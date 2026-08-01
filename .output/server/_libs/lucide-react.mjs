@@ -273,6 +273,32 @@ var Download = createLucideIcon("download", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var Ellipsis = createLucideIcon("ellipsis", [
+	["circle", {
+		cx: "12",
+		cy: "12",
+		r: "1",
+		key: "41hilf"
+	}],
+	["circle", {
+		cx: "19",
+		cy: "12",
+		r: "1",
+		key: "1wjl8i"
+	}],
+	["circle", {
+		cx: "5",
+		cy: "12",
+		r: "1",
+		key: "1pcz8c"
+	}]
+]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var ExternalLink = createLucideIcon("external-link", [
 	["path", {
 		d: "M15 3h6v6",
@@ -562,6 +588,19 @@ var MessageSquare = createLucideIcon("message-square", [["path", {
 var Minus = createLucideIcon("minus", [["path", {
 	d: "M5 12h14",
 	key: "1ays0h"
+}]]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
+var Pencil = createLucideIcon("pencil", [["path", {
+	d: "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",
+	key: "1a8usu"
+}], ["path", {
+	d: "m15 5 4 4",
+	key: "1mk7zo"
 }]]);
 /**
 * @license lucide-react v0.510.0 - ISC
@@ -861,4 +900,4 @@ var Zap = createLucideIcon("zap", [["path", {
 	key: "1xq2db"
 }]]);
 //#endregion
-export { FolderOpen as A, ArrowRight as B, Link2Off as C, Hammer as D, HardDrive as E, Command as F, Activity as H, ChevronRight as I, Check as L, ExternalLink as M, Download as N, Gauge as O, Compass as P, Cable as R, Link2 as S, History as T, AppWindow as V, Minus as _, TimerReset as a, Menu as b, Sparkles as c, Settings as d, Send as f, Play as g, Plus as h, Trash2 as i, FolderInput as j, Folder as k, ShieldCheck as l, Plug as m, X as n, Terminal as o, RefreshCw as p, Users as r, Square as s, Zap as t, ShieldAlert as u, MessageSquare as v, Image as w, LoaderCircle as x, MessageSquarePlus as y, Brain as z };
+export { Folder as A, Cable as B, Link2 as C, HardDrive as D, History as E, Download as F, ArrowRight as H, Compass as I, Command as L, FolderInput as M, ExternalLink as N, Hammer as O, Ellipsis as P, ChevronRight as R, LoaderCircle as S, Image as T, AppWindow as U, Brain as V, Activity as W, Pencil as _, TimerReset as a, MessageSquarePlus as b, Sparkles as c, Settings as d, Send as f, Play as g, Plus as h, Trash2 as i, FolderOpen as j, Gauge as k, ShieldCheck as l, Plug as m, X as n, Terminal as o, RefreshCw as p, Users as r, Square as s, Zap as t, ShieldAlert as u, Minus as v, Link2Off as w, Menu as x, MessageSquare as y, Check as z };

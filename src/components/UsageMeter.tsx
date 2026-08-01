@@ -243,8 +243,9 @@ export function UsageMeterPanel({ compact }: { compact?: boolean }) {
               Grok website session
             </div>
             <p className="text-[11px] text-[var(--color-subtle)]">
-              Weekly SuperGrok limits live on grok.com, not the xAI API key. Link the
-              same browser login (SSO) used for Settings → Usage.
+              Opens an in-app Grok window (not a blank tab). Sign in until the chat home
+              loads — the window closes when the session cookie is captured. Or paste the{" "}
+              <span className="font-mono">sso</span> cookie from your browser.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" onClick={() => void onLink()} disabled={linkBusy}>

@@ -1,5 +1,5 @@
-import { t as APP_VERSION, v as parseRateLimitHeaders } from "./version-2C_HLcex.mjs";
-import { XAI_BASE, callXaiChat, callXaiChatStream, callXaiImagine, probeXaiBearer } from "./grok-DQgOeaph.mjs";
+import { t as APP_VERSION, v as parseRateLimitHeaders } from "./version-DMnPo7i1.mjs";
+import { XAI_BASE, callXaiChat, callXaiChatStream, callXaiImagine, probeXaiBearer } from "./grok-cJrr7ICQ.mjs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream, existsSync, readFileSync } from "node:fs";
@@ -8,7 +8,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs$1 from "node:fs/promises";
 import os from "node:os";
-//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-B6YmpO4_.js
+//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-CVopEPS8.js
 /**
 * GitHub update helpers — Node only (server / Electron main).
 *
@@ -944,7 +944,7 @@ async function dispatchApi(route, action, body) {
 				ok: false,
 				error: "models required"
 			};
-			const { buildClassifyPrompt, parseGrokSlotPlan, pickSlotModel } = await import("./version-2C_HLcex.mjs").then((n) => n.T).then((n) => n.w);
+			const { buildClassifyPrompt, parseGrokSlotPlan, pickSlotModel } = await import("./version-DMnPo7i1.mjs").then((n) => n.T).then((n) => n.w);
 			let accessToken = body.accessToken ? String(body.accessToken) : void 0;
 			const apiKey = body.apiKey ? String(body.apiKey) : void 0;
 			if (body.tokens && typeof body.tokens === "object") try {

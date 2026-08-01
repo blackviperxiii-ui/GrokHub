@@ -23,75 +23,75 @@ var headers = ((m) => function headersRouteRule(event) {
 //#endregion
 //#region #nitro/virtual/public-assets-data
 var public_assets_data_default = {
-	"/assets/button-O5inoqv-.js": {
+	"/assets/button-C7XeGfil.js": {
 		"type": "text/javascript; charset=utf-8",
-		"etag": "\"f274-e8P2JzIl5IQ3LmYh9Ic9f0GLe8Q\"",
-		"mtime": "2026-08-01T22:21:49.897Z",
+		"etag": "\"f274-RYyOeJi569eflCS+XFW7j2JXfUM\"",
+		"mtime": "2026-08-01T22:32:06.853Z",
 		"size": 62068,
-		"path": "../public/assets/button-O5inoqv-.js"
+		"path": "../public/assets/button-C7XeGfil.js"
 	},
 	"/assets/grok-DaaXHfHa.js": {
 		"type": "text/javascript; charset=utf-8",
 		"etag": "\"5f6-3yZyFmC8ExoU9QlMjc0zXyjkpi4\"",
-		"mtime": "2026-08-01T22:21:49.897Z",
+		"mtime": "2026-08-01T22:32:06.853Z",
 		"size": 1526,
 		"path": "../public/assets/grok-DaaXHfHa.js"
 	},
-	"/assets/grok-client-DSRSIr1V.js": {
+	"/assets/grok-client-Bbadogi1.js": {
 		"type": "text/javascript; charset=utf-8",
-		"etag": "\"b8-sFwNnVAkJyWNCyNMudxaJAHi434\"",
-		"mtime": "2026-08-01T22:21:49.897Z",
+		"etag": "\"b8-gzC899zYl3p0vpWK324nnEh9jJU\"",
+		"mtime": "2026-08-01T22:32:06.853Z",
 		"size": 184,
-		"path": "../public/assets/grok-client-DSRSIr1V.js"
-	},
-	"/assets/grok-website-usage-BoaO_MKa.js": {
-		"type": "text/javascript; charset=utf-8",
-		"etag": "\"4c-srbrA8NGq+z1oAIpFN2HH0qIVvM\"",
-		"mtime": "2026-08-01T22:21:49.897Z",
-		"size": 76,
-		"path": "../public/assets/grok-website-usage-BoaO_MKa.js"
+		"path": "../public/assets/grok-client-Bbadogi1.js"
 	},
 	"/assets/host-client-DG-Ye8yi.js": {
 		"type": "text/javascript; charset=utf-8",
 		"etag": "\"880-uM2STYIgPo5PzDkUFdHBG7tjiUA\"",
-		"mtime": "2026-08-01T22:21:49.897Z",
+		"mtime": "2026-08-01T22:32:06.853Z",
 		"size": 2176,
 		"path": "../public/assets/host-client-DG-Ye8yi.js"
 	},
-	"/assets/index-Dj9SGMN1.js": {
+	"/assets/index-DC1w5af5.js": {
 		"type": "text/javascript; charset=utf-8",
-		"etag": "\"4d4ad-0awaglGEnJriH6/8nbGLFGiFgJY\"",
-		"mtime": "2026-08-01T22:21:49.897Z",
+		"etag": "\"4d4ad-9C8TdByeF39WBfoRWbKdIFetl7E\"",
+		"mtime": "2026-08-01T22:32:06.853Z",
 		"size": 316589,
-		"path": "../public/assets/index-Dj9SGMN1.js"
+		"path": "../public/assets/index-DC1w5af5.js"
 	},
-	"/assets/login-Cs274_1n.js": {
+	"/assets/login-C41Gdje5.js": {
 		"type": "text/javascript; charset=utf-8",
-		"etag": "\"5c2-cD1Aw7FwJr0U1KJuuRi/nz8c6mc\"",
-		"mtime": "2026-08-01T22:21:49.897Z",
+		"etag": "\"5c2-yEJ0Y5XBlGgpVb2Cl6wq3M4NDtY\"",
+		"mtime": "2026-08-01T22:32:06.853Z",
 		"size": 1474,
-		"path": "../public/assets/login-Cs274_1n.js"
+		"path": "../public/assets/login-C41Gdje5.js"
 	},
 	"/assets/openclaw-import-CRJUnD2p.js": {
 		"type": "text/javascript; charset=utf-8",
 		"etag": "\"f7a-2XiG/hFckln0bhpCVuqz3wahUq8\"",
-		"mtime": "2026-08-01T22:21:49.897Z",
+		"mtime": "2026-08-01T22:32:06.853Z",
 		"size": 3962,
 		"path": "../public/assets/openclaw-import-CRJUnD2p.js"
 	},
-	"/assets/routes-BNZG28_p.js": {
+	"/assets/routes-DZk9zST-.js": {
 		"type": "text/javascript; charset=utf-8",
-		"etag": "\"2993e-H2VYaoTMZBNpFP1AFuxJW7T1494\"",
-		"mtime": "2026-08-01T22:21:49.897Z",
-		"size": 170302,
-		"path": "../public/assets/routes-BNZG28_p.js"
+		"etag": "\"2a9c4-lNSHJ/JjRNhiUbQ3WupjtBT2zdw\"",
+		"mtime": "2026-08-01T22:32:06.853Z",
+		"size": 174532,
+		"path": "../public/assets/routes-DZk9zST-.js"
 	},
-	"/assets/styles-lBsYYfGp.css": {
+	"/assets/styles-HEQ6yL1O.css": {
 		"type": "text/css; charset=utf-8",
-		"etag": "\"b895-8VRXiMeNiFkce9pIk7cdBDT4cOQ\"",
-		"mtime": "2026-08-01T22:21:49.897Z",
-		"size": 47253,
-		"path": "../public/assets/styles-lBsYYfGp.css"
+		"etag": "\"bbf8-nDpMVbu6zYN+PGC1j4UtGfXgHys\"",
+		"mtime": "2026-08-01T22:32:06.853Z",
+		"size": 48120,
+		"path": "../public/assets/styles-HEQ6yL1O.css"
+	},
+	"/assets/grok-website-usage-C7-Lg5y8.js": {
+		"type": "text/javascript; charset=utf-8",
+		"etag": "\"4c-rw3zvjF8aUpcB6N4ELnx08Dx2qM\"",
+		"mtime": "2026-08-01T22:32:06.853Z",
+		"size": 76,
+		"path": "../public/assets/grok-website-usage-C7-Lg5y8.js"
 	}
 };
 //#endregion

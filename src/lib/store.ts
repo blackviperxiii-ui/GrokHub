@@ -595,12 +595,21 @@ export const useGrokHub = create<State>()(
               });
               return { ok: true, detail: "Grok website session linked" };
             }
-            return { ok: false, detail: r?.error || "No SSO cookie captured" };
+            return {
+              ok: false,
+              detail:
+                r?.error ||
+                "No SSO cookie captured. Stay until Grok chat loads, then try again — or paste sso= from browser cookies.",
+            };
+          }
+          // Browser preview: open grok.com for manual cookie copy (desktop uses Electron window)
+          if (typeof window !== "undefined") {
+            window.open("https://grok.com/", "_blank", "noopener,noreferrer");
           }
           return {
             ok: false,
             detail:
-              "Desktop: use Link Grok website session. Or paste your grok.com sso cookie in Settings.",
+              "Opened grok.com — copy the sso cookie (DevTools → Application → Cookies) and paste it below. Full auto-link works in the Arch desktop app.",
           };
         } catch (e) {
           return {

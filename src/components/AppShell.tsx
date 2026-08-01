@@ -226,8 +226,9 @@ export function AppShell() {
   useEffect(() => {
     const p = useGrokHub.persist.rehydrate();
     Promise.resolve(p).finally(() => {
-      // Always land on Agent for a clean session entry
-      useGrokHub.setState({ nav: "chat" });
+      // Always land on Agent for a clean session entry (never Desktop tab)
+      const cur = useGrokHub.getState().nav;
+      useGrokHub.setState({ nav: cur === "desktop" ? "chat" : "chat" });
       const st = useGrokHub.getState();
       st.refreshStaleTimes();
       st.tickHeartbeat();
