@@ -158,7 +158,7 @@ export function HostGatewayBanner({ variant = "card", className, onOpenDesktop }
                 {info.bridge} · {info.platform}/{info.arch} · {info.homedir}
               </div>
               <div className="mt-1 text-xs text-[var(--color-subtle)]">
-                Agent can use <span className="font-mono">$</span> shell in chat and the Desktop tab.
+                Agent can use <span className="font-mono">$</span> shell in chat and the Desktop host panel.
               </div>
             </div>
           </div>

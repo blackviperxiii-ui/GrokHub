@@ -115,6 +115,7 @@ type State = {
   newThread: () => void;
   selectThread: (id: string) => void;
   deleteThread: (id: string) => void;
+  renameThread: (id: string, title: string) => void;
   setPlan: (plan: SubscriptionPlanId) => void;
 
   recordUsage: (bucket: UsageBucket, mode?: GrokModeId) => { ok: boolean; cost: number };
@@ -933,6 +934,16 @@ export const useGrokHub = create<State>()(
           activeThreadId: nextActive.id,
           chat: nextActive.messages,
         });
+      },
+
+      renameThread: (id, title) => {
+        const next = title.trim().slice(0, 80);
+        if (!next) return;
+        set((s) => ({
+          threads: s.threads.map((t) =>
+            t.id === id ? { ...t, title: next, updatedAt: Date.now() } : t,
+          ),
+        }));
       },
 
       setPlan: (plan) => {

@@ -2,21 +2,23 @@ import type { ComponentType, CSSProperties } from "react";
 import {
   Cable,
   Command,
-  HardDrive,
   History,
   ImageIcon,
   MessageSquare,
   MessageSquarePlus,
   Minus,
+  MoreHorizontal,
+  Pencil,
   Settings,
   Sparkles,
   Square,
   TimerReset,
+  Trash2,
   Users,
   Menu,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
 import { useGrokHub } from "@/lib/store";
 import type { NavId } from "@/lib/types";
@@ -46,7 +48,6 @@ const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string 
   { id: "chat", label: "Agent", icon: MessageSquare },
   { id: "history", label: "History", icon: History },
   { id: "command", label: "Command", icon: Command },
-  { id: "desktop", label: "Desktop", icon: HardDrive },
   { id: "imagine", label: "Imagine", icon: ImageIcon },
   { id: "connectors", label: "Connectors", icon: Cable },
   { id: "skills", label: "Skills", icon: Sparkles },
@@ -54,6 +55,140 @@ const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string 
   { id: "agents", label: "Roster", icon: Users },
   { id: "settings", label: "Settings", icon: Settings },
 ];
+
+function RecentThreadRow({
+  id,
+  title,
+  active,
+  onSelect,
+}: {
+  id: string;
+  title: string;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const renameThread = useGrokHub((s) => s.renameThread);
+  const deleteThread = useGrokHub((s) => s.deleteThread);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(title);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setDraft(title);
+  }, [title]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (renaming) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [renaming]);
+
+  function commitRename() {
+    const next = draft.trim();
+    if (next && next !== title) renameThread(id, next);
+    else setDraft(title);
+    setRenaming(false);
+  }
+
+  if (renaming) {
+    return (
+      <div className="mb-0.5 px-1 py-0.5">
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commitRename}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitRename();
+            }
+            if (e.key === "Escape") {
+              setDraft(title);
+              setRenaming(false);
+            }
+          }}
+          className="w-full rounded-[var(--radius-sm)] border border-[var(--color-border-strong)] bg-[var(--color-elevated)] px-2 py-1 text-xs text-[var(--color-fg)] outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+          aria-label="Rename chat"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "group relative mb-0.5 flex w-full items-center gap-0.5 rounded-[var(--radius-sm)]",
+        active
+          ? "bg-[var(--color-elevated)] text-[var(--color-fg)]"
+          : "text-[var(--color-muted)] hover:bg-[var(--color-elevated)]/50",
+      )}
+    >
+      <button
+        type="button"
+        onClick={onSelect}
+        className="min-w-0 flex-1 truncate px-2.5 py-1.5 text-left text-xs font-medium"
+      >
+        {title}
+      </button>
+      <div className="relative shrink-0 pr-0.5" ref={menuRef}>
+        <button
+          type="button"
+          className={cn(
+            "rounded p-1 text-[var(--color-subtle)] transition-opacity hover:bg-[var(--color-surface)] hover:text-[var(--color-fg)]",
+            menuOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus:opacity-100",
+          )}
+          aria-label="Chat options"
+          onClick={(e) => {
+            e.stopPropagation();
+            setMenuOpen((v) => !v);
+          }}
+        >
+          <MoreHorizontal className="h-3.5 w-3.5" />
+        </button>
+        {menuOpen && (
+          <div className="absolute right-0 top-full z-50 mt-0.5 min-w-[132px] overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-elevated)] py-1 shadow-lg">
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--color-fg)] hover:bg-[var(--color-surface)]"
+              onClick={() => {
+                setMenuOpen(false);
+                setDraft(title);
+                setRenaming(true);
+              }}
+            >
+              <Pencil className="h-3 w-3" />
+              Rename
+            </button>
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--color-danger)] hover:bg-[var(--color-surface)]"
+              onClick={() => {
+                setMenuOpen(false);
+                deleteThread(id);
+              }}
+            >
+              <Trash2 className="h-3 w-3" />
+              Delete
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function AppShell() {
   const nav = useGrokHub((s) => s.nav);
@@ -318,20 +453,17 @@ export function AppShell() {
                 Recent
               </div>
               {recent.map((t) => (
-                <button
+                <RecentThreadRow
                   key={t.id}
-                  type="button"
-                  onClick={() => selectThread(t.id)}
-                  className={cn(
-                    "mb-0.5 flex w-full flex-col rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-xs transition-colors",
-                    t.id === activeThreadId
-                      ? "bg-[var(--color-elevated)] text-[var(--color-fg)]"
-                      : "text-[var(--color-muted)] hover:bg-[var(--color-elevated)]/50",
-                  )}
-                >
-                  <span className="truncate font-medium">{t.title}</span>
-                </button>
+                  id={t.id}
+                  title={t.title}
+                  active={t.id === activeThreadId}
+                  onSelect={() => selectThread(t.id)}
+                />
               ))}
+              {recent.length === 0 && (
+                <p className="px-2 py-1 text-[11px] text-[var(--color-subtle)]">No chats yet</p>
+              )}
             </div>
           </nav>
 
@@ -357,7 +489,9 @@ export function AppShell() {
               </Button>
               <div className="min-w-0">
                 <div className="text-sm font-medium md:text-base">
-                  {NAV.find((n) => n.id === nav)?.label}
+                  {nav === "desktop"
+                    ? "Desktop host"
+                    : (NAV.find((n) => n.id === nav)?.label ?? "Agent")}
                 </div>
                 <div className="truncate text-xs text-[var(--color-subtle)]">
                   GrokHub v{APP_VERSION} ·{" "}
