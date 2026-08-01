@@ -16,7 +16,7 @@ export function HistoryView() {
   const sorted = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
 
   return (
-    <div className="mx-auto max-w-2xl space-y-4">
+    <div className="content-readable mx-auto space-y-4">
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-3">
           <div>

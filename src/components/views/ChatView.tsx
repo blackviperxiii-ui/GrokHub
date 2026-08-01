@@ -150,9 +150,9 @@ export function ChatView() {
   }
 
   return (
-    <div className="mx-auto flex h-full min-h-0 max-w-3xl flex-col gap-3">
+    <div className="chat-stage mx-auto flex h-full min-h-0 w-full flex-col gap-3">
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardHeader className="shrink-0 border-b border-[var(--color-border)]">
+        <CardHeader className="shrink-0 border-b border-[var(--color-border)] px-4 py-3 md:px-6 3xl:px-8">
           <div className="flex items-start justify-between gap-3">
             <div>
               <CardTitle className="text-sm">Agent</CardTitle>
@@ -179,7 +179,7 @@ export function ChatView() {
           </div>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-0">
-          <div className="scroll-panel min-h-0 flex-1 space-y-3 px-4 py-4 md:px-5">
+          <div className="scroll-panel min-h-0 flex-1 space-y-3 px-4 py-4 md:px-6 3xl:px-10 uw:px-16">
             {chat.map((m) => (
               <div
                 key={m.id}
@@ -187,7 +187,7 @@ export function ChatView() {
               >
                 <div
                   className={cn(
-                    "max-w-[92%] rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap",
+                    "chat-bubble rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap",
                     m.role === "user"
                       ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]"
                       : m.role === "system"
@@ -219,7 +219,7 @@ export function ChatView() {
             <div ref={endRef} />
           </div>
 
-          <div className="shrink-0 space-y-2 border-t border-[var(--color-border)] p-3 md:p-4">
+          <div className="shrink-0 space-y-2 border-t border-[var(--color-border)] p-3 md:p-4 3xl:px-8 uw:px-12">
             <div className="flex flex-wrap gap-1.5">
               {SUGGESTIONS.map((s) => (
                 <button
@@ -234,7 +234,7 @@ export function ChatView() {
               ))}
             </div>
             <form
-              className="flex gap-2"
+              className="mx-auto flex w-full max-w-[min(56rem,100%)] gap-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]"
               onSubmit={(e) => {
                 e.preventDefault();
                 void onSend();

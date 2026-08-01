@@ -5,7 +5,7 @@ import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
 import { A as Command, C as HardDrive, D as FolderOpen, E as Folder, F as ArrowRight, I as AppWindow, L as Activity, M as Check, N as Cable, O as ExternalLink, P as Brain, S as History, T as Gauge, _ as MessageSquarePlus, a as TimerReset, b as Link2Off, c as Sparkles, d as Send, f as RefreshCw, g as MessageSquare, h as Minus, i as Trash2, j as ChevronRight, k as Download, l as ShieldAlert, m as Play, n as X, o as Terminal, p as Plus, r as Users, s as Square, t as Zap, u as Settings, v as Menu, w as Hammer, x as Image, y as LoaderCircle } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-BdY0QS3x.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-ByKhrx4K.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function rpc(path, action, body = {}) {
@@ -755,7 +755,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-BXD6uL2Q.mjs");
+		const { oauthStart } = await import("./grok-client-DiPw0wM9.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -784,7 +784,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-BXD6uL2Q.mjs");
+		const { oauthPoll } = await import("./grok-client-DiPw0wM9.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -862,7 +862,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-BXD6uL2Q.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-DiPw0wM9.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1276,7 +1276,7 @@ var useGrokHub = create()(persist((set, get) => ({
 				await wait(280);
 				answer = replyFor(trimmed, get(), routed);
 			} else {
-				const { grokChat } = await import("./grok-client-BXD6uL2Q.mjs");
+				const { grokChat } = await import("./grok-client-DiPw0wM9.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
@@ -1520,7 +1520,7 @@ function wait(ms) {
 	return new Promise((r) => setTimeout(r, ms));
 }
 /** Single source of truth for display / packaging version. */
-var APP_VERSION = "0.2.0";
+var APP_VERSION = "0.2.1";
 `${APP_VERSION}`;
 /** Avatar with automatic initials fallback when URL is missing or fails to load. */
 function ProfileAvatar({ src, name, email, className, size = "md" }) {
@@ -2297,11 +2297,11 @@ function ChatView() {
 		await sendChat(payload);
 	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "mx-auto flex h-full min-h-0 max-w-3xl flex-col gap-3",
+		className: "chat-stage mx-auto flex h-full min-h-0 w-full flex-col gap-3",
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, {
 			className: "flex min-h-0 flex-1 flex-col overflow-hidden",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardHeader, {
-				className: "shrink-0 border-b border-[var(--color-border)]",
+				className: "shrink-0 border-b border-[var(--color-border)] px-4 py-3 md:px-6 3xl:px-8",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "flex items-start justify-between gap-3",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
@@ -2351,12 +2351,12 @@ function ChatView() {
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 				className: "flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-0",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "scroll-panel min-h-0 flex-1 space-y-3 px-4 py-4 md:px-5",
+					className: "scroll-panel min-h-0 flex-1 space-y-3 px-4 py-4 md:px-6 3xl:px-10 uw:px-16",
 					children: [
 						chat.map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: cn("flex", m.role === "user" ? "justify-end" : "justify-start"),
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: cn("max-w-[92%] rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap", m.role === "user" ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]" : m.role === "system" ? "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted)]" : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-fg)]"),
+								className: cn("chat-bubble rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap", m.role === "user" ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]" : m.role === "system" ? "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted)]" : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-fg)]"),
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-[var(--color-subtle)]",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
@@ -2380,7 +2380,7 @@ function ChatView() {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { ref: endRef })
 					]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "shrink-0 space-y-2 border-t border-[var(--color-border)] p-3 md:p-4",
+					className: "shrink-0 space-y-2 border-t border-[var(--color-border)] p-3 md:p-4 3xl:px-8 uw:px-12",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "flex flex-wrap gap-1.5",
 						children: SUGGESTIONS.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -2391,7 +2391,7 @@ function ChatView() {
 							children: s
 						}, s))
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
-						className: "flex gap-2",
+						className: "mx-auto flex w-full max-w-[min(56rem,100%)] gap-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]",
 						onSubmit: (e) => {
 							e.preventDefault();
 							onSend();
@@ -3118,7 +3118,7 @@ function HistoryView() {
 	const newThread = useGrokHub((s) => s.newThread);
 	const sorted = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "mx-auto max-w-2xl space-y-4",
+		className: "content-readable mx-auto space-y-4",
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, {
 			className: "flex flex-row items-start justify-between gap-3",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardTitle, {
@@ -3469,7 +3469,7 @@ function SettingsView() {
 		}
 	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "mx-auto max-w-3xl space-y-5 pb-8",
+		className: "content-readable mx-auto space-y-5 pb-8",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
@@ -4046,7 +4046,7 @@ function AppShell() {
 	const noDrag = { WebkitAppRegion: "no-drag" };
 	const recent = [...threads].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "flex h-dvh max-h-dvh flex-col overflow-hidden bg-[var(--color-bg)] text-[var(--color-fg)]",
+		className: "flex h-dvh max-h-dvh w-full max-w-none flex-col overflow-hidden bg-[var(--color-bg)] text-[var(--color-fg)]",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3",
 			style: drag,
@@ -4114,9 +4114,9 @@ function AppShell() {
 				]
 			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 overflow-hidden",
+			className: "app-frame flex min-h-0 w-full flex-1 overflow-hidden",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
-				className: "hidden w-60 shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-surface)] md:flex",
+				className: "sidebar-rail hidden shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-surface)] md:flex",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "shrink-0 p-3 pb-1",
@@ -4197,10 +4197,10 @@ function AppShell() {
 					})
 				]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+				className: "app-stage flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
-						className: "flex shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-bg)_88%,transparent)] px-4 py-3 backdrop-blur-md md:px-6",
+						className: "flex shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-bg)_88%,transparent)] px-4 py-3 backdrop-blur-md md:px-6 3xl:px-8 uw:px-10",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "flex min-w-0 items-center gap-3",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
@@ -4239,7 +4239,11 @@ function AppShell() {
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Badge, {
 									className: "hidden font-mono sm:inline-flex",
-									children: [modeMeta.label, " · 4.5"]
+									children: [
+										modeMeta.label,
+										" · ",
+										modeMeta.model
+									]
 								})
 							]
 						})]
@@ -4263,9 +4267,9 @@ function AppShell() {
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("main", {
-						className: "flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6",
+						className: "app-stage flex min-h-0 flex-1 flex-col overflow-hidden p-3 sm:p-4 md:p-5 3xl:p-6 uw:p-8",
 						children: (nav === "chat" || nav === "history") && nav === "chat" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "min-h-0 flex-1 overflow-hidden",
+							className: "chat-stage min-h-0 flex-1 overflow-hidden",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatView, {})
 						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "scroll-panel min-h-0 flex-1",

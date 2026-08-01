@@ -207,7 +207,7 @@ export function SettingsView() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 pb-8">
+    <div className="content-readable mx-auto space-y-5 pb-8">
       {/* Primary: real xAI Grok OAuth */}
       <Card>
         <CardHeader>

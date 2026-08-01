@@ -95,27 +95,36 @@ try {
 }
 
 function fitToWorkArea(win) {
+  if (!win || win.isDestroyed()) return;
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const { x, y, width, height } = display.workArea;
+  // Fill the full work area (ultrawide / multi-monitor safe)
   win.setBounds({
     x,
     y,
     width: Math.max(880, width),
     height: Math.max(600, height),
   });
+  // Maximize so WM decorations / tiling still treat us as fullscreened window
   if (process.env.GROKHUB_MAXIMIZE !== "0") {
-    win.maximize();
+    try {
+      if (!win.isMaximized()) win.maximize();
+    } catch {
+      /* ignore */
+    }
   }
 }
 
 function createWindow() {
   const display = screen.getPrimaryDisplay();
-  const { width: aw, height: ah } = display.workAreaSize;
+  const { x, y, width: aw, height: ah } = display.workArea;
   const icon = loadAppIcon();
 
   mainWindow = new BrowserWindow({
-    width: Math.min(1600, aw),
-    height: Math.min(1000, ah),
+    x,
+    y,
+    width: Math.max(880, aw),
+    height: Math.max(600, ah),
     minWidth: 880,
     minHeight: 600,
     show: false,
@@ -125,6 +134,8 @@ function createWindow() {
     frame: false,
     titleBarStyle: "hidden",
     autoHideMenuBar: true,
+    // Fill the monitor; content is CSS-fluid for ultrawide
+    useContentSize: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -167,6 +178,24 @@ function createWindow() {
       mainWindow?.show();
       mainWindow?.focus();
     }
+  });
+
+  // Keep filling the active display when monitors change (dock, resolution, ultrawide switch)
+  const reflow = () => {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+      // Only re-fit when maximized / full work-area mode
+      if (mainWindow.isMaximized() || process.env.GROKHUB_MAXIMIZE !== "0") {
+        fitToWorkArea(mainWindow);
+      }
+    }
+  };
+  screen.on("display-metrics-changed", reflow);
+  screen.on("display-added", reflow);
+  screen.on("display-removed", reflow);
+  mainWindow.on("closed", () => {
+    screen.removeListener("display-metrics-changed", reflow);
+    screen.removeListener("display-added", reflow);
+    screen.removeListener("display-removed", reflow);
   });
 
   mainWindow.on("close", (e) => {

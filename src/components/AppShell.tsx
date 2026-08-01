@@ -117,7 +117,7 @@ export function AppShell() {
   const recent = [...threads].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6);
 
   return (
-    <div className="flex h-dvh max-h-dvh flex-col overflow-hidden bg-[var(--color-bg)] text-[var(--color-fg)]">
+    <div className="flex h-dvh max-h-dvh w-full max-w-none flex-col overflow-hidden bg-[var(--color-bg)] text-[var(--color-fg)]">
       <div
         className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3"
         style={drag}
@@ -197,8 +197,8 @@ export function AppShell() {
         </div>
       </div>
 
-      <div className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 overflow-hidden">
-        <aside className="hidden w-60 shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-surface)] md:flex">
+      <div className="app-frame flex min-h-0 w-full flex-1 overflow-hidden">
+        <aside className="sidebar-rail hidden shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-surface)] md:flex">
           <div className="shrink-0 p-3 pb-1">
             <Button size="sm" className="w-full" variant="secondary" onClick={() => newThread()}>
               <MessageSquarePlus className="h-4 w-4" />
@@ -276,8 +276,8 @@ export function AppShell() {
           </div>
         </aside>
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-bg)_88%,transparent)] px-4 py-3 backdrop-blur-md md:px-6">
+        <div className="app-stage flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-bg)_88%,transparent)] px-4 py-3 backdrop-blur-md md:px-6 3xl:px-8 uw:px-10">
             <div className="flex min-w-0 items-center gap-3">
               <Button
                 variant="ghost"
@@ -310,7 +310,7 @@ export function AppShell() {
                 <Badge variant="success">Online</Badge>
               )}
               <Badge className="hidden font-mono sm:inline-flex">
-                {modeMeta.label} · 4.5
+                {modeMeta.label} · {modeMeta.model}
               </Badge>
             </div>
           </header>
@@ -345,9 +345,9 @@ export function AppShell() {
             </div>
           )}
 
-          <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
+          <main className="app-stage flex min-h-0 flex-1 flex-col overflow-hidden p-3 sm:p-4 md:p-5 3xl:p-6 uw:p-8">
             {(nav === "chat" || nav === "history") && nav === "chat" ? (
-              <div className="min-h-0 flex-1 overflow-hidden">
+              <div className="chat-stage min-h-0 flex-1 overflow-hidden">
                 <ChatView />
               </div>
             ) : (

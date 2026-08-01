@@ -29,6 +29,11 @@
   --radius-xl: 24px;
 
   --shadow-soft: 0 8px 30px rgba(0, 0, 0, 0.35);
+
+  /* Ultrawide-friendly breakpoints */
+  --breakpoint-3xl: 1920px;
+  --breakpoint-uw: 2560px;
+  --breakpoint-uwx: 3440px;
 }
 
 @layer base {
@@ -39,8 +44,10 @@
   html,
   body,
   #root {
+    width: 100%;
     height: 100%;
     max-height: 100%;
+    min-height: 100%;
     overflow: hidden;
   }
 
@@ -109,6 +116,101 @@
     -webkit-overflow-scrolling: touch;
   }
 
+  /* Full-bleed app shell — no side letterboxing */
+  .app-frame {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+  }
+
+  /* Main content stage: fills remaining width after sidebar */
+  .app-stage {
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+
+  /*
+   * Readable content width that grows on ultrawide.
+   * Use for Settings/History/forms — not for Agent chat (chat fills stage).
+   */
+  .content-readable {
+    width: 100%;
+    max-width: 48rem; /* ~3xl */
+  }
+  @media (min-width: 1280px) {
+    .content-readable {
+      max-width: 56rem;
+    }
+  }
+  @media (min-width: 1920px) {
+    .content-readable {
+      max-width: 64rem;
+    }
+  }
+  @media (min-width: 2560px) {
+    .content-readable {
+      max-width: 72rem;
+    }
+  }
+  @media (min-width: 3440px) {
+    .content-readable {
+      max-width: 80rem;
+    }
+  }
+
+  /* Agent chat: use full stage; messages stay readable */
+  .chat-stage {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    max-width: none;
+  }
+
+  .chat-bubble {
+    max-width: min(42rem, 92%);
+  }
+  @media (min-width: 1280px) {
+    .chat-bubble {
+      max-width: min(48rem, 78%);
+    }
+  }
+  @media (min-width: 1920px) {
+    .chat-bubble {
+      max-width: min(56rem, 70%);
+    }
+  }
+  @media (min-width: 2560px) {
+    .chat-bubble {
+      max-width: min(64rem, 62%);
+    }
+  }
+  @media (min-width: 3440px) {
+    .chat-bubble {
+      max-width: min(72rem, 55%);
+    }
+  }
+
+  .sidebar-rail {
+    width: 15rem; /* 240px */
+  }
+  @media (min-width: 1920px) {
+    .sidebar-rail {
+      width: 16.5rem;
+    }
+  }
+  @media (min-width: 2560px) {
+    .sidebar-rail {
+      width: 18rem;
+    }
+  }
+  @media (min-width: 3440px) {
+    .sidebar-rail {
+      width: 20rem;
+    }
+  }
+
   .shimmer {
     background: linear-gradient(
       90deg,
@@ -129,7 +231,11 @@
     }
   }
 
-  @keyframes pulse-dot {
+  .pulse-live {
+    animation: pulse-live 2.2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-live {
     0%,
     100% {
       opacity: 1;
@@ -137,18 +243,7 @@
     }
     50% {
       opacity: 0.55;
-      transform: scale(0.85);
-    }
-  }
-
-  .pulse-live {
-    animation: pulse-dot 1.6s ease-in-out infinite;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .shimmer,
-    .pulse-live {
-      animation: none;
+      transform: scale(0.92);
     }
   }
 }
