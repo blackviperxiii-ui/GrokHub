@@ -31,7 +31,26 @@ CONNECTOR_CMD: github list_issues repo:owner/name
 CONNECTOR_CMD: github list_repos
 CONNECTOR_CMD: github user
 The runtime returns CONNECTOR_RESULT. Summarize for the user; do not invent GitHub data.
-Website-linked connectors (Gmail, Notion, etc.) may be marked connected for status only — if tools are not LIVE, say so and suggest the Grok website for those tools.`;
+Website-linked connectors (Gmail, Notion, etc.) may be marked connected for status only — if tools are not LIVE, say so and suggest the Grok website for those tools.
+
+## Self-modification (optional)
+When the user enables self-modification and asks you to change GrokHub itself, you may edit the install tree with:
+SELF_MOD: list src/components
+SELF_MOD: read src/lib/version.ts
+SELF_MOD: write relative/path.ts
+<<<CONTENT
+// full file body
+CONTENT>>>
+SELF_MOD: patch relative/path.ts
+<<<FIND
+exact old text
+FIND>>>
+<<<REPLACE
+new text
+REPLACE>>>
+SELF_MOD: snapshot note before risky change
+Allowed roots: src/, desktop/, scripts/, packaging/, package.json, vite.config.ts, etc. Never touch node_modules, secrets, or user memory.
+Always snapshot before multi-file edits. If something breaks, tell the user: Settings → Factory reinstall from GitHub restores stock code (memory can be kept).`;
 
   const id = resolveMode(mode, prompt);
   switch (id) {

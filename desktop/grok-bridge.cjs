@@ -450,7 +450,10 @@ async function applyUpdate(opts = {}) {
 
     await swap(".output");
     await swap("desktop");
-    for (const extra of ["package.json", "scripts", "packaging"]) {
+    const factoryExtras = opts.factory
+      ? ["src", "scripts", "packaging", "public", "package.json", "package-lock.json", "vite.config.ts", "tsconfig.json", "startup.sh", ".grok"]
+      : ["package.json", "scripts", "packaging"];
+    for (const extra of factoryExtras) {
       try {
         await fs.stat(path.join(extracted, extra));
         await swap(extra);
@@ -1004,6 +1007,62 @@ async function callXaiChatStream(req = {}, handlers = {}) {
   }
 }
 
+
+/**
+ * Factory reinstall: force full pull from GitHub and optionally wipe local self-mod journal.
+ * Memory (userData) is kept unless wipeMemory is true.
+ */
+async function factoryReinstall(opts = {}) {
+  const steps = [];
+  steps.push("Factory reinstall from GitHub…");
+  const result = await applyUpdate({
+    ...opts,
+    factory: true,
+    force: true,
+    restart: opts.restart !== false,
+  });
+  steps.push(...(result.steps || []));
+
+  // Clear local self-mod journal/snapshots of install tree (not user memory unless asked)
+  if (opts.clearSelfMod !== false) {
+    try {
+      const selfMod = require("./self-mod.cjs");
+      const dir = selfMod.selfModDir();
+      await fs.rm(dir, { recursive: true, force: true });
+      steps.push("Cleared local self-mod snapshots/journal");
+    } catch (e) {
+      steps.push("Self-mod cleanup skipped: " + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  if (opts.wipeMemory) {
+    try {
+      const { app } = require("electron");
+      const ud = app.getPath("userData");
+      for (const name of ["grokhub-memory.json", "grokhub-memory.backup.json", "grokhub-secrets.json"]) {
+        try {
+          await fs.rm(path.join(ud, name), { force: true });
+          steps.push("Removed " + name);
+        } catch {}
+      }
+      steps.push("User memory wipe requested — secrets/memory cleared");
+    } catch (e) {
+      steps.push("Memory wipe skipped: " + (e instanceof Error ? e.message : String(e)));
+    }
+  } else {
+    steps.push("User memory retained (chats/settings/secrets)");
+  }
+
+  return {
+    ...result,
+    ok: result.ok !== false,
+    factory: true,
+    steps,
+    detail: result.detail || "Factory reinstall complete",
+  };
+}
+
+
 module.exports = {
   callXaiChat: callXaiChatWithOAuth,
   callXaiChatStream,
@@ -1011,6 +1070,7 @@ module.exports = {
   probeXaiKey,
   checkForUpdate,
   applyUpdate,
+  factoryReinstall,
   scheduleAppRestart,
   oauthStart,
   oauthPoll,

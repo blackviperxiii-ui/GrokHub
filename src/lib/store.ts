@@ -93,6 +93,8 @@ type State = {
     confirmHostCommands: boolean;
     /** When confirmHostCommands, only prompt for non-read-only commands */
     confirmDestructiveOnly: boolean;
+    /** Allow agent SELF_MOD writes under the install tree */
+    selfModifyEnabled: boolean;
   };
   /** Host commands awaiting user approval */
   pendingHostConfirm: {
@@ -482,6 +484,7 @@ export const useGrokHub = create<State>()(
         tray: true,
         confirmHostCommands: true,
         confirmDestructiveOnly: true,
+        selfModifyEnabled: false,
       },
       usage: createUsage("pro"),
       heartbeatAt: boot.heartbeatAt,
@@ -532,6 +535,24 @@ export const useGrokHub = create<State>()(
           if (sec.oauth) {
             try {
               patch.oauth = JSON.parse(sec.oauth);
+            } catch {
+              /* ignore */
+            }
+          }
+          // Recover website session from Electron partition if secrets empty
+          if (
+            !patch.ssoCookie &&
+            typeof window !== "undefined" &&
+            window.grokhubDesktop?.grok?.getWebsiteSso
+          ) {
+            try {
+              const sso = await window.grokhubDesktop.grok.getWebsiteSso();
+              if (sso?.cookie) {
+                patch.ssoCookie = sso.cookie;
+                void import("./secrets-client").then((m) =>
+                  m.secretsSet("ssoCookie", sso.cookie!),
+                );
+              }
             } catch {
               /* ignore */
             }
@@ -654,11 +675,20 @@ export const useGrokHub = create<State>()(
         void import("./secrets-client").then((m) => m.secretsSet("githubToken", token));
       },
       setSsoCookie: (cookie) => {
-        set({ ssoCookie: cookie.trim() });
+        const raw = cookie.trim();
+        // Normalize bare tokens
+        const normalized =
+          raw && !raw.includes("=") ? `sso=${raw}` : raw;
+        set({ ssoCookie: normalized });
         void import("./secrets-client").then((m) =>
-          m.secretsSet("ssoCookie", cookie.trim()),
+          m.secretsSet("ssoCookie", normalized),
         );
+        // Inject into Electron partition so session.fetch works
+        if (typeof window !== "undefined" && window.grokhubDesktop?.grok?.injectWebsiteCookie) {
+          void window.grokhubDesktop.grok.injectWebsiteCookie(normalized);
+        }
         void get().refreshUsage();
+        void get().syncWebsiteConnectors();
       },
 
       startGrokOAuth: async () => {
@@ -790,13 +820,13 @@ export const useGrokHub = create<State>()(
           if (typeof window !== "undefined" && window.grokhubDesktop?.grok?.linkWebsiteSession) {
             const r = await window.grokhubDesktop.grok.linkWebsiteSession();
             if (r?.cookie) {
-              set({ ssoCookie: r.cookie });
-              await get().refreshUsage();
+              // Persist via setSsoCookie (secrets + inject + usage)
+              get().setSsoCookie(r.cookie);
               void get().syncWebsiteConnectors();
               get().pushActivity({
                 kind: "auth",
                 title: "Grok website linked",
-                detail: "Weekly usage will sync from grok.com",
+                detail: "Session saved — usage & connectors will sync from grok.com",
                 status: "success",
               });
               return { ok: true, detail: "Grok website session linked" };
@@ -805,7 +835,7 @@ export const useGrokHub = create<State>()(
               ok: false,
               detail:
                 r?.error ||
-                "No SSO cookie captured. Stay until Grok chat loads, then try again — or paste sso= from browser cookies.",
+                "No session captured. Sign in until Grok chat loads, click “Use this session” in the bar, or paste sso= from browser cookies.",
             };
           }
           // Browser preview: open grok.com for manual cookie copy (desktop uses Electron window)
@@ -1929,8 +1959,17 @@ export const useGrokHub = create<State>()(
           stripConnectorCommands,
           runConnectorTool,
         } = await import("./connector-tools");
+        const {
+          extractSelfModCommands,
+          stripSelfModCommands,
+          selfModList,
+          selfModRead,
+          selfModWrite,
+          selfModPatch,
+          selfModSnapshot,
+        } = await import("./self-mod-client");
         const scrubAssistant = (s: string) =>
-          stripConnectorCommands(stripHostCommands(s));
+          stripSelfModCommands(stripConnectorCommands(stripHostCommands(s)));
 
         try {
           if (isLocalSlash) {
@@ -2153,7 +2192,116 @@ export const useGrokHub = create<State>()(
                   if (!cmds.length) continue;
                 }
 
-                if (!cmds.length) {
+                
+                // Self-modification (install tree) when enabled
+                let selfCmds = extractSelfModCommands(full);
+                if (selfCmds.length) {
+                  if (!get().desktop.selfModifyEnabled) {
+                    history.push({ role: "assistant", content: full });
+                    history.push({
+                      role: "user",
+                      content:
+                        "SELF_MOD_RESULT: blocked — self-modification is disabled. User must enable Settings → Desktop → Allow self-modification, or use Factory reinstall if the app is broken.",
+                    });
+                    patchBot(
+                      (visible || "") +
+                        "\n\n_Self-mod blocked (enable in Settings)._\n_Continuing…_",
+                      { streaming: true },
+                    );
+                    if (!cmds.length) continue;
+                  } else {
+                    set({ streamStatus: "Self-modifying app…" });
+                    const outputs: string[] = [];
+                    for (const sc of selfCmds.slice(0, 4)) {
+                      if (abort.signal.aborted || gen !== chatGeneration) {
+                        aborted = true;
+                        break;
+                      }
+                      try {
+                        if (sc.kind === "list") {
+                          const r = await selfModList(sc.path);
+                          outputs.push(
+                            `LIST ${sc.path}\n${JSON.stringify(r.entries || r, null, 2).slice(0, 4000)}`,
+                          );
+                        } else if (sc.kind === "read") {
+                          const r = await selfModRead(sc.path);
+                          outputs.push(
+                            r.ok
+                              ? `READ ${sc.path}\n${(r.content || "").slice(0, 8000)}`
+                              : `READ ${sc.path} failed: ${(r as { error?: string }).error}`,
+                          );
+                        } else if (sc.kind === "write") {
+                          const r = await selfModWrite(sc.path, sc.content, {
+                            note: "agent SELF_MOD",
+                          });
+                          outputs.push(
+                            r.ok
+                              ? `WRITE ${sc.path} ok`
+                              : `WRITE ${sc.path} failed: ${(r as { error?: string }).error}`,
+                          );
+                          get().pushActivity({
+                            kind: "skill",
+                            title: `Self-mod write ${sc.path}`,
+                            detail: r.ok ? "ok" : String((r as { error?: string }).error || "fail"),
+                            status: r.ok ? "success" : "failed",
+                          });
+                        } else if (sc.kind === "patch") {
+                          const r = await selfModPatch(sc.path, sc.find, sc.replace, {
+                            note: "agent SELF_MOD patch",
+                          });
+                          outputs.push(
+                            r.ok
+                              ? `PATCH ${sc.path} ok`
+                              : `PATCH ${sc.path} failed: ${(r as { error?: string }).error}`,
+                          );
+                          get().pushActivity({
+                            kind: "skill",
+                            title: `Self-mod patch ${sc.path}`,
+                            detail: r.ok ? "ok" : String((r as { error?: string }).error || "fail"),
+                            status: r.ok ? "success" : "failed",
+                          });
+                        } else if (sc.kind === "snapshot") {
+                          const r = await selfModSnapshot(sc.note);
+                          outputs.push(
+                            r.ok
+                              ? `SNAPSHOT ${(r as { id?: string }).id} files=${(r as { fileCount?: number }).fileCount}`
+                              : `SNAPSHOT failed`,
+                          );
+                        }
+                      } catch (e) {
+                        outputs.push(
+                          `SELF_MOD error: ${e instanceof Error ? e.message : "failed"}`,
+                        );
+                      }
+                    }
+                    if (aborted) break;
+                    history.push({ role: "assistant", content: full });
+                    history.push({
+                      role: "user",
+                      content: [
+                        "SELF_MOD_RESULT (authoritative):",
+                        outputs.join("\n\n---\n\n"),
+                        "",
+                        "Summarize for the user. Remind them Factory reinstall is available in Settings if anything breaks.",
+                      ].join("\n"),
+                    });
+                    patchBot(
+                      [
+                        visible || "Applied self-mod steps.",
+                        "",
+                        "```",
+                        outputs.join("\n\n").slice(0, 3000),
+                        "```",
+                        "",
+                        "_Summarizing…_",
+                      ].join("\n"),
+                      { streaming: true },
+                    );
+                    if (!cmds.length) continue;
+                  }
+                }
+
+if (!cmds.length) {
                   finalAnswer = visible || full;
                   break;
                 }
@@ -2652,6 +2800,7 @@ export const useGrokHub = create<State>()(
         if (desk) {
           if (desk.confirmHostCommands === undefined) desk.confirmHostCommands = true;
           if (desk.confirmDestructiveOnly === undefined) desk.confirmDestructiveOnly = true;
+          if (desk.selfModifyEnabled === undefined) desk.selfModifyEnabled = false;
           s.desktop = desk;
         }
         // Drop old demo-seeded usage (842 units SuperGrok Pro) so meter shows real usage

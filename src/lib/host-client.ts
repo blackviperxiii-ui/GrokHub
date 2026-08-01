@@ -69,10 +69,25 @@ export type DesktopGrokBridge = {
     token?: string;
     force?: boolean;
     restart?: boolean;
+    factory?: boolean;
   }) => Promise<UpdateResult>;
+  factoryReinstall?: (opts?: {
+    token?: string;
+    wipeMemory?: boolean;
+    clearSelfMod?: boolean;
+    restart?: boolean;
+  }) => Promise<{ ok?: boolean; detail?: string; steps?: string[]; error?: string }>;
   /** grok.com website SSO for weekly SuperGrok usage */
-  linkWebsiteSession?: () => Promise<{ cookie?: string; error?: string }>;
-  getWebsiteSso?: () => Promise<{ cookie?: string }>;
+  linkWebsiteSession?: () => Promise<{
+    cookie?: string;
+    cookieHeader?: string;
+    error?: string;
+    names?: string[];
+  }>;
+  getWebsiteSso?: () => Promise<{ cookie?: string; signedIn?: boolean }>;
+  injectWebsiteCookie?: (
+    raw: string,
+  ) => Promise<{ ok?: boolean; cookie?: string; error?: string }>;
   websiteUsage?: (opts: {
     ssoCookie?: string;
     bearer?: string;
@@ -116,6 +131,25 @@ export type DesktopBridge = {
     }>;
     exportAll: () => Promise<unknown>;
     importAll: (payload: string | unknown) => Promise<{ ok: boolean; error?: string }>;
+  };
+  selfmod?: {
+    info: () => Promise<import("./self-mod-client").SelfModInfo>;
+    list: (rel?: string) => Promise<{ ok: boolean; path?: string; entries?: Array<{ name: string; type: string }>; error?: string }>;
+    read: (rel: string) => Promise<{ ok: boolean; path?: string; content?: string; error?: string }>;
+    write: (
+      rel: string,
+      content: string,
+      opts?: { note?: string; snapshot?: boolean },
+    ) => Promise<{ ok: boolean; path?: string; error?: string }>;
+    patch: (
+      rel: string,
+      find: string,
+      replace: string,
+      opts?: { replaceAll?: boolean; note?: string },
+    ) => Promise<{ ok: boolean; path?: string; error?: string }>;
+    snapshot: (note?: string) => Promise<{ ok: boolean; id?: string; fileCount?: number; error?: string }>;
+    restore: (id: string) => Promise<{ ok: boolean; error?: string }>;
+    journal: (limit?: number) => Promise<{ ok: boolean; entries?: unknown[] }>;
   };
   host?: {
     info: () => Promise<HostInfo>;

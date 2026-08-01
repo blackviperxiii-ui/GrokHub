@@ -243,29 +243,51 @@ export function UsageMeterPanel({ compact }: { compact?: boolean }) {
               Grok website session
             </div>
             <p className="text-[11px] text-[var(--color-subtle)]">
-              Opens an in-app Grok window (not a blank tab). Sign in until the chat home
-              loads — the window closes when the session cookie is captured. Or paste the{" "}
-              <span className="font-mono">sso</span> cookie from your browser.
+              Opens an in-app sign-in window. Complete login until the Grok chat UI appears, then
+              click <span className="font-medium text-[var(--color-fg)]">Use this session</span> in
+              the bar at the bottom of that window. Or paste the{" "}
+              <span className="font-mono">sso</span> cookie from your browser DevTools.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" onClick={() => void onLink()} disabled={linkBusy}>
                 <Link2 className="h-3.5 w-3.5" />
-                {linkBusy ? "Linking…" : "Link Grok website"}
+                {linkBusy ? "Waiting for sign-in…" : "Link Grok website"}
               </Button>
               {ssoCookie ? (
-                <Badge variant="success">SSO linked</Badge>
+                <Badge variant="success">Linked</Badge>
               ) : (
                 <Badge>Not linked</Badge>
               )}
+              {ssoCookie ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setSsoCookie("");
+                    setLinkDetail("Website session cleared");
+                  }}
+                >
+                  Unlink
+                </Button>
+              ) : null}
             </div>
             {linkDetail && (
-              <p className="text-[11px] text-[var(--color-muted)]">{linkDetail}</p>
+              <p
+                className={
+                  linkDetail.toLowerCase().includes("linked") ||
+                  linkDetail.toLowerCase().includes("saved")
+                    ? "text-[11px] text-[var(--color-success)]"
+                    : "text-[11px] text-[var(--color-muted)]"
+                }
+              >
+                {linkDetail}
+              </p>
             )}
             <div className="flex gap-2">
               <Input
                 value={ssoDraft}
                 onChange={(e) => setSsoDraft(e.target.value)}
-                placeholder="Or paste sso=… cookie from grok.com"
+                placeholder="Paste sso=… or full Cookie header from grok.com"
                 className="font-mono text-xs"
               />
               <Button
@@ -275,7 +297,8 @@ export function UsageMeterPanel({ compact }: { compact?: boolean }) {
                 onClick={() => {
                   setSsoCookie(ssoDraft.trim());
                   setSsoDraft("");
-                  setLinkDetail("SSO cookie saved — refreshing usage…");
+                  setLinkDetail("Cookie saved & injected — refreshing usage…");
+                  void refreshUsage();
                 }}
               >
                 Save

@@ -24,58 +24,154 @@ function grpcWebFrame(payload) {
   return out;
 }
 
-/** Prefer real consumer session cookies from the login partition. */
+/**
+ * Collect every cookie from the Grok partition (and related domains).
+ * Grok has used `sso`, `sso-rw`, and other session names over time.
+ */
 async function collectSessionCookies() {
   const ses = grokSession();
-  const buckets = await Promise.all([
-    ses.cookies.get({ domain: "grok.com" }),
-    ses.cookies.get({ domain: ".grok.com" }),
-    ses.cookies.get({ url: "https://grok.com" }),
-    ses.cookies.get({ domain: "x.ai" }),
-    ses.cookies.get({ domain: ".x.ai" }),
-    ses.cookies.get({ url: "https://accounts.x.ai" }),
-  ]);
-  const byKey = new Map();
-  for (const list of buckets) {
-    for (const c of list || []) {
-      byKey.set(`${c.domain}|${c.name}`, c);
+  let all = [];
+  try {
+    // Full partition dump is most reliable
+    all = await ses.cookies.get({});
+  } catch {
+    all = [];
+  }
+  if (!all.length) {
+    const buckets = await Promise.all([
+      ses.cookies.get({ domain: "grok.com" }).catch(() => []),
+      ses.cookies.get({ domain: ".grok.com" }).catch(() => []),
+      ses.cookies.get({ url: "https://grok.com" }).catch(() => []),
+      ses.cookies.get({ domain: "x.ai" }).catch(() => []),
+      ses.cookies.get({ domain: ".x.ai" }).catch(() => []),
+      ses.cookies.get({ url: "https://accounts.x.ai" }).catch(() => []),
+      ses.cookies.get({ url: "https://grok.x.ai" }).catch(() => []),
+    ]);
+    const byKey = new Map();
+    for (const list of buckets) {
+      for (const c of list || []) {
+        byKey.set(`${c.domain}|${c.name}`, c);
+      }
+    }
+    all = [...byKey.values()];
+  }
+
+  const names = all.map((c) => c.name);
+  // Priority order for auth cookies
+  const ssoPick =
+    all.find((c) => c.name === "sso" && c.value && c.value.length > 8) ||
+    all.find((c) => c.name === "sso-rw" && c.value && c.value.length > 8) ||
+    all.find((c) => /^sso/i.test(c.name) && c.value && c.value.length > 8) ||
+    all.find(
+      (c) =>
+        /session|auth|token|cf_clearance|__Secure-next|next-auth/i.test(c.name) &&
+        c.value &&
+        c.value.length > 12 &&
+        ((c.domain || "").includes("grok") || (c.domain || "").includes("x.ai")),
+    );
+
+  const relevant = all.filter(
+    (c) =>
+      (c.domain || "").includes("grok.com") ||
+      (c.domain || "").includes("x.ai") ||
+      /sso|session|auth|token|cf_clearance/i.test(c.name),
+  );
+
+  const cookieHeader = relevant.map((c) => `${c.name}=${c.value}`).join("; ");
+  const sso = ssoPick ? `${ssoPick.name}=${ssoPick.value}` : "";
+
+  // "Signed in enough" heuristic: sso cookie OR (grok.com cookies + any long-lived auth-ish cookie)
+  const grokCookies = all.filter((c) => (c.domain || "").includes("grok"));
+  const signedIn =
+    Boolean(sso) ||
+    (grokCookies.length >= 1 &&
+      relevant.some((c) => c.value && c.value.length > 20 && /sso|session|token|auth/i.test(c.name)));
+
+  return {
+    sso,
+    cookieHeader: cookieHeader || sso,
+    count: all.length,
+    names,
+    signedIn,
+    domains: [...new Set(all.map((c) => c.domain).filter(Boolean))],
+  };
+}
+
+/**
+ * Inject a pasted cookie string into the persistent partition so session.fetch works.
+ */
+async function injectCookieHeader(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return { ok: false, error: "empty cookie" };
+  const ses = grokSession();
+  // Accept "sso=VALUE" or full "a=1; b=2" or bare token
+  let pairs = [];
+  if (text.includes("=")) {
+    pairs = text.split(/;\s*/).map((p) => {
+      const i = p.indexOf("=");
+      if (i < 0) return null;
+      return { name: p.slice(0, i).trim(), value: p.slice(i + 1).trim() };
+    }).filter(Boolean);
+  } else {
+    pairs = [{ name: "sso", value: text }];
+  }
+  const expires = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 60;
+  for (const { name, value } of pairs) {
+    if (!name || !value) continue;
+    const domains = name.toLowerCase().includes("cf")
+      ? [".grok.com", "grok.com"]
+      : [".grok.com", "grok.com", ".x.ai"];
+    for (const domain of domains) {
+      try {
+        await ses.cookies.set({
+          url: domain.includes("x.ai") ? "https://accounts.x.ai" : "https://grok.com",
+          name,
+          value,
+          domain,
+          path: "/",
+          secure: true,
+          httpOnly: !/cf_clearance/i.test(name),
+          expirationDate: expires,
+        });
+      } catch {
+        try {
+          await ses.cookies.set({
+            url: "https://grok.com",
+            name,
+            value,
+            path: "/",
+            secure: true,
+            expirationDate: expires,
+          });
+        } catch {
+          /* ignore */
+        }
+      }
     }
   }
-  const all = [...byKey.values()];
-  const sso =
-    all.find((c) => c.name === "sso") ||
-    all.find((c) => c.name === "sso-rw") ||
-    all.find((c) => /sso/i.test(c.name));
-  const cookieHeader = all
-    .filter(
-      (c) =>
-        (c.domain || "").includes("grok.com") ||
-        (c.domain || "").includes("x.ai") ||
-        /sso|session|auth|token/i.test(c.name),
-    )
-    .map((c) => `${c.name}=${c.value}`)
-    .join("; ");
+  const collected = await collectSessionCookies();
   return {
-    sso: sso ? `${sso.name}=${sso.value}` : "",
-    cookieHeader: cookieHeader || (sso ? `${sso.name}=${sso.value}` : ""),
-    count: all.length,
-    names: all.map((c) => c.name),
+    ok: Boolean(collected.sso || collected.cookieHeader),
+    cookie: collected.sso || collected.cookieHeader || pairs.map((p) => `${p.name}=${p.value}`).join("; "),
+    cookieHeader: collected.cookieHeader,
+    names: collected.names,
   };
 }
 
 /**
  * Open an in-app browser so the user can sign in to grok.com.
- * Waits until an SSO-like cookie appears (or the window is closed).
+ * Does NOT auto-close on the first cookie blip — waits for a real session
+ * or the user clicking "I'm signed in" (injected toolbar) / window close after success.
  */
 function linkWebsiteSession() {
   return new Promise((resolve) => {
     const ses = grokSession();
     const win = new BrowserWindow({
-      width: 1040,
-      height: 820,
+      width: 1100,
+      height: 860,
       minWidth: 720,
       minHeight: 560,
-      title: "Sign in to Grok — then this window closes",
+      title: "Sign in to Grok — wait for chat home, then click “Use this session”",
       autoHideMenuBar: true,
       backgroundColor: "#0a0a0a",
       show: false,
@@ -102,49 +198,82 @@ function linkWebsiteSession() {
       resolve(payload);
     };
 
-    const tryCapture = async (force = false) => {
-      if (settled) return;
-      try {
-        const { sso, cookieHeader, count, names } = await collectSessionCookies();
-        if (sso) {
-          // Mirror into default session too (optional helpers)
-          try {
-            const name = sso.split("=")[0];
-            const value = sso.slice(name.length + 1);
-            await session.defaultSession.cookies.set({
-              url: "https://grok.com",
-              name,
-              value,
-              domain: ".grok.com",
-              path: "/",
-              secure: true,
-              httpOnly: true,
-              expirationDate: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30,
-            });
-          } catch {
-            /* ignore */
-          }
-          done({ cookie: sso, cookieHeader, names });
-          return;
-        }
-        // Some sessions only set a long combined auth cookie after home load
-        if (cookieHeader && /sso=|session/i.test(cookieHeader) && count >= 2) {
-          done({ cookie: cookieHeader, cookieHeader, names });
-          return;
-        }
-        if (force) {
+    const captureIfReady = async (opts = {}) => {
+      if (settled) return false;
+      const force = Boolean(opts.force);
+      const { sso, cookieHeader, count, names, signedIn, domains } =
+        await collectSessionCookies();
+
+      // Prefer explicit sso
+      if (sso && sso.length > 12) {
+        done({
+          cookie: sso,
+          cookieHeader: cookieHeader || sso,
+          names,
+          domains,
+        });
+        return true;
+      }
+
+      // Full cookie header once signed-in heuristic passes
+      if (signedIn && cookieHeader && cookieHeader.length > 20) {
+        done({
+          cookie: cookieHeader,
+          cookieHeader,
+          names,
+          domains,
+        });
+        return true;
+      }
+
+      // User pressed "Use this session"
+      if (force) {
+        if (cookieHeader && count > 0) {
           done({
-            error:
-              count === 0
-                ? "No grok.com cookies yet. Sign in fully (home chat must load), then click Link again."
-                : `Signed in cookies found (${names.join(", ") || "none"}) but no sso cookie. Paste sso=… from DevTools → Application → Cookies if needed.`,
+            cookie: sso || cookieHeader,
+            cookieHeader,
             names,
+            domains,
           });
+          return true;
         }
-      } catch (e) {
-        if (force) {
-          done({ error: e instanceof Error ? e.message : "cookie capture failed" });
-        }
+        done({
+          error:
+            count === 0
+              ? "No cookies yet. Finish sign-in until the Grok chat UI loads, then click “Use this session” again."
+              : `Cookies present (${names.slice(0, 12).join(", ") || "unnamed"}) but session looks incomplete. Stay on grok.com chat home and retry, or paste sso= from browser DevTools.`,
+          names,
+          domains,
+        });
+        return true;
+      }
+      return false;
+    };
+
+    // Floating capture bar via executeJavaScript on each navigation
+    const injectToolbar = async () => {
+      if (settled || win.isDestroyed()) return;
+      try {
+        await win.webContents.executeJavaScript(`
+          (function () {
+            if (document.getElementById('grokhub-session-bar')) return;
+            var bar = document.createElement('div');
+            bar.id = 'grokhub-session-bar';
+            bar.style.cssText = 'position:fixed;z-index:2147483647;left:12px;right:12px;bottom:12px;display:flex;gap:8px;align-items:center;justify-content:center;padding:10px 14px;border-radius:14px;background:rgba(12,12,14,0.94);border:1px solid rgba(255,255,255,0.12);box-shadow:0 12px 40px rgba(0,0,0,.45);font:600 13px system-ui,sans-serif;color:#f4f4f5';
+            bar.innerHTML = '<span style="opacity:.85;font-weight:500">When Grok chat is visible, capture the session:</span>';
+            var btn = document.createElement('button');
+            btn.textContent = 'Use this session';
+            btn.style.cssText = 'border:0;border-radius:999px;padding:8px 14px;background:#f4f4f5;color:#0a0a0a;font:600 13px system-ui,sans-serif;cursor:pointer';
+            btn.onclick = function () {
+              document.title = 'GROKHUB_CAPTURE_SESSION';
+              btn.textContent = 'Capturing…';
+            };
+            bar.appendChild(btn);
+            document.documentElement.appendChild(bar);
+          })();
+        `, true);
+      } catch {
+        /* page may not allow */
       }
     };
 
@@ -154,22 +283,20 @@ function linkWebsiteSession() {
 
     win.webContents.on("did-fail-load", (_e, code, desc, url, isMain) => {
       if (!isMain || settled) return;
-      // -3 = aborted (redirects) — ignore
       if (code === -3) return;
-      const html = `<!doctype html><html><body style="font-family:system-ui;background:#111;color:#eee;padding:2rem;max-width:36rem">
+      const html = `<!doctype html><html><body style="font-family:system-ui;background:#111;color:#eee;padding:2rem;max-width:40rem;margin:auto">
         <h1 style="font-size:1.25rem">Could not load Grok</h1>
         <p style="color:#aaa;line-height:1.5">Error ${code}: ${desc || "unknown"}</p>
-        <p style="color:#aaa;line-height:1.5;word-break:break-all">${url || ""}</p>
+        <p style="color:#aaa;word-break:break-all">${url || ""}</p>
         <p><a href="https://grok.com/" style="color:#7dd3fc">Retry grok.com</a>
-        · <a href="https://accounts.x.ai/sign-in" style="color:#7dd3fc">xAI sign-in</a></p>
-        <p style="color:#888;font-size:0.85rem">If this stays blank, open grok.com in Firefox, copy the <code>sso</code> cookie, and paste it in GrokHub Settings → Usage.</p>
+        · <a href="https://accounts.x.ai/sign-in?redirect=grok-com" style="color:#7dd3fc">xAI sign-in</a></p>
+        <p style="color:#888;font-size:0.9rem;line-height:1.5">If the embed stays blank, open <b>grok.com</b> in Firefox/Chrome, DevTools → Application → Cookies → copy the <code>sso</code> value, and paste it in GrokHub.</p>
       </body></html>`;
       win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
     });
 
-    // Keep external targets inside this window when possible
     win.webContents.setWindowOpenHandler(({ url }) => {
-      if (/grok\.com|x\.ai|x\.com|twitter\.com|accounts\./i.test(url)) {
+      if (/grok\.com|x\.ai|x\.com|twitter\.com|accounts\.|google\.|apple\.|github\./i.test(url)) {
         win.loadURL(url);
         return { action: "deny" };
       }
@@ -177,27 +304,70 @@ function linkWebsiteSession() {
       return { action: "deny" };
     });
 
-    win.webContents.on("did-navigate", () => void tryCapture(false));
-    win.webContents.on("did-navigate-in-page", () => void tryCapture(false));
-    win.webContents.on("did-finish-load", () => void tryCapture(false));
-
-    const poll = setInterval(() => void tryCapture(false), 1200);
-    win.on("closed", () => {
-      clearInterval(poll);
-      if (!settled) {
-        settled = true;
-        resolve({ error: "Window closed before Grok website session was linked" });
+    // Capture toolbar "Use this session" via title change
+    win.webContents.on("page-title-updated", (_e, title) => {
+      if (title === "GROKHUB_CAPTURE_SESSION") {
+        void captureIfReady({ force: true });
       }
     });
+
+    win.webContents.on("did-navigate", () => {
+      void injectToolbar();
+      void captureIfReady(false);
+    });
+    win.webContents.on("did-navigate-in-page", () => void captureIfReady(false));
+    win.webContents.on("did-finish-load", () => {
+      void injectToolbar();
+      void captureIfReady(false);
+    });
+    win.webContents.on("did-redirect-navigation", () => void captureIfReady(false));
+
+    // Cookie store changes (Electron 30+)
+    try {
+      ses.cookies.on("changed", () => {
+        void captureIfReady(false);
+      });
+    } catch {
+      /* older electron */
+    }
+
+    const poll = setInterval(() => {
+      void injectToolbar();
+      void captureIfReady(false);
+    }, 1500);
+
+    win.on("closed", async () => {
+      clearInterval(poll);
+      if (settled) return;
+      // Last chance: user closed after signing in
+      const { sso, cookieHeader, signedIn, names } = await collectSessionCookies();
+      if (sso || (signedIn && cookieHeader)) {
+        settled = true;
+        resolve({
+          cookie: sso || cookieHeader,
+          cookieHeader: cookieHeader || sso,
+          names,
+        });
+        return;
+      }
+      settled = true;
+      resolve({
+        error:
+          "Window closed before a Grok session was captured. Sign in until chat loads, click “Use this session”, or paste the sso cookie in Settings.",
+        names,
+      });
+    });
+
+    // Hard timeout 8 minutes
     setTimeout(() => {
       clearInterval(poll);
-      void tryCapture(true);
-    }, 5 * 60 * 1000);
+      void captureIfReady({ force: true });
+    }, 8 * 60 * 1000);
 
-    // Prefer login entry that actually renders in Chromium embeds
+    // Start at accounts sign-in with return to grok — more reliable than bare grok.com in embeds
     const start =
       process.env.GROKHUB_GROK_LOGIN_URL ||
-      "https://grok.com/?_gh=1";
+      "https://accounts.x.ai/sign-in?redirect=https%3A%2F%2Fgrok.com%2F";
     win.loadURL(start, {
       userAgent: CHROME_UA,
       httpReferrer: "https://grok.com/",
@@ -211,6 +381,16 @@ async function readSessionCookieHeader(fallbackSso) {
   if (fromSes.sso) return fromSes.sso;
   const t = String(fallbackSso || "").trim();
   if (!t) return "";
+  // If user pasted a raw value, inject it for this process too
+  if (t && !fromSes.count) {
+    try {
+      await injectCookieHeader(t);
+      const again = await collectSessionCookies();
+      if (again.cookieHeader) return again.cookieHeader;
+    } catch {
+      /* ignore */
+    }
+  }
   if (/sso=/i.test(t) || t.includes("=")) return t;
   return `sso=${t}`;
 }
@@ -310,7 +490,7 @@ async function fetchWebsiteUsage(opts = {}) {
   const cookieHeader = await readSessionCookieHeader(opts.ssoCookie);
   if (!cookieHeader) {
     return emptyUsage(
-      "No Grok website session. Click Link Grok website and sign in until chat loads.",
+      "No Grok website session. Click Link Grok website and sign in until chat loads, then “Use this session”.",
     );
   }
 
@@ -324,98 +504,141 @@ async function fetchWebsiteUsage(opts = {}) {
       "x-user-agent": "grokhub-desktop",
       origin: "https://grok.com",
       referer: "https://grok.com/",
-      cookie: cookieHeader,
       "user-agent": CHROME_UA,
+      cookie: cookieHeader,
     };
-    if (opts.bearer) headers.authorization = `Bearer ${opts.bearer}`;
 
     // Prefer session.fetch so partition cookies merge with explicit Cookie header
-    const res = await ses.fetch(CREDITS_URL, {
-      method: "POST",
-      headers,
-      body,
-    });
-    const ab = await res.arrayBuffer();
-    const buf = Buffer.from(ab);
-    if (!res.ok) {
-      return emptyUsage(
-        `grok.com usage HTTP ${res.status} — re-link website session (sign in fully)`,
-      );
+    let res;
+    try {
+      res = await ses.fetch(CREDITS_URL, {
+        method: "POST",
+        headers,
+        body,
+      });
+    } catch {
+      res = await fetch(CREDITS_URL, { method: "POST", headers, body });
     }
-    const parsed = parseGrpcWeb(buf);
+
+    const ab = Buffer.from(await res.arrayBuffer());
+    if (!res.ok) {
+      // Try subscriptions JSON fallback
+      try {
+        const subRes = await ses.fetch(SUBSCRIPTIONS_URL, {
+          method: "GET",
+          headers: {
+            accept: "application/json",
+            cookie: cookieHeader,
+            "user-agent": CHROME_UA,
+            referer: "https://grok.com/",
+          },
+        });
+        if (subRes.ok) {
+          const json = await subRes.json();
+          return {
+            ok: true,
+            planLabel: json?.plan || json?.tier || "Grok",
+            planId: "super",
+            creditUsagePercent: Number(json?.usagePercent || json?.percent || 0) || 0,
+            periodType: "unknown",
+            periodStart: null,
+            periodEnd: null,
+            productUsage: [],
+            prepaidBalanceCents: 0,
+            onDemandCapCents: 0,
+            onDemandUsedCents: 0,
+            raw: "subscriptions",
+            ssoCookie: cookieHeader,
+          };
+        }
+      } catch {
+        /* fall through */
+      }
+      return emptyUsage(`Usage API ${res.status} — re-link website session (cookie may be stale)`);
+    }
+
+    const parsed = parseGrpcWeb(ab);
     if (parsed.status && parsed.status !== 0) {
       return emptyUsage(
-        parsed.message || `grpc-status ${parsed.status} — re-link website session`,
+        parsed.message || `grpc-status ${parsed.status} — re-link Grok website session`,
       );
     }
-    const msg = parsed.messages[0];
-    if (!msg) {
-      return emptyUsage("Empty usage response — try re-linking after chat loads");
-    }
 
-    // Prefer server-side full parser when local UI API is up
-    try {
-      const local = await fetch("http://127.0.0.1:8080/api/grok", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "websiteUsage",
-          ssoCookie: cookieHeader,
-          bearer: opts.bearer || "",
-        }),
-      });
-      if (local.ok) {
-        const data = await local.json();
-        if (data && (data.ok || data.creditUsagePercent != null)) return data;
-      }
-    } catch {
-      /* offline local API */
-    }
-
-    // Minimal inline parse for credit_usage_percent
-    const root = decodeFields(msg);
-    const config = root[1] && root[1][0] instanceof Buffer ? decodeFields(root[1][0]) : {};
     let creditUsagePercent = 0;
-    if (config[2] && config[2][0] instanceof Buffer && config[2][0].length === 8) {
-      creditUsagePercent = config[2][0].readDoubleLE(0);
+    let planLabel = "Grok";
+    let periodEnd = null;
+    let periodStart = null;
+    let prepaidBalanceCents = 0;
+    let productUsage = [];
+
+    for (const msg of parsed.messages) {
+      const top = decodeFields(msg);
+      // Walk nested messages for doubles / strings (best-effort)
+      for (const [, vals] of Object.entries(top)) {
+        for (const v of vals) {
+          if (Buffer.isBuffer(v) && v.length >= 8) {
+            // try as nested message
+            try {
+              const nested = decodeFields(v);
+              for (const [fk, fvals] of Object.entries(nested)) {
+                for (const fv of fvals) {
+                  if (Buffer.isBuffer(fv) && fv.length === 8) {
+                    const pct = fv.readDoubleLE(0);
+                    if (pct >= 0 && pct <= 100 && creditUsagePercent === 0) {
+                      creditUsagePercent = pct;
+                    }
+                  }
+                }
+              }
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      }
     }
 
-    let planLabel = "SuperGrok";
-    try {
-      const subRes = await ses.fetch(SUBSCRIPTIONS_URL, {
-        headers: {
-          accept: "application/json",
-          cookie: cookieHeader,
-          "user-agent": CHROME_UA,
-          origin: "https://grok.com",
-          referer: "https://grok.com/",
-        },
-      });
-      if (subRes.ok) {
-        const sub = await subRes.json();
-        const name =
-          sub?.tier?.name ||
-          sub?.subscription?.tier?.name ||
-          sub?.plan?.name ||
-          sub?.displayName;
-        if (name) planLabel = String(name);
+    // Also try REST rate-limits style endpoints
+    if (!creditUsagePercent) {
+      for (const url of [
+        "https://grok.com/rest/rate-limits",
+        "https://grok.com/rest/subscriptions",
+      ]) {
+        try {
+          const r = await ses.fetch(url, {
+            headers: {
+              accept: "application/json",
+              cookie: cookieHeader,
+              "user-agent": CHROME_UA,
+              referer: "https://grok.com/",
+            },
+          });
+          if (!r.ok) continue;
+          const j = await r.json();
+          const pct =
+            Number(j?.creditUsagePercent ?? j?.usagePercent ?? j?.percentUsed ?? 0) || 0;
+          if (pct > 0) creditUsagePercent = pct;
+          if (j?.plan || j?.planName) planLabel = String(j.plan || j.planName);
+          break;
+        } catch {
+          /* next */
+        }
       }
-    } catch {
-      /* ignore */
     }
 
     return {
       ok: true,
       planLabel,
-      planId: /heavy/i.test(planLabel) ? "heavy" : /pro/i.test(planLabel) ? "pro" : "super",
-      creditUsagePercent: Number.isFinite(creditUsagePercent) ? creditUsagePercent : 0,
+      planId: "super",
+      creditUsagePercent,
       periodType: "weekly",
-      periodStart: null,
-      periodEnd: null,
-      productUsage: [],
-      prepaidBalanceCents: 0,
+      periodStart,
+      periodEnd,
+      productUsage,
+      prepaidBalanceCents,
       onDemandCapCents: 0,
       onDemandUsedCents: 0,
+      ssoCookie: cookieHeader,
     };
   } catch (e) {
     return emptyUsage(e instanceof Error ? e.message : "usage fetch failed");
@@ -423,10 +646,14 @@ async function fetchWebsiteUsage(opts = {}) {
 }
 
 async function getStoredSso() {
-  const { sso, cookieHeader } = await collectSessionCookies();
-  return { cookie: sso || cookieHeader || "" };
+  const { sso, cookieHeader, signedIn } = await collectSessionCookies();
+  return {
+    cookie: sso || cookieHeader || "",
+    signedIn: Boolean(signedIn || sso),
+  };
 }
 
+// ---- connectors fetch (kept from previous version, simplified import) ----
 const CONNECTOR_REST = [
   "https://grok.com/rest/connectors",
   "https://grok.com/rest/apps",
@@ -538,9 +765,6 @@ function walkJsonConnectors(node, hits, depth) {
   }
 }
 
-/**
- * List Grok website Installed connectors using the persistent login partition.
- */
 async function fetchWebsiteConnectors(opts = {}) {
   const ses = grokSession();
   const collected = await collectSessionCookies();
@@ -606,4 +830,5 @@ module.exports = {
   fetchWebsiteConnectors,
   getStoredSso,
   collectSessionCookies,
+  injectCookieHeader,
 };

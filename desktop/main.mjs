@@ -10,6 +10,7 @@ const grokBridge = require("./grok-bridge.cjs");
 const websiteSession = require("./website-session.cjs");
 const secretsStore = require("./secrets-store.cjs");
 const stateStore = require("./state-store.cjs");
+const selfMod = require("./self-mod.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -492,6 +493,22 @@ function registerIpc() {
     }
   });
 
+  ipcMain.handle("grok:getWebsiteSso", async () => {
+    try {
+      return await websiteSession.getStoredSso();
+    } catch (e) {
+      return { cookie: "", error: e instanceof Error ? e.message : "sso read failed" };
+    }
+  });
+
+  ipcMain.handle("grok:injectWebsiteCookie", async (_e, raw) => {
+    try {
+      return await websiteSession.injectCookieHeader(String(raw || ""));
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "inject failed" };
+    }
+  });
+
   ipcMain.handle("grok:websiteUsage", async (_e, opts) => {
     return websiteSession.fetchWebsiteUsage({
       ssoCookie: String(opts?.ssoCookie || ""),
@@ -518,6 +535,23 @@ function registerIpc() {
   ipcMain.handle("state:info", () => stateStore.info());
   ipcMain.handle("state:export", () => stateStore.exportAll());
   ipcMain.handle("state:import", (_e, payload) => stateStore.importAll(payload));
+
+  ipcMain.handle("selfmod:info", () => selfMod.info());
+  ipcMain.handle("selfmod:list", (_e, rel) => selfMod.listDirRel(rel));
+  ipcMain.handle("selfmod:read", (_e, rel) => selfMod.readFileRel(rel));
+  ipcMain.handle("selfmod:write", (_e, rel, content, opts) =>
+    selfMod.writeFileRel(rel, content, opts || {}),
+  );
+  ipcMain.handle("selfmod:patch", (_e, rel, find, replace, opts) =>
+    selfMod.patchFileRel(rel, find, replace, opts || {}),
+  );
+  ipcMain.handle("selfmod:snapshot", (_e, note) => selfMod.createSnapshot(note));
+  ipcMain.handle("selfmod:restore", (_e, id) => selfMod.restoreSnapshot(id));
+  ipcMain.handle("selfmod:journal", (_e, limit) => selfMod.listJournal(limit));
+  ipcMain.handle("update:factory", async (_e, opts) => {
+    const r = await grokBridge.factoryReinstall({ ...(opts || {}), restart: true });
+    return r;
+  });
 
   // Non-stream chat already registered; expose stream buffer helper if bridge supports it
   if (typeof grokBridge.callXaiChatStream === "function") {

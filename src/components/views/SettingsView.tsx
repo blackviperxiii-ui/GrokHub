@@ -5,6 +5,12 @@ import { friendlyModelName } from "@/lib/models-catalog";
 import { applyUpdate, checkUpdate } from "@/lib/grok-client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { exportMemory, importMemory, memoryInfo } from "@/lib/persistent-storage";
+import {
+  factoryReinstall,
+  selfModInfo,
+  selfModRestore,
+  selfModSnapshot,
+} from "@/lib/self-mod-client";
 import { useGrokHub } from "@/lib/store";
 import type { GrokModeId } from "@/lib/types";
 import type { UpdateStatus } from "@/lib/update";
@@ -37,9 +43,13 @@ export function SettingsView() {
   } | null>(null);
   const [memMsg, setMemMsg] = useState("");
   const importRef = useRef<HTMLInputElement>(null);
+  const [selfMsg, setSelfMsg] = useState("");
+  const [selfBusy, setSelfBusy] = useState(false);
+  const [selfInfo, setSelfInfo] = useState<Awaited<ReturnType<typeof selfModInfo>> | null>(null);
 
   useEffect(() => {
     void memoryInfo().then(setMemInfo);
+    void selfModInfo().then(setSelfInfo);
   }, []);
   const apiKey = useGrokHub((s) => s.apiKey);
   const setApiKey = useGrokHub((s) => s.setApiKey);
@@ -636,6 +646,11 @@ export function SettingsView() {
                 "Only risky commands",
                 "Skip confirm for read-only commands (ls, cat, …)",
               ],
+              [
+                "selfModifyEnabled",
+                "Allow self-modification",
+                "Agent may edit install files (src/, desktop/, …). Use Factory reinstall if something breaks.",
+              ],
             ] as const
           ).map(([key, label, hint]) => (
             <label
@@ -653,6 +668,163 @@ export function SettingsView() {
                 onChange={(e) => setDesktop({ [key]: e.target.checked })}
               />
             </label>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Self-mod & factory restore</CardTitle>
+          <CardDescription>
+            The agent can change GrokHub’s install files when self-modification is enabled. Local
+            snapshots and a full GitHub factory reinstall let you roll back. Your chats live in user
+            data and survive code reinstall unless you wipe memory.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {selfInfo?.ok && (
+            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-2 font-mono text-[11px] text-[var(--color-muted)]">
+              <div className="truncate">install: {selfInfo.root || "—"}</div>
+              <div className="truncate">snapshots: {selfInfo.selfModDir || "—"}</div>
+              <div>
+                saved points: {(selfInfo.snapshots || []).length}
+                {desktop.selfModifyEnabled ? " · self-mod ON" : " · self-mod OFF"}
+              </div>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={selfBusy}
+              onClick={() => {
+                setSelfBusy(true);
+                setSelfMsg("Creating snapshot…");
+                void selfModSnapshot("manual settings").then((r) => {
+                  setSelfBusy(false);
+                  setSelfMsg(
+                    r.ok
+                      ? `Snapshot ${(r as { id?: string }).id} (${(r as { fileCount?: number }).fileCount || 0} files)`
+                      : (r as { error?: string }).error || "Snapshot failed",
+                  );
+                  void selfModInfo().then(setSelfInfo);
+                });
+              }}
+            >
+              Snapshot install tree
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={selfBusy || !(selfInfo?.snapshots && selfInfo.snapshots[0])}
+              onClick={() => {
+                const id = selfInfo?.snapshots?.[0]?.id;
+                if (!id) return;
+                if (
+                  !window.confirm(
+                    `Restore snapshot ${id}? App code will be rolled back; restart after.`,
+                  )
+                )
+                  return;
+                setSelfBusy(true);
+                void selfModRestore(id).then((r) => {
+                  setSelfBusy(false);
+                  setSelfMsg(
+                    r.ok
+                      ? "Snapshot restored — restart GrokHub to load it"
+                      : (r as { error?: string }).error || "Restore failed",
+                  );
+                });
+              }}
+            >
+              Restore latest snapshot
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={selfBusy}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    "Factory reinstall from GitHub? Stock app code replaces local install. Chats/settings are KEPT.",
+                  )
+                )
+                  return;
+                setSelfBusy(true);
+                setSelfMsg("Factory reinstall…");
+                setUpdateLog("Factory reinstall from GitHub…\n");
+                void factoryReinstall({ wipeMemory: false, clearSelfMod: true }).then((r) => {
+                  setSelfBusy(false);
+                  const steps = (r as { steps?: string[] }).steps || [];
+                  setUpdateLog((prev) => prev + steps.join("\n") + "\n");
+                  setSelfMsg(
+                    (r as { ok?: boolean }).ok !== false
+                      ? (r as { detail?: string }).detail || "Factory reinstall done"
+                      : (r as { error?: string }).error || "Factory reinstall failed",
+                  );
+                });
+              }}
+            >
+              Factory reinstall (keep memory)
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={selfBusy}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    "FULL factory reset: reinstall from GitHub AND wipe chats, secrets, and local memory?",
+                  )
+                )
+                  return;
+                if (!window.confirm("Last chance — this erases local GrokHub memory on this machine."))
+                  return;
+                setSelfBusy(true);
+                setSelfMsg("Full factory wipe…");
+                void factoryReinstall({ wipeMemory: true, clearSelfMod: true }).then((r) => {
+                  setSelfBusy(false);
+                  setSelfMsg(
+                    (r as { ok?: boolean }).ok !== false
+                      ? "Full factory reset done"
+                      : (r as { error?: string }).error || "Failed",
+                  );
+                  if ((r as { ok?: boolean }).ok !== false) {
+                    resetDemo();
+                  }
+                });
+              }}
+            >
+              Factory + wipe memory
+            </Button>
+          </div>
+          {selfMsg && <p className="text-xs text-[var(--color-muted)]">{selfMsg}</p>}
+          {(selfInfo?.snapshots || []).slice(0, 5).map((s) => (
+            <div
+              key={s.id}
+              className="flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1.5 text-[11px]"
+            >
+              <span className="truncate font-mono text-[var(--color-muted)]">
+                {s.id}
+                {s.note ? ` · ${s.note}` : ""}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 shrink-0 text-xs"
+                disabled={selfBusy}
+                onClick={() => {
+                  if (!window.confirm(`Restore ${s.id}?`)) return;
+                  setSelfBusy(true);
+                  void selfModRestore(s.id).then((r) => {
+                    setSelfBusy(false);
+                    setSelfMsg(r.ok ? "Restored — restart app" : "Restore failed");
+                  });
+                }}
+              >
+                Restore
+              </Button>
+            </div>
           ))}
         </CardContent>
       </Card>

@@ -33,8 +33,10 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     oauthEnsure: (tokens) => ipcRenderer.invoke("grok:oauthEnsure", tokens),
     checkUpdate: (opts) => ipcRenderer.invoke("update:check", opts),
     applyUpdate: (opts) => ipcRenderer.invoke("update:apply", opts),
+    factoryReinstall: (opts) => ipcRenderer.invoke("update:factory", opts),
     linkWebsiteSession: () => ipcRenderer.invoke("grok:linkWebsiteSession"),
     getWebsiteSso: () => ipcRenderer.invoke("grok:getWebsiteSso"),
+    injectWebsiteCookie: (raw) => ipcRenderer.invoke("grok:injectWebsiteCookie", raw),
     websiteUsage: (opts) => ipcRenderer.invoke("grok:websiteUsage", opts),
     websiteConnectors: (opts) => ipcRenderer.invoke("grok:websiteConnectors", opts),
   },
@@ -50,5 +52,16 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     info: () => ipcRenderer.invoke("state:info"),
     exportAll: () => ipcRenderer.invoke("state:export"),
     importAll: (payload) => ipcRenderer.invoke("state:import", payload),
+  },
+  selfmod: {
+    info: () => ipcRenderer.invoke("selfmod:info"),
+    list: (rel) => ipcRenderer.invoke("selfmod:list", rel),
+    read: (rel) => ipcRenderer.invoke("selfmod:read", rel),
+    write: (rel, content, opts) => ipcRenderer.invoke("selfmod:write", rel, content, opts),
+    patch: (rel, find, replace, opts) =>
+      ipcRenderer.invoke("selfmod:patch", rel, find, replace, opts),
+    snapshot: (note) => ipcRenderer.invoke("selfmod:snapshot", note),
+    restore: (id) => ipcRenderer.invoke("selfmod:restore", id),
+    journal: (limit) => ipcRenderer.invoke("selfmod:journal", limit),
   },
 });
