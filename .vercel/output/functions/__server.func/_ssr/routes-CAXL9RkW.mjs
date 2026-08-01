@@ -4,7 +4,7 @@ import { A as Brain, C as Folder, D as ChevronRight, E as Command, M as ArrowRig
 import { n as create, t as persist } from "../_libs/zustand.mjs";
 import { n as clsx, t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { t as twMerge } from "../_libs/tailwind-merge.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-CI-76Iar.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-CAXL9RkW.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 var GROK_MODES = [
@@ -300,23 +300,23 @@ function createSeeds(now = Date.now()) {
 				runs: 31
 			},
 			{
-				id: "truck-ops",
-				name: "Truck Ops",
-				description: "Track vehicle repairs, parts, and cash impact for gig work.",
+				id: "standup",
+				name: "Standup Notes",
+				description: "Turn recent activity into a short standup update.",
 				kind: "custom",
 				enabled: true,
-				slash: "/truck",
-				instructions: "Log repair status, estimate downtime cost, suggest next cheapest fix path.",
-				runs: 9
+				slash: "/standup",
+				instructions: "Summarize yesterday's shipped work, today's plan, and blockers in three bullets.",
+				runs: 14
 			},
 			{
 				id: "print-queue",
 				name: "Print Queue",
-				description: "3D print job tracker and commercial listing checklist.",
+				description: "3D print job tracker and packaging checklist.",
 				kind: "custom",
 				enabled: false,
 				slash: "/prints",
-				instructions: "Track K2 Plus jobs, filament, failure notes, and sales-ready packaging steps.",
+				instructions: "Track print jobs, material, failure notes, and packaging steps for finished parts.",
 				runs: 4
 			},
 			{
@@ -375,7 +375,7 @@ function createSeeds(now = Date.now()) {
 		agents: [
 			{
 				id: "primary",
-				name: "Viper",
+				name: "Primary",
 				role: "Primary co-pilot",
 				model: "xai/grok-4.5 · Auto/Fast/Expert",
 				status: "idle",
@@ -393,7 +393,7 @@ function createSeeds(now = Date.now()) {
 			},
 			{
 				id: "research",
-				name: "Hermes",
+				name: "Research",
 				role: "Heavy / Expert",
 				model: "xai/grok-4.5 · Heavy",
 				status: "offline",
@@ -402,7 +402,7 @@ function createSeeds(now = Date.now()) {
 			},
 			{
 				id: "ops",
-				name: "Beast",
+				name: "Ops",
 				role: "Ops & automations",
 				model: "xai/grok-4.5 · Fast",
 				status: "idle",
@@ -416,7 +416,7 @@ function createSeeds(now = Date.now()) {
 				ts: now - 5 * MINUTE,
 				kind: "connector",
 				title: "GitHub tools used",
-				detail: "list_issues on openclaw/sync — 12 open, 2 P0",
+				detail: "list_issues on example/app — 12 open, 2 P0",
 				status: "success"
 			},
 			{
@@ -631,23 +631,23 @@ function replyFor(text, s, routed) {
 			"",
 			`- Connectors live: ${connected.map((c) => c.name).join(", ") || "none"}`,
 			"- Calendar: 2 meetings after 13:00, free block 10:00–12:00",
-			"- Inbox: 4 unread · bill reminder · Silverado coil pack quote",
+			"- Inbox: 4 unread · 1 invoice reminder · 1 shipping notice",
 			"- Linear: 2 P0s · GitHub: 3 review requests",
 			`- Usage: ${pct}% of ${plan.label} period budget`
 		];
 		if (depth === "light") return [
 			...core,
 			"",
-			"Top move: truck quote, then P0 Linear."
+			"Top move: clear P0 Linear, then PR reviews."
 		].join("\n");
 		if (depth === "team") return [
 			...core,
 			"",
 			"Team pass (Heavy):",
-			"- Ops: confirm parts lead time before Uber block",
-			"- Research: cheapest coil pack + warranty notes",
-			"- Build: draft repair log skill if missing",
-			"- Primary: sequence day plan under 90 minutes deep work"
+			"- Ops: confirm dependencies on the two P0s",
+			"- Research: gather context from last related issue threads",
+			"- Build: draft a short checklist skill if the workflow repeats",
+			"- Primary: sequence deep work under 90 minutes"
 		].join("\n");
 		if (depth === "code") return [
 			...core,
@@ -655,24 +655,24 @@ function replyFor(text, s, routed) {
 			"Build angle:",
 			"- Ship GrokClaw desktop install path first",
 			"- Wire mode routing tests before new connectors",
-			"- Package: electron-builder + Arch PKGBUILD ready"
+			"- Package: Electron + Arch PKGBUILD ready"
 		].join("\n");
 		return [
 			...core,
 			"",
-			"Suggested order: truck quote → P0 Linear → PR reviews → lunch buffer.",
-			depth === "deep" ? "Risk: vehicle downtime compounds gig income — protect morning window." : ""
+			"Suggested order: P0 Linear → PR reviews → inbox drafts → lunch buffer.",
+			depth === "deep" ? "Risk: context switching across tools — batch connector work." : ""
 		].filter(Boolean).join("\n");
 	}
-	if (lower.startsWith("/truck") || lower.includes("truck") || lower.includes("silverado")) return [
+	if (lower.startsWith("/standup") || lower.includes("standup")) return [
 		head,
 		"",
-		"Truck Ops",
+		"Standup",
 		"",
-		"- 2015 Silverado 1500 LT — fuel/coil/brakes history noted",
-		"- Next: battery cable integrity, then coil pack if misfire returns",
-		depth === "deep" || depth === "team" ? "- Cost path: confirm quote vs DIY labor hours vs lost Uber shifts" : "- Gig impact: plan half-day offline if bay work",
-		depth === "code" ? "- Build: keep /truck skill logging receipts for weekly rollup" : ""
+		"- Yesterday: connector triage + mode routing polish",
+		"- Today: desktop host checks and packaging notes",
+		"- Blockers: none — usage meter and Imagine ready for demos",
+		depth === "code" ? "- Build: keep /standup skill logging shipped items weekly" : ""
 	].filter(Boolean).join("\n");
 	if (lower.includes("imagine") || lower.startsWith("/imagine")) return [
 		head,
@@ -769,7 +769,7 @@ function replyFor(text, s, routed) {
 		`Goal: ${text}`,
 		`Using ${connected.length} connectors and ${enabledSkills.length} enabled skills.`,
 		"Next: break into steps → pull tools → run skills → log.",
-		"Try /morning, /truck, Imagine, or Heavy mode for a team pass."
+		"Try /morning, /standup, Imagine, or Heavy mode for a team pass."
 	].join("\n");
 }
 function initialFromSeeds() {
@@ -2832,7 +2832,7 @@ function ImagineView() {
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
 						value: prompt,
 						onChange: (e) => setImaginePrompt(e.target.value),
-						placeholder: "West Texas night desk, dual monitors, soft amber lamp, film still…",
+						placeholder: "Moody night desk, dual monitors, soft amber lamp, film still…",
 						disabled: running
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
 						type: "submit",
