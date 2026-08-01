@@ -7,7 +7,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef } from "react";
-import { GROK_MODES } from "@/lib/modes";
+import { GROK_MODES, modeBadge } from "@/lib/modes";
 import { useGrokHub } from "@/lib/store";
 import type { GrokModeId } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -56,6 +56,7 @@ export function ModePicker() {
         )}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-label={`Model mode: ${modeBadge(active.id)}`}
       >
         <ActiveIcon className="h-3.5 w-3.5 text-[var(--color-muted)]" />
         <span className="text-xs font-medium text-[var(--color-fg)]">{active.label}</span>
@@ -64,15 +65,15 @@ export function ModePicker() {
             Beta
           </span>
         )}
-        <span className="hidden text-[10px] text-[var(--color-subtle)] sm:inline">
-          Grok 4.5
+        <span className="hidden max-w-[7.5rem] truncate font-mono text-[10px] text-[var(--color-subtle)] sm:inline">
+          {active.model}
         </span>
       </button>
 
       {open && (
         <div
           role="listbox"
-          className="absolute right-0 top-[calc(100%+6px)] z-50 w-[min(100vw-2rem,300px)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-[var(--shadow-soft)]"
+          className="absolute right-0 top-[calc(100%+6px)] z-50 w-[min(100vw-2rem,320px)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-[var(--shadow-soft)]"
         >
           {GROK_MODES.map((m) => {
             const Icon = ICONS[m.id];
@@ -83,7 +84,10 @@ export function ModePicker() {
                 type="button"
                 role="option"
                 aria-selected={selected}
-                onClick={() => setMode(m.id)}
+                onClick={() => {
+                  setMode(m.id);
+                  setModeMenuOpen(false);
+                }}
                 className={cn(
                   "flex w-full items-start gap-3 rounded-[var(--radius-md)] px-2.5 py-2.5 text-left transition-colors",
                   selected

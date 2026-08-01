@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { renderImaginePreview } from "./imagine";
-import { getMode, resolveMode } from "./modes";
+import { getMode, resolveMode, stripAssistantChrome, modelIdForMode } from "./modes";
 import { createSeeds } from "./seed";
 import type {
   ActivityItem,
@@ -116,27 +116,16 @@ type State = {
   refreshStaleTimes: () => void;
 };
 
-function modePrefix(mode: GrokModeId, routed: GrokModeId): string {
-  const m = getMode(routed);
-  if (mode === "auto" && routed !== "auto") {
-    return `[Auto → ${m.label} · ${m.model}]`;
-  }
-  return `[${m.label} · ${m.model}]`;
-}
-
 function replyFor(text: string, s: State, routed: GrokModeId): string {
   const lower = text.toLowerCase();
   const connected = s.connectors.filter((c) => c.status === "connected");
   const enabledSkills = s.skills.filter((sk) => sk.enabled);
-  const head = modePrefix(s.mode, routed);
   const depth = getMode(routed).depth;
   const plan = PLAN_LIMITS[s.usage.plan];
   const pct = Math.round(usagePercent(s.usage));
 
   if (lower.includes("usage") || lower.includes("quota") || lower.includes("limit") || lower.includes("subscription")) {
     return [
-      head,
-      "",
       "Subscription usage",
       "",
       `Plan: ${plan.label}`,
@@ -151,7 +140,6 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
 
   if (lower.startsWith("/morning") || lower.includes("morning brief")) {
     const core = [
-      head,
       "",
       "Morning Brief",
       "",
@@ -199,7 +187,6 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
 
   if (lower.startsWith("/standup") || lower.includes("standup")) {
     return [
-      head,
       "",
       "Standup",
       "",
@@ -216,7 +203,6 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
 
   if (lower.includes("imagine") || lower.startsWith("/imagine")) {
     return [
-      head,
       "",
       "Imagine is available in the Imagine panel.",
       "Describe a scene there — GrokHub renders a local preview on this Arch desktop build.",
@@ -226,14 +212,13 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
 
   if (lower.includes("mode") || lower.includes("fast") || lower.includes("expert") || lower.includes("heavy")) {
     return [
-      head,
       "",
       "Baked-in Grok modes (same as web):",
       "- Auto — Chooses Fast or Expert",
-      "- Fast — Quick responses · Grok 4.5 · 1 unit",
-      "- Expert — Thinks hard · Grok 4.5 · 4 units",
-      "- Heavy — Team of Experts · Grok 4.5 · 8 units",
-      "- Build — Build apps and sites · Grok 4.5 · 2 units",
+      "- Fast — Quick responses · grok-4-1-fast · 1 unit",
+      "- Expert — Thinks hard · grok-4.3 · 4 units",
+      "- Heavy — Team of Experts · grok-4.3 · 8 units",
+      "- Build — Build apps and sites · grok-code-fast-1 · 2 units",
       "",
       `Active: ${getMode(s.mode).label}${s.mode === "auto" ? ` (this turn → ${getMode(routed).label})` : ""}`,
       "Change modes from the titlebar picker or Settings.",
@@ -242,7 +227,6 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
 
   if (lower.includes("connector") || lower.includes("connect")) {
     return [
-      head,
       "",
       "Connector status",
       "",
@@ -252,7 +236,6 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
 
   if (lower.includes("automat") || lower.includes("schedule")) {
     return [
-      head,
       "",
       "Automations",
       "",
@@ -265,7 +248,6 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
 
   if (lower.includes("skill")) {
     return [
-      head,
       "",
       "Skills",
       "",
@@ -275,7 +257,6 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
 
   if (depth === "code" || lower.includes("build") || lower.includes("arch") || lower.includes("desktop")) {
     return [
-      head,
       "",
       "Build / desktop plan",
       "",
@@ -290,7 +271,6 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
 
   if (depth === "team") {
     return [
-      head,
       "",
       "Heavy · Team of Experts",
       "",
@@ -307,7 +287,6 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
 
   if (depth === "deep") {
     return [
-      head,
       "",
       "Expert analysis",
       "",
@@ -323,7 +302,6 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
 
   if (depth === "light") {
     return [
-      head,
       "",
       `Got it — ${text.slice(0, 120)}${text.length > 120 ? "…" : ""}`,
       `Using ${connected.length} connectors · ${enabledSkills.length} skills · ${pct}% quota.`,
@@ -332,7 +310,6 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
   }
 
   return [
-    head,
     "",
     "Primary co-pilot",
     "",
@@ -1033,15 +1010,21 @@ export const useGrokHub = create<State>()(
               .slice(-16)
               .map((c) => ({
                 role: c.role as "user" | "assistant",
-                content: c.content,
-              }));
+                content:
+                  c.role === "assistant"
+                    ? stripAssistantChrome(c.content)
+                    : c.content,
+              }))
+              .filter((c) => c.content.trim().length > 0);
             // ensure last user message is present
             if (!history.length || history[history.length - 1]?.content !== trimmed) {
               history.push({ role: "user", content: trimmed });
             }
+            const modelId = modelIdForMode(mode, trimmed);
             const result = await grokChat({
               messages: history,
               mode: routed,
+              model: modelId,
               apiKey: get().apiKey || undefined,
               accessToken: get().oauth?.accessToken,
               tokens: get().oauth,
@@ -1051,33 +1034,25 @@ export const useGrokHub = create<State>()(
             }
             if (result.ok && result.content) {
               usedLive = true;
-              answer = [
-                mode === "auto" && routed !== "auto"
-                  ? `[Auto → ${m.label} · ${result.model || m.model}]`
-                  : `[${m.label} · ${result.model || m.model}]`,
-                "",
-                result.content,
-              ].join("\n");
+              // Clean answer only — mode is shown on the message badge, not in the body
+              answer = stripAssistantChrome(result.content);
               set({
                 grokConnected: true,
                 grokStatusDetail: get().oauth
-                  ? `Live via OAuth · ${result.model || "Grok"}`
-                  : `Live · ${result.model || "Grok"}`,
+                  ? `Live · ${result.model || modelId}`
+                  : `Live · ${result.model || modelId}`,
               });
             } else {
               const hasOauth = Boolean(get().oauth?.accessToken);
               const err = result.error || "Unknown error";
               answer = [
-                modePrefix(mode, routed),
-                "",
                 "Could not reach Grok.",
                 err,
                 "",
                 hasOauth
-                  ? "Your OAuth session is saved. If this keeps failing: Settings → Disconnect → Connect with Grok OAuth again (token may be expired), or paste an xAI API key as fallback."
+                  ? "Your OAuth session is saved. If this keeps failing: Settings → Disconnect → Connect with Grok OAuth again, or paste an xAI API key as fallback."
                   : "Fix: Settings → Connect with Grok OAuth (SuperGrok / X Premium) or paste an xAI API key.",
                 "",
-                "— Offline fallback —",
                 replyFor(trimmed, get(), routed),
               ].join("\n");
               set({
@@ -1091,11 +1066,8 @@ export const useGrokHub = create<State>()(
         } catch (e) {
           const msg = e instanceof Error ? e.message : "request failed";
           answer = [
-            modePrefix(mode, routed),
-            "",
             `Grok connection error: ${msg}`,
             "",
-            "— Offline fallback —",
             replyFor(trimmed, get(), routed),
           ].join("\n");
           set({ grokConnected: false, grokStatusDetail: msg });

@@ -92,6 +92,7 @@ export async function dispatchApi(
       const mode = (body.mode as GrokModeId) || "auto";
       const apiKey = body.apiKey ? String(body.apiKey) : undefined;
       let accessToken = body.accessToken ? String(body.accessToken) : undefined;
+      const model = body.model ? String(body.model) : undefined;
       let tokensOut: XaiOAuthTokens | undefined;
       let refreshed = false;
 
@@ -118,7 +119,7 @@ export async function dispatchApi(
         if (t.accessToken) accessToken = t.accessToken;
       }
 
-      const result = await callXaiChat({ messages, mode, apiKey, accessToken });
+      const result = await callXaiChat({ messages, mode, model, apiKey, accessToken });
       return {
         ...result,
         ...(tokensOut ? { tokens: tokensOut } : {}),

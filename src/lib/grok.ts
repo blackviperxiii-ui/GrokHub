@@ -1,33 +1,22 @@
 import type { GrokModeId } from "./types";
-import { resolveMode } from "./modes";
+import { modelIdForMode, resolveMode } from "./modes";
 
 export const XAI_BASE = "https://api.x.ai/v1";
 
 /** Map GrokHub modes → xAI model IDs */
 export function modelForMode(mode: GrokModeId, prompt = ""): string {
-  const id = resolveMode(mode, prompt);
-  switch (id) {
-    case "fast":
-      return "grok-4-1-fast-non-reasoning";
-    case "expert":
-      return "grok-4";
-    case "heavy":
-      return "grok-4";
-    case "build":
-      return "grok-code-fast-1";
-    case "auto":
-    default:
-      return "grok-4-1-fast-non-reasoning";
-  }
+  return modelIdForMode(mode, prompt);
 }
 
-export function systemPromptForMode(mode: GrokModeId): string {
-  const base = `You are GrokHub, a desktop agent control plane powered by Grok (xAI).
-You help with coding, ops, research, and local machine tasks.
+export function systemPromptForMode(mode: GrokModeId, prompt = ""): string {
+  const base = `You are Grok, running inside GrokHub (a desktop agent control plane).
+Help with coding, ops, research, and local machine tasks.
 Be direct and practical. Prefer short structured answers with bullets when listing steps.
-The user may have unsandboxed host access ($ shell, files, apps) on their Linux desktop.`;
+The user may have unsandboxed host access ($ shell, files, apps) on their Linux desktop.
+Do not prefix replies with mode labels like [Fast] or [Auto → …]. Just answer.`;
 
-  switch (resolveMode(mode, "")) {
+  const id = resolveMode(mode, prompt);
+  switch (id) {
     case "fast":
       return `${base}\nMode: Fast — concise answers, minimal preamble.`;
     case "expert":
@@ -93,13 +82,21 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
 
   const mode = req.mode ?? "auto";
   const lastUser = [...req.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  const routed = resolveMode(mode, lastUser);
   const model = req.model || modelForMode(mode, lastUser);
-  const system = systemPromptForMode(mode);
+  const system = systemPromptForMode(mode, lastUser);
 
   const messages: GrokChatMessage[] = [
     { role: "system", content: system },
     ...req.messages.filter((m) => m.role !== "system"),
   ];
+
+  const temperature =
+    req.temperature ??
+    (routed === "fast" ? 0.5 : routed === "build" ? 0.4 : routed === "heavy" ? 0.8 : 0.7);
+  const max_tokens =
+    req.maxTokens ??
+    (routed === "heavy" ? 4096 : routed === "build" ? 8192 : routed === "expert" ? 3072 : 2048);
 
   try {
     const res = await fetch(`${XAI_BASE}/chat/completions`, {
@@ -111,8 +108,8 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
       body: JSON.stringify({
         model,
         messages,
-        temperature: req.temperature ?? (mode === "fast" ? 0.5 : 0.7),
-        max_tokens: req.maxTokens ?? (mode === "heavy" ? 4096 : mode === "build" ? 8192 : 2048),
+        temperature,
+        max_tokens,
         stream: false,
       }),
     });
@@ -125,6 +122,19 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
     };
 
     if (!res.ok) {
+      // Retry once with grok-4 if grok-4.3 is unavailable on this account
+      if (
+        res.status === 404 ||
+        (typeof data.error === "object" &&
+          /model|not found|invalid/i.test(data.error?.message || ""))
+      ) {
+        if (model === "grok-4.3") {
+          return callXaiChat({ ...req, model: "grok-4" });
+        }
+        if (model === "grok-4-1-fast-non-reasoning") {
+          return callXaiChat({ ...req, model: "grok-3-mini-fast" });
+        }
+      }
       const msg =
         typeof data.error === "string"
           ? data.error

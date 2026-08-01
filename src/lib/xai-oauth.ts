@@ -52,6 +52,31 @@ function trustedXai(url: string): string {
   return url;
 }
 
+function decodeJwtPayload(token: string): Record<string, unknown> {
+  try {
+    const part = token.split(".")[1];
+    if (!part) return {};
+    const json = Buffer.from(part, "base64url").toString("utf8");
+    return JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function pickPicture(...candidates: unknown[]): string | undefined {
+  for (const c of candidates) {
+    if (typeof c === "string" && /^https?:\/\//i.test(c.trim())) return c.trim();
+  }
+  return undefined;
+}
+
+function pickName(...candidates: unknown[]): string | undefined {
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim()) return c.trim();
+  }
+  return undefined;
+}
+
 async function discovery(): Promise<Discovery> {
   const res = await fetch(XAI_OAUTH_DISCOVERY, {
     headers: { accept: "application/json", "user-agent": XAI_UA },
@@ -162,14 +187,25 @@ export async function pollXaiDeviceCode(deviceCode: string): Promise<PollResult>
     let email: string | undefined;
     let name: string | undefined;
     let picture: string | undefined;
+
+    // id_token claims (often include profile picture from Google/X)
+    if (base.idToken) {
+      const claims = decodeJwtPayload(base.idToken);
+      email = pickName(claims.email) || email;
+      name =
+        pickName(claims.name, claims.preferred_username, claims.given_name) || name;
+      picture = pickPicture(claims.picture, claims.avatar_url, claims.profile_image_url);
+    }
+
     try {
       const ui = await fetchUserinfo(base.accessToken, d.userinfoEndpoint);
-      email = ui.email;
-      name = ui.name;
-      picture = ui.picture;
+      email = ui.email || email;
+      name = ui.name || name;
+      picture = ui.picture || picture;
     } catch {
       /* optional */
     }
+
     return {
       status: "ready",
       tokens: {
@@ -214,9 +250,9 @@ async function fetchUserinfo(
   if (!res.ok) return {};
   const j = (await res.json()) as Record<string, unknown>;
   return {
-    email: typeof j.email === "string" ? j.email : undefined,
-    name: typeof j.name === "string" ? j.name : undefined,
-    picture: typeof j.picture === "string" ? j.picture : undefined,
+    email: pickName(j.email),
+    name: pickName(j.name, j.preferred_username, j.given_name),
+    picture: pickPicture(j.picture, j.avatar_url, j.profile_image_url, j.image),
   };
 }
 
@@ -239,7 +275,6 @@ export async function refreshXaiOAuth(
   });
   const text = await res.text();
   if (!res.ok) {
-    // Cloudflare sometimes challenges automated refresh
     if (/cloudflare|<!doctype html/i.test(text)) {
       throw new Error(
         "xAI blocked token refresh (Cloudflare). Re-run Grok OAuth sign-in.",

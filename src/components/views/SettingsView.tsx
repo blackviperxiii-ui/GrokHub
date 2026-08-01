@@ -9,6 +9,7 @@ import { useGrokHub } from "@/lib/store";
 import type { GrokModeId } from "@/lib/types";
 import type { UpdateStatus } from "@/lib/update";
 import { cn } from "@/lib/utils";
+import { ProfileAvatar } from "../ProfileAvatar";
 import { UsageMeterPanel } from "../UsageMeter";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -238,13 +239,11 @@ export function SettingsView() {
 
           {oauth && (
             <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-success)_35%,transparent)] bg-[color-mix(in_oklab,var(--color-success)_8%,transparent)] px-3 py-3">
-              {oauth.picture ? (
-                <img src={oauth.picture} alt="" className="h-10 w-10 rounded-full object-cover" />
-              ) : (
-                <div className="grid h-10 w-10 place-items-center rounded-full bg-[var(--color-elevated)] text-sm font-medium">
-                  {(oauth.name || oauth.email || "G").charAt(0).toUpperCase()}
-                </div>
-              )}
+              <ProfileAvatar
+                src={oauth.picture}
+                name={oauth.name}
+                email={oauth.email}
+              />
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium">{oauth.name || "Grok account"}</div>
                 <div className="truncate text-xs text-[var(--color-muted)]">
@@ -323,17 +322,11 @@ export function SettingsView() {
             <div className="h-10 animate-pulse rounded bg-[var(--color-elevated)]" />
           ) : user && !user.isDevFallback ? (
             <div className="flex flex-wrap items-center gap-3">
-              {user.profileImageUrl ? (
-                <img
-                  src={user.profileImageUrl}
-                  alt=""
-                  className="h-10 w-10 rounded-full object-cover"
-                />
-              ) : (
-                <div className="grid h-10 w-10 place-items-center rounded-full bg-[var(--color-elevated)] text-sm font-medium">
-                  {(user.displayName || user.primaryEmail || "?").charAt(0).toUpperCase()}
-                </div>
-              )}
+              <ProfileAvatar
+                src={user.profileImageUrl}
+                name={user.displayName}
+                email={user.primaryEmail}
+              />
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium">{user.displayName || "Signed in"}</div>
                 <div className="truncate text-xs text-[var(--color-muted)]">

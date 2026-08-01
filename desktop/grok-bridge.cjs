@@ -13,25 +13,33 @@ const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
 const APP_VERSION = "0.1";
 
-function modelForMode(mode, prompt = "") {
+function resolveMode(mode, prompt = "") {
   let id = mode || "auto";
-  if (id === "auto") {
-    const p = String(prompt).toLowerCase();
-    const heavy =
-      p.includes("architect") ||
-      p.includes("debug") ||
-      p.includes("why") ||
-      p.includes("research") ||
-      p.includes("plan") ||
-      p.length > 160;
-    id = heavy ? "expert" : "fast";
-  }
+  if (id !== "auto") return id;
+  const p = String(prompt).toLowerCase();
+  const heavy =
+    p.includes("architect") ||
+    p.includes("debug") ||
+    p.includes("why") ||
+    p.includes("compare") ||
+    p.includes("research") ||
+    p.includes("plan") ||
+    p.includes("implement") ||
+    p.includes("refactor") ||
+    p.includes("design") ||
+    p.length > 160 ||
+    p.split(/\s+/).length > 28;
+  return heavy ? "expert" : "fast";
+}
+
+function modelForMode(mode, prompt = "") {
+  const id = resolveMode(mode, prompt);
   switch (id) {
     case "fast":
       return "grok-4-1-fast-non-reasoning";
     case "expert":
     case "heavy":
-      return "grok-4";
+      return "grok-4.3";
     case "build":
       return "grok-code-fast-1";
     default:
@@ -39,13 +47,16 @@ function modelForMode(mode, prompt = "") {
   }
 }
 
-function systemPrompt(mode) {
-  const base = `You are GrokHub, a desktop agent control plane powered by Grok (xAI).
-Be direct and practical. Prefer short structured answers.`;
-  if (mode === "fast") return `${base}\nMode: Fast — concise.`;
-  if (mode === "expert") return `${base}\nMode: Expert — careful reasoning.`;
-  if (mode === "heavy") return `${base}\nMode: Heavy — multi-angle synthesis.`;
-  if (mode === "build") return `${base}\nMode: Build — prioritize working code.`;
+function systemPrompt(mode, prompt = "") {
+  const base = `You are Grok, running inside GrokHub (a desktop agent control plane).
+Help with coding, ops, research, and local machine tasks.
+Be direct and practical. Prefer short structured answers with bullets when listing steps.
+Do not prefix replies with mode labels like [Fast] or [Auto → …]. Just answer.`;
+  const id = resolveMode(mode, prompt);
+  if (id === "fast") return `${base}\nMode: Fast — concise answers, minimal preamble.`;
+  if (id === "expert") return `${base}\nMode: Expert — reason carefully, surface tradeoffs.`;
+  if (id === "heavy") return `${base}\nMode: Heavy (team of experts) — multi-angle synthesis.`;
+  if (id === "build") return `${base}\nMode: Build — prioritize working code and file paths.`;
   return base;
 }
 
@@ -68,11 +79,16 @@ async function callXaiChat(req = {}) {
   const lastUser = [...(req.messages || [])]
     .reverse()
     .find((m) => m.role === "user")?.content;
+  const routed = resolveMode(mode, lastUser || "");
   const model = req.model || modelForMode(mode, lastUser || "");
   const messages = [
-    { role: "system", content: systemPrompt(mode) },
+    { role: "system", content: systemPrompt(mode, lastUser || "") },
     ...(req.messages || []).filter((m) => m.role !== "system"),
   ];
+  const temperature =
+    routed === "fast" ? 0.5 : routed === "build" ? 0.4 : routed === "heavy" ? 0.8 : 0.7;
+  const max_tokens =
+    routed === "heavy" ? 4096 : routed === "build" ? 8192 : routed === "expert" ? 3072 : 2048;
   try {
     const res = await fetch(`${XAI_BASE}/chat/completions`, {
       method: "POST",
@@ -83,13 +99,22 @@ async function callXaiChat(req = {}) {
       body: JSON.stringify({
         model,
         messages,
-        temperature: mode === "fast" ? 0.5 : 0.7,
-        max_tokens: mode === "heavy" ? 4096 : mode === "build" ? 8192 : 2048,
+        temperature,
+        max_tokens,
         stream: false,
       }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
+      // fallback aliases if account lacks a model id
+      if (res.status === 404 || /model|not found|invalid/i.test(String(data.error?.message || data.error || ""))) {
+        if (model === "grok-4.3") {
+          return callXaiChat({ ...req, model: "grok-4" });
+        }
+        if (model === "grok-4-1-fast-non-reasoning") {
+          return callXaiChat({ ...req, model: "grok-3-mini-fast" });
+        }
+      }
       const msg =
         typeof data.error === "string"
           ? data.error
@@ -463,15 +488,30 @@ async function oauthPoll(deviceCode) {
   const j = await res.json().catch(() => ({}));
   if (res.ok && j.access_token) {
     let email, name, picture;
+    // Prefer id_token claims (often include Google/X avatar URL)
+    if (j.id_token) {
+      try {
+        const payload = JSON.parse(
+          Buffer.from(String(j.id_token).split(".")[1], "base64url").toString("utf8"),
+        );
+        email = payload.email || email;
+        name = payload.name || payload.preferred_username || payload.given_name || name;
+        picture =
+          payload.picture ||
+          payload.avatar_url ||
+          payload.profile_image_url ||
+          picture;
+      } catch {}
+    }
     try {
       const ui = await fetch(d.userinfo_endpoint || "https://auth.x.ai/oauth2/userinfo", {
         headers: { authorization: `Bearer ${j.access_token}`, "user-agent": XAI_UA },
       });
       if (ui.ok) {
         const u = await ui.json();
-        email = u.email;
-        name = u.name;
-        picture = u.picture;
+        email = u.email || email;
+        name = u.name || u.preferred_username || name;
+        picture = u.picture || u.avatar_url || u.profile_image_url || u.image || picture;
       }
     } catch {}
     return {

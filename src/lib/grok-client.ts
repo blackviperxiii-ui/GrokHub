@@ -23,6 +23,7 @@ async function rpc<T>(
 export async function grokChat(opts: {
   messages: GrokChatMessage[];
   mode: GrokModeId;
+  model?: string;
   apiKey?: string;
   accessToken?: string;
   tokens?: XaiOAuthTokens | null;

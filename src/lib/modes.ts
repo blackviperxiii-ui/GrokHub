@@ -1,11 +1,16 @@
 import type { GrokMode, GrokModeId } from "./types";
 
+/**
+ * Mode catalog — labels match Grok web; modelId is what we send to api.x.ai.
+ * SuperGrok / OAuth typically exposes grok-4.3 + fast / code variants.
+ */
 export const GROK_MODES: GrokMode[] = [
   {
     id: "auto",
     label: "Auto",
     subtitle: "Chooses Fast or Expert",
-    model: "Grok 4.5",
+    model: "Auto",
+    modelId: "auto",
     icon: "auto",
     latencyMs: [400, 900],
     depth: "standard",
@@ -13,8 +18,9 @@ export const GROK_MODES: GrokMode[] = [
   {
     id: "fast",
     label: "Fast",
-    subtitle: "Quick responses · Grok 4.5",
-    model: "Grok 4.5",
+    subtitle: "Quick responses · grok-4-1-fast",
+    model: "grok-4-1-fast",
+    modelId: "grok-4-1-fast-non-reasoning",
     icon: "fast",
     latencyMs: [250, 500],
     depth: "light",
@@ -22,8 +28,9 @@ export const GROK_MODES: GrokMode[] = [
   {
     id: "expert",
     label: "Expert",
-    subtitle: "Thinks hard · Grok 4.5",
-    model: "Grok 4.5",
+    subtitle: "Thinks hard · grok-4.3",
+    model: "grok-4.3",
+    modelId: "grok-4.3",
     icon: "expert",
     latencyMs: [900, 1600],
     depth: "deep",
@@ -31,8 +38,9 @@ export const GROK_MODES: GrokMode[] = [
   {
     id: "heavy",
     label: "Heavy",
-    subtitle: "Team of Experts · Grok 4.5",
-    model: "Grok 4.5",
+    subtitle: "Team of Experts · grok-4.3",
+    model: "grok-4.3",
+    modelId: "grok-4.3",
     icon: "heavy",
     latencyMs: [1400, 2400],
     depth: "team",
@@ -40,8 +48,9 @@ export const GROK_MODES: GrokMode[] = [
   {
     id: "build",
     label: "Build",
-    subtitle: "Build apps and sites · Grok 4.5",
-    model: "Grok 4.5",
+    subtitle: "Build apps and sites · grok-code-fast-1",
+    model: "grok-code-fast-1",
+    modelId: "grok-code-fast-1",
     icon: "build",
     latencyMs: [700, 1400],
     depth: "code",
@@ -63,12 +72,35 @@ export function resolveMode(id: GrokModeId, prompt: string): GrokModeId {
     p.includes("compare") ||
     p.includes("research") ||
     p.includes("plan") ||
+    p.includes("implement") ||
+    p.includes("refactor") ||
+    p.includes("design") ||
     p.length > 160 ||
     p.split(/\s+/).length > 28;
   return heavySignals ? "expert" : "fast";
 }
 
+/** Resolve the concrete xAI model id for a mode + prompt. */
+export function modelIdForMode(id: GrokModeId, prompt = ""): string {
+  const routed = resolveMode(id, prompt);
+  if (routed === "auto") return getMode("fast").modelId;
+  return getMode(routed).modelId;
+}
+
 export function modeBadge(id: GrokModeId): string {
   const m = getMode(id);
-  return `${m.label} · ${m.model}`;
+  return m.id === "auto" ? m.label : `${m.label} · ${m.model}`;
+}
+
+/** Strip UI chrome we used to inject into assistant text (keep history clean for the model). */
+export function stripAssistantChrome(content: string): string {
+  return content
+    .replace(/^\[(?:Auto → )?[^\]]+\]\s*\n*/gm, "")
+    .replace(/^— Offline fallback —\s*\n*/gm, "")
+    .replace(/^Could not reach Grok\.\s*\n*/gm, "")
+    .replace(/^Grok connection error:.*$/gm, "")
+    .replace(/^Your OAuth session is saved\..*$/gm, "")
+    .replace(/^Fix: Settings →.*$/gm, "")
+    .replace(/^Not connected to Grok\..*$/gm, "")
+    .trim();
 }

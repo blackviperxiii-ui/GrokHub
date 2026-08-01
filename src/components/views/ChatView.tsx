@@ -212,7 +212,7 @@ export function ChatView() {
             {busy && (
               <div className="text-xs text-[var(--color-subtle)]">
                 <span className="shimmer rounded px-1">
-                  {localRunning ? "Host running…" : `${modeMeta.label} · Grok thinking…`}
+                  {localRunning ? "Host running…" : `${modeMeta.label} · thinking…`}
                 </span>
               </div>
             )}

@@ -17,7 +17,10 @@ export type GrokMode = {
   id: GrokModeId;
   label: string;
   subtitle: string;
+  /** Human-readable model family shown in UI */
   model: string;
+  /** xAI API model id used for live requests */
+  modelId: string;
   icon: "auto" | "fast" | "expert" | "heavy" | "build";
   latencyMs: [number, number];
   depth: "light" | "standard" | "deep" | "team" | "code";
