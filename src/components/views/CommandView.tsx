@@ -9,7 +9,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { GROK_MODES } from "@/lib/modes";
+import { getModesWithCatalog } from "@/lib/modes";
 import { useGrokHub } from "@/lib/store";
 import { RelativeTime } from "../RelativeTime";
 import { UsageMeterPanel } from "../UsageMeter";
@@ -25,6 +25,7 @@ export function CommandView() {
   const agents = useGrokHub((s) => s.agents);
   const mode = useGrokHub((s) => s.mode);
   const setMode = useGrokHub((s) => s.setMode);
+  const modelCatalog = useGrokHub((s) => s.modelCatalog);
   const setNav = useGrokHub((s) => s.setNav);
   const runAutomation = useGrokHub((s) => s.runAutomation);
   const sendChat = useGrokHub((s) => s.sendChat);
@@ -78,7 +79,7 @@ export function CommandView() {
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
-            {GROK_MODES.map((m) => {
+            {getModesWithCatalog(modelCatalog).map((m) => {
               const selected = m.id === mode;
               const costHint =
                 m.id === "heavy"

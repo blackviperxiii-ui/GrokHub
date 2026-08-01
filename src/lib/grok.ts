@@ -144,8 +144,14 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
         (typeof data.error === "object" &&
           /model|not found|invalid/i.test(data.error?.message || ""))
       ) {
+        if (model === "grok-4.5" || model === "grok-4-5") {
+          return callXaiChat({ ...req, model: "grok-4.3" });
+        }
         if (model === "grok-4.3") {
           return callXaiChat({ ...req, model: "grok-4" });
+        }
+        if (model === "grok-code-fast-1" || /build/i.test(model)) {
+          return callXaiChat({ ...req, model: "grok-code-fast-1" });
         }
         if (model === "grok-4-1-fast-non-reasoning") {
           return callXaiChat({ ...req, model: "grok-3-mini-fast" });
@@ -222,6 +228,9 @@ export async function callXaiChatStream(
       // Fall back to non-stream once for model aliases / older accounts
       const errText = await res.text().catch(() => "");
       if (res.status === 404 || /model|not found|invalid/i.test(errText)) {
+        if (model === "grok-4.5" || model === "grok-4-5") {
+          return callXaiChatStream({ ...req, model: "grok-4.3" }, handlers);
+        }
         if (model === "grok-4.3") {
           return callXaiChatStream({ ...req, model: "grok-4" }, handlers);
         }

@@ -107,6 +107,7 @@ export function AppShell() {
         });
       }
       void useGrokHub.getState().probeGrok();
+      void useGrokHub.getState().refreshModels();
       // Auto-probe desktop host connector
       void (async () => {
         try {
@@ -127,6 +128,24 @@ export function AppShell() {
       })();
     });
     setIsDesktop(Boolean(window.grokhubDesktop));
+  }, []);
+
+  // Poll essential models every 5 minutes while connected
+  useEffect(() => {
+    const MODELS_POLL_MS = 5 * 60 * 1000;
+    const tick = () => {
+      const st = useGrokHub.getState();
+      if (st.oauth?.accessToken || st.apiKey || st.grokConnected) {
+        void st.refreshModels();
+      }
+    };
+    const id = window.setInterval(tick, MODELS_POLL_MS);
+    // Also refresh shortly after mount if we already have credentials
+    const t = window.setTimeout(tick, 8_000);
+    return () => {
+      window.clearInterval(id);
+      window.clearTimeout(t);
+    };
   }, []);
 
   // Prefer Grok OAuth identity once connected (not only Better Auth session)

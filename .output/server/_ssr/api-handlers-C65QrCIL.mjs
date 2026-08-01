@@ -1,5 +1,5 @@
-import { t as APP_VERSION } from "./version-BQM8PrMu.mjs";
-import { XAI_BASE, callXaiChat, callXaiChatStream, callXaiImagine, probeXaiBearer } from "./grok-DNbvJMRG.mjs";
+import { t as APP_VERSION } from "./version-erPv52O7.mjs";
+import { XAI_BASE, callXaiChat, callXaiChatStream, callXaiImagine, probeXaiBearer } from "./grok-DY9vmTDN.mjs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream, existsSync, readFileSync } from "node:fs";
@@ -8,7 +8,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs$1 from "node:fs/promises";
 import os from "node:os";
-//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-D8iTTyiC.js
+//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-C65QrCIL.js
 /**
 * GitHub update helpers — Node only (server / Electron main).
 *
@@ -549,7 +549,7 @@ var XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:a
 var XAI_OAUTH_ISSUER = "https://auth.x.ai";
 var XAI_OAUTH_DISCOVERY = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
 var XAI_DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-var XAI_UA = "GrokHub/0.2.7 (xAI OAuth; Linux)";
+var XAI_UA = "GrokHub/0.2.8 (xAI OAuth; Linux)";
 function formBody(data) {
 	return new URLSearchParams(data).toString();
 }

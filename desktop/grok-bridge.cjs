@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.2.7";
+const APP_VERSION = "0.2.8";
 
 function shaMatch(a, b) {
   if (!a || !b) return false;
@@ -61,30 +61,29 @@ fi
 function resolveMode(mode, prompt = "") {
   let id = mode || "auto";
   if (id !== "auto") return id;
-  const p = String(prompt).toLowerCase();
-  const heavy =
-    p.includes("architect") ||
-    p.includes("debug") ||
-    p.includes("why") ||
-    p.includes("compare") ||
-    p.includes("research") ||
-    p.includes("plan") ||
-    p.includes("implement") ||
-    p.includes("refactor") ||
-    p.includes("design") ||
-    p.length > 160 ||
-    p.split(/\s+/).length > 28;
-  return heavy ? "expert" : "fast";
+  const p = String(prompt || "");
+  const lower = p.toLowerCase();
+  const words = lower.split(/\s+/).filter(Boolean).length;
+  if (/\b(imagine|image|picture|draw|render|illustration)\b/i.test(p)) return "fast";
+  if (/\b(team of|multi-agent|heavy|red team)\b/i.test(p) || (words > 80 && /debug|architect|debug/i.test(p))) return "heavy";
+  if (/\b(code|implement|refactor|typescript|react|scaffold|pkgbuild|full app|rewrite)\b/i.test(p) && words > 20) return "build";
+  if (/\b(architect|root cause|trade-?off|research|prove|deep dive|complex)\b/i.test(p) || words > 60 || p.length > 400) return "expert";
+  if (words > 28 || /\b(plan|explain|how do i|step by step)\b/i.test(p)) return "expert";
+  return "fast";
 }
 
 function modelForMode(mode, prompt = "") {
   const id = resolveMode(mode, prompt);
+  const p = String(prompt || "");
   switch (id) {
     case "fast":
       return "grok-4-1-fast-non-reasoning";
     case "expert":
+      return (p.length > 400 || /\b(architect|research|prove|complex|deep dive)\b/i.test(p))
+        ? "grok-4.5"
+        : "grok-4.3";
     case "heavy":
-      return "grok-4.3";
+      return "grok-4.5";
     case "build":
       return "grok-code-fast-1";
     default:
@@ -544,7 +543,7 @@ const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const XAI_UA = "GrokHub/0.2.7 (xAI OAuth; Electron)";
+const XAI_UA = "GrokHub/0.2.8 (xAI OAuth; Electron)";
 
 async function xaiDiscovery() {
   const res = await fetch(XAI_OAUTH_DISCOVERY, {

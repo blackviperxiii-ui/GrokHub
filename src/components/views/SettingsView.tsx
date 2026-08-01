@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ExternalLink } from "lucide-react";
-import { GROK_MODES } from "@/lib/modes";
+import { getModesWithCatalog } from "@/lib/modes";
+import { friendlyModelName } from "@/lib/models-catalog";
 import { applyUpdate, checkUpdate } from "@/lib/grok-client";
 import { GROK_PROVIDERS, authEnabled, signIn, signOut } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
@@ -20,6 +21,9 @@ import { Input } from "../ui/input";
 export function SettingsView() {
   const mode = useGrokHub((s) => s.mode);
   const setMode = useGrokHub((s) => s.setMode);
+  const modelCatalog = useGrokHub((s) => s.modelCatalog);
+  const refreshModels = useGrokHub((s) => s.refreshModels);
+  const lastModelsFetchAt = useGrokHub((s) => s.lastModelsFetchAt);
   const desktop = useGrokHub((s) => s.desktop);
   const setDesktop = useGrokHub((s) => s.setDesktop);
   const setNav = useGrokHub((s) => s.setNav);
@@ -421,22 +425,69 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      {profile.models.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Models from your connection</CardTitle>
-          </CardHeader>
-          <CardContent>
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <CardTitle className="text-sm">Essential models</CardTitle>
+              <CardDescription>
+                Polled from xAI · only 4.5 / 4.3 / Fast / Build / Imagine class ids
+              </CardDescription>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void refreshModels()}
+            >
+              Refresh models
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-2 sm:grid-cols-2">
+            {(
+              [
+                ["fast", "Fast chat"],
+                ["balanced", "Balanced"],
+                ["smart", "Brains"],
+                ["heavy", "Heavy / team"],
+                ["build", "Build / code"],
+                ["imagine", "Imagine"],
+              ] as const
+            ).map(([slot, label]) => (
+              <div
+                key={slot}
+                className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2"
+              >
+                <div className="text-[10px] uppercase tracking-wide text-[var(--color-subtle)]">
+                  {label}
+                </div>
+                <div className="text-sm font-medium text-[var(--color-fg)]">
+                  {friendlyModelName(modelCatalog.slots[slot])}
+                </div>
+                <div className="font-mono text-[10px] text-[var(--color-muted)]">
+                  {modelCatalog.slots[slot]}
+                </div>
+              </div>
+            ))}
+          </div>
+          {modelCatalog.essential.length > 0 && (
             <div className="flex flex-wrap gap-1">
-              {profile.models.slice(0, 16).map((m) => (
+              {modelCatalog.essential.map((m) => (
                 <Badge key={m} className="font-mono text-[10px]">
                   {m}
                 </Badge>
               ))}
             </div>
-          </CardContent>
-        </Card>
-      )}
+          )}
+          <div className="text-[10px] text-[var(--color-subtle)]">
+            Source: {modelCatalog.source}
+            {lastModelsFetchAt
+              ? ` · last poll ${new Date(lastModelsFetchAt).toLocaleTimeString()}`
+              : " · not polled yet"}
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -495,10 +546,12 @@ export function SettingsView() {
       <Card>
         <CardHeader>
           <CardTitle className="text-sm">Model modes</CardTitle>
-          <CardDescription>Mapped to live xAI models after you connect.</CardDescription>
+          <CardDescription>
+            Auto routes each prompt to Fast · 4.3 · 4.5 · Build · Imagine balancing tokens.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
-          {GROK_MODES.map((m) => {
+          {getModesWithCatalog(modelCatalog).map((m) => {
             const selected = m.id === mode;
             return (
               <button
@@ -515,6 +568,11 @@ export function SettingsView() {
                 <div>
                   <div className="text-sm font-medium">{m.label}</div>
                   <div className="text-xs text-[var(--color-muted)]">{m.subtitle}</div>
+                  {m.id !== "auto" && (
+                    <div className="mt-0.5 font-mono text-[10px] text-[var(--color-subtle)]">
+                      {m.modelId}
+                    </div>
+                  )}
                 </div>
                 {selected && <span className="text-xs text-[var(--color-muted)]">Active</span>}
               </button>

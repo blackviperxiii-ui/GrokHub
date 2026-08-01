@@ -1,5 +1,5 @@
-import { a as modelIdForMode, o as resolveMode } from "./version-BQM8PrMu.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/grok-DNbvJMRG.js
+import { l as modelIdForMode, u as resolveMode } from "./version-erPv52O7.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/grok-DY9vmTDN.js
 var XAI_BASE = "https://api.x.ai/v1";
 /** Map GrokHub modes → xAI model IDs */
 function modelForMode(mode, prompt = "") {
@@ -83,9 +83,17 @@ async function callXaiChat(req) {
 		const data = await res.json().catch(() => ({}));
 		if (!res.ok) {
 			if (res.status === 404 || typeof data.error === "object" && /model|not found|invalid/i.test(data.error?.message || "")) {
+				if (model === "grok-4.5" || model === "grok-4-5") return callXaiChat({
+					...req,
+					model: "grok-4.3"
+				});
 				if (model === "grok-4.3") return callXaiChat({
 					...req,
 					model: "grok-4"
+				});
+				if (model === "grok-code-fast-1" || /build/i.test(model)) return callXaiChat({
+					...req,
+					model: "grok-code-fast-1"
 				});
 				if (model === "grok-4-1-fast-non-reasoning") return callXaiChat({
 					...req,
@@ -151,6 +159,10 @@ async function callXaiChatStream(req, handlers = {}) {
 		if (!res.ok) {
 			const errText = await res.text().catch(() => "");
 			if (res.status === 404 || /model|not found|invalid/i.test(errText)) {
+				if (model === "grok-4.5" || model === "grok-4-5") return callXaiChatStream({
+					...req,
+					model: "grok-4.3"
+				}, handlers);
 				if (model === "grok-4.3") return callXaiChatStream({
 					...req,
 					model: "grok-4"

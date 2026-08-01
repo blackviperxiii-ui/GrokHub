@@ -1,12 +1,12 @@
 import { o as __toESM } from "../_runtime.mjs";
-import { a as modelIdForMode, i as modeBadge, n as GROK_MODES, o as resolveMode, r as getMode, s as stripAssistantChrome, t as APP_VERSION } from "./version-BQM8PrMu.mjs";
+import { a as friendlyModelName, c as modeBadge, d as resolveModeWithCatalog, f as stripAssistantChrome, i as emptyCatalog, l as modelIdForMode, n as autoRouteFor, o as getMode, r as buildCatalog, s as getModesWithCatalog, t as APP_VERSION, u as resolveMode } from "./version-erPv52O7.mjs";
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
 import { N as require_jsx_runtime, P as require_react, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
 import { A as ExternalLink, C as Image, D as Gauge, E as Hammer, F as Cable, I as Brain, L as ArrowRight, M as Command, N as ChevronRight, O as Folder, P as Check, R as AppWindow, S as Link2Off, T as HardDrive, _ as Minus, a as TimerReset, b as Menu, c as Sparkles, d as Settings, f as Send, g as Play, h as Plus, i as Trash2, j as Download, k as FolderOpen, l as ShieldCheck, m as Plug, n as X, o as Terminal, p as RefreshCw, r as Users, s as Square, t as Zap, u as ShieldAlert, v as MessageSquare, w as History, x as LoaderCircle, y as MessageSquarePlus, z as Activity } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-He4wD8kJ.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-Cw4jZ7xd.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function rpc(path, action, body = {}, init) {
@@ -781,6 +781,8 @@ var useGrokHub = create()(persist((set, get) => ({
 	running: false,
 	streamStatus: null,
 	streamingMessageId: null,
+	modelCatalog: emptyCatalog(),
+	lastModelsFetchAt: 0,
 	apiKey: "",
 	githubToken: "",
 	oauth: null,
@@ -814,7 +816,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-CIRl4icR.mjs");
+		const { oauthStart } = await import("./grok-client-CwD1pJQ1.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -843,7 +845,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-CIRl4icR.mjs");
+		const { oauthPoll } = await import("./grok-client-CwD1pJQ1.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -921,7 +923,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-CIRl4icR.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-CwD1pJQ1.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -977,18 +979,21 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			if (res.ok) {
 				const data = await res.json();
-				if (Array.isArray(data.models)) models.push(...data.models);
+				if (Array.isArray(data.models)) models.push(...data.models.filter(Boolean));
 			}
 		} catch {}
 		const now = Date.now();
+		const catalog = models.length ? buildCatalog(models) : get().modelCatalog || emptyCatalog();
 		set((st) => ({
 			profile: {
 				displayName: opts?.displayName ?? st.profile.displayName,
 				email: opts?.email ?? st.profile.email,
 				imageUrl: opts?.imageUrl ?? st.profile.imageUrl,
-				models: models.length ? models : st.profile.models,
+				models: catalog.essential.length ? catalog.essential : st.profile.models,
 				connectedAt: st.profile.connectedAt ?? (st.grokConnected ? now : null)
 			},
+			modelCatalog: catalog,
+			lastModelsFetchAt: models.length ? now : st.lastModelsFetchAt,
 			agents: st.agents.length > 0 ? st.agents : [{
 				id: "primary",
 				name: (opts?.displayName || "Primary").split(/\s+/)[0] || "Primary",
@@ -1010,9 +1015,44 @@ var useGrokHub = create()(persist((set, get) => ({
 		if (opts?.displayName || opts?.email || models.length) get().pushActivity({
 			kind: "auth",
 			title: "Grok profile synced",
-			detail: opts?.displayName || opts?.email || `${models.length} models`,
+			detail: opts?.displayName || opts?.email || `${catalog.essential.length} essential models (${catalog.source})`,
 			status: "success"
 		});
+	},
+	refreshModels: async () => {
+		try {
+			const st = get();
+			const res = await fetch("/api/grok", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					action: "models",
+					apiKey: st.apiKey || "",
+					accessToken: st.oauth?.accessToken || ""
+				})
+			});
+			let models = [];
+			if (res.ok) {
+				const data = await res.json();
+				if (Array.isArray(data.models)) models = data.models.filter(Boolean);
+			}
+			if (!models.length) {
+				set({ lastModelsFetchAt: Date.now() });
+				return;
+			}
+			const catalog = buildCatalog(models);
+			set((s) => ({
+				modelCatalog: catalog,
+				lastModelsFetchAt: Date.now(),
+				profile: {
+					...s.profile,
+					models: catalog.essential
+				},
+				grokStatusDetail: s.grokConnected ? `Live · ${catalog.essential.length} models · Auto ready` : s.grokStatusDetail
+			}));
+		} catch {
+			set({ lastModelsFetchAt: Date.now() });
+		}
 	},
 	newThread: () => {
 		const now = Date.now();
@@ -1452,7 +1492,16 @@ var useGrokHub = create()(persist((set, get) => ({
 		if (!trimmed) return;
 		if (get().running) return;
 		const mode = get().mode;
-		const routed = resolveMode(mode, trimmed);
+		const catalog = get().modelCatalog || emptyCatalog();
+		const auto = autoRouteFor(trimmed, catalog);
+		if (mode === "auto" && auto.openImagine) {
+			set({
+				nav: "imagine",
+				imaginePrompt: trimmed
+			});
+			return;
+		}
+		const routed = resolveModeWithCatalog(mode, trimmed, catalog);
 		const m = getMode(routed);
 		const bill = get().recordUsage("message", routed);
 		if (!bill.ok) {
@@ -1503,7 +1552,7 @@ var useGrokHub = create()(persist((set, get) => ({
 				botPlaceholder
 			],
 			running: true,
-			streamStatus: "Thinking…",
+			streamStatus: mode === "auto" ? `Auto → ${auto.reason}` : `Thinking · ${m.label}…`,
 			streamingMessageId: botId
 		}));
 		if (get().agents.length === 0) await get().syncFromGrok();
@@ -1524,7 +1573,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let usedLive = false;
 		let finalAnswer = "";
 		let aborted = false;
-		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-DNbvJMRG.mjs");
+		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-DY9vmTDN.mjs");
 		try {
 			if (isLocalSlash) {
 				set({ streamStatus: "Running skill…" });
@@ -1535,7 +1584,7 @@ var useGrokHub = create()(persist((set, get) => ({
 					patchBot(finalAnswer, { streaming: false });
 				}
 			} else {
-				const { grokChatStream } = await import("./grok-client-CIRl4icR.mjs");
+				const { grokChatStream } = await import("./grok-client-CwD1pJQ1.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").filter((c) => c.id !== botId).slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
@@ -1544,7 +1593,8 @@ var useGrokHub = create()(persist((set, get) => ({
 					role: "user",
 					content: trimmed
 				});
-				const modelId = modelIdForMode(mode, trimmed);
+				const modelId = modelIdForMode(mode, trimmed, catalog);
+				if (mode === "auto") set({ streamStatus: `Auto → ${auto.reason}` });
 				let rounds = 0;
 				const maxRounds = 4;
 				let accumulated = "";
@@ -1777,7 +1827,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let model;
 		let err = null;
 		try {
-			const { grokImagine } = await import("./grok-client-CIRl4icR.mjs");
+			const { grokImagine } = await import("./grok-client-CwD1pJQ1.mjs");
 			const live = await grokImagine({
 				prompt: p,
 				apiKey: get().apiKey || void 0,
@@ -1890,6 +1940,8 @@ var useGrokHub = create()(persist((set, get) => ({
 			running: false,
 			streamStatus: null,
 			streamingMessageId: null,
+			modelCatalog: emptyCatalog(),
+			lastModelsFetchAt: 0,
 			nav: "chat",
 			modeMenuOpen: false,
 			usage: createUsage("pro"),
@@ -1917,6 +1969,8 @@ var useGrokHub = create()(persist((set, get) => ({
 		githubToken: s.githubToken,
 		oauth: s.oauth,
 		profile: s.profile,
+		modelCatalog: s.modelCatalog,
+		lastModelsFetchAt: s.lastModelsFetchAt,
 		chat: s.chat,
 		activity: s.activity.slice(0, 40)
 	}),
@@ -1992,8 +2046,10 @@ function ModePicker() {
 	const open = useGrokHub((s) => s.modeMenuOpen);
 	const setMode = useGrokHub((s) => s.setMode);
 	const setModeMenuOpen = useGrokHub((s) => s.setModeMenuOpen);
+	const catalog = useGrokHub((s) => s.modelCatalog);
 	const ref = (0, import_react.useRef)(null);
-	const active = GROK_MODES.find((m) => m.id === mode) ?? GROK_MODES[0];
+	const modes = getModesWithCatalog(catalog);
+	const active = modes.find((m) => m.id === mode) ?? modes[0];
 	const ActiveIcon = ICONS[active.id];
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
@@ -2019,7 +2075,7 @@ function ModePicker() {
 			className: cn("flex h-9 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2.5 text-left transition-colors hover:border-[var(--color-border-strong)]", open && "border-[var(--color-border-strong)]"),
 			"aria-haspopup": "listbox",
 			"aria-expanded": open,
-			"aria-label": `Model mode: ${modeBadge(active.id)}`,
+			"aria-label": `Model mode: ${modeBadge(active.id, catalog)}`,
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ActiveIcon, { className: "h-3.5 w-3.5 text-[var(--color-muted)]" }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -2035,10 +2091,10 @@ function ModePicker() {
 					children: active.model
 				})
 			]
-		}), open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		}), open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			role: "listbox",
-			className: "absolute right-0 top-[calc(100%+6px)] z-50 w-[min(100vw-2rem,320px)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-[var(--shadow-soft)]",
-			children: GROK_MODES.map((m) => {
+			className: "absolute right-0 top-[calc(100%+6px)] z-50 w-[min(100vw-2rem,340px)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-[var(--shadow-soft)]",
+			children: [modes.map((m) => {
 				const Icon = ICONS[m.id];
 				const selected = m.id === mode;
 				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -2052,29 +2108,43 @@ function ModePicker() {
 					className: cn("flex w-full items-start gap-3 rounded-[var(--radius-md)] px-2.5 py-2.5 text-left transition-colors", selected ? "bg-[var(--color-elevated)]" : "hover:bg-[var(--color-elevated)]/70"),
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Icon, { className: "mt-0.5 h-4 w-4 shrink-0 text-[var(--color-muted)]" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "min-w-0 flex-1",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex items-center gap-2",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "text-sm font-medium text-[var(--color-fg)]",
-									children: m.label
-								}),
-								m.id === "build" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "rounded bg-[var(--color-surface)] px-1 py-px text-[10px] text-[var(--color-subtle)]",
-									children: "Beta"
-								}),
-								selected && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "ml-auto text-[var(--color-muted)]",
-									children: "✓"
-								})
-							]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "text-xs text-[var(--color-muted)]",
-							children: m.subtitle
-						})]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "flex items-center gap-2",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "text-sm font-medium text-[var(--color-fg)]",
+										children: m.label
+									}),
+									m.id === "build" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "rounded bg-[var(--color-surface)] px-1 py-px text-[10px] text-[var(--color-subtle)]",
+										children: "Beta"
+									}),
+									selected && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "ml-auto text-[var(--color-muted)]",
+										children: "✓"
+									})
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "text-xs text-[var(--color-muted)]",
+								children: m.subtitle
+							}),
+							m.id !== "auto" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "mt-0.5 font-mono text-[10px] text-[var(--color-subtle)]",
+								children: m.modelId
+							})
+						]
 					})]
 				}, m.id);
-			})
+			}), catalog.source === "live" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "border-t border-[var(--color-border)] px-2.5 py-1.5 text-[10px] text-[var(--color-subtle)]",
+				children: [
+					"Live · ",
+					catalog.essential.length,
+					" essential models"
+				]
+			})]
 		})]
 	});
 }
@@ -3109,6 +3179,7 @@ function CommandView() {
 	const agents = useGrokHub((s) => s.agents);
 	const mode = useGrokHub((s) => s.mode);
 	const setMode = useGrokHub((s) => s.setMode);
+	const modelCatalog = useGrokHub((s) => s.modelCatalog);
 	const setNav = useGrokHub((s) => s.setNav);
 	const runAutomation = useGrokHub((s) => s.runAutomation);
 	const sendChat = useGrokHub((s) => s.sendChat);
@@ -3156,7 +3227,7 @@ function CommandView() {
 				className: "grid gap-4 lg:grid-cols-[1.35fr_1fr]",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, { children: "Grok modes" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Baked in exactly like the web picker — Auto, Fast, Expert, Heavy, Build. Costs scale by mode." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, {
 					className: "grid gap-2 sm:grid-cols-2",
-					children: GROK_MODES.map((m) => {
+					children: getModesWithCatalog(modelCatalog).map((m) => {
 						const selected = m.id === mode;
 						const costHint = m.id === "heavy" ? "8u" : m.id === "expert" ? "4u" : m.id === "build" ? "2u" : m.id === "auto" ? "1.5u" : "1u";
 						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -4037,6 +4108,9 @@ function ImagineView() {
 function SettingsView() {
 	const mode = useGrokHub((s) => s.mode);
 	const setMode = useGrokHub((s) => s.setMode);
+	const modelCatalog = useGrokHub((s) => s.modelCatalog);
+	const refreshModels = useGrokHub((s) => s.refreshModels);
+	const lastModelsFetchAt = useGrokHub((s) => s.lastModelsFetchAt);
 	const desktop = useGrokHub((s) => s.desktop);
 	const setDesktop = useGrokHub((s) => s.setDesktop);
 	const setNav = useGrokHub((s) => s.setNav);
@@ -4049,7 +4123,7 @@ function SettingsView() {
 	const grokStatusDetail = useGrokHub((s) => s.grokStatusDetail);
 	const probeGrok = useGrokHub((s) => s.probeGrok);
 	const syncFromGrok = useGrokHub((s) => s.syncFromGrok);
-	const profile = useGrokHub((s) => s.profile);
+	useGrokHub((s) => s.profile);
 	const oauth = useGrokHub((s) => s.oauth);
 	const oauthPending = useGrokHub((s) => s.oauthPending);
 	const startGrokOAuth = useGrokHub((s) => s.startGrokOAuth);
@@ -4384,16 +4458,64 @@ function SettingsView() {
 					})]
 				})]
 			})] }),
-			profile.models.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardHeader, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
-				className: "text-sm",
-				children: "Models from your connection"
-			}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "flex flex-wrap gap-1",
-				children: profile.models.slice(0, 16).map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
-					className: "font-mono text-[10px]",
-					children: m
-				}, m))
-			}) })] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardHeader, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "flex flex-wrap items-start justify-between gap-2",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
+					className: "text-sm",
+					children: "Essential models"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Polled from xAI · only 4.5 / 4.3 / Fast / Build / Imagine class ids" })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+					size: "sm",
+					variant: "secondary",
+					onClick: () => void refreshModels(),
+					children: "Refresh models"
+				})]
+			}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+				className: "space-y-3",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "grid gap-2 sm:grid-cols-2",
+						children: [
+							["fast", "Fast chat"],
+							["balanced", "Balanced"],
+							["smart", "Brains"],
+							["heavy", "Heavy / team"],
+							["build", "Build / code"],
+							["imagine", "Imagine"]
+						].map(([slot, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "text-[10px] uppercase tracking-wide text-[var(--color-subtle)]",
+									children: label
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "text-sm font-medium text-[var(--color-fg)]",
+									children: friendlyModelName(modelCatalog.slots[slot])
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "font-mono text-[10px] text-[var(--color-muted)]",
+									children: modelCatalog.slots[slot]
+								})
+							]
+						}, slot))
+					}),
+					modelCatalog.essential.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "flex flex-wrap gap-1",
+						children: modelCatalog.essential.map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+							className: "font-mono text-[10px]",
+							children: m
+						}, m))
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "text-[10px] text-[var(--color-subtle)]",
+						children: [
+							"Source: ",
+							modelCatalog.source,
+							lastModelsFetchAt ? ` · last poll ${new Date(lastModelsFetchAt).toLocaleTimeString()}` : " · not polled yet"
+						]
+					})
+				]
+			})] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
 				children: "Updates (GitHub)"
@@ -4449,21 +4571,28 @@ function SettingsView() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
 				children: "Model modes"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Mapped to live xAI models after you connect." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, {
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Auto routes each prompt to Fast · 4.3 · 4.5 · Build · Imagine balancing tokens." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, {
 				className: "space-y-2",
-				children: GROK_MODES.map((m) => {
+				children: getModesWithCatalog(modelCatalog).map((m) => {
 					const selected = m.id === mode;
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
 						onClick: () => setMode(m.id),
 						className: cn("flex w-full items-center justify-between gap-3 rounded-[var(--radius-md)] border px-3 py-3 text-left transition-colors", selected ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)]" : "border-[var(--color-border)] hover:border-[var(--color-border-strong)]"),
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "text-sm font-medium",
-							children: m.label
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "text-xs text-[var(--color-muted)]",
-							children: m.subtitle
-						})] }), selected && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "text-sm font-medium",
+								children: m.label
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "text-xs text-[var(--color-muted)]",
+								children: m.subtitle
+							}),
+							m.id !== "auto" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "mt-0.5 font-mono text-[10px] text-[var(--color-subtle)]",
+								children: m.modelId
+							})
+						] }), selected && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "text-xs text-[var(--color-muted)]",
 							children: "Active"
 						})]
@@ -4758,6 +4887,7 @@ function AppShell() {
 				lastUsed: Date.now()
 			} : c) });
 			useGrokHub.getState().probeGrok();
+			useGrokHub.getState().refreshModels();
 			(async () => {
 				try {
 					const { hostInfo } = await import("./host-client-WUUmAwRI.mjs");
@@ -4771,6 +4901,19 @@ function AppShell() {
 			})();
 		});
 		setIsDesktop(Boolean(window.grokhubDesktop));
+	}, []);
+	(0, import_react.useEffect)(() => {
+		const MODELS_POLL_MS = 300 * 1e3;
+		const tick = () => {
+			const st = useGrokHub.getState();
+			if (st.oauth?.accessToken || st.apiKey || st.grokConnected) st.refreshModels();
+		};
+		const id = window.setInterval(tick, MODELS_POLL_MS);
+		const t = window.setTimeout(tick, 8e3);
+		return () => {
+			window.clearInterval(id);
+			window.clearTimeout(t);
+		};
 	}, []);
 	(0, import_react.useEffect)(() => {
 		if (oauth?.name || oauth?.email) {

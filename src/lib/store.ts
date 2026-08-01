@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { renderImaginePreview } from "./imagine";
-import { getMode, resolveMode, stripAssistantChrome, modelIdForMode } from "./modes";
+import { getMode, resolveMode, resolveModeWithCatalog, stripAssistantChrome, modelIdForMode, autoRouteFor } from "./modes";
+import { buildCatalog, emptyCatalog, type ResolvedCatalog } from "./models-catalog";
 import { createSeeds } from "./seed";
 import type {
   ActivityItem,
@@ -61,6 +62,9 @@ type State = {
   streamStatus: string | null;
   /** Id of the assistant message currently streaming */
   streamingMessageId: string | null;
+  /** Live essential models from xAI */
+  modelCatalog: ResolvedCatalog;
+  lastModelsFetchAt: number;
   /** xAI API key (local only; never sent to third parties except api.x.ai) */
   apiKey: string;
   /** Optional GitHub token for private-repo updates */
@@ -114,6 +118,7 @@ type State = {
   }) => void;
   sendChat: (text: string) => Promise<void>;
   stopChat: () => void;
+  refreshModels: () => Promise<void>;
   setImaginePrompt: (v: string) => void;
   setImagineAspect: (v: ImagineAspect) => void;
   runImagine: (prompt?: string) => Promise<void>;
@@ -395,6 +400,8 @@ export const useGrokHub = create<State>()(
       running: false,
       streamStatus: null,
       streamingMessageId: null,
+      modelCatalog: emptyCatalog(),
+      lastModelsFetchAt: 0,
       apiKey: "",
       githubToken: "",
       oauth: null,
@@ -602,20 +609,23 @@ export const useGrokHub = create<State>()(
           });
           if (res.ok) {
             const data = (await res.json()) as { models?: string[] };
-            if (Array.isArray(data.models)) models.push(...data.models);
+            if (Array.isArray(data.models)) models.push(...data.models.filter(Boolean));
           }
         } catch {
           /* optional when offline */
         }
         const now = Date.now();
+        const catalog = models.length ? buildCatalog(models) : get().modelCatalog || emptyCatalog();
         set((st) => ({
           profile: {
             displayName: opts?.displayName ?? st.profile.displayName,
             email: opts?.email ?? st.profile.email,
             imageUrl: opts?.imageUrl ?? st.profile.imageUrl,
-            models: models.length ? models : st.profile.models,
+            models: catalog.essential.length ? catalog.essential : st.profile.models,
             connectedAt: st.profile.connectedAt ?? (st.grokConnected ? now : null),
           },
+          modelCatalog: catalog,
+          lastModelsFetchAt: models.length ? now : st.lastModelsFetchAt,
           agents:
             st.agents.length > 0
               ? st.agents
@@ -644,9 +654,50 @@ export const useGrokHub = create<State>()(
           get().pushActivity({
             kind: "auth",
             title: "Grok profile synced",
-            detail: opts?.displayName || opts?.email || `${models.length} models`,
+            detail:
+              opts?.displayName ||
+              opts?.email ||
+              `${catalog.essential.length} essential models (${catalog.source})`,
             status: "success",
           });
+        }
+      },
+
+      refreshModels: async () => {
+        try {
+          const st = get();
+          const res = await fetch("/api/grok", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              action: "models",
+              apiKey: st.apiKey || "",
+              accessToken: st.oauth?.accessToken || "",
+            }),
+          });
+          let models: string[] = [];
+          if (res.ok) {
+            const data = (await res.json()) as { models?: string[] };
+            if (Array.isArray(data.models)) models = data.models.filter(Boolean);
+          }
+          if (!models.length) {
+            set({ lastModelsFetchAt: Date.now() });
+            return;
+          }
+          const catalog = buildCatalog(models);
+          set((s) => ({
+            modelCatalog: catalog,
+            lastModelsFetchAt: Date.now(),
+            profile: {
+              ...s.profile,
+              models: catalog.essential,
+            },
+            grokStatusDetail: s.grokConnected
+              ? `Live · ${catalog.essential.length} models · Auto ready`
+              : s.grokStatusDetail,
+          }));
+        } catch {
+          set({ lastModelsFetchAt: Date.now() });
         }
       },
 
@@ -1155,7 +1206,13 @@ export const useGrokHub = create<State>()(
         }
 
         const mode = get().mode;
-        const routed = resolveMode(mode, trimmed);
+        const catalog = get().modelCatalog || emptyCatalog();
+        const auto = autoRouteFor(trimmed, catalog);
+        if (mode === "auto" && auto.openImagine) {
+          set({ nav: "imagine", imaginePrompt: trimmed });
+          return;
+        }
+        const routed = resolveModeWithCatalog(mode, trimmed, catalog);
         const m = getMode(routed);
         const bill = get().recordUsage("message", routed);
         if (!bill.ok) {
@@ -1210,7 +1267,10 @@ export const useGrokHub = create<State>()(
         set((s) => ({
           chat: [...s.chat, userMsg, botPlaceholder],
           running: true,
-          streamStatus: "Thinking…",
+          streamStatus:
+            mode === "auto"
+              ? `Auto → ${auto.reason}`
+              : `Thinking · ${m.label}…`,
           streamingMessageId: botId,
         }));
 
@@ -1280,7 +1340,11 @@ export const useGrokHub = create<State>()(
               history.push({ role: "user", content: trimmed });
             }
 
-            const modelId = modelIdForMode(mode, trimmed);
+            const modelId = modelIdForMode(mode, trimmed, catalog);
+            // Surface Auto routing decision while streaming
+            if (mode === "auto") {
+              set({ streamStatus: `Auto → ${auto.reason}` });
+            }
             let rounds = 0;
             const maxRounds = 4;
             let accumulated = "";
@@ -1726,6 +1790,8 @@ export const useGrokHub = create<State>()(
           running: false,
           streamStatus: null,
           streamingMessageId: null,
+          modelCatalog: emptyCatalog(),
+          lastModelsFetchAt: 0,
           nav: "chat",
           modeMenuOpen: false,
           usage: createUsage("pro"),
@@ -1755,6 +1821,8 @@ export const useGrokHub = create<State>()(
         githubToken: s.githubToken,
         oauth: s.oauth,
         profile: s.profile,
+        modelCatalog: s.modelCatalog,
+        lastModelsFetchAt: s.lastModelsFetchAt,
         chat: s.chat,
         activity: s.activity.slice(0, 40),
       }),
