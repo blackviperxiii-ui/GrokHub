@@ -1,7 +1,7 @@
 import { r as __exportAll } from "../_runtime.mjs";
 import { t as __exportAll$1 } from "./rolldown-runtime-D7D4PA-g.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/version-XWMLrbG8.js
-var version_XWMLrbG8_exports = /* @__PURE__ */ __exportAll({
+//#region node_modules/.nitro/vite/services/ssr/assets/version-By51W1Q4.js
+var version_By51W1Q4_exports = /* @__PURE__ */ __exportAll({
 	a: () => modeBadge,
 	c: () => resolveModeWithCatalog,
 	d: () => buildCatalog,
@@ -492,7 +492,7 @@ function stripAssistantChrome(content) {
 	return content.replace(/^\[(?:Auto → )?[^\]]+\]\s*\n*/gm, "").replace(/^— Offline fallback —\s*\n*/gm, "").replace(/^Could not reach Grok\.\s*\n*/gm, "").replace(/^Grok connection error:.*$/gm, "").replace(/^Your OAuth session is saved\..*$/gm, "").replace(/^Fix: Settings →.*$/gm, "").replace(/^Not connected to Grok\..*$/gm, "").trim();
 }
 /** Single source of truth for display / packaging version. */
-var APP_VERSION = "0.2.11";
+var APP_VERSION = "0.2.12";
 `${APP_VERSION}`;
 //#endregion
-export { emptyCatalog as a, getModesWithCatalog as c, needsGrokClassification as d, resolveMode as f, version_XWMLrbG8_exports as h, buildCatalog as i, modeBadge as l, stripAssistantChrome as m, applyGrokPlan as n, friendlyModelName as o, resolveModeWithCatalog as p, autoRouteFor as r, getMode as s, APP_VERSION as t, modelIdForMode as u };
+export { emptyCatalog as a, getModesWithCatalog as c, needsGrokClassification as d, resolveMode as f, version_By51W1Q4_exports as h, buildCatalog as i, modeBadge as l, stripAssistantChrome as m, applyGrokPlan as n, friendlyModelName as o, resolveModeWithCatalog as p, autoRouteFor as r, getMode as s, APP_VERSION as t, modelIdForMode as u };

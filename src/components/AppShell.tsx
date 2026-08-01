@@ -324,18 +324,10 @@ export function AppShell() {
             </div>
           </nav>
 
-          <div className="shrink-0 space-y-3 border-t border-[var(--color-border)] p-4">
-            <UsageMeterChip className="w-full" />
+          <div className="shrink-0 space-y-2 border-t border-[var(--color-border)] p-4">
             <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
               <span className="pulse-live inline-block h-2 w-2 rounded-full bg-[var(--color-success)]" />
               Heartbeat <RelativeTime ts={heartbeatAt} />
-            </div>
-            <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2.5 py-2">
-              <div className="text-[10px] uppercase tracking-wide text-[var(--color-subtle)]">
-                Mode
-              </div>
-              <div className="text-xs font-medium">{modeMeta.label}</div>
-              <div className="text-[10px] text-[var(--color-muted)]">{modeMeta.subtitle}</div>
             </div>
           </div>
         </aside>

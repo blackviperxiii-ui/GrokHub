@@ -1,5 +1,5 @@
-import { f as resolveMode, u as modelIdForMode } from "./version-XWMLrbG8.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/grok-DGxwu4Mf.js
+import { f as resolveMode, u as modelIdForMode } from "./version-By51W1Q4.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/grok-B6vT5sj0.js
 var XAI_BASE = "https://api.x.ai/v1";
 /** Map GrokHub modes → xAI model IDs */
 function modelForMode(mode, prompt = "") {

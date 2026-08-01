@@ -1,14 +1,15 @@
 import { o as __toESM } from "../_runtime.mjs";
-import { a as emptyCatalog, c as getModesWithCatalog, d as needsGrokClassification, f as resolveMode, i as buildCatalog, l as modeBadge, m as stripAssistantChrome, n as applyGrokPlan, o as friendlyModelName, p as resolveModeWithCatalog, r as autoRouteFor, s as getMode, t as APP_VERSION, u as modelIdForMode } from "./version-XWMLrbG8.mjs";
+import { a as emptyCatalog, c as getModesWithCatalog, d as needsGrokClassification, f as resolveMode, i as buildCatalog, l as modeBadge, m as stripAssistantChrome, n as applyGrokPlan, o as friendlyModelName, p as resolveModeWithCatalog, r as autoRouteFor, s as getMode, t as APP_VERSION, u as modelIdForMode } from "./version-By51W1Q4.mjs";
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
-import { N as require_jsx_runtime, P as require_react, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
+import { F as require_react, P as require_jsx_runtime, g as require_react_dom, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
 import { A as ExternalLink, B as Activity, C as Image, D as Gauge, E as Hammer, F as Check, I as Cable, L as Brain, M as Compass, N as Command, O as Folder, P as ChevronRight, R as ArrowRight, S as Link2Off, T as HardDrive, _ as Minus, a as TimerReset, b as Menu, c as Sparkles, d as Settings, f as Send, g as Play, h as Plus, i as Trash2, j as Download, k as FolderOpen, l as ShieldCheck, m as Plug, n as X, o as Terminal, p as RefreshCw, r as Users, s as Square, t as Zap, u as ShieldAlert, v as MessageSquare, w as History, x as LoaderCircle, y as MessageSquarePlus, z as AppWindow } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-DAl8uJhq.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-C1qBPr9w.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
+var import_react_dom = require_react_dom();
 async function rpc(path, action, body = {}, init) {
 	const res = await fetch(path, {
 		method: "POST",
@@ -816,7 +817,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-CSU0Of2p.mjs");
+		const { oauthStart } = await import("./grok-client-CS5ThB0G.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -845,7 +846,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-CSU0Of2p.mjs");
+		const { oauthPoll } = await import("./grok-client-CS5ThB0G.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -923,7 +924,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-CSU0Of2p.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-CS5ThB0G.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1598,7 +1599,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let usedLive = false;
 		let finalAnswer = "";
 		let aborted = false;
-		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-DGxwu4Mf.mjs");
+		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-B6vT5sj0.mjs");
 		try {
 			if (isLocalSlash) {
 				set({ streamStatus: "Running skill…" });
@@ -1609,7 +1610,7 @@ var useGrokHub = create()(persist((set, get) => ({
 					patchBot(finalAnswer, { streaming: false });
 				}
 			} else {
-				const { grokChatStream } = await import("./grok-client-CSU0Of2p.mjs");
+				const { grokChatStream } = await import("./grok-client-CS5ThB0G.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").filter((c) => c.id !== botId).slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
@@ -1852,7 +1853,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let model;
 		let err = null;
 		try {
-			const { grokImagine } = await import("./grok-client-CSU0Of2p.mjs");
+			const { grokImagine } = await import("./grok-client-CS5ThB0G.mjs");
 			const live = await grokImagine({
 				prompt: p,
 				apiKey: get().apiKey || void 0,
@@ -2079,20 +2080,49 @@ var ICONS = {
 	heavy: Users,
 	build: Hammer
 };
+/**
+* Mode picker for the title bar. Menu is portaled to document.body so it is not
+* clipped by the frameless shell overflow / app-region drag.
+*/
 function ModePicker() {
 	const mode = useGrokHub((s) => s.mode);
 	const open = useGrokHub((s) => s.modeMenuOpen);
 	const setMode = useGrokHub((s) => s.setMode);
 	const setModeMenuOpen = useGrokHub((s) => s.setModeMenuOpen);
 	const catalog = useGrokHub((s) => s.modelCatalog);
-	const ref = (0, import_react.useRef)(null);
+	const btnRef = (0, import_react.useRef)(null);
+	const menuRef = (0, import_react.useRef)(null);
+	const [pos, setPos] = (0, import_react.useState)({
+		top: 0,
+		right: 0
+	});
 	const modes = getModesWithCatalog(catalog);
 	const active = modes.find((m) => m.id === mode) ?? modes[0];
 	const ActiveIcon = ICONS[active.id];
+	const noDrag = { WebkitAppRegion: "no-drag" };
+	(0, import_react.useLayoutEffect)(() => {
+		if (!open || !btnRef.current) return;
+		const update = () => {
+			const r = btnRef.current.getBoundingClientRect();
+			setPos({
+				top: r.bottom + 6,
+				right: Math.max(8, window.innerWidth - r.right)
+			});
+		};
+		update();
+		window.addEventListener("resize", update);
+		window.addEventListener("scroll", update, true);
+		return () => {
+			window.removeEventListener("resize", update);
+			window.removeEventListener("scroll", update, true);
+		};
+	}, [open]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		const onDoc = (e) => {
-			if (!ref.current?.contains(e.target)) setModeMenuOpen(false);
+			const t = e.target;
+			if (btnRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+			setModeMenuOpen(false);
 		};
 		const onKey = (e) => {
 			if (e.key === "Escape") setModeMenuOpen(false);
@@ -2104,12 +2134,87 @@ function ModePicker() {
 			document.removeEventListener("keydown", onKey);
 		};
 	}, [open, setModeMenuOpen]);
+	const menu = open && typeof document !== "undefined" && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		ref: menuRef,
+		role: "listbox",
+		style: {
+			...noDrag,
+			position: "fixed",
+			top: pos.top,
+			right: pos.right,
+			zIndex: 9999
+		},
+		className: "w-[min(100vw-1.5rem,340px)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-[var(--shadow-soft)]",
+		children: [modes.map((m) => {
+			const Icon = ICONS[m.id];
+			const selected = m.id === mode;
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				role: "option",
+				"aria-selected": selected,
+				style: noDrag,
+				onClick: (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					setMode(m.id);
+					setModeMenuOpen(false);
+				},
+				className: cn("flex w-full items-start gap-3 rounded-[var(--radius-md)] px-2.5 py-2.5 text-left transition-colors", selected ? "bg-[var(--color-elevated)]" : "hover:bg-[var(--color-elevated)]/70"),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Icon, { className: "mt-0.5 h-4 w-4 shrink-0 text-[var(--color-muted)]" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "min-w-0 flex-1",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex items-center gap-2",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "text-sm font-medium text-[var(--color-fg)]",
+									children: m.label
+								}),
+								m.id === "build" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "rounded bg-[var(--color-surface)] px-1 py-px text-[10px] text-[var(--color-subtle)]",
+									children: "Beta"
+								}),
+								selected && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "ml-auto text-[var(--color-muted)]",
+									children: "✓"
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "text-xs text-[var(--color-muted)]",
+							children: m.subtitle
+						}),
+						m.id !== "auto" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "mt-0.5 font-mono text-[10px] text-[var(--color-subtle)]",
+							children: m.modelId
+						})
+					]
+				})]
+			}, m.id);
+		}), catalog.essential.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "border-t border-[var(--color-border)] px-2.5 py-1.5 text-[10px] text-[var(--color-subtle)]",
+			children: [
+				catalog.source === "live" ? "Live" : "Fallback",
+				" · ",
+				catalog.essential.length,
+				" ",
+				"models · slots by ",
+				catalog.classifiedBy === "grok" ? "Grok" : "heuristic"
+			]
+		})]
+	}), document.body);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "relative",
-		ref,
+		style: noDrag,
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			ref: btnRef,
 			type: "button",
-			onClick: () => setModeMenuOpen(!open),
+			style: noDrag,
+			onClick: (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				setModeMenuOpen(!open);
+			},
 			className: cn("flex h-9 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2.5 text-left transition-colors hover:border-[var(--color-border-strong)]", open && "border-[var(--color-border-strong)]"),
 			"aria-haspopup": "listbox",
 			"aria-expanded": open,
@@ -2129,64 +2234,7 @@ function ModePicker() {
 					children: active.model
 				})
 			]
-		}), open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			role: "listbox",
-			className: "absolute right-0 top-[calc(100%+6px)] z-50 w-[min(100vw-2rem,340px)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-[var(--shadow-soft)]",
-			children: [modes.map((m) => {
-				const Icon = ICONS[m.id];
-				const selected = m.id === mode;
-				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-					type: "button",
-					role: "option",
-					"aria-selected": selected,
-					onClick: () => {
-						setMode(m.id);
-						setModeMenuOpen(false);
-					},
-					className: cn("flex w-full items-start gap-3 rounded-[var(--radius-md)] px-2.5 py-2.5 text-left transition-colors", selected ? "bg-[var(--color-elevated)]" : "hover:bg-[var(--color-elevated)]/70"),
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Icon, { className: "mt-0.5 h-4 w-4 shrink-0 text-[var(--color-muted)]" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "min-w-0 flex-1",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "flex items-center gap-2",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "text-sm font-medium text-[var(--color-fg)]",
-										children: m.label
-									}),
-									m.id === "build" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "rounded bg-[var(--color-surface)] px-1 py-px text-[10px] text-[var(--color-subtle)]",
-										children: "Beta"
-									}),
-									selected && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "ml-auto text-[var(--color-muted)]",
-										children: "✓"
-									})
-								]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "text-xs text-[var(--color-muted)]",
-								children: m.subtitle
-							}),
-							m.id !== "auto" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "mt-0.5 font-mono text-[10px] text-[var(--color-subtle)]",
-								children: m.modelId
-							})
-						]
-					})]
-				}, m.id);
-			}), catalog.essential.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "border-t border-[var(--color-border)] px-2.5 py-1.5 text-[10px] text-[var(--color-subtle)]",
-				children: [
-					catalog.source === "live" ? "Live" : "Fallback",
-					" · ",
-					catalog.essential.length,
-					" ",
-					"models · slots by ",
-					catalog.classifiedBy === "grok" ? "Grok" : "heuristic"
-				]
-			})]
-		})]
+		}), menu]
 	});
 }
 /** Avoids SSR/client time drift hydration mismatches. */
@@ -2254,7 +2302,7 @@ function barColor(tone) {
 	if (tone === "warn") return "bg-[var(--color-warn)]";
 	return "bg-[var(--color-fg)]";
 }
-/** Compact titlebar / sidebar chip */
+/** Compact titlebar chip — navigates to Settings usage panel */
 function UsageMeterChip({ className }) {
 	const usage = useGrokHub((s) => s.usage);
 	const setNav = useGrokHub((s) => s.setNav);
@@ -2263,8 +2311,13 @@ function UsageMeterChip({ className }) {
 	const tone = usageTone(pct);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 		type: "button",
-		onClick: () => setNav("settings"),
-		title: `${plan.label}: ${formatUnits(usage.usedUnits)} / ${formatUnits(plan.units)} units`,
+		style: { WebkitAppRegion: "no-drag" },
+		onClick: (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			setNav("settings");
+		},
+		title: `${plan.label}: ${formatUnits(usage.usedUnits)} / ${formatUnits(plan.units)} units · open Settings`,
 		className: cn("flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-1 text-left transition-colors hover:border-[var(--color-border-strong)]", className),
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Gauge, { className: cn("h-3.5 w-3.5 shrink-0", tone === "danger" ? "text-[var(--color-danger)]" : tone === "warn" ? "text-[var(--color-warn)]" : "text-[var(--color-muted)]") }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "min-w-0 flex-1",
@@ -2281,7 +2334,7 @@ function UsageMeterChip({ className }) {
 				className: "mt-0.5 h-1 overflow-hidden rounded-full bg-[var(--color-border)]",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: cn("h-full rounded-full transition-all duration-300", barColor(tone)),
-					style: { width: `${pct}%` }
+					style: { width: `${Math.min(100, Math.max(0, pct))}%` }
 				})
 			})]
 		})]
@@ -5487,36 +5540,16 @@ function AppShell() {
 							}, t.id))]
 						})]
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "shrink-0 space-y-3 border-t border-[var(--color-border)] p-4",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsageMeterChip, { className: "w-full" }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "flex items-center gap-2 text-xs text-[var(--color-muted)]",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "pulse-live inline-block h-2 w-2 rounded-full bg-[var(--color-success)]" }),
-									"Heartbeat ",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RelativeTime, { ts: heartbeatAt })
-								]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2.5 py-2",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "text-[10px] uppercase tracking-wide text-[var(--color-subtle)]",
-										children: "Mode"
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "text-xs font-medium",
-										children: modeMeta.label
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "text-[10px] text-[var(--color-muted)]",
-										children: modeMeta.subtitle
-									})
-								]
-							})
-						]
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "shrink-0 space-y-2 border-t border-[var(--color-border)] p-4",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex items-center gap-2 text-xs text-[var(--color-muted)]",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "pulse-live inline-block h-2 w-2 rounded-full bg-[var(--color-success)]" }),
+								"Heartbeat ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RelativeTime, { ts: heartbeatAt })
+							]
+						})
 					})
 				]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {

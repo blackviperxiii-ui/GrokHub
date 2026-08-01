@@ -1,5 +1,5 @@
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
-import { N as require_jsx_runtime, g as Navigate, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
+import { P as require_jsx_runtime, _ as Navigate, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { a as signIn, l as useCurrentUserState, n as GrokHubMark, t as Button } from "./button-Cz9j7Ln5.mjs";
 //#region node_modules/.nitro/vite/services/ssr/assets/login-DJtZHKJX.js
 var import_jsx_runtime = require_jsx_runtime();

@@ -1,7 +1,7 @@
 import { o as __toESM } from "../_runtime.mjs";
 import { Kt as capitalizeFirstLetter, Xt as isSafeUrlScheme, Yt as createFetch, qt as toKebabCase } from "../_libs/@better-auth/core+[...].mjs";
 import { i as getBaseURL, r as PACKAGE_VERSION, t as GENERIC_OAUTH_ERROR_CODES } from "./providers-DD9Wq7fi.mjs";
-import { N as require_jsx_runtime, P as require_react } from "../_libs/@tanstack/react-router+[...].mjs";
+import { F as require_react, P as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
 import { n as defu } from "../_libs/defu.mjs";
 import { n as clsx, t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { t as twMerge } from "../_libs/tailwind-merge.mjs";

@@ -1,5 +1,5 @@
-import { t as APP_VERSION } from "./version-XWMLrbG8.mjs";
-import { XAI_BASE, callXaiChat, callXaiChatStream, callXaiImagine, probeXaiBearer } from "./grok-DGxwu4Mf.mjs";
+import { t as APP_VERSION } from "./version-By51W1Q4.mjs";
+import { XAI_BASE, callXaiChat, callXaiChatStream, callXaiImagine, probeXaiBearer } from "./grok-B6vT5sj0.mjs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream, existsSync, readFileSync } from "node:fs";
@@ -8,7 +8,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs$1 from "node:fs/promises";
 import os from "node:os";
-//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-Dtnma8Mt.js
+//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-WrosuUCe.js
 /**
 * GitHub update helpers — Node only (server / Electron main).
 *
@@ -908,7 +908,7 @@ async function dispatchApi(route, action, body) {
 				ok: false,
 				error: "models required"
 			};
-			const { buildClassifyPrompt, parseGrokSlotPlan, pickSlotModel } = await import("./version-XWMLrbG8.mjs").then((n) => n.h).then((n) => n.m);
+			const { buildClassifyPrompt, parseGrokSlotPlan, pickSlotModel } = await import("./version-By51W1Q4.mjs").then((n) => n.h).then((n) => n.m);
 			let accessToken = body.accessToken ? String(body.accessToken) : void 0;
 			const apiKey = body.apiKey ? String(body.apiKey) : void 0;
 			if (body.tokens && typeof body.tokens === "object") try {

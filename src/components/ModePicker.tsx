@@ -6,7 +6,8 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { getModesWithCatalog, modeBadge } from "@/lib/modes";
 import { useGrokHub } from "@/lib/store";
 import type { GrokModeId } from "@/lib/types";
@@ -20,21 +21,49 @@ const ICONS: Record<GrokModeId, LucideIcon> = {
   build: Hammer,
 };
 
+/**
+ * Mode picker for the title bar. Menu is portaled to document.body so it is not
+ * clipped by the frameless shell overflow / app-region drag.
+ */
 export function ModePicker() {
   const mode = useGrokHub((s) => s.mode);
   const open = useGrokHub((s) => s.modeMenuOpen);
   const setMode = useGrokHub((s) => s.setMode);
   const setModeMenuOpen = useGrokHub((s) => s.setModeMenuOpen);
   const catalog = useGrokHub((s) => s.modelCatalog);
-  const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
   const modes = getModesWithCatalog(catalog);
   const active = modes.find((m) => m.id === mode) ?? modes[0]!;
   const ActiveIcon = ICONS[active.id];
 
+  const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
+
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return;
+    const update = () => {
+      const r = btnRef.current!.getBoundingClientRect();
+      setPos({
+        top: r.bottom + 6,
+        right: Math.max(8, window.innerWidth - r.right),
+      });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setModeMenuOpen(false);
+      const t = e.target as Node;
+      if (btnRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setModeMenuOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setModeMenuOpen(false);
@@ -47,11 +76,91 @@ export function ModePicker() {
     };
   }, [open, setModeMenuOpen]);
 
+  const menu =
+    open &&
+    typeof document !== "undefined" &&
+    createPortal(
+      <div
+        ref={menuRef}
+        role="listbox"
+        style={{
+          ...noDrag,
+          position: "fixed",
+          top: pos.top,
+          right: pos.right,
+          zIndex: 9999,
+        }}
+        className="w-[min(100vw-1.5rem,340px)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-[var(--shadow-soft)]"
+      >
+        {modes.map((m) => {
+          const Icon = ICONS[m.id];
+          const selected = m.id === mode;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              role="option"
+              aria-selected={selected}
+              style={noDrag}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setMode(m.id);
+                setModeMenuOpen(false);
+              }}
+              className={cn(
+                "flex w-full items-start gap-3 rounded-[var(--radius-md)] px-2.5 py-2.5 text-left transition-colors",
+                selected
+                  ? "bg-[var(--color-elevated)]"
+                  : "hover:bg-[var(--color-elevated)]/70",
+              )}
+            >
+              <Icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-muted)]" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-[var(--color-fg)]">
+                    {m.label}
+                  </span>
+                  {m.id === "build" && (
+                    <span className="rounded bg-[var(--color-surface)] px-1 py-px text-[10px] text-[var(--color-subtle)]">
+                      Beta
+                    </span>
+                  )}
+                  {selected && (
+                    <span className="ml-auto text-[var(--color-muted)]">✓</span>
+                  )}
+                </div>
+                <div className="text-xs text-[var(--color-muted)]">{m.subtitle}</div>
+                {m.id !== "auto" && (
+                  <div className="mt-0.5 font-mono text-[10px] text-[var(--color-subtle)]">
+                    {m.modelId}
+                  </div>
+                )}
+              </div>
+            </button>
+          );
+        })}
+        {catalog.essential.length > 0 && (
+          <div className="border-t border-[var(--color-border)] px-2.5 py-1.5 text-[10px] text-[var(--color-subtle)]">
+            {catalog.source === "live" ? "Live" : "Fallback"} · {catalog.essential.length}{" "}
+            models · slots by {catalog.classifiedBy === "grok" ? "Grok" : "heuristic"}
+          </div>
+        )}
+      </div>,
+      document.body,
+    );
+
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative" style={noDrag}>
       <button
+        ref={btnRef}
         type="button"
-        onClick={() => setModeMenuOpen(!open)}
+        style={noDrag}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setModeMenuOpen(!open);
+        }}
         className={cn(
           "flex h-9 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2.5 text-left transition-colors hover:border-[var(--color-border-strong)]",
           open && "border-[var(--color-border-strong)]",
@@ -71,65 +180,7 @@ export function ModePicker() {
           {active.model}
         </span>
       </button>
-
-      {open && (
-        <div
-          role="listbox"
-          className="absolute right-0 top-[calc(100%+6px)] z-50 w-[min(100vw-2rem,340px)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-[var(--shadow-soft)]"
-        >
-          {modes.map((m) => {
-            const Icon = ICONS[m.id];
-            const selected = m.id === mode;
-            return (
-              <button
-                key={m.id}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                onClick={() => {
-                  setMode(m.id);
-                  setModeMenuOpen(false);
-                }}
-                className={cn(
-                  "flex w-full items-start gap-3 rounded-[var(--radius-md)] px-2.5 py-2.5 text-left transition-colors",
-                  selected
-                    ? "bg-[var(--color-elevated)]"
-                    : "hover:bg-[var(--color-elevated)]/70",
-                )}
-              >
-                <Icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-muted)]" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-[var(--color-fg)]">
-                      {m.label}
-                    </span>
-                    {m.id === "build" && (
-                      <span className="rounded bg-[var(--color-surface)] px-1 py-px text-[10px] text-[var(--color-subtle)]">
-                        Beta
-                      </span>
-                    )}
-                    {selected && (
-                      <span className="ml-auto text-[var(--color-muted)]">✓</span>
-                    )}
-                  </div>
-                  <div className="text-xs text-[var(--color-muted)]">{m.subtitle}</div>
-                  {m.id !== "auto" && (
-                    <div className="mt-0.5 font-mono text-[10px] text-[var(--color-subtle)]">
-                      {m.modelId}
-                    </div>
-                  )}
-                </div>
-              </button>
-            );
-          })}
-          {catalog.essential.length > 0 && (
-            <div className="border-t border-[var(--color-border)] px-2.5 py-1.5 text-[10px] text-[var(--color-subtle)]">
-              {catalog.source === "live" ? "Live" : "Fallback"} · {catalog.essential.length}{" "}
-              models · slots by {catalog.classifiedBy === "grok" ? "Grok" : "heuristic"}
-            </div>
-          )}
-        </div>
-      )}
+      {menu}
     </div>
   );
 }

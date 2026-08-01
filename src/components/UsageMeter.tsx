@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { Gauge } from "lucide-react";
 import {
   daysLeftInPeriod,
@@ -17,19 +18,25 @@ function barColor(tone: "ok" | "warn" | "danger") {
   return "bg-[var(--color-fg)]";
 }
 
-/** Compact titlebar / sidebar chip */
+/** Compact titlebar chip — navigates to Settings usage panel */
 export function UsageMeterChip({ className }: { className?: string }) {
   const usage = useGrokHub((s) => s.usage);
   const setNav = useGrokHub((s) => s.setNav);
   const plan = PLAN_LIMITS[usage.plan];
   const pct = usagePercent(usage);
   const tone = usageTone(pct);
+  const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
   return (
     <button
       type="button"
-      onClick={() => setNav("settings")}
-      title={`${plan.label}: ${formatUnits(usage.usedUnits)} / ${formatUnits(plan.units)} units`}
+      style={noDrag}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setNav("settings");
+      }}
+      title={`${plan.label}: ${formatUnits(usage.usedUnits)} / ${formatUnits(plan.units)} units · open Settings`}
       className={cn(
         "flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-1 text-left transition-colors hover:border-[var(--color-border-strong)]",
         className,
@@ -57,7 +64,7 @@ export function UsageMeterChip({ className }: { className?: string }) {
         <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-[var(--color-border)]">
           <div
             className={cn("h-full rounded-full transition-all duration-300", barColor(tone))}
-            style={{ width: `${pct}%` }}
+            style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
           />
         </div>
       </div>

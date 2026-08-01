@@ -1,6 +1,6 @@
 import { $t as BetterAuthError, A as email, At as withSpan, B as base64Url, Bt as runWithTransaction, C as toResponse, Ct as encode, D as any, F as record, Ft as safeJSONParse, Gt as createRandomStringGenerator, H as decodeJwt, Ht as initGetModelName, I as string, It as getAuthTables, Jt as betterFetch, Lt as getCurrentAdapter, M as number, Mt as ATTR_HOOK_TYPE, N as object, Nt as ATTR_OPERATION_ID, O as array, P as optional, Pt as import_src, Qt as APIError, Rt as queueAfterTransactionHook, S as serializeSignedCookie, U as decodeProtectedHeader, Ut as initGetFieldName, Vt as getBetterAuthVersion, W as jwtVerify, Wt as generateId, Zt as normalizePathname, _ as runWithRequestState, a as createAuthorizationURL, an as shouldPublishLog, b as createRouter$1, c as createRateLimitKey, d as deprecate, dn as isProduction, en as kAPIErrorHeaderSymbol, f as createAuthEndpoint, fn as isTest, g as hasRequestState, h as defineRequestState, i as refreshAccessToken, in as logger, j as looseObject, jt as ATTR_CONTEXT, k as boolean, l as findInvalidTrustedProxies, m as isAPIError, n as socialProviders, o as applyDefaultAccessTokenExpiry, p as createAuthMiddleware, r as validateAuthorizationCode, rn as createLogger, s as isLoopbackHost, sn as env, t as SocialProviderListEnum, tn as BASE_ERROR_CODES, u as getIp, un as isDevelopment, v as getCurrentAuthContext, vt as JWTExpired, w as filterOutputFields, x as serializeCookie, y as runWithEndpointContext, zt as runWithAdapter } from "../_libs/@better-auth/core+[...].mjs";
 import { a as getHost, c as isDynamicBaseURLConfig, d as wildcardMatch, i as getBaseURL, l as isRequestLike, n as GROK_PROVIDERS, o as getOrigin, r as PACKAGE_VERSION, s as getProtocol, t as GENERIC_OAUTH_ERROR_CODES, u as resolveBaseURL } from "./providers-DD9Wq7fi.mjs";
-import { N as require_jsx_runtime, c as HeadContent, d as Outlet, f as lazyRouteComponent, m as createRootRoute, p as createFileRoute, s as Scripts, u as createRouter } from "../_libs/@tanstack/react-router+[...].mjs";
+import { P as require_jsx_runtime, c as HeadContent, d as Outlet, f as lazyRouteComponent, m as createRootRoute, p as createFileRoute, s as Scripts, u as createRouter } from "../_libs/@tanstack/react-router+[...].mjs";
 import { n as defu, t as createDefu } from "../_libs/defu.mjs";
 import { a as PostgresIntrospector, c as sql, i as PostgresAdapter, n as getKyselyDatabaseType, o as PostgresQueryCompiler, s as CompiledQuery, t as createKyselyAdapter } from "../_libs/@better-auth/kysely-adapter+[...].mjs";
 import { n as hkdf, t as sha256 } from "../_libs/noble__hashes.mjs";
@@ -11,9 +11,9 @@ import { a as utf8ToBytes, i as managedNonce, n as bytesToHex, r as hexToBytes, 
 import { n as string$1, t as boolean$1 } from "../_libs/zod.mjs";
 import { t as Pool } from "../_libs/pg.mjs";
 import { randomBytes } from "node:crypto";
-//#region node_modules/.nitro/vite/services/ssr/assets/router-D_8PfdIq.js
+//#region node_modules/.nitro/vite/services/ssr/assets/router-CXsT5Z_8.js
 var import_jsx_runtime = require_jsx_runtime();
-var styles_default = "/assets/styles-CYSZUcfB.css";
+var styles_default = "/assets/styles-Ce1sPsEA.css";
 var Route$6 = createRootRoute({
 	head: () => ({
 		meta: [
@@ -44,7 +44,7 @@ function RootDocument({ children }) {
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("head", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HeadContent, {}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("body", { children: [children, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Scripts, {})] })]
 	});
 }
-var $$splitComponentImporter$1 = () => import("./routes-DAl8uJhq.mjs");
+var $$splitComponentImporter$1 = () => import("./routes-C1qBPr9w.mjs");
 var Route$5 = createFileRoute("/")({ component: lazyRouteComponent($$splitComponentImporter$1, "component") });
 var $$splitComponentImporter = () => import("./login-DJtZHKJX.mjs");
 var Route$4 = createFileRoute("/login")({ component: lazyRouteComponent($$splitComponentImporter, "component") });
@@ -54,7 +54,7 @@ var Route$3 = createFileRoute("/api/grok")({ server: { handlers: { POST: async (
 		const body = await request.json().catch(() => ({}));
 		const action = String(body.action || "chat");
 		if (action === "chatStream") {
-			const { createGrokChatSseStream } = await import("./api-handlers-Dtnma8Mt.mjs");
+			const { createGrokChatSseStream } = await import("./api-handlers-WrosuUCe.mjs");
 			const stream = createGrokChatSseStream(body);
 			return new Response(stream, { headers: {
 				"content-type": "text/event-stream; charset=utf-8",
@@ -62,7 +62,7 @@ var Route$3 = createFileRoute("/api/grok")({ server: { handlers: { POST: async (
 				connection: "keep-alive"
 			} });
 		}
-		const { dispatchApi } = await import("./api-handlers-Dtnma8Mt.mjs");
+		const { dispatchApi } = await import("./api-handlers-WrosuUCe.mjs");
 		const result = await dispatchApi("grok", action, body);
 		return Response.json(result);
 	} catch (e) {
@@ -91,7 +91,7 @@ var Route$1 = createFileRoute("/api/update")({ server: { handlers: { POST: async
 	try {
 		const body = await request.json().catch(() => ({}));
 		const action = String(body.action || "check");
-		const { dispatchApi } = await import("./api-handlers-Dtnma8Mt.mjs");
+		const { dispatchApi } = await import("./api-handlers-WrosuUCe.mjs");
 		const result = await dispatchApi("update", action, body);
 		return Response.json(result);
 	} catch (e) {
