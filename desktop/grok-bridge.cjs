@@ -497,10 +497,17 @@ async function oauthPoll(deviceCode) {
 }
 
 async function oauthEnsure(tokens) {
-  let access = tokens.accessToken;
+  if (!tokens || !tokens.accessToken) {
+    throw new Error("No OAuth access token");
+  }
+  let access = String(tokens.accessToken);
   let next = { ...tokens };
-  const skew = 60000;
-  if (tokens.expiresAt && tokens.expiresAt - skew < Date.now() && tokens.refreshToken) {
+  let refreshed = false;
+  const skew = 60_000;
+  const expired =
+    typeof tokens.expiresAt === "number" && tokens.expiresAt - skew < Date.now();
+
+  if (expired && tokens.refreshToken) {
     const d = await xaiDiscovery();
     const res = await fetch(d.token_endpoint, {
       method: "POST",
@@ -515,35 +522,76 @@ async function oauthEnsure(tokens) {
         refresh_token: tokens.refreshToken,
       }).toString(),
     });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(j.error_description || j.error || "refresh failed");
+    const text = await res.text();
+    let j = {};
+    try {
+      j = JSON.parse(text);
+    } catch {
+      /* ignore */
+    }
+    if (!res.ok) {
+      if (/cloudflare|<!doctype html/i.test(text)) {
+        throw new Error("xAI blocked token refresh — reconnect Grok OAuth in Settings");
+      }
+      throw new Error(j.error_description || j.error || `refresh failed (${res.status})`);
+    }
     next = {
       ...tokens,
       accessToken: j.access_token,
       refreshToken: j.refresh_token || tokens.refreshToken,
       expiresAt: j.expires_in ? Date.now() + j.expires_in * 1000 : tokens.expiresAt,
+      idToken: j.id_token || tokens.idToken,
     };
     access = next.accessToken;
+    refreshed = true;
   }
+
   const probe = await probeXaiKey(access);
-  return { ok: probe.ok, detail: probe.detail, refreshed: next !== tokens, tokens: next };
+  return {
+    ok: probe.ok,
+    detail: probe.detail,
+    refreshed,
+    tokens: next,
+    accessToken: access,
+  };
 }
 
 async function callXaiChatWithOAuth(req = {}) {
-  if (req.tokens?.accessToken) {
+  let accessToken =
+    (req.accessToken && String(req.accessToken).trim()) ||
+    (req.tokens && req.tokens.accessToken && String(req.tokens.accessToken).trim()) ||
+    "";
+  let tokensOut = req.tokens || null;
+  let refreshed = false;
+
+  if (req.tokens && req.tokens.accessToken) {
     try {
       const ensured = await oauthEnsure(req.tokens);
-      const r = await callXaiChat({
-        ...req,
-        accessToken: ensured.accessToken,
-        apiKey: req.apiKey,
-      });
-      return { ...r, tokens: ensured.tokens, refreshed: ensured.refreshed };
+      // Critical: use ensured.tokens.accessToken (and alias accessToken)
+      accessToken = ensured.accessToken || ensured.tokens?.accessToken || accessToken;
+      tokensOut = ensured.tokens || tokensOut;
+      refreshed = Boolean(ensured.refreshed);
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : "oauth failed" };
+      // If refresh failed, still try existing access token once
+      if (!accessToken) {
+        return {
+          ok: false,
+          error: e instanceof Error ? e.message : "OAuth refresh failed",
+        };
+      }
     }
   }
-  return callXaiChat(req);
+
+  const r = await callXaiChat({
+    ...req,
+    accessToken: accessToken || undefined,
+    apiKey: req.apiKey,
+  });
+  return {
+    ...r,
+    ...(tokensOut ? { tokens: tokensOut } : {}),
+    refreshed,
+  };
 }
 
 // patch callXaiChat to accept accessToken

@@ -55,6 +55,25 @@ export function SettingsView() {
     setGhDraft(githubToken);
   }, [githubToken]);
 
+  // When OAuth session exists, re-verify against api.x.ai so the status line matches reality
+  useEffect(() => {
+    if (!oauth?.accessToken) return;
+    let cancelled = false;
+    void (async () => {
+      setProbing(true);
+      try {
+        await probeGrok();
+      } finally {
+        if (!cancelled) setProbing(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // only on mount / oauth identity change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [oauth?.accessToken, oauth?.email]);
+
   // Auto-poll device code while pending
   useEffect(() => {
     if (!oauthPending) {
@@ -179,10 +198,42 @@ export function SettingsView() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={oauth ? "success" : grokConnected ? "success" : "default"}>
-              {oauth ? "OAuth connected" : grokConnected ? "API connected" : "Not connected"}
+            <Badge
+              variant={
+                oauth && grokConnected
+                  ? "success"
+                  : oauth
+                    ? "info"
+                    : grokConnected
+                      ? "success"
+                      : "default"
+              }
+            >
+              {oauth && grokConnected
+                ? "OAuth live"
+                : oauth
+                  ? "OAuth session"
+                  : grokConnected
+                    ? "API connected"
+                    : "Not connected"}
             </Badge>
-            <span className="text-xs text-[var(--color-muted)]">{grokStatusDetail}</span>
+            <span className="text-xs text-[var(--color-muted)]">
+              {probing
+                ? "Verifying with xAI…"
+                : oauth && grokStatusDetail.toLowerCase().includes("not connected")
+                  ? "Session saved — verifying API access…"
+                  : grokStatusDetail}
+            </span>
+            {oauth && (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={probing}
+                onClick={() => void saveAndProbe()}
+              >
+                {probing ? "Testing…" : "Test connection"}
+              </Button>
+            )}
           </div>
 
           {oauth && (

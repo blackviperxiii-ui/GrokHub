@@ -1058,22 +1058,33 @@ export const useGrokHub = create<State>()(
                 "",
                 result.content,
               ].join("\n");
-              set({ grokConnected: true, grokStatusDetail: `Live · ${result.model || "Grok"}` });
+              set({
+                grokConnected: true,
+                grokStatusDetail: get().oauth
+                  ? `Live via OAuth · ${result.model || "Grok"}`
+                  : `Live · ${result.model || "Grok"}`,
+              });
             } else {
+              const hasOauth = Boolean(get().oauth?.accessToken);
+              const err = result.error || "Unknown error";
               answer = [
                 modePrefix(mode, routed),
                 "",
                 "Could not reach Grok.",
-                result.error || "Unknown error",
+                err,
                 "",
-                "Fix: Settings → paste your xAI API key (console.x.ai) or set XAI_API_KEY.",
+                hasOauth
+                  ? "Your OAuth session is saved. If this keeps failing: Settings → Disconnect → Connect with Grok OAuth again (token may be expired), or paste an xAI API key as fallback."
+                  : "Fix: Settings → Connect with Grok OAuth (SuperGrok / X Premium) or paste an xAI API key.",
                 "",
                 "— Offline fallback —",
                 replyFor(trimmed, get(), routed),
               ].join("\n");
               set({
                 grokConnected: false,
-                grokStatusDetail: result.error || "Grok request failed",
+                grokStatusDetail: hasOauth
+                  ? `OAuth session · chat failed: ${err}`
+                  : err,
               });
             }
           }

@@ -264,6 +264,9 @@ export async function ensureAccessToken(tokens: XaiOAuthTokens): Promise<{
   tokens: XaiOAuthTokens;
   refreshed: boolean;
 }> {
+  if (!tokens?.accessToken) {
+    throw new Error("No OAuth access token — connect Grok OAuth in Settings");
+  }
   const skew = 60_000;
   const expired =
     typeof tokens.expiresAt === "number" && tokens.expiresAt - skew < Date.now();

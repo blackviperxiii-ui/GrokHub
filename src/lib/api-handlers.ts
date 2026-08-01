@@ -92,21 +92,38 @@ export async function dispatchApi(
       const mode = (body.mode as GrokModeId) || "auto";
       const apiKey = body.apiKey ? String(body.apiKey) : undefined;
       let accessToken = body.accessToken ? String(body.accessToken) : undefined;
-      // Auto-refresh if client sent full tokens blob
+      let tokensOut: XaiOAuthTokens | undefined;
+      let refreshed = false;
+
       if (body.tokens && typeof body.tokens === "object") {
         try {
           const ensured = await ensureAccessToken(body.tokens as XaiOAuthTokens);
           accessToken = ensured.accessToken;
-          const result = await callXaiChat({ messages, mode, apiKey, accessToken });
-          return { ...result, tokens: ensured.tokens, refreshed: ensured.refreshed };
+          tokensOut = ensured.tokens;
+          refreshed = ensured.refreshed;
         } catch (e) {
-          return {
-            ok: false,
-            error: e instanceof Error ? e.message : "OAuth refresh failed",
-          };
+          // Fall back to raw token on the payload if refresh failed
+          if (!accessToken) {
+            return {
+              ok: false,
+              error: e instanceof Error ? e.message : "OAuth refresh failed",
+            };
+          }
         }
       }
-      return callXaiChat({ messages, mode, apiKey, accessToken });
+
+      // Also accept tokens.accessToken when top-level accessToken omitted
+      if (!accessToken && body.tokens && typeof body.tokens === "object") {
+        const t = body.tokens as XaiOAuthTokens;
+        if (t.accessToken) accessToken = t.accessToken;
+      }
+
+      const result = await callXaiChat({ messages, mode, apiKey, accessToken });
+      return {
+        ...result,
+        ...(tokensOut ? { tokens: tokensOut } : {}),
+        refreshed,
+      };
     }
 
     throw new Error(`Unknown grok action: ${action}`);
