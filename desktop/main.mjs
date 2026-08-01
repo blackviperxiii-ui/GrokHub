@@ -94,37 +94,122 @@ try {
   /* non-windows */
 }
 
+function windowStatePath() {
+  return path.join(app.getPath("userData"), "window-state.json");
+}
+
+/**
+ * @returns {{ x: number, y: number, width: number, height: number, isMaximized: boolean } | null}
+ */
+function loadWindowState() {
+  try {
+    const raw = fs.readFileSync(windowStatePath(), "utf8");
+    const s = JSON.parse(raw);
+    if (
+      typeof s.width === "number" &&
+      typeof s.height === "number" &&
+      s.width >= 880 &&
+      s.height >= 600
+    ) {
+      return {
+        x: typeof s.x === "number" ? s.x : undefined,
+        y: typeof s.y === "number" ? s.y : undefined,
+        width: Math.round(s.width),
+        height: Math.round(s.height),
+        isMaximized: Boolean(s.isMaximized),
+      };
+    }
+  } catch {
+    /* first run */
+  }
+  return null;
+}
+
+function saveWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    const isMaximized = mainWindow.isMaximized();
+    // When maximized, save the restored bounds so unmaximize returns to last free size
+    const b = isMaximized ? mainWindow.getNormalBounds() : mainWindow.getBounds();
+    const state = {
+      x: b.x,
+      y: b.y,
+      width: b.width,
+      height: b.height,
+      isMaximized,
+      displayId: screen.getDisplayMatching(b)?.id,
+      savedAt: Date.now(),
+    };
+    fs.mkdirSync(path.dirname(windowStatePath()), { recursive: true });
+    fs.writeFileSync(windowStatePath(), JSON.stringify(state, null, 2));
+  } catch (e) {
+    console.error("[window-state] save failed", e);
+  }
+}
+
+/** Ensure saved bounds are still on a connected display */
+function sanitizeBounds(state) {
+  const displays = screen.getAllDisplays();
+  if (!state || !displays.length) return null;
+  const width = Math.max(880, state.width || 1200);
+  const height = Math.max(600, state.height || 800);
+  let x = typeof state.x === "number" ? state.x : displays[0].workArea.x + 40;
+  let y = typeof state.y === "number" ? state.y : displays[0].workArea.y + 40;
+
+  // Must intersect some display work area (at least 100px visible)
+  const intersects = displays.some((d) => {
+    const wa = d.workArea;
+    const overlapW =
+      Math.min(x + width, wa.x + wa.width) - Math.max(x, wa.x);
+    const overlapH =
+      Math.min(y + height, wa.y + wa.height) - Math.max(y, wa.y);
+    return overlapW > 100 && overlapH > 100;
+  });
+  if (!intersects) {
+    const wa = screen.getPrimaryDisplay().workArea;
+    x = wa.x + Math.max(0, Math.floor((wa.width - width) / 2));
+    y = wa.y + Math.max(0, Math.floor((wa.height - height) / 2));
+  }
+  return { x, y, width, height, isMaximized: Boolean(state.isMaximized) };
+}
+
 function fitToWorkArea(win) {
   if (!win || win.isDestroyed()) return;
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const { x, y, width, height } = display.workArea;
-  // Fill the full work area (ultrawide / multi-monitor safe)
   win.setBounds({
     x,
     y,
     width: Math.max(880, width),
     height: Math.max(600, height),
   });
-  // Maximize so WM decorations / tiling still treat us as fullscreened window
-  if (process.env.GROKHUB_MAXIMIZE !== "0") {
-    try {
-      if (!win.isMaximized()) win.maximize();
-    } catch {
-      /* ignore */
-    }
+  try {
+    if (!win.isMaximized()) win.maximize();
+  } catch {
+    /* ignore */
   }
 }
 
 function createWindow() {
+  const saved = sanitizeBounds(loadWindowState());
   const display = screen.getPrimaryDisplay();
-  const { x, y, width: aw, height: ah } = display.workArea;
+  const { x: dx, y: dy, width: aw, height: ah } = display.workArea;
   const icon = loadAppIcon();
 
-  mainWindow = new BrowserWindow({
-    x,
-    y,
+  // Prefer remembered size/position; first run fills primary work area
+  const initial = saved || {
+    x: dx,
+    y: dy,
     width: Math.max(880, aw),
     height: Math.max(600, ah),
+    isMaximized: process.env.GROKHUB_MAXIMIZE !== "0",
+  };
+
+  mainWindow = new BrowserWindow({
+    x: initial.x,
+    y: initial.y,
+    width: initial.width,
+    height: initial.height,
     minWidth: 880,
     minHeight: 600,
     show: false,
@@ -134,7 +219,6 @@ function createWindow() {
     frame: false,
     titleBarStyle: "hidden",
     autoHideMenuBar: true,
-    // Fill the monitor; content is CSS-fluid for ultrawide
     useContentSize: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -153,7 +237,16 @@ function createWindow() {
     }
   }
 
-  fitToWorkArea(mainWindow);
+  // Only force full-screen fit when no saved state and maximize not disabled
+  if (!saved && process.env.GROKHUB_MAXIMIZE !== "0") {
+    fitToWorkArea(mainWindow);
+  } else if (saved?.isMaximized) {
+    try {
+      mainWindow.maximize();
+    } catch {
+      /* ignore */
+    }
+  }
 
   const startUrl =
     process.env.GROKHUB_URL ||
@@ -163,11 +256,29 @@ function createWindow() {
 
   void mainWindow.loadURL(startUrl);
 
+  let saveTimer = null;
+  const scheduleSave = () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveWindowState(), 250);
+  };
+
+  mainWindow.on("resize", scheduleSave);
+  mainWindow.on("move", scheduleSave);
+  mainWindow.on("maximize", scheduleSave);
+  mainWindow.on("unmaximize", scheduleSave);
+
   mainWindow.once("ready-to-show", () => {
-    fitToWorkArea(mainWindow);
     if (!icon.isEmpty()) {
       try {
         mainWindow?.setIcon(icon);
+      } catch {
+        /* ignore */
+      }
+    }
+    // Re-apply maximize after show (some WMs ignore pre-show maximize)
+    if (saved?.isMaximized || (!saved && process.env.GROKHUB_MAXIMIZE !== "0")) {
+      try {
+        if (mainWindow && !mainWindow.isMaximized()) mainWindow.maximize();
       } catch {
         /* ignore */
       }
@@ -178,31 +289,42 @@ function createWindow() {
       mainWindow?.show();
       mainWindow?.focus();
     }
+    scheduleSave();
   });
 
-  // Keep filling the active display when monitors change (dock, resolution, ultrawide switch)
+  // If displays change and window is off-screen, nudge it back
   const reflow = () => {
-    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
-      // Only re-fit when maximized / full work-area mode
-      if (mainWindow.isMaximized() || process.env.GROKHUB_MAXIMIZE !== "0") {
-        fitToWorkArea(mainWindow);
-      }
+    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) return;
+    if (mainWindow.isMaximized()) return;
+    const b = mainWindow.getBounds();
+    const fixed = sanitizeBounds({ ...b, isMaximized: false });
+    if (fixed && (fixed.x !== b.x || fixed.y !== b.y)) {
+      mainWindow.setBounds({
+        x: fixed.x,
+        y: fixed.y,
+        width: b.width,
+        height: b.height,
+      });
     }
   };
   screen.on("display-metrics-changed", reflow);
   screen.on("display-added", reflow);
   screen.on("display-removed", reflow);
-  mainWindow.on("closed", () => {
-    screen.removeListener("display-metrics-changed", reflow);
-    screen.removeListener("display-added", reflow);
-    screen.removeListener("display-removed", reflow);
-  });
 
   mainWindow.on("close", (e) => {
+    saveWindowState();
     if (process.env.GROKHUB_TRAY !== "0" && tray) {
       e.preventDefault();
       mainWindow?.hide();
     }
+  });
+
+  mainWindow.on("closed", () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    screen.removeListener("display-metrics-changed", reflow);
+    screen.removeListener("display-added", reflow);
+    screen.removeListener("display-removed", reflow);
+    mainWindow = null;
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

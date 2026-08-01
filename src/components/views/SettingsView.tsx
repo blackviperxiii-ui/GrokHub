@@ -563,9 +563,30 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Button variant="secondary" onClick={resetDemo}>
-        Reset to clean install
-      </Button>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Danger zone</CardTitle>
+          <CardDescription>
+            Wipe local chat history, connectors, and preferences on this device. Does not revoke
+            Grok OAuth on xAI servers — disconnect first if you want a full sign-out.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              if (
+                typeof window !== "undefined" &&
+                window.confirm("Reset GrokHub to a clean install on this device?")
+              ) {
+                resetDemo();
+              }
+            }}
+          >
+            Reset to clean install
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }

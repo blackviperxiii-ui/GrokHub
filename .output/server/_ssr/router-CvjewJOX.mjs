@@ -11,9 +11,9 @@ import { a as utf8ToBytes, i as managedNonce, n as bytesToHex, r as hexToBytes, 
 import { n as string$1, t as boolean$1 } from "../_libs/zod.mjs";
 import { t as Pool } from "../_libs/pg.mjs";
 import { randomBytes } from "node:crypto";
-//#region node_modules/.nitro/vite/services/ssr/assets/router-XK7yB7Vf.js
+//#region node_modules/.nitro/vite/services/ssr/assets/router-CvjewJOX.js
 var import_jsx_runtime = require_jsx_runtime();
-var styles_default = "/assets/styles-CbQ7LlSH.css";
+var styles_default = "/assets/styles-Bco8H6f7.css";
 var Route$6 = createRootRoute({
 	head: () => ({
 		meta: [
@@ -44,7 +44,7 @@ function RootDocument({ children }) {
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("head", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HeadContent, {}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("body", { children: [children, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Scripts, {})] })]
 	});
 }
-var $$splitComponentImporter$1 = () => import("./routes-BfNH3f_H.mjs");
+var $$splitComponentImporter$1 = () => import("./routes-Buup9FAZ.mjs");
 var Route$5 = createFileRoute("/")({ component: lazyRouteComponent($$splitComponentImporter$1, "component") });
 var $$splitComponentImporter = () => import("./login-DJtZHKJX.mjs");
 var Route$4 = createFileRoute("/login")({ component: lazyRouteComponent($$splitComponentImporter, "component") });
@@ -53,7 +53,7 @@ var Route$3 = createFileRoute("/api/grok")({ server: { handlers: { POST: async (
 	try {
 		const body = await request.json().catch(() => ({}));
 		const action = String(body.action || "chat");
-		const { dispatchApi } = await import("./api-handlers-gRCrBpb6.mjs");
+		const { dispatchApi } = await import("./api-handlers-D_XZUoxo.mjs");
 		const result = await dispatchApi("grok", action, body);
 		return Response.json(result);
 	} catch (e) {
@@ -82,7 +82,7 @@ var Route$1 = createFileRoute("/api/update")({ server: { handlers: { POST: async
 	try {
 		const body = await request.json().catch(() => ({}));
 		const action = String(body.action || "check");
-		const { dispatchApi } = await import("./api-handlers-gRCrBpb6.mjs");
+		const { dispatchApi } = await import("./api-handlers-D_XZUoxo.mjs");
 		const result = await dispatchApi("update", action, body);
 		return Response.json(result);
 	} catch (e) {

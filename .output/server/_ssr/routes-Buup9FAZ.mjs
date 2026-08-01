@@ -1,12 +1,12 @@
 import { o as __toESM } from "../_runtime.mjs";
-import { a as modelIdForMode, i as modeBadge, n as GROK_MODES, o as resolveMode, r as getMode, s as stripAssistantChrome, t as APP_VERSION } from "./version-BvLmLIXC.mjs";
+import { a as modelIdForMode, i as modeBadge, n as GROK_MODES, o as resolveMode, r as getMode, s as stripAssistantChrome, t as APP_VERSION } from "./version-oVkq3SFd.mjs";
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
 import { N as require_jsx_runtime, P as require_react, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
 import { A as Command, C as HardDrive, D as FolderOpen, E as Folder, F as ArrowRight, I as AppWindow, L as Activity, M as Check, N as Cable, O as ExternalLink, P as Brain, S as History, T as Gauge, _ as MessageSquarePlus, a as TimerReset, b as Link2Off, c as Sparkles, d as Send, f as RefreshCw, g as MessageSquare, h as Minus, i as Trash2, j as ChevronRight, k as Download, l as ShieldAlert, m as Play, n as X, o as Terminal, p as Plus, r as Users, s as Square, t as Zap, u as Settings, v as Menu, w as Hammer, x as Image, y as LoaderCircle } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-BfNH3f_H.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-Buup9FAZ.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function rpc(path, action, body = {}) {
@@ -677,7 +677,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-CLmfNgC4.mjs");
+		const { oauthStart } = await import("./grok-client-DEq41qcx.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -706,7 +706,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-CLmfNgC4.mjs");
+		const { oauthPoll } = await import("./grok-client-DEq41qcx.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -784,7 +784,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-CLmfNgC4.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-DEq41qcx.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1198,7 +1198,7 @@ var useGrokHub = create()(persist((set, get) => ({
 				await wait(280);
 				answer = replyFor(trimmed, get(), routed);
 			} else {
-				const { grokChat } = await import("./grok-client-CLmfNgC4.mjs");
+				const { grokChat } = await import("./grok-client-DEq41qcx.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
@@ -3713,11 +3713,16 @@ function SettingsView() {
 					})]
 				}, key))
 			})] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
+				className: "text-sm",
+				children: "Danger zone"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Wipe local chat history, connectors, and preferences on this device. Does not revoke Grok OAuth on xAI servers — disconnect first if you want a full sign-out." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
 				variant: "secondary",
-				onClick: resetDemo,
+				onClick: () => {
+					if (typeof window !== "undefined" && window.confirm("Reset GrokHub to a clean install on this device?")) resetDemo();
+				},
 				children: "Reset to clean install"
-			})
+			}) })] })
 		]
 	});
 }
@@ -3921,8 +3926,6 @@ function AppShell() {
 	const running = useGrokHub((s) => s.running);
 	const mode = useGrokHub((s) => s.mode);
 	const tickHeartbeat = useGrokHub((s) => s.tickHeartbeat);
-	const refreshStaleTimes = useGrokHub((s) => s.refreshStaleTimes);
-	const resetDemo = useGrokHub((s) => s.resetDemo);
 	const grokConnected = useGrokHub((s) => s.grokConnected);
 	const grokStatusDetail = useGrokHub((s) => s.grokStatusDetail);
 	const probeGrok = useGrokHub((s) => s.probeGrok);
@@ -3931,10 +3934,14 @@ function AppShell() {
 	const threads = useGrokHub((s) => s.threads);
 	const selectThread = useGrokHub((s) => s.selectThread);
 	const activeThreadId = useGrokHub((s) => s.activeThreadId);
+	const oauth = useGrokHub((s) => s.oauth);
+	const profile = useGrokHub((s) => s.profile);
 	const { user, isPending } = useCurrentUserState();
 	const [mobileOpen, setMobileOpen] = (0, import_react.useState)(false);
 	const [isDesktop, setIsDesktop] = (0, import_react.useState)(false);
 	const modeMeta = getMode(mode);
+	const accountLabel = oauth?.name || oauth?.email || profile?.displayName || profile?.email || (user && !user.isDevFallback ? user.displayName || user.primaryEmail || null : null);
+	const accountConnected = Boolean(oauth?.accessToken || user && !user.isDevFallback || grokConnected);
 	(0, import_react.useEffect)(() => {
 		const p = useGrokHub.persist.rehydrate();
 		Promise.resolve(p).finally(() => {
@@ -3946,6 +3953,14 @@ function AppShell() {
 		setIsDesktop(Boolean(window.grokhubDesktop));
 	}, []);
 	(0, import_react.useEffect)(() => {
+		if (oauth?.name || oauth?.email) {
+			syncFromGrok({
+				displayName: oauth.name ?? null,
+				email: oauth.email ?? null,
+				imageUrl: oauth.picture ?? null
+			});
+			return;
+		}
 		if (isPending) return;
 		if (user && !user.isDevFallback) syncFromGrok({
 			displayName: user.displayName,
@@ -3955,7 +3970,10 @@ function AppShell() {
 	}, [
 		user,
 		isPending,
-		syncFromGrok
+		syncFromGrok,
+		oauth?.name,
+		oauth?.email,
+		oauth?.picture
 	]);
 	(0, import_react.useEffect)(() => {
 		const hb = window.setInterval(() => tickHeartbeat(), 3e4);
@@ -3999,13 +4017,20 @@ function AppShell() {
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsageMeterChip, { className: "hidden max-w-[160px] sm:flex" }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModePicker, {}),
-					isPending ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "hidden h-7 w-20 animate-pulse rounded bg-[var(--color-elevated)] sm:block" }) : user && !user.isDevFallback ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					isPending && !oauth ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "hidden h-7 w-20 animate-pulse rounded bg-[var(--color-elevated)] sm:block" }) : accountLabel ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: () => setNav("settings"),
+						className: "hidden max-w-[10rem] truncate rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] text-[var(--color-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)] sm:inline",
+						title: accountLabel,
+						children: accountLabel
+					}) : user && !user.isDevFallback ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "hidden scale-90 sm:block",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UserButton, {})
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-						to: "/login",
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: () => setNav("settings"),
 						className: "hidden rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] text-[var(--color-muted)] hover:text-[var(--color-fg)] sm:inline",
-						children: "Sign in"
+						children: "Connect Grok"
 					}),
 					isDesktop && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "ml-1 flex items-center gap-0.5",
@@ -4104,16 +4129,6 @@ function AppShell() {
 										children: modeMeta.subtitle
 									})
 								]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-								variant: "secondary",
-								size: "sm",
-								className: "w-full",
-								onClick: () => {
-									resetDemo();
-									refreshStaleTimes();
-								},
-								children: "Reset to clean install"
 							})
 						]
 					})
@@ -4144,7 +4159,7 @@ function AppShell() {
 										APP_VERSION,
 										" ·",
 										" ",
-										user && !user.isDevFallback ? user.displayName || user.primaryEmail || "Signed in" : grokConnected ? "API connected" : "Sign in to connect Grok"
+										accountLabel ? accountLabel : accountConnected ? grokStatusDetail || "Grok connected" : "Connect Grok in Settings"
 									]
 								})]
 							})]

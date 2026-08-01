@@ -17,13 +17,11 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link } from "@tanstack/react-router";
 import { getMode } from "@/lib/modes";
 import { useGrokHub } from "@/lib/store";
 import type { NavId } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "@/lib/version";
-import { authEnabled } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { UserButton } from "@/lib/auth/gates";
 import { GrokHubMark } from "./GrokLogo";
@@ -64,8 +62,6 @@ export function AppShell() {
   const running = useGrokHub((s) => s.running);
   const mode = useGrokHub((s) => s.mode);
   const tickHeartbeat = useGrokHub((s) => s.tickHeartbeat);
-  const refreshStaleTimes = useGrokHub((s) => s.refreshStaleTimes);
-  const resetDemo = useGrokHub((s) => s.resetDemo);
   const grokConnected = useGrokHub((s) => s.grokConnected);
   const grokStatusDetail = useGrokHub((s) => s.grokStatusDetail);
   const probeGrok = useGrokHub((s) => s.probeGrok);
@@ -74,10 +70,23 @@ export function AppShell() {
   const threads = useGrokHub((s) => s.threads);
   const selectThread = useGrokHub((s) => s.selectThread);
   const activeThreadId = useGrokHub((s) => s.activeThreadId);
+  const oauth = useGrokHub((s) => s.oauth);
+  const profile = useGrokHub((s) => s.profile);
   const { user, isPending } = useCurrentUserState();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const modeMeta = getMode(mode);
+
+  const accountLabel =
+    oauth?.name ||
+    oauth?.email ||
+    profile?.displayName ||
+    profile?.email ||
+    (user && !user.isDevFallback
+      ? user.displayName || user.primaryEmail || null
+      : null);
+
+  const accountConnected = Boolean(oauth?.accessToken || (user && !user.isDevFallback) || grokConnected);
 
   useEffect(() => {
     const p = useGrokHub.persist.rehydrate();
@@ -91,8 +100,16 @@ export function AppShell() {
     setIsDesktop(Boolean(window.grokhubDesktop));
   }, []);
 
-  // After Grok OAuth, pull identity into profile (no personal defaults in source)
+  // Prefer Grok OAuth identity once connected (not only Better Auth session)
   useEffect(() => {
+    if (oauth?.name || oauth?.email) {
+      void syncFromGrok({
+        displayName: oauth.name ?? null,
+        email: oauth.email ?? null,
+        imageUrl: oauth.picture ?? null,
+      });
+      return;
+    }
     if (isPending) return;
     if (user && !user.isDevFallback) {
       void syncFromGrok({
@@ -101,7 +118,7 @@ export function AppShell() {
         imageUrl: user.profileImageUrl,
       });
     }
-  }, [user, isPending, syncFromGrok]);
+  }, [user, isPending, syncFromGrok, oauth?.name, oauth?.email, oauth?.picture]);
 
   useEffect(() => {
     const hb = window.setInterval(() => tickHeartbeat(), 30000);
@@ -152,20 +169,30 @@ export function AppShell() {
         <div className="flex min-w-0 items-center gap-2" style={noDrag}>
           <UsageMeterChip className="hidden max-w-[160px] sm:flex" />
           <ModePicker />
-          {isPending ? (
+          {isPending && !oauth ? (
             <div className="hidden h-7 w-20 animate-pulse rounded bg-[var(--color-elevated)] sm:block" />
+          ) : accountLabel ? (
+            <button
+              type="button"
+              onClick={() => setNav("settings")}
+              className="hidden max-w-[10rem] truncate rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] text-[var(--color-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)] sm:inline"
+              title={accountLabel}
+            >
+              {accountLabel}
+            </button>
           ) : user && !user.isDevFallback ? (
             <div className="hidden scale-90 sm:block">
               <UserButton />
             </div>
-          ) : authEnabled ? (
-            <Link
-              to="/login"
+          ) : (
+            <button
+              type="button"
+              onClick={() => setNav("settings")}
               className="hidden rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] text-[var(--color-muted)] hover:text-[var(--color-fg)] sm:inline"
             >
-              Sign in
-            </Link>
-          ) : null}
+              Connect Grok
+            </button>
+          )}
           {isDesktop && (
             <div className="ml-1 flex items-center gap-0.5">
               <button
@@ -262,17 +289,6 @@ export function AppShell() {
               <div className="text-xs font-medium">{modeMeta.label}</div>
               <div className="text-[10px] text-[var(--color-muted)]">{modeMeta.subtitle}</div>
             </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              className="w-full"
-              onClick={() => {
-                resetDemo();
-                refreshStaleTimes();
-              }}
-            >
-              Reset to clean install
-            </Button>
           </div>
         </aside>
 
@@ -294,11 +310,11 @@ export function AppShell() {
                 </div>
                 <div className="truncate text-xs text-[var(--color-subtle)]">
                   GrokHub v{APP_VERSION} ·{" "}
-                  {user && !user.isDevFallback
-                    ? user.displayName || user.primaryEmail || "Signed in"
-                    : grokConnected
-                      ? "API connected"
-                      : "Sign in to connect Grok"}
+                  {accountLabel
+                    ? accountLabel
+                    : accountConnected
+                      ? grokStatusDetail || "Grok connected"
+                      : "Connect Grok in Settings"}
                 </div>
               </div>
             </div>
