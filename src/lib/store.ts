@@ -149,7 +149,7 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
         ...core,
         "",
         "Build angle:",
-        "- Ship GrokClaw desktop install path first",
+        "- Ship GrokHub desktop install path first",
         "- Wire mode routing tests before new connectors",
         "- Package: Electron + Arch PKGBUILD ready",
       ].join("\n");
@@ -188,7 +188,7 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
       head,
       "",
       "Imagine is available in the Imagine panel.",
-      "Describe a scene there — GrokClaw renders a local preview on this Arch desktop build.",
+      "Describe a scene there — GrokHub renders a local preview on this Arch desktop build.",
       `Imagine quota: ${s.usage.imagine}/${plan.imagine} this period (5 units each).`,
     ].join("\n");
   }
@@ -248,7 +248,7 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
       "",
       "Build / desktop plan",
       "",
-      "GrokClaw ships as an Electron shell for Arch Linux:",
+      "GrokHub ships as an Electron shell for Arch Linux:",
       "- `desktop/main.mjs` — native window, tray, Wayland-friendly flags",
       "- `packaging/PKGBUILD` — makepkg install",
       "- Unsandboxed host: CLI, files, apps via Desktop tab or `$ command`",
@@ -328,7 +328,7 @@ function initialFromSeeds() {
 
 const boot = initialFromSeeds();
 
-export const useGrokClaw = create<State>()(
+export const useGrokHub = create<State>()(
   persist(
     (set, get) => ({
       nav: "command",
@@ -813,7 +813,8 @@ export const useGrokClaw = create<State>()(
       },
     }),
     {
-      name: "grokclaw-v5",
+      name: "grokhub-v1",
+
 
       partialize: (s) => ({
         connectors: s.connectors,

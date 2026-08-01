@@ -1,10 +1,10 @@
 import { r as __toESM } from "../_runtime.mjs";
 import { M as require_react, h as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
-import { A as Brain, C as Folder, D as ChevronRight, E as Command, M as ArrowRight, N as AppWindow, O as Check, P as Activity, S as Gauge, T as Download, _ as LoaderCircle, a as Terminal, b as HardDrive, c as ShieldAlert, d as RefreshCw, f as Plus, g as Menu, h as MessageSquare, i as TimerReset, j as Bot, k as Cable, l as Settings, m as Minus, n as X, o as Square, p as Play, r as Users, s as Sparkles, t as Zap, u as Send, v as Link2Off, w as FolderOpen, x as Hammer, y as Image } from "../_libs/lucide-react.mjs";
+import { A as Brain, C as Folder, D as ChevronRight, E as Command, M as AppWindow, N as Activity, O as Check, S as Gauge, T as Download, _ as LoaderCircle, a as Terminal, b as HardDrive, c as ShieldAlert, d as RefreshCw, f as Plus, g as Menu, h as MessageSquare, i as TimerReset, j as ArrowRight, k as Cable, l as Settings, m as Minus, n as X, o as Square, p as Play, r as Users, s as Sparkles, t as Zap, u as Send, v as Link2Off, w as FolderOpen, x as Hammer, y as Image } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
 import { n as clsx, t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { t as twMerge } from "../_libs/tailwind-merge.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-CAXL9RkW.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-Cja-EmpI.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 var GROK_MODES = [
@@ -115,7 +115,7 @@ function renderImaginePreview(prompt, aspect) {
 	const c3 = `hsl(${h3 % 360} 28% 42%)`;
 	const accent = `hsl(${(h1 + 40) % 360} 35% 68%)`;
 	const title = escapeXml(prompt.slice(0, 72) || "Imagine");
-	const sub = "GrokClaw · Imagine · local preview";
+	const sub = "GrokHub · Imagine · local preview";
 	const blobs = Array.from({ length: 5 }, (_, i) => {
 		const hx = hash(`${prompt}-blob-${i}`);
 		const cx = hx % 80 + 10;
@@ -455,7 +455,7 @@ function createSeeds(now = Date.now()) {
 		chat: [{
 			id: "c0",
 			role: "system",
-			content: "GrokClaw desktop online. Modes Auto/Fast/Expert/Heavy/Build are baked in (Grok 4.5). Imagine is in the sidebar. Prefix shell with $ for unsandboxed host CLI, or open Desktop.",
+			content: "GrokHub desktop online. Modes Auto/Fast/Expert/Heavy/Build are baked in (Grok 4.5). Imagine is in the sidebar. Prefix shell with $ for unsandboxed host CLI, or open Desktop.",
 			ts: now - 2 * MINUTE
 		}],
 		heartbeatAt: now
@@ -653,7 +653,7 @@ function replyFor(text, s, routed) {
 			...core,
 			"",
 			"Build angle:",
-			"- Ship GrokClaw desktop install path first",
+			"- Ship GrokHub desktop install path first",
 			"- Wire mode routing tests before new connectors",
 			"- Package: Electron + Arch PKGBUILD ready"
 		].join("\n");
@@ -678,7 +678,7 @@ function replyFor(text, s, routed) {
 		head,
 		"",
 		"Imagine is available in the Imagine panel.",
-		"Describe a scene there — GrokClaw renders a local preview on this Arch desktop build.",
+		"Describe a scene there — GrokHub renders a local preview on this Arch desktop build.",
 		`Imagine quota: ${s.usage.imagine}/${plan.imagine} this period (5 units each).`
 	].join("\n");
 	if (lower.includes("mode") || lower.includes("fast") || lower.includes("expert") || lower.includes("heavy")) return [
@@ -720,7 +720,7 @@ function replyFor(text, s, routed) {
 		"",
 		"Build / desktop plan",
 		"",
-		"GrokClaw ships as an Electron shell for Arch Linux:",
+		"GrokHub ships as an Electron shell for Arch Linux:",
 		"- `desktop/main.mjs` — native window, tray, Wayland-friendly flags",
 		"- `packaging/PKGBUILD` — makepkg install",
 		"- Unsandboxed host: CLI, files, apps via Desktop tab or `$ command`",
@@ -785,7 +785,7 @@ function initialFromSeeds() {
 	};
 }
 var boot = initialFromSeeds();
-var useGrokClaw = create()(persist((set, get) => ({
+var useGrokHub = create()(persist((set, get) => ({
 	nav: "command",
 	mode: "build",
 	modeMenuOpen: false,
@@ -1243,7 +1243,7 @@ var useGrokClaw = create()(persist((set, get) => ({
 		});
 	}
 }), {
-	name: "grokclaw-v4",
+	name: "grokhub-v1",
 	partialize: (s) => ({
 		connectors: s.connectors,
 		skills: s.skills,
@@ -1262,6 +1262,25 @@ var useGrokClaw = create()(persist((set, get) => ({
 function wait(ms) {
 	return new Promise((r) => setTimeout(r, ms));
 }
+/** Official Grok mark path (xAI brand) — monochrome, scales with currentColor. */
+function GrokLogo({ className }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		viewBox: "0 0 24 24",
+		fill: "currentColor",
+		fillRule: "evenodd",
+		xmlns: "http://www.w3.org/2000/svg",
+		className: cn("shrink-0", className),
+		"aria-hidden": true,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("title", { children: "Grok" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815" })]
+	});
+}
+/** App icon plate for titlebar / desktop entry previews. */
+function GrokHubMark({ className }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: cn("flex items-center justify-center rounded border border-[var(--color-border)] bg-[var(--color-elevated)] text-[var(--color-fg)]", className),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GrokLogo, { className: "h-[62%] w-[62%]" })
+	});
+}
 var ICONS = {
 	auto: Sparkles,
 	fast: Zap,
@@ -1270,10 +1289,10 @@ var ICONS = {
 	build: Hammer
 };
 function ModePicker() {
-	const mode = useGrokClaw((s) => s.mode);
-	const open = useGrokClaw((s) => s.modeMenuOpen);
-	const setMode = useGrokClaw((s) => s.setMode);
-	const setModeMenuOpen = useGrokClaw((s) => s.setModeMenuOpen);
+	const mode = useGrokHub((s) => s.mode);
+	const open = useGrokHub((s) => s.modeMenuOpen);
+	const setMode = useGrokHub((s) => s.setMode);
+	const setModeMenuOpen = useGrokHub((s) => s.setModeMenuOpen);
 	const ref = (0, import_react.useRef)(null);
 	const active = GROK_MODES.find((m) => m.id === mode) ?? GROK_MODES[0];
 	const ActiveIcon = ICONS[active.id];
@@ -1423,8 +1442,8 @@ function barColor(tone) {
 }
 /** Compact titlebar / sidebar chip */
 function UsageMeterChip({ className }) {
-	const usage = useGrokClaw((s) => s.usage);
-	const setNav = useGrokClaw((s) => s.setNav);
+	const usage = useGrokHub((s) => s.usage);
+	const setNav = useGrokHub((s) => s.setNav);
 	const plan = PLAN_LIMITS[usage.plan];
 	const pct = usagePercent(usage);
 	const tone = usageTone(pct);
@@ -1456,9 +1475,9 @@ function UsageMeterChip({ className }) {
 }
 /** Full breakdown card for Command / Settings */
 function UsageMeterPanel({ compact }) {
-	const usage = useGrokClaw((s) => s.usage);
-	const setPlan = useGrokClaw((s) => s.setPlan);
-	const resetUsage = useGrokClaw((s) => s.resetUsagePeriod);
+	const usage = useGrokHub((s) => s.usage);
+	const setPlan = useGrokHub((s) => s.setPlan);
+	const resetUsage = useGrokHub((s) => s.resetUsagePeriod);
 	const plan = PLAN_LIMITS[usage.plan];
 	const pct = usagePercent(usage);
 	const tone = usageTone(pct);
@@ -1635,7 +1654,7 @@ var Button = import_react.forwardRef(({ className, variant, size, ...props }, re
 }));
 Button.displayName = "Button";
 function AgentsView() {
-	const agents = useGrokClaw((s) => s.agents);
+	const agents = useGrokHub((s) => s.agents);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "space-y-5",
 		children: [
@@ -1737,12 +1756,12 @@ var SCHEDULES = [
 	"monthly"
 ];
 function AutomationsView() {
-	const automations = useGrokClaw((s) => s.automations);
-	const connectors = useGrokClaw((s) => s.connectors);
-	const toggleAutomation = useGrokClaw((s) => s.toggleAutomation);
-	const runAutomation = useGrokClaw((s) => s.runAutomation);
-	const addAutomation = useGrokClaw((s) => s.addAutomation);
-	const running = useGrokClaw((s) => s.running);
+	const automations = useGrokHub((s) => s.automations);
+	const connectors = useGrokHub((s) => s.connectors);
+	const toggleAutomation = useGrokHub((s) => s.toggleAutomation);
+	const runAutomation = useGrokHub((s) => s.runAutomation);
+	const addAutomation = useGrokHub((s) => s.addAutomation);
+	const running = useGrokHub((s) => s.running);
 	const [name, setName] = (0, import_react.useState)("");
 	const [instructions, setInstructions] = (0, import_react.useState)("");
 	const [schedule, setSchedule] = (0, import_react.useState)("daily");
@@ -1904,14 +1923,14 @@ var SUGGESTIONS = [
 	"Arch desktop install"
 ];
 function ChatView() {
-	const chat = useGrokClaw((s) => s.chat);
-	const sendChat = useGrokClaw((s) => s.sendChat);
-	const running = useGrokClaw((s) => s.running);
-	const mode = useGrokClaw((s) => s.mode);
-	const setNav = useGrokClaw((s) => s.setNav);
-	const pushActivity = useGrokClaw((s) => s.pushActivity);
-	const recordUsage = useGrokClaw((s) => s.recordUsage);
-	const usage = useGrokClaw((s) => s.usage);
+	const chat = useGrokHub((s) => s.chat);
+	const sendChat = useGrokHub((s) => s.sendChat);
+	const running = useGrokHub((s) => s.running);
+	const mode = useGrokHub((s) => s.mode);
+	const setNav = useGrokHub((s) => s.setNav);
+	const pushActivity = useGrokHub((s) => s.pushActivity);
+	const recordUsage = useGrokHub((s) => s.recordUsage);
+	const usage = useGrokHub((s) => s.usage);
 	const [text, setText] = (0, import_react.useState)("");
 	const [localRunning, setLocalRunning] = (0, import_react.useState)(false);
 	const endRef = (0, import_react.useRef)(null);
@@ -1925,7 +1944,7 @@ function ChatView() {
 	async function runShell(command) {
 		setLocalRunning(true);
 		const userLine = command.startsWith("$") ? command : `$ ${command}`;
-		useGrokClaw.setState((s) => ({ chat: [...s.chat, {
+		useGrokHub.setState((s) => ({ chat: [...s.chat, {
 			id: `u_${Date.now()}`,
 			role: "user",
 			content: userLine,
@@ -1935,7 +1954,7 @@ function ChatView() {
 		try {
 			const bill = recordUsage("host");
 			if (!bill.ok) {
-				useGrokClaw.setState((s) => ({ chat: [...s.chat, {
+				useGrokHub.setState((s) => ({ chat: [...s.chat, {
 					id: `a_${Date.now()}`,
 					role: "system",
 					content: `Host blocked: ${plan.label} unit quota exhausted.`,
@@ -1944,7 +1963,7 @@ function ChatView() {
 				return;
 			}
 			const cmd = command.replace(/^\$\s*/, "").replace(/^\/sh\s+/, "").trim();
-			const { hostExec } = await import("./host-client--b9qdyUs.mjs");
+			const { hostExec } = await import("./host-client-BQWTZ47b.mjs");
 			const r = await hostExec(cmd);
 			const body = [
 				`[Desktop host · ${r.ok ? "ok" : "fail"} · exit ${r.code ?? "?"} · ${bill.cost}u]`,
@@ -1953,7 +1972,7 @@ function ChatView() {
 				r.stdout || "(no stdout)",
 				r.stderr ? `\n[stderr]\n${r.stderr}` : ""
 			].filter(Boolean).join("\n");
-			useGrokClaw.setState((s) => ({ chat: [...s.chat, {
+			useGrokHub.setState((s) => ({ chat: [...s.chat, {
 				id: `a_${Date.now()}`,
 				role: "assistant",
 				content: body,
@@ -1967,7 +1986,7 @@ function ChatView() {
 				status: r.ok ? "success" : "failed"
 			});
 		} catch (e) {
-			useGrokClaw.setState((s) => ({ chat: [...s.chat, {
+			useGrokHub.setState((s) => ({ chat: [...s.chat, {
 				id: `a_${Date.now()}`,
 				role: "assistant",
 				content: `Host exec error: ${e instanceof Error ? e.message : "failed"}`,
@@ -2092,16 +2111,16 @@ function ChatView() {
 	});
 }
 function CommandView() {
-	const connectors = useGrokClaw((s) => s.connectors);
-	const skills = useGrokClaw((s) => s.skills);
-	const automations = useGrokClaw((s) => s.automations);
-	const activity = useGrokClaw((s) => s.activity);
-	const agents = useGrokClaw((s) => s.agents);
-	const mode = useGrokClaw((s) => s.mode);
-	const setMode = useGrokClaw((s) => s.setMode);
-	const setNav = useGrokClaw((s) => s.setNav);
-	const runAutomation = useGrokClaw((s) => s.runAutomation);
-	const sendChat = useGrokClaw((s) => s.sendChat);
+	const connectors = useGrokHub((s) => s.connectors);
+	const skills = useGrokHub((s) => s.skills);
+	const automations = useGrokHub((s) => s.automations);
+	const activity = useGrokHub((s) => s.activity);
+	const agents = useGrokHub((s) => s.agents);
+	const mode = useGrokHub((s) => s.mode);
+	const setMode = useGrokHub((s) => s.setMode);
+	const setNav = useGrokHub((s) => s.setNav);
+	const runAutomation = useGrokHub((s) => s.runAutomation);
+	const sendChat = useGrokHub((s) => s.sendChat);
 	const connected = connectors.filter((c) => c.status === "connected").length;
 	const enabledSkills = skills.filter((s) => s.enabled).length;
 	const activeAutos = automations.filter((a) => a.enabled).length;
@@ -2302,8 +2321,8 @@ function StatCard({ label, value, hint, icon, onClick }) {
 	});
 }
 function ConnectorsView() {
-	const connectors = useGrokClaw((s) => s.connectors);
-	const toggleConnector = useGrokClaw((s) => s.toggleConnector);
+	const connectors = useGrokHub((s) => s.connectors);
+	const toggleConnector = useGrokHub((s) => s.toggleConnector);
 	const [q, setQ] = (0, import_react.useState)("");
 	const filtered = (0, import_react.useMemo)(() => {
 		const needle = q.trim().toLowerCase();
@@ -2382,7 +2401,7 @@ var QUICK_CMDS = [
 	"env | sort | head -40"
 ];
 function DesktopHostView() {
-	const recordUsage = useGrokClaw((s) => s.recordUsage);
+	const recordUsage = useGrokHub((s) => s.recordUsage);
 	const [api, setApi] = (0, import_react.useState)(null);
 	const [tab, setTab] = (0, import_react.useState)("cli");
 	const [info, setInfo] = (0, import_react.useState)(null);
@@ -2404,7 +2423,7 @@ function DesktopHostView() {
 		let cancelled = false;
 		(async () => {
 			try {
-				const mod = await import("./host-client--b9qdyUs.mjs");
+				const mod = await import("./host-client-BQWTZ47b.mjs");
 				if (cancelled) return;
 				setApi(mod);
 				setIsShell(mod.isDesktopShell());
@@ -2795,14 +2814,14 @@ var ASPECTS = [
 	"2:3"
 ];
 function ImagineView() {
-	const prompt = useGrokClaw((s) => s.imaginePrompt);
-	const aspect = useGrokClaw((s) => s.imagineAspect);
-	const jobs = useGrokClaw((s) => s.imagineJobs);
-	const running = useGrokClaw((s) => s.running);
-	const mode = useGrokClaw((s) => s.mode);
-	const setImaginePrompt = useGrokClaw((s) => s.setImaginePrompt);
-	const setImagineAspect = useGrokClaw((s) => s.setImagineAspect);
-	const runImagine = useGrokClaw((s) => s.runImagine);
+	const prompt = useGrokHub((s) => s.imaginePrompt);
+	const aspect = useGrokHub((s) => s.imagineAspect);
+	const jobs = useGrokHub((s) => s.imagineJobs);
+	const running = useGrokHub((s) => s.running);
+	const mode = useGrokHub((s) => s.mode);
+	const setImaginePrompt = useGrokHub((s) => s.setImaginePrompt);
+	const setImagineAspect = useGrokHub((s) => s.setImagineAspect);
+	const runImagine = useGrokHub((s) => s.runImagine);
 	const latest = jobs[0];
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "space-y-5",
@@ -2810,7 +2829,7 @@ function ImagineView() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardTitle, {
 				className: "flex items-center gap-2 text-sm",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Image, { className: "h-4 w-4" }), "Imagine"]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Baked into GrokClaw desktop — local preview renderer for Arch offline use. Pair with Expert/Heavy modes for stronger art direction in chat." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Baked into GrokHub desktop — local preview renderer for Arch offline use. Pair with Expert/Heavy modes for stronger art direction in chat." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 				className: "space-y-3",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "flex flex-wrap gap-2",
@@ -2854,7 +2873,7 @@ function ImagineView() {
 						children: latest.prompt
 					})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
 						href: latest.imageDataUrl,
-						download: `grokclaw-imagine-${latest.id}.svg`,
+						download: `grokhub-imagine-${latest.id}.svg`,
 						className: "inline-flex h-9 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 text-xs font-medium hover:border-[var(--color-border-strong)]",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Download, { className: "h-3.5 w-3.5" }), "Save SVG"]
 					})]
@@ -2918,12 +2937,12 @@ function ImagineView() {
 	});
 }
 function SettingsView() {
-	const mode = useGrokClaw((s) => s.mode);
-	const setMode = useGrokClaw((s) => s.setMode);
-	const desktop = useGrokClaw((s) => s.desktop);
-	const setDesktop = useGrokClaw((s) => s.setDesktop);
-	const setNav = useGrokClaw((s) => s.setNav);
-	const resetDemo = useGrokClaw((s) => s.resetDemo);
+	const mode = useGrokHub((s) => s.mode);
+	const setMode = useGrokHub((s) => s.setMode);
+	const desktop = useGrokHub((s) => s.desktop);
+	const setDesktop = useGrokHub((s) => s.setDesktop);
+	const setNav = useGrokHub((s) => s.setNav);
+	const resetDemo = useGrokHub((s) => s.resetDemo);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "mx-auto max-w-3xl space-y-5",
 		children: [
@@ -2964,7 +2983,7 @@ function SettingsView() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
 				children: "Unsandboxed desktop host"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "GrokClaw is designed as a personal agent with full user-session access: shell, files, and installed apps. Host CLI burns 0.25 units per command." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "GrokHub is designed as a personal agent with full user-session access: shell, files, and installed apps. Host CLI burns 0.25 units per command." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 				className: "space-y-3",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -3051,11 +3070,11 @@ function SettingsView() {
 	});
 }
 function SkillsView() {
-	const skills = useGrokClaw((s) => s.skills);
-	const toggleSkill = useGrokClaw((s) => s.toggleSkill);
-	const runSkill = useGrokClaw((s) => s.runSkill);
-	const addSkill = useGrokClaw((s) => s.addSkill);
-	const running = useGrokClaw((s) => s.running);
+	const skills = useGrokHub((s) => s.skills);
+	const toggleSkill = useGrokHub((s) => s.toggleSkill);
+	const runSkill = useGrokHub((s) => s.runSkill);
+	const addSkill = useGrokHub((s) => s.addSkill);
+	const running = useGrokHub((s) => s.running);
 	const [name, setName] = (0, import_react.useState)("");
 	const [slash, setSlash] = (0, import_react.useState)("");
 	const [description, setDescription] = (0, import_react.useState)("");
@@ -3191,6 +3210,7 @@ function SkillsView() {
 		})
 	});
 }
+var APP_VERSION = "0.1";
 var NAV = [
 	{
 		id: "chat",
@@ -3239,24 +3259,24 @@ var NAV = [
 	}
 ];
 function AppShell() {
-	const nav = useGrokClaw((s) => s.nav);
-	const setNav = useGrokClaw((s) => s.setNav);
-	const heartbeatAt = useGrokClaw((s) => s.heartbeatAt);
-	const running = useGrokClaw((s) => s.running);
-	const mode = useGrokClaw((s) => s.mode);
-	const tickHeartbeat = useGrokClaw((s) => s.tickHeartbeat);
-	const refreshStaleTimes = useGrokClaw((s) => s.refreshStaleTimes);
-	const resetDemo = useGrokClaw((s) => s.resetDemo);
+	const nav = useGrokHub((s) => s.nav);
+	const setNav = useGrokHub((s) => s.setNav);
+	const heartbeatAt = useGrokHub((s) => s.heartbeatAt);
+	const running = useGrokHub((s) => s.running);
+	const mode = useGrokHub((s) => s.mode);
+	const tickHeartbeat = useGrokHub((s) => s.tickHeartbeat);
+	const refreshStaleTimes = useGrokHub((s) => s.refreshStaleTimes);
+	const resetDemo = useGrokHub((s) => s.resetDemo);
 	const [mobileOpen, setMobileOpen] = (0, import_react.useState)(false);
 	const [isDesktop, setIsDesktop] = (0, import_react.useState)(false);
 	const modeMeta = getMode(mode);
 	(0, import_react.useEffect)(() => {
-		const p = useGrokClaw.persist.rehydrate();
+		const p = useGrokHub.persist.rehydrate();
 		Promise.resolve(p).finally(() => {
-			useGrokClaw.getState().refreshStaleTimes();
-			useGrokClaw.getState().tickHeartbeat();
+			useGrokHub.getState().refreshStaleTimes();
+			useGrokHub.getState().tickHeartbeat();
 		});
-		setIsDesktop(Boolean(window.grokclawDesktop));
+		setIsDesktop(Boolean(window.grokhubDesktop));
 	}, []);
 	(0, import_react.useEffect)(() => {
 		const hb = window.setInterval(() => tickHeartbeat(), 3e4);
@@ -3276,16 +3296,17 @@ function AppShell() {
 				className: "flex items-center gap-2",
 				style: noDrag,
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "flex h-6 w-6 items-center justify-center rounded border border-[var(--color-border)] bg-[var(--color-elevated)]",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bot, { className: "h-3.5 w-3.5" })
-					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GrokHubMark, { className: "h-6 w-6" }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "text-xs font-semibold tracking-tight",
-						children: "GrokClaw"
+						children: "GrokHub"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Badge, {
+						className: "hidden font-mono text-[10px] sm:inline-flex",
+						children: ["v", APP_VERSION]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "hidden text-[10px] text-[var(--color-subtle)] sm:inline",
+						className: "hidden text-[10px] text-[var(--color-subtle)] md:inline",
 						children: "Arch desktop · unsandboxed host"
 					})
 				]
@@ -3301,21 +3322,21 @@ function AppShell() {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "flex h-7 w-8 items-center justify-center rounded text-[var(--color-muted)] hover:bg-[var(--color-elevated)]",
-								onClick: () => window.grokclawDesktop?.minimize?.(),
+								onClick: () => window.grokhubDesktop?.minimize?.(),
 								"aria-label": "Minimize",
 								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Minus, { className: "h-3.5 w-3.5" })
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "flex h-7 w-8 items-center justify-center rounded text-[var(--color-muted)] hover:bg-[var(--color-elevated)]",
-								onClick: () => window.grokclawDesktop?.maximize?.(),
+								onClick: () => window.grokhubDesktop?.maximize?.(),
 								"aria-label": "Maximize",
 								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Square, { className: "h-3 w-3" })
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "flex h-7 w-8 items-center justify-center rounded text-[var(--color-muted)] hover:bg-[color-mix(in_oklab,var(--color-danger)_25%,transparent)] hover:text-[var(--color-danger)]",
-								onClick: () => window.grokclawDesktop?.close?.(),
+								onClick: () => window.grokhubDesktop?.close?.(),
 								"aria-label": "Close",
 								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(X, { className: "h-3.5 w-3.5" })
 							})
@@ -3398,9 +3419,13 @@ function AppShell() {
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 									className: "text-sm font-medium md:text-base",
 									children: NAV.find((n) => n.id === nav)?.label
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "truncate text-xs text-[var(--color-subtle)]",
-									children: "Modes · Usage · Desktop host · Imagine"
+									children: [
+										"GrokHub v",
+										APP_VERSION,
+										" · Modes · Usage · Desktop · Imagine"
+									]
 								})]
 							})]
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {

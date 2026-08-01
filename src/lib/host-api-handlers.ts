@@ -114,7 +114,7 @@ export async function handleExec(
       timeout,
       maxBuffer: MAX_STDOUT,
       shell: process.env.SHELL || "/bin/bash",
-      env: { ...process.env, GROKCLAW_HOST: "1" },
+      env: { ...process.env, GROKHUB_HOST: "1" },
     });
     return {
       ok: true,
@@ -159,23 +159,23 @@ async function ensureDemoDesktopEntries() {
     return;
   }
   const entries: Record<string, string> = {
-    "grokclaw-terminal.desktop": `[Desktop Entry]
+    "grokhub-terminal.desktop": `[Desktop Entry]
 Type=Application
 Name=Host Terminal (bash)
-Exec=bash -lc 'echo GrokClaw host shell; exec bash'
+Exec=bash -lc 'echo GrokHub host shell; exec bash'
 Terminal=true
 Categories=System;TerminalEmulator;
 `,
-    "grokclaw-files.desktop": `[Desktop Entry]
+    "grokhub-files.desktop": `[Desktop Entry]
 Type=Application
 Name=Home Files
 Exec=xdg-open ${os.homedir()}
 Terminal=false
 Categories=System;FileManager;
 `,
-    "grokclaw-workspace.desktop": `[Desktop Entry]
+    "grokhub-workspace.desktop": `[Desktop Entry]
 Type=Application
-Name=GrokClaw Workspace
+Name=GrokHub Workspace
 Exec=xdg-open ${os.homedir()}
 Terminal=false
 Categories=Development;
@@ -183,9 +183,9 @@ Categories=Development;
   };
   // Also pick up packaging desktop file if present
   try {
-    const packaging = path.resolve(process.cwd(), "packaging/grokclaw.desktop");
+    const packaging = path.resolve(process.cwd(), "packaging/grokhub.desktop");
     const raw = await fs.readFile(packaging, "utf8");
-    entries["grokclaw.desktop"] = raw;
+    entries["grokhub.desktop"] = raw;
   } catch {
     /* optional */
   }

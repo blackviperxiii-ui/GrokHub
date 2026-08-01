@@ -1,10 +1,10 @@
 import { Users } from "lucide-react";
-import { useGrokClaw } from "@/lib/store";
+import { useGrokHub } from "@/lib/store";
 import { Badge } from "../ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 
 export function AgentsView() {
-  const agents = useGrokClaw((s) => s.agents);
+  const agents = useGrokHub((s) => s.agents);
 
   return (
     <div className="space-y-5">

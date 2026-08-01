@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostApp, HostExecResult, HostFileEntry, HostInfo } from "@/lib/host-types";
-import { useGrokClaw } from "@/lib/store";
+import { useGrokHub } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -30,7 +30,7 @@ const QUICK_CMDS = [
 ];
 
 export function DesktopHostView() {
-  const recordUsage = useGrokClaw((s) => s.recordUsage);
+  const recordUsage = useGrokHub((s) => s.recordUsage);
   const [api, setApi] = useState<HostApi | null>(null);
   const [tab, setTab] = useState<Tab>("cli");
   const [info, setInfo] = useState<HostInfo | null>(null);

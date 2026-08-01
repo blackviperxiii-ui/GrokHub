@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { GROK_MODES } from "@/lib/modes";
-import { useGrokClaw } from "@/lib/store";
+import { useGrokHub } from "@/lib/store";
 import type { GrokModeId } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -21,10 +21,10 @@ const ICONS: Record<GrokModeId, LucideIcon> = {
 };
 
 export function ModePicker() {
-  const mode = useGrokClaw((s) => s.mode);
-  const open = useGrokClaw((s) => s.modeMenuOpen);
-  const setMode = useGrokClaw((s) => s.setMode);
-  const setModeMenuOpen = useGrokClaw((s) => s.setModeMenuOpen);
+  const mode = useGrokHub((s) => s.mode);
+  const open = useGrokHub((s) => s.modeMenuOpen);
+  const setMode = useGrokHub((s) => s.setMode);
+  const setModeMenuOpen = useGrokHub((s) => s.setModeMenuOpen);
   const ref = useRef<HTMLDivElement>(null);
   const active = GROK_MODES.find((m) => m.id === mode) ?? GROK_MODES[0]!;
   const ActiveIcon = ICONS[active.id];

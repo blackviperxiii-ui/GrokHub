@@ -1,39 +1,13 @@
-# GrokClaw on Arch Linux
+# GrokHub on Arch Linux (v0.1)
 
-## Real AUR-style package (recommended)
-
-Full package lives in **`packaging/aur/`**:
-
-| Package | File | Notes |
-|---------|------|--------|
-| **grokclaw-bin** | `PKGBUILD-bin` + `grokclaw-bin-0.1.0.tar.gz` | **Prebuilt** — install in seconds |
-| **grokclaw** | `PKGBUILD` + `grokclaw-0.1.0.tar.gz` | Build from source with npm |
-
-### Install prebuilt now
+## Install
 
 ```bash
-sudo pacman -S --needed base-devel electron nodejs curl
-cd packaging/aur
-cp PKGBUILD-bin PKGBUILD
-makepkg -si
-grokclaw
+sudo pacman -S --needed git electron nodejs npm curl base-devel
+git clone https://github.com/blackviperxiii-ui/spring-dove-reef-apple.git
+cd spring-dove-reef-apple
+sudo ./scripts/install-arch.sh
+grokhub
 ```
 
-See [aur/README.md](./aur/README.md) for AUR publish steps (`yay -S grokclaw-bin`).
-
----
-
-## Dev run (without packaging)
-
-```bash
-sudo pacman -S --needed electron nodejs npm
-npm install
-npm run dev          # terminal 1
-npm run desktop:dev  # terminal 2
-# or:
-npm run desktop:arch
-```
-
-## Security
-
-Unsandboxed host agent: shell, files, and apps run as your Linux user.
+See [aur/README.md](./aur/README.md) for PKGBUILD options.

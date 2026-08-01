@@ -1,43 +1,42 @@
-# Maintainer: GrokClaw contributors
+# Maintainer: GrokHub contributors
 # Prebuilt package — uses committed .output + Electron shell (no npm compile)
-pkgname=grokclaw-bin
-_pkgname=grokclaw
-pkgver=0.1.0
-pkgrel=2
+pkgname=grokhub-bin
+_pkgname=grokhub
+pkgver=0.1
+pkgrel=1
 pkgdesc="Grok-native agent control plane (prebuilt) — modes, Imagine, unsandboxed desktop host"
 arch=('x86_64')
 url="https://github.com/blackviperxiii-ui/spring-dove-reef-apple"
 license=('MIT')
 depends=('electron' 'nodejs' 'curl')
 makedepends=('git')
-provides=('grokclaw')
-conflicts=('grokclaw')
+provides=('grokhub')
+conflicts=('grokhub')
 options=('!strip' '!debug')
-install=grokclaw.install
-# Clones the app repo (private OK with your GitHub auth; public required for AUR bots)
+install=grokhub.install
 source=("${_pkgname}::git+https://github.com/blackviperxiii-ui/spring-dove-reef-apple.git#branch=main")
-sha256sums=('494434b17c86a8fbe755a9c80bdb63062a6a670dc6246cbd0cf45a86f80005ef')
+sha256sums=('SKIP')
 
 package() {
   cd "${srcdir}/${_pkgname}"
 
   if [[ ! -f .output/server/index.mjs ]]; then
-    echo "error: .output missing — run GROKCLAW_DESKTOP=1 npm run build and push, or use source PKGBUILD" >&2
+    echo "error: .output missing — run GROKHUB_DESKTOP=1 npm run build and push, or use source PKGBUILD" >&2
     return 1
   fi
 
   install -dm755 "${pkgdir}/usr/lib/${_pkgname}"
   cp -a .output desktop "${pkgdir}/usr/lib/${_pkgname}/"
 
-  install -Dm755 packaging/aur/grokclaw.sh "${pkgdir}/usr/bin/grokclaw"
-  install -Dm644 packaging/grokclaw.desktop \
-    "${pkgdir}/usr/share/applications/grokclaw.desktop"
-  install -Dm644 packaging/grokclaw.svg \
-    "${pkgdir}/usr/share/icons/hicolor/scalable/apps/grokclaw.svg"
+  install -Dm755 packaging/aur/grokhub.sh "${pkgdir}/usr/bin/grokhub"
+  install -Dm644 packaging/grokhub.desktop \
+    "${pkgdir}/usr/share/applications/grokhub.desktop"
+  install -Dm644 packaging/grokhub.svg \
+    "${pkgdir}/usr/share/icons/hicolor/scalable/apps/grokhub.svg"
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${_pkgname}/LICENSE"
 
   find "${pkgdir}/usr/lib/${_pkgname}" -type f -exec chmod 644 {} +
   find "${pkgdir}/usr/lib/${_pkgname}" -type d -exec chmod 755 {} +
-  chmod 755 "${pkgdir}/usr/bin/grokclaw"
+  chmod 755 "${pkgdir}/usr/bin/grokhub"
   chmod 755 "${pkgdir}/usr/lib/${_pkgname}/desktop/main.mjs" || true
 }

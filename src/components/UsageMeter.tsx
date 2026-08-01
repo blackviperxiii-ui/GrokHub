@@ -6,7 +6,7 @@ import {
   usagePercent,
   usageTone,
 } from "@/lib/usage";
-import { useGrokClaw } from "@/lib/store";
+import { useGrokHub } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
@@ -19,8 +19,8 @@ function barColor(tone: "ok" | "warn" | "danger") {
 
 /** Compact titlebar / sidebar chip */
 export function UsageMeterChip({ className }: { className?: string }) {
-  const usage = useGrokClaw((s) => s.usage);
-  const setNav = useGrokClaw((s) => s.setNav);
+  const usage = useGrokHub((s) => s.usage);
+  const setNav = useGrokHub((s) => s.setNav);
   const plan = PLAN_LIMITS[usage.plan];
   const pct = usagePercent(usage);
   const tone = usageTone(pct);
@@ -67,9 +67,9 @@ export function UsageMeterChip({ className }: { className?: string }) {
 
 /** Full breakdown card for Command / Settings */
 export function UsageMeterPanel({ compact }: { compact?: boolean }) {
-  const usage = useGrokClaw((s) => s.usage);
-  const setPlan = useGrokClaw((s) => s.setPlan);
-  const resetUsage = useGrokClaw((s) => s.resetUsagePeriod);
+  const usage = useGrokHub((s) => s.usage);
+  const setPlan = useGrokHub((s) => s.setPlan);
+  const resetUsage = useGrokHub((s) => s.resetUsagePeriod);
   const plan = PLAN_LIMITS[usage.plan];
   const pct = usagePercent(usage);
   const tone = usageTone(pct);

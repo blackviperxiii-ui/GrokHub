@@ -47,7 +47,7 @@ export function renderImaginePreview(prompt: string, aspect: ImagineAspect): str
   const c3 = `hsl(${h3 % 360} 28% 42%)`;
   const accent = `hsl(${(h1 + 40) % 360} 35% 68%)`;
   const title = escapeXml(prompt.slice(0, 72) || "Imagine");
-  const sub = "GrokClaw · Imagine · local preview";
+  const sub = "GrokHub · Imagine · local preview";
 
   const blobs = Array.from({ length: 5 }, (_, i) => {
     const hx = hash(`${prompt}-blob-${i}`);

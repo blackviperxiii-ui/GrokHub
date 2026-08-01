@@ -36,7 +36,7 @@ function pgliteBootstrapPlugin(): Plugin {
  */
 function hostApiPlugin(): Plugin {
   return {
-    name: "grokclaw-host-api",
+    name: "grokhub-host-api",
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         try {
@@ -175,10 +175,10 @@ function authPopupPlugin(): Plugin {
 // `0.0.0.0:8080` is the live-preview contract — don't change host/port.
 // Keep `nitro` gated to `build` (the Vercel deploy target): enabled in dev it
 // opens a second dev-server port, which breaks the single-port preview.
-// Desktop/AUR builds set GROKCLAW_DESKTOP=1 → nitro node-server for local runtime.
+// Desktop/AUR builds set GROKHUB_DESKTOP=1 → nitro node-server for local runtime.
 export default defineConfig(({ command }) => {
   const desktop =
-    process.env.GROKCLAW_DESKTOP === "1" || process.env.GROKCLAW_DESKTOP === "true";
+    process.env.GROKHUB_DESKTOP === "1" || process.env.GROKHUB_DESKTOP === "true";
   const nitroPreset = desktop ? "node-server" : "vercel";
 
   return {

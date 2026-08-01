@@ -1,5 +1,5 @@
 {
-  "name": "grokclaw",
+  "name": "grokhub",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -16,9 +16,9 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "desktop": "electron desktop/main.mjs",
-    "desktop:dev": "GROKCLAW_URL=http://127.0.0.1:8080 electron desktop/main.mjs",
+    "desktop:dev": "GROKHUB_URL=http://127.0.0.1:8080 electron desktop/main.mjs",
     "desktop:arch": "bash scripts/arch-launch.sh",
-    "desktop:build": "GROKCLAW_DESKTOP=1 vite build && npm run db:migrate",
+    "desktop:build": "GROKHUB_DESKTOP=1 vite build && npm run db:migrate",
     "aur:release": "bash scripts/make-aur-release.sh"
   },
   "dependencies": {

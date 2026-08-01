@@ -1,6 +1,6 @@
 import { Cable, Check, Link2Off } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useGrokClaw } from "@/lib/store";
+import { useGrokHub } from "@/lib/store";
 import { RelativeTime } from "../RelativeTime";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -8,8 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui
 import { Input } from "../ui/input";
 
 export function ConnectorsView() {
-  const connectors = useGrokClaw((s) => s.connectors);
-  const toggleConnector = useGrokClaw((s) => s.toggleConnector);
+  const connectors = useGrokHub((s) => s.connectors);
+  const toggleConnector = useGrokHub((s) => s.toggleConnector);
   const [q, setQ] = useState("");
 
   const filtered = useMemo(() => {

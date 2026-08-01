@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 /**
  * Exposed to renderer. Host methods talk to main process (unsandboxed user session).
  */
-contextBridge.exposeInMainWorld("grokclawDesktop", {
+contextBridge.exposeInMainWorld("grokhubDesktop", {
   minimize: () => ipcRenderer.invoke("desktop:minimize"),
   maximize: () => ipcRenderer.invoke("desktop:maximize"),
   close: () => ipcRenderer.invoke("desktop:close"),

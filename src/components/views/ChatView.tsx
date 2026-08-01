@@ -1,7 +1,7 @@
 import { Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
-import { useGrokClaw } from "@/lib/store";
+import { useGrokHub } from "@/lib/store";
 import { formatUnits, PLAN_LIMITS, usagePercent } from "@/lib/usage";
 import { cn } from "@/lib/utils";
 import { RelativeTime } from "../RelativeTime";
@@ -19,14 +19,14 @@ const SUGGESTIONS = [
 ];
 
 export function ChatView() {
-  const chat = useGrokClaw((s) => s.chat);
-  const sendChat = useGrokClaw((s) => s.sendChat);
-  const running = useGrokClaw((s) => s.running);
-  const mode = useGrokClaw((s) => s.mode);
-  const setNav = useGrokClaw((s) => s.setNav);
-  const pushActivity = useGrokClaw((s) => s.pushActivity);
-  const recordUsage = useGrokClaw((s) => s.recordUsage);
-  const usage = useGrokClaw((s) => s.usage);
+  const chat = useGrokHub((s) => s.chat);
+  const sendChat = useGrokHub((s) => s.sendChat);
+  const running = useGrokHub((s) => s.running);
+  const mode = useGrokHub((s) => s.mode);
+  const setNav = useGrokHub((s) => s.setNav);
+  const pushActivity = useGrokHub((s) => s.pushActivity);
+  const recordUsage = useGrokHub((s) => s.recordUsage);
+  const usage = useGrokHub((s) => s.usage);
   const [text, setText] = useState("");
   const [localRunning, setLocalRunning] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -42,7 +42,7 @@ export function ChatView() {
   async function runShell(command: string) {
     setLocalRunning(true);
     const userLine = command.startsWith("$") ? command : `$ ${command}`;
-    useGrokClaw.setState((s) => ({
+    useGrokHub.setState((s) => ({
       chat: [
         ...s.chat,
         {
@@ -57,7 +57,7 @@ export function ChatView() {
     try {
       const bill = recordUsage("host");
       if (!bill.ok) {
-        useGrokClaw.setState((s) => ({
+        useGrokHub.setState((s) => ({
           chat: [
             ...s.chat,
             {
@@ -82,7 +82,7 @@ export function ChatView() {
       ]
         .filter(Boolean)
         .join("\n");
-      useGrokClaw.setState((s) => ({
+      useGrokHub.setState((s) => ({
         chat: [
           ...s.chat,
           {
@@ -101,7 +101,7 @@ export function ChatView() {
         status: r.ok ? "success" : "failed",
       });
     } catch (e) {
-      useGrokClaw.setState((s) => ({
+      useGrokHub.setState((s) => ({
         chat: [
           ...s.chat,
           {

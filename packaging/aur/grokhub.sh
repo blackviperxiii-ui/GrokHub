@@ -1,16 +1,16 @@
 #!/bin/bash
-# GrokClaw system launcher — starts local nitro UI then Electron shell.
+# GrokHub system launcher — starts local nitro UI then Electron shell.
 set -euo pipefail
 
-APP_ROOT="${GROKCLAW_HOME:-/usr/lib/grokclaw}"
-PORT="${GROKCLAW_PORT:-18765}"
-URL="${GROKCLAW_URL:-http://127.0.0.1:${PORT}}"
-RUNTIME="${XDG_RUNTIME_DIR:-/tmp}/grokclaw"
+APP_ROOT="${GROKHUB_HOME:-/usr/lib/grokhub}"
+PORT="${GROKHUB_PORT:-18765}"
+URL="${GROKHUB_URL:-http://127.0.0.1:${PORT}}"
+RUNTIME="${XDG_RUNTIME_DIR:-/tmp}/grokhub"
 LOG="${RUNTIME}/ui.log"
 PIDFILE="${RUNTIME}/ui.pid"
 
-export GROKCLAW_WAYLAND="${GROKCLAW_WAYLAND:-1}"
-export GROKCLAW_TRAY="${GROKCLAW_TRAY:-1}"
+export GROKHUB_WAYLAND="${GROKHUB_WAYLAND:-1}"
+export GROKHUB_TRAY="${GROKHUB_TRAY:-1}"
 
 mkdir -p "$RUNTIME"
 
@@ -25,7 +25,7 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 if [[ ! -f "$APP_ROOT/desktop/main.mjs" ]]; then
-  echo "error: GrokClaw not installed at $APP_ROOT" >&2
+  echo "error: GrokHub not installed at $APP_ROOT" >&2
   exit 1
 fi
 
@@ -53,7 +53,7 @@ start_ui() {
     exit 1
   fi
 
-  echo "Starting GrokClaw UI on ${URL} …"
+  echo "Starting GrokHub UI on ${URL} …"
   (
     cd "$APP_ROOT"
     export PORT="$PORT"
@@ -79,5 +79,5 @@ start_ui() {
 
 start_ui
 
-export GROKCLAW_URL="$URL"
+export GROKHUB_URL="$URL"
 exec electron "$APP_ROOT/desktop/main.mjs" "$@"

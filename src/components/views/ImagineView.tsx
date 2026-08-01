@@ -1,5 +1,5 @@
 import { Download, ImageIcon, Loader2, Sparkles } from "lucide-react";
-import { useGrokClaw } from "@/lib/store";
+import { useGrokHub } from "@/lib/store";
 import type { ImagineAspect } from "@/lib/types";
 import { RelativeTime } from "../RelativeTime";
 import { Badge } from "../ui/badge";
@@ -10,14 +10,14 @@ import { Input } from "../ui/input";
 const ASPECTS: ImagineAspect[] = ["1:1", "16:9", "9:16", "3:2", "2:3"];
 
 export function ImagineView() {
-  const prompt = useGrokClaw((s) => s.imaginePrompt);
-  const aspect = useGrokClaw((s) => s.imagineAspect);
-  const jobs = useGrokClaw((s) => s.imagineJobs);
-  const running = useGrokClaw((s) => s.running);
-  const mode = useGrokClaw((s) => s.mode);
-  const setImaginePrompt = useGrokClaw((s) => s.setImaginePrompt);
-  const setImagineAspect = useGrokClaw((s) => s.setImagineAspect);
-  const runImagine = useGrokClaw((s) => s.runImagine);
+  const prompt = useGrokHub((s) => s.imaginePrompt);
+  const aspect = useGrokHub((s) => s.imagineAspect);
+  const jobs = useGrokHub((s) => s.imagineJobs);
+  const running = useGrokHub((s) => s.running);
+  const mode = useGrokHub((s) => s.mode);
+  const setImaginePrompt = useGrokHub((s) => s.setImaginePrompt);
+  const setImagineAspect = useGrokHub((s) => s.setImagineAspect);
+  const runImagine = useGrokHub((s) => s.runImagine);
 
   const latest = jobs[0];
 
@@ -30,7 +30,7 @@ export function ImagineView() {
             Imagine
           </CardTitle>
           <CardDescription>
-            Baked into GrokClaw desktop — local preview renderer for Arch offline use.
+            Baked into GrokHub desktop — local preview renderer for Arch offline use.
             Pair with Expert/Heavy modes for stronger art direction in chat.
           </CardDescription>
         </CardHeader>
@@ -92,7 +92,7 @@ export function ImagineView() {
             </div>
             <a
               href={latest.imageDataUrl}
-              download={`grokclaw-imagine-${latest.id}.svg`}
+              download={`grokhub-imagine-${latest.id}.svg`}
               className="inline-flex h-9 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 text-xs font-medium hover:border-[var(--color-border-strong)]"
             >
               <Download className="h-3.5 w-3.5" />

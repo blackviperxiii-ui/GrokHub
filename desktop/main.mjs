@@ -22,7 +22,7 @@ function createWindow() {
     minHeight: 640,
     show: false,
     backgroundColor: "#0a0a0b",
-    title: "GrokClaw",
+    title: "GrokHub",
     frame: false,
     titleBarStyle: "hidden",
     webPreferences: {
@@ -36,7 +36,7 @@ function createWindow() {
   });
 
   const startUrl =
-    process.env.GROKCLAW_URL ||
+    process.env.GROKHUB_URL ||
     (isDev
       ? "http://127.0.0.1:8080"
       : `file://${path.join(__dirname, "../dist/client/index.html")}`);
@@ -44,7 +44,7 @@ function createWindow() {
   void mainWindow.loadURL(startUrl);
 
   mainWindow.once("ready-to-show", () => {
-    if (process.env.GROKCLAW_START_MINIMIZED === "1") {
+    if (process.env.GROKHUB_START_MINIMIZED === "1") {
       mainWindow?.hide();
     } else {
       mainWindow?.show();
@@ -52,7 +52,7 @@ function createWindow() {
   });
 
   mainWindow.on("close", (e) => {
-    if (process.env.GROKCLAW_TRAY !== "0" && tray) {
+    if (process.env.GROKHUB_TRAY !== "0" && tray) {
       e.preventDefault();
       mainWindow?.hide();
     }
@@ -65,14 +65,14 @@ function createWindow() {
 }
 
 function createTray() {
-  if (process.env.GROKCLAW_TRAY === "0") return;
+  if (process.env.GROKHUB_TRAY === "0") return;
   const icon = nativeImage.createEmpty();
   tray = new Tray(icon);
-  tray.setToolTip("GrokClaw");
+  tray.setToolTip("GrokHub");
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
-        label: "Show GrokClaw",
+        label: "Show GrokHub",
         click: () => {
           mainWindow?.show();
           mainWindow?.focus();
@@ -121,7 +121,7 @@ function registerIpc() {
 }
 
 // Wayland-friendly Chromium flags (Arch / Hyprland / KDE)
-if (process.env.GROKCLAW_WAYLAND !== "0") {
+if (process.env.GROKHUB_WAYLAND !== "0") {
   app.commandLine.appendSwitch("enable-features", "UseOzonePlatform,WaylandWindowDecorations");
   app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 }

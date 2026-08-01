@@ -1,7 +1,7 @@
-pkgbase = grokclaw-bin
+pkgbase = grokhub-bin
 	pkgdesc = Grok-native agent control plane (prebuilt) — modes, Imagine, unsandboxed desktop host
-	pkgver = 0.1.0
-	pkgrel = 2
+	pkgver = 0.1
+	pkgrel = 1
 	url = https://github.com/blackviperxiii-ui/spring-dove-reef-apple
 	arch = x86_64
 	license = MIT
@@ -9,11 +9,11 @@ pkgbase = grokclaw-bin
 	depends = electron
 	depends = nodejs
 	depends = curl
-	provides = grokclaw
-	conflicts = grokclaw
+	provides = grokhub
+	conflicts = grokhub
 	options = !strip
 	options = !debug
-	source = grokclaw::git+https://github.com/blackviperxiii-ui/spring-dove-reef-apple.git#branch=main
+	source = grokhub::git+https://github.com/blackviperxiii-ui/spring-dove-reef-apple.git#branch=main
 	sha256sums = SKIP
 
-pkgname = grokclaw-bin
+pkgname = grokhub-bin

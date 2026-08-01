@@ -306,7 +306,7 @@ export function createSeeds(now = Date.now()): SeedBundle {
       id: "c0",
       role: "system",
       content:
-        "GrokClaw desktop online. Modes Auto/Fast/Expert/Heavy/Build are baked in (Grok 4.5). Imagine is in the sidebar. Prefix shell with $ for unsandboxed host CLI, or open Desktop.",
+        "GrokHub desktop online. Modes Auto/Fast/Expert/Heavy/Build are baked in (Grok 4.5). Imagine is in the sidebar. Prefix shell with $ for unsandboxed host CLI, or open Desktop.",
       ts: now - 2 * MINUTE,
     },
   ];

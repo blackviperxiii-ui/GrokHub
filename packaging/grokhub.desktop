@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=GrokHub
+GenericName=Grok Agent Control Plane
+Comment=Grok-native agent desktop — modes, Imagine, Connectors, Skills, Automations
+Exec=grokhub %U
+Icon=grokhub
+Terminal=false
+Categories=Utility;Development;Office;
+Keywords=grok;ai;agent;xai;hub;
+StartupWMClass=GrokHub
+X-GNOME-UsesNotifications=true

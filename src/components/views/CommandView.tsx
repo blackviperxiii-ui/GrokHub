@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { GROK_MODES } from "@/lib/modes";
-import { useGrokClaw } from "@/lib/store";
+import { useGrokHub } from "@/lib/store";
 import { RelativeTime } from "../RelativeTime";
 import { UsageMeterPanel } from "../UsageMeter";
 import { Badge } from "../ui/badge";
@@ -18,16 +18,16 @@ import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 
 export function CommandView() {
-  const connectors = useGrokClaw((s) => s.connectors);
-  const skills = useGrokClaw((s) => s.skills);
-  const automations = useGrokClaw((s) => s.automations);
-  const activity = useGrokClaw((s) => s.activity);
-  const agents = useGrokClaw((s) => s.agents);
-  const mode = useGrokClaw((s) => s.mode);
-  const setMode = useGrokClaw((s) => s.setMode);
-  const setNav = useGrokClaw((s) => s.setNav);
-  const runAutomation = useGrokClaw((s) => s.runAutomation);
-  const sendChat = useGrokClaw((s) => s.sendChat);
+  const connectors = useGrokHub((s) => s.connectors);
+  const skills = useGrokHub((s) => s.skills);
+  const automations = useGrokHub((s) => s.automations);
+  const activity = useGrokHub((s) => s.activity);
+  const agents = useGrokHub((s) => s.agents);
+  const mode = useGrokHub((s) => s.mode);
+  const setMode = useGrokHub((s) => s.setMode);
+  const setNav = useGrokHub((s) => s.setNav);
+  const runAutomation = useGrokHub((s) => s.runAutomation);
+  const sendChat = useGrokHub((s) => s.sendChat);
 
   const connected = connectors.filter((c) => c.status === "connected").length;
   const enabledSkills = skills.filter((s) => s.enabled).length;

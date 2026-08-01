@@ -1,18 +1,18 @@
 post_install() {
   cat <<'EOF'
 
-  GrokClaw installed.
+  GrokHub v0.1 installed.
 
-  Run:    grokclaw
-  Menu:   Applications → GrokClaw
+  Run:    grokhub
+  Menu:   Applications → GrokHub
 
   Depends on system packages: electron, nodejs
   Unsandboxed host agent — commands run as your user.
 
   Env:
-    GROKCLAW_PORT=18765
-    GROKCLAW_WAYLAND=1
-    GROKCLAW_TRAY=1
+    GROKHUB_PORT=18765
+    GROKHUB_WAYLAND=1
+    GROKHUB_TRAY=1
 
 EOF
 }

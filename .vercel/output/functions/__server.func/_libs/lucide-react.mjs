@@ -133,42 +133,6 @@ var ArrowRight = createLucideIcon("arrow-right", [["path", {
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
-var Bot = createLucideIcon("bot", [
-	["path", {
-		d: "M12 8V4H8",
-		key: "hb8ula"
-	}],
-	["rect", {
-		width: "16",
-		height: "12",
-		x: "4",
-		y: "8",
-		rx: "2",
-		key: "enze0r"
-	}],
-	["path", {
-		d: "M2 14h2",
-		key: "vft8re"
-	}],
-	["path", {
-		d: "M20 14h2",
-		key: "4cs60a"
-	}],
-	["path", {
-		d: "M15 13v2",
-		key: "1xurst"
-	}],
-	["path", {
-		d: "M9 13v2",
-		key: "rq6x2g"
-	}]
-]);
-/**
-* @license lucide-react v0.510.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
 var Brain = createLucideIcon("brain", [
 	["path", {
 		d: "M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z",
@@ -708,4 +672,4 @@ var Zap = createLucideIcon("zap", [["path", {
 	key: "1xq2db"
 }]]);
 //#endregion
-export { Brain as A, Folder as C, ChevronRight as D, Command as E, ArrowRight as M, AppWindow as N, Check as O, Activity as P, Gauge as S, Download as T, LoaderCircle as _, Terminal as a, HardDrive as b, ShieldAlert as c, RefreshCw as d, Plus as f, Menu as g, MessageSquare as h, TimerReset as i, Bot as j, Cable as k, Settings as l, Minus as m, X as n, Square as o, Play as p, Users as r, Sparkles as s, Zap as t, Send as u, Link2Off as v, FolderOpen as w, Hammer as x, Image as y };
+export { Brain as A, Folder as C, ChevronRight as D, Command as E, AppWindow as M, Activity as N, Check as O, Gauge as S, Download as T, LoaderCircle as _, Terminal as a, HardDrive as b, ShieldAlert as c, RefreshCw as d, Plus as f, Menu as g, MessageSquare as h, TimerReset as i, ArrowRight as j, Cable as k, Settings as l, Minus as m, X as n, Square as o, Play as p, Users as r, Sparkles as s, Zap as t, Send as u, Link2Off as v, FolderOpen as w, Hammer as x, Image as y };

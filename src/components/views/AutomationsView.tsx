@@ -1,6 +1,6 @@
 import { Play, Plus, TimerReset } from "lucide-react";
 import { useState } from "react";
-import { useGrokClaw } from "@/lib/store";
+import { useGrokHub } from "@/lib/store";
 import type { AutomationSchedule } from "@/lib/types";
 import { RelativeTime } from "../RelativeTime";
 import { Badge } from "../ui/badge";
@@ -18,12 +18,12 @@ const SCHEDULES: AutomationSchedule[] = [
 ];
 
 export function AutomationsView() {
-  const automations = useGrokClaw((s) => s.automations);
-  const connectors = useGrokClaw((s) => s.connectors);
-  const toggleAutomation = useGrokClaw((s) => s.toggleAutomation);
-  const runAutomation = useGrokClaw((s) => s.runAutomation);
-  const addAutomation = useGrokClaw((s) => s.addAutomation);
-  const running = useGrokClaw((s) => s.running);
+  const automations = useGrokHub((s) => s.automations);
+  const connectors = useGrokHub((s) => s.connectors);
+  const toggleAutomation = useGrokHub((s) => s.toggleAutomation);
+  const runAutomation = useGrokHub((s) => s.runAutomation);
+  const addAutomation = useGrokHub((s) => s.addAutomation);
+  const running = useGrokHub((s) => s.running);
 
   const [name, setName] = useState("");
   const [instructions, setInstructions] = useState("");

@@ -1,6 +1,6 @@
 import { Play, Plus, Sparkles } from "lucide-react";
 import { useState } from "react";
-import { useGrokClaw } from "@/lib/store";
+import { useGrokHub } from "@/lib/store";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
@@ -8,11 +8,11 @@ import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 
 export function SkillsView() {
-  const skills = useGrokClaw((s) => s.skills);
-  const toggleSkill = useGrokClaw((s) => s.toggleSkill);
-  const runSkill = useGrokClaw((s) => s.runSkill);
-  const addSkill = useGrokClaw((s) => s.addSkill);
-  const running = useGrokClaw((s) => s.running);
+  const skills = useGrokHub((s) => s.skills);
+  const toggleSkill = useGrokHub((s) => s.toggleSkill);
+  const runSkill = useGrokHub((s) => s.runSkill);
+  const addSkill = useGrokHub((s) => s.addSkill);
+  const running = useGrokHub((s) => s.running);
 
   const [name, setName] = useState("");
   const [slash, setSlash] = useState("");

@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 PKGVER="$(node -p "require('./package.json').version" 2>/dev/null || echo 0.1.0)"
-NAME="grokclaw"
+NAME="grokhub"
 STAGE="$(mktemp -d)"
 OUT_DIR="$ROOT/packaging/aur"
 TARBALL="${OUT_DIR}/${NAME}-${PKGVER}.tar.gz"
@@ -40,7 +40,7 @@ tar -C "$ROOT" \
 # Ensure critical files exist
 test -f "$DEST/package.json"
 test -f "$DEST/desktop/main.mjs"
-test -f "$DEST/packaging/aur/grokclaw.sh"
+test -f "$DEST/packaging/aur/grokhub.sh"
 
 echo "Creating $TARBALL"
 tar -C "$STAGE" -czf "$TARBALL" "${NAME}-${PKGVER}"

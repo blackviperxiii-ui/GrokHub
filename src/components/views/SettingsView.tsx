@@ -1,5 +1,5 @@
 import { GROK_MODES } from "@/lib/modes";
-import { useGrokClaw } from "@/lib/store";
+import { useGrokHub } from "@/lib/store";
 import type { GrokModeId } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { UsageMeterPanel } from "../UsageMeter";
@@ -8,12 +8,12 @@ import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 
 export function SettingsView() {
-  const mode = useGrokClaw((s) => s.mode);
-  const setMode = useGrokClaw((s) => s.setMode);
-  const desktop = useGrokClaw((s) => s.desktop);
-  const setDesktop = useGrokClaw((s) => s.setDesktop);
-  const setNav = useGrokClaw((s) => s.setNav);
-  const resetDemo = useGrokClaw((s) => s.resetDemo);
+  const mode = useGrokHub((s) => s.mode);
+  const setMode = useGrokHub((s) => s.setMode);
+  const desktop = useGrokHub((s) => s.desktop);
+  const setDesktop = useGrokHub((s) => s.setDesktop);
+  const setNav = useGrokHub((s) => s.setNav);
+  const resetDemo = useGrokHub((s) => s.resetDemo);
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
@@ -74,7 +74,7 @@ export function SettingsView() {
         <CardHeader>
           <CardTitle className="text-sm">Unsandboxed desktop host</CardTitle>
           <CardDescription>
-            GrokClaw is designed as a personal agent with full user-session access: shell, files,
+            GrokHub is designed as a personal agent with full user-session access: shell, files,
             and installed apps. Host CLI burns 0.25 units per command.
           </CardDescription>
         </CardHeader>

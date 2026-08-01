@@ -1,6 +1,6 @@
-//#region node_modules/.nitro/vite/services/ssr/assets/host-client--b9qdyUs.js
+//#region node_modules/.nitro/vite/services/ssr/assets/host-client-BQWTZ47b.js
 function electronHost() {
-	return typeof window !== "undefined" ? window.grokclawDesktop?.host : void 0;
+	return typeof window !== "undefined" ? window.grokhubDesktop?.host : void 0;
 }
 async function rpc(action, body = {}) {
 	const res = await fetch("/api/host", {
@@ -80,7 +80,7 @@ async function hostOpenApp(opts) {
 	return rpc("openApp", opts);
 }
 function isDesktopShell() {
-	return typeof window !== "undefined" && Boolean(window.grokclawDesktop);
+	return typeof window !== "undefined" && Boolean(window.grokhubDesktop);
 }
 //#endregion
 export { hostExec, hostInfo, hostListApps, hostListDir, hostOpenApp, hostReadFile, hostWriteFile, isDesktopShell };

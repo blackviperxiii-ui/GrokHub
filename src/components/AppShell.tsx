@@ -1,6 +1,5 @@
 import type { ComponentType, CSSProperties } from "react";
 import {
-  Bot,
   Cable,
   Command,
   HardDrive,
@@ -17,9 +16,10 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getMode } from "@/lib/modes";
-import { useGrokClaw } from "@/lib/store";
+import { useGrokHub } from "@/lib/store";
 import type { NavId } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { GrokHubMark } from "./GrokLogo";
 import { ModePicker } from "./ModePicker";
 import { RelativeTime } from "./RelativeTime";
 import { UsageMeterChip } from "./UsageMeter";
@@ -35,6 +35,8 @@ import { ImagineView } from "./views/ImagineView";
 import { SettingsView } from "./views/SettingsView";
 import { SkillsView } from "./views/SkillsView";
 
+const APP_VERSION = "0.1";
+
 const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { id: "chat", label: "Agent", icon: MessageSquare },
   { id: "command", label: "Command", icon: Command },
@@ -47,27 +49,26 @@ const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string 
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
-
 export function AppShell() {
-  const nav = useGrokClaw((s) => s.nav);
-  const setNav = useGrokClaw((s) => s.setNav);
-  const heartbeatAt = useGrokClaw((s) => s.heartbeatAt);
-  const running = useGrokClaw((s) => s.running);
-  const mode = useGrokClaw((s) => s.mode);
-  const tickHeartbeat = useGrokClaw((s) => s.tickHeartbeat);
-  const refreshStaleTimes = useGrokClaw((s) => s.refreshStaleTimes);
-  const resetDemo = useGrokClaw((s) => s.resetDemo);
+  const nav = useGrokHub((s) => s.nav);
+  const setNav = useGrokHub((s) => s.setNav);
+  const heartbeatAt = useGrokHub((s) => s.heartbeatAt);
+  const running = useGrokHub((s) => s.running);
+  const mode = useGrokHub((s) => s.mode);
+  const tickHeartbeat = useGrokHub((s) => s.tickHeartbeat);
+  const refreshStaleTimes = useGrokHub((s) => s.refreshStaleTimes);
+  const resetDemo = useGrokHub((s) => s.resetDemo);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const modeMeta = getMode(mode);
 
   useEffect(() => {
-    const p = useGrokClaw.persist.rehydrate();
+    const p = useGrokHub.persist.rehydrate();
     Promise.resolve(p).finally(() => {
-      useGrokClaw.getState().refreshStaleTimes();
-      useGrokClaw.getState().tickHeartbeat();
+      useGrokHub.getState().refreshStaleTimes();
+      useGrokHub.getState().tickHeartbeat();
     });
-    setIsDesktop(Boolean(window.grokclawDesktop));
+    setIsDesktop(Boolean(window.grokhubDesktop));
   }, []);
 
   useEffect(() => {
@@ -89,11 +90,10 @@ export function AppShell() {
         style={drag}
       >
         <div className="flex items-center gap-2" style={noDrag}>
-          <div className="flex h-6 w-6 items-center justify-center rounded border border-[var(--color-border)] bg-[var(--color-elevated)]">
-            <Bot className="h-3.5 w-3.5" />
-          </div>
-          <span className="text-xs font-semibold tracking-tight">GrokClaw</span>
-          <span className="hidden text-[10px] text-[var(--color-subtle)] sm:inline">
+          <GrokHubMark className="h-6 w-6" />
+          <span className="text-xs font-semibold tracking-tight">GrokHub</span>
+          <Badge className="hidden font-mono text-[10px] sm:inline-flex">v{APP_VERSION}</Badge>
+          <span className="hidden text-[10px] text-[var(--color-subtle)] md:inline">
             Arch desktop · unsandboxed host
           </span>
         </div>
@@ -105,7 +105,7 @@ export function AppShell() {
               <button
                 type="button"
                 className="flex h-7 w-8 items-center justify-center rounded text-[var(--color-muted)] hover:bg-[var(--color-elevated)]"
-                onClick={() => window.grokclawDesktop?.minimize?.()}
+                onClick={() => window.grokhubDesktop?.minimize?.()}
                 aria-label="Minimize"
               >
                 <Minus className="h-3.5 w-3.5" />
@@ -113,7 +113,7 @@ export function AppShell() {
               <button
                 type="button"
                 className="flex h-7 w-8 items-center justify-center rounded text-[var(--color-muted)] hover:bg-[var(--color-elevated)]"
-                onClick={() => window.grokclawDesktop?.maximize?.()}
+                onClick={() => window.grokhubDesktop?.maximize?.()}
                 aria-label="Maximize"
               >
                 <Square className="h-3 w-3" />
@@ -121,7 +121,7 @@ export function AppShell() {
               <button
                 type="button"
                 className="flex h-7 w-8 items-center justify-center rounded text-[var(--color-muted)] hover:bg-[color-mix(in_oklab,var(--color-danger)_25%,transparent)] hover:text-[var(--color-danger)]"
-                onClick={() => window.grokclawDesktop?.close?.()}
+                onClick={() => window.grokhubDesktop?.close?.()}
                 aria-label="Close"
               >
                 <X className="h-3.5 w-3.5" />
@@ -200,7 +200,7 @@ export function AppShell() {
                   {NAV.find((n) => n.id === nav)?.label}
                 </div>
                 <div className="truncate text-xs text-[var(--color-subtle)]">
-                  Modes · Usage · Desktop host · Imagine
+                  GrokHub v{APP_VERSION} · Modes · Usage · Desktop · Imagine
                 </div>
               </div>
             </div>

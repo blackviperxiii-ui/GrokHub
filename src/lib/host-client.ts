@@ -36,12 +36,12 @@ type DesktopBridge = {
 
 declare global {
   interface Window {
-    grokclawDesktop?: DesktopBridge;
+    grokhubDesktop?: DesktopBridge;
   }
 }
 
 function electronHost() {
-  return typeof window !== "undefined" ? window.grokclawDesktop?.host : undefined;
+  return typeof window !== "undefined" ? window.grokhubDesktop?.host : undefined;
 }
 
 async function rpc<T>(action: string, body: Record<string, unknown> = {}): Promise<T> {
@@ -127,5 +127,5 @@ export async function hostOpenApp(opts: {
 }
 
 export function isDesktopShell(): boolean {
-  return typeof window !== "undefined" && Boolean(window.grokclawDesktop);
+  return typeof window !== "undefined" && Boolean(window.grokhubDesktop);
 }
