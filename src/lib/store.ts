@@ -2643,6 +2643,10 @@ export const useGrokHub = create<State>()(
         } catch {
           /* ignore */
         }
+        if (s.imagineMediaKind !== "image" && s.imagineMediaKind !== "video") s.imagineMediaKind = "image";
+        if (s.imagineQuality !== "speed" && s.imagineQuality !== "quality") s.imagineQuality = "speed";
+        if (!s.imagineAspect) s.imagineAspect = "auto";
+        if (!Array.isArray(s.imagineJobs)) s.imagineJobs = [];
         // Host safety defaults for upgrades
         const desk = s.desktop as Record<string, unknown> | undefined;
         if (desk) {

@@ -1,7 +1,0 @@
-function e(e){let t=[];for(let n of e.split(`
-`)){let e=n.match(/^\s*HOST_CMD:\s*(.+?)\s*$/i);e?.[1]&&t.push(e[1].trim())}let n=[...e.matchAll(/(?:^|[\s.])HOST_CMD:\s*(.+?)(?=\n|$)/gi)];for(let e of n){let n=(e[1]||``).trim();n&&!t.includes(n)&&t.push(n)}let r=[...e.matchAll(/```(?:host|bash|sh)\s*\n([\s\S]*?)```/gi)];for(let e of r)for(let n of(e[1]||``).split(`
-`)){let e=n.trim();e&&!e.startsWith(`#`)&&!t.includes(e)&&t.push(e)}return t.filter(Boolean)}function t(e){let t=e;return t=t.split(`
-`).filter(e=>!/^\s*HOST_CMD:\s*/i.test(e)).join(`
-`),t=t.replace(/\s*HOST_CMD:\s*.+$/gim,``),t=t.replace(/```(?:host|bash|sh)\s*\n[\s\S]*?```/gi,``),t.replace(/\n{3,}/g,`
-
-`).trim()}function n(e){let t=e.toLowerCase(),n=/\b(list|show|what('|’)?s|whats|what do i have|contents?|files?|inside|in my)\b/.test(t)||/\b(check|look at|open)\b/.test(t);return!n&&!/\b(download|downloads|desktop|documents|home|folder|directory)\b/.test(t)?[]:/\bdownloads?\b/.test(t)?['ls -la "${HOME}/Downloads" 2>/dev/null || ls -la ~/Downloads 2>/dev/null || ls -la "$HOME/Descargas" 2>/dev/null || echo "Downloads folder not found"']:/\bdocuments?\b/.test(t)?['ls -la "${HOME}/Documents" 2>/dev/null || ls -la ~/Documents 2>/dev/null || echo "Documents folder not found"']:/\bdesktop\b/.test(t)?['ls -la "${HOME}/Desktop" 2>/dev/null || ls -la ~/Desktop 2>/dev/null || echo "Desktop folder not found"']:/\bhome\b/.test(t)&&n?[`ls -la "$HOME" | head -80`]:[]}export{e as extractHostCommands,n as inferHostCommandsFromUser,t as stripHostCommands};

@@ -133,6 +133,19 @@ var ArrowRight = createLucideIcon("arrow-right", [["path", {
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var ArrowUp = createLucideIcon("arrow-up", [["path", {
+	d: "m5 12 7-7 7 7",
+	key: "hav0vg"
+}], ["path", {
+	d: "M12 19V5",
+	key: "x0mq9r"
+}]]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var Brain = createLucideIcon("brain", [
 	["path", {
 		d: "M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z",
@@ -585,6 +598,67 @@ var MessageSquare = createLucideIcon("message-square", [["path", {
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var MicOff = createLucideIcon("mic-off", [
+	["line", {
+		x1: "2",
+		x2: "22",
+		y1: "2",
+		y2: "22",
+		key: "a6p6uj"
+	}],
+	["path", {
+		d: "M18.89 13.23A7.12 7.12 0 0 0 19 12v-2",
+		key: "80xlxr"
+	}],
+	["path", {
+		d: "M5 10v2a7 7 0 0 0 12 5",
+		key: "p2k8kg"
+	}],
+	["path", {
+		d: "M15 9.34V5a3 3 0 0 0-5.68-1.33",
+		key: "1gzdoj"
+	}],
+	["path", {
+		d: "M9 9v3a3 3 0 0 0 5.12 2.12",
+		key: "r2i35w"
+	}],
+	["line", {
+		x1: "12",
+		x2: "12",
+		y1: "19",
+		y2: "22",
+		key: "x3vr5v"
+	}]
+]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
+var Mic = createLucideIcon("mic", [
+	["path", {
+		d: "M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z",
+		key: "131961"
+	}],
+	["path", {
+		d: "M19 10v2a7 7 0 0 1-14 0v-2",
+		key: "1vc78b"
+	}],
+	["line", {
+		x1: "12",
+		x2: "12",
+		y1: "19",
+		y2: "22",
+		key: "x3vr5v"
+	}]
+]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var Minus = createLucideIcon("minus", [["path", {
 	d: "M5 12h14",
 	key: "1ays0h"
@@ -649,6 +723,27 @@ var Plug = createLucideIcon("plug", [
 		key: "osxo6l"
 	}]
 ]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
+var Ratio = createLucideIcon("ratio", [["rect", {
+	width: "12",
+	height: "20",
+	x: "6",
+	y: "2",
+	rx: "2",
+	key: "1oxtiu"
+}], ["rect", {
+	width: "20",
+	height: "12",
+	x: "2",
+	y: "6",
+	rx: "2",
+	key: "9lu3g6"
+}]]);
 /**
 * @license lucide-react v0.510.0 - ISC
 *
@@ -882,6 +977,23 @@ var Users = createLucideIcon("users", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var Video = createLucideIcon("video", [["path", {
+	d: "m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5",
+	key: "ftymec"
+}], ["rect", {
+	x: "2",
+	y: "6",
+	width: "14",
+	height: "12",
+	rx: "2",
+	key: "158x01"
+}]]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var X = createLucideIcon("x", [["path", {
 	d: "M18 6 6 18",
 	key: "1bl5f8"
@@ -900,4 +1012,4 @@ var Zap = createLucideIcon("zap", [["path", {
 	key: "1xq2db"
 }]]);
 //#endregion
-export { Folder as A, Cable as B, Link2 as C, HardDrive as D, History as E, Download as F, ArrowRight as H, Compass as I, Command as L, FolderInput as M, ExternalLink as N, Hammer as O, Ellipsis as P, ChevronRight as R, LoaderCircle as S, Image as T, AppWindow as U, Brain as V, Activity as W, Pencil as _, TimerReset as a, MessageSquarePlus as b, Sparkles as c, Settings as d, Send as f, Play as g, Plus as h, Trash2 as i, FolderOpen as j, Gauge as k, ShieldCheck as l, Plug as m, X as n, Terminal as o, RefreshCw as p, Users as r, Square as s, Zap as t, ShieldAlert as u, Minus as v, Link2Off as w, Menu as x, MessageSquare as y, Check as z };
+export { History as A, Compass as B, MessageSquare as C, Link2 as D, LoaderCircle as E, FolderOpen as F, Brain as G, ChevronRight as H, FolderInput as I, AppWindow as J, ArrowUp as K, ExternalLink as L, Hammer as M, Gauge as N, Link2Off as O, Folder as P, Ellipsis as R, MicOff as S, Menu as T, Check as U, Command as V, Cable as W, Activity as Y, Plus as _, Trash2 as a, Minus as b, Square as c, ShieldAlert as d, Settings as f, Plug as g, Ratio as h, Users as i, HardDrive as j, Image as k, Sparkles as l, RefreshCw as m, X as n, TimerReset as o, Send as p, ArrowRight as q, Video as r, Terminal as s, Zap as t, ShieldCheck as u, Play as v, MessageSquarePlus as w, Mic as x, Pencil as y, Download as z };

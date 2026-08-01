@@ -65,13 +65,13 @@ function Pill({
 }
 
 export function ImagineView() {
-  const prompt = useGrokHub((s) => s.imaginePrompt);
-  const aspect = useGrokHub((s) => s.imagineAspect);
-  const mediaKind = useGrokHub((s) => s.imagineMediaKind);
-  const quality = useGrokHub((s) => s.imagineQuality);
-  const reference = useGrokHub((s) => s.imagineReference);
-  const jobs = useGrokHub((s) => s.imagineJobs);
-  const busy = useGrokHub((s) => s.imagineBusy);
+  const prompt = useGrokHub((s) => s.imaginePrompt ?? "");
+  const aspect = useGrokHub((s) => s.imagineAspect ?? "auto");
+  const mediaKind = useGrokHub((s) => s.imagineMediaKind ?? "image");
+  const quality = useGrokHub((s) => s.imagineQuality ?? "speed");
+  const reference = useGrokHub((s) => s.imagineReference ?? null);
+  const jobs = useGrokHub((s) => s.imagineJobs ?? []);
+  const busy = useGrokHub((s) => Boolean(s.imagineBusy));
   const err = useGrokHub((s) => s.imagineError);
   const grokConnected = useGrokHub((s) => s.grokConnected);
   const setImaginePrompt = useGrokHub((s) => s.setImaginePrompt);
