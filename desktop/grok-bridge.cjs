@@ -222,73 +222,183 @@ async function applyUpdate(opts = {}) {
     process.env.GH_TOKEN ||
     process.env.GROKHUB_GITHUB_TOKEN ||
     "";
-  const root = (await findInstallRoot()) || process.cwd();
+
+  async function isAppRoot(root) {
+    try {
+      await fs.stat(path.join(root, ".output", "server", "index.mjs"));
+      return true;
+    } catch {}
+    try {
+      const pkg = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
+      return pkg.name === "grokhub" || pkg.name === "GrokHub";
+    } catch {
+      return false;
+    }
+  }
+
+  let root = process.env.GROKHUB_HOME || path.join(os.homedir(), ".local/share/grokhub");
+  for (const c of [
+    process.env.GROKHUB_HOME,
+    process.cwd(),
+    "/usr/lib/grokhub",
+    path.join(os.homedir(), ".local/share/grokhub"),
+  ].filter(Boolean)) {
+    if (await isAppRoot(c)) {
+      root = c;
+      break;
+    }
+  }
+  if (!(await isAppRoot(root))) {
+    await fs.mkdir(root, { recursive: true });
+    steps.push(`Created ${root}`);
+  }
   steps.push(`Install root: ${root}`);
+
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "grokhub-up-"));
+  const tarball = path.join(tmp, "update.tar.gz");
+  const extractDir = path.join(tmp, "extract");
+
   try {
-    let hasGit = false;
-    try {
-      await fs.stat(path.join(root, ".git"));
-      hasGit = true;
-    } catch {
-      hasGit = false;
+    steps.push("Downloading GitHub archive…");
+    const headers = {
+      accept: "application/vnd.github+json",
+      "user-agent": "GrokHub-Updater",
+    };
+    if (token) headers.authorization = `Bearer ${token}`;
+    const urls = [
+      `https://api.github.com/repos/${repo}/tarball/${branch}`,
+      `https://codeload.github.com/${repo}/tar.gz/refs/heads/${branch}`,
+    ];
+    let ok = false;
+    let last = "";
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, {
+          headers: url.includes("api.github.com")
+            ? headers
+            : { "user-agent": "GrokHub-Updater", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+          redirect: "follow",
+        });
+        if (!res.ok) {
+          last = `HTTP ${res.status}`;
+          continue;
+        }
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length < 1000) {
+          last = "archive too small";
+          continue;
+        }
+        await fs.writeFile(tarball, buf);
+        ok = true;
+        steps.push(`Downloaded ${(buf.length / 1024 / 1024).toFixed(1)} MB`);
+        break;
+      } catch (e) {
+        last = e instanceof Error ? e.message : String(e);
+      }
     }
-    if (hasGit) {
-      steps.push(`git fetch + reset --hard origin/${branch}`);
-      await execAsync(`git -C "${root}" fetch origin ${branch}`, {
-        timeout: 180000,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-      });
-      await execAsync(`git -C "${root}" reset --hard origin/${branch}`, {
-        timeout: 60000,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-      });
-    } else {
-      steps.push("No .git — cloning fresh");
-      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "grokhub-up-"));
-      const cloneUrl = token
-        ? `https://x-access-token:${token}@github.com/${repo}.git`
-        : `https://github.com/${repo}.git`;
-      await execAsync(`git clone --depth 1 --branch ${branch} "${cloneUrl}" "${tmp}/src"`, {
-        timeout: 300000,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-      });
-      await execAsync(
-        `rsync -a --delete --exclude node_modules --exclude .env --exclude .env.local "${tmp}/src/" "${root}/"`,
-        { timeout: 120000 },
-      );
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-    steps.push("npm install + desktop build");
-    await execAsync("npm ci --ignore-scripts || npm install --ignore-scripts", {
-      cwd: root,
-      timeout: 600000,
+    if (!ok) throw new Error(`Download failed: ${last}`);
+
+    steps.push("Extracting…");
+    await fs.mkdir(extractDir, { recursive: true });
+    await execAsync(`tar -xzf "${tarball}" -C "${extractDir}"`, {
+      timeout: 120000,
+      maxBuffer: 20 * 1024 * 1024,
     });
-    await execAsync("GROKHUB_DESKTOP=1 npm run build", {
-      cwd: root,
-      timeout: 600000,
-      env: { ...process.env, GROKHUB_DESKTOP: "1" },
-    });
-    try {
-      await fs.access("/usr/bin", fs.constants.W_OK);
-      steps.push("Reinstalling system package");
-      await execAsync(`bash "${root}/scripts/install-arch.sh"`, { cwd: root, timeout: 120000 });
-    } catch {
-      steps.push("Skipped system reinstall (no root) — restart from this tree");
+    const entries = await fs.readdir(extractDir);
+    let extracted = extractDir;
+    if (entries.length === 1) {
+      const only = path.join(extractDir, entries[0]);
+      if ((await fs.stat(only)).isDirectory()) extracted = only;
     }
+
+    async function swap(srcName) {
+      const src = path.join(extracted, srcName);
+      const dest = path.join(root, srcName);
+      try {
+        await fs.stat(src);
+      } catch {
+        steps.push(`Skip ${srcName}`);
+        return;
+      }
+      const bak = `${dest}.bak-${Date.now()}`;
+      let had = false;
+      try {
+        await fs.stat(dest);
+        had = true;
+        await fs.rename(dest, bak);
+      } catch {}
+      try {
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await execAsync(`cp -a "${src}" "${dest}"`, { timeout: 120000 });
+        if (had) await fs.rm(bak, { recursive: true, force: true }).catch(() => {});
+        steps.push(`Updated ${srcName}`);
+      } catch (e) {
+        if (had) {
+          await fs.rm(dest, { recursive: true, force: true }).catch(() => {});
+          await fs.rename(bak, dest).catch(() => {});
+        }
+        throw e;
+      }
+    }
+
+    await swap(".output");
+    await swap("desktop");
+    for (const extra of ["package.json", "scripts", "packaging"]) {
+      try {
+        await fs.stat(path.join(extracted, extra));
+        await swap(extra);
+      } catch {}
+    }
+
     let newSha;
     try {
-      const { stdout } = await execAsync("git rev-parse HEAD", { cwd: root });
-      newSha = stdout.trim().slice(0, 12);
-      await fs.writeFile(path.join(root, "VERSION"), stdout.trim() + "\n");
-    } catch {
-      /* ignore */
+      const head = await checkForUpdate({ repo, branch, token });
+      newSha = head.remoteSha || undefined;
+    } catch {}
+    if (!newSha) {
+      const m = path.basename(extracted).match(/-([0-9a-f]{7,40})$/i);
+      if (m) newSha = m[1].slice(0, 12);
     }
-    steps.push("Done — restart GrokHub");
+    if (!newSha) {
+      try {
+        const v = (await fs.readFile(path.join(extracted, "VERSION"), "utf8")).trim();
+        if (v) newSha = v.slice(0, 40);
+      } catch {}
+    }
+    if (newSha) {
+      await fs.writeFile(path.join(root, "VERSION"), newSha + "\n");
+      steps.push(`VERSION → ${newSha}`);
+    }
+
+
+    try {
+      await fs.stat(path.join(root, ".output", "server", "index.mjs"));
+      steps.push("Verified .output/server/index.mjs");
+    } catch {
+      throw new Error("Update missing .output/server/index.mjs");
+    }
+
+    try {
+      if (typeof process.getuid === "function" && process.getuid() === 0) {
+        const script = path.join(root, "scripts", "install-arch.sh");
+        await fs.stat(script);
+        steps.push("Running install-arch.sh");
+        await execAsync(`bash "${script}"`, { cwd: root, timeout: 180000 });
+      } else {
+        steps.push("No root — restart GrokHub to load new build");
+      }
+    } catch {
+      steps.push("System reinstall skipped");
+    }
+
+    steps.push("Done — fully quit and relaunch GrokHub");
     return { ok: true, detail: `Updated to ${newSha || "latest"}`, steps, newSha };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     steps.push(`Failed: ${msg}`);
-    return { ok: false, detail: msg, steps };
+    return { ok: false, detail: msg.slice(0, 2000), steps };
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
   }
 }
 

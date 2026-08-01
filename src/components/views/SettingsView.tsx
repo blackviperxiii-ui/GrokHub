@@ -154,12 +154,10 @@ export function SettingsView() {
     setUpdateLog("Installing update from GitHub…");
     try {
       setGithubToken(ghDraft.trim());
-      const r = await applyUpdate(ghDraft.trim() || undefined);
-      setUpdateLog([r.detail, "", ...(r.steps || [])].join("\n"));
-      if (r.ok) {
-        const s = await checkUpdate(ghDraft.trim() || undefined);
-        setUpdate(s);
-      }
+      const r = await applyUpdate(ghDraft.trim() || undefined, true);
+      setUpdateLog([r.ok ? "OK" : "FAILED", r.detail, "", ...(r.steps || [])].join("\n"));
+      const s = await checkUpdate(ghDraft.trim() || undefined);
+      setUpdate(s);
     } catch (e) {
       setUpdateLog(e instanceof Error ? e.message : "update failed");
     } finally {
@@ -406,11 +404,12 @@ export function SettingsView() {
             <Button variant="secondary" disabled={updateBusy} onClick={() => void onCheckUpdate()}>
               Check for updates
             </Button>
-            <Button
-              disabled={updateBusy || (update ? !update.updateAvailable : false)}
-              onClick={() => void onInstallUpdate()}
-            >
-              {updateBusy ? "Working…" : "Install latest"}
+            <Button disabled={updateBusy} onClick={() => void onInstallUpdate()}>
+              {updateBusy
+                ? "Installing…"
+                : update?.updateAvailable
+                  ? "Install latest"
+                  : "Reinstall / repair"}
             </Button>
           </div>
           {updateLog && (

@@ -36,7 +36,7 @@ export type DesktopGrokBridge = {
     tokens: XaiOAuthTokens;
   }>;
   checkUpdate?: (opts?: { token?: string }) => Promise<UpdateStatus>;
-  applyUpdate?: (opts?: { token?: string }) => Promise<UpdateResult>;
+  applyUpdate?: (opts?: { token?: string; force?: boolean }) => Promise<UpdateResult>;
 };
 
 export type DesktopBridge = {

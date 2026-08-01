@@ -5,7 +5,7 @@ import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
 import { A as Command, C as HardDrive, D as FolderOpen, E as Folder, F as ArrowRight, I as AppWindow, L as Activity, M as Check, N as Cable, O as ExternalLink, P as Brain, S as History, T as Gauge, _ as MessageSquarePlus, a as TimerReset, b as Link2Off, c as Sparkles, d as Send, f as RefreshCw, g as MessageSquare, h as Minus, i as Trash2, j as ChevronRight, k as Download, l as ShieldAlert, m as Play, n as X, o as Terminal, p as Plus, r as Users, s as Square, t as Zap, u as Settings, v as Menu, w as Hammer, x as Image, y as LoaderCircle } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-BCszUoql.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-Df8204b3.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function rpc(path, action, body = {}) {
@@ -54,10 +54,16 @@ async function checkUpdate(token) {
 	if (desktop?.checkUpdate) return desktop.checkUpdate({ token });
 	return rpc("/api/update", "check", { token: token || "" });
 }
-async function applyUpdate(token) {
+async function applyUpdate(token, force = true) {
 	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
-	if (desktop?.applyUpdate) return desktop.applyUpdate({ token });
-	return rpc("/api/update", "apply", { token: token || "" });
+	if (desktop?.applyUpdate) return desktop.applyUpdate({
+		token,
+		force
+	});
+	return rpc("/api/update", "apply", {
+		token: token || "",
+		force
+	});
 }
 var GROK_MODES = [
 	{
@@ -744,7 +750,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-BhOSqU44.mjs");
+		const { oauthStart } = await import("./grok-client-Q1UHqW3b.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -773,7 +779,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-BhOSqU44.mjs");
+		const { oauthPoll } = await import("./grok-client-Q1UHqW3b.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -851,7 +857,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-BhOSqU44.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-Q1UHqW3b.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1265,7 +1271,7 @@ var useGrokHub = create()(persist((set, get) => ({
 				await wait(280);
 				answer = replyFor(trimmed, get(), routed);
 			} else {
-				const { grokChat } = await import("./grok-client-BhOSqU44.mjs");
+				const { grokChat } = await import("./grok-client-Q1UHqW3b.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").slice(-16).map((c) => ({
 					role: c.role,
 					content: c.content
@@ -3393,16 +3399,15 @@ function SettingsView() {
 		setUpdateLog("Installing update from GitHub…");
 		try {
 			setGithubToken(ghDraft.trim());
-			const r = await applyUpdate(ghDraft.trim() || void 0);
+			const r = await applyUpdate(ghDraft.trim() || void 0, true);
 			setUpdateLog([
+				r.ok ? "OK" : "FAILED",
 				r.detail,
 				"",
 				...r.steps || []
 			].join("\n"));
-			if (r.ok) {
-				const s = await checkUpdate(ghDraft.trim() || void 0);
-				setUpdate(s);
-			}
+			const s = await checkUpdate(ghDraft.trim() || void 0);
+			setUpdate(s);
 		} catch (e) {
 			setUpdateLog(e instanceof Error ? e.message : "update failed");
 		} finally {
@@ -3640,9 +3645,9 @@ function SettingsView() {
 							onClick: () => void onCheckUpdate(),
 							children: "Check for updates"
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-							disabled: updateBusy || (update ? !update.updateAvailable : false),
+							disabled: updateBusy,
 							onClick: () => void onInstallUpdate(),
-							children: updateBusy ? "Working…" : "Install latest"
+							children: updateBusy ? "Installing…" : update?.updateAvailable ? "Install latest" : "Reinstall / repair"
 						})]
 					}),
 					updateLog && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {

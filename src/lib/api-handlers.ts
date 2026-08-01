@@ -125,6 +125,7 @@ export async function dispatchApi(
         repo: body.repo ? String(body.repo) : undefined,
         branch: body.branch ? String(body.branch) : undefined,
         token: body.token ? String(body.token) : undefined,
+        force: body.force === true || body.force === "1" || body.force === 1,
       });
     }
     throw new Error(`Unknown update action: ${action}`);

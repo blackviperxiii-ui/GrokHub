@@ -84,10 +84,10 @@ export async function checkUpdate(token?: string) {
   return rpc<UpdateStatus>("/api/update", "check", { token: token || "" });
 }
 
-export async function applyUpdate(token?: string) {
+export async function applyUpdate(token?: string, force = true) {
   const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
   if (desktop?.applyUpdate) {
-    return desktop.applyUpdate({ token });
+    return desktop.applyUpdate({ token, force });
   }
-  return rpc<UpdateResult>("/api/update", "apply", { token: token || "" });
+  return rpc<UpdateResult>("/api/update", "apply", { token: token || "", force });
 }
