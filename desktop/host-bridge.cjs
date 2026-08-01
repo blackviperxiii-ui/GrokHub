@@ -11,6 +11,7 @@ const { shell } = require("electron");
 
 const execAsync = promisify(exec);
 const MAX_STDOUT = 200_000;
+const MAX_TIMEOUT = 120_000;
 
 function clip(s, max = MAX_STDOUT) {
   if (!s) return "";
@@ -18,13 +19,53 @@ function clip(s, max = MAX_STDOUT) {
   return `${s.slice(0, max)}\n… [truncated ${s.length - max} chars]`;
 }
 
+function defaultCwd() {
+  try {
+    return os.homedir() || process.cwd();
+  } catch {
+    return process.cwd();
+  }
+}
+
+function hostEnv() {
+  return {
+    ...process.env,
+    GROKHUB_HOST: "1",
+    PATH:
+      process.env.PATH ||
+      "/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    HOME: process.env.HOME || os.homedir(),
+    USER: process.env.USER || (() => {
+      try {
+        return os.userInfo().username;
+      } catch {
+        return "user";
+      }
+    })(),
+    SHELL: process.env.SHELL || "/bin/bash",
+    LANG: process.env.LANG || "en_US.UTF-8",
+    DISPLAY: process.env.DISPLAY || ":0",
+    WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY || "",
+    XDG_RUNTIME_DIR:
+      process.env.XDG_RUNTIME_DIR ||
+      `/run/user/${typeof process.getuid === "function" ? process.getuid() : 1000}`,
+    DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS || "",
+  };
+}
+
 async function info() {
   return {
     platform: process.platform,
     arch: process.arch,
     homedir: os.homedir(),
-    cwd: process.cwd(),
-    user: os.userInfo().username,
+    cwd: defaultCwd(),
+    user: (() => {
+      try {
+        return os.userInfo().username;
+      } catch {
+        return process.env.USER || "user";
+      }
+    })(),
     shell: process.env.SHELL || "/bin/bash",
     hostname: os.hostname(),
     bridge: "electron",
@@ -36,7 +77,7 @@ async function listDir(dirPath) {
   const target = path.resolve(dirPath || os.homedir());
   const names = await fs.readdir(target);
   const entries = [];
-  for (const name of names.slice(0, 500)) {
+  for (const name of names.slice(0, 800)) {
     const full = path.join(target, name);
     try {
       const st = await fs.stat(full);
@@ -84,20 +125,27 @@ async function runExec(command, cwd, timeoutMs = 30_000) {
       code: 1,
       stdout: "",
       stderr: "empty command",
-      cwd: cwd || process.cwd(),
+      cwd: cwd || defaultCwd(),
       command: "",
       ms: 0,
     };
   }
-  const workdir = cwd ? path.resolve(cwd) : process.cwd();
+  const workdir = cwd ? path.resolve(cwd) : defaultCwd();
+  try {
+    await fs.mkdir(workdir, { recursive: true });
+  } catch {
+    /* ignore */
+  }
   const started = Date.now();
+  const timeout = Math.min(Math.max(timeoutMs || 30_000, 1_000), MAX_TIMEOUT);
+  const shellBin = process.env.SHELL || "/bin/bash";
   try {
     const { stdout, stderr } = await execAsync(cmd, {
       cwd: workdir,
-      timeout: timeoutMs,
+      timeout,
       maxBuffer: MAX_STDOUT,
-      shell: process.env.SHELL || "/bin/bash",
-      env: process.env,
+      shell: shellBin,
+      env: hostEnv(),
     });
     return {
       ok: true,
@@ -111,9 +159,14 @@ async function runExec(command, cwd, timeoutMs = 30_000) {
   } catch (err) {
     return {
       ok: false,
-      code: typeof err.code === "number" ? err.code : 1,
+      code: typeof err.code === "number" ? err.code : err.killed ? 124 : 1,
       stdout: clip(String(err.stdout || "")),
-      stderr: clip(String(err.stderr || err.message || "exec failed")),
+      stderr: clip(
+        String(
+          err.stderr ||
+            (err.killed ? `command timed out after ${timeout}ms` : err.message || "exec failed"),
+        ),
+      ),
       cwd: workdir,
       command: cmd,
       ms: Date.now() - started,
@@ -135,7 +188,7 @@ async function listApps() {
     } catch {
       continue;
     }
-    for (const file of files.slice(0, 400)) {
+    for (const file of files.slice(0, 500)) {
       const desktopFile = path.join(dir, file);
       try {
         const raw = await fs.readFile(desktopFile, "utf8");
@@ -147,7 +200,7 @@ async function listApps() {
         const execCmd = execLine.replace(/\s+%[a-zA-Z]/g, "").trim();
         if (!execCmd) continue;
         apps.push({
-          id: file,
+          id: `${dir}:${file}`,
           name,
           exec: execCmd,
           desktopFile,
@@ -167,7 +220,7 @@ async function listApps() {
       seen.add(k);
       return true;
     })
-    .slice(0, 400);
+    .slice(0, 500);
 }
 
 async function openApp(opts = {}) {
@@ -175,20 +228,25 @@ async function openApp(opts = {}) {
     if (opts.path) {
       const err = await shell.openPath(opts.path);
       if (err) {
-        spawn("xdg-open", [opts.path], { detached: true, stdio: "ignore" }).unref();
+        spawn("xdg-open", [opts.path], {
+          detached: true,
+          stdio: "ignore",
+          env: hostEnv(),
+        }).unref();
       }
       return { ok: true, detail: `opened path ${opts.path}` };
     }
     if (opts.desktopFile) {
-      spawn("gtk-launch", [path.basename(opts.desktopFile, ".desktop")], {
+      const base = path.basename(opts.desktopFile, ".desktop");
+      spawn("gtk-launch", [base], {
         detached: true,
         stdio: "ignore",
-        env: process.env,
+        env: hostEnv(),
       }).unref();
       spawn("xdg-open", [opts.desktopFile], {
         detached: true,
         stdio: "ignore",
-        env: process.env,
+        env: hostEnv(),
       }).unref();
       return { ok: true, detail: `launched ${opts.desktopFile}` };
     }
@@ -197,7 +255,7 @@ async function openApp(opts = {}) {
         shell: true,
         detached: true,
         stdio: "ignore",
-        env: process.env,
+        env: hostEnv(),
       }).unref();
       return { ok: true, detail: `exec ${opts.exec}` };
     }

@@ -1,9 +1,9 @@
 /**
- * Shared host handlers used by Vite middleware (preview) and Electron main.
- * Always runs in a Node process — never import from React client components.
+ * Shared host handlers used by Vite middleware (preview), production Nitro,
+ * and Electron main (via host-bridge). Always runs in Node — never import from
+ * React client components.
  *
- * Intentionally unsandboxed: full shell, filesystem, and app launch as the
- * process user (root in this preview container; your user under Electron on Arch).
+ * Unsandboxed: full shell, filesystem, and app launch as the process user.
  */
 import { exec as execCb, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -22,12 +22,40 @@ function clip(s: string, max = MAX_STDOUT): string {
   return `${s.slice(0, max)}\n… [truncated ${s.length - max} chars]`;
 }
 
+/** Prefer home dir as the user-facing workspace, not the app install path. */
+function defaultCwd(): string {
+  try {
+    return os.homedir() || process.cwd();
+  } catch {
+    return process.cwd();
+  }
+}
+
+function hostEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GROKHUB_HOST: "1",
+    // Ensure typical desktop PATH even if launched from a minimal .desktop env
+    PATH:
+      process.env.PATH ||
+      "/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    HOME: process.env.HOME || os.homedir(),
+    USER: process.env.USER || os.userInfo().username,
+    SHELL: process.env.SHELL || "/bin/bash",
+    LANG: process.env.LANG || "en_US.UTF-8",
+    DISPLAY: process.env.DISPLAY || ":0",
+    WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY || "",
+    XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 1000}`,
+    DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS || "",
+  };
+}
+
 export async function handleHostInfo(): Promise<HostInfo> {
   return {
     platform: process.platform,
     arch: process.arch,
     homedir: os.homedir(),
-    cwd: process.cwd(),
+    cwd: defaultCwd(),
     user: os.userInfo().username,
     shell: process.env.SHELL || "/bin/bash",
     hostname: os.hostname(),
@@ -100,21 +128,29 @@ export async function handleExec(
       code: 1,
       stdout: "",
       stderr: "empty command",
-      cwd: cwd || process.cwd(),
+      cwd: cwd || defaultCwd(),
       command: "",
       ms: 0,
     };
   }
-  const workdir = cwd ? path.resolve(cwd) : process.cwd();
+  const workdir = cwd ? path.resolve(cwd) : defaultCwd();
+  // Ensure workdir exists
+  try {
+    await fs.mkdir(workdir, { recursive: true });
+  } catch {
+    /* ignore */
+  }
   const started = Date.now();
   const timeout = Math.min(Math.max(timeoutMs || 30_000, 1_000), MAX_TIMEOUT);
+  const shell = process.env.SHELL || "/bin/bash";
   try {
+    // Run via login-capable shell so PATH / aliases match a real user terminal
     const { stdout, stderr } = await execAsync(cmd, {
       cwd: workdir,
       timeout,
       maxBuffer: MAX_STDOUT,
-      shell: process.env.SHELL || "/bin/bash",
-      env: { ...process.env, GROKHUB_HOST: "1" },
+      shell,
+      env: hostEnv(),
     });
     return {
       ok: true,
@@ -127,21 +163,29 @@ export async function handleExec(
     };
   } catch (err: unknown) {
     const e = err as {
-      code?: number;
-      stdout?: string;
-      stderr?: string;
-      message?: string;
+      code?: number | string;
       killed?: boolean;
+      signal?: string;
+      stdout?: string | Buffer;
+      stderr?: string | Buffer;
+      message?: string;
     };
+    const code =
+      typeof e.code === "number"
+        ? e.code
+        : e.killed
+          ? 124
+          : typeof e.code === "string"
+            ? 1
+            : 1;
     return {
       ok: false,
-      code: typeof e.code === "number" ? e.code : 1,
+      code,
       stdout: clip(String(e.stdout || "")),
       stderr: clip(
         String(
           e.stderr ||
-            e.message ||
-            (e.killed ? "command timed out" : "exec failed"),
+            (e.killed ? `command timed out after ${timeout}ms` : e.message || "exec failed"),
         ),
       ),
       cwd: workdir,
@@ -151,65 +195,11 @@ export async function handleExec(
   }
 }
 
-async function ensureDemoDesktopEntries() {
-  const dir = path.join(os.homedir(), ".local/share/applications");
-  try {
-    await fs.mkdir(dir, { recursive: true });
-  } catch {
-    return;
-  }
-  const entries: Record<string, string> = {
-    "grokhub-terminal.desktop": `[Desktop Entry]
-Type=Application
-Name=Host Terminal (bash)
-Exec=bash -lc 'echo GrokHub host shell; exec bash'
-Terminal=true
-Categories=System;TerminalEmulator;
-`,
-    "grokhub-files.desktop": `[Desktop Entry]
-Type=Application
-Name=Home Files
-Exec=xdg-open ${os.homedir()}
-Terminal=false
-Categories=System;FileManager;
-`,
-    "grokhub-workspace.desktop": `[Desktop Entry]
-Type=Application
-Name=GrokHub Workspace
-Exec=xdg-open ${os.homedir()}
-Terminal=false
-Categories=Development;
-`,
-  };
-  // Also pick up packaging desktop file if present
-  try {
-    const packaging = path.resolve(process.cwd(), "packaging/grokhub.desktop");
-    const raw = await fs.readFile(packaging, "utf8");
-    entries["grokhub.desktop"] = raw;
-  } catch {
-    /* optional */
-  }
-  for (const [file, body] of Object.entries(entries)) {
-    const full = path.join(dir, file);
-    try {
-      await fs.access(full);
-    } catch {
-      try {
-        await fs.writeFile(full, body, "utf8");
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-}
-
 export async function handleListApps(): Promise<HostApp[]> {
-  await ensureDemoDesktopEntries();
   const dirs = [
     "/usr/share/applications",
     "/usr/local/share/applications",
     path.join(os.homedir(), ".local/share/applications"),
-    path.resolve(process.cwd(), "packaging"),
   ];
   const apps: HostApp[] = [];
   for (const dir of dirs) {
@@ -219,18 +209,27 @@ export async function handleListApps(): Promise<HostApp[]> {
     } catch {
       continue;
     }
-    for (const file of files.slice(0, 400)) {
+    for (const file of files.slice(0, 500)) {
       const desktopFile = path.join(dir, file);
       try {
         const raw = await fs.readFile(desktopFile, "utf8");
         if (/^NoDisplay\s*=\s*true/im.test(raw)) continue;
         if (/^Hidden\s*=\s*true/im.test(raw)) continue;
+        if (/^Type\s*=\s*(?!Application)/im.test(raw) && /^Type\s*=/m.test(raw)) {
+          if (!/^Type\s*=\s*Application/im.test(raw)) continue;
+        }
         const name = raw.match(/^Name\s*=\s*(.+)$/m)?.[1]?.trim() || file;
         const execLine = raw.match(/^Exec\s*=\s*(.+)$/m)?.[1]?.trim() || "";
         const terminal = /^Terminal\s*=\s*true/im.test(raw);
         const execCmd = execLine.replace(/\s+%[a-zA-Z]/g, "").trim();
         if (!execCmd) continue;
-        apps.push({ id: `${dir}:${file}`, name, exec: execCmd, desktopFile, terminal });
+        apps.push({
+          id: `${dir}:${file}`,
+          name,
+          exec: execCmd,
+          desktopFile,
+          terminal,
+        });
       } catch {
         /* skip */
       }
@@ -245,7 +244,7 @@ export async function handleListApps(): Promise<HostApp[]> {
       seen.add(k);
       return true;
     })
-    .slice(0, 300);
+    .slice(0, 500);
 }
 
 export async function handleOpenApp(opts: {
@@ -258,29 +257,31 @@ export async function handleOpenApp(opts: {
       spawn("xdg-open", [opts.path], {
         detached: true,
         stdio: "ignore",
-        env: process.env,
+        env: hostEnv(),
       }).unref();
       return { ok: true, detail: `opened path ${opts.path}` };
     }
     if (opts.desktopFile) {
-      spawn("gtk-launch", [path.basename(opts.desktopFile, ".desktop")], {
+      const base = path.basename(opts.desktopFile, ".desktop");
+      // Prefer gtk-launch, fall back to xdg-open / gio
+      spawn("gtk-launch", [base], {
         detached: true,
         stdio: "ignore",
-        env: process.env,
+        env: hostEnv(),
       }).unref();
       spawn("xdg-open", [opts.desktopFile], {
         detached: true,
         stdio: "ignore",
-        env: process.env,
+        env: hostEnv(),
       }).unref();
       return { ok: true, detail: `launched ${opts.desktopFile}` };
     }
     if (opts.exec) {
       spawn(opts.exec, {
+        shell: true,
         detached: true,
         stdio: "ignore",
-        shell: true,
-        env: process.env,
+        env: hostEnv(),
       }).unref();
       return { ok: true, detail: `exec ${opts.exec}` };
     }
@@ -292,7 +293,7 @@ export async function handleOpenApp(opts: {
 
 export async function dispatchHost(
   action: string,
-  body: Record<string, unknown> = {},
+  body: Record<string, unknown>,
 ): Promise<unknown> {
   switch (action) {
     case "info":
@@ -300,14 +301,17 @@ export async function dispatchHost(
     case "listDir":
       return handleListDir(body.path as string | undefined);
     case "readFile":
-      return handleReadFile(String(body.path || ""), body.maxBytes as number | undefined);
+      return handleReadFile(
+        String(body.path || ""),
+        typeof body.maxBytes === "number" ? body.maxBytes : undefined,
+      );
     case "writeFile":
       return handleWriteFile(String(body.path || ""), String(body.content ?? ""));
     case "exec":
       return handleExec(
         String(body.command || ""),
         body.cwd as string | undefined,
-        body.timeoutMs as number | undefined,
+        typeof body.timeoutMs === "number" ? body.timeoutMs : undefined,
       );
     case "listApps":
       return handleListApps();

@@ -1,11 +1,12 @@
 import { o as __toESM } from "../_runtime.mjs";
+import { a as modelIdForMode, i as modeBadge, n as GROK_MODES, o as resolveMode, r as getMode, s as stripAssistantChrome, t as APP_VERSION } from "./version-BvLmLIXC.mjs";
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
 import { N as require_jsx_runtime, P as require_react, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
 import { A as Command, C as HardDrive, D as FolderOpen, E as Folder, F as ArrowRight, I as AppWindow, L as Activity, M as Check, N as Cable, O as ExternalLink, P as Brain, S as History, T as Gauge, _ as MessageSquarePlus, a as TimerReset, b as Link2Off, c as Sparkles, d as Send, f as RefreshCw, g as MessageSquare, h as Minus, i as Trash2, j as ChevronRight, k as Download, l as ShieldAlert, m as Play, n as X, o as Terminal, p as Plus, r as Users, s as Square, t as Zap, u as Settings, v as Menu, w as Hammer, x as Image, y as LoaderCircle } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-ByKhrx4K.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-BfNH3f_H.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function rpc(path, action, body = {}) {
@@ -66,85 +67,6 @@ async function applyUpdate(token, force = true) {
 		force,
 		restart: false
 	});
-}
-/**
-* Mode catalog — labels match Grok web; modelId is what we send to api.x.ai.
-* SuperGrok / OAuth typically exposes grok-4.3 + fast / code variants.
-*/
-var GROK_MODES = [
-	{
-		id: "auto",
-		label: "Auto",
-		subtitle: "Chooses Fast or Expert",
-		model: "Auto",
-		modelId: "auto",
-		icon: "auto",
-		latencyMs: [400, 900],
-		depth: "standard"
-	},
-	{
-		id: "fast",
-		label: "Fast",
-		subtitle: "Quick responses · grok-4-1-fast",
-		model: "grok-4-1-fast",
-		modelId: "grok-4-1-fast-non-reasoning",
-		icon: "fast",
-		latencyMs: [250, 500],
-		depth: "light"
-	},
-	{
-		id: "expert",
-		label: "Expert",
-		subtitle: "Thinks hard · grok-4.3",
-		model: "grok-4.3",
-		modelId: "grok-4.3",
-		icon: "expert",
-		latencyMs: [900, 1600],
-		depth: "deep"
-	},
-	{
-		id: "heavy",
-		label: "Heavy",
-		subtitle: "Team of Experts · grok-4.3",
-		model: "grok-4.3",
-		modelId: "grok-4.3",
-		icon: "heavy",
-		latencyMs: [1400, 2400],
-		depth: "team"
-	},
-	{
-		id: "build",
-		label: "Build",
-		subtitle: "Build apps and sites · grok-code-fast-1",
-		model: "grok-code-fast-1",
-		modelId: "grok-code-fast-1",
-		icon: "build",
-		latencyMs: [700, 1400],
-		depth: "code"
-	}
-];
-function getMode(id) {
-	return GROK_MODES.find((m) => m.id === id) ?? GROK_MODES[0];
-}
-/** Auto routes simple prompts to Fast, deeper ones to Expert. */
-function resolveMode(id, prompt) {
-	if (id !== "auto") return id;
-	const p = prompt.toLowerCase();
-	return p.includes("architect") || p.includes("debug") || p.includes("why") || p.includes("compare") || p.includes("research") || p.includes("plan") || p.includes("implement") || p.includes("refactor") || p.includes("design") || p.length > 160 || p.split(/\s+/).length > 28 ? "expert" : "fast";
-}
-/** Resolve the concrete xAI model id for a mode + prompt. */
-function modelIdForMode(id, prompt = "") {
-	const routed = resolveMode(id, prompt);
-	if (routed === "auto") return getMode("fast").modelId;
-	return getMode(routed).modelId;
-}
-function modeBadge(id) {
-	const m = getMode(id);
-	return m.id === "auto" ? m.label : `${m.label} · ${m.model}`;
-}
-/** Strip UI chrome we used to inject into assistant text (keep history clean for the model). */
-function stripAssistantChrome(content) {
-	return content.replace(/^\[(?:Auto → )?[^\]]+\]\s*\n*/gm, "").replace(/^— Offline fallback —\s*\n*/gm, "").replace(/^Could not reach Grok\.\s*\n*/gm, "").replace(/^Grok connection error:.*$/gm, "").replace(/^Your OAuth session is saved\..*$/gm, "").replace(/^Fix: Settings →.*$/gm, "").replace(/^Not connected to Grok\..*$/gm, "").trim();
 }
 function hash(s) {
 	let h = 2166136261;
@@ -755,7 +677,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-DiPw0wM9.mjs");
+		const { oauthStart } = await import("./grok-client-CLmfNgC4.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -784,7 +706,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-DiPw0wM9.mjs");
+		const { oauthPoll } = await import("./grok-client-CLmfNgC4.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -862,7 +784,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-DiPw0wM9.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-CLmfNgC4.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1276,7 +1198,7 @@ var useGrokHub = create()(persist((set, get) => ({
 				await wait(280);
 				answer = replyFor(trimmed, get(), routed);
 			} else {
-				const { grokChat } = await import("./grok-client-DiPw0wM9.mjs");
+				const { grokChat } = await import("./grok-client-CLmfNgC4.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
@@ -1519,9 +1441,6 @@ var useGrokHub = create()(persist((set, get) => ({
 function wait(ms) {
 	return new Promise((r) => setTimeout(r, ms));
 }
-/** Single source of truth for display / packaging version. */
-var APP_VERSION = "0.2.1";
-`${APP_VERSION}`;
 /** Avatar with automatic initials fallback when URL is missing or fails to load. */
 function ProfileAvatar({ src, name, email, className, size = "md" }) {
 	const [failed, setFailed] = (0, import_react.useState)(false);
@@ -2241,7 +2160,7 @@ function ChatView() {
 				return;
 			}
 			const cmd = command.replace(/^\$\s*/, "").replace(/^\/sh\s+/, "").trim();
-			const { hostExec } = await import("./host-client-BQWTZ47b.mjs");
+			const { hostExec } = await import("./host-client-WUUmAwRI.mjs");
 			const r = await hostExec(cmd);
 			const body = [
 				`[Desktop host · ${r.ok ? "ok" : "fail"} · exit ${r.code ?? "?"} · ${bill.cost}u]`,
@@ -2727,7 +2646,7 @@ function DesktopHostView() {
 		let cancelled = false;
 		(async () => {
 			try {
-				const mod = await import("./host-client-BQWTZ47b.mjs");
+				const mod = await import("./host-client-WUUmAwRI.mjs");
 				if (cancelled) return;
 				setApi(mod);
 				setIsShell(mod.isDesktopShell());
@@ -2735,18 +2654,21 @@ function DesktopHostView() {
 				const i = await mod.hostInfo();
 				if (cancelled) return;
 				setInfo(i);
-				setCwd(i.cwd);
+				setCwd(i.homedir || i.cwd);
 				setDirPath(i.homedir || i.cwd);
-				if (!probed.current) {
+				if (i.bridge === "none" || !i.unsandboxed) setError("Desktop host bridge is offline. Fully quit and relaunch GrokHub from the Arch package (Electron shell). Browser-only preview has limited host access.");
+				if (!probed.current && i.bridge !== "none") {
 					probed.current = true;
 					try {
-						recordUsage("host");
-						const r = await mod.hostExec("uname -a && whoami && pwd && echo --- && ls -la | head -20", i.cwd);
+						const r = await mod.hostExec("uname -a && whoami && pwd && echo --- && ls -la | head -20", i.homedir || i.cwd);
 						if (!cancelled) {
 							setResult(r);
 							setHistory(["uname -a && whoami && pwd && echo --- && ls -la | head -20"]);
+							if (!r.ok) setError(r.stderr || `probe exit ${r.code}`);
 						}
-					} catch {}
+					} catch (e) {
+						if (!cancelled) setError(e instanceof Error ? e.message : "host probe failed");
+					}
 				}
 			} catch (e) {
 				if (!cancelled) setError(e instanceof Error ? e.message : "host bridge failed");

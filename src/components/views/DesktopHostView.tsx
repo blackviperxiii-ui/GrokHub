@@ -64,22 +64,31 @@ export function DesktopHostView() {
         const i = await mod.hostInfo();
         if (cancelled) return;
         setInfo(i);
-        setCwd(i.cwd);
+        setCwd(i.homedir || i.cwd);
         setDirPath(i.homedir || i.cwd);
-        if (!probed.current) {
+        if (i.bridge === "none" || !i.unsandboxed) {
+          setError(
+            "Desktop host bridge is offline. Fully quit and relaunch GrokHub from the Arch package (Electron shell). Browser-only preview has limited host access.",
+          );
+        }
+        if (!probed.current && i.bridge !== "none") {
           probed.current = true;
           try {
-            recordUsage("host");
             const r = await mod.hostExec(
               "uname -a && whoami && pwd && echo --- && ls -la | head -20",
-              i.cwd,
+              i.homedir || i.cwd,
             );
             if (!cancelled) {
               setResult(r);
               setHistory(["uname -a && whoami && pwd && echo --- && ls -la | head -20"]);
+              if (!r.ok) {
+                setError(r.stderr || `probe exit ${r.code}`);
+              }
             }
-          } catch {
-            /* ignore probe */
+          } catch (e) {
+            if (!cancelled) {
+              setError(e instanceof Error ? e.message : "host probe failed");
+            }
           }
         }
       } catch (e) {

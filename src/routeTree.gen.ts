@@ -11,6 +11,9 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as ApiGrokRouteImport } from './routes/api/grok'
+import { Route as ApiHostRouteImport } from './routes/api/host'
+import { Route as ApiUpdateRouteImport } from './routes/api/update'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,6 +26,21 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiGrokRoute = ApiGrokRouteImport.update({
+  id: '/api/grok',
+  path: '/api/grok',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiHostRoute = ApiHostRouteImport.update({
+  id: '/api/host',
+  path: '/api/host',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiUpdateRoute = ApiUpdateRouteImport.update({
+  id: '/api/update',
+  path: '/api/update',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -32,30 +50,50 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/api/grok': typeof ApiGrokRoute
+  '/api/host': typeof ApiHostRoute
+  '/api/update': typeof ApiUpdateRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/api/grok': typeof ApiGrokRoute
+  '/api/host': typeof ApiHostRoute
+  '/api/update': typeof ApiUpdateRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/api/grok': typeof ApiGrokRoute
+  '/api/host': typeof ApiHostRoute
+  '/api/update': typeof ApiUpdateRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/api/auth/$'
+  fullPaths:
+    '/' | '/login' | '/api/grok' | '/api/host' | '/api/update' | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/api/auth/$'
-  id: '__root__' | '/' | '/login' | '/api/auth/$'
+  to: '/' | '/login' | '/api/grok' | '/api/host' | '/api/update' | '/api/auth/$'
+  id:
+    | '__root__'
+    | '/'
+    | '/login'
+    | '/api/grok'
+    | '/api/host'
+    | '/api/update'
+    | '/api/auth/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   LoginRoute: typeof LoginRoute
+  ApiGrokRoute: typeof ApiGrokRoute
+  ApiHostRoute: typeof ApiHostRoute
+  ApiUpdateRoute: typeof ApiUpdateRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
@@ -75,6 +113,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/grok': {
+      id: '/api/grok'
+      path: '/api/grok'
+      fullPath: '/api/grok'
+      preLoaderRoute: typeof ApiGrokRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/host': {
+      id: '/api/host'
+      path: '/api/host'
+      fullPath: '/api/host'
+      preLoaderRoute: typeof ApiHostRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/update': {
+      id: '/api/update'
+      path: '/api/update'
+      fullPath: '/api/update'
+      preLoaderRoute: typeof ApiUpdateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -88,6 +147,9 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LoginRoute: LoginRoute,
+  ApiGrokRoute: ApiGrokRoute,
+  ApiHostRoute: ApiHostRoute,
+  ApiUpdateRoute: ApiUpdateRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport

@@ -258,6 +258,18 @@ function createTray() {
 }
 
 function registerIpc() {
+  const wrap = (fn) => {
+    return async (...args) => {
+      try {
+        return await fn(...args);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.error("[host-ipc]", message);
+        throw e;
+      }
+    };
+  };
+
   ipcMain.handle("desktop:minimize", () => mainWindow?.minimize());
   ipcMain.handle("desktop:maximize", () => {
     if (!mainWindow) return;
@@ -270,15 +282,34 @@ function registerIpc() {
     if (mainWindow) fitToWorkArea(mainWindow);
   });
 
-  ipcMain.handle("host:info", () => host.info());
-  ipcMain.handle("host:listDir", (_e, p) => host.listDir(p));
-  ipcMain.handle("host:readFile", (_e, p, maxBytes) => host.readFile(p, maxBytes));
-  ipcMain.handle("host:writeFile", (_e, p, content) => host.writeFile(p, content));
-  ipcMain.handle("host:exec", (_e, command, cwd, timeoutMs) =>
-    host.runExec(command, cwd, timeoutMs),
+  ipcMain.handle(
+    "host:info",
+    wrap(() => host.info()),
   );
-  ipcMain.handle("host:listApps", () => host.listApps());
-  ipcMain.handle("host:openApp", (_e, opts) => host.openApp(opts || {}));
+  ipcMain.handle(
+    "host:listDir",
+    wrap((_e, p) => host.listDir(p)),
+  );
+  ipcMain.handle(
+    "host:readFile",
+    wrap((_e, p, maxBytes) => host.readFile(p, maxBytes)),
+  );
+  ipcMain.handle(
+    "host:writeFile",
+    wrap((_e, p, content) => host.writeFile(p, content)),
+  );
+  ipcMain.handle(
+    "host:exec",
+    wrap((_e, command, cwd, timeoutMs) => host.runExec(command, cwd, timeoutMs)),
+  );
+  ipcMain.handle(
+    "host:listApps",
+    wrap(() => host.listApps()),
+  );
+  ipcMain.handle(
+    "host:openApp",
+    wrap((_e, opts) => host.openApp(opts || {})),
+  );
 
   ipcMain.handle("grok:chat", (_e, payload) => grokBridge.callXaiChat(payload || {}));
   ipcMain.handle("grok:probe", async (_e, apiKey, accessToken) => {
@@ -302,8 +333,6 @@ function registerIpc() {
   ipcMain.handle("update:apply", async (_e, opts) => {
     const r = await grokBridge.applyUpdate({ ...(opts || {}), restart: true });
     if (r?.ok && r?.restarting) {
-      // Give the renderer a moment to show "Restarting…" then quit this process.
-      // scheduleAppRestart already spawned the replacement launcher.
       setTimeout(() => {
         try {
           tray?.destroy();
@@ -325,6 +354,13 @@ if (process.env.GROKHUB_WAYLAND !== "0") {
 app.commandLine.appendSwitch("no-sandbox");
 
 app.whenReady().then(() => {
+  // Prefer home as process cwd so relative shell paths match a real desktop session
+  try {
+    const home = process.env.HOME || require("node:os").homedir();
+    if (home) process.chdir(home);
+  } catch {
+    /* ignore */
+  }
   // Dock / taskbar name
   if (process.platform === "linux") {
     try {

@@ -1,33 +1,49 @@
-//#region node_modules/.nitro/vite/services/ssr/assets/host-client-BQWTZ47b.js
+//#region node_modules/.nitro/vite/services/ssr/assets/host-client-WUUmAwRI.js
 function electronHost() {
 	return typeof window !== "undefined" ? window.grokhubDesktop?.host : void 0;
 }
 async function rpc(action, body = {}) {
 	const res = await fetch("/api/host", {
 		method: "POST",
-		headers: { "content-type": "application/json" },
+		headers: {
+			"content-type": "application/json",
+			accept: "application/json"
+		},
 		body: JSON.stringify({
 			action,
 			...body
 		})
 	});
-	const data = await res.json();
+	const text = await res.text();
+	if (text.trimStart().startsWith("<!DOCTYPE") || text.trimStart().startsWith("<html") || (res.headers.get("content-type") || "").includes("text/html")) throw new Error("Host API returned HTML instead of JSON — desktop bridge is offline. Relaunch GrokHub (Electron) or update to a build that includes /api/host.");
+	let data;
+	try {
+		data = JSON.parse(text);
+	} catch {
+		throw new Error(`Host API invalid JSON (${res.status}): ${text.slice(0, 160)}`);
+	}
 	if (!res.ok) throw new Error(data.error || `host rpc ${res.status}`);
 	if (data && typeof data === "object" && "error" in data && data.error) throw new Error(String(data.error));
 	return data;
 }
 async function hostInfo() {
 	const e = electronHost();
-	if (e?.info) return {
-		...await e.info(),
-		bridge: "electron",
-		unsandboxed: true
-	};
+	if (e?.info) try {
+		return {
+			...await e.info(),
+			bridge: "electron",
+			unsandboxed: true
+		};
+	} catch (err) {
+		console.warn("[host] electron info failed, trying HTTP", err);
+	}
 	try {
 		return await rpc("info");
-	} catch {
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : "host unavailable";
+		console.error("[host]", msg);
 		return {
-			platform: "unknown",
+			platform: typeof navigator !== "undefined" ? navigator.platform : "unknown",
 			arch: "unknown",
 			homedir: "~",
 			cwd: ".",

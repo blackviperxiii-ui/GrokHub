@@ -11,10 +11,10 @@ import { a as utf8ToBytes, i as managedNonce, n as bytesToHex, r as hexToBytes, 
 import { n as string$1, t as boolean$1 } from "../_libs/zod.mjs";
 import { t as Pool } from "../_libs/pg.mjs";
 import { randomBytes } from "node:crypto";
-//#region node_modules/.nitro/vite/services/ssr/assets/router-BMVJNcE0.js
+//#region node_modules/.nitro/vite/services/ssr/assets/router-XK7yB7Vf.js
 var import_jsx_runtime = require_jsx_runtime();
 var styles_default = "/assets/styles-CbQ7LlSH.css";
-var Route$3 = createRootRoute({
+var Route$6 = createRootRoute({
 	head: () => ({
 		meta: [
 			{ charSet: "utf-8" },
@@ -44,10 +44,52 @@ function RootDocument({ children }) {
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("head", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HeadContent, {}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("body", { children: [children, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Scripts, {})] })]
 	});
 }
-var $$splitComponentImporter$1 = () => import("./routes-ByKhrx4K.mjs");
-var Route$2 = createFileRoute("/")({ component: lazyRouteComponent($$splitComponentImporter$1, "component") });
+var $$splitComponentImporter$1 = () => import("./routes-BfNH3f_H.mjs");
+var Route$5 = createFileRoute("/")({ component: lazyRouteComponent($$splitComponentImporter$1, "component") });
 var $$splitComponentImporter = () => import("./login-DJtZHKJX.mjs");
-var Route$1 = createFileRoute("/login")({ component: lazyRouteComponent($$splitComponentImporter, "component") });
+var Route$4 = createFileRoute("/login")({ component: lazyRouteComponent($$splitComponentImporter, "component") });
+/** Production Grok / xAI / OAuth RPC */
+var Route$3 = createFileRoute("/api/grok")({ server: { handlers: { POST: async ({ request }) => {
+	try {
+		const body = await request.json().catch(() => ({}));
+		const action = String(body.action || "chat");
+		const { dispatchApi } = await import("./api-handlers-gRCrBpb6.mjs");
+		const result = await dispatchApi("grok", action, body);
+		return Response.json(result);
+	} catch (e) {
+		const message = e instanceof Error ? e.message : "grok api failed";
+		return Response.json({ error: message }, { status: 500 });
+	}
+} } } });
+/**
+* Production + desktop host bridge (CLI / files / apps).
+* Dev also has Vite middleware for the same path; both call dispatchHost.
+*/
+var Route$2 = createFileRoute("/api/host")({ server: { handlers: { POST: async ({ request }) => {
+	try {
+		const body = await request.json().catch(() => ({}));
+		const action = String(body.action || "");
+		const { dispatchHost } = await import("./host-api-handlers-Caqkd0Cd.mjs");
+		const result = await dispatchHost(action, body);
+		return Response.json(result);
+	} catch (e) {
+		const message = e instanceof Error ? e.message : "host api failed";
+		return Response.json({ error: message }, { status: 500 });
+	}
+} } } });
+/** Production GitHub update RPC */
+var Route$1 = createFileRoute("/api/update")({ server: { handlers: { POST: async ({ request }) => {
+	try {
+		const body = await request.json().catch(() => ({}));
+		const action = String(body.action || "check");
+		const { dispatchApi } = await import("./api-handlers-gRCrBpb6.mjs");
+		const result = await dispatchApi("update", action, body);
+		return Response.json(result);
+	} catch (e) {
+		const message = e instanceof Error ? e.message : "update api failed";
+		return Response.json({ error: message }, { status: 500 });
+	}
+} } } });
 var generateRandomString = createRandomStringGenerator("a-z", "0-9", "A-Z", "-_");
 async function signJWT(payload, secret, expiresIn = 3600) {
 	return await new SignJWT(payload).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime(Math.floor(Date.now() / 1e3) + expiresIn).sign(new TextEncoder().encode(secret));
@@ -5619,9 +5661,9 @@ var signInEmail = () => createAuthEndpoint("/sign-in/email", {
 			message: "Email and password is not enabled"
 		});
 	}
-	const { email: email$1, password } = ctx.body;
-	if (!email().safeParse(email$1).success) throw APIError.from("BAD_REQUEST", BASE_ERROR_CODES.INVALID_EMAIL);
-	const user = await ctx.context.internalAdapter.findUserByEmail(email$1, { includeAccounts: true });
+	const { email: email$2, password } = ctx.body;
+	if (!email().safeParse(email$2).success) throw APIError.from("BAD_REQUEST", BASE_ERROR_CODES.INVALID_EMAIL);
+	const user = await ctx.context.internalAdapter.findUserByEmail(email$2, { includeAccounts: true });
 	if (!user) {
 		await ctx.context.password.hash(password);
 		ctx.context.logger.warn("User not found");
@@ -5837,8 +5879,8 @@ var signUpEmail = () => createAuthEndpoint("/sign-up/email", {
 			code: "EMAIL_PASSWORD_SIGN_UP_DISABLED"
 		});
 		const body = ctx.body;
-		const { name, email: email$2, password, image, callbackURL: _callbackURL, rememberMe, ...rest } = body;
-		if (!email().safeParse(email$2).success) throw APIError.from("BAD_REQUEST", BASE_ERROR_CODES.INVALID_EMAIL);
+		const { name, email: email$1, password, image, callbackURL: _callbackURL, rememberMe, ...rest } = body;
+		if (!email().safeParse(email$1).success) throw APIError.from("BAD_REQUEST", BASE_ERROR_CODES.INVALID_EMAIL);
 		if (!password || typeof password !== "string") throw APIError.from("BAD_REQUEST", BASE_ERROR_CODES.INVALID_PASSWORD);
 		const minPasswordLength = ctx.context.password.config.minPasswordLength;
 		if (password.length < minPasswordLength) {
@@ -5853,10 +5895,10 @@ var signUpEmail = () => createAuthEndpoint("/sign-up/email", {
 		const shouldReturnGenericDuplicateResponse = ctx.context.options.emailAndPassword.requireEmailVerification || ctx.context.options.emailAndPassword.autoSignIn === false;
 		const shouldSkipAutoSignIn = ctx.context.options.emailAndPassword.autoSignIn === false || shouldReturnGenericDuplicateResponse;
 		const additionalUserFields = parseUserInput(ctx.context.options, rest, "create");
-		const normalizedEmail = email$2.toLowerCase();
+		const normalizedEmail = email$1.toLowerCase();
 		const dbUser = await ctx.context.internalAdapter.findUserByEmail(normalizedEmail);
 		if (dbUser?.user) {
-			ctx.context.logger.info(`Sign-up attempt for existing email: ${email$2}`);
+			ctx.context.logger.info(`Sign-up attempt for existing email: ${email$1}`);
 			if (shouldReturnGenericDuplicateResponse) {
 				/**
 				* Hash the password to reduce timing differences
@@ -8794,23 +8836,38 @@ var Route = createFileRoute("/api/auth/$")({ server: { handlers: {
 	POST: ({ request }) => auth.handler(request)
 } } });
 var rootRouteChildren = {
-	IndexRoute: Route$2.update({
+	IndexRoute: Route$5.update({
 		id: "/",
 		path: "/",
-		getParentRoute: () => Route$3
+		getParentRoute: () => Route$6
 	}),
-	LoginRoute: Route$1.update({
+	LoginRoute: Route$4.update({
 		id: "/login",
 		path: "/login",
-		getParentRoute: () => Route$3
+		getParentRoute: () => Route$6
+	}),
+	ApiGrokRoute: Route$3.update({
+		id: "/api/grok",
+		path: "/api/grok",
+		getParentRoute: () => Route$6
+	}),
+	ApiHostRoute: Route$2.update({
+		id: "/api/host",
+		path: "/api/host",
+		getParentRoute: () => Route$6
+	}),
+	ApiUpdateRoute: Route$1.update({
+		id: "/api/update",
+		path: "/api/update",
+		getParentRoute: () => Route$6
 	}),
 	ApiAuthSplatRoute: Route.update({
 		id: "/api/auth/$",
 		path: "/api/auth/$",
-		getParentRoute: () => Route$3
+		getParentRoute: () => Route$6
 	})
 };
-var routeTree = Route$3._addFileChildren(rootRouteChildren)._addFileTypes();
+var routeTree = Route$6._addFileChildren(rootRouteChildren)._addFileTypes();
 function getRouter() {
 	return createRouter({
 		routeTree,

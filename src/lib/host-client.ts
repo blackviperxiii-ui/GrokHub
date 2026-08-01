@@ -82,15 +82,31 @@ function electronHost() {
 async function rpc<T>(action: string, body: Record<string, unknown> = {}): Promise<T> {
   const res = await fetch("/api/host", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify({ action, ...body }),
   });
-  const data = (await res.json()) as T & { error?: string };
-  if (!res.ok) {
-    throw new Error((data as { error?: string }).error || `host rpc ${res.status}`);
+  const text = await res.text();
+  // Production bug guard: SPA HTML fallback means the host API route is missing
+  if (
+    text.trimStart().startsWith("<!DOCTYPE") ||
+    text.trimStart().startsWith("<html") ||
+    (res.headers.get("content-type") || "").includes("text/html")
+  ) {
+    throw new Error(
+      "Host API returned HTML instead of JSON — desktop bridge is offline. Relaunch GrokHub (Electron) or update to a build that includes /api/host.",
+    );
   }
-  if (data && typeof data === "object" && "error" in data && (data as { error?: string }).error) {
-    throw new Error(String((data as { error?: string }).error));
+  let data: T & { error?: string };
+  try {
+    data = JSON.parse(text) as T & { error?: string };
+  } catch {
+    throw new Error(`Host API invalid JSON (${res.status}): ${text.slice(0, 160)}`);
+  }
+  if (!res.ok) {
+    throw new Error(data.error || `host rpc ${res.status}`);
+  }
+  if (data && typeof data === "object" && "error" in data && data.error) {
+    throw new Error(String(data.error));
   }
   return data;
 }
@@ -98,14 +114,21 @@ async function rpc<T>(action: string, body: Record<string, unknown> = {}): Promi
 export async function hostInfo(): Promise<HostInfo> {
   const e = electronHost();
   if (e?.info) {
-    const info = await e.info();
-    return { ...info, bridge: "electron", unsandboxed: true };
+    try {
+      const info = await e.info();
+      return { ...info, bridge: "electron", unsandboxed: true };
+    } catch (err) {
+      // Fall through to HTTP — surface IPC failure if that also fails
+      console.warn("[host] electron info failed, trying HTTP", err);
+    }
   }
   try {
     return await rpc<HostInfo>("info");
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "host unavailable";
+    console.error("[host]", msg);
     return {
-      platform: "unknown",
+      platform: typeof navigator !== "undefined" ? navigator.platform : "unknown",
       arch: "unknown",
       homedir: "~",
       cwd: ".",
