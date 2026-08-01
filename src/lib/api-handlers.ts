@@ -11,6 +11,7 @@ import {
 } from "./grok";
 import type { GrokModeId } from "./types";
 import { applyUpdate, checkForUpdate } from "./update";
+import { parseRateLimitHeaders } from "./usage";
 import {
   ensureAccessToken,
   pollXaiDeviceCode,
@@ -82,6 +83,8 @@ export function createGrokChatSseStream(body: Record<string, unknown>): Readable
             ok: true,
             content: result.content,
             model: result.model,
+            usage: result.usage,
+            rateLimit: result.rateLimit,
             tokens: auth.tokensOut,
             refreshed: auth.refreshed,
           });
@@ -152,6 +155,42 @@ export async function dispatchApi(
         envConfigured: Boolean(process.env.XAI_API_KEY || process.env.GROK_API_KEY),
         authMode: accessToken ? "oauth" : apiKey ? "apiKey" : "env",
       };
+    }
+
+    if (action === "usageProbe") {
+      const bearer =
+        String(body.accessToken || "") ||
+        String(body.apiKey || "") ||
+        process.env.XAI_API_KEY ||
+        process.env.GROK_API_KEY ||
+        "";
+      if (!bearer) {
+        return { ok: false, detail: "not connected" };
+      }
+      try {
+        // Models list is the lightest authenticated call; capture rate-limit headers.
+        const res = await fetch(`${XAI_BASE}/models`, {
+          headers: { authorization: `Bearer ${bearer}` },
+        });
+        const rateLimit = parseRateLimitHeaders(res.headers);
+        if (!res.ok) {
+          return {
+            ok: false,
+            detail: `xAI ${res.status}`,
+            rateLimit,
+          };
+        }
+        return {
+          ok: true,
+          detail: "usage probe ok",
+          rateLimit,
+        };
+      } catch (e) {
+        return {
+          ok: false,
+          detail: e instanceof Error ? e.message : "probe failed",
+        };
+      }
     }
 
     if (action === "models") {

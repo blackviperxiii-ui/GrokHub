@@ -140,9 +140,7 @@ export type ImagineJob = {
   imageDataUrl?: string;
 };
 
-export type SubscriptionPlanId = "free" | "pro" | "super";
-
-
+export type SubscriptionPlanId = "free" | "super" | "pro";
 
 export type UsageBucket = "message" | "imagine" | "automation" | "host" | "skill";
 
@@ -150,12 +148,25 @@ export type UsageSnapshot = {
   plan: SubscriptionPlanId;
   periodStart: number;
   periodEnd: number;
+  /** Compute units used this period (token-derived + local host/automation) */
   usedUnits: number;
   messages: number;
   imagine: number;
   automations: number;
   host: number;
   byMode: Record<GrokModeId, number>;
+  /** Live token totals from xAI responses this period */
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  /** Last successful usage poll */
+  lastPolledAt: number;
+  /** How the meter was last updated */
+  source: "local" | "live";
+  /** Optional remaining quota from rate-limit headers */
+  rateLimitRemaining?: number | null;
+  rateLimitLimit?: number | null;
+  rateLimitResetAt?: number | null;
 };
 
 /** Profile synced after Grok OAuth / API connect — never seeded with personal defaults. */

@@ -1,12 +1,12 @@
 import { o as __toESM } from "../_runtime.mjs";
-import { a as emptyCatalog, c as getModesWithCatalog, d as needsGrokClassification, f as resolveMode, i as buildCatalog, l as modeBadge, m as stripAssistantChrome, n as applyGrokPlan, o as friendlyModelName, p as resolveModeWithCatalog, r as autoRouteFor, s as getMode, t as APP_VERSION, u as modelIdForMode } from "./version-By51W1Q4.mjs";
+import { C as stripAssistantChrome, E as usageTone, S as resolveModeWithCatalog, T as usagePercent, _ as modeBadge, a as buildCatalog, c as daysLeftInPeriod, d as formatTokens, f as formatUnits, g as inferPlanFromAuth, h as getModesWithCatalog, i as autoRouteFor, l as emptyCatalog, m as getMode, n as PLAN_LIMITS, o as costFor, p as friendlyModelName, r as applyGrokPlan, s as createUsage, t as APP_VERSION, u as ensurePeriod, v as modelIdForMode, w as unitsFromTokens, x as resolveMode, y as needsGrokClassification } from "./version-BUc8U3iw.mjs";
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
 import { F as require_react, P as require_jsx_runtime, g as require_react_dom, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
 import { A as ExternalLink, B as Activity, C as Image, D as Gauge, E as Hammer, F as Check, I as Cable, L as Brain, M as Compass, N as Command, O as Folder, P as ChevronRight, R as ArrowRight, S as Link2Off, T as HardDrive, _ as Minus, a as TimerReset, b as Menu, c as Sparkles, d as Settings, f as Send, g as Play, h as Plus, i as Trash2, j as Download, k as FolderOpen, l as ShieldCheck, m as Plug, n as X, o as Terminal, p as RefreshCw, r as Users, s as Square, t as Zap, u as ShieldAlert, v as MessageSquare, w as History, x as LoaderCircle, y as MessageSquarePlus, z as AppWindow } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-C1qBPr9w.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-B5tIbn3S.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 var import_react_dom = require_react_dom();
@@ -59,6 +59,8 @@ async function grokChatStream(opts, handlers) {
 			let content = "";
 			let model;
 			let tokens;
+			let usage;
+			let rateLimit;
 			while (true) {
 				if (handlers.signal?.aborted) {
 					try {
@@ -69,7 +71,9 @@ async function grokChatStream(opts, handlers) {
 						aborted: true,
 						error: "Stopped",
 						content,
-						model
+						model,
+						usage,
+						rateLimit
 					};
 				}
 				const { done, value } = await reader.read();
@@ -92,6 +96,8 @@ async function grokChatStream(opts, handlers) {
 						else if (evt.type === "done") {
 							model = evt.model || model;
 							tokens = evt.tokens || tokens;
+							usage = evt.usage || usage;
+							rateLimit = evt.rateLimit || rateLimit;
 							if (evt.content && !content) {
 								content = evt.content;
 								handlers.onDelta(evt.content);
@@ -101,7 +107,9 @@ async function grokChatStream(opts, handlers) {
 							error: evt.error || "stream error",
 							content,
 							model,
-							tokens
+							tokens,
+							usage,
+							rateLimit
 						};
 						else if (evt.delta) {
 							content += evt.delta;
@@ -114,13 +122,17 @@ async function grokChatStream(opts, handlers) {
 				ok: false,
 				error: "Empty stream",
 				model,
-				tokens
+				tokens,
+				usage,
+				rateLimit
 			};
 			return {
 				ok: true,
 				content,
 				model,
-				tokens
+				tokens,
+				usage,
+				rateLimit
 			};
 		}
 		if (res.ok) {
@@ -464,109 +476,6 @@ function createSeeds(now = Date.now()) {
 createSeeds().connectors;
 createSeeds().skills;
 createSeeds().chat;
-var PLAN_LIMITS = {
-	free: {
-		id: "free",
-		label: "Free",
-		units: 80,
-		messages: 40,
-		imagine: 5,
-		automations: 10,
-		host: 50,
-		heavyAllowed: false,
-		buildAllowed: false
-	},
-	super: {
-		id: "super",
-		label: "SuperGrok",
-		units: 600,
-		messages: 400,
-		imagine: 60,
-		automations: 120,
-		host: 400,
-		heavyAllowed: true,
-		buildAllowed: true
-	},
-	pro: {
-		id: "pro",
-		label: "SuperGrok Pro",
-		units: 2500,
-		messages: 2e3,
-		imagine: 250,
-		automations: 500,
-		host: 2e3,
-		heavyAllowed: true,
-		buildAllowed: true
-	}
-};
-/** Mode-weighted compute cost per agent turn */
-var MODE_UNIT_COST = {
-	fast: 1,
-	auto: 1.5,
-	build: 2,
-	expert: 4,
-	heavy: 8
-};
-var BUCKET_UNIT_COST = {
-	message: 1,
-	imagine: 5,
-	automation: 3,
-	skill: 2,
-	host: .25
-};
-function periodBounds(now = Date.now()) {
-	const d = new Date(now);
-	return {
-		start: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).getTime(),
-		end: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)).getTime()
-	};
-}
-function createUsage(plan = "pro", now = Date.now()) {
-	const { start, end } = periodBounds(now);
-	return {
-		plan,
-		periodStart: start,
-		periodEnd: end,
-		usedUnits: plan === "pro" ? 842 : plan === "super" ? 210 : 28,
-		messages: plan === "pro" ? 186 : plan === "super" ? 72 : 12,
-		imagine: plan === "pro" ? 24 : plan === "super" ? 8 : 2,
-		automations: plan === "pro" ? 41 : plan === "super" ? 14 : 3,
-		host: plan === "pro" ? 93 : plan === "super" ? 30 : 5,
-		byMode: {
-			auto: 22,
-			fast: 48,
-			expert: 31,
-			heavy: 19,
-			build: plan === "pro" ? 66 : 12
-		}
-	};
-}
-function ensurePeriod(u, now = Date.now()) {
-	if (now < u.periodEnd && now >= u.periodStart) return u;
-	return createUsage(u.plan, now);
-}
-function usagePercent(u) {
-	const lim = PLAN_LIMITS[u.plan].units;
-	if (lim <= 0) return 0;
-	return Math.min(100, u.usedUnits / lim * 100);
-}
-function usageTone(pct) {
-	if (pct >= 92) return "danger";
-	if (pct >= 75) return "warn";
-	return "ok";
-}
-function formatUnits(n) {
-	if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
-	if (Number.isInteger(n)) return String(n);
-	return n.toFixed(1);
-}
-function daysLeftInPeriod(u, now = Date.now()) {
-	return Math.max(0, Math.ceil((u.periodEnd - now) / 864e5));
-}
-function costFor(bucket, mode) {
-	if (bucket === "message" || bucket === "skill") return MODE_UNIT_COST[mode ?? "fast"] ?? 1;
-	return BUCKET_UNIT_COST[bucket];
-}
 function replyFor(text, s, routed) {
 	const lower = text.toLowerCase();
 	const connected = s.connectors.filter((c) => c.status === "connected");
@@ -817,7 +726,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-CS5ThB0G.mjs");
+		const { oauthStart } = await import("./grok-client-U140RoqO.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -846,7 +755,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-CS5ThB0G.mjs");
+		const { oauthPoll } = await import("./grok-client-U140RoqO.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -924,7 +833,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-CS5ThB0G.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-U140RoqO.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1126,31 +1035,11 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	setPlan: (plan) => {
 		const prev = get().usage;
-		const next = ensurePeriod({
-			...createUsage(plan),
-			usedUnits: 0,
-			messages: 0,
-			imagine: 0,
-			automations: 0,
-			host: 0,
-			byMode: {
-				auto: 0,
-				fast: 0,
-				expert: 0,
-				heavy: 0,
-				build: 0
-			}
-		});
-		set({ usage: {
-			...createUsage(plan),
-			periodStart: next.periodStart,
-			periodEnd: next.periodEnd,
-			plan
-		} });
+		set({ usage: createUsage(plan) });
 		get().pushActivity({
 			kind: "usage",
 			title: `Plan → ${PLAN_LIMITS[plan].label}`,
-			detail: `Limit ${PLAN_LIMITS[plan].units} units / month (was ${PLAN_LIMITS[prev.plan].label})`,
+			detail: `Limit ${PLAN_LIMITS[plan].units} units / month (was ${PLAN_LIMITS[prev.plan].label}) · meter reset for plan change`,
 			status: "success"
 		});
 	},
@@ -1173,7 +1062,9 @@ var useGrokHub = create()(persist((set, get) => ({
 				imagine: base.imagine + (bucket === "imagine" ? 1 : 0),
 				automations: base.automations + (bucket === "automation" ? 1 : 0),
 				host: base.host + (bucket === "host" ? 1 : 0),
-				byMode
+				byMode,
+				lastPolledAt: Date.now(),
+				source: "local"
 			} };
 		});
 		if (!ok) get().pushActivity({
@@ -1187,23 +1078,83 @@ var useGrokHub = create()(persist((set, get) => ({
 			cost
 		};
 	},
+	recordTokenUsage: (tokens, mode, rateLimit) => {
+		const cost = unitsFromTokens(tokens, mode);
+		let ok = true;
+		set((s) => {
+			const base = ensurePeriod(s.usage);
+			const lim = PLAN_LIMITS[base.plan];
+			if (base.usedUnits + cost > lim.units * 1.05) ok = false;
+			const prompt = tokens.prompt_tokens ?? 0;
+			const completion = tokens.completion_tokens ?? Math.max(0, (tokens.total_tokens ?? 0) - prompt);
+			const total = tokens.total_tokens ?? prompt + completion;
+			const byMode = { ...base.byMode };
+			if (mode) byMode[mode] = (byMode[mode] ?? 0) + 1;
+			return { usage: {
+				...base,
+				usedUnits: Math.round((base.usedUnits + cost) * 100) / 100,
+				messages: base.messages + 1,
+				byMode,
+				promptTokens: base.promptTokens + prompt,
+				completionTokens: base.completionTokens + completion,
+				totalTokens: base.totalTokens + total,
+				lastPolledAt: Date.now(),
+				source: "live",
+				rateLimitRemaining: rateLimit?.remaining ?? base.rateLimitRemaining ?? null,
+				rateLimitLimit: rateLimit?.limit ?? base.rateLimitLimit ?? null,
+				rateLimitResetAt: rateLimit?.resetAt ?? base.rateLimitResetAt ?? null
+			} };
+		});
+		return {
+			ok,
+			cost
+		};
+	},
+	refreshUsage: async () => {
+		const st = get();
+		let usage = ensurePeriod(st.usage);
+		const inferred = inferPlanFromAuth({
+			hasOauth: Boolean(st.oauth?.accessToken),
+			hasApiKey: Boolean(st.apiKey?.trim()),
+			email: st.oauth?.email || st.profile?.email,
+			name: st.oauth?.name || st.profile?.displayName
+		});
+		if (usage.plan === "free" && inferred !== "free") usage = {
+			...usage,
+			plan: inferred
+		};
+		try {
+			if (st.oauth?.accessToken || st.apiKey) {
+				const res = await fetch("/api/grok", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({
+						action: "usageProbe",
+						apiKey: st.apiKey || "",
+						accessToken: st.oauth?.accessToken || ""
+					})
+				});
+				if (res.ok) {
+					const data = await res.json();
+					if (data.rateLimit) usage = {
+						...usage,
+						rateLimitRemaining: data.rateLimit.remaining,
+						rateLimitLimit: data.rateLimit.limit,
+						rateLimitResetAt: data.rateLimit.resetAt,
+						source: usage.totalTokens > 0 ? "live" : usage.source
+					};
+				}
+			}
+		} catch {}
+		usage = {
+			...usage,
+			lastPolledAt: Date.now()
+		};
+		set({ usage });
+	},
 	resetUsagePeriod: () => {
 		const plan = get().usage.plan;
-		set({ usage: {
-			...createUsage(plan),
-			usedUnits: 0,
-			messages: 0,
-			imagine: 0,
-			automations: 0,
-			host: 0,
-			byMode: {
-				auto: 0,
-				fast: 0,
-				expert: 0,
-				heavy: 0,
-				build: 0
-			}
-		} });
+		set({ usage: createUsage(plan) });
 		get().pushActivity({
 			kind: "usage",
 			title: "Billing period reset",
@@ -1529,26 +1480,33 @@ var useGrokHub = create()(persist((set, get) => ({
 		}
 		const routed = resolveModeWithCatalog(mode, trimmed, catalog);
 		const m = getMode(routed);
-		const bill = get().recordUsage("message", routed);
-		if (!bill.ok) {
-			set((s) => ({ chat: [
-				...s.chat,
-				{
-					id: uid("msg"),
-					role: "user",
-					content: trimmed,
-					ts: Date.now(),
-					mode
-				},
-				{
-					id: uid("msg"),
-					role: "system",
-					content: `Quota exceeded on ${PLAN_LIMITS[get().usage.plan].label}. Wait for period reset or switch plan in Settings.`,
-					ts: Date.now()
-				}
-			] }));
-			return;
+		{
+			const u = ensurePeriod(get().usage);
+			const est = costFor("message", routed);
+			if (u.usedUnits + est > PLAN_LIMITS[u.plan].units * 1.02) {
+				set((s) => ({ chat: [
+					...s.chat,
+					{
+						id: uid("msg"),
+						role: "user",
+						content: trimmed,
+						ts: Date.now(),
+						mode
+					},
+					{
+						id: uid("msg"),
+						role: "system",
+						content: `Quota exceeded on ${PLAN_LIMITS[u.plan].label}. Wait for period reset or switch plan in Settings.`,
+						ts: Date.now()
+					}
+				] }));
+				return;
+			}
 		}
+		let bill = {
+			ok: true,
+			cost: costFor("message", routed)
+		};
 		const userMsg = {
 			id: uid("msg"),
 			role: "user",
@@ -1599,18 +1557,19 @@ var useGrokHub = create()(persist((set, get) => ({
 		let usedLive = false;
 		let finalAnswer = "";
 		let aborted = false;
-		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-B6vT5sj0.mjs");
+		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-C7lH-J7d.mjs");
 		try {
 			if (isLocalSlash) {
 				set({ streamStatus: "Running skill…" });
 				await wait(280);
 				if (abort.signal.aborted || gen !== chatGeneration) aborted = true;
 				else {
+					bill = get().recordUsage("message", routed);
 					finalAnswer = replyFor(trimmed, get(), routed);
 					patchBot(finalAnswer, { streaming: false });
 				}
 			} else {
-				const { grokChatStream } = await import("./grok-client-CS5ThB0G.mjs");
+				const { grokChatStream } = await import("./grok-client-U140RoqO.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").filter((c) => c.id !== botId).slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
@@ -1659,6 +1618,8 @@ var useGrokHub = create()(persist((set, get) => ({
 					}
 					if (result.ok && (result.content || roundText)) {
 						usedLive = true;
+						if (result.usage) bill = get().recordTokenUsage(result.usage, routed, result.rateLimit);
+						else if (rounds === 1) bill = get().recordUsage("message", routed);
 						const full = stripAssistantChrome(result.content || roundText);
 						const visible = stripHostCommands(full);
 						accumulated = full;
@@ -1853,7 +1814,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let model;
 		let err = null;
 		try {
-			const { grokImagine } = await import("./grok-client-CS5ThB0G.mjs");
+			const { grokImagine } = await import("./grok-client-U140RoqO.mjs");
 			const live = await grokImagine({
 				prompt: p,
 				apiKey: get().apiKey || void 0,
@@ -2011,6 +1972,13 @@ var useGrokHub = create()(persist((set, get) => ({
 			classifiedAt: cat.classifiedAt || 0,
 			signature: cat.signature || ""
 		};
+		const u = s.usage;
+		if (u) {
+			const tokens = Number(u.totalTokens ?? 0);
+			const used = Number(u.usedUnits ?? 0);
+			if (tokens === 0 && (used === 842 || used === 210 || used === 28 || !("totalTokens" in u))) s.usage = createUsage(u.plan || "pro");
+			else s.usage = ensurePeriod(u);
+		}
 		return s;
 	},
 	skipHydration: true
@@ -2317,7 +2285,7 @@ function UsageMeterChip({ className }) {
 			e.stopPropagation();
 			setNav("settings");
 		},
-		title: `${plan.label}: ${formatUnits(usage.usedUnits)} / ${formatUnits(plan.units)} units · open Settings`,
+		title: `${plan.label}: ${formatUnits(usage.usedUnits)} / ${formatUnits(plan.units)} units · ${formatTokens(usage.totalTokens || 0)} tokens · open Settings`,
 		className: cn("flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-1 text-left transition-colors hover:border-[var(--color-border-strong)]", className),
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Gauge, { className: cn("h-3.5 w-3.5 shrink-0", tone === "danger" ? "text-[var(--color-danger)]" : tone === "warn" ? "text-[var(--color-warn)]" : "text-[var(--color-muted)]") }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "min-w-0 flex-1",
@@ -2345,11 +2313,13 @@ function UsageMeterPanel({ compact }) {
 	const usage = useGrokHub((s) => s.usage);
 	const setPlan = useGrokHub((s) => s.setPlan);
 	const resetUsage = useGrokHub((s) => s.resetUsagePeriod);
+	const refreshUsage = useGrokHub((s) => s.refreshUsage);
 	const plan = PLAN_LIMITS[usage.plan];
 	const pct = usagePercent(usage);
 	const tone = usageTone(pct);
 	const left = daysLeftInPeriod(usage);
 	const remaining = Math.max(0, plan.units - usage.usedUnits);
+	const lastPoll = usage.lastPolledAt ? new Date(usage.lastPolledAt).toLocaleTimeString() : "—";
 	const rows = [
 		{
 			label: "Agent messages",
@@ -2379,9 +2349,16 @@ function UsageMeterPanel({ compact }) {
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardTitle, {
 				className: "flex items-center gap-2 text-sm",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Gauge, { className: "h-4 w-4 text-[var(--color-muted)]" }), "Usage · subscription limits"]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Compute units reset each billing period. Heavy / Expert cost more per turn." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
-				variant: tone === "danger" ? "danger" : tone === "warn" ? "warn" : "success",
-				children: plan.label
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Live token usage from Grok replies + local host/Imagine. Polled every minute." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "flex items-center gap-2",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+					variant: tone === "danger" ? "danger" : tone === "warn" ? "warn" : "success",
+					children: plan.label
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+					variant: "default",
+					className: "text-[10px]",
+					children: usage.source === "live" ? "live tokens" : "local"
+				})]
 			})]
 		})
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
@@ -2389,25 +2366,41 @@ function UsageMeterPanel({ compact }) {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "mb-1.5 flex items-end justify-between gap-2",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "text-2xl font-semibold tracking-tight tabular",
-					children: [formatUnits(usage.usedUnits), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "text-sm font-normal text-[var(--color-muted)]",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "text-2xl font-semibold tracking-tight tabular",
+						children: [formatUnits(usage.usedUnits), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "text-sm font-normal text-[var(--color-muted)]",
+							children: [
+								" ",
+								"/ ",
+								formatUnits(plan.units)
+							]
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "text-xs text-[var(--color-subtle)]",
 						children: [
-							" ",
-							"/ ",
-							formatUnits(plan.units)
+							formatUnits(remaining),
+							" units left · ",
+							left,
+							"d until reset"
 						]
-					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "text-xs text-[var(--color-subtle)]",
-					children: [
-						formatUnits(remaining),
-						" units left · ",
-						left,
-						"d until reset"
-					]
-				})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "mt-0.5 text-[10px] text-[var(--color-subtle)]",
+						children: [
+							"Tokens this period: ",
+							formatTokens(usage.totalTokens || 0),
+							" (",
+							formatTokens(usage.promptTokens || 0),
+							" in ·",
+							" ",
+							formatTokens(usage.completionTokens || 0),
+							" out)"
+						]
+					})
+				] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: cn("text-lg font-semibold tabular", tone === "danger" ? "text-[var(--color-danger)]" : tone === "warn" ? "text-[var(--color-warn)]" : "text-[var(--color-fg)]"),
 					children: [Math.round(pct), "%"]
 				})]
@@ -2415,9 +2408,20 @@ function UsageMeterPanel({ compact }) {
 				className: "h-2.5 overflow-hidden rounded-full bg-[var(--color-border)]",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: cn("h-full rounded-full transition-all duration-500", barColor(tone)),
-					style: { width: `${pct}%` }
+					style: { width: `${Math.min(100, Math.max(0, pct))}%` }
 				})
 			})] }),
+			(usage.rateLimitRemaining != null || usage.rateLimitLimit != null) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-muted)]",
+				children: [
+					"API rate limit remaining:",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "tabular text-[var(--color-fg)]",
+						children: [usage.rateLimitRemaining ?? "—", usage.rateLimitLimit != null ? ` / ${usage.rateLimitLimit}` : ""]
+					})
+				]
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "grid gap-2 sm:grid-cols-2",
 				children: rows.map((r) => {
@@ -2447,46 +2451,67 @@ function UsageMeterPanel({ compact }) {
 					}, r.label);
 				})
 			}),
-			!compact && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "mb-1.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-subtle)]",
-				children: "By mode (messages)"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "flex flex-wrap gap-1.5",
-				children: [
-					["fast", "Fast"],
-					["auto", "Auto"],
-					["build", "Build"],
-					["expert", "Expert"],
-					["heavy", "Heavy"]
-				].map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]",
+			!compact && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "mb-1.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-subtle)]",
+					children: "By mode (messages)"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "flex flex-wrap gap-1.5",
 					children: [
-						label,
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "tabular text-[var(--color-fg)]",
-							children: usage.byMode[id]
+						["fast", "Fast"],
+						["auto", "Auto"],
+						["build", "Build"],
+						["expert", "Expert"],
+						["heavy", "Heavy"]
+					].map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]",
+						children: [
+							label,
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "tabular text-[var(--color-fg)]",
+								children: usage.byMode[id] ?? 0
+							})
+						]
+					}, id))
+				})] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "flex flex-wrap items-center gap-2",
+					children: [
+						[
+							["free", "Free"],
+							["super", "SuperGrok"],
+							["pro", "SuperGrok Pro"]
+						].map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							onClick: () => setPlan(id),
+							className: cn("rounded-full border px-3 py-1 text-xs transition-colors", usage.plan === id ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-border-strong)]"),
+							children: label
+						}, id)),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
+							size: "sm",
+							variant: "secondary",
+							className: "ml-auto",
+							onClick: () => void refreshUsage(),
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RefreshCw, { className: "h-3.5 w-3.5" }), "Refresh"]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							onClick: () => resetUsage(),
+							className: "rounded-full border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]",
+							children: "Reset period"
 						})
 					]
-				}, id))
-			})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "flex flex-wrap gap-2",
-				children: [[
-					["free", "Free"],
-					["super", "SuperGrok"],
-					["pro", "SuperGrok Pro"]
-				].map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					onClick: () => setPlan(id),
-					className: cn("rounded-full border px-3 py-1 text-xs transition-colors", usage.plan === id ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-border-strong)]"),
-					children: label
-				}, id)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					onClick: () => resetUsage(),
-					className: "ml-auto rounded-full border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]",
-					children: "Simulate period reset"
-				})]
-			})] })
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "text-[10px] text-[var(--color-subtle)]",
+					children: [
+						"Last poll ",
+						lastPoll,
+						" · units from xAI token usage when available"
+					]
+				})
+			] })
 		]
 	})] });
 }
@@ -5390,6 +5415,15 @@ function AppShell() {
 			window.clearInterval(id);
 			window.clearTimeout(t);
 		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		const USAGE_POLL_MS = 6e4;
+		const tick = () => {
+			useGrokHub.getState().refreshUsage();
+		};
+		tick();
+		const id = window.setInterval(tick, USAGE_POLL_MS);
+		return () => window.clearInterval(id);
 	}, []);
 	(0, import_react.useEffect)(() => {
 		if (oauth?.name || oauth?.email) {

@@ -3,9 +3,8 @@ import type { GrokModeId, SubscriptionPlanId, UsageBucket, UsageSnapshot } from 
 export type PlanLimits = {
   id: SubscriptionPlanId;
   label: string;
-  /** Monthly compute unit cap */
+  /** Monthly compute unit cap (app meter) */
   units: number;
-  /** Soft caps (for display bars); -1 = unlimited within unit budget */
   messages: number;
   imagine: number;
   automations: number;
@@ -14,54 +13,59 @@ export type PlanLimits = {
   buildAllowed: boolean;
 };
 
+/**
+ * Plan caps aligned to SuperGrok consumer tiers (approximate published limits).
+ * Units are an internal meter: ~1 unit ≈ 1k input tokens or ~0.5k output tokens,
+ * plus fixed costs for Imagine / host / automations.
+ */
 export const PLAN_LIMITS: Record<SubscriptionPlanId, PlanLimits> = {
   free: {
     id: "free",
     label: "Free",
-    units: 80,
-    messages: 40,
+    units: 100,
+    messages: 50,
     imagine: 5,
     automations: 10,
-    host: 50,
+    host: 80,
     heavyAllowed: false,
     buildAllowed: false,
   },
   super: {
     id: "super",
     label: "SuperGrok",
-    units: 600,
-    messages: 400,
-    imagine: 60,
-    automations: 120,
-    host: 400,
+    units: 800,
+    messages: 500,
+    imagine: 80,
+    automations: 150,
+    host: 500,
     heavyAllowed: true,
     buildAllowed: true,
   },
   pro: {
     id: "pro",
     label: "SuperGrok Pro",
-    units: 2500,
-    messages: 2000,
-    imagine: 250,
-    automations: 500,
-    host: 2000,
+    units: 3000,
+    messages: 2500,
+    imagine: 300,
+    automations: 600,
+    host: 2500,
     heavyAllowed: true,
     buildAllowed: true,
   },
 };
 
-/** Mode-weighted compute cost per agent turn */
+/** Mode-weighted compute cost per agent turn (fallback when no token usage returned) */
 export const MODE_UNIT_COST: Record<GrokModeId, number> = {
-  fast: 1,
-  auto: 1.5,
+  fast: 0.8,
+  auto: 1.2,
   build: 2,
-  expert: 4,
-  heavy: 8,
+  expert: 3.5,
+  heavy: 7,
 };
 
 export const BUCKET_UNIT_COST: Record<UsageBucket, number> = {
-  message: 1, // overridden by mode
-  imagine: 5,
+  message: 1,
+  imagine: 6,
   automation: 3,
   skill: 2,
   host: 0.25,
@@ -74,31 +78,43 @@ export function periodBounds(now = Date.now()): { start: number; end: number } {
   return { start, end };
 }
 
+/** Clean empty usage — no demo seed. */
 export function createUsage(plan: SubscriptionPlanId = "pro", now = Date.now()): UsageSnapshot {
   const { start, end } = periodBounds(now);
-  // Seed partial demo usage so the meter isn't empty
-  const usedUnits = plan === "pro" ? 842 : plan === "super" ? 210 : 28;
   return {
     plan,
     periodStart: start,
     periodEnd: end,
-    usedUnits,
-    messages: plan === "pro" ? 186 : plan === "super" ? 72 : 12,
-    imagine: plan === "pro" ? 24 : plan === "super" ? 8 : 2,
-    automations: plan === "pro" ? 41 : plan === "super" ? 14 : 3,
-    host: plan === "pro" ? 93 : plan === "super" ? 30 : 5,
-    byMode: {
-      auto: 22,
-      fast: 48,
-      expert: 31,
-      heavy: 19,
-      build: plan === "pro" ? 66 : 12,
-    },
+    usedUnits: 0,
+    messages: 0,
+    imagine: 0,
+    automations: 0,
+    host: 0,
+    byMode: { auto: 0, fast: 0, expert: 0, heavy: 0, build: 0 },
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    lastPolledAt: now,
+    source: "local",
+    rateLimitRemaining: null,
+    rateLimitLimit: null,
+    rateLimitResetAt: null,
   };
 }
 
 export function ensurePeriod(u: UsageSnapshot, now = Date.now()): UsageSnapshot {
-  if (now < u.periodEnd && now >= u.periodStart) return u;
+  if (now < u.periodEnd && now >= u.periodStart) {
+    // Migrate older snapshots missing token fields
+    return {
+      ...createUsage(u.plan, u.periodStart),
+      ...u,
+      promptTokens: u.promptTokens ?? 0,
+      completionTokens: u.completionTokens ?? 0,
+      totalTokens: u.totalTokens ?? 0,
+      lastPolledAt: u.lastPolledAt ?? 0,
+      source: u.source ?? "local",
+    };
+  }
   return createUsage(u.plan, now);
 }
 
@@ -120,16 +136,91 @@ export function formatUnits(n: number): string {
   return n.toFixed(1);
 }
 
+export function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  return String(Math.round(n));
+}
+
 export function daysLeftInPeriod(u: UsageSnapshot, now = Date.now()): number {
   return Math.max(0, Math.ceil((u.periodEnd - now) / 86_400_000));
 }
 
-export function costFor(
-  bucket: UsageBucket,
-  mode?: GrokModeId,
-): number {
+export function costFor(bucket: UsageBucket, mode?: GrokModeId): number {
   if (bucket === "message" || bucket === "skill") {
     return MODE_UNIT_COST[mode ?? "fast"] ?? 1;
   }
   return BUCKET_UNIT_COST[bucket];
+}
+
+/**
+ * Convert xAI token usage into app compute units.
+ * Input tokens are cheaper; output / reasoning heavier.
+ */
+export function unitsFromTokens(
+  usage: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  },
+  mode?: GrokModeId,
+): number {
+  const prompt = usage.prompt_tokens ?? 0;
+  const completion = usage.completion_tokens ?? Math.max(0, (usage.total_tokens ?? 0) - prompt);
+  const modeMul =
+    mode === "heavy" ? 1.4 : mode === "expert" ? 1.2 : mode === "build" ? 1.15 : mode === "fast" ? 0.9 : 1;
+  const units = prompt / 1000 + (completion / 500) * modeMul;
+  return Math.round(Math.max(units, 0.05) * 100) / 100;
+}
+
+export function parseRateLimitHeaders(headers: Headers | Record<string, string>): {
+  remaining: number | null;
+  limit: number | null;
+  resetAt: number | null;
+} {
+  const get = (k: string) => {
+    if (headers instanceof Headers) return headers.get(k) || headers.get(k.toLowerCase());
+    return (headers as Record<string, string>)[k] || (headers as Record<string, string>)[k.toLowerCase()];
+  };
+  // Common patterns: x-ratelimit-remaining-requests, x-ratelimit-remaining, etc.
+  const remainingRaw =
+    get("x-ratelimit-remaining-requests") ||
+    get("x-ratelimit-remaining") ||
+    get("x-ratelimit-remaining-tokens");
+  const limitRaw =
+    get("x-ratelimit-limit-requests") ||
+    get("x-ratelimit-limit") ||
+    get("x-ratelimit-limit-tokens");
+  const resetRaw =
+    get("x-ratelimit-reset-requests") ||
+    get("x-ratelimit-reset") ||
+    get("x-ratelimit-reset-tokens");
+
+  const remaining = remainingRaw != null && remainingRaw !== "" ? Number(remainingRaw) : null;
+  const limit = limitRaw != null && limitRaw !== "" ? Number(limitRaw) : null;
+  let resetAt: number | null = null;
+  if (resetRaw) {
+    const n = Number(resetRaw);
+    if (Number.isFinite(n)) {
+      // seconds vs ms vs unix
+      resetAt = n > 1e12 ? n : n > 1e9 ? n * 1000 : Date.now() + n * 1000;
+    }
+  }
+  return {
+    remaining: Number.isFinite(remaining as number) ? remaining : null,
+    limit: Number.isFinite(limit as number) ? limit : null,
+    resetAt,
+  };
+}
+
+/** Infer plan from OAuth email/name heuristics or explicit setting — default pro when SuperGrok OAuth. */
+export function inferPlanFromAuth(opts: {
+  hasOauth?: boolean;
+  hasApiKey?: boolean;
+  email?: string | null;
+  name?: string | null;
+}): SubscriptionPlanId {
+  if (opts.hasOauth) return "pro"; // SuperGrok / X Premium device login
+  if (opts.hasApiKey) return "super";
+  return "free";
 }

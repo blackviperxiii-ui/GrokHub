@@ -1,5 +1,6 @@
 import type { GrokModeId } from "./types";
 import { modelIdForMode, resolveMode } from "./modes";
+import { parseRateLimitHeaders } from "./usage";
 
 export const XAI_BASE = "https://api.x.ai/v1";
 
@@ -63,6 +64,11 @@ export type GrokChatResult = {
   error?: string;
   status?: number;
   aborted?: boolean;
+  rateLimit?: {
+    remaining: number | null;
+    limit: number | null;
+    resetAt: number | null;
+  };
 };
 
 function resolveBearer(req: GrokChatRequest): { bearer: string; source: "oauth" | "key" | "env" } | null {
@@ -137,6 +143,7 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
       model?: string;
       usage?: GrokChatResult["usage"];
     };
+    const rateLimit = parseRateLimitHeaders(res.headers);
 
     if (!res.ok) {
       if (
@@ -161,12 +168,12 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
         typeof data.error === "string"
           ? data.error
           : data.error?.message || `xAI error ${res.status}`;
-      return { ok: false, status: res.status, error: msg, model };
+      return { ok: false, status: res.status, error: msg, model, rateLimit };
     }
 
     const content = data.choices?.[0]?.message?.content?.trim();
     if (!content) {
-      return { ok: false, status: res.status, error: "Empty response from Grok", model };
+      return { ok: false, status: res.status, error: "Empty response from Grok", model, rateLimit };
     }
 
     return {
@@ -175,6 +182,7 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
       model: data.model || model,
       usage: data.usage,
       status: res.status,
+      rateLimit,
     };
   } catch (e) {
     if (req.signal?.aborted || (e instanceof Error && e.name === "AbortError")) {
@@ -258,6 +266,8 @@ export async function callXaiChatStream(
     let buffer = "";
     let content = "";
     let usedModel = model;
+    let streamUsage: GrokChatResult["usage"] | undefined;
+    const rateLimit = parseRateLimitHeaders(res.headers);
 
     while (true) {
       if (signal?.aborted) {
@@ -266,7 +276,15 @@ export async function callXaiChatStream(
         } catch {
           /* ignore */
         }
-        return { ok: false, aborted: true, error: "Stopped", content, model: usedModel };
+        return {
+          ok: false,
+          aborted: true,
+          error: "Stopped",
+          content,
+          model: usedModel,
+          usage: streamUsage,
+          rateLimit,
+        };
       }
       const { done, value } = await reader.read();
       if (done) break;
@@ -282,9 +300,11 @@ export async function callXaiChatStream(
         try {
           const json = JSON.parse(data) as {
             model?: string;
+            usage?: GrokChatResult["usage"];
             choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
           };
           if (json.model) usedModel = json.model;
+          if (json.usage) streamUsage = json.usage;
           const piece =
             json.choices?.[0]?.delta?.content ||
             json.choices?.[0]?.message?.content ||
@@ -300,10 +320,10 @@ export async function callXaiChatStream(
     }
 
     if (!content.trim()) {
-      return { ok: false, error: "Empty stream from Grok", model: usedModel };
+      return { ok: false, error: "Empty stream from Grok", model: usedModel, rateLimit };
     }
     handlers.onStatus?.("done");
-    return { ok: true, content, model: usedModel };
+    return { ok: true, content, model: usedModel, usage: streamUsage, rateLimit };
   } catch (e) {
     if (signal?.aborted || (e instanceof Error && e.name === "AbortError")) {
       return { ok: false, aborted: true, error: "Stopped" };

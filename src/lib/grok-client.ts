@@ -88,6 +88,8 @@ export async function grokChatStream(
       let content = "";
       let model: string | undefined;
       let tokens: XaiOAuthTokens | undefined;
+      let usage: GrokChatResult["usage"] | undefined;
+      let rateLimit: GrokChatResult["rateLimit"] | undefined;
       while (true) {
         if (handlers.signal?.aborted) {
           try {
@@ -95,7 +97,7 @@ export async function grokChatStream(
           } catch {
             /* ignore */
           }
-          return { ok: false, aborted: true, error: "Stopped", content, model };
+          return { ok: false, aborted: true, error: "Stopped", content, model, usage, rateLimit };
         }
         const { done, value } = await reader.read();
         if (done) break;
@@ -117,6 +119,8 @@ export async function grokChatStream(
               error?: string;
               tokens?: XaiOAuthTokens;
               ok?: boolean;
+              usage?: GrokChatResult["usage"];
+              rateLimit?: GrokChatResult["rateLimit"];
             };
             if (evt.type === "delta" && evt.delta) {
               content += evt.delta;
@@ -126,12 +130,14 @@ export async function grokChatStream(
             } else if (evt.type === "done") {
               model = evt.model || model;
               tokens = evt.tokens || tokens;
+              usage = evt.usage || usage;
+              rateLimit = evt.rateLimit || rateLimit;
               if (evt.content && !content) {
                 content = evt.content;
                 handlers.onDelta(evt.content);
               }
             } else if (evt.type === "error") {
-              return { ok: false, error: evt.error || "stream error", content, model, tokens };
+              return { ok: false, error: evt.error || "stream error", content, model, tokens, usage, rateLimit };
             } else if (evt.delta) {
               content += evt.delta;
               handlers.onDelta(evt.delta);
@@ -141,8 +147,8 @@ export async function grokChatStream(
           }
         }
       }
-      if (!content.trim()) return { ok: false, error: "Empty stream", model, tokens };
-      return { ok: true, content, model, tokens };
+      if (!content.trim()) return { ok: false, error: "Empty stream", model, tokens, usage, rateLimit };
+      return { ok: true, content, model, tokens, usage, rateLimit };
     }
 
     // JSON fallback (non-SSE)

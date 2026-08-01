@@ -26,7 +26,9 @@ import {
   costFor,
   createUsage,
   ensurePeriod,
+  inferPlanFromAuth,
   PLAN_LIMITS,
+  unitsFromTokens,
   usagePercent,
 } from "./usage";
 import { uid } from "./utils";
@@ -97,6 +99,12 @@ type State = {
   setPlan: (plan: SubscriptionPlanId) => void;
 
   recordUsage: (bucket: UsageBucket, mode?: GrokModeId) => { ok: boolean; cost: number };
+  recordTokenUsage: (
+    tokens: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number },
+    mode?: GrokModeId,
+    rateLimit?: { remaining: number | null; limit: number | null; resetAt: number | null },
+  ) => { ok: boolean; cost: number };
+  refreshUsage: () => Promise<void>;
   resetUsagePeriod: () => void;
   toggleConnector: (id: string) => void;
   connectConnector: (id: string) => Promise<void>;
@@ -801,28 +809,12 @@ export const useGrokHub = create<State>()(
 
       setPlan: (plan) => {
         const prev = get().usage;
-        const next = ensurePeriod({
-          ...createUsage(plan),
-          usedUnits: 0,
-          messages: 0,
-          imagine: 0,
-          automations: 0,
-          host: 0,
-          byMode: { auto: 0, fast: 0, expert: 0, heavy: 0, build: 0 },
-        });
-        const seeded = createUsage(plan);
-        set({
-          usage: {
-            ...seeded,
-            periodStart: next.periodStart,
-            periodEnd: next.periodEnd,
-            plan,
-          },
-        });
+        const next = createUsage(plan);
+        set({ usage: next });
         get().pushActivity({
           kind: "usage",
           title: `Plan → ${PLAN_LIMITS[plan].label}`,
-          detail: `Limit ${PLAN_LIMITS[plan].units} units / month (was ${PLAN_LIMITS[prev.plan].label})`,
+          detail: `Limit ${PLAN_LIMITS[plan].units} units / month (was ${PLAN_LIMITS[prev.plan].label}) · meter reset for plan change`,
           status: "success",
         });
       },
@@ -850,6 +842,8 @@ export const useGrokHub = create<State>()(
               automations: base.automations + (bucket === "automation" ? 1 : 0),
               host: base.host + (bucket === "host" ? 1 : 0),
               byMode,
+              lastPolledAt: Date.now(),
+              source: "local",
             },
           };
         });
@@ -864,20 +858,98 @@ export const useGrokHub = create<State>()(
         return { ok, cost };
       },
 
+      recordTokenUsage: (tokens, mode, rateLimit) => {
+        const cost = unitsFromTokens(tokens, mode);
+        let ok = true;
+        set((s) => {
+          const base = ensurePeriod(s.usage);
+          const lim = PLAN_LIMITS[base.plan];
+          if (base.usedUnits + cost > lim.units * 1.05) {
+            ok = false;
+          }
+          const prompt = tokens.prompt_tokens ?? 0;
+          const completion = tokens.completion_tokens ?? Math.max(0, (tokens.total_tokens ?? 0) - prompt);
+          const total = tokens.total_tokens ?? prompt + completion;
+          const byMode = { ...base.byMode };
+          if (mode) byMode[mode] = (byMode[mode] ?? 0) + 1;
+          return {
+            usage: {
+              ...base,
+              usedUnits: Math.round((base.usedUnits + cost) * 100) / 100,
+              messages: base.messages + 1,
+              byMode,
+              promptTokens: base.promptTokens + prompt,
+              completionTokens: base.completionTokens + completion,
+              totalTokens: base.totalTokens + total,
+              lastPolledAt: Date.now(),
+              source: "live",
+              rateLimitRemaining: rateLimit?.remaining ?? base.rateLimitRemaining ?? null,
+              rateLimitLimit: rateLimit?.limit ?? base.rateLimitLimit ?? null,
+              rateLimitResetAt: rateLimit?.resetAt ?? base.rateLimitResetAt ?? null,
+            },
+          };
+        });
+        return { ok, cost };
+      },
+
+      refreshUsage: async () => {
+        const st = get();
+        let usage = ensurePeriod(st.usage);
+        // Auto-align plan when OAuth / API key present
+        const inferred = inferPlanFromAuth({
+          hasOauth: Boolean(st.oauth?.accessToken),
+          hasApiKey: Boolean(st.apiKey?.trim()),
+          email: st.oauth?.email || st.profile?.email,
+          name: st.oauth?.name || st.profile?.displayName,
+        });
+        // Only upgrade free → super/pro when credentials appear; never force-downgrade user choice
+        if (usage.plan === "free" && inferred !== "free") {
+          usage = { ...usage, plan: inferred };
+        }
+        // Lightweight live probe: models list proves auth; capture nothing else if rate limits absent
+        try {
+          if (st.oauth?.accessToken || st.apiKey) {
+            const res = await fetch("/api/grok", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                action: "usageProbe",
+                apiKey: st.apiKey || "",
+                accessToken: st.oauth?.accessToken || "",
+              }),
+            });
+            if (res.ok) {
+              const data = (await res.json()) as {
+                ok?: boolean;
+                rateLimit?: {
+                  remaining: number | null;
+                  limit: number | null;
+                  resetAt: number | null;
+                };
+                planHint?: string;
+              };
+              if (data.rateLimit) {
+                usage = {
+                  ...usage,
+                  rateLimitRemaining: data.rateLimit.remaining,
+                  rateLimitLimit: data.rateLimit.limit,
+                  rateLimitResetAt: data.rateLimit.resetAt,
+                  source: usage.totalTokens > 0 ? "live" : usage.source,
+                };
+              }
+            }
+          }
+        } catch {
+          /* offline */
+        }
+        usage = { ...usage, lastPolledAt: Date.now() };
+        set({ usage });
+      },
+
       resetUsagePeriod: () => {
         const plan = get().usage.plan;
         const u = createUsage(plan);
-        set({
-          usage: {
-            ...u,
-            usedUnits: 0,
-            messages: 0,
-            imagine: 0,
-            automations: 0,
-            host: 0,
-            byMode: { auto: 0, fast: 0, expert: 0, heavy: 0, build: 0 },
-          },
-        });
+        set({ usage: u });
         get().pushActivity({
           kind: "usage",
           title: "Billing period reset",
@@ -1260,28 +1332,33 @@ export const useGrokHub = create<State>()(
         }
         const routed = resolveModeWithCatalog(mode, trimmed, catalog);
         const m = getMode(routed);
-        const bill = get().recordUsage("message", routed);
-        if (!bill.ok) {
-          set((s) => ({
-            chat: [
-              ...s.chat,
-              {
-                id: uid("msg"),
-                role: "user",
-                content: trimmed,
-                ts: Date.now(),
-                mode,
-              },
-              {
-                id: uid("msg"),
-                role: "system",
-                content: `Quota exceeded on ${PLAN_LIMITS[get().usage.plan].label}. Wait for period reset or switch plan in Settings.`,
-                ts: Date.now(),
-              },
-            ],
-          }));
-          return;
+        // Soft quota check (real token units settled after live reply)
+        {
+          const u = ensurePeriod(get().usage);
+          const est = costFor("message", routed);
+          if (u.usedUnits + est > PLAN_LIMITS[u.plan].units * 1.02) {
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                {
+                  id: uid("msg"),
+                  role: "user",
+                  content: trimmed,
+                  ts: Date.now(),
+                  mode,
+                },
+                {
+                  id: uid("msg"),
+                  role: "system",
+                  content: `Quota exceeded on ${PLAN_LIMITS[u.plan].label}. Wait for period reset or switch plan in Settings.`,
+                  ts: Date.now(),
+                },
+              ],
+            }));
+            return;
+          }
         }
+        let bill = { ok: true, cost: costFor("message", routed) };
 
         const userMsg: ChatMessage = {
           id: uid("msg"),
@@ -1365,6 +1442,7 @@ export const useGrokHub = create<State>()(
             if (abort.signal.aborted || gen !== chatGeneration) {
               aborted = true;
             } else {
+              bill = get().recordUsage("message", routed);
               finalAnswer = replyFor(trimmed, get(), routed);
               patchBot(finalAnswer, { streaming: false });
             }
@@ -1448,6 +1526,16 @@ export const useGrokHub = create<State>()(
 
               if (result.ok && (result.content || roundText)) {
                 usedLive = true;
+                if (result.usage) {
+                  bill = get().recordTokenUsage(
+                    result.usage,
+                    routed,
+                    result.rateLimit,
+                  );
+                } else if (rounds === 1) {
+                  // No token payload — fall back to mode estimate once
+                  bill = get().recordUsage("message", routed);
+                }
                 const full = stripAssistantChrome(result.content || roundText);
                 const visible = stripHostCommands(full);
                 accumulated = full;
@@ -1885,6 +1973,18 @@ export const useGrokHub = create<State>()(
             classifiedAt: cat.classifiedAt || 0,
             signature: cat.signature || "",
           };
+        }
+        // Drop old demo-seeded usage (842 units SuperGrok Pro) so meter shows real usage
+        const u = s.usage as Record<string, unknown> | undefined;
+        if (u) {
+          const tokens = Number(u.totalTokens ?? 0);
+          const used = Number(u.usedUnits ?? 0);
+          if (tokens === 0 && (used === 842 || used === 210 || used === 28 || !("totalTokens" in u))) {
+            const plan = (u.plan as "free" | "super" | "pro") || "pro";
+            s.usage = createUsage(plan);
+          } else {
+            s.usage = ensurePeriod(u as import("./types").UsageSnapshot);
+          }
         }
         return s as typeof s;
       },

@@ -148,6 +148,17 @@ export function AppShell() {
     };
   }, []);
 
+  // Subscription usage meter — poll every 1 minute
+  useEffect(() => {
+    const USAGE_POLL_MS = 60_000;
+    const tick = () => {
+      void useGrokHub.getState().refreshUsage();
+    };
+    tick();
+    const id = window.setInterval(tick, USAGE_POLL_MS);
+    return () => window.clearInterval(id);
+  }, []);
+
   // Prefer Grok OAuth identity once connected (not only Better Auth session)
   useEffect(() => {
     if (oauth?.name || oauth?.email) {

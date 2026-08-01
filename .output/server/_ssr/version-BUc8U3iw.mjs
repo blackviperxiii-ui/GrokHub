@@ -1,22 +1,34 @@
 import { r as __exportAll } from "../_runtime.mjs";
 import { t as __exportAll$1 } from "./rolldown-runtime-D7D4PA-g.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/version-By51W1Q4.js
-var version_By51W1Q4_exports = /* @__PURE__ */ __exportAll({
-	a: () => modeBadge,
-	c: () => resolveModeWithCatalog,
-	d: () => buildCatalog,
-	f: () => emptyCatalog,
-	h: () => needsGrokClassification,
-	i: () => getModesWithCatalog,
-	l: () => stripAssistantChrome,
-	m: () => models_catalog_exports,
-	n: () => autoRouteFor,
-	o: () => modelIdForMode,
-	p: () => friendlyModelName,
-	r: () => getMode,
-	s: () => resolveMode,
+//#region node_modules/.nitro/vite/services/ssr/assets/version-BUc8U3iw.js
+var version_BUc8U3iw_exports = /* @__PURE__ */ __exportAll({
+	C: () => buildCatalog,
+	D: () => needsGrokClassification,
+	E: () => models_catalog_exports,
+	S: () => applyGrokPlan,
+	T: () => friendlyModelName,
+	_: () => modeBadge,
+	a: () => daysLeftInPeriod,
+	b: () => resolveModeWithCatalog,
+	c: () => formatUnits,
+	d: () => unitsFromTokens,
+	f: () => usagePercent,
+	g: () => getModesWithCatalog,
+	h: () => getMode,
+	i: () => createUsage,
+	l: () => inferPlanFromAuth,
+	m: () => autoRouteFor,
+	n: () => PLAN_LIMITS,
+	o: () => ensurePeriod,
+	p: () => usageTone,
+	r: () => costFor,
+	s: () => formatTokens,
 	t: () => APP_VERSION,
-	u: () => applyGrokPlan
+	u: () => parseRateLimitHeaders,
+	v: () => modelIdForMode,
+	w: () => emptyCatalog,
+	x: () => stripAssistantChrome,
+	y: () => resolveMode
 });
 var models_catalog_exports = /* @__PURE__ */ __exportAll$1({
 	ESSENTIAL_NAME_HINTS: () => ESSENTIAL_NAME_HINTS,
@@ -491,8 +503,176 @@ function modeBadge(id, catalog) {
 function stripAssistantChrome(content) {
 	return content.replace(/^\[(?:Auto → )?[^\]]+\]\s*\n*/gm, "").replace(/^— Offline fallback —\s*\n*/gm, "").replace(/^Could not reach Grok\.\s*\n*/gm, "").replace(/^Grok connection error:.*$/gm, "").replace(/^Your OAuth session is saved\..*$/gm, "").replace(/^Fix: Settings →.*$/gm, "").replace(/^Not connected to Grok\..*$/gm, "").trim();
 }
+/**
+* Plan caps aligned to SuperGrok consumer tiers (approximate published limits).
+* Units are an internal meter: ~1 unit ≈ 1k input tokens or ~0.5k output tokens,
+* plus fixed costs for Imagine / host / automations.
+*/
+var PLAN_LIMITS = {
+	free: {
+		id: "free",
+		label: "Free",
+		units: 100,
+		messages: 50,
+		imagine: 5,
+		automations: 10,
+		host: 80,
+		heavyAllowed: false,
+		buildAllowed: false
+	},
+	super: {
+		id: "super",
+		label: "SuperGrok",
+		units: 800,
+		messages: 500,
+		imagine: 80,
+		automations: 150,
+		host: 500,
+		heavyAllowed: true,
+		buildAllowed: true
+	},
+	pro: {
+		id: "pro",
+		label: "SuperGrok Pro",
+		units: 3e3,
+		messages: 2500,
+		imagine: 300,
+		automations: 600,
+		host: 2500,
+		heavyAllowed: true,
+		buildAllowed: true
+	}
+};
+/** Mode-weighted compute cost per agent turn (fallback when no token usage returned) */
+var MODE_UNIT_COST = {
+	fast: .8,
+	auto: 1.2,
+	build: 2,
+	expert: 3.5,
+	heavy: 7
+};
+var BUCKET_UNIT_COST = {
+	message: 1,
+	imagine: 6,
+	automation: 3,
+	skill: 2,
+	host: .25
+};
+function periodBounds(now = Date.now()) {
+	const d = new Date(now);
+	return {
+		start: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).getTime(),
+		end: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)).getTime()
+	};
+}
+/** Clean empty usage — no demo seed. */
+function createUsage(plan = "pro", now = Date.now()) {
+	const { start, end } = periodBounds(now);
+	return {
+		plan,
+		periodStart: start,
+		periodEnd: end,
+		usedUnits: 0,
+		messages: 0,
+		imagine: 0,
+		automations: 0,
+		host: 0,
+		byMode: {
+			auto: 0,
+			fast: 0,
+			expert: 0,
+			heavy: 0,
+			build: 0
+		},
+		promptTokens: 0,
+		completionTokens: 0,
+		totalTokens: 0,
+		lastPolledAt: now,
+		source: "local",
+		rateLimitRemaining: null,
+		rateLimitLimit: null,
+		rateLimitResetAt: null
+	};
+}
+function ensurePeriod(u, now = Date.now()) {
+	if (now < u.periodEnd && now >= u.periodStart) return {
+		...createUsage(u.plan, u.periodStart),
+		...u,
+		promptTokens: u.promptTokens ?? 0,
+		completionTokens: u.completionTokens ?? 0,
+		totalTokens: u.totalTokens ?? 0,
+		lastPolledAt: u.lastPolledAt ?? 0,
+		source: u.source ?? "local"
+	};
+	return createUsage(u.plan, now);
+}
+function usagePercent(u) {
+	const lim = PLAN_LIMITS[u.plan].units;
+	if (lim <= 0) return 0;
+	return Math.min(100, u.usedUnits / lim * 100);
+}
+function usageTone(pct) {
+	if (pct >= 92) return "danger";
+	if (pct >= 75) return "warn";
+	return "ok";
+}
+function formatUnits(n) {
+	if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
+	if (Number.isInteger(n)) return String(n);
+	return n.toFixed(1);
+}
+function formatTokens(n) {
+	if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+	if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
+	return String(Math.round(n));
+}
+function daysLeftInPeriod(u, now = Date.now()) {
+	return Math.max(0, Math.ceil((u.periodEnd - now) / 864e5));
+}
+function costFor(bucket, mode) {
+	if (bucket === "message" || bucket === "skill") return MODE_UNIT_COST[mode ?? "fast"] ?? 1;
+	return BUCKET_UNIT_COST[bucket];
+}
+/**
+* Convert xAI token usage into app compute units.
+* Input tokens are cheaper; output / reasoning heavier.
+*/
+function unitsFromTokens(usage, mode) {
+	const prompt = usage.prompt_tokens ?? 0;
+	const completion = usage.completion_tokens ?? Math.max(0, (usage.total_tokens ?? 0) - prompt);
+	const modeMul = mode === "heavy" ? 1.4 : mode === "expert" ? 1.2 : mode === "build" ? 1.15 : mode === "fast" ? .9 : 1;
+	const units = prompt / 1e3 + completion / 500 * modeMul;
+	return Math.round(Math.max(units, .05) * 100) / 100;
+}
+function parseRateLimitHeaders(headers) {
+	const get = (k) => {
+		if (headers instanceof Headers) return headers.get(k) || headers.get(k.toLowerCase());
+		return headers[k] || headers[k.toLowerCase()];
+	};
+	const remainingRaw = get("x-ratelimit-remaining-requests") || get("x-ratelimit-remaining") || get("x-ratelimit-remaining-tokens");
+	const limitRaw = get("x-ratelimit-limit-requests") || get("x-ratelimit-limit") || get("x-ratelimit-limit-tokens");
+	const resetRaw = get("x-ratelimit-reset-requests") || get("x-ratelimit-reset") || get("x-ratelimit-reset-tokens");
+	const remaining = remainingRaw != null && remainingRaw !== "" ? Number(remainingRaw) : null;
+	const limit = limitRaw != null && limitRaw !== "" ? Number(limitRaw) : null;
+	let resetAt = null;
+	if (resetRaw) {
+		const n = Number(resetRaw);
+		if (Number.isFinite(n)) resetAt = n > 0xe8d4a51000 ? n : n > 1e9 ? n * 1e3 : Date.now() + n * 1e3;
+	}
+	return {
+		remaining: Number.isFinite(remaining) ? remaining : null,
+		limit: Number.isFinite(limit) ? limit : null,
+		resetAt
+	};
+}
+/** Infer plan from OAuth email/name heuristics or explicit setting — default pro when SuperGrok OAuth. */
+function inferPlanFromAuth(opts) {
+	if (opts.hasOauth) return "pro";
+	if (opts.hasApiKey) return "super";
+	return "free";
+}
 /** Single source of truth for display / packaging version. */
-var APP_VERSION = "0.2.12";
+var APP_VERSION = "0.2.13";
 `${APP_VERSION}`;
 //#endregion
-export { emptyCatalog as a, getModesWithCatalog as c, needsGrokClassification as d, resolveMode as f, version_By51W1Q4_exports as h, buildCatalog as i, modeBadge as l, stripAssistantChrome as m, applyGrokPlan as n, friendlyModelName as o, resolveModeWithCatalog as p, autoRouteFor as r, getMode as s, APP_VERSION as t, modelIdForMode as u };
+export { stripAssistantChrome as C, version_BUc8U3iw_exports as D, usageTone as E, resolveModeWithCatalog as S, usagePercent as T, modeBadge as _, buildCatalog as a, parseRateLimitHeaders as b, daysLeftInPeriod as c, formatTokens as d, formatUnits as f, inferPlanFromAuth as g, getModesWithCatalog as h, autoRouteFor as i, emptyCatalog as l, getMode as m, PLAN_LIMITS as n, costFor as o, friendlyModelName as p, applyGrokPlan as r, createUsage as s, APP_VERSION as t, ensurePeriod as u, modelIdForMode as v, unitsFromTokens as w, resolveMode as x, needsGrokClassification as y };

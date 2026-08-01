@@ -1,5 +1,5 @@
-import { f as resolveMode, u as modelIdForMode } from "./version-By51W1Q4.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/grok-B6vT5sj0.js
+import { b as parseRateLimitHeaders, v as modelIdForMode, x as resolveMode } from "./version-BUc8U3iw.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/grok-C7lH-J7d.js
 var XAI_BASE = "https://api.x.ai/v1";
 /** Map GrokHub modes → xAI model IDs */
 function modelForMode(mode, prompt = "") {
@@ -81,6 +81,7 @@ async function callXaiChat(req) {
 			signal: req.signal
 		});
 		const data = await res.json().catch(() => ({}));
+		const rateLimit = parseRateLimitHeaders(res.headers);
 		if (!res.ok) {
 			if (res.status === 404 || typeof data.error === "object" && /model|not found|invalid/i.test(data.error?.message || "")) {
 				if (model === "grok-4.5" || model === "grok-4-5") return callXaiChat({
@@ -105,7 +106,8 @@ async function callXaiChat(req) {
 				ok: false,
 				status: res.status,
 				error: msg,
-				model
+				model,
+				rateLimit
 			};
 		}
 		const content = data.choices?.[0]?.message?.content?.trim();
@@ -113,14 +115,16 @@ async function callXaiChat(req) {
 			ok: false,
 			status: res.status,
 			error: "Empty response from Grok",
-			model
+			model,
+			rateLimit
 		};
 		return {
 			ok: true,
 			content,
 			model: data.model || model,
 			usage: data.usage,
-			status: res.status
+			status: res.status,
+			rateLimit
 		};
 	} catch (e) {
 		if (req.signal?.aborted || e instanceof Error && e.name === "AbortError") return {
@@ -197,6 +201,8 @@ async function callXaiChatStream(req, handlers = {}) {
 		let buffer = "";
 		let content = "";
 		let usedModel = model;
+		let streamUsage;
+		const rateLimit = parseRateLimitHeaders(res.headers);
 		while (true) {
 			if (signal?.aborted) {
 				try {
@@ -207,7 +213,9 @@ async function callXaiChatStream(req, handlers = {}) {
 					aborted: true,
 					error: "Stopped",
 					content,
-					model: usedModel
+					model: usedModel,
+					usage: streamUsage,
+					rateLimit
 				};
 			}
 			const { done, value } = await reader.read();
@@ -224,6 +232,7 @@ async function callXaiChatStream(req, handlers = {}) {
 				try {
 					const json = JSON.parse(data);
 					if (json.model) usedModel = json.model;
+					if (json.usage) streamUsage = json.usage;
 					const piece = json.choices?.[0]?.delta?.content || json.choices?.[0]?.message?.content || "";
 					if (piece) {
 						content += piece;
@@ -235,13 +244,16 @@ async function callXaiChatStream(req, handlers = {}) {
 		if (!content.trim()) return {
 			ok: false,
 			error: "Empty stream from Grok",
-			model: usedModel
+			model: usedModel,
+			rateLimit
 		};
 		handlers.onStatus?.("done");
 		return {
 			ok: true,
 			content,
-			model: usedModel
+			model: usedModel,
+			usage: streamUsage,
+			rateLimit
 		};
 	} catch (e) {
 		if (signal?.aborted || e instanceof Error && e.name === "AbortError") return {

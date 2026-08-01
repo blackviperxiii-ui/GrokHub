@@ -1,5 +1,5 @@
-import { t as APP_VERSION } from "./version-By51W1Q4.mjs";
-import { XAI_BASE, callXaiChat, callXaiChatStream, callXaiImagine, probeXaiBearer } from "./grok-B6vT5sj0.mjs";
+import { b as parseRateLimitHeaders, t as APP_VERSION } from "./version-BUc8U3iw.mjs";
+import { XAI_BASE, callXaiChat, callXaiChatStream, callXaiImagine, probeXaiBearer } from "./grok-C7lH-J7d.mjs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream, existsSync, readFileSync } from "node:fs";
@@ -8,7 +8,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs$1 from "node:fs/promises";
 import os from "node:os";
-//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-WrosuUCe.js
+//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-C2b-BvfE.js
 /**
 * GitHub update helpers — Node only (server / Electron main).
 *
@@ -838,6 +838,8 @@ function createGrokChatSseStream(body) {
 				ok: true,
 				content: result.content,
 				model: result.model,
+				usage: result.usage,
+				rateLimit: result.rateLimit,
 				tokens: auth.tokensOut,
 				refreshed: auth.refreshed
 			});
@@ -891,6 +893,32 @@ async function dispatchApi(route, action, body) {
 				authMode: accessToken ? "oauth" : apiKey ? "apiKey" : "env"
 			};
 		}
+		if (action === "usageProbe") {
+			const bearer = String(body.accessToken || "") || String(body.apiKey || "") || process.env.XAI_API_KEY || process.env.GROK_API_KEY || "";
+			if (!bearer) return {
+				ok: false,
+				detail: "not connected"
+			};
+			try {
+				const res = await fetch(`${XAI_BASE}/models`, { headers: { authorization: `Bearer ${bearer}` } });
+				const rateLimit = parseRateLimitHeaders(res.headers);
+				if (!res.ok) return {
+					ok: false,
+					detail: `xAI ${res.status}`,
+					rateLimit
+				};
+				return {
+					ok: true,
+					detail: "usage probe ok",
+					rateLimit
+				};
+			} catch (e) {
+				return {
+					ok: false,
+					detail: e instanceof Error ? e.message : "probe failed"
+				};
+			}
+		}
 		if (action === "models") {
 			const bearer = String(body.accessToken || "") || String(body.apiKey || "") || process.env.XAI_API_KEY || process.env.GROK_API_KEY || "";
 			if (!bearer) return { models: [] };
@@ -908,7 +936,7 @@ async function dispatchApi(route, action, body) {
 				ok: false,
 				error: "models required"
 			};
-			const { buildClassifyPrompt, parseGrokSlotPlan, pickSlotModel } = await import("./version-By51W1Q4.mjs").then((n) => n.h).then((n) => n.m);
+			const { buildClassifyPrompt, parseGrokSlotPlan, pickSlotModel } = await import("./version-BUc8U3iw.mjs").then((n) => n.D).then((n) => n.E);
 			let accessToken = body.accessToken ? String(body.accessToken) : void 0;
 			const apiKey = body.apiKey ? String(body.apiKey) : void 0;
 			if (body.tokens && typeof body.tokens === "object") try {
