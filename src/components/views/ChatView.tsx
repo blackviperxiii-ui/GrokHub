@@ -5,6 +5,7 @@ import { useGrokHub } from "@/lib/store";
 import { formatUnits, PLAN_LIMITS, usagePercent } from "@/lib/usage";
 import { cn } from "@/lib/utils";
 import { RelativeTime } from "../RelativeTime";
+import { HostGatewayBanner } from "../HostGatewayBanner";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
@@ -114,18 +115,19 @@ export function ChatView() {
         status: r.ok ? "success" : "failed",
       });
     } catch (e) {
+      const msg = e instanceof Error ? e.message : "host failed";
       useGrokHub.setState((s) => ({
         chat: [
           ...s.chat,
           {
             id: `a_${Date.now()}`,
-            role: "assistant",
-            content: `Host exec error: ${e instanceof Error ? e.message : "failed"}`,
+            role: "system" as const,
+            content: `Desktop gateway offline: ${msg}\n\nConnect the host in Settings → Desktop host gateway so I can run shell/files/apps on your machine.`,
             ts: Date.now(),
-            mode,
           },
         ],
       }));
+      setNav("settings");
     } finally {
       setLocalRunning(false);
     }
@@ -179,6 +181,9 @@ export function ChatView() {
           </div>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-0">
+          <div className="shrink-0 px-4 pt-3 md:px-6 3xl:px-8">
+            <HostGatewayBanner variant="compact" />
+          </div>
           <div className="scroll-panel min-h-0 flex-1 space-y-3 px-4 py-4 md:px-6 3xl:px-10 uw:px-16">
             {chat.map((m) => (
               <div

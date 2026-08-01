@@ -1,4 +1,4 @@
-import { a as modelIdForMode, o as resolveMode, t as APP_VERSION } from "./version-BWlGhsus.mjs";
+import { a as modelIdForMode, o as resolveMode, t as APP_VERSION } from "./version-aISqRfJc.mjs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream, existsSync, readFileSync } from "node:fs";
@@ -7,7 +7,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs$1 from "node:fs/promises";
 import os from "node:os";
-//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-BlMUt7it.js
+//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-UkkfHXBK.js
 var XAI_BASE = "https://api.x.ai/v1";
 /** Map GrokHub modes → xAI model IDs */
 function modelForMode(mode, prompt = "") {
@@ -748,7 +748,7 @@ var XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:a
 var XAI_OAUTH_ISSUER = "https://auth.x.ai";
 var XAI_OAUTH_DISCOVERY = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
 var XAI_DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-var XAI_UA = "GrokHub/0.2.4 (xAI OAuth; Linux)";
+var XAI_UA = "GrokHub/0.2.5 (xAI OAuth; Linux)";
 function formBody(data) {
 	return new URLSearchParams(data).toString();
 }

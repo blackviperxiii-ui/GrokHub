@@ -1,12 +1,12 @@
 import { o as __toESM } from "../_runtime.mjs";
-import { a as modelIdForMode, i as modeBadge, n as GROK_MODES, o as resolveMode, r as getMode, s as stripAssistantChrome, t as APP_VERSION } from "./version-BWlGhsus.mjs";
+import { a as modelIdForMode, i as modeBadge, n as GROK_MODES, o as resolveMode, r as getMode, s as stripAssistantChrome, t as APP_VERSION } from "./version-aISqRfJc.mjs";
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
 import { N as require_jsx_runtime, P as require_react, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
-import { A as Command, C as HardDrive, D as FolderOpen, E as Folder, F as ArrowRight, I as AppWindow, L as Activity, M as Check, N as Cable, O as ExternalLink, P as Brain, S as History, T as Gauge, _ as MessageSquarePlus, a as TimerReset, b as Link2Off, c as Sparkles, d as Send, f as RefreshCw, g as MessageSquare, h as Minus, i as Trash2, j as ChevronRight, k as Download, l as ShieldAlert, m as Play, n as X, o as Terminal, p as Plus, r as Users, s as Square, t as Zap, u as Settings, v as Menu, w as Hammer, x as Image, y as LoaderCircle } from "../_libs/lucide-react.mjs";
+import { A as ExternalLink, C as Image, D as Gauge, E as Hammer, F as Cable, I as Brain, L as ArrowRight, M as Command, N as ChevronRight, O as Folder, P as Check, R as AppWindow, S as Link2Off, T as HardDrive, _ as Minus, a as TimerReset, b as Menu, c as Sparkles, d as Settings, f as Send, g as Play, h as Plus, i as Trash2, j as Download, k as FolderOpen, l as ShieldCheck, m as Plug, n as X, o as Terminal, p as RefreshCw, r as Users, s as Square, t as Zap, u as ShieldAlert, v as MessageSquare, w as History, x as LoaderCircle, y as MessageSquarePlus, z as Activity } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-BwR6kHWz.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-8H0vprrC.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function rpc(path, action, body = {}) {
@@ -697,7 +697,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-Cb6uzGBf.mjs");
+		const { oauthStart } = await import("./grok-client-B4KQiicj.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -726,7 +726,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-Cb6uzGBf.mjs");
+		const { oauthPoll } = await import("./grok-client-B4KQiicj.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -804,7 +804,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-Cb6uzGBf.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-B4KQiicj.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1350,7 +1350,7 @@ var useGrokHub = create()(persist((set, get) => ({
 				await wait(280);
 				answer = replyFor(trimmed, get(), routed);
 			} else {
-				const { grokChat } = await import("./grok-client-Cb6uzGBf.mjs");
+				const { grokChat } = await import("./grok-client-B4KQiicj.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
@@ -1481,7 +1481,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let model;
 		let err = null;
 		try {
-			const { grokImagine } = await import("./grok-client-Cb6uzGBf.mjs");
+			const { grokImagine } = await import("./grok-client-B4KQiicj.mjs");
 			const live = await grokImagine({
 				prompt: p,
 				apiKey: get().apiKey || void 0,
@@ -2287,6 +2287,200 @@ function AutomationsView() {
 		})
 	});
 }
+/**
+* Desktop host / gateway connector.
+* When the unsandboxed bridge is offline, this is the CTA to reconnect so Grok
+* can run shell, files, and apps on the user's machine.
+*/
+function HostGatewayBanner({ variant = "card", className, onOpenDesktop }) {
+	const setNav = useGrokHub((s) => s.setNav);
+	const connectConnector = useGrokHub((s) => s.connectConnector);
+	const [info, setInfo] = (0, import_react.useState)(null);
+	const [error, setError] = (0, import_react.useState)(null);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [isElectron, setIsElectron] = (0, import_react.useState)(false);
+	const probe = (0, import_react.useCallback)(async () => {
+		setBusy(true);
+		setError(null);
+		try {
+			const mod = await import("./host-client-WUUmAwRI.mjs");
+			setIsElectron(mod.isDesktopShell());
+			const i = await mod.hostInfo();
+			setInfo(i);
+			if (i.bridge !== "none" && i.unsandboxed) useGrokHub.setState((s) => ({ connectors: s.connectors.map((c) => c.id === "desktop-host" ? {
+				...c,
+				status: "connected",
+				lastUsed: Date.now()
+			} : c) }));
+			return i;
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : "Host probe failed";
+			setError(msg);
+			setInfo(null);
+			return null;
+		} finally {
+			setBusy(false);
+		}
+	}, [connectConnector]);
+	(0, import_react.useEffect)(() => {
+		probe();
+	}, [probe]);
+	const online = Boolean(info && info.bridge !== "none" && info.unsandboxed);
+	async function connectGateway() {
+		setBusy(true);
+		setError(null);
+		try {
+			const i = await probe();
+			if (i && i.bridge !== "none" && i.unsandboxed) {
+				useGrokHub.setState((s) => ({ connectors: s.connectors.map((c) => c.id === "desktop-host" ? {
+					...c,
+					status: "connected",
+					lastUsed: Date.now()
+				} : c) }));
+				return;
+			}
+			if (typeof window !== "undefined" && window.grokhubDesktop) setError("Electron shell is present but host IPC failed. Fully quit GrokHub (tray too) and relaunch.");
+			else setError("No desktop gateway in this window. Launch the Arch package: grokhub (Electron). Web-only preview cannot control your machine.");
+		} finally {
+			setBusy(false);
+		}
+	}
+	if (variant === "compact") {
+		if (online) return null;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: cn("flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-warn)_45%,transparent)] bg-[color-mix(in_oklab,var(--color-warn)_10%,transparent)] px-3 py-2", className),
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "flex min-w-0 items-center gap-2 text-xs text-[var(--color-warn)]",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldAlert, { className: "h-3.5 w-3.5 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "truncate",
+					children: "Desktop gateway offline — agent cannot run shell/files on your machine."
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "flex shrink-0 gap-1.5",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
+					size: "sm",
+					variant: "secondary",
+					disabled: busy,
+					onClick: () => void connectGateway(),
+					children: [busy ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoaderCircle, { className: "h-3.5 w-3.5 animate-spin" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Plug, { className: "h-3.5 w-3.5" }), "Connect host"]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+					size: "sm",
+					variant: "ghost",
+					onClick: () => {
+						setNav("desktop");
+						onOpenDesktop?.();
+					},
+					children: "Desktop"
+				})]
+			})]
+		});
+	}
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, {
+		className,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardHeader, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "flex flex-wrap items-start justify-between gap-3",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardTitle, {
+				className: "flex items-center gap-2 text-sm",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HardDrive, { className: "h-4 w-4" }), "Desktop host gateway"]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Unsandboxed access so Grok can run CLI commands, read/write files, and open apps on this machine on your behalf." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+				variant: online ? "success" : "warn",
+				children: online ? "connected" : "offline"
+			})]
+		}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+			className: "space-y-3",
+			children: [
+				online && info ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "flex items-start gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-success)_35%,transparent)] bg-[color-mix(in_oklab,var(--color-success)_8%,transparent)] px-3 py-2.5 text-sm",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "mt-0.5 h-4 w-4 shrink-0 text-[var(--color-success)]" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "min-w-0",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "font-medium text-[var(--color-fg)]",
+								children: [
+									info.user,
+									"@",
+									info.hostname
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "font-mono text-xs text-[var(--color-muted)]",
+								children: [
+									info.bridge,
+									" · ",
+									info.platform,
+									"/",
+									info.arch,
+									" · ",
+									info.homedir
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "mt-1 text-xs text-[var(--color-subtle)]",
+								children: [
+									"Agent can use ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "font-mono",
+										children: "$"
+									}),
+									" shell in chat and the Desktop tab."
+								]
+							})
+						]
+					})]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "space-y-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3 text-sm text-[var(--color-muted)]",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "No live desktop gateway. Without it, Grok cannot control your PC — only chat." }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
+						className: "list-decimal space-y-1 pl-4 text-xs text-[var(--color-subtle)]",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+								"Install/run the Arch package:",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "font-mono text-[var(--color-fg)]",
+									children: "grokhub"
+								})
+							] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: "Use the Electron window (not a plain browser tab)" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: "Click Connect below to probe host IPC / API" })
+						]
+					})]
+				}),
+				error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "rounded-[var(--radius-sm)] border border-[color-mix(in_oklab,var(--color-danger)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-danger)_10%,transparent)] px-3 py-2 text-xs text-[var(--color-danger)]",
+					children: error
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "flex flex-wrap gap-2",
+					children: [
+						!online ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+							disabled: busy,
+							onClick: () => void connectGateway(),
+							children: busy ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoaderCircle, { className: "h-4 w-4 animate-spin" }), "Connecting…"] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Plug, { className: "h-4 w-4" }), "Connect desktop host"] })
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+							onClick: () => {
+								setNav("desktop");
+								onOpenDesktop?.();
+							},
+							children: "Open Desktop host"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
+							variant: "secondary",
+							size: "default",
+							disabled: busy,
+							onClick: () => void probe(),
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RefreshCw, { className: cn("h-4 w-4", busy && "animate-spin") }), "Reprobe"]
+						}),
+						isElectron && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+							variant: "info",
+							className: "self-center",
+							children: "Electron shell"
+						})
+					]
+				})
+			]
+		})]
+	});
+}
 var SUGGESTIONS = [
 	"What can you help me with?",
 	"$ uname -a",
@@ -2379,13 +2573,14 @@ function ChatView() {
 				status: r.ok ? "success" : "failed"
 			});
 		} catch (e) {
+			const msg = e instanceof Error ? e.message : "host failed";
 			useGrokHub.setState((s) => ({ chat: [...s.chat, {
 				id: `a_${Date.now()}`,
-				role: "assistant",
-				content: `Host exec error: ${e instanceof Error ? e.message : "failed"}`,
-				ts: Date.now(),
-				mode
+				role: "system",
+				content: `Desktop gateway offline: ${msg}\n\nConnect the host in Settings → Desktop host gateway so I can run shell/files/apps on your machine.`,
+				ts: Date.now()
 			}] }));
+			setNav("settings");
 		} finally {
 			setLocalRunning(false);
 		}
@@ -2455,66 +2650,73 @@ function ChatView() {
 				})
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 				className: "flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-0",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "scroll-panel min-h-0 flex-1 space-y-3 px-4 py-4 md:px-6 3xl:px-10 uw:px-16",
-					children: [
-						chat.map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: cn("flex", m.role === "user" ? "justify-end" : "justify-start"),
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: cn("chat-bubble rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap", m.role === "user" ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]" : m.role === "system" ? "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted)]" : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-fg)]"),
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-[var(--color-subtle)]",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-										m.role,
-										" · ",
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RelativeTime, { ts: m.ts })
-									] }), m.mode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case",
-										children: getMode(m.mode).label
-									})]
-								}), m.content]
-							})
-						}, m.id)),
-						busy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "text-xs text-[var(--color-subtle)]",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "shimmer rounded px-1",
-								children: localRunning ? "Host running…" : `${modeMeta.label} · thinking…`
-							})
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { ref: endRef })
-					]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "shrink-0 space-y-2 border-t border-[var(--color-border)] p-3 md:p-4 3xl:px-8 uw:px-12",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "flex flex-wrap gap-1.5",
-						children: SUGGESTIONS.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							disabled: busy,
-							onClick: () => void onSend(s),
-							className: "rounded-full border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-muted)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]",
-							children: s
-						}, s))
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
-						className: "mx-auto flex w-full max-w-[min(56rem,100%)] gap-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]",
-						onSubmit: (e) => {
-							e.preventDefault();
-							onSend();
-						},
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
-							value: text,
-							onChange: (e) => setText(e.target.value),
-							placeholder: "Message Grok… or $ shell",
-							disabled: busy,
-							className: "flex-1"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-							type: "submit",
-							disabled: busy || !text.trim(),
-							size: "icon",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Send, { className: "h-4 w-4" })
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "shrink-0 px-4 pt-3 md:px-6 3xl:px-8",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HostGatewayBanner, { variant: "compact" })
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "scroll-panel min-h-0 flex-1 space-y-3 px-4 py-4 md:px-6 3xl:px-10 uw:px-16",
+						children: [
+							chat.map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: cn("flex", m.role === "user" ? "justify-end" : "justify-start"),
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: cn("chat-bubble rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap", m.role === "user" ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]" : m.role === "system" ? "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted)]" : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-fg)]"),
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-[var(--color-subtle)]",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+											m.role,
+											" · ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RelativeTime, { ts: m.ts })
+										] }), m.mode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case",
+											children: getMode(m.mode).label
+										})]
+									}), m.content]
+								})
+							}, m.id)),
+							busy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "text-xs text-[var(--color-subtle)]",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "shimmer rounded px-1",
+									children: localRunning ? "Host running…" : `${modeMeta.label} · thinking…`
+								})
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { ref: endRef })
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "shrink-0 space-y-2 border-t border-[var(--color-border)] p-3 md:p-4 3xl:px-8 uw:px-12",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "flex flex-wrap gap-1.5",
+							children: SUGGESTIONS.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								disabled: busy,
+								onClick: () => void onSend(s),
+								className: "rounded-full border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-muted)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]",
+								children: s
+							}, s))
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+							className: "mx-auto flex w-full max-w-[min(56rem,100%)] gap-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]",
+							onSubmit: (e) => {
+								e.preventDefault();
+								onSend();
+							},
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
+								value: text,
+								onChange: (e) => setText(e.target.value),
+								placeholder: "Message Grok… or $ shell",
+								disabled: busy,
+								className: "flex-1"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+								type: "submit",
+								disabled: busy || !text.trim(),
+								size: "icon",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Send, { className: "h-4 w-4" })
+							})]
 						})]
-					})]
-				})]
+					})
+				]
 			})]
 		})
 	});
@@ -2973,11 +3175,12 @@ function DesktopHostView() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "space-y-4",
 		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HostGatewayBanner, { variant: "card" }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, {
 				className: "gap-2",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardTitle, {
 					className: "flex items-center gap-2 text-sm",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldAlert, { className: "h-4 w-4 text-[var(--color-warn)]" }), "Desktop host · unsandboxed"]
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldAlert, { className: "h-4 w-4 text-[var(--color-warn)]" }), "Desktop host · session"]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Full host CLI / files / apps. Shell commands bill 0.25 units against your plan." })]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 				className: "flex flex-wrap items-center gap-2",
@@ -3887,13 +4090,10 @@ function SettingsView() {
 					}, m.id);
 				})
 			})] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardHeader, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
-				className: "text-sm",
-				children: "Desktop host"
-			}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-				onClick: () => setNav("desktop"),
-				children: "Open Desktop host"
-			}) })] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HostGatewayBanner, {
+				variant: "card",
+				onOpenDesktop: () => setNav("desktop")
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardHeader, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
 				children: "Arch Linux shell preferences"

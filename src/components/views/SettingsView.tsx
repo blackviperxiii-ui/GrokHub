@@ -10,6 +10,7 @@ import type { GrokModeId } from "@/lib/types";
 import type { UpdateStatus } from "@/lib/update";
 import { cn } from "@/lib/utils";
 import { ProfileAvatar } from "../ProfileAvatar";
+import { HostGatewayBanner } from "../HostGatewayBanner";
 import { UsageMeterPanel } from "../UsageMeter";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -522,14 +523,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">Desktop host</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Button onClick={() => setNav("desktop")}>Open Desktop host</Button>
-        </CardContent>
-      </Card>
+      <HostGatewayBanner variant="card" onOpenDesktop={() => setNav("desktop")} />
 
       <Card>
         <CardHeader>

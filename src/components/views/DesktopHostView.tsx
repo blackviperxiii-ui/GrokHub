@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostApp, HostExecResult, HostFileEntry, HostInfo } from "@/lib/host-types";
 import { useGrokHub } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { HostGatewayBanner } from "../HostGatewayBanner";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
@@ -199,11 +200,13 @@ export function DesktopHostView() {
 
   return (
     <div className="space-y-4">
+      <HostGatewayBanner variant="card" />
+
       <Card>
         <CardHeader className="gap-2">
           <CardTitle className="flex items-center gap-2 text-sm">
             <ShieldAlert className="h-4 w-4 text-[var(--color-warn)]" />
-            Desktop host · unsandboxed
+            Desktop host · session
           </CardTitle>
           <CardDescription>
             Full host CLI / files / apps. Shell commands bill 0.25 units against your plan.
