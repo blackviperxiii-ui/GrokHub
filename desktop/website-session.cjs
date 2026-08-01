@@ -322,11 +322,13 @@ function linkWebsiteSession() {
     });
     win.webContents.on("did-redirect-navigation", () => void captureIfReady(false));
 
-    // Cookie store changes (Electron 30+)
+    // Cookie store changes when API supports EventEmitter
     try {
-      ses.cookies.on("changed", () => {
-        void captureIfReady(false);
-      });
+      if (ses.cookies && typeof ses.cookies.on === "function") {
+        ses.cookies.on("changed", () => {
+          void captureIfReady(false);
+        });
+      }
     } catch {
       /* older electron */
     }

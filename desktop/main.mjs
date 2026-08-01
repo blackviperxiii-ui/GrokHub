@@ -396,54 +396,64 @@ function registerIpc() {
     };
   };
 
-  ipcMain.handle("desktop:minimize", () => mainWindow?.minimize());
-  ipcMain.handle("desktop:maximize", () => {
+  // Avoid crash if handlers are registered twice (hot reload / double init)
+  const safeHandle = (channel, listener) => {
+    try {
+      ipcMain.removeHandler(channel);
+    } catch {
+      /* ignore */
+    }
+    ipcMain.handle(channel, listener);
+  };
+
+  safeHandle("desktop:minimize", () => mainWindow?.minimize());
+  safeHandle("desktop:maximize", () => {
     if (!mainWindow) return;
     if (mainWindow.isMaximized()) mainWindow.unmaximize();
     else mainWindow.maximize();
   });
-  ipcMain.handle("desktop:close", () => mainWindow?.close());
-  ipcMain.handle("desktop:platform", () => process.platform);
-  ipcMain.handle("desktop:fit", () => {
+  safeHandle("desktop:close", () => mainWindow?.close());
+  safeHandle("desktop:platform", () => process.platform);
+  safeHandle("desktop:fit", () => {
     if (mainWindow) fitToWorkArea(mainWindow);
   });
 
-  ipcMain.handle(
+  safeHandle(
     "host:info",
     wrap(() => host.info()),
   );
-  ipcMain.handle(
+  safeHandle(
     "host:listDir",
     wrap((_e, p) => host.listDir(p)),
   );
-  ipcMain.handle(
+  safeHandle(
     "host:readFile",
     wrap((_e, p, maxBytes) => host.readFile(p, maxBytes)),
   );
-  ipcMain.handle(
+  safeHandle(
     "host:writeFile",
     wrap((_e, p, content) => host.writeFile(p, content)),
   );
-  ipcMain.handle(
+  safeHandle(
     "host:exec",
     wrap((_e, command, cwd, timeoutMs) => host.runExec(command, cwd, timeoutMs)),
   );
-  ipcMain.handle(
+  safeHandle(
     "host:listApps",
     wrap(() => host.listApps()),
   );
-  ipcMain.handle(
+  safeHandle(
     "host:openApp",
     wrap((_e, opts) => host.openApp(opts || {})),
   );
-  ipcMain.handle(
+  safeHandle(
     "host:readOpenClawWorkspace",
     wrap((_e, p) => host.readOpenClawWorkspace(p)),
   );
 
-  ipcMain.handle("grok:chat", (_e, payload) => grokBridge.callXaiChat(payload || {}));
-  ipcMain.handle("grok:imagine", (_e, payload) => grokBridge.callXaiImagine(payload || {}));
-  ipcMain.handle("grok:probe", async (_e, apiKey, accessToken) => {
+  safeHandle("grok:chat", (_e, payload) => grokBridge.callXaiChat(payload || {}));
+  safeHandle("grok:imagine", (_e, payload) => grokBridge.callXaiImagine(payload || {}));
+  safeHandle("grok:probe", async (_e, apiKey, accessToken) => {
     const bearer =
       (accessToken && String(accessToken)) ||
       (apiKey && String(apiKey)) ||
@@ -457,11 +467,11 @@ function registerIpc() {
       authMode: accessToken ? "oauth" : apiKey ? "apiKey" : "env",
     };
   });
-  ipcMain.handle("grok:oauthStart", () => grokBridge.oauthStart());
-  ipcMain.handle("grok:oauthPoll", (_e, deviceCode) => grokBridge.oauthPoll(deviceCode));
-  ipcMain.handle("grok:oauthEnsure", (_e, tokens) => grokBridge.oauthEnsure(tokens));
-  ipcMain.handle("update:check", (_e, opts) => grokBridge.checkForUpdate(opts || {}));
-  ipcMain.handle("update:apply", async (_e, opts) => {
+  safeHandle("grok:oauthStart", () => grokBridge.oauthStart());
+  safeHandle("grok:oauthPoll", (_e, deviceCode) => grokBridge.oauthPoll(deviceCode));
+  safeHandle("grok:oauthEnsure", (_e, tokens) => grokBridge.oauthEnsure(tokens));
+  safeHandle("update:check", (_e, opts) => grokBridge.checkForUpdate(opts || {}));
+  safeHandle("update:apply", async (_e, opts) => {
     const r = await grokBridge.applyUpdate({ ...(opts || {}), restart: true });
     if (r?.ok && r?.restarting) {
       setTimeout(() => {
@@ -477,7 +487,7 @@ function registerIpc() {
   });
 
   /** Capture grok.com SSO cookie (website Usage / weekly SuperGrok limit). */
-  ipcMain.handle("grok:getWebsiteSso", async () => {
+  safeHandle("grok:getWebsiteSso", async () => {
     try {
       return await websiteSession.getStoredSso();
     } catch (e) {
@@ -485,7 +495,7 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle("grok:linkWebsiteSession", async () => {
+  safeHandle("grok:linkWebsiteSession", async () => {
     try {
       return await websiteSession.linkWebsiteSession();
     } catch (e) {
@@ -493,15 +503,7 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle("grok:getWebsiteSso", async () => {
-    try {
-      return await websiteSession.getStoredSso();
-    } catch (e) {
-      return { cookie: "", error: e instanceof Error ? e.message : "sso read failed" };
-    }
-  });
-
-  ipcMain.handle("grok:injectWebsiteCookie", async (_e, raw) => {
+  safeHandle("grok:injectWebsiteCookie", async (_e, raw) => {
     try {
       return await websiteSession.injectCookieHeader(String(raw || ""));
     } catch (e) {
@@ -509,53 +511,53 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle("grok:websiteUsage", async (_e, opts) => {
+  safeHandle("grok:websiteUsage", async (_e, opts) => {
     return websiteSession.fetchWebsiteUsage({
       ssoCookie: String(opts?.ssoCookie || ""),
       bearer: String(opts?.bearer || ""),
     });
   });
 
-  ipcMain.handle("grok:websiteConnectors", async (_e, opts) => {
+  safeHandle("grok:websiteConnectors", async (_e, opts) => {
     return websiteSession.fetchWebsiteConnectors({
       ssoCookie: String(opts?.ssoCookie || ""),
       bearer: String(opts?.bearer || ""),
     });
   });
 
-  ipcMain.handle("secrets:set", (_e, key, value) => secretsStore.set(String(key), String(value ?? "")));
-  ipcMain.handle("secrets:get", (_e, key) => secretsStore.get(String(key)));
-  ipcMain.handle("secrets:delete", (_e, key) => secretsStore.del(String(key)));
+  safeHandle("secrets:set", (_e, key, value) => secretsStore.set(String(key), String(value ?? "")));
+  safeHandle("secrets:get", (_e, key) => secretsStore.get(String(key)));
+  safeHandle("secrets:delete", (_e, key) => secretsStore.del(String(key)));
 
-  ipcMain.handle("state:get", (_e, name) => stateStore.get(String(name || "")));
-  ipcMain.handle("state:set", (_e, name, value) =>
+  safeHandle("state:get", (_e, name) => stateStore.get(String(name || "")));
+  safeHandle("state:set", (_e, name, value) =>
     stateStore.set(String(name || ""), value == null ? "" : String(value)),
   );
-  ipcMain.handle("state:remove", (_e, name) => stateStore.remove(String(name || "")));
-  ipcMain.handle("state:info", () => stateStore.info());
-  ipcMain.handle("state:export", () => stateStore.exportAll());
-  ipcMain.handle("state:import", (_e, payload) => stateStore.importAll(payload));
+  safeHandle("state:remove", (_e, name) => stateStore.remove(String(name || "")));
+  safeHandle("state:info", () => stateStore.info());
+  safeHandle("state:export", () => stateStore.exportAll());
+  safeHandle("state:import", (_e, payload) => stateStore.importAll(payload));
 
-  ipcMain.handle("selfmod:info", () => selfMod.info());
-  ipcMain.handle("selfmod:list", (_e, rel) => selfMod.listDirRel(rel));
-  ipcMain.handle("selfmod:read", (_e, rel) => selfMod.readFileRel(rel));
-  ipcMain.handle("selfmod:write", (_e, rel, content, opts) =>
+  safeHandle("selfmod:info", () => selfMod.info());
+  safeHandle("selfmod:list", (_e, rel) => selfMod.listDirRel(rel));
+  safeHandle("selfmod:read", (_e, rel) => selfMod.readFileRel(rel));
+  safeHandle("selfmod:write", (_e, rel, content, opts) =>
     selfMod.writeFileRel(rel, content, opts || {}),
   );
-  ipcMain.handle("selfmod:patch", (_e, rel, find, replace, opts) =>
+  safeHandle("selfmod:patch", (_e, rel, find, replace, opts) =>
     selfMod.patchFileRel(rel, find, replace, opts || {}),
   );
-  ipcMain.handle("selfmod:snapshot", (_e, note) => selfMod.createSnapshot(note));
-  ipcMain.handle("selfmod:restore", (_e, id) => selfMod.restoreSnapshot(id));
-  ipcMain.handle("selfmod:journal", (_e, limit) => selfMod.listJournal(limit));
-  ipcMain.handle("update:factory", async (_e, opts) => {
+  safeHandle("selfmod:snapshot", (_e, note) => selfMod.createSnapshot(note));
+  safeHandle("selfmod:restore", (_e, id) => selfMod.restoreSnapshot(id));
+  safeHandle("selfmod:journal", (_e, limit) => selfMod.listJournal(limit));
+  safeHandle("update:factory", async (_e, opts) => {
     const r = await grokBridge.factoryReinstall({ ...(opts || {}), restart: true });
     return r;
   });
 
   // Non-stream chat already registered; expose stream buffer helper if bridge supports it
   if (typeof grokBridge.callXaiChatStream === "function") {
-    ipcMain.handle("grok:chatStream", async (_e, payload) => {
+    safeHandle("grok:chatStream", async (_e, payload) => {
       let content = "";
       const result = await grokBridge.callXaiChatStream(payload || {}, {
         onDelta: (d) => {
