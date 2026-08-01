@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=GrokClaw
+GenericName=Grok Agent Control Plane
+Comment=OpenClaw-style agent desktop — Grok modes, Imagine, Connectors, Skills, Automations
+Exec=grokclaw %U
+Icon=grokclaw
+Terminal=false
+Categories=Utility;Development;Office;
+Keywords=grok;ai;agent;openclaw;xai;
+StartupWMClass=GrokClaw
+X-GNOME-UsesNotifications=true

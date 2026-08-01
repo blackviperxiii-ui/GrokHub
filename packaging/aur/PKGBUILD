@@ -1,0 +1,56 @@
+# Maintainer: GrokClaw contributors
+# Source package — builds the Arch runtime from the GitHub tree
+pkgname=grokclaw
+pkgver=0.1.0
+pkgrel=2
+pkgdesc="Grok-native agent control plane (modes, Imagine, connectors, unsandboxed desktop host)"
+arch=('x86_64')
+url="https://github.com/blackviperxiii-ui/spring-dove-reef-apple"
+license=('MIT')
+depends=('electron' 'nodejs' 'curl')
+makedepends=('npm' 'git')
+options=('!strip' '!debug')
+install=grokclaw.install
+# Git source (works for private clones with your credentials; make the repo public for AUR)
+source=("${pkgname}::git+https://github.com/blackviperxiii-ui/spring-dove-reef-apple.git#branch=main")
+sha256sums=('127f8df439a5c68aa309179aa5817e50667cffed363f7f65f465e31ccdd64baf')
+
+pkgver() {
+  cd "${srcdir}/${pkgname}"
+  # Prefer package.json version; fall back to git describe
+  if [[ -f package.json ]]; then
+    node -p "require('./package.json').version" 2>/dev/null || echo 0.1.0
+  else
+    printf "0.1.0.r%s" "$(git rev-list --count HEAD)"
+  fi
+}
+
+build() {
+  cd "${srcdir}/${pkgname}"
+  if [[ -d node_modules ]]; then
+    echo "Using existing node_modules"
+  else
+    npm ci --ignore-scripts || npm install --ignore-scripts
+  fi
+  # node-server preset for local Arch runtime
+  GROKCLAW_DESKTOP=1 npm run build
+}
+
+package() {
+  cd "${srcdir}/${pkgname}"
+
+  install -dm755 "${pkgdir}/usr/lib/grokclaw"
+  cp -a .output desktop "${pkgdir}/usr/lib/grokclaw/"
+
+  install -Dm755 packaging/aur/grokclaw.sh "${pkgdir}/usr/bin/grokclaw"
+  install -Dm644 packaging/grokclaw.desktop \
+    "${pkgdir}/usr/share/applications/grokclaw.desktop"
+  install -Dm644 packaging/grokclaw.svg \
+    "${pkgdir}/usr/share/icons/hicolor/scalable/apps/grokclaw.svg"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/grokclaw/LICENSE"
+
+  find "${pkgdir}/usr/lib/grokclaw" -type f -exec chmod 644 {} +
+  find "${pkgdir}/usr/lib/grokclaw" -type d -exec chmod 755 {} +
+  chmod 755 "${pkgdir}/usr/bin/grokclaw"
+  chmod 755 "${pkgdir}/usr/lib/grokclaw/desktop/main.mjs" || true
+}

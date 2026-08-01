@@ -1,0 +1,14 @@
+node_modules/
+.project_id
+.github_repo
+.env
+.env.*
+screenshots/**
+!screenshots/.gitkeep
+attachments/**
+*.log
+/tmp/
+.DS_Store
+packaging/aur/pkg/
+packaging/aur/src/
+packaging/aur/*.pkg.tar*
