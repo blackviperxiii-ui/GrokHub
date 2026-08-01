@@ -11,11 +11,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui
 import { Input } from "../ui/input";
 
 const SUGGESTIONS = [
+  "What can you help me with?",
   "/morning",
   "$ uname -a",
   "What's my usage?",
-  "What modes are baked in?",
-  "Arch desktop install",
+  "Explain my modes",
 ];
 
 export function ChatView() {
@@ -27,6 +27,7 @@ export function ChatView() {
   const pushActivity = useGrokHub((s) => s.pushActivity);
   const recordUsage = useGrokHub((s) => s.recordUsage);
   const usage = useGrokHub((s) => s.usage);
+  const grokConnected = useGrokHub((s) => s.grokConnected);
   const [text, setText] = useState("");
   const [localRunning, setLocalRunning] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -137,19 +138,22 @@ export function ChatView() {
   }
 
   return (
-    <div className="mx-auto flex h-[calc(100dvh-10.5rem)] max-w-3xl flex-col gap-3 md:h-[calc(100dvh-9rem)]">
-      <Card className="flex min-h-0 flex-1 flex-col">
+    <div className="mx-auto flex h-full min-h-0 max-w-3xl flex-col gap-3">
+      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0 border-b border-[var(--color-border)]">
           <div className="flex items-start justify-between gap-3">
             <div>
               <CardTitle className="text-sm">Agent session</CardTitle>
               <CardDescription>
-                Prefix with <span className="font-mono">$</span> for host shell. Mode turns burn
-                plan units.
+                Live Grok via xAI · <span className="font-mono">$</span> for host shell · mode units
+                apply
               </CardDescription>
             </div>
             <div className="flex flex-col items-end gap-1">
               <Badge className="font-mono">{modeMeta.label}</Badge>
+              <Badge variant={grokConnected ? "success" : "default"} className="text-[10px]">
+                {grokConnected ? "Grok live" : "Offline / key needed"}
+              </Badge>
               <span className="text-[10px] tabular text-[var(--color-subtle)]">
                 {formatUnits(usage.usedUnits)}/{formatUnits(plan.units)} · {pct}%
               </span>
@@ -157,7 +161,7 @@ export function ChatView() {
           </div>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-0">
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 md:px-5">
+          <div className="scroll-panel min-h-0 flex-1 space-y-3 px-4 py-4 md:px-5">
             {chat.map((m) => (
               <div
                 key={m.id}
@@ -190,7 +194,7 @@ export function ChatView() {
             {busy && (
               <div className="text-xs text-[var(--color-subtle)]">
                 <span className="shimmer rounded px-1">
-                  {localRunning ? "Host running…" : `${modeMeta.label} thinking…`}
+                  {localRunning ? "Host running…" : `${modeMeta.label} · Grok thinking…`}
                 </span>
               </div>
             )}
@@ -221,10 +225,11 @@ export function ChatView() {
               <Input
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder={`Message or $ shell (${modeMeta.label})`}
+                placeholder="Message Grok… or $ shell"
                 disabled={busy}
+                className="flex-1"
               />
-              <Button type="submit" disabled={busy || !text.trim()} size="icon" aria-label="Send">
+              <Button type="submit" disabled={busy || !text.trim()} size="icon">
                 <Send className="h-4 w-4" />
               </Button>
             </form>

@@ -4,6 +4,9 @@ import type {
   HostFileEntry,
   HostInfo,
 } from "./host-types";
+import type { GrokChatMessage, GrokChatResult } from "./grok";
+import type { GrokModeId } from "./types";
+import type { UpdateResult, UpdateStatus } from "./update";
 
 /**
  * Client host bridge.
@@ -11,10 +14,22 @@ import type {
  * 2) POST /api/host JSON RPC (Vite middleware / production adapter)
  */
 
-type DesktopBridge = {
+export type DesktopGrokBridge = {
+  chat?: (payload: {
+    messages: GrokChatMessage[];
+    mode?: GrokModeId;
+    apiKey?: string;
+  }) => Promise<GrokChatResult>;
+  probe?: (apiKey?: string) => Promise<{ ok: boolean; detail: string; envConfigured?: boolean }>;
+  checkUpdate?: (opts?: { token?: string }) => Promise<UpdateStatus>;
+  applyUpdate?: (opts?: { token?: string }) => Promise<UpdateResult>;
+};
+
+export type DesktopBridge = {
   minimize?: () => void;
   maximize?: () => void;
   close?: () => void;
+  fit?: () => void;
   platform?: string;
   host?: {
     info: () => Promise<HostInfo>;
@@ -32,6 +47,7 @@ type DesktopBridge = {
       path?: string;
     }) => Promise<{ ok: boolean; detail: string }>;
   };
+  grok?: DesktopGrokBridge;
 };
 
 declare global {

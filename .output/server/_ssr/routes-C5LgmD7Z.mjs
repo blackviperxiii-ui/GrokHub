@@ -1,12 +1,45 @@
 import { r as __toESM } from "../_runtime.mjs";
-import { M as require_react, h as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
+import { M as require_react, j as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
 import { A as Brain, C as Folder, D as ChevronRight, E as Command, M as AppWindow, N as Activity, O as Check, S as Gauge, T as Download, _ as LoaderCircle, a as Terminal, b as HardDrive, c as ShieldAlert, d as RefreshCw, f as Plus, g as Menu, h as MessageSquare, i as TimerReset, j as ArrowRight, k as Cable, l as Settings, m as Minus, n as X, o as Square, p as Play, r as Users, s as Sparkles, t as Zap, u as Send, v as Link2Off, w as FolderOpen, x as Hammer, y as Image } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
 import { n as clsx, t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { t as twMerge } from "../_libs/tailwind-merge.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-Cja-EmpI.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-C5LgmD7Z.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
+async function rpc(path, action, body = {}) {
+	const res = await fetch(path, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			action,
+			...body
+		})
+	});
+	const data = await res.json().catch(() => ({}));
+	if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+	return data;
+}
+async function grokChat(opts) {
+	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
+	if (desktop?.chat) return desktop.chat(opts);
+	return rpc("/api/grok", "chat", opts);
+}
+async function grokProbe(apiKey) {
+	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
+	if (desktop?.probe) return desktop.probe(apiKey);
+	return rpc("/api/grok", "probe", { apiKey: apiKey || "" });
+}
+async function checkUpdate(token) {
+	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
+	if (desktop?.checkUpdate) return desktop.checkUpdate({ token });
+	return rpc("/api/update", "check", { token: token || "" });
+}
+async function applyUpdate(token) {
+	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
+	if (desktop?.applyUpdate) return desktop.applyUpdate({ token });
+	return rpc("/api/update", "apply", { token: token || "" });
+}
 var GROK_MODES = [
 	{
 		id: "auto",
@@ -455,7 +488,7 @@ function createSeeds(now = Date.now()) {
 		chat: [{
 			id: "c0",
 			role: "system",
-			content: "GrokHub desktop online. Modes Auto/Fast/Expert/Heavy/Build are baked in (Grok 4.5). Imagine is in the sidebar. Prefix shell with $ for unsandboxed host CLI, or open Desktop.",
+			content: "GrokHub desktop online (v0.1). Modes Auto/Fast/Expert/Heavy/Build map to live xAI Grok models. Add your API key in Settings to connect. Prefix shell with $ for host CLI.",
 			ts: now - 2 * MINUTE
 		}],
 		heartbeatAt: now
@@ -807,6 +840,10 @@ var useGrokHub = create()(persist((set, get) => ({
 	usage: createUsage("pro"),
 	heartbeatAt: boot.heartbeatAt,
 	running: false,
+	apiKey: "",
+	githubToken: "",
+	grokConnected: null,
+	grokStatusDetail: "Not connected — add an xAI API key in Settings",
 	setNav: (nav) => set({
 		nav,
 		modeMenuOpen: false
@@ -828,6 +865,28 @@ var useGrokHub = create()(persist((set, get) => ({
 		...s.desktop,
 		...patch
 	} })),
+	setApiKey: (key) => set({
+		apiKey: key,
+		grokConnected: null
+	}),
+	setGithubToken: (token) => set({ githubToken: token }),
+	probeGrok: async () => {
+		try {
+			const { grokProbe } = await import("./grok-client-BL-IqUiv.mjs");
+			const r = await grokProbe(get().apiKey || void 0);
+			set({
+				grokConnected: r.ok,
+				grokStatusDetail: r.detail + (r.envConfigured && !get().apiKey ? " (env key)" : "")
+			});
+			return r.ok;
+		} catch (e) {
+			set({
+				grokConnected: false,
+				grokStatusDetail: e instanceof Error ? e.message : "probe failed"
+			});
+			return false;
+		}
+	},
 	setPlan: (plan) => {
 		const prev = get().usage;
 		const next = ensurePeriod({
@@ -1096,8 +1155,72 @@ var useGrokHub = create()(persist((set, get) => ({
 			get().setAgentStatus("ops", "working", 1);
 			get().setAgentStatus("builder", "working", 1);
 		}
-		await wait(m.latencyMs[0] + Math.random() * (m.latencyMs[1] - m.latencyMs[0]));
-		const answer = replyFor(trimmed, get(), routed);
+		const isLocalSlash = trimmed.startsWith("/morning") || trimmed.startsWith("/standup") || trimmed.startsWith("/docs") || trimmed.startsWith("/prints");
+		let answer;
+		let usedLive = false;
+		try {
+			if (isLocalSlash) {
+				await wait(280);
+				answer = replyFor(trimmed, get(), routed);
+			} else {
+				const { grokChat } = await import("./grok-client-BL-IqUiv.mjs");
+				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").slice(-16).map((c) => ({
+					role: c.role,
+					content: c.content
+				}));
+				if (!history.length || history[history.length - 1]?.content !== trimmed) history.push({
+					role: "user",
+					content: trimmed
+				});
+				const result = await grokChat({
+					messages: history,
+					mode: routed,
+					apiKey: get().apiKey || void 0
+				});
+				if (result.ok && result.content) {
+					usedLive = true;
+					answer = [
+						mode === "auto" && routed !== "auto" ? `[Auto → ${m.label} · ${result.model || m.model}]` : `[${m.label} · ${result.model || m.model}]`,
+						"",
+						result.content
+					].join("\n");
+					set({
+						grokConnected: true,
+						grokStatusDetail: `Live · ${result.model || "Grok"}`
+					});
+				} else {
+					answer = [
+						modePrefix(mode, routed),
+						"",
+						"Could not reach Grok.",
+						result.error || "Unknown error",
+						"",
+						"Fix: Settings → paste your xAI API key (console.x.ai) or set XAI_API_KEY.",
+						"",
+						"— Offline fallback —",
+						replyFor(trimmed, get(), routed)
+					].join("\n");
+					set({
+						grokConnected: false,
+						grokStatusDetail: result.error || "Grok request failed"
+					});
+				}
+			}
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : "request failed";
+			answer = [
+				modePrefix(mode, routed),
+				"",
+				`Grok connection error: ${msg}`,
+				"",
+				"— Offline fallback —",
+				replyFor(trimmed, get(), routed)
+			].join("\n");
+			set({
+				grokConnected: false,
+				grokStatusDetail: msg
+			});
+		}
 		const bot = {
 			id: uid("msg"),
 			role: "assistant",
@@ -1115,9 +1238,9 @@ var useGrokHub = create()(persist((set, get) => ({
 		get().setAgentStatus("ops", "idle", 0);
 		get().pushActivity({
 			kind: "chat",
-			title: `Agent reply · ${m.label}`,
+			title: usedLive ? `Grok · ${m.label}` : `Agent reply · ${m.label}`,
 			detail: `${trimmed.slice(0, 80)} · ${bill.cost}u`,
-			status: "success"
+			status: usedLive ? "success" : "failed"
 		});
 	},
 	setImaginePrompt: (v) => set({ imaginePrompt: v }),
@@ -1243,7 +1366,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		});
 	}
 }), {
-	name: "grokhub-v1",
+	name: "grokhub-v2",
 	partialize: (s) => ({
 		connectors: s.connectors,
 		skills: s.skills,
@@ -1255,7 +1378,9 @@ var useGrokHub = create()(persist((set, get) => ({
 		desktop: s.desktop,
 		usage: s.usage,
 		imagineJobs: s.imagineJobs.slice(0, 8),
-		imagineAspect: s.imagineAspect
+		imagineAspect: s.imagineAspect,
+		apiKey: s.apiKey,
+		githubToken: s.githubToken
 	}),
 	skipHydration: true
 }));
@@ -1916,11 +2041,11 @@ function AutomationsView() {
 	});
 }
 var SUGGESTIONS = [
+	"What can you help me with?",
 	"/morning",
 	"$ uname -a",
 	"What's my usage?",
-	"What modes are baked in?",
-	"Arch desktop install"
+	"Explain my modes"
 ];
 function ChatView() {
 	const chat = useGrokHub((s) => s.chat);
@@ -1931,6 +2056,7 @@ function ChatView() {
 	const pushActivity = useGrokHub((s) => s.pushActivity);
 	const recordUsage = useGrokHub((s) => s.recordUsage);
 	const usage = useGrokHub((s) => s.usage);
+	const grokConnected = useGrokHub((s) => s.grokConnected);
 	const [text, setText] = (0, import_react.useState)("");
 	const [localRunning, setLocalRunning] = (0, import_react.useState)(false);
 	const endRef = (0, import_react.useRef)(null);
@@ -2009,9 +2135,9 @@ function ChatView() {
 		await sendChat(payload);
 	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "mx-auto flex h-[calc(100dvh-10.5rem)] max-w-3xl flex-col gap-3 md:h-[calc(100dvh-9rem)]",
+		className: "mx-auto flex h-full min-h-0 max-w-3xl flex-col gap-3",
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, {
-			className: "flex min-h-0 flex-1 flex-col",
+			className: "flex min-h-0 flex-1 flex-col overflow-hidden",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardHeader, {
 				className: "shrink-0 border-b border-[var(--color-border)]",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -2020,34 +2146,42 @@ function ChatView() {
 						className: "text-sm",
 						children: "Agent session"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardDescription, { children: [
-						"Prefix with ",
+						"Live Grok via xAI · ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "font-mono",
 							children: "$"
 						}),
-						" for host shell. Mode turns burn plan units."
+						" for host shell · mode units apply"
 					] })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "flex flex-col items-end gap-1",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
-							className: "font-mono",
-							children: modeMeta.label
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "text-[10px] tabular text-[var(--color-subtle)]",
-							children: [
-								formatUnits(usage.usedUnits),
-								"/",
-								formatUnits(plan.units),
-								" · ",
-								pct,
-								"%"
-							]
-						})]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+								className: "font-mono",
+								children: modeMeta.label
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+								variant: grokConnected ? "success" : "default",
+								className: "text-[10px]",
+								children: grokConnected ? "Grok live" : "Offline / key needed"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "text-[10px] tabular text-[var(--color-subtle)]",
+								children: [
+									formatUnits(usage.usedUnits),
+									"/",
+									formatUnits(plan.units),
+									" · ",
+									pct,
+									"%"
+								]
+							})
+						]
 					})]
 				})
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 				className: "flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-0",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 md:px-5",
+					className: "scroll-panel min-h-0 flex-1 space-y-3 px-4 py-4 md:px-5",
 					children: [
 						chat.map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: cn("flex", m.role === "user" ? "justify-end" : "justify-start"),
@@ -2070,7 +2204,7 @@ function ChatView() {
 							className: "text-xs text-[var(--color-subtle)]",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "shimmer rounded px-1",
-								children: localRunning ? "Host running…" : `${modeMeta.label} thinking…`
+								children: localRunning ? "Host running…" : `${modeMeta.label} · Grok thinking…`
 							})
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { ref: endRef })
@@ -2095,13 +2229,13 @@ function ChatView() {
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
 							value: text,
 							onChange: (e) => setText(e.target.value),
-							placeholder: `Message or $ shell (${modeMeta.label})`,
-							disabled: busy
+							placeholder: "Message Grok… or $ shell",
+							disabled: busy,
+							className: "flex-1"
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
 							type: "submit",
 							disabled: busy || !text.trim(),
 							size: "icon",
-							"aria-label": "Send",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Send, { className: "h-4 w-4" })
 						})]
 					})]
@@ -2943,14 +3077,225 @@ function SettingsView() {
 	const setDesktop = useGrokHub((s) => s.setDesktop);
 	const setNav = useGrokHub((s) => s.setNav);
 	const resetDemo = useGrokHub((s) => s.resetDemo);
+	const apiKey = useGrokHub((s) => s.apiKey);
+	const setApiKey = useGrokHub((s) => s.setApiKey);
+	const githubToken = useGrokHub((s) => s.githubToken);
+	const setGithubToken = useGrokHub((s) => s.setGithubToken);
+	const grokConnected = useGrokHub((s) => s.grokConnected);
+	const grokStatusDetail = useGrokHub((s) => s.grokStatusDetail);
+	const probeGrok = useGrokHub((s) => s.probeGrok);
+	const [keyDraft, setKeyDraft] = (0, import_react.useState)(apiKey);
+	const [ghDraft, setGhDraft] = (0, import_react.useState)(githubToken);
+	const [probing, setProbing] = (0, import_react.useState)(false);
+	const [update, setUpdate] = (0, import_react.useState)(null);
+	const [updateBusy, setUpdateBusy] = (0, import_react.useState)(false);
+	const [updateLog, setUpdateLog] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		setKeyDraft(apiKey);
+	}, [apiKey]);
+	(0, import_react.useEffect)(() => {
+		setGhDraft(githubToken);
+	}, [githubToken]);
+	(0, import_react.useEffect)(() => {
+		checkUpdate(githubToken || void 0).then(setUpdate).catch((e) => setUpdate({
+			currentVersion: "0.1",
+			currentSha: null,
+			remoteSha: null,
+			remoteMessage: null,
+			updateAvailable: false,
+			repo: "blackviperxiii-ui/spring-dove-reef-apple",
+			branch: "main",
+			installRoot: null,
+			detail: e instanceof Error ? e.message : "check failed"
+		}));
+	}, [githubToken]);
+	async function saveAndProbe() {
+		setApiKey(keyDraft.trim());
+		setProbing(true);
+		try {
+			await probeGrok();
+		} finally {
+			setProbing(false);
+		}
+	}
+	async function onCheckUpdate() {
+		setUpdateBusy(true);
+		setUpdateLog("");
+		try {
+			setGithubToken(ghDraft.trim());
+			const s = await checkUpdate(ghDraft.trim() || void 0);
+			setUpdate(s);
+			setUpdateLog(s.detail);
+		} catch (e) {
+			setUpdateLog(e instanceof Error ? e.message : "check failed");
+		} finally {
+			setUpdateBusy(false);
+		}
+	}
+	async function onInstallUpdate() {
+		setUpdateBusy(true);
+		setUpdateLog("Installing update from GitHub…");
+		try {
+			setGithubToken(ghDraft.trim());
+			const r = await applyUpdate(ghDraft.trim() || void 0);
+			setUpdateLog([
+				r.detail,
+				"",
+				...r.steps || []
+			].join("\n"));
+			if (r.ok) {
+				const s = await checkUpdate(ghDraft.trim() || void 0);
+				setUpdate(s);
+			}
+		} catch (e) {
+			setUpdateLog(e instanceof Error ? e.message : "update failed");
+		} finally {
+			setUpdateBusy(false);
+		}
+	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "mx-auto max-w-3xl space-y-5",
+		className: "mx-auto max-w-3xl space-y-5 pb-8",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsageMeterPanel, {}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
+				children: "Grok / xAI connection"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardDescription, { children: [
+				"Agent chat uses the live xAI API (api.x.ai). Paste a key from",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "font-mono",
+					children: "console.x.ai"
+				}),
+				" or export",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "font-mono",
+					children: "XAI_API_KEY"
+				}),
+				" in the environment."
+			] })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+				className: "space-y-3",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex flex-wrap items-center gap-2",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+							variant: grokConnected ? "success" : "default",
+							children: grokConnected ? "Connected" : "Not connected"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "text-xs text-[var(--color-muted)]",
+							children: grokStatusDetail
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "space-y-1.5",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+							className: "text-xs font-medium text-[var(--color-muted)]",
+							children: "xAI API key"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
+							type: "password",
+							autoComplete: "off",
+							value: keyDraft,
+							onChange: (e) => setKeyDraft(e.target.value),
+							placeholder: "xai-…"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex flex-wrap gap-2",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+							onClick: () => void saveAndProbe(),
+							disabled: probing,
+							children: probing ? "Testing…" : "Save & test"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+							variant: "secondary",
+							onClick: () => {
+								setKeyDraft("");
+								setApiKey("");
+							},
+							children: "Clear key"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "text-xs text-[var(--color-subtle)]",
+						children: "Key stays on this device (local storage). It is only sent to api.x.ai when you chat."
+					})
+				]
+			})] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
+				className: "text-sm",
+				children: "Updates (GitHub)"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Pull the latest GrokHub build from the repository and reinstall. Private repos need a GitHub token with contents:read." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+				className: "space-y-3",
+				children: [
+					update && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-sm",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex flex-wrap items-center gap-2",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Badge, { children: ["v", update.currentVersion] }), update.updateAvailable ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+								variant: "info",
+								children: "Update available"
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+								variant: "success",
+								children: "Up to date"
+							})]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "mt-2 space-y-1 font-mono text-xs text-[var(--color-muted)]",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+									"local ",
+									update.currentSha || "—",
+									" → remote ",
+									update.remoteSha || "—"
+								] }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+									update.repo,
+									"@",
+									update.branch
+								] }),
+								update.remoteMessage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "text-[var(--color-subtle)]",
+									children: update.remoteMessage
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: update.detail })
+							]
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "space-y-1.5",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+							className: "text-xs font-medium text-[var(--color-muted)]",
+							children: "GitHub token (optional, private repo)"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
+							type: "password",
+							autoComplete: "off",
+							value: ghDraft,
+							onChange: (e) => setGhDraft(e.target.value),
+							placeholder: "ghp_… or github_pat_…"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex flex-wrap gap-2",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+							variant: "secondary",
+							disabled: updateBusy,
+							onClick: () => void onCheckUpdate(),
+							children: "Check for updates"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+							disabled: updateBusy || (update ? !update.updateAvailable : false),
+							onClick: () => void onInstallUpdate(),
+							children: updateBusy ? "Working…" : "Install latest"
+						})]
+					}),
+					updateLog && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+						className: "scroll-panel max-h-48 whitespace-pre-wrap rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] p-3 font-mono text-xs text-[var(--color-muted)]",
+						children: updateLog
+					})
+				]
+			})] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
+				className: "text-sm",
 				children: "Model modes (baked in)"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Same control surface as Grok web — Auto, Fast, Expert, Heavy, Build. All on Grok 4.5. Units charged per agent turn by mode." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, {
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Same control surface as Grok web — Auto, Fast, Expert, Heavy, Build. All on Grok 4.5 family models via xAI." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, {
 				className: "space-y-2",
 				children: GROK_MODES.map((m) => {
 					const selected = m.id === mode;
@@ -2983,35 +3328,22 @@ function SettingsView() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
 				children: "Unsandboxed desktop host"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "GrokHub is designed as a personal agent with full user-session access: shell, files, and installed apps. Host CLI burns 0.25 units per command." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Full user-session access: shell, files, and installed apps. Host CLI burns 0.25 units per command." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 				className: "space-y-3",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-warn)_35%,transparent)] bg-[color-mix(in_oklab,var(--color-warn)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warn)]",
-						children: "Commands run as your Linux user. Treat this like giving an agent your terminal."
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-						onClick: () => setNav("desktop"),
-						children: "Open Desktop host"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 font-mono text-xs leading-relaxed text-[var(--color-muted)]",
-						children: [
-							"Agent chat: prefix with $ to exec",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
-							"$ uname -a",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
-							"Desktop tab: CLI · Files · Apps"
-						]
-					})
-				]
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-warn)_35%,transparent)] bg-[color-mix(in_oklab,var(--color-warn)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warn)]",
+					children: "Commands run as your Linux user. Treat this like giving an agent your terminal."
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+					onClick: () => setNav("desktop"),
+					children: "Open Desktop host"
+				})]
 			})] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
 				children: "Arch Linux desktop shell"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Electron preferences for Wayland/X11 (CachyOS, Hyprland, KDE, GNOME)." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Electron preferences for Wayland/X11. Window auto-fits the work area on launch." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, {
 				className: "space-y-3",
-				children: [[
+				children: [
 					[
 						"wayland",
 						"Prefer Wayland",
@@ -3046,20 +3378,7 @@ function SettingsView() {
 						checked: desktop[key],
 						onChange: (e) => setDesktop({ [key]: e.target.checked })
 					})]
-				}, key)), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 font-mono text-xs leading-relaxed text-[var(--color-muted)]",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "mb-1 text-[10px] uppercase tracking-wide text-[var(--color-subtle)]",
-							children: "Arch install"
-						}),
-						"sudo pacman -S electron nodejs npm",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
-						"npm run desktop:dev",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
-						"# or: cd packaging && makepkg -si"
-					]
-				})]
+				}, key))
 			})] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
 				variant: "secondary",
@@ -3267,6 +3586,9 @@ function AppShell() {
 	const tickHeartbeat = useGrokHub((s) => s.tickHeartbeat);
 	const refreshStaleTimes = useGrokHub((s) => s.refreshStaleTimes);
 	const resetDemo = useGrokHub((s) => s.resetDemo);
+	const grokConnected = useGrokHub((s) => s.grokConnected);
+	const grokStatusDetail = useGrokHub((s) => s.grokStatusDetail);
+	const probeGrok = useGrokHub((s) => s.probeGrok);
 	const [mobileOpen, setMobileOpen] = (0, import_react.useState)(false);
 	const [isDesktop, setIsDesktop] = (0, import_react.useState)(false);
 	const modeMeta = getMode(mode);
@@ -3275,6 +3597,7 @@ function AppShell() {
 		Promise.resolve(p).finally(() => {
 			useGrokHub.getState().refreshStaleTimes();
 			useGrokHub.getState().tickHeartbeat();
+			useGrokHub.getState().probeGrok();
 		});
 		setIsDesktop(Boolean(window.grokhubDesktop));
 	}, []);
@@ -3288,7 +3611,7 @@ function AppShell() {
 	const drag = { WebkitAppRegion: "drag" };
 	const noDrag = { WebkitAppRegion: "no-drag" };
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "flex min-h-dvh flex-col bg-[var(--color-bg)] text-[var(--color-fg)]",
+		className: "flex h-dvh max-h-dvh flex-col overflow-hidden bg-[var(--color-bg)] text-[var(--color-fg)]",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3",
 			style: drag,
@@ -3305,9 +3628,12 @@ function AppShell() {
 						className: "hidden font-mono text-[10px] sm:inline-flex",
 						children: ["v", APP_VERSION]
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "hidden text-[10px] text-[var(--color-subtle)] md:inline",
-						children: "Arch desktop · unsandboxed host"
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						onClick: () => void probeGrok(),
+						className: "hidden items-center gap-1.5 rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] md:inline-flex",
+						title: grokStatusDetail,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: cn("inline-block h-1.5 w-1.5 rounded-full", grokConnected === true ? "bg-[var(--color-success)]" : grokConnected === false ? "bg-[var(--color-danger)]" : "bg-[var(--color-subtle)]") }), grokConnected === true ? "Grok live" : grokConnected === false ? "Grok offline" : "Grok…"]
 					})
 				]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -3345,22 +3671,22 @@ function AppShell() {
 				]
 			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "mx-auto flex min-h-0 w-full max-w-[1400px] flex-1",
+			className: "mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 overflow-hidden",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
-				className: "hidden w-56 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)] md:flex",
+				className: "hidden w-56 shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-surface)] md:flex",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
-					className: "flex flex-1 flex-col gap-1 p-3",
+					className: "scroll-panel flex flex-1 flex-col gap-1 p-3",
 					children: NAV.map((item) => {
 						const Icon = item.icon;
 						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							type: "button",
 							onClick: () => setNav(item.id),
-							className: cn("flex h-10 items-center gap-2.5 rounded-[var(--radius-sm)] px-3 text-sm transition-colors", nav === item.id ? "bg-[var(--color-elevated)] text-[var(--color-fg)]" : "text-[var(--color-muted)] hover:bg-[var(--color-elevated)]/60 hover:text-[var(--color-fg)]"),
+							className: cn("flex h-10 shrink-0 items-center gap-2.5 rounded-[var(--radius-sm)] px-3 text-sm transition-colors", nav === item.id ? "bg-[var(--color-elevated)] text-[var(--color-fg)]" : "text-[var(--color-muted)] hover:bg-[var(--color-elevated)]/60 hover:text-[var(--color-fg)]"),
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Icon, { className: "h-4 w-4 shrink-0" }), item.label]
 						}, item.id);
 					})
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "space-y-3 border-t border-[var(--color-border)] p-4",
+					className: "shrink-0 space-y-3 border-t border-[var(--color-border)] p-4",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsageMeterChip, { className: "w-full" }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -3401,10 +3727,10 @@ function AppShell() {
 					]
 				})]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "flex min-w-0 flex-1 flex-col",
+				className: "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
-						className: "sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-bg)_88%,transparent)] px-4 py-3 backdrop-blur-md md:px-6",
+						className: "flex shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-bg)_88%,transparent)] px-4 py-3 backdrop-blur-md md:px-6",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "flex min-w-0 items-center gap-3",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
@@ -3424,7 +3750,8 @@ function AppShell() {
 									children: [
 										"GrokHub v",
 										APP_VERSION,
-										" · Modes · Usage · Desktop · Imagine"
+										" · ",
+										grokConnected ? "live Grok" : "connect in Settings"
 									]
 								})]
 							})]
@@ -3447,7 +3774,7 @@ function AppShell() {
 						})]
 					}),
 					mobileOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "border-b border-[var(--color-border)] bg-[var(--color-surface)] p-2 md:hidden",
+						className: "shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)] p-2 md:hidden",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "mb-2 px-1",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsageMeterChip, { className: "w-full" })
@@ -3465,18 +3792,23 @@ function AppShell() {
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
-						className: "flex-1 p-4 md:p-6",
-						children: [
-							nav === "command" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommandView, {}),
-							nav === "connectors" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectorsView, {}),
-							nav === "skills" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkillsView, {}),
-							nav === "automations" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationsView, {}),
-							nav === "chat" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatView, {}),
-							nav === "agents" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentsView, {}),
-							nav === "imagine" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ImagineView, {}),
-							nav === "desktop" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DesktopHostView, {}),
-							nav === "settings" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsView, {})
-						]
+						className: "flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "scroll-panel min-h-0 flex-1",
+							children: [
+								nav === "command" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommandView, {}),
+								nav === "connectors" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectorsView, {}),
+								nav === "skills" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkillsView, {}),
+								nav === "automations" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationsView, {}),
+								nav === "agents" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentsView, {}),
+								nav === "imagine" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ImagineView, {}),
+								nav === "desktop" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DesktopHostView, {}),
+								nav === "settings" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsView, {})
+							]
+						}), nav === "chat" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "min-h-0 flex-1 overflow-hidden",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatView, {})
+						})]
 					})
 				]
 			})]
@@ -3487,4 +3819,4 @@ function HomePage() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AppShell, {});
 }
 //#endregion
-export { HomePage as component };
+export { HomePage as component, grokProbe as i, checkUpdate as n, grokChat as r, applyUpdate as t };

@@ -23,33 +23,40 @@ var headers = ((m) => function headersRouteRule(event) {
 //#endregion
 //#region #nitro/virtual/public-assets-data
 var public_assets_data_default = {
-	"/assets/routes-DI9eSuPX.js": {
+	"/assets/grok-client-DVWyvBRG.js": {
 		"type": "text/javascript; charset=utf-8",
-		"etag": "\"1e01e-L96htjf4/wYpQbmwDgnv+b4QLw4\"",
-		"mtime": "2026-08-01T04:34:09.102Z",
-		"size": 122910,
-		"path": "../public/assets/routes-DI9eSuPX.js"
-	},
-	"/assets/styles-BXI9c8tN.css": {
-		"type": "text/css; charset=utf-8",
-		"etag": "\"a39a-kzoP0tOyBX0R5RyDQm5Bkqu9LUY\"",
-		"mtime": "2026-08-01T04:34:09.102Z",
-		"size": 41882,
-		"path": "../public/assets/styles-BXI9c8tN.css"
+		"etag": "\"55-RKOOZnjybUK53mKf4geMUFq7YeQ\"",
+		"mtime": "2026-08-01T19:20:48.781Z",
+		"size": 85,
+		"path": "../public/assets/grok-client-DVWyvBRG.js"
 	},
 	"/assets/host-client-Dt5g3YM7.js": {
 		"type": "text/javascript; charset=utf-8",
 		"etag": "\"57a-/h0AfYlC+mUyiq8SBy49y1Aiv9U\"",
-		"mtime": "2026-08-01T04:34:09.102Z",
+		"mtime": "2026-08-01T19:20:48.781Z",
 		"size": 1402,
 		"path": "../public/assets/host-client-Dt5g3YM7.js"
 	},
-	"/assets/index-iCBYBpBF.js": {
+	"/assets/index-Dv6NygT0.js": {
 		"type": "text/javascript; charset=utf-8",
-		"etag": "\"4d2b5-OHKCQ//2sOItLiAp+di1bSDtOu8\"",
-		"mtime": "2026-08-01T04:34:09.102Z",
+		"etag": "\"4d2b5-xuyhZk4Jv45cZM6G2J5HcUA82fk\"",
+		"mtime": "2026-08-01T19:20:48.781Z",
 		"size": 316085,
-		"path": "../public/assets/index-iCBYBpBF.js"
+		"path": "../public/assets/index-Dv6NygT0.js"
+	},
+	"/assets/routes-C7fDODhf.js": {
+		"type": "text/javascript; charset=utf-8",
+		"etag": "\"1fba9-0AEa0Jn9BniMOp5FSHw4ERXH8ts\"",
+		"mtime": "2026-08-01T19:20:48.781Z",
+		"size": 129961,
+		"path": "../public/assets/routes-C7fDODhf.js"
+	},
+	"/assets/styles-BLI3MbLK.css": {
+		"type": "text/css; charset=utf-8",
+		"etag": "\"a80a-kV6OhGVNIqXgSXJUDDn5iCRS1wM\"",
+		"mtime": "2026-08-01T19:20:48.781Z",
+		"size": 43018,
+		"path": "../public/assets/styles-BLI3MbLK.css"
 	}
 };
 //#endregion

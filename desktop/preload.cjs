@@ -1,12 +1,13 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 /**
- * Exposed to renderer. Host methods talk to main process (unsandboxed user session).
+ * Exposed to renderer. Host + Grok + Updates talk to main (unsandboxed session).
  */
 contextBridge.exposeInMainWorld("grokhubDesktop", {
   minimize: () => ipcRenderer.invoke("desktop:minimize"),
   maximize: () => ipcRenderer.invoke("desktop:maximize"),
   close: () => ipcRenderer.invoke("desktop:close"),
+  fit: () => ipcRenderer.invoke("desktop:fit"),
   platform: process.platform,
   host: {
     info: () => ipcRenderer.invoke("host:info"),
@@ -17,5 +18,11 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
       ipcRenderer.invoke("host:exec", command, cwd, timeoutMs),
     listApps: () => ipcRenderer.invoke("host:listApps"),
     openApp: (opts) => ipcRenderer.invoke("host:openApp", opts),
+  },
+  grok: {
+    chat: (payload) => ipcRenderer.invoke("grok:chat", payload),
+    probe: (apiKey) => ipcRenderer.invoke("grok:probe", apiKey),
+    checkUpdate: (opts) => ipcRenderer.invoke("update:check", opts),
+    applyUpdate: (opts) => ipcRenderer.invoke("update:apply", opts),
   },
 });

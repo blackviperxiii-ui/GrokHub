@@ -50,11 +50,21 @@ type State = {
   usage: UsageSnapshot;
   heartbeatAt: number;
   running: boolean;
+  /** xAI API key (local only; never sent to third parties except api.x.ai) */
+  apiKey: string;
+  /** Optional GitHub token for private-repo updates */
+  githubToken: string;
+  grokConnected: boolean | null;
+  grokStatusDetail: string;
   setNav: (nav: NavId) => void;
   setMode: (mode: GrokModeId) => void;
   setModeMenuOpen: (open: boolean) => void;
   setDesktop: (patch: Partial<State["desktop"]>) => void;
+  setApiKey: (key: string) => void;
+  setGithubToken: (token: string) => void;
+  probeGrok: () => Promise<boolean>;
   setPlan: (plan: SubscriptionPlanId) => void;
+
   recordUsage: (bucket: UsageBucket, mode?: GrokModeId) => { ok: boolean; cost: number };
   resetUsagePeriod: () => void;
   toggleConnector: (id: string) => void;
@@ -352,6 +362,10 @@ export const useGrokHub = create<State>()(
       usage: createUsage("pro"),
       heartbeatAt: boot.heartbeatAt,
       running: false,
+      apiKey: "",
+      githubToken: "",
+      grokConnected: null,
+      grokStatusDetail: "Not connected — add an xAI API key in Settings",
 
       setNav: (nav) => set({ nav, modeMenuOpen: false }),
       setMode: (mode) => {
@@ -365,6 +379,23 @@ export const useGrokHub = create<State>()(
       },
       setModeMenuOpen: (open) => set({ modeMenuOpen: open }),
       setDesktop: (patch) => set((s) => ({ desktop: { ...s.desktop, ...patch } })),
+      setApiKey: (key) => set({ apiKey: key, grokConnected: null }),
+      setGithubToken: (token) => set({ githubToken: token }),
+      probeGrok: async () => {
+        try {
+          const { grokProbe } = await import("./grok-client");
+          const r = await grokProbe(get().apiKey || undefined);
+          set({
+            grokConnected: r.ok,
+            grokStatusDetail: r.detail + (r.envConfigured && !get().apiKey ? " (env key)" : ""),
+          });
+          return r.ok;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "probe failed";
+          set({ grokConnected: false, grokStatusDetail: msg });
+          return false;
+        }
+      },
 
       setPlan: (plan) => {
         const prev = get().usage;
@@ -653,8 +684,79 @@ export const useGrokHub = create<State>()(
           get().setAgentStatus("ops", "working", 1);
           get().setAgentStatus("builder", "working", 1);
         }
-        await wait(m.latencyMs[0] + Math.random() * (m.latencyMs[1] - m.latencyMs[0]));
-        const answer = replyFor(trimmed, get(), routed);
+
+        // Local slash demos still work offline; everything else hits xAI Grok
+        const isLocalSlash =
+          trimmed.startsWith("/morning") ||
+          trimmed.startsWith("/standup") ||
+          trimmed.startsWith("/docs") ||
+          trimmed.startsWith("/prints");
+
+        let answer: string;
+        let usedLive = false;
+        try {
+          if (isLocalSlash) {
+            await wait(280);
+            answer = replyFor(trimmed, get(), routed);
+          } else {
+            const { grokChat } = await import("./grok-client");
+            const history = get()
+              .chat.filter((c) => c.role === "user" || c.role === "assistant")
+              .slice(-16)
+              .map((c) => ({
+                role: c.role as "user" | "assistant",
+                content: c.content,
+              }));
+            // ensure last user message is present
+            if (!history.length || history[history.length - 1]?.content !== trimmed) {
+              history.push({ role: "user", content: trimmed });
+            }
+            const result = await grokChat({
+              messages: history,
+              mode: routed,
+              apiKey: get().apiKey || undefined,
+            });
+            if (result.ok && result.content) {
+              usedLive = true;
+              answer = [
+                mode === "auto" && routed !== "auto"
+                  ? `[Auto → ${m.label} · ${result.model || m.model}]`
+                  : `[${m.label} · ${result.model || m.model}]`,
+                "",
+                result.content,
+              ].join("\n");
+              set({ grokConnected: true, grokStatusDetail: `Live · ${result.model || "Grok"}` });
+            } else {
+              answer = [
+                modePrefix(mode, routed),
+                "",
+                "Could not reach Grok.",
+                result.error || "Unknown error",
+                "",
+                "Fix: Settings → paste your xAI API key (console.x.ai) or set XAI_API_KEY.",
+                "",
+                "— Offline fallback —",
+                replyFor(trimmed, get(), routed),
+              ].join("\n");
+              set({
+                grokConnected: false,
+                grokStatusDetail: result.error || "Grok request failed",
+              });
+            }
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "request failed";
+          answer = [
+            modePrefix(mode, routed),
+            "",
+            `Grok connection error: ${msg}`,
+            "",
+            "— Offline fallback —",
+            replyFor(trimmed, get(), routed),
+          ].join("\n");
+          set({ grokConnected: false, grokStatusDetail: msg });
+        }
+
         const bot: ChatMessage = {
           id: uid("msg"),
           role: "assistant",
@@ -669,9 +771,9 @@ export const useGrokHub = create<State>()(
         get().setAgentStatus("ops", "idle", 0);
         get().pushActivity({
           kind: "chat",
-          title: `Agent reply · ${m.label}`,
+          title: usedLive ? `Grok · ${m.label}` : `Agent reply · ${m.label}`,
           detail: `${trimmed.slice(0, 80)} · ${bill.cost}u`,
-          status: "success",
+          status: usedLive ? "success" : "failed",
         });
       },
 
@@ -813,9 +915,7 @@ export const useGrokHub = create<State>()(
       },
     }),
     {
-      name: "grokhub-v1",
-
-
+      name: "grokhub-v2",
       partialize: (s) => ({
         connectors: s.connectors,
         skills: s.skills,
@@ -828,6 +928,8 @@ export const useGrokHub = create<State>()(
         usage: s.usage,
         imagineJobs: s.imagineJobs.slice(0, 8),
         imagineAspect: s.imagineAspect,
+        apiKey: s.apiKey,
+        githubToken: s.githubToken,
       }),
       skipHydration: true,
     },

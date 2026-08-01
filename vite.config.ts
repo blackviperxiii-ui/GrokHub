@@ -31,18 +31,19 @@ function pgliteBootstrapPlugin(): Plugin {
 }
 
 /**
- * Unsandboxed host bridge for Desktop CLI / files / apps.
- * POST /api/host { action, ... }
+ * JSON APIs: host bridge, Grok/xAI chat, GitHub updates.
+ * POST /api/host | /api/grok | /api/update  { action, ... }
  */
 function hostApiPlugin(): Plugin {
   return {
-    name: "grokhub-host-api",
+    name: "grokhub-api",
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         try {
           const rawUrl = req.url ?? "";
           const pathOnly = rawUrl.split("?", 1)[0] ?? "";
-          if (pathOnly !== "/api/host") {
+          const routes = new Set(["/api/host", "/api/grok", "/api/update"]);
+          if (!routes.has(pathOnly)) {
             next();
             return;
           }
@@ -61,20 +62,34 @@ function hostApiPlugin(): Plugin {
           const payload = JSON.parse(bodyText) as Record<string, unknown>;
           const action = String(payload.action || "");
 
-          const mod = (await server.ssrLoadModule("/src/lib/host-api-handlers.ts")) as {
-            dispatchHost: (action: string, body: Record<string, unknown>) => Promise<unknown>;
-          };
-          const result = await mod.dispatchHost(action, payload);
+          let result: unknown;
+          if (pathOnly === "/api/host") {
+            const mod = (await server.ssrLoadModule("/src/lib/host-api-handlers.ts")) as {
+              dispatchHost: (action: string, body: Record<string, unknown>) => Promise<unknown>;
+            };
+            result = await mod.dispatchHost(action, payload);
+          } else {
+            const route = pathOnly === "/api/grok" ? "grok" : "update";
+            const mod = (await server.ssrLoadModule("/src/lib/api-handlers.ts")) as {
+              dispatchApi: (
+                route: "grok" | "update",
+                action: string,
+                body: Record<string, unknown>,
+              ) => Promise<unknown>;
+            };
+            result = await mod.dispatchApi(route, action, payload);
+          }
+
           res.statusCode = 200;
           res.setHeader("content-type", "application/json; charset=utf-8");
           res.end(JSON.stringify(result));
         } catch (err) {
-          console.error("[host-api]", err);
+          console.error("[grokhub-api]", err);
           res.statusCode = 500;
           res.setHeader("content-type", "application/json; charset=utf-8");
           res.end(
             JSON.stringify({
-              error: err instanceof Error ? err.message : "host api failed",
+              error: err instanceof Error ? err.message : "api failed",
             }),
           );
         }

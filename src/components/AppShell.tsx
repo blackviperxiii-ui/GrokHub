@@ -58,6 +58,9 @@ export function AppShell() {
   const tickHeartbeat = useGrokHub((s) => s.tickHeartbeat);
   const refreshStaleTimes = useGrokHub((s) => s.refreshStaleTimes);
   const resetDemo = useGrokHub((s) => s.resetDemo);
+  const grokConnected = useGrokHub((s) => s.grokConnected);
+  const grokStatusDetail = useGrokHub((s) => s.grokStatusDetail);
+  const probeGrok = useGrokHub((s) => s.probeGrok);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const modeMeta = getMode(mode);
@@ -67,6 +70,7 @@ export function AppShell() {
     Promise.resolve(p).finally(() => {
       useGrokHub.getState().refreshStaleTimes();
       useGrokHub.getState().tickHeartbeat();
+      void useGrokHub.getState().probeGrok();
     });
     setIsDesktop(Boolean(window.grokhubDesktop));
   }, []);
@@ -84,7 +88,7 @@ export function AppShell() {
   const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
   return (
-    <div className="flex min-h-dvh flex-col bg-[var(--color-bg)] text-[var(--color-fg)]">
+    <div className="flex h-dvh max-h-dvh flex-col overflow-hidden bg-[var(--color-bg)] text-[var(--color-fg)]">
       <div
         className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3"
         style={drag}
@@ -93,9 +97,28 @@ export function AppShell() {
           <GrokHubMark className="h-6 w-6" />
           <span className="text-xs font-semibold tracking-tight">GrokHub</span>
           <Badge className="hidden font-mono text-[10px] sm:inline-flex">v{APP_VERSION}</Badge>
-          <span className="hidden text-[10px] text-[var(--color-subtle)] md:inline">
-            Arch desktop · unsandboxed host
-          </span>
+          <button
+            type="button"
+            onClick={() => void probeGrok()}
+            className="hidden items-center gap-1.5 rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] md:inline-flex"
+            title={grokStatusDetail}
+          >
+            <span
+              className={cn(
+                "inline-block h-1.5 w-1.5 rounded-full",
+                grokConnected === true
+                  ? "bg-[var(--color-success)]"
+                  : grokConnected === false
+                    ? "bg-[var(--color-danger)]"
+                    : "bg-[var(--color-subtle)]",
+              )}
+            />
+            {grokConnected === true
+              ? "Grok live"
+              : grokConnected === false
+                ? "Grok offline"
+                : "Grok…"}
+          </button>
         </div>
         <div className="flex min-w-0 items-center gap-2" style={noDrag}>
           <UsageMeterChip className="hidden max-w-[160px] sm:flex" />
@@ -131,9 +154,9 @@ export function AppShell() {
         </div>
       </div>
 
-      <div className="mx-auto flex min-h-0 w-full max-w-[1400px] flex-1">
-        <aside className="hidden w-56 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)] md:flex">
-          <nav className="flex flex-1 flex-col gap-1 p-3">
+      <div className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 overflow-hidden">
+        <aside className="hidden w-56 shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-surface)] md:flex">
+          <nav className="scroll-panel flex flex-1 flex-col gap-1 p-3">
             {NAV.map((item) => {
               const Icon = item.icon;
               const active = nav === item.id;
@@ -143,7 +166,7 @@ export function AppShell() {
                   type="button"
                   onClick={() => setNav(item.id)}
                   className={cn(
-                    "flex h-10 items-center gap-2.5 rounded-[var(--radius-sm)] px-3 text-sm transition-colors",
+                    "flex h-10 shrink-0 items-center gap-2.5 rounded-[var(--radius-sm)] px-3 text-sm transition-colors",
                     active
                       ? "bg-[var(--color-elevated)] text-[var(--color-fg)]"
                       : "text-[var(--color-muted)] hover:bg-[var(--color-elevated)]/60 hover:text-[var(--color-fg)]",
@@ -156,7 +179,7 @@ export function AppShell() {
             })}
           </nav>
 
-          <div className="space-y-3 border-t border-[var(--color-border)] p-4">
+          <div className="shrink-0 space-y-3 border-t border-[var(--color-border)] p-4">
             <UsageMeterChip className="w-full" />
             <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
               <span className="pulse-live inline-block h-2 w-2 rounded-full bg-[var(--color-success)]" />
@@ -183,8 +206,8 @@ export function AppShell() {
           </div>
         </aside>
 
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-bg)_88%,transparent)] px-4 py-3 backdrop-blur-md md:px-6">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-bg)_88%,transparent)] px-4 py-3 backdrop-blur-md md:px-6">
             <div className="flex min-w-0 items-center gap-3">
               <Button
                 variant="ghost"
@@ -200,7 +223,7 @@ export function AppShell() {
                   {NAV.find((n) => n.id === nav)?.label}
                 </div>
                 <div className="truncate text-xs text-[var(--color-subtle)]">
-                  GrokHub v{APP_VERSION} · Modes · Usage · Desktop · Imagine
+                  GrokHub v{APP_VERSION} · {grokConnected ? "live Grok" : "connect in Settings"}
                 </div>
               </div>
             </div>
@@ -218,7 +241,7 @@ export function AppShell() {
           </header>
 
           {mobileOpen && (
-            <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)] p-2 md:hidden">
+            <div className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)] p-2 md:hidden">
               <div className="mb-2 px-1">
                 <UsageMeterChip className="w-full" />
               </div>
@@ -247,16 +270,22 @@ export function AppShell() {
             </div>
           )}
 
-          <main className="flex-1 p-4 md:p-6">
-            {nav === "command" && <CommandView />}
-            {nav === "connectors" && <ConnectorsView />}
-            {nav === "skills" && <SkillsView />}
-            {nav === "automations" && <AutomationsView />}
-            {nav === "chat" && <ChatView />}
-            {nav === "agents" && <AgentsView />}
-            {nav === "imagine" && <ImagineView />}
-            {nav === "desktop" && <DesktopHostView />}
-            {nav === "settings" && <SettingsView />}
+          <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
+            <div className="scroll-panel min-h-0 flex-1">
+              {nav === "command" && <CommandView />}
+              {nav === "connectors" && <ConnectorsView />}
+              {nav === "skills" && <SkillsView />}
+              {nav === "automations" && <AutomationsView />}
+              {nav === "agents" && <AgentsView />}
+              {nav === "imagine" && <ImagineView />}
+              {nav === "desktop" && <DesktopHostView />}
+              {nav === "settings" && <SettingsView />}
+            </div>
+            {nav === "chat" && (
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <ChatView />
+              </div>
+            )}
           </main>
         </div>
       </div>

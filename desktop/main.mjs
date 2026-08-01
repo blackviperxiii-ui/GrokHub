@@ -1,10 +1,11 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell } from "electron";
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, screen } from "electron";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const host = require("./host-bridge.cjs");
+const grokBridge = require("./grok-bridge.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -14,12 +15,29 @@ let mainWindow = null;
 /** @type {Tray | null} */
 let tray = null;
 
+function fitToWorkArea(win) {
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const { x, y, width, height } = display.workArea;
+  win.setBounds({
+    x,
+    y,
+    width: Math.max(880, width),
+    height: Math.max(600, height),
+  });
+  if (process.env.GROKHUB_MAXIMIZE !== "0") {
+    win.maximize();
+  }
+}
+
 function createWindow() {
+  const display = screen.getPrimaryDisplay();
+  const { width: aw, height: ah } = display.workAreaSize;
+
   mainWindow = new BrowserWindow({
-    width: 1320,
-    height: 860,
-    minWidth: 920,
-    minHeight: 640,
+    width: Math.min(1600, aw),
+    height: Math.min(1000, ah),
+    minWidth: 880,
+    minHeight: 600,
     show: false,
     backgroundColor: "#0a0a0b",
     title: "GrokHub",
@@ -29,11 +47,12 @@ function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      // Intentionally off: personal agent needs host FS/shell/apps
       sandbox: false,
       webSecurity: true,
     },
   });
+
+  fitToWorkArea(mainWindow);
 
   const startUrl =
     process.env.GROKHUB_URL ||
@@ -44,10 +63,12 @@ function createWindow() {
   void mainWindow.loadURL(startUrl);
 
   mainWindow.once("ready-to-show", () => {
+    fitToWorkArea(mainWindow);
     if (process.env.GROKHUB_START_MINIMIZED === "1") {
       mainWindow?.hide();
     } else {
       mainWindow?.show();
+      mainWindow?.focus();
     }
   });
 
@@ -107,8 +128,10 @@ function registerIpc() {
   });
   ipcMain.handle("desktop:close", () => mainWindow?.close());
   ipcMain.handle("desktop:platform", () => process.platform);
+  ipcMain.handle("desktop:fit", () => {
+    if (mainWindow) fitToWorkArea(mainWindow);
+  });
 
-  // Unsandboxed host bridge
   ipcMain.handle("host:info", () => host.info());
   ipcMain.handle("host:listDir", (_e, p) => host.listDir(p));
   ipcMain.handle("host:readFile", (_e, p, maxBytes) => host.readFile(p, maxBytes));
@@ -118,15 +141,24 @@ function registerIpc() {
   );
   ipcMain.handle("host:listApps", () => host.listApps());
   ipcMain.handle("host:openApp", (_e, opts) => host.openApp(opts || {}));
+
+  ipcMain.handle("grok:chat", (_e, payload) => grokBridge.callXaiChat(payload || {}));
+  ipcMain.handle("grok:probe", async (_e, apiKey) => {
+    const r = await grokBridge.probeXaiKey(apiKey);
+    return {
+      ...r,
+      envConfigured: Boolean(process.env.XAI_API_KEY || process.env.GROK_API_KEY),
+    };
+  });
+  ipcMain.handle("update:check", (_e, opts) => grokBridge.checkForUpdate(opts || {}));
+  ipcMain.handle("update:apply", (_e, opts) => grokBridge.applyUpdate(opts || {}));
 }
 
-// Wayland-friendly Chromium flags (Arch / Hyprland / KDE)
 if (process.env.GROKHUB_WAYLAND !== "0") {
   app.commandLine.appendSwitch("enable-features", "UseOzonePlatform,WaylandWindowDecorations");
   app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 }
 
-// Do not enable Chromium sandbox for host agent workloads
 app.commandLine.appendSwitch("no-sandbox");
 
 app.whenReady().then(() => {
