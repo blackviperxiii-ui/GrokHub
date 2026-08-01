@@ -1,4 +1,4 @@
-//#region node_modules/.nitro/vite/services/ssr/assets/version-Od4YDoyU.js
+//#region node_modules/.nitro/vite/services/ssr/assets/version-BQM8PrMu.js
 /**
 * Mode catalog — labels match Grok web; modelId is what we send to api.x.ai.
 * SuperGrok / OAuth typically exposes grok-4.3 + fast / code variants.
@@ -79,7 +79,7 @@ function stripAssistantChrome(content) {
 	return content.replace(/^\[(?:Auto → )?[^\]]+\]\s*\n*/gm, "").replace(/^— Offline fallback —\s*\n*/gm, "").replace(/^Could not reach Grok\.\s*\n*/gm, "").replace(/^Grok connection error:.*$/gm, "").replace(/^Your OAuth session is saved\..*$/gm, "").replace(/^Fix: Settings →.*$/gm, "").replace(/^Not connected to Grok\..*$/gm, "").trim();
 }
 /** Single source of truth for display / packaging version. */
-var APP_VERSION = "0.2.6";
+var APP_VERSION = "0.2.7";
 `${APP_VERSION}`;
 //#endregion
 export { modelIdForMode as a, modeBadge as i, GROK_MODES as n, resolveMode as o, getMode as r, stripAssistantChrome as s, APP_VERSION as t };

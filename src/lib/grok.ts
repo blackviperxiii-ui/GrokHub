@@ -16,11 +16,11 @@ Do not prefix replies with mode labels like [Fast] or [Auto → …]. Just answe
 
 You have unsandboxed host access when the desktop gateway is connected.
 When you need real filesystem / shell data (Downloads, home, processes, etc.), do NOT invent results.
-Output exactly one host command on its own line in this form:
-HOST_CMD: <bash command>
-Wait for the runtime to paste the command output back before concluding.
-You may use multiple HOST_CMD rounds if needed. Prefer non-interactive commands (ls, head, cat, find, stat).
-After you have results, summarize them clearly for the user.`;
+Put the host command on its OWN line, alone, like:
+HOST_CMD: ls -la "$HOME/Downloads"
+Never glue HOST_CMD onto a prose sentence. Prefer one simple command (ls, head, cat, find, stat).
+The runtime executes it and returns HOST_RESULT — then summarize clearly for the user.
+You may use multiple HOST_CMD rounds if needed.`;
 
   const id = resolveMode(mode, prompt);
   switch (id) {
@@ -317,14 +317,78 @@ export async function callXaiChatStream(
   }
 }
 
-/** Parse HOST_CMD lines the model emits for desktop execution. */
+/** Parse HOST_CMD commands the model emits for desktop execution (own line or inline). */
 export function extractHostCommands(text: string): string[] {
   const cmds: string[] = [];
+  // Own-line form
   for (const line of text.split("\n")) {
-    const m = line.match(/^\s*HOST_CMD:\s*(.+)\s*$/i);
+    const m = line.match(/^\s*HOST_CMD:\s*(.+?)\s*$/i);
     if (m?.[1]) cmds.push(m[1].trim());
   }
-  return cmds;
+  // Inline form: "... now. HOST_CMD: ls ..."
+  const inline = [...text.matchAll(/(?:^|[\s.])HOST_CMD:\s*(.+?)(?=\n|$)/gi)];
+  for (const m of inline) {
+    const cmd = (m[1] || "").trim();
+    if (cmd && !cmds.includes(cmd)) cmds.push(cmd);
+  }
+  // Fenced form: ```host\nls\n```
+  const fenced = [...text.matchAll(/```(?:host|bash|sh)\s*\n([\s\S]*?)```/gi)];
+  for (const m of fenced) {
+    for (const line of (m[1] || "").split("\n")) {
+      const cmd = line.trim();
+      if (cmd && !cmd.startsWith("#") && !cmds.includes(cmd)) cmds.push(cmd);
+    }
+  }
+  return cmds.filter(Boolean);
+}
+
+/** Remove HOST_CMD markers from text shown to the user. */
+export function stripHostCommands(text: string): string {
+  let out = text;
+  // Drop own-line HOST_CMD
+  out = out
+    .split("\n")
+    .filter((line) => !/^\s*HOST_CMD:\s*/i.test(line))
+    .join("\n");
+  // Drop inline HOST_CMD: ... to end of line
+  out = out.replace(/\s*HOST_CMD:\s*.+$/gim, "");
+  // Drop host fences
+  out = out.replace(/```(?:host|bash|sh)\s*\n[\s\S]*?```/gi, "");
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * If the user clearly asks about local files/folders and the model forgot HOST_CMD,
+ * invent a safe listing command.
+ */
+export function inferHostCommandsFromUser(prompt: string): string[] {
+  const p = prompt.toLowerCase();
+  const wantsList =
+    /\b(list|show|what('|’)?s|whats|what do i have|contents?|files?|inside|in my)\b/.test(p) ||
+    /\b(check|look at|open)\b/.test(p);
+  if (!wantsList && !/\b(download|downloads|desktop|documents|home|folder|directory)\b/.test(p)) {
+    return [];
+  }
+
+  if (/\bdownloads?\b/.test(p)) {
+    return [
+      'ls -la "${HOME}/Downloads" 2>/dev/null || ls -la ~/Downloads 2>/dev/null || ls -la "$HOME/Descargas" 2>/dev/null || echo "Downloads folder not found"',
+    ];
+  }
+  if (/\bdocuments?\b/.test(p)) {
+    return [
+      'ls -la "${HOME}/Documents" 2>/dev/null || ls -la ~/Documents 2>/dev/null || echo "Documents folder not found"',
+    ];
+  }
+  if (/\bdesktop\b/.test(p)) {
+    return [
+      'ls -la "${HOME}/Desktop" 2>/dev/null || ls -la ~/Desktop 2>/dev/null || echo "Desktop folder not found"',
+    ];
+  }
+  if (/\bhome\b/.test(p) && wantsList) {
+    return ['ls -la "$HOME" | head -80'];
+  }
+  return [];
 }
 
 export async function probeXaiKey(apiKey: string): Promise<{ ok: boolean; detail: string }> {

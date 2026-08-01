@@ -1245,6 +1245,12 @@ export const useGrokHub = create<State>()(
         let usedLive = false;
         let finalAnswer = "";
         let aborted = false;
+        // Host helpers always available for final sanitization
+        const {
+          extractHostCommands,
+          stripHostCommands,
+          inferHostCommandsFromUser,
+        } = await import("./grok");
 
         try {
           if (isLocalSlash) {
@@ -1258,7 +1264,6 @@ export const useGrokHub = create<State>()(
             }
           } else {
             const { grokChatStream } = await import("./grok-client");
-            const { extractHostCommands } = await import("./grok");
 
             // Multi-turn host tool loop (model can emit HOST_CMD: lines)
             const history: Array<{ role: "user" | "assistant"; content: string }> = get()
@@ -1319,7 +1324,8 @@ export const useGrokHub = create<State>()(
                     if (gen !== chatGeneration) return;
                     roundText += piece;
                     accumulated = roundText;
-                    patchBot(roundText, { streaming: true });
+                    // Hide HOST_CMD while tokens arrive
+                    patchBot(stripHostCommands(roundText) || "…", { streaming: true });
                   },
                 },
               );
@@ -1333,16 +1339,25 @@ export const useGrokHub = create<State>()(
               if (result.ok && (result.content || roundText)) {
                 usedLive = true;
                 const full = stripAssistantChrome(result.content || roundText);
+                const visible = stripHostCommands(full);
                 accumulated = full;
-                patchBot(full, { streaming: true });
+                // Never show raw HOST_CMD lines to the user
+                patchBot(
+                  visible || "Working on your machine…",
+                  { streaming: true },
+                );
                 set({
                   grokConnected: true,
                   grokStatusDetail: `Live · ${result.model || modelId}`,
                 });
 
-                const cmds = extractHostCommands(full);
+                let cmds = extractHostCommands(full);
+                // First round: if user asked about local files and model forgot HOST_CMD, infer
+                if (!cmds.length && rounds === 1) {
+                  cmds = inferHostCommandsFromUser(trimmed);
+                }
                 if (!cmds.length) {
-                  finalAnswer = full;
+                  finalAnswer = visible || full;
                   break;
                 }
 
@@ -1355,7 +1370,11 @@ export const useGrokHub = create<State>()(
                     aborted = true;
                     break;
                   }
-                  set({ streamStatus: `Host: ${cmd.slice(0, 48)}…` });
+                  set({ streamStatus: `Host: ${cmd.slice(0, 56)}…` });
+                  patchBot(
+                    `${visible || "Checking your machine…"}\n\n_Running_\n\`$ ${cmd}\``,
+                    { streaming: true },
+                  );
                   try {
                     const r = await hostExec(cmd, undefined, 45_000);
                     outputs.push(
@@ -1377,16 +1396,24 @@ export const useGrokHub = create<State>()(
                 if (aborted) break;
 
                 const toolBlock = [
-                  "HOST_RESULT:",
+                  "HOST_RESULT (authoritative — use this, do not invent files):",
                   outputs.join("\n\n---\n\n"),
                   "",
-                  "Use the host results above to answer the user. Do not invent files.",
+                  "Summarize these results for the user in plain language. Do not output HOST_CMD again unless you need another command.",
                 ].join("\n");
 
                 history.push({ role: "assistant", content: full });
                 history.push({ role: "user", content: toolBlock });
-                // Show intermediate host output in the bubble
-                const mid = `${full}\n\n---\n${outputs.join("\n\n")}\n\n_Working…_`;
+                // Show intermediate host output (sanitized) while model continues
+                const mid = [
+                  visible || "Checked your machine.",
+                  "",
+                  "```",
+                  outputs.join("\n\n"),
+                  "```",
+                  "",
+                  "_Summarizing…_",
+                ].join("\n");
                 patchBot(mid, { streaming: true });
                 accumulated = mid;
                 // continue loop for next model turn
@@ -1417,7 +1444,11 @@ export const useGrokHub = create<State>()(
             }
 
             if (!finalAnswer && accumulated && !aborted) {
-              finalAnswer = stripAssistantChrome(accumulated.replace(/\n_Working…_\s*$/, ""));
+              finalAnswer = stripHostCommands(
+                stripAssistantChrome(
+                  accumulated.replace(/\n_Working…_\s*$/, "").replace(/\n_Summarizing…_\s*$/, ""),
+                ),
+              );
             }
           }
         } catch (e) {
@@ -1459,7 +1490,7 @@ export const useGrokHub = create<State>()(
             }));
           }
         } else {
-          const answer = stripAssistantChrome(finalAnswer || "");
+          const answer = stripHostCommands(stripAssistantChrome(finalAnswer || ""));
           set((s) => {
             const chat = s.chat.map((row) =>
               row.id === botId

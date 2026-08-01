@@ -1,12 +1,12 @@
 import { o as __toESM } from "../_runtime.mjs";
-import { a as modelIdForMode, i as modeBadge, n as GROK_MODES, o as resolveMode, r as getMode, s as stripAssistantChrome, t as APP_VERSION } from "./version-Od4YDoyU.mjs";
+import { a as modelIdForMode, i as modeBadge, n as GROK_MODES, o as resolveMode, r as getMode, s as stripAssistantChrome, t as APP_VERSION } from "./version-BQM8PrMu.mjs";
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
 import { N as require_jsx_runtime, P as require_react, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
 import { A as ExternalLink, C as Image, D as Gauge, E as Hammer, F as Cable, I as Brain, L as ArrowRight, M as Command, N as ChevronRight, O as Folder, P as Check, R as AppWindow, S as Link2Off, T as HardDrive, _ as Minus, a as TimerReset, b as Menu, c as Sparkles, d as Settings, f as Send, g as Play, h as Plus, i as Trash2, j as Download, k as FolderOpen, l as ShieldCheck, m as Plug, n as X, o as Terminal, p as RefreshCw, r as Users, s as Square, t as Zap, u as ShieldAlert, v as MessageSquare, w as History, x as LoaderCircle, y as MessageSquarePlus, z as Activity } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-DFRsAIeE.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-He4wD8kJ.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function rpc(path, action, body = {}, init) {
@@ -814,7 +814,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-Djb-LbBk.mjs");
+		const { oauthStart } = await import("./grok-client-CIRl4icR.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -843,7 +843,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-Djb-LbBk.mjs");
+		const { oauthPoll } = await import("./grok-client-CIRl4icR.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -921,7 +921,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-Djb-LbBk.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-CIRl4icR.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1524,6 +1524,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let usedLive = false;
 		let finalAnswer = "";
 		let aborted = false;
+		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-DNbvJMRG.mjs");
 		try {
 			if (isLocalSlash) {
 				set({ streamStatus: "Running skill…" });
@@ -1534,8 +1535,7 @@ var useGrokHub = create()(persist((set, get) => ({
 					patchBot(finalAnswer, { streaming: false });
 				}
 			} else {
-				const { grokChatStream } = await import("./grok-client-Djb-LbBk.mjs");
-				const { extractHostCommands } = await import("./grok-BHPoOd67.mjs");
+				const { grokChatStream } = await import("./grok-client-CIRl4icR.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").filter((c) => c.id !== botId).slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
@@ -1573,7 +1573,7 @@ var useGrokHub = create()(persist((set, get) => ({
 							if (gen !== chatGeneration) return;
 							roundText += piece;
 							accumulated = roundText;
-							patchBot(roundText, { streaming: true });
+							patchBot(stripHostCommands(roundText) || "…", { streaming: true });
 						}
 					});
 					if (result.tokens) set({ oauth: result.tokens });
@@ -1584,15 +1584,17 @@ var useGrokHub = create()(persist((set, get) => ({
 					if (result.ok && (result.content || roundText)) {
 						usedLive = true;
 						const full = stripAssistantChrome(result.content || roundText);
+						const visible = stripHostCommands(full);
 						accumulated = full;
-						patchBot(full, { streaming: true });
+						patchBot(visible || "Working on your machine…", { streaming: true });
 						set({
 							grokConnected: true,
 							grokStatusDetail: `Live · ${result.model || modelId}`
 						});
-						const cmds = extractHostCommands(full);
+						let cmds = extractHostCommands(full);
+						if (!cmds.length && rounds === 1) cmds = inferHostCommandsFromUser(trimmed);
 						if (!cmds.length) {
-							finalAnswer = full;
+							finalAnswer = visible || full;
 							break;
 						}
 						set({ streamStatus: "Running on your desktop…" });
@@ -1603,7 +1605,8 @@ var useGrokHub = create()(persist((set, get) => ({
 								aborted = true;
 								break;
 							}
-							set({ streamStatus: `Host: ${cmd.slice(0, 48)}…` });
+							set({ streamStatus: `Host: ${cmd.slice(0, 56)}…` });
+							patchBot(`${visible || "Checking your machine…"}\n\n_Running_\n\`$ ${cmd}\``, { streaming: true });
 							try {
 								const r = await hostExec(cmd, void 0, 45e3);
 								outputs.push([
@@ -1618,10 +1621,10 @@ var useGrokHub = create()(persist((set, get) => ({
 						}
 						if (aborted) break;
 						const toolBlock = [
-							"HOST_RESULT:",
+							"HOST_RESULT (authoritative — use this, do not invent files):",
 							outputs.join("\n\n---\n\n"),
 							"",
-							"Use the host results above to answer the user. Do not invent files."
+							"Summarize these results for the user in plain language. Do not output HOST_CMD again unless you need another command."
 						].join("\n");
 						history.push({
 							role: "assistant",
@@ -1631,7 +1634,15 @@ var useGrokHub = create()(persist((set, get) => ({
 							role: "user",
 							content: toolBlock
 						});
-						const mid = `${full}\n\n---\n${outputs.join("\n\n")}\n\n_Working…_`;
+						const mid = [
+							visible || "Checked your machine.",
+							"",
+							"```",
+							outputs.join("\n\n"),
+							"```",
+							"",
+							"_Summarizing…_"
+						].join("\n");
 						patchBot(mid, { streaming: true });
 						accumulated = mid;
 						continue;
@@ -1653,7 +1664,7 @@ var useGrokHub = create()(persist((set, get) => ({
 					patchBot(finalAnswer, { streaming: false });
 					break;
 				}
-				if (!finalAnswer && accumulated && !aborted) finalAnswer = stripAssistantChrome(accumulated.replace(/\n_Working…_\s*$/, ""));
+				if (!finalAnswer && accumulated && !aborted) finalAnswer = stripHostCommands(stripAssistantChrome(accumulated.replace(/\n_Working…_\s*$/, "").replace(/\n_Summarizing…_\s*$/, "")));
 			}
 		} catch (e) {
 			if (abort.signal.aborted || gen !== chatGeneration) aborted = true;
@@ -1685,7 +1696,7 @@ var useGrokHub = create()(persist((set, get) => ({
 				} : row)
 			}));
 		} else {
-			const answer = stripAssistantChrome(finalAnswer || "");
+			const answer = stripHostCommands(stripAssistantChrome(finalAnswer || ""));
 			set((s) => {
 				const chat = s.chat.map((row) => row.id === botId ? {
 					...row,
@@ -1766,7 +1777,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let model;
 		let err = null;
 		try {
-			const { grokImagine } = await import("./grok-client-Djb-LbBk.mjs");
+			const { grokImagine } = await import("./grok-client-CIRl4icR.mjs");
 			const live = await grokImagine({
 				prompt: p,
 				apiKey: get().apiKey || void 0,
