@@ -5,7 +5,7 @@ import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
 import { A as Command, C as HardDrive, D as FolderOpen, E as Folder, F as ArrowRight, I as AppWindow, L as Activity, M as Check, N as Cable, O as ExternalLink, P as Brain, S as History, T as Gauge, _ as MessageSquarePlus, a as TimerReset, b as Link2Off, c as Sparkles, d as Send, f as RefreshCw, g as MessageSquare, h as Minus, i as Trash2, j as ChevronRight, k as Download, l as ShieldAlert, m as Play, n as X, o as Terminal, p as Plus, r as Users, s as Square, t as Zap, u as Settings, v as Menu, w as Hammer, x as Image, y as LoaderCircle } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-Df8204b3.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-BdY0QS3x.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function rpc(path, action, body = {}) {
@@ -58,19 +58,26 @@ async function applyUpdate(token, force = true) {
 	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
 	if (desktop?.applyUpdate) return desktop.applyUpdate({
 		token,
-		force
+		force,
+		restart: true
 	});
 	return rpc("/api/update", "apply", {
 		token: token || "",
-		force
+		force,
+		restart: false
 	});
 }
+/**
+* Mode catalog — labels match Grok web; modelId is what we send to api.x.ai.
+* SuperGrok / OAuth typically exposes grok-4.3 + fast / code variants.
+*/
 var GROK_MODES = [
 	{
 		id: "auto",
 		label: "Auto",
 		subtitle: "Chooses Fast or Expert",
-		model: "Grok 4.5",
+		model: "Auto",
+		modelId: "auto",
 		icon: "auto",
 		latencyMs: [400, 900],
 		depth: "standard"
@@ -78,8 +85,9 @@ var GROK_MODES = [
 	{
 		id: "fast",
 		label: "Fast",
-		subtitle: "Quick responses · Grok 4.5",
-		model: "Grok 4.5",
+		subtitle: "Quick responses · grok-4-1-fast",
+		model: "grok-4-1-fast",
+		modelId: "grok-4-1-fast-non-reasoning",
 		icon: "fast",
 		latencyMs: [250, 500],
 		depth: "light"
@@ -87,8 +95,9 @@ var GROK_MODES = [
 	{
 		id: "expert",
 		label: "Expert",
-		subtitle: "Thinks hard · Grok 4.5",
-		model: "Grok 4.5",
+		subtitle: "Thinks hard · grok-4.3",
+		model: "grok-4.3",
+		modelId: "grok-4.3",
 		icon: "expert",
 		latencyMs: [900, 1600],
 		depth: "deep"
@@ -96,8 +105,9 @@ var GROK_MODES = [
 	{
 		id: "heavy",
 		label: "Heavy",
-		subtitle: "Team of Experts · Grok 4.5",
-		model: "Grok 4.5",
+		subtitle: "Team of Experts · grok-4.3",
+		model: "grok-4.3",
+		modelId: "grok-4.3",
 		icon: "heavy",
 		latencyMs: [1400, 2400],
 		depth: "team"
@@ -105,8 +115,9 @@ var GROK_MODES = [
 	{
 		id: "build",
 		label: "Build",
-		subtitle: "Build apps and sites · Grok 4.5",
-		model: "Grok 4.5",
+		subtitle: "Build apps and sites · grok-code-fast-1",
+		model: "grok-code-fast-1",
+		modelId: "grok-code-fast-1",
 		icon: "build",
 		latencyMs: [700, 1400],
 		depth: "code"
@@ -119,7 +130,21 @@ function getMode(id) {
 function resolveMode(id, prompt) {
 	if (id !== "auto") return id;
 	const p = prompt.toLowerCase();
-	return p.includes("architect") || p.includes("debug") || p.includes("why") || p.includes("compare") || p.includes("research") || p.includes("plan") || p.length > 160 || p.split(/\s+/).length > 28 ? "expert" : "fast";
+	return p.includes("architect") || p.includes("debug") || p.includes("why") || p.includes("compare") || p.includes("research") || p.includes("plan") || p.includes("implement") || p.includes("refactor") || p.includes("design") || p.length > 160 || p.split(/\s+/).length > 28 ? "expert" : "fast";
+}
+/** Resolve the concrete xAI model id for a mode + prompt. */
+function modelIdForMode(id, prompt = "") {
+	const routed = resolveMode(id, prompt);
+	if (routed === "auto") return getMode("fast").modelId;
+	return getMode(routed).modelId;
+}
+function modeBadge(id) {
+	const m = getMode(id);
+	return m.id === "auto" ? m.label : `${m.label} · ${m.model}`;
+}
+/** Strip UI chrome we used to inject into assistant text (keep history clean for the model). */
+function stripAssistantChrome(content) {
+	return content.replace(/^\[(?:Auto → )?[^\]]+\]\s*\n*/gm, "").replace(/^— Offline fallback —\s*\n*/gm, "").replace(/^Could not reach Grok\.\s*\n*/gm, "").replace(/^Grok connection error:.*$/gm, "").replace(/^Your OAuth session is saved\..*$/gm, "").replace(/^Fix: Settings →.*$/gm, "").replace(/^Not connected to Grok\..*$/gm, "").trim();
 }
 function hash(s) {
 	let h = 2166136261;
@@ -486,22 +511,14 @@ function costFor(bucket, mode) {
 	if (bucket === "message" || bucket === "skill") return MODE_UNIT_COST[mode ?? "fast"] ?? 1;
 	return BUCKET_UNIT_COST[bucket];
 }
-function modePrefix(mode, routed) {
-	const m = getMode(routed);
-	if (mode === "auto" && routed !== "auto") return `[Auto → ${m.label} · ${m.model}]`;
-	return `[${m.label} · ${m.model}]`;
-}
 function replyFor(text, s, routed) {
 	const lower = text.toLowerCase();
 	const connected = s.connectors.filter((c) => c.status === "connected");
 	const enabledSkills = s.skills.filter((sk) => sk.enabled);
-	const head = modePrefix(s.mode, routed);
 	const depth = getMode(routed).depth;
 	const plan = PLAN_LIMITS[s.usage.plan];
 	const pct = Math.round(usagePercent(s.usage));
 	if (lower.includes("usage") || lower.includes("quota") || lower.includes("limit") || lower.includes("subscription")) return [
-		head,
-		"",
 		"Subscription usage",
 		"",
 		`Plan: ${plan.label}`,
@@ -514,7 +531,6 @@ function replyFor(text, s, routed) {
 	].join("\n");
 	if (lower.startsWith("/morning") || lower.includes("morning brief")) {
 		const core = [
-			head,
 			"",
 			"Morning Brief",
 			"",
@@ -554,7 +570,6 @@ function replyFor(text, s, routed) {
 		].filter(Boolean).join("\n");
 	}
 	if (lower.startsWith("/standup") || lower.includes("standup")) return [
-		head,
 		"",
 		"Standup",
 		"",
@@ -564,48 +579,42 @@ function replyFor(text, s, routed) {
 		depth === "code" ? "- Build: keep /standup skill logging shipped items weekly" : ""
 	].filter(Boolean).join("\n");
 	if (lower.includes("imagine") || lower.startsWith("/imagine")) return [
-		head,
 		"",
 		"Imagine is available in the Imagine panel.",
 		"Describe a scene there — GrokHub renders a local preview on this Arch desktop build.",
 		`Imagine quota: ${s.usage.imagine}/${plan.imagine} this period (5 units each).`
 	].join("\n");
 	if (lower.includes("mode") || lower.includes("fast") || lower.includes("expert") || lower.includes("heavy")) return [
-		head,
 		"",
 		"Baked-in Grok modes (same as web):",
 		"- Auto — Chooses Fast or Expert",
-		"- Fast — Quick responses · Grok 4.5 · 1 unit",
-		"- Expert — Thinks hard · Grok 4.5 · 4 units",
-		"- Heavy — Team of Experts · Grok 4.5 · 8 units",
-		"- Build — Build apps and sites · Grok 4.5 · 2 units",
+		"- Fast — Quick responses · grok-4-1-fast · 1 unit",
+		"- Expert — Thinks hard · grok-4.3 · 4 units",
+		"- Heavy — Team of Experts · grok-4.3 · 8 units",
+		"- Build — Build apps and sites · grok-code-fast-1 · 2 units",
 		"",
 		`Active: ${getMode(s.mode).label}${s.mode === "auto" ? ` (this turn → ${getMode(routed).label})` : ""}`,
 		"Change modes from the titlebar picker or Settings."
 	].join("\n");
 	if (lower.includes("connector") || lower.includes("connect")) return [
-		head,
 		"",
 		"Connector status",
 		"",
 		...s.connectors.map((c) => `- ${c.name}: ${c.status}`)
 	].join("\n");
 	if (lower.includes("automat") || lower.includes("schedule")) return [
-		head,
 		"",
 		"Automations",
 		"",
 		...s.automations.map((a) => `- ${a.enabled ? "ON" : "OFF"} ${a.name} (${a.schedule} @ ${a.time}) · ${a.runCount} runs`)
 	].join("\n");
 	if (lower.includes("skill")) return [
-		head,
 		"",
 		"Skills",
 		"",
 		...enabledSkills.map((sk) => `- ${sk.slash} — ${sk.name}`)
 	].join("\n");
 	if (depth === "code" || lower.includes("build") || lower.includes("arch") || lower.includes("desktop")) return [
-		head,
 		"",
 		"Build / desktop plan",
 		"",
@@ -617,7 +626,6 @@ function replyFor(text, s, routed) {
 		`Plan ${plan.label}: host CLI ${s.usage.host}/${plan.host} this period.`
 	].join("\n");
 	if (depth === "team") return [
-		head,
 		"",
 		"Heavy · Team of Experts",
 		"",
@@ -631,27 +639,24 @@ function replyFor(text, s, routed) {
 		`Context: ${connected.length} connectors · ${enabledSkills.length} skills · ${pct}% usage.`
 	].join("\n");
 	if (depth === "deep") return [
-		head,
 		"",
 		"Expert analysis",
 		"",
 		`Reading: ${text}`,
 		"",
-		"Constraints: local-first control plane, Grok 4.5 modes, Arch desktop target.",
+		"Constraints: local-first control plane, Grok modes (Fast/Expert/Heavy/Build), Arch desktop target.",
 		"Approach: gather connector state → apply enabled skills → leave run log.",
 		"Tradeoff: Fast is cheaper/latency; Expert/Heavy spend units for depth.",
 		"",
 		`Live tools: ${connected.map((c) => c.name).join(", ") || "none connected"}.`
 	].join("\n");
 	if (depth === "light") return [
-		head,
 		"",
 		`Got it — ${text.slice(0, 120)}${text.length > 120 ? "…" : ""}`,
 		`Using ${connected.length} connectors · ${enabledSkills.length} skills · ${pct}% quota.`,
 		"Say /morning, open Imagine, or switch to Expert for deeper work."
 	].join("\n");
 	return [
-		head,
 		"",
 		"Primary co-pilot",
 		"",
@@ -750,7 +755,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-Q1UHqW3b.mjs");
+		const { oauthStart } = await import("./grok-client-BXD6uL2Q.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -779,7 +784,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-Q1UHqW3b.mjs");
+		const { oauthPoll } = await import("./grok-client-BXD6uL2Q.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -857,7 +862,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-Q1UHqW3b.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-BXD6uL2Q.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1271,18 +1276,20 @@ var useGrokHub = create()(persist((set, get) => ({
 				await wait(280);
 				answer = replyFor(trimmed, get(), routed);
 			} else {
-				const { grokChat } = await import("./grok-client-Q1UHqW3b.mjs");
+				const { grokChat } = await import("./grok-client-BXD6uL2Q.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").slice(-16).map((c) => ({
 					role: c.role,
-					content: c.content
-				}));
+					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
+				})).filter((c) => c.content.trim().length > 0);
 				if (!history.length || history[history.length - 1]?.content !== trimmed) history.push({
 					role: "user",
 					content: trimmed
 				});
+				const modelId = modelIdForMode(mode, trimmed);
 				const result = await grokChat({
 					messages: history,
 					mode: routed,
+					model: modelId,
 					apiKey: get().apiKey || void 0,
 					accessToken: get().oauth?.accessToken,
 					tokens: get().oauth
@@ -1290,41 +1297,33 @@ var useGrokHub = create()(persist((set, get) => ({
 				if (result.tokens) set({ oauth: result.tokens });
 				if (result.ok && result.content) {
 					usedLive = true;
-					answer = [
-						mode === "auto" && routed !== "auto" ? `[Auto → ${m.label} · ${result.model || m.model}]` : `[${m.label} · ${result.model || m.model}]`,
-						"",
-						result.content
-					].join("\n");
+					answer = stripAssistantChrome(result.content);
 					set({
 						grokConnected: true,
-						grokStatusDetail: `Live · ${result.model || "Grok"}`
+						grokStatusDetail: get().oauth ? `Live · ${result.model || modelId}` : `Live · ${result.model || modelId}`
 					});
 				} else {
+					const hasOauth = Boolean(get().oauth?.accessToken);
+					const err = result.error || "Unknown error";
 					answer = [
-						modePrefix(mode, routed),
-						"",
 						"Could not reach Grok.",
-						result.error || "Unknown error",
+						err,
 						"",
-						"Fix: Settings → paste your xAI API key (console.x.ai) or set XAI_API_KEY.",
+						hasOauth ? "Your OAuth session is saved. If this keeps failing: Settings → Disconnect → Connect with Grok OAuth again, or paste an xAI API key as fallback." : "Fix: Settings → Connect with Grok OAuth (SuperGrok / X Premium) or paste an xAI API key.",
 						"",
-						"— Offline fallback —",
 						replyFor(trimmed, get(), routed)
 					].join("\n");
 					set({
 						grokConnected: false,
-						grokStatusDetail: result.error || "Grok request failed"
+						grokStatusDetail: hasOauth ? `OAuth session · chat failed: ${err}` : err
 					});
 				}
 			}
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : "request failed";
 			answer = [
-				modePrefix(mode, routed),
-				"",
 				`Grok connection error: ${msg}`,
 				"",
-				"— Offline fallback —",
 				replyFor(trimmed, get(), routed)
 			].join("\n");
 			set({
@@ -1520,6 +1519,30 @@ var useGrokHub = create()(persist((set, get) => ({
 function wait(ms) {
 	return new Promise((r) => setTimeout(r, ms));
 }
+/** Single source of truth for display / packaging version. */
+var APP_VERSION = "0.2.0";
+`${APP_VERSION}`;
+/** Avatar with automatic initials fallback when URL is missing or fails to load. */
+function ProfileAvatar({ src, name, email, className, size = "md" }) {
+	const [failed, setFailed] = (0, import_react.useState)(false);
+	const label = (name || email || "G").trim();
+	const initials = label.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase() || "").join("") || "G";
+	const dim = size === "sm" ? "h-8 w-8 text-xs" : size === "lg" ? "h-12 w-12 text-base" : "h-10 w-10 text-sm";
+	if (!src || failed) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: cn("grid shrink-0 place-items-center rounded-full bg-[var(--color-elevated)] font-medium text-[var(--color-fg)] ring-1 ring-[var(--color-border)]", dim, className),
+		title: label,
+		"aria-label": label,
+		children: initials
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+		src,
+		alt: "",
+		title: label,
+		className: cn("shrink-0 rounded-full object-cover ring-1 ring-[var(--color-border)]", dim, className),
+		referrerPolicy: "no-referrer",
+		onError: () => setFailed(true)
+	});
+}
 /**
 * Minimal signed-in identity chip + sign-out. Restyle freely (see the
 * `design-ui` skill). Sign-out is only shown when auth is enabled (the
@@ -1532,13 +1555,11 @@ function UserButton() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "flex items-center gap-2",
 		children: [
-			user.profileImageUrl ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProfileAvatar, {
 				src: user.profileImageUrl,
-				alt: "",
-				className: "h-8 w-8 rounded-full object-cover"
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "grid h-8 w-8 place-items-center rounded-full bg-black/10 text-sm font-medium dark:bg-white/20",
-				children: label.charAt(0).toUpperCase()
+				name: user.displayName,
+				email: user.primaryEmail,
+				size: "sm"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "text-sm font-medium",
@@ -1592,6 +1613,7 @@ function ModePicker() {
 			className: cn("flex h-9 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2.5 text-left transition-colors hover:border-[var(--color-border-strong)]", open && "border-[var(--color-border-strong)]"),
 			"aria-haspopup": "listbox",
 			"aria-expanded": open,
+			"aria-label": `Model mode: ${modeBadge(active.id)}`,
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ActiveIcon, { className: "h-3.5 w-3.5 text-[var(--color-muted)]" }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -1603,13 +1625,13 @@ function ModePicker() {
 					children: "Beta"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "hidden text-[10px] text-[var(--color-subtle)] sm:inline",
-					children: "Grok 4.5"
+					className: "hidden max-w-[7.5rem] truncate font-mono text-[10px] text-[var(--color-subtle)] sm:inline",
+					children: active.model
 				})
 			]
 		}), open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			role: "listbox",
-			className: "absolute right-0 top-[calc(100%+6px)] z-50 w-[min(100vw-2rem,300px)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-[var(--shadow-soft)]",
+			className: "absolute right-0 top-[calc(100%+6px)] z-50 w-[min(100vw-2rem,320px)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-[var(--shadow-soft)]",
 			children: GROK_MODES.map((m) => {
 				const Icon = ICONS[m.id];
 				const selected = m.id === mode;
@@ -1617,7 +1639,10 @@ function ModePicker() {
 					type: "button",
 					role: "option",
 					"aria-selected": selected,
-					onClick: () => setMode(m.id),
+					onClick: () => {
+						setMode(m.id);
+						setModeMenuOpen(false);
+					},
 					className: cn("flex w-full items-start gap-3 rounded-[var(--radius-md)] px-2.5 py-2.5 text-left transition-colors", selected ? "bg-[var(--color-elevated)]" : "hover:bg-[var(--color-elevated)]/70"),
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Icon, { className: "mt-0.5 h-4 w-4 shrink-0 text-[var(--color-muted)]" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "min-w-0 flex-1",
@@ -2349,7 +2374,7 @@ function ChatView() {
 							className: "text-xs text-[var(--color-subtle)]",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "shimmer rounded px-1",
-								children: localRunning ? "Host running…" : `${modeMeta.label} · Grok thinking…`
+								children: localRunning ? "Host running…" : `${modeMeta.label} · thinking…`
 							})
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { ref: endRef })
@@ -3319,6 +3344,21 @@ function SettingsView() {
 		setGhDraft(githubToken);
 	}, [githubToken]);
 	(0, import_react.useEffect)(() => {
+		if (!oauth?.accessToken) return;
+		let cancelled = false;
+		(async () => {
+			setProbing(true);
+			try {
+				await probeGrok();
+			} finally {
+				if (!cancelled) setProbing(false);
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [oauth?.accessToken, oauth?.email]);
+	(0, import_react.useEffect)(() => {
 		if (!oauthPending) {
 			if (pollRef.current) {
 				window.clearInterval(pollRef.current);
@@ -3343,7 +3383,7 @@ function SettingsView() {
 	}, [oauthPending, pollGrokOAuth]);
 	(0, import_react.useEffect)(() => {
 		checkUpdate(githubToken || void 0).then(setUpdate).catch((e) => setUpdate({
-			currentVersion: "0.1",
+			currentVersion: "0.2.0",
 			currentSha: null,
 			remoteSha: null,
 			remoteMessage: null,
@@ -3400,14 +3440,28 @@ function SettingsView() {
 		try {
 			setGithubToken(ghDraft.trim());
 			const r = await applyUpdate(ghDraft.trim() || void 0, true);
-			setUpdateLog([
+			if (r.status) setUpdate(r.status);
+			else {
+				const s = await checkUpdate(ghDraft.trim() || void 0);
+				setUpdate(s);
+			}
+			const lines = [
 				r.ok ? "OK" : "FAILED",
 				r.detail,
+				r.newVersion ? `Version: v${r.newVersion}` : "",
+				r.newSha ? `Commit: ${r.newSha}` : "",
 				"",
 				...r.steps || []
-			].join("\n"));
-			const s = await checkUpdate(ghDraft.trim() || void 0);
-			setUpdate(s);
+			].filter(Boolean);
+			if (r.ok && r.restarting) {
+				lines.push("", "Restarting GrokHub…");
+				setUpdateLog(lines.join("\n"));
+				setTimeout(() => {
+					window.location.reload();
+				}, 1500);
+				return;
+			}
+			setUpdateLog(lines.join("\n"));
 		} catch (e) {
 			setUpdateLog(e instanceof Error ? e.message : "update failed");
 		} finally {
@@ -3431,24 +3485,31 @@ function SettingsView() {
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "flex flex-wrap items-center gap-2",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
-							variant: oauth ? "success" : grokConnected ? "success" : "default",
-							children: oauth ? "OAuth connected" : grokConnected ? "API connected" : "Not connected"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "text-xs text-[var(--color-muted)]",
-							children: grokStatusDetail
-						})]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+								variant: oauth && grokConnected ? "success" : oauth ? "info" : grokConnected ? "success" : "default",
+								children: oauth && grokConnected ? "OAuth live" : oauth ? "OAuth session" : grokConnected ? "API connected" : "Not connected"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "text-xs text-[var(--color-muted)]",
+								children: probing ? "Verifying with xAI…" : oauth && grokStatusDetail.toLowerCase().includes("not connected") ? "Session saved — verifying API access…" : grokStatusDetail
+							}),
+							oauth && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+								variant: "secondary",
+								size: "sm",
+								disabled: probing,
+								onClick: () => void saveAndProbe(),
+								children: probing ? "Testing…" : "Test connection"
+							})
+						]
 					}),
 					oauth && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "flex flex-wrap items-center gap-3 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-success)_35%,transparent)] bg-[color-mix(in_oklab,var(--color-success)_8%,transparent)] px-3 py-3",
 						children: [
-							oauth.picture ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProfileAvatar, {
 								src: oauth.picture,
-								alt: "",
-								className: "h-10 w-10 rounded-full object-cover"
-							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "grid h-10 w-10 place-items-center rounded-full bg-[var(--color-elevated)] text-sm font-medium",
-								children: (oauth.name || oauth.email || "G").charAt(0).toUpperCase()
+								name: oauth.name,
+								email: oauth.email
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "min-w-0 flex-1",
@@ -3523,13 +3584,10 @@ function SettingsView() {
 				children: isPending ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "h-10 animate-pulse rounded bg-[var(--color-elevated)]" }) : user && !user.isDevFallback ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "flex flex-wrap items-center gap-3",
 					children: [
-						user.profileImageUrl ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProfileAvatar, {
 							src: user.profileImageUrl,
-							alt: "",
-							className: "h-10 w-10 rounded-full object-cover"
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "grid h-10 w-10 place-items-center rounded-full bg-[var(--color-elevated)] text-sm font-medium",
-							children: (user.displayName || user.primaryEmail || "?").charAt(0).toUpperCase()
+							name: user.displayName,
+							email: user.primaryEmail
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "min-w-0 flex-1",
@@ -3625,9 +3683,13 @@ function SettingsView() {
 								variant: "success",
 								children: "Up to date"
 							})]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "mt-2 font-mono text-xs text-[var(--color-muted)]",
-							children: update.detail
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "mt-2 space-y-1 font-mono text-xs text-[var(--color-muted)]",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: update.detail }), (update.currentSha || update.remoteSha) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+								"local ",
+								update.currentSha || "?",
+								update.remoteSha ? ` · remote ${update.remoteSha}` : ""
+							] })]
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
@@ -3878,7 +3940,6 @@ function SkillsView() {
 		})
 	});
 }
-var APP_VERSION = "0.1";
 var NAV = [
 	{
 		id: "chat",

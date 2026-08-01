@@ -144,6 +144,7 @@ export async function dispatchApi(
         branch: body.branch ? String(body.branch) : undefined,
         token: body.token ? String(body.token) : undefined,
         force: body.force === true || body.force === "1" || body.force === 1,
+        restart: body.restart === true || body.restart === "1" || body.restart === 1,
       });
     }
     throw new Error(`Unknown update action: ${action}`);

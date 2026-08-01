@@ -107,7 +107,7 @@ export function SettingsView() {
       .then(setUpdate)
       .catch((e) =>
         setUpdate({
-          currentVersion: "0.1",
+          currentVersion: "0.2.0",
           currentSha: null,
           remoteSha: null,
           remoteMessage: null,
@@ -175,9 +175,30 @@ export function SettingsView() {
     try {
       setGithubToken(ghDraft.trim());
       const r = await applyUpdate(ghDraft.trim() || undefined, true);
-      setUpdateLog([r.ok ? "OK" : "FAILED", r.detail, "", ...(r.steps || [])].join("\n"));
-      const s = await checkUpdate(ghDraft.trim() || undefined);
-      setUpdate(s);
+      if (r.status) {
+        setUpdate(r.status);
+      } else {
+        const s = await checkUpdate(ghDraft.trim() || undefined);
+        setUpdate(s);
+      }
+      const lines = [
+        r.ok ? "OK" : "FAILED",
+        r.detail,
+        r.newVersion ? `Version: v${r.newVersion}` : "",
+        r.newSha ? `Commit: ${r.newSha}` : "",
+        "",
+        ...(r.steps || []),
+      ].filter(Boolean);
+      if (r.ok && r.restarting) {
+        lines.push("", "Restarting GrokHub…");
+        setUpdateLog(lines.join("\n"));
+        // Desktop shell exits; in browser preview just refresh state
+        setTimeout(() => {
+          window.location.reload();
+        }, 1500);
+        return;
+      }
+      setUpdateLog(lines.join("\n"));
     } catch (e) {
       setUpdateLog(e instanceof Error ? e.message : "update failed");
     } finally {
@@ -432,8 +453,14 @@ export function SettingsView() {
                   <Badge variant="success">Up to date</Badge>
                 )}
               </div>
-              <div className="mt-2 font-mono text-xs text-[var(--color-muted)]">
-                {update.detail}
+              <div className="mt-2 space-y-1 font-mono text-xs text-[var(--color-muted)]">
+                <div>{update.detail}</div>
+                {(update.currentSha || update.remoteSha) && (
+                  <div>
+                    local {update.currentSha || "?"}
+                    {update.remoteSha ? ` · remote ${update.remoteSha}` : ""}
+                  </div>
+                )}
               </div>
             </div>
           )}

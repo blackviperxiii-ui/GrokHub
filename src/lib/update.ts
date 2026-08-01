@@ -5,20 +5,21 @@
  * (no .git / package.json). Updates download a GitHub tarball and swap those
  * trees — never `git reset --hard` (that wipes local work).
  */
-import { execFile as execFileCb } from "node:child_process";
+import { execFile as execFileCb, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs/promises";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
+import { APP_VERSION as BUILTIN_VERSION } from "./version";
 
 const execFileAsync = promisify(execFileCb);
 
 export const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 export const DEFAULT_BRANCH = "main";
-export const APP_VERSION = "0.1";
+export const APP_VERSION = BUILTIN_VERSION;
 
 export type UpdateStatus = {
   currentVersion: string;
@@ -37,6 +38,10 @@ export type UpdateResult = {
   detail: string;
   steps: string[];
   newSha?: string;
+  newVersion?: string;
+  restarting?: boolean;
+  /** Post-apply check so UI can clear “Update available” immediately */
+  status?: UpdateStatus;
 };
 
 type RunResult = { stdout: string; stderr: string };
@@ -65,6 +70,17 @@ async function run(
     const msg = [err.message, stderr, stdout].filter(Boolean).join("\n").slice(0, 4000);
     throw new Error(msg || `Command failed: ${cmd} ${args.join(" ")}`);
   }
+}
+
+/** Compare git SHAs allowing 7–40 char prefixes. */
+export function shaMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  const x = a.trim().toLowerCase();
+  const y = b.trim().toLowerCase();
+  if (!x || !y) return false;
+  const n = Math.min(x.length, y.length);
+  if (n < 7) return x === y;
+  return x.slice(0, n) === y.slice(0, n);
 }
 
 function installRoots(): string[] {
@@ -101,36 +117,64 @@ async function findInstallRoot(): Promise<string | null> {
   return null;
 }
 
+function readBuiltinVersion(): string {
+  // Prefer package.json next to this module's project root when available
+  const candidates = [
+    path.join(process.cwd(), "package.json"),
+    path.join(process.env.GROKHUB_HOME || "", "package.json"),
+    path.join("/usr/lib/grokhub", "package.json"),
+  ];
+  for (const f of candidates) {
+    try {
+      if (!f || !existsSync(f)) continue;
+      const pkg = JSON.parse(readFileSync(f, "utf8")) as { version?: string; name?: string };
+      if (pkg.version && (pkg.name === "grokhub" || !pkg.name)) {
+        return String(pkg.version);
+      }
+      if (pkg.version) return String(pkg.version);
+    } catch {
+      /* next */
+    }
+  }
+  return BUILTIN_VERSION;
+}
+
 async function readLocalVersion(
   root: string | null,
 ): Promise<{ version: string; sha: string | null }> {
-  let version = APP_VERSION;
+  let version = readBuiltinVersion();
   let sha: string | null = null;
   if (!root) return { version, sha };
+
   try {
     const pkg = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")) as {
       version?: string;
     };
-    if (pkg.version) version = String(pkg.version).replace(/\.0$/, "") || version;
+    if (pkg.version) version = String(pkg.version);
   } catch {
     /* packaged installs may lack package.json */
   }
   try {
-    const v = await fs.readFile(path.join(root, "VERSION"), "utf8");
-    const line = v.trim();
-    if (line) sha = line.slice(0, 40);
+    const v = (await fs.readFile(path.join(root, "APP_VERSION"), "utf8")).trim();
+    if (v) version = v;
+  } catch {
+    /* ignore */
+  }
+  try {
+    const v = (await fs.readFile(path.join(root, "VERSION"), "utf8")).trim();
+    if (v) sha = v.split(/\s+/)[0] || null;
   } catch {
     /* ignore */
   }
   if (!sha) {
     try {
       const { stdout } = await run("git", ["rev-parse", "HEAD"], { cwd: root, timeout: 8000 });
-      sha = stdout.trim().slice(0, 12);
+      sha = stdout.trim() || null;
     } catch {
       /* ignore */
     }
   }
-  return { version, sha: sha ? sha.slice(0, 12) : null };
+  return { version, sha };
 }
 
 async function fetchRemoteHead(
@@ -180,20 +224,20 @@ export async function checkForUpdate(opts?: {
       detail = token
         ? "Could not read remote commit (check repo access / token scopes)."
         : "Could not read remote commit (private repo needs a GitHub token).";
-    } else if (local.sha && remote.sha.slice(0, 12) === local.sha.slice(0, 12)) {
-      detail = "Already on latest commit.";
+    } else if (shaMatch(local.sha, remote.sha)) {
+      detail = `Up to date · v${local.version} · ${local.sha?.slice(0, 12) || "local"}`;
     } else if (!local.sha) {
       detail = "Local VERSION unknown — install recommended.";
     } else {
-      detail = "Update available from GitHub.";
+      detail = `Update available · ${local.sha.slice(0, 12)} → ${remote.sha.slice(0, 12)}`;
     }
   } catch (e) {
     detail = e instanceof Error ? e.message : "Update check failed";
   }
 
-  const remoteShort = remote?.sha.slice(0, 12) ?? null;
-  const localShort = local.sha?.slice(0, 12) ?? null;
-  const updateAvailable = Boolean(remote && (!localShort || remoteShort !== localShort));
+  const remoteShort = remote?.sha ? remote.sha.slice(0, 12) : null;
+  const localShort = local.sha ? local.sha.slice(0, 12) : null;
+  const updateAvailable = Boolean(remote && !shaMatch(local.sha, remote.sha));
 
   return {
     currentVersion: local.version,
@@ -313,10 +357,11 @@ async function deployExtracted(
   extracted: string,
   root: string,
   steps: string[],
-): Promise<string | undefined> {
+): Promise<{ sha?: string; version?: string }> {
   await replaceDir(path.join(extracted, ".output"), path.join(root, ".output"), steps);
   await replaceDir(path.join(extracted, "desktop"), path.join(root, "desktop"), steps);
 
+  let version: string | undefined;
   for (const name of ["package.json", "package-lock.json", "scripts", "packaging"]) {
     const src = path.join(extracted, name);
     try {
@@ -326,23 +371,101 @@ async function deployExtracted(
       } else if (st.isFile()) {
         await fs.copyFile(src, path.join(root, name));
         steps.push(`Updated ${name}`);
+        if (name === "package.json") {
+          try {
+            const pkg = JSON.parse(await fs.readFile(src, "utf8")) as { version?: string };
+            if (pkg.version) version = String(pkg.version);
+          } catch {
+            /* ignore */
+          }
+        }
       }
     } catch {
       /* optional */
     }
   }
 
-  // GitHub tarball folder ends with the commit short/long sha — most reliable
+  let sha: string | undefined;
   const base = path.basename(extracted);
   const m = base.match(/-([0-9a-f]{7,40})$/i);
-  if (m?.[1]) return m[1].slice(0, 12);
+  if (m?.[1]) sha = m[1];
   try {
     const v = (await fs.readFile(path.join(extracted, "VERSION"), "utf8")).trim();
-    if (v) return v.slice(0, 40);
+    if (v) sha = v.split(/\s+/)[0] || sha;
   } catch {
     /* ignore */
   }
-  return undefined;
+  return { sha, version };
+}
+
+async function stampInstall(
+  root: string,
+  sha: string | undefined,
+  version: string | undefined,
+  steps: string[],
+): Promise<void> {
+  if (sha) {
+    await fs.writeFile(path.join(root, "VERSION"), `${sha}\n`);
+    steps.push(`VERSION → ${sha.slice(0, 12)}`);
+  }
+  const ver = version || readBuiltinVersion();
+  await fs.writeFile(path.join(root, "APP_VERSION"), `${ver}\n`);
+  steps.push(`APP_VERSION → ${ver}`);
+}
+
+/**
+ * Schedule a full app restart (UI server + Electron) after a successful update.
+ * Spawns a detached helper so the current process can exit cleanly.
+ */
+export function scheduleAppRestart(opts?: { port?: string; appRoot?: string }): void {
+  const port = opts?.port || process.env.GROKHUB_PORT || "18765";
+  const appRoot =
+    opts?.appRoot ||
+    process.env.GROKHUB_HOME ||
+    path.resolve(process.cwd());
+  const runtime = process.env.XDG_RUNTIME_DIR || "/tmp";
+  const pidfile = path.join(runtime, "grokhub", "ui.pid");
+
+  const script = `
+set +e
+sleep 1.2
+# Stop old UI server
+if [ -f "${pidfile}" ]; then
+  kill "$(cat "${pidfile}")" 2>/dev/null || true
+  rm -f "${pidfile}"
+fi
+fuser -k ${port}/tcp >/dev/null 2>&1 || true
+# Prefer system launcher
+if command -v grokhub >/dev/null 2>&1; then
+  nohup grokhub >/dev/null 2>&1 &
+  exit 0
+fi
+# Fallback: run packaged launcher or electron main
+export GROKHUB_HOME="${appRoot}"
+export GROKHUB_PORT="${port}"
+if [ -x "${appRoot}/packaging/aur/grokhub.sh" ]; then
+  nohup bash "${appRoot}/packaging/aur/grokhub.sh" >/dev/null 2>&1 &
+elif [ -f "${appRoot}/desktop/main.mjs" ] && command -v electron >/dev/null 2>&1; then
+  # start UI if present
+  if [ -f "${appRoot}/.output/server/index.mjs" ]; then
+    (
+      cd "${appRoot}"
+      export PORT="${port}" NITRO_PORT="${port}" HOST=127.0.0.1 NITRO_HOST=127.0.0.1
+      nohup node .output/server/index.mjs >/tmp/grokhub-ui-restart.log 2>&1 &
+      echo $! > "${pidfile}"
+    )
+    sleep 0.8
+  fi
+  nohup electron --class=GrokHub --name=GrokHub "${appRoot}/desktop/main.mjs" >/dev/null 2>&1 &
+fi
+`.trim();
+
+  const child = spawn("bash", ["-c", script], {
+    detached: true,
+    stdio: "ignore",
+    env: process.env,
+  });
+  child.unref();
 }
 
 /**
@@ -354,6 +477,8 @@ export async function applyUpdate(opts?: {
   branch?: string;
   token?: string;
   force?: boolean;
+  /** When true (default in desktop), schedule full app restart after success */
+  restart?: boolean;
 }): Promise<UpdateResult> {
   const steps: string[] = [];
   const repo = opts?.repo || process.env.GROKHUB_REPO || DEFAULT_REPO;
@@ -364,19 +489,26 @@ export async function applyUpdate(opts?: {
     process.env.GH_TOKEN ||
     process.env.GROKHUB_GITHUB_TOKEN ||
     "";
+  const shouldRestart = opts?.restart === true;
 
-  const status = await checkForUpdate({ repo, branch, token: token || undefined });
-  if (!status.updateAvailable && !opts?.force) {
-    steps.push(status.detail || "Already up to date");
+  const statusBefore = await checkForUpdate({ repo, branch, token: token || undefined });
+  if (!statusBefore.updateAvailable && !opts?.force) {
+    return {
+      ok: true,
+      detail: statusBefore.detail || "Already up to date",
+      steps: [statusBefore.detail || "Already up to date"],
+      newSha: statusBefore.currentSha || undefined,
+      newVersion: statusBefore.currentVersion,
+      status: statusBefore,
+      restarting: false,
+    };
   }
 
-  // Prefer GROKHUB_HOME / packaged path; avoid using a random cwd when possible
   let root =
     process.env.GROKHUB_HOME ||
     (await findInstallRoot()) ||
     path.join(os.homedir(), ".local/share/grokhub");
 
-  // If GROKHUB_HOME not set and cwd looks like the app, use cwd (dev)
   if (!process.env.GROKHUB_HOME && (await isAppRoot(process.cwd()))) {
     root = process.cwd();
   }
@@ -387,7 +519,9 @@ export async function applyUpdate(opts?: {
   }
 
   steps.push(`Install root: ${root}`);
-  steps.push(`Target: ${repo}@${branch}${status.remoteSha ? ` (${status.remoteSha})` : ""}`);
+  steps.push(
+    `Target: ${repo}@${branch}${statusBefore.remoteSha ? ` (${statusBefore.remoteSha})` : ""}`,
+  );
 
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "grokhub-up-"));
   const tarball = path.join(tmp, "update.tar.gz");
@@ -408,28 +542,38 @@ export async function applyUpdate(opts?: {
     const extracted = await extractTarball(tarball, extractDir);
     steps.push(`Extracted ${path.basename(extracted)}`);
 
-    const extractedSha = await deployExtracted(extracted, root, steps);
+    const deployed = await deployExtracted(extracted, root, steps);
 
-    let newSha = status.remoteSha || extractedSha || undefined;
-    if (!newSha) {
-      // Parse short sha from GitHub folder name: owner-repo-<sha>
-      const m = path.basename(extracted).match(/-([0-9a-f]{7,40})$/i);
-      if (m?.[1]) newSha = m[1].slice(0, 12);
-    }
-    if (!newSha) {
+    // Prefer full remote SHA from API for reliable future checks
+    let newSha = statusBefore.remoteSha || deployed.sha;
+    if (newSha && newSha.length < 40 && statusBefore.remoteSha) {
+      // statusBefore.remoteSha is already short (12); fetch full if we only have short
       try {
         const head = await fetchRemoteHead(repo, branch, token || undefined);
-        newSha = head?.sha.slice(0, 12);
+        if (head?.sha) newSha = head.sha;
+      } catch {
+        /* keep short */
+      }
+    } else if (!newSha) {
+      try {
+        const head = await fetchRemoteHead(repo, branch, token || undefined);
+        newSha = head?.sha;
       } catch {
         /* ignore */
       }
     }
-    if (newSha) {
-      await fs.writeFile(path.join(root, "VERSION"), `${newSha}\n`);
-      steps.push(`VERSION → ${newSha}`);
-    } else {
-      steps.push("Warning: could not determine remote SHA for VERSION stamp");
+
+    let newVersion = deployed.version || readBuiltinVersion();
+    try {
+      const pkg = JSON.parse(
+        await fs.readFile(path.join(root, "package.json"), "utf8"),
+      ) as { version?: string };
+      if (pkg.version) newVersion = String(pkg.version);
+    } catch {
+      /* ignore */
     }
+
+    await stampInstall(root, newSha, newVersion, steps);
 
     // Rebuild only if no .output shipped
     let hasOutput = false;
@@ -477,8 +621,6 @@ export async function applyUpdate(opts?: {
 
     let canRoot = false;
     try {
-      // Only treat as root when we are actually uid 0 — write-access alone can
-      // be misleading in some containers and we must not half-run install-arch.
       canRoot = typeof process.getuid === "function" && process.getuid() === 0;
       if (canRoot) await fs.access("/usr/lib", fs.constants.W_OK);
       else canRoot = false;
@@ -493,6 +635,8 @@ export async function applyUpdate(opts?: {
       try {
         await run("bash", [installScript], { cwd: root, timeout: 180_000 });
         steps.push("System files updated under /usr/lib/grokhub");
+        // stamp again on system path
+        await stampInstall("/usr/lib/grokhub", newSha, newVersion, steps);
       } catch (e) {
         steps.push(
           `System reinstall failed (non-fatal): ${
@@ -502,21 +646,6 @@ export async function applyUpdate(opts?: {
       }
     } else if (hasInstallScript && canRoot && !systemTarget) {
       steps.push("Root session but non-system root — skipped install-arch.sh");
-    } else if (hasInstallScript && !canRoot) {
-      const userLib = path.join(os.homedir(), ".local/share/grokhub");
-      if (path.resolve(root) !== path.resolve(userLib) && root !== "/usr/lib/grokhub") {
-        // When updating a clone, also refresh user-local runtime if it exists
-        try {
-          await fs.stat(path.join(userLib, ".output"));
-          steps.push(`Syncing runtime → ${userLib}`);
-          await replaceDir(path.join(root, ".output"), path.join(userLib, ".output"), steps);
-          await replaceDir(path.join(root, "desktop"), path.join(userLib, "desktop"), steps);
-          if (newSha) await fs.writeFile(path.join(userLib, "VERSION"), `${newSha}\n`);
-        } catch {
-          /* no user lib */
-        }
-      }
-      steps.push("No root — skipped /usr reinstall. Restart GrokHub to load the new build.");
     } else {
       steps.push("Runtime files updated in place");
     }
@@ -530,17 +659,38 @@ export async function applyUpdate(opts?: {
       );
     }
 
-    steps.push("Done — fully quit and relaunch GrokHub");
+    // Re-check so UI clears "Update available"
+    const statusAfter = await checkForUpdate({ repo, branch, token: token || undefined });
+    // Force local stamp into status if check still races
+    if (newSha && statusAfter.updateAvailable && shaMatch(newSha, statusAfter.remoteSha)) {
+      statusAfter.updateAvailable = false;
+      statusAfter.currentSha = newSha.slice(0, 12);
+      statusAfter.currentVersion = newVersion;
+      statusAfter.detail = `Up to date · v${newVersion} · ${newSha.slice(0, 12)}`;
+    }
+
+    let restarting = false;
+    if (shouldRestart) {
+      steps.push("Restarting GrokHub…");
+      scheduleAppRestart({ appRoot: root });
+      restarting = true;
+    } else {
+      steps.push("Done — restart GrokHub to load the new build");
+    }
+
     return {
       ok: true,
-      detail: `Updated to ${newSha || "latest"} from ${repo}@${branch}`,
+      detail: `Updated to v${newVersion} (${(newSha || "latest").slice(0, 12)}) from ${repo}@${branch}`,
       steps,
-      newSha,
+      newSha: newSha?.slice(0, 12),
+      newVersion,
+      restarting,
+      status: statusAfter,
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     steps.push(`Failed: ${msg}`);
-    return { ok: false, detail: msg.slice(0, 2000), steps };
+    return { ok: false, detail: msg.slice(0, 2000), steps, restarting: false };
   } finally {
     await fs.rm(tmp, { recursive: true, force: true }).catch(() => null);
   }

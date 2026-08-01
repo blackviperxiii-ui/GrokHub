@@ -3,6 +3,7 @@
 set -euo pipefail
 
 APP_ROOT="${GROKHUB_HOME:-/usr/lib/grokhub}"
+export GROKHUB_HOME="$APP_ROOT"
 PORT="${GROKHUB_PORT:-18765}"
 URL="${GROKHUB_URL:-http://127.0.0.1:${PORT}}"
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}/grokhub"

@@ -81,7 +81,7 @@ fi
 
 cat <<EOF
 
-GrokHub v0.1 installed (with taskbar icons).
+GrokHub v0.2.0 installed (with taskbar icons).
 
   Run:   grokhub
   Menu:  Applications → GrokHub

@@ -1,5 +1,6 @@
 {
   "name": "grokhub",
+  "version": "0.2.0",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -94,6 +95,5 @@
     "typescript-eslint": "^8.56.1",
     "vite": "^8.1.0"
   },
-  "version": "0.1.0",
   "main": "desktop/main.mjs"
 }

@@ -5,7 +5,7 @@ post_install() {
 
   cat <<'EOF'
 
-  GrokHub v0.1 installed.
+  GrokHub v0.2.0 installed.
 
   Run:    grokhub
   Menu:   Applications → GrokHub

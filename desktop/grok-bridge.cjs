@@ -11,7 +11,52 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.1";
+const APP_VERSION = "0.2.0";
+
+function shaMatch(a, b) {
+  if (!a || !b) return false;
+  const x = String(a).trim().toLowerCase();
+  const y = String(b).trim().toLowerCase();
+  if (!x || !y) return false;
+  const n = Math.min(x.length, y.length);
+  if (n < 7) return x === y;
+  return x.slice(0, n) === y.slice(0, n);
+}
+
+function scheduleAppRestart(appRoot) {
+  const { spawn } = require("node:child_process");
+  const port = process.env.GROKHUB_PORT || "18765";
+  const root = appRoot || process.env.GROKHUB_HOME || process.cwd();
+  const runtime = process.env.XDG_RUNTIME_DIR || "/tmp";
+  const pidfile = `${runtime}/grokhub/ui.pid`;
+  const script = `
+set +e
+sleep 1.2
+if [ -f "${pidfile}" ]; then
+  kill "$(cat "${pidfile}")" 2>/dev/null || true
+  rm -f "${pidfile}"
+fi
+fuser -k ${port}/tcp >/dev/null 2>&1 || true
+if command -v grokhub >/dev/null 2>&1; then
+  nohup grokhub >/dev/null 2>&1 &
+  exit 0
+fi
+export GROKHUB_HOME="${root}"
+export GROKHUB_PORT="${port}"
+if [ -x "${root}/packaging/aur/grokhub.sh" ]; then
+  nohup bash "${root}/packaging/aur/grokhub.sh" >/dev/null 2>&1 &
+elif [ -f "${root}/desktop/main.mjs" ] && command -v electron >/dev/null 2>&1; then
+  if [ -f "${root}/.output/server/index.mjs" ]; then
+    ( cd "${root}" && export PORT="${port}" NITRO_PORT="${port}" HOST=127.0.0.1 NITRO_HOST=127.0.0.1 && nohup node .output/server/index.mjs >/tmp/grokhub-ui-restart.log 2>&1 & echo $! > "${pidfile}" )
+    sleep 0.8
+  fi
+  nohup electron --class=GrokHub --name=GrokHub "${root}/desktop/main.mjs" >/dev/null 2>&1 &
+fi
+`.trim();
+  const child = spawn("bash", ["-c", script], { detached: true, stdio: "ignore", env: process.env });
+  child.unref();
+}
+
 
 function resolveMode(mode, prompt = "") {
   let id = mode || "auto";
@@ -184,7 +229,7 @@ async function checkForUpdate(opts = {}) {
   if (installRoot) {
     try {
       const pkg = JSON.parse(await fs.readFile(path.join(installRoot, "package.json"), "utf8"));
-      if (pkg.version) version = String(pkg.version).replace(/\.0$/, "") || version;
+      if (pkg.version) version = String(pkg.version);
     } catch {
       /* ignore */
     }
@@ -229,7 +274,7 @@ async function checkForUpdate(opts = {}) {
     currentSha: sha,
     remoteSha,
     remoteMessage,
-    updateAvailable: Boolean(remoteSha && remoteSha !== sha),
+    updateAvailable: Boolean(remoteSha && !shaMatch(sha, remoteSha)),
     repo,
     branch,
     installRoot,
@@ -376,25 +421,34 @@ async function applyUpdate(opts = {}) {
     }
 
     let newSha;
+    let newVersion = APP_VERSION;
     try {
       const head = await checkForUpdate({ repo, branch, token });
       newSha = head.remoteSha || undefined;
     } catch {}
+    try {
+      const headers = { accept: "application/vnd.github+json", "user-agent": "GrokHub-Updater" };
+      if (token) headers.authorization = `Bearer ${token}`;
+      const res = await fetch(`https://api.github.com/repos/${repo}/commits/${branch}`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.sha) newSha = data.sha;
+      }
+    } catch {}
     if (!newSha) {
       const m = path.basename(extracted).match(/-([0-9a-f]{7,40})$/i);
-      if (m) newSha = m[1].slice(0, 12);
+      if (m) newSha = m[1];
     }
-    if (!newSha) {
-      try {
-        const v = (await fs.readFile(path.join(extracted, "VERSION"), "utf8")).trim();
-        if (v) newSha = v.slice(0, 40);
-      } catch {}
-    }
+    try {
+      const pkg = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
+      if (pkg.version) newVersion = String(pkg.version);
+    } catch {}
     if (newSha) {
       await fs.writeFile(path.join(root, "VERSION"), newSha + "\n");
-      steps.push(`VERSION → ${newSha}`);
+      steps.push(`VERSION → ${newSha.slice(0, 12)}`);
     }
-
+    await fs.writeFile(path.join(root, "APP_VERSION"), newVersion + "\n");
+    steps.push(`APP_VERSION → ${newVersion}`);
 
     try {
       await fs.stat(path.join(root, ".output", "server", "index.mjs"));
@@ -409,15 +463,40 @@ async function applyUpdate(opts = {}) {
         await fs.stat(script);
         steps.push("Running install-arch.sh");
         await execAsync(`bash "${script}"`, { cwd: root, timeout: 180000 });
-      } else {
-        steps.push("No root — restart GrokHub to load new build");
       }
     } catch {
       steps.push("System reinstall skipped");
     }
 
-    steps.push("Done — fully quit and relaunch GrokHub");
-    return { ok: true, detail: `Updated to ${newSha || "latest"}`, steps, newSha };
+    let status;
+    try {
+      status = await checkForUpdate({ repo, branch, token });
+      if (status.updateAvailable && newSha && shaMatch(newSha, status.remoteSha)) {
+        status.updateAvailable = false;
+        status.currentSha = newSha.slice(0, 12);
+        status.currentVersion = newVersion;
+        status.detail = `Up to date · v${newVersion} · ${newSha.slice(0, 12)}`;
+      }
+    } catch {}
+
+    const doRestart = opts.restart !== false;
+    if (doRestart) {
+      steps.push("Restarting GrokHub…");
+      scheduleAppRestart(root);
+    } else {
+      steps.push("Done — relaunch GrokHub to load the new build");
+    }
+
+    return {
+      ok: true,
+      detail: `Updated to v${newVersion} (${(newSha || "latest").slice(0, 12)})`,
+      steps,
+      newSha: newSha ? newSha.slice(0, 12) : undefined,
+      newVersion,
+      restarting: doRestart,
+      status,
+    };
+
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     steps.push(`Failed: ${msg}`);
@@ -433,7 +512,7 @@ const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const XAI_UA = "GrokHub/0.1 (xAI OAuth; Electron)";
+const XAI_UA = "GrokHub/0.2.0 (xAI OAuth; Electron)";
 
 async function xaiDiscovery() {
   const res = await fetch(XAI_OAUTH_DISCOVERY, {
@@ -641,6 +720,7 @@ module.exports = {
   probeXaiKey,
   checkForUpdate,
   applyUpdate,
+  scheduleAppRestart,
   oauthStart,
   oauthPoll,
   oauthEnsure,

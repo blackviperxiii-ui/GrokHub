@@ -270,7 +270,22 @@ function registerIpc() {
   ipcMain.handle("grok:oauthPoll", (_e, deviceCode) => grokBridge.oauthPoll(deviceCode));
   ipcMain.handle("grok:oauthEnsure", (_e, tokens) => grokBridge.oauthEnsure(tokens));
   ipcMain.handle("update:check", (_e, opts) => grokBridge.checkForUpdate(opts || {}));
-  ipcMain.handle("update:apply", (_e, opts) => grokBridge.applyUpdate(opts || {}));
+  ipcMain.handle("update:apply", async (_e, opts) => {
+    const r = await grokBridge.applyUpdate({ ...(opts || {}), restart: true });
+    if (r?.ok && r?.restarting) {
+      // Give the renderer a moment to show "Restarting…" then quit this process.
+      // scheduleAppRestart already spawned the replacement launcher.
+      setTimeout(() => {
+        try {
+          tray?.destroy();
+        } catch {
+          /* ignore */
+        }
+        app.exit(0);
+      }, 900);
+    }
+    return r;
+  });
 }
 
 if (process.env.GROKHUB_WAYLAND !== "0") {

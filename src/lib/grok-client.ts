@@ -88,7 +88,13 @@ export async function checkUpdate(token?: string) {
 export async function applyUpdate(token?: string, force = true) {
   const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
   if (desktop?.applyUpdate) {
-    return desktop.applyUpdate({ token, force });
+    // Desktop: always restart after a successful install
+    return desktop.applyUpdate({ token, force, restart: true });
   }
-  return rpc<UpdateResult>("/api/update", "apply", { token: token || "", force });
+  // Browser preview: no process restart
+  return rpc<UpdateResult>("/api/update", "apply", {
+    token: token || "",
+    force,
+    restart: false,
+  });
 }

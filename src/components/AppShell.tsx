@@ -22,6 +22,7 @@ import { getMode } from "@/lib/modes";
 import { useGrokHub } from "@/lib/store";
 import type { NavId } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { APP_VERSION } from "@/lib/version";
 import { authEnabled } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { UserButton } from "@/lib/auth/gates";
@@ -42,7 +43,6 @@ import { ImagineView } from "./views/ImagineView";
 import { SettingsView } from "./views/SettingsView";
 import { SkillsView } from "./views/SkillsView";
 
-const APP_VERSION = "0.1";
 
 const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { id: "chat", label: "Agent", icon: MessageSquare },
