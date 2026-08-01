@@ -110,7 +110,8 @@ export function AutomationsView() {
               New automation
             </CardTitle>
             <CardDescription>
-              Describe once. Attach live connectors automatically from your connected set.
+              Local scheduler (every 30s while the app is open). Due jobs run through the agent
+              with live Grok when connected.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">

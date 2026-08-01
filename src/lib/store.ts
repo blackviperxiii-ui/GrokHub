@@ -32,6 +32,25 @@ import {
   usagePercent,
 } from "./usage";
 import { uid } from "./utils";
+import { computeNextRun } from "./automation-schedule";
+
+/** Waits for user approval of host commands (agent tool loop). */
+let hostConfirmWaiter: ((allow: boolean) => void) | null = null;
+
+function requestHostConfirm(
+  set: (partial: Partial<State> | ((s: State) => Partial<State>)) => void,
+  cmds: string[],
+  risks: string[],
+  botId: string,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    hostConfirmWaiter = resolve;
+    set({
+      pendingHostConfirm: { cmds, risks, botId },
+      streamStatus: "Waiting for host approval…",
+    });
+  });
+}
 
 type State = {
   nav: NavId;
@@ -56,7 +75,17 @@ type State = {
     launchOnLogin: boolean;
     wayland: boolean;
     tray: boolean;
+    /** Prompt before running host commands from the agent */
+    confirmHostCommands: boolean;
+    /** When confirmHostCommands, only prompt for non-read-only commands */
+    confirmDestructiveOnly: boolean;
   };
+  /** Host commands awaiting user approval */
+  pendingHostConfirm: {
+    cmds: string[];
+    risks: string[];
+    botId: string;
+  } | null;
   usage: UsageSnapshot;
   heartbeatAt: number;
   running: boolean;
@@ -96,6 +125,9 @@ type State = {
   setMode: (mode: GrokModeId) => void;
   setModeMenuOpen: (open: boolean) => void;
   setDesktop: (patch: Partial<State["desktop"]>) => void;
+  resolveHostConfirm: (allow: boolean) => void;
+  tickAutomations: () => Promise<void>;
+  hydrateSecrets: () => Promise<void>;
   setApiKey: (key: string) => void;
   setGithubToken: (token: string) => void;
   startGrokOAuth: () => Promise<void>;
@@ -422,12 +454,15 @@ export const useGrokHub = create<State>()(
         launchOnLogin: false,
         wayland: true,
         tray: true,
+        confirmHostCommands: true,
+        confirmDestructiveOnly: true,
       },
       usage: createUsage("pro"),
       heartbeatAt: boot.heartbeatAt,
       running: false,
       streamStatus: null,
       streamingMessageId: null,
+      pendingHostConfirm: null,
       modelCatalog: emptyCatalog(),
       lastModelsFetchAt: 0,
       apiKey: "",
@@ -451,8 +486,50 @@ export const useGrokHub = create<State>()(
       },
       setModeMenuOpen: (open) => set({ modeMenuOpen: open }),
       setDesktop: (patch) => set((s) => ({ desktop: { ...s.desktop, ...patch } })),
-      setApiKey: (key) => set({ apiKey: key, grokConnected: null }),
-      setGithubToken: (token) => set({ githubToken: token }),
+
+      resolveHostConfirm: (allow) => {
+        const pending = hostConfirmWaiter;
+        hostConfirmWaiter = null;
+        set({ pendingHostConfirm: null });
+        pending?.(allow);
+      },
+
+      hydrateSecrets: async () => {
+        try {
+          const { loadAllSecrets } = await import("./secrets-client");
+          const sec = await loadAllSecrets();
+          const patch: Partial<State> = {};
+          if (sec.apiKey) patch.apiKey = sec.apiKey;
+          if (sec.githubToken) patch.githubToken = sec.githubToken;
+          if (sec.ssoCookie) patch.ssoCookie = sec.ssoCookie;
+          if (sec.oauth) {
+            try {
+              patch.oauth = JSON.parse(sec.oauth);
+            } catch {
+              /* ignore */
+            }
+          }
+          if (Object.keys(patch).length) set(patch);
+        } catch {
+          /* ignore */
+        }
+      },
+
+      setApiKey: (key) => {
+        set({ apiKey: key, grokConnected: null });
+        void import("./secrets-client").then((m) => m.secretsSet("apiKey", key));
+      },
+      setGithubToken: (token) => {
+        set({ githubToken: token });
+        void import("./secrets-client").then((m) => m.secretsSet("githubToken", token));
+      },
+      setSsoCookie: (cookie) => {
+        set({ ssoCookie: cookie.trim() });
+        void import("./secrets-client").then((m) =>
+          m.secretsSet("ssoCookie", cookie.trim()),
+        );
+        void get().refreshUsage();
+      },
 
       startGrokOAuth: async () => {
         const { oauthStart } = await import("./grok-client");
@@ -488,6 +565,9 @@ export const useGrokHub = create<State>()(
         const { oauthPoll } = await import("./grok-client");
         const r = await oauthPoll(pending.deviceCode);
         if (r.status === "ready") {
+          void import("./secrets-client").then((m) =>
+            m.secretsSet("oauth", JSON.stringify(r.tokens)),
+          );
           set({
             oauth: r.tokens,
             oauthPending: null,
@@ -575,12 +655,7 @@ export const useGrokHub = create<State>()(
         });
       },
 
-      setSsoCookie: (cookie) => {
-        set({ ssoCookie: cookie.trim() });
-        void get().refreshUsage();
-      },
-
-      linkGrokWebsiteSession: async () => {
+            linkGrokWebsiteSession: async () => {
         try {
           if (typeof window !== "undefined" && window.grokhubDesktop?.grok?.linkWebsiteSession) {
             const r = await window.grokhubDesktop.grok.linkWebsiteSession();
@@ -1287,7 +1362,7 @@ export const useGrokHub = create<State>()(
           return;
         }
 
-        // Generic connectors — enable for agent context; open vendor home for account linking
+        // Planned connectors — honest "coming soon", do not fake connected
         const homes: Record<string, string> = {
           gmail: "https://accounts.google.com/",
           gdrive: "https://drive.google.com/",
@@ -1301,21 +1376,12 @@ export const useGrokHub = create<State>()(
         if (url && typeof window !== "undefined") {
           window.open(url, "_blank", "noopener,noreferrer");
         }
-        set((s) => ({
-          connectors: s.connectors.map((row) =>
-            row.id === id
-              ? { ...row, status: "connected" as const, lastUsed: Date.now() }
-              : row,
-          ),
-        }));
         get().pushActivity({
           kind: "connector",
-          title: `Enabled ${c.name}`,
+          title: `${c.name} — coming soon`,
           detail:
-            id === "custom-mcp"
-              ? "Mark enabled — point MCP URL from Grok skills when available"
-              : "Enabled for agent context. Finish account sign-in in the browser if prompted.",
-          status: "success",
+            "Live API wiring is not available yet. Only Grok, Desktop Host, and GitHub are fully integrated.",
+          status: "queued",
         });
       },
 
@@ -1402,10 +1468,20 @@ export const useGrokHub = create<State>()(
       runAutomation: async (id) => {
         const auto = get().automations.find((a) => a.id === id);
         if (!auto) return;
-        const m = getMode(resolveMode(get().mode, auto.instructions));
-        const bill = get().recordUsage("automation");
+        if (get().running) {
+          get().pushActivity({
+            kind: "automation",
+            title: `Skipped: ${auto.name}`,
+            detail: "Agent is busy — will retry on next schedule tick",
+            status: "queued",
+          });
+          return;
+        }
+        const routed = resolveMode(get().mode, auto.instructions);
+        const m = getMode(routed);
+        const bill = get().recordUsage("automation", routed);
         if (!bill.ok) return;
-        set({ running: true });
+        set({ running: true, streamStatus: `Automation: ${auto.name}` });
         get().setAgentStatus("ops", "working", 1);
         get().pushActivity({
           kind: "automation",
@@ -1413,22 +1489,75 @@ export const useGrokHub = create<State>()(
           detail: `${auto.instructions.slice(0, 100)} · ${m.label} · ${bill.cost}u`,
           status: "running",
         });
-        await wait(m.latencyMs[0] + Math.random() * (m.latencyMs[1] - m.latencyMs[0]));
+        let summary = "";
+        let ok = true;
+        try {
+          const { grokChat } = await import("./grok-client");
+          const prompt = [
+            `You are running a scheduled automation named "${auto.name}".`,
+            "Follow the instructions. Be concise. If host shell is needed, reply with HOST_CMD lines.",
+            "",
+            auto.instructions,
+          ].join("\n");
+          // Prefer sending through agent chat path for host tools when connected
+          if (get().oauth?.accessToken || get().apiKey) {
+            await get().sendChat(
+              `[Automation: ${auto.name}]\n${auto.instructions}`,
+            );
+            summary = "Ran via agent chat";
+          } else {
+            summary = "Not connected to Grok — automation recorded only";
+            ok = false;
+          }
+          void prompt;
+          void grokChat;
+        } catch (e) {
+          ok = false;
+          summary = e instanceof Error ? e.message : "automation failed";
+        }
+        const { computeNextRun } = await import("./automation-schedule");
         set((s) => ({
           running: false,
+          streamStatus: null,
           automations: s.automations.map((a) =>
             a.id === id
-              ? { ...a, lastRun: Date.now(), runCount: a.runCount + 1 }
+              ? {
+                  ...a,
+                  lastRun: Date.now(),
+                  runCount: a.runCount + 1,
+                  nextRun:
+                    a.schedule === "once"
+                      ? undefined
+                      : computeNextRun(a.schedule, a.time, Date.now(), Date.now()),
+                  enabled: a.schedule === "once" ? false : a.enabled,
+                }
               : a,
           ),
         }));
         get().setAgentStatus("ops", "idle", 0);
         get().pushActivity({
           kind: "automation",
-          title: `Automation completed: ${auto.name}`,
-          detail: `Used connectors: ${auto.connectorIds.join(", ") || "none"}`,
-          status: "success",
+          title: ok
+            ? `Automation completed: ${auto.name}`
+            : `Automation failed: ${auto.name}`,
+          detail: summary,
+          status: ok ? "success" : "failed",
         });
+      },
+
+      tickAutomations: async () => {
+        const { dueAutomations, ensureAutomationSchedule } = await import(
+          "./automation-schedule"
+        );
+        const now = Date.now();
+        set((s) => ({
+          automations: s.automations.map((a) => ensureAutomationSchedule(a, now)),
+        }));
+        const due = dueAutomations(get().automations, now);
+        for (const a of due.slice(0, 1)) {
+          // one per tick to avoid pile-up
+          await get().runAutomation(a.id);
+        }
       },
 
       addAutomation: (input) => {
@@ -1445,7 +1574,7 @@ export const useGrokHub = create<State>()(
             .map((c) => c.id),
           skillIds: [],
           runCount: 0,
-          nextRun: Date.now() + 1000 * 60 * 60 * 24,
+          nextRun: computeNextRun(input.schedule, input.time, Date.now()),
         };
         set((s) => ({ automations: [auto, ...s.automations] }));
         get().pushActivity({
@@ -1697,8 +1826,20 @@ export const useGrokHub = create<State>()(
                     if (gen !== chatGeneration) return;
                     roundText += piece;
                     accumulated = roundText;
-                    // Hide HOST_CMD while tokens arrive
-                    patchBot(stripHostCommands(roundText) || "…", { streaming: true });
+                    // Batch UI patches to animation frames (smoother streaming)
+                    const visibleDelta = stripHostCommands(roundText) || "…";
+                    if (!(globalThis as unknown as { __ghRaf?: number }).__ghRaf) {
+                      (globalThis as unknown as { __ghRaf?: number }).__ghRaf =
+                        requestAnimationFrame(() => {
+                          (globalThis as unknown as { __ghRaf?: number }).__ghRaf = 0;
+                          if (gen !== chatGeneration) return;
+                          patchBot(
+                            stripHostCommands(roundText) || "…",
+                            { streaming: true },
+                          );
+                        });
+                    }
+                    void visibleDelta;
                   },
                 },
               );
@@ -1745,10 +1886,39 @@ export const useGrokHub = create<State>()(
                 }
 
                 // Execute host commands and feed results back
+                const { classifyHostCommand, needsHostConfirm, riskLabel } = await import("./host-safety");
+                const riskList = cmds.slice(0, 3).map((c) => riskLabel(classifyHostCommand(c)));
+                const desk = get().desktop;
+                if (
+                  needsHostConfirm(cmds.slice(0, 3), {
+                    confirmAll: Boolean(desk.confirmHostCommands) && !desk.confirmDestructiveOnly,
+                    confirmDestructive: Boolean(desk.confirmHostCommands),
+                  })
+                ) {
+                  const allowed = await requestHostConfirm(
+                    set,
+                    cmds.slice(0, 3),
+                    riskList,
+                    botId,
+                  );
+                  if (!allowed) {
+                    finalAnswer =
+                      (visible || "") +
+                      "\n\n_Host commands cancelled — not run on your machine._";
+                    patchBot(finalAnswer, { streaming: false });
+                    break;
+                  }
+                }
                 set({ streamStatus: "Running on your desktop…" });
                 const { hostExec } = await import("./host-client");
                 const outputs: string[] = [];
                 for (const cmd of cmds.slice(0, 3)) {
+                  get().pushActivity({
+                    kind: "desktop",
+                    title: "Host command",
+                    detail: cmd.slice(0, 160),
+                    status: "running",
+                  });
                   if (abort.signal.aborted || gen !== chatGeneration) {
                     aborted = true;
                     break;
@@ -1807,14 +1977,13 @@ export const useGrokHub = create<State>()(
               const hasOauth = Boolean(get().oauth?.accessToken);
               const err = result.error || "Unknown error";
               finalAnswer = [
-                "Could not reach Grok.",
+                "**Could not reach Grok.**",
+                "",
                 err,
                 "",
                 hasOauth
-                  ? "Your OAuth session is saved. If this keeps failing: Settings → Disconnect → Connect with Grok OAuth again, or paste an xAI API key as fallback."
+                  ? "Your OAuth session is saved. Try: Settings → Disconnect → Connect with Grok OAuth again, or paste an xAI API key as fallback."
                   : "Fix: Settings → Connect with Grok OAuth (SuperGrok / X Premium) or paste an xAI API key.",
-                "",
-                replyFor(trimmed, get(), routed),
               ].join("\n");
               set({
                 grokConnected: false,
@@ -2124,7 +2293,7 @@ export const useGrokHub = create<State>()(
       },
     }),
     {
-      name: "grokhub-clean-v3",
+      name: "grokhub-clean-v4",
       partialize: (s) => ({
         connectors: s.connectors,
         skills: s.skills,
@@ -2138,17 +2307,13 @@ export const useGrokHub = create<State>()(
         // Never persist large image payloads (breaks localStorage quota)
         imagineJobs: s.imagineJobs.slice(0, 8).map(({ imageDataUrl: _drop, ...rest }) => rest),
         imagineAspect: s.imagineAspect,
-        apiKey: s.apiKey,
+        // Secrets intentionally omitted — Electron safeStorage / session only
         openClawWorkspace: s.openClawWorkspace
           ? {
               ...s.openClawWorkspace,
-              // Cap context bundle size in storage
               contextBundle: s.openClawWorkspace.contextBundle.slice(0, 48_000),
             }
           : null,
-        ssoCookie: s.ssoCookie,
-        githubToken: s.githubToken,
-        oauth: s.oauth,
         profile: s.profile,
         modelCatalog: s.modelCatalog,
         lastModelsFetchAt: s.lastModelsFetchAt,
@@ -2168,6 +2333,13 @@ export const useGrokHub = create<State>()(
             classifiedAt: cat.classifiedAt || 0,
             signature: cat.signature || "",
           };
+        }
+        // Host safety defaults for upgrades
+        const desk = s.desktop as Record<string, unknown> | undefined;
+        if (desk) {
+          if (desk.confirmHostCommands === undefined) desk.confirmHostCommands = true;
+          if (desk.confirmDestructiveOnly === undefined) desk.confirmDestructiveOnly = true;
+          s.desktop = desk;
         }
         // Drop old demo-seeded usage (842 units SuperGrok Pro) so meter shows real usage
         const u = s.usage as Record<string, unknown> | undefined;

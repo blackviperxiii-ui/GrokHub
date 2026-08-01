@@ -85,6 +85,11 @@ export type DesktopBridge = {
   close?: () => void;
   fit?: () => void;
   platform?: string;
+  secrets?: {
+    set: (key: string, value: string) => Promise<{ ok?: boolean }>;
+    get: (key: string) => Promise<{ value?: string }>;
+    delete: (key: string) => Promise<{ ok?: boolean }>;
+  };
   host?: {
     info: () => Promise<HostInfo>;
     listDir: (p?: string) => Promise<{ path: string; entries: HostFileEntry[] }>;
@@ -122,10 +127,21 @@ function electronHost() {
 }
 
 async function rpc<T>(action: string, body: Record<string, unknown> = {}): Promise<T> {
+  const token =
+    (typeof process !== "undefined" && process.env?.GROKHUB_HOST_TOKEN) ||
+    (typeof window !== "undefined"
+      ? (window as unknown as { __GROKHUB_HOST_TOKEN__?: string }).__GROKHUB_HOST_TOKEN__
+      : "") ||
+    "";
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    accept: "application/json",
+  };
+  if (token) headers["x-grokhub-host-token"] = token;
   const res = await fetch("/api/host", {
     method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify({ action, ...body }),
+    headers,
+    body: JSON.stringify({ action, ...body, ...(token ? { hostToken: token } : {}) }),
   });
   const text = await res.text();
   // Production bug guard: SPA HTML fallback means the host API route is missing

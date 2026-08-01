@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "@tanstack/react-router";
 import { ExternalLink, FolderInput } from "lucide-react";
 import { getModesWithCatalog } from "@/lib/modes";
 import { friendlyModelName } from "@/lib/models-catalog";
 import { applyUpdate, checkUpdate } from "@/lib/grok-client";
-import { GROK_PROVIDERS, authEnabled, signIn, signOut } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { useGrokHub } from "@/lib/store";
 import type { GrokModeId } from "@/lib/types";
@@ -45,7 +43,7 @@ export function SettingsView() {
   const importOpenClawWorkspace = useGrokHub((s) => s.importOpenClawWorkspace);
   const clearOpenClawWorkspace = useGrokHub((s) => s.clearOpenClawWorkspace);
   const openClawWorkspace = useGrokHub((s) => s.openClawWorkspace);
-  const { user, isPending } = useCurrentUserState();
+  const { user } = useCurrentUserState();
 
   const [keyDraft, setKeyDraft] = useState(apiKey);
   const [ghDraft, setGhDraft] = useState(githubToken);
@@ -340,62 +338,6 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      {/* Optional app identity via Grok Build broker */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">App account (optional)</CardTitle>
-          <CardDescription>
-            Grok Build app identity via Google/X (auth.grok.me). Separate from live Grok model
-            access above.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {isPending ? (
-            <div className="h-10 animate-pulse rounded bg-[var(--color-elevated)]" />
-          ) : user && !user.isDevFallback ? (
-            <div className="flex flex-wrap items-center gap-3">
-              <ProfileAvatar
-                src={user.profileImageUrl}
-                name={user.displayName}
-                email={user.primaryEmail}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium">{user.displayName || "Signed in"}</div>
-                <div className="truncate text-xs text-[var(--color-muted)]">
-                  {user.primaryEmail}
-                </div>
-              </div>
-              {authEnabled && (
-                <Button variant="secondary" size="sm" onClick={() => void signOut()}>
-                  Sign out
-                </Button>
-              )}
-            </div>
-          ) : authEnabled ? (
-            <div className="flex flex-wrap gap-2">
-              {GROK_PROVIDERS.map((p) => (
-                <Button
-                  key={p.providerId}
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => void signIn(p.providerId, { callbackURL: "/" })}
-                >
-                  {p.label}
-                </Button>
-              ))}
-              <Link
-                to="/login"
-                className="self-center text-xs text-[var(--color-muted)] underline-offset-2 hover:underline"
-              >
-                Full sign-in page
-              </Link>
-            </div>
-          ) : (
-            <p className="text-sm text-[var(--color-muted)]">Auth disabled.</p>
-          )}
-        </CardContent>
-      </Card>
-
       <UsageMeterPanel />
 
       <Card>
@@ -669,6 +611,16 @@ export function SettingsView() {
               ["tray", "System tray", "Minimize to tray"],
               ["launchOnLogin", "Launch on login", "Autostart"],
               ["startMinimized", "Start minimized", "Tray only"],
+              [
+                "confirmHostCommands",
+                "Confirm host commands",
+                "Ask before agent runs shell on your machine",
+              ],
+              [
+                "confirmDestructiveOnly",
+                "Only risky commands",
+                "Skip confirm for read-only commands (ls, cat, …)",
+              ],
             ] as const
           ).map(([key, label, hint]) => (
             <label
@@ -682,7 +634,7 @@ export function SettingsView() {
               <input
                 type="checkbox"
                 className="h-4 w-4 accent-[var(--color-fg)]"
-                checked={desktop[key]}
+                checked={Boolean(desktop[key])}
                 onChange={(e) => setDesktop({ [key]: e.target.checked })}
               />
             </label>

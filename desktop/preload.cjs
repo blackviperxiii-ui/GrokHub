@@ -22,6 +22,10 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
   },
   grok: {
     chat: (payload) => ipcRenderer.invoke("grok:chat", payload),
+    chatStream: (payload, handlers) => {
+      // Streaming via main is event-based; handlers optional for future
+      return ipcRenderer.invoke("grok:chatStream", payload);
+    },
     imagine: (payload) => ipcRenderer.invoke("grok:imagine", payload),
     probe: (apiKey, accessToken) => ipcRenderer.invoke("grok:probe", apiKey, accessToken),
     oauthStart: () => ipcRenderer.invoke("grok:oauthStart"),
@@ -32,5 +36,10 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     linkWebsiteSession: () => ipcRenderer.invoke("grok:linkWebsiteSession"),
     getWebsiteSso: () => ipcRenderer.invoke("grok:getWebsiteSso"),
     websiteUsage: (opts) => ipcRenderer.invoke("grok:websiteUsage", opts),
+  },
+  secrets: {
+    set: (key, value) => ipcRenderer.invoke("secrets:set", key, value),
+    get: (key) => ipcRenderer.invoke("secrets:get", key),
+    delete: (key) => ipcRenderer.invoke("secrets:delete", key),
   },
 });

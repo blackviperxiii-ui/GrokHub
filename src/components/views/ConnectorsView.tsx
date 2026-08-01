@@ -46,9 +46,9 @@ export function ConnectorsView() {
               Grok Connectors
             </CardTitle>
             <CardDescription>
-              Grok, Desktop Host, and GitHub use real auth. Other connectors enable agent context
-              and open the vendor sign-in page.
-              {` ${connected} connected.`}
+              Live: Grok, Desktop Host, GitHub. Other rows are planned integrations (open vendor
+              site only — not marked connected).
+              {` ${connected} live.`}
               {oauth?.email ? ` · Grok as ${oauth.email}` : ""}
             </CardDescription>
           </div>
@@ -63,6 +63,7 @@ export function ConnectorsView() {
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {filtered.map((c) => {
+          const live = c.id === "grok-xai" || c.id === "desktop-host" || c.id === "github";
           const on = c.status === "connected";
           const err = c.status === "error";
           const busy = busyId === c.id;
@@ -74,8 +75,12 @@ export function ConnectorsView() {
                     <CardTitle className="text-sm">{c.name}</CardTitle>
                     <CardDescription className="mt-1">{c.category}</CardDescription>
                   </div>
-                  <Badge variant={on ? "success" : err ? "danger" : "default"}>
-                    {on ? "connected" : err ? "error" : "offline"}
+                  <Badge
+                    variant={
+                      on ? "success" : err ? "danger" : live ? "default" : "info"
+                    }
+                  >
+                    {on ? "connected" : err ? "error" : live ? "offline" : "coming soon"}
                   </Badge>
                 </div>
               </CardHeader>
@@ -113,10 +118,15 @@ export function ConnectorsView() {
                       <Link2Off className="h-3.5 w-3.5" />
                       Disconnect
                     </>
-                  ) : (
+                  ) : live ? (
                     <>
                       <Check className="h-3.5 w-3.5" />
                       Connect
+                    </>
+                  ) : (
+                    <>
+                      <Check className="h-3.5 w-3.5" />
+                      Open vendor
                     </>
                   )}
                 </Button>

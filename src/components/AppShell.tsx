@@ -18,7 +18,7 @@ import {
   Menu,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
 import { useGrokHub } from "@/lib/store";
 import type { NavId } from "@/lib/types";
@@ -32,16 +32,36 @@ import { RelativeTime } from "./RelativeTime";
 import { UsageMeterChip } from "./UsageMeter";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { AgentsView } from "./views/AgentsView";
-import { AutomationsView } from "./views/AutomationsView";
-import { ChatView } from "./views/ChatView";
-import { CommandView } from "./views/CommandView";
-import { ConnectorsView } from "./views/ConnectorsView";
-import { DesktopHostView } from "./views/DesktopHostView";
-import { HistoryView } from "./views/HistoryView";
-import { ImagineView } from "./views/ImagineView";
-import { SettingsView } from "./views/SettingsView";
-import { SkillsView } from "./views/SkillsView";
+const AgentsView = lazy(() =>
+  import("./views/AgentsView").then((m) => ({ default: m.AgentsView })),
+);
+const AutomationsView = lazy(() =>
+  import("./views/AutomationsView").then((m) => ({ default: m.AutomationsView })),
+);
+const ChatView = lazy(() =>
+  import("./views/ChatView").then((m) => ({ default: m.ChatView })),
+);
+const CommandView = lazy(() =>
+  import("./views/CommandView").then((m) => ({ default: m.CommandView })),
+);
+const ConnectorsView = lazy(() =>
+  import("./views/ConnectorsView").then((m) => ({ default: m.ConnectorsView })),
+);
+const DesktopHostView = lazy(() =>
+  import("./views/DesktopHostView").then((m) => ({ default: m.DesktopHostView })),
+);
+const HistoryView = lazy(() =>
+  import("./views/HistoryView").then((m) => ({ default: m.HistoryView })),
+);
+const ImagineView = lazy(() =>
+  import("./views/ImagineView").then((m) => ({ default: m.ImagineView })),
+);
+const SettingsView = lazy(() =>
+  import("./views/SettingsView").then((m) => ({ default: m.SettingsView })),
+);
+const SkillsView = lazy(() =>
+  import("./views/SkillsView").then((m) => ({ default: m.SkillsView })),
+);
 
 
 const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string }> }[] = [
@@ -232,6 +252,10 @@ export function AppShell() {
       const st = useGrokHub.getState();
       st.refreshStaleTimes();
       st.tickHeartbeat();
+      void st.hydrateSecrets().then(() => {
+        void useGrokHub.getState().probeGrok();
+        void useGrokHub.getState().refreshUsage();
+      });
       // Reflect persisted OAuth on the Grok connector
       if (st.oauth?.accessToken) {
         useGrokHub.setState({
@@ -284,15 +308,38 @@ export function AppShell() {
     };
   }, []);
 
-  // Subscription usage meter — poll every 1 minute
+  // Subscription usage — poll every 1 minute when linked / authenticated
   useEffect(() => {
     const USAGE_POLL_MS = 60_000;
     const tick = () => {
-      void useGrokHub.getState().refreshUsage();
+      const st = useGrokHub.getState();
+      if (st.ssoCookie || st.oauth?.accessToken || st.apiKey || document.visibilityState === "visible") {
+        // Still refresh local units when visible; website pool needs SSO
+        void st.refreshUsage();
+      }
     };
     tick();
     const id = window.setInterval(tick, USAGE_POLL_MS);
-    return () => window.clearInterval(id);
+    const onVis = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
+
+  // Automations scheduler — every 30s
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void useGrokHub.getState().tickAutomations();
+    }, 30_000);
+    const t = window.setTimeout(() => void useGrokHub.getState().tickAutomations(), 5_000);
+    return () => {
+      window.clearInterval(id);
+      window.clearTimeout(t);
+    };
   }, []);
 
   // Prefer Grok OAuth identity once connected (not only Better Auth session)
@@ -548,23 +595,31 @@ export function AppShell() {
           )}
 
           <main className="app-stage flex min-h-0 flex-1 flex-col overflow-hidden p-3 sm:p-4 md:p-5 3xl:p-6 uw:p-8">
-            {(nav === "chat" || nav === "history") && nav === "chat" ? (
-              <div className="chat-stage min-h-0 flex-1 overflow-hidden">
-                <ChatView />
-              </div>
-            ) : (
-              <div className="scroll-panel min-h-0 flex-1">
-                {nav === "history" && <HistoryView />}
-                {nav === "command" && <CommandView />}
-                {nav === "connectors" && <ConnectorsView />}
-                {nav === "skills" && <SkillsView />}
-                {nav === "automations" && <AutomationsView />}
-                {nav === "agents" && <AgentsView />}
-                {nav === "imagine" && <ImagineView />}
-                {nav === "desktop" && <DesktopHostView />}
-                {nav === "settings" && <SettingsView />}
-              </div>
-            )}
+            <Suspense
+              fallback={
+                <div className="flex flex-1 items-center justify-center text-sm text-[var(--color-subtle)]">
+                  Loading…
+                </div>
+              }
+            >
+              {(nav === "chat" || nav === "history") && nav === "chat" ? (
+                <div className="chat-stage min-h-0 flex-1 overflow-hidden">
+                  <ChatView />
+                </div>
+              ) : (
+                <div className="scroll-panel min-h-0 flex-1">
+                  {nav === "history" && <HistoryView />}
+                  {nav === "command" && <CommandView />}
+                  {nav === "connectors" && <ConnectorsView />}
+                  {nav === "skills" && <SkillsView />}
+                  {nav === "automations" && <AutomationsView />}
+                  {nav === "agents" && <AgentsView />}
+                  {nav === "imagine" && <ImagineView />}
+                  {nav === "desktop" && <DesktopHostView />}
+                  {nav === "settings" && <SettingsView />}
+                </div>
+              )}
+            </Suspense>
           </main>
         </div>
       </div>

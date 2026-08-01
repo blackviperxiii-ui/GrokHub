@@ -1,4 +1,4 @@
-import { Loader2, MessageSquarePlus, Send, Square, Sparkles, Terminal, Compass, Gauge } from "lucide-react";
+import { Loader2, MessageSquarePlus, Send, Square, Sparkles, Terminal, Compass, Gauge, ShieldAlert } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
 import { buildQuickChips, type QuickChip } from "@/lib/quick-assistant";
@@ -10,7 +10,8 @@ import { HostGatewayBanner } from "../HostGatewayBanner";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
-import { Input } from "../ui/input";
+import { Textarea } from "../ui/textarea";
+import { MarkdownBody } from "@/lib/markdown";
 
 function chipIcon(kind: QuickChip["kind"]) {
   if (kind === "shell") return Terminal;
@@ -36,11 +37,13 @@ export function ChatView() {
   const activity = useGrokHub((s) => s.activity);
   const threads = useGrokHub((s) => s.threads);
   const connectors = useGrokHub((s) => s.connectors);
+  const pendingHostConfirm = useGrokHub((s) => s.pendingHostConfirm);
+  const resolveHostConfirm = useGrokHub((s) => s.resolveHostConfirm);
   const [text, setText] = useState("");
   const [localRunning, setLocalRunning] = useState(false);
   const [hostOnline, setHostOnline] = useState<boolean | undefined>(undefined);
   const endRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const modeMeta = getMode(mode);
   const busy = running || localRunning;
   const plan = PLAN_LIMITS[usage.plan];
@@ -274,7 +277,7 @@ export function ChatView() {
               >
                 <div
                   className={cn(
-                    "chat-bubble rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap",
+                    "chat-bubble rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed",
                     m.role === "user"
                       ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]"
                       : m.role === "system"
@@ -304,15 +307,20 @@ export function ChatView() {
                       </span>
                     )}
                   </div>
-                  {m.content ||
-                    (m.streaming ? (
-                      <span className="inline-flex items-center gap-1.5 text-[var(--color-subtle)]">
-                        <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-info)]" />
-                        …
-                      </span>
+                  {m.content ? (
+                    m.role === "user" ? (
+                      <div className="whitespace-pre-wrap">{m.content}</div>
                     ) : (
-                      ""
-                    ))}
+                      <MarkdownBody content={m.content} />
+                    )
+                  ) : m.streaming ? (
+                    <span className="inline-flex items-center gap-1.5 text-[var(--color-subtle)]">
+                      <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-info)]" />
+                      …
+                    </span>
+                  ) : (
+                    ""
+                  )}
                   {m.streaming && m.content ? (
                     <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-[var(--color-fg)] align-middle opacity-70" />
                   ) : null}
@@ -376,6 +384,31 @@ export function ChatView() {
                 </div>
               </div>
             )}
+
+            {pendingHostConfirm && (
+              <div className="mx-auto w-full max-w-[min(56rem,100%)] rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-warn)_45%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-warn)_10%,var(--color-surface))] p-3 3xl:max-w-[min(64rem,100%)]">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-[var(--color-fg)]">
+                  <ShieldAlert className="h-4 w-4 text-[var(--color-warn)]" />
+                  Allow host commands?
+                </div>
+                <ul className="mb-3 space-y-1 font-mono text-xs text-[var(--color-muted)]">
+                  {pendingHostConfirm.cmds.map((c, i) => (
+                    <li key={c + i} className="break-all">
+                      <span className="text-[var(--color-subtle)]">[{pendingHostConfirm.risks[i] || "run"}]</span>{" "}
+                      $ {c}
+                    </li>
+                  ))}
+                </ul>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => resolveHostConfirm(true)}>
+                    Run on this machine
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => resolveHostConfirm(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
             <form
               className="mx-auto flex w-full max-w-[min(56rem,100%)] gap-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]"
               onSubmit={(e) => {
@@ -387,20 +420,26 @@ export function ChatView() {
                 void onSend();
               }}
             >
-              <Input
+              <Textarea
                 ref={inputRef}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 placeholder={
                   busy
                     ? "Agent running — press Stop to interrupt…"
-                    : "Message Grok… or $ shell"
+                    : "Message Grok…  Enter to send · Shift+Enter for newline · $ shell"
                 }
-                className="flex-1"
+                rows={1}
+                className="max-h-40 min-h-[2.5rem] flex-1 resize-y"
                 onKeyDown={(e) => {
                   if (e.key === "Escape" && busy) {
                     e.preventDefault();
                     onStop();
+                    return;
+                  }
+                  if (e.key === "Enter" && !e.shiftKey && !busy) {
+                    e.preventDefault();
+                    void onSend();
                   }
                 }}
               />

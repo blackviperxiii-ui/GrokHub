@@ -8,6 +8,7 @@ const require = createRequire(import.meta.url);
 const host = require("./host-bridge.cjs");
 const grokBridge = require("./grok-bridge.cjs");
 const websiteSession = require("./website-session.cjs");
+const secretsStore = require("./secrets-store.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -496,6 +497,23 @@ function registerIpc() {
       bearer: String(opts?.bearer || ""),
     });
   });
+
+  ipcMain.handle("secrets:set", (_e, key, value) => secretsStore.set(String(key), String(value ?? "")));
+  ipcMain.handle("secrets:get", (_e, key) => secretsStore.get(String(key)));
+  ipcMain.handle("secrets:delete", (_e, key) => secretsStore.del(String(key)));
+
+  // Non-stream chat already registered; expose stream buffer helper if bridge supports it
+  if (typeof grokBridge.callXaiChatStream === "function") {
+    ipcMain.handle("grok:chatStream", async (_e, payload) => {
+      let content = "";
+      const result = await grokBridge.callXaiChatStream(payload || {}, {
+        onDelta: (d) => {
+          content += d;
+        },
+      });
+      return { ...result, content: result.content || content };
+    });
+  }
 }
 
 if (process.env.GROKHUB_WAYLAND !== "0") {
