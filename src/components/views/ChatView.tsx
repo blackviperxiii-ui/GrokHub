@@ -335,16 +335,17 @@ export function ChatView() {
             {/* Quick assistant — predictive chips from recent activity */}
             {!busy && chips.length > 0 && (
               <div className="mx-auto w-full max-w-[min(56rem,100%)] 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]">
-                <div className="mb-1 flex items-center justify-between gap-2 px-0.5">
+                <div className="mb-1 flex items-center justify-center gap-2 px-0.5">
                   <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--color-subtle)]">
                     Quick assist
                   </span>
+                  <span className="text-[10px] text-[var(--color-subtle)]">·</span>
                   <span className="text-[10px] text-[var(--color-subtle)]">
                     {chips.length} suggestion{chips.length === 1 ? "" : "s"}
                   </span>
                 </div>
                 <div
-                  className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  className="flex flex-wrap items-center justify-center gap-1.5"
                   role="listbox"
                   aria-label="Quick assistant suggestions"
                 >
@@ -359,7 +360,7 @@ export function ChatView() {
                         title={c.value.startsWith("__") ? c.label : c.value}
                         onClick={() => void onChip(c)}
                         className={cn(
-                          "inline-flex max-w-[14rem] shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors",
+                          "inline-flex max-w-[14rem] items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors",
                           "border-[var(--color-border)] text-[var(--color-muted)]",
                           "hover:border-[var(--color-border-strong)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]",
                           "disabled:opacity-50",

@@ -1,12 +1,12 @@
 import { o as __toESM } from "../_runtime.mjs";
-import { a as emptyCatalog, c as getModesWithCatalog, d as needsGrokClassification, f as resolveMode, i as buildCatalog, l as modeBadge, m as stripAssistantChrome, n as applyGrokPlan, o as friendlyModelName, p as resolveModeWithCatalog, r as autoRouteFor, s as getMode, t as APP_VERSION, u as modelIdForMode } from "./version-Ca3CA1NW.mjs";
+import { a as emptyCatalog, c as getModesWithCatalog, d as needsGrokClassification, f as resolveMode, i as buildCatalog, l as modeBadge, m as stripAssistantChrome, n as applyGrokPlan, o as friendlyModelName, p as resolveModeWithCatalog, r as autoRouteFor, s as getMode, t as APP_VERSION, u as modelIdForMode } from "./version-XWMLrbG8.mjs";
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
 import { N as require_jsx_runtime, P as require_react, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
 import { A as ExternalLink, B as Activity, C as Image, D as Gauge, E as Hammer, F as Check, I as Cable, L as Brain, M as Compass, N as Command, O as Folder, P as ChevronRight, R as ArrowRight, S as Link2Off, T as HardDrive, _ as Minus, a as TimerReset, b as Menu, c as Sparkles, d as Settings, f as Send, g as Play, h as Plus, i as Trash2, j as Download, k as FolderOpen, l as ShieldCheck, m as Plug, n as X, o as Terminal, p as RefreshCw, r as Users, s as Square, t as Zap, u as ShieldAlert, v as MessageSquare, w as History, x as LoaderCircle, y as MessageSquarePlus, z as AppWindow } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-CTSvkp2_.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-DAl8uJhq.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function rpc(path, action, body = {}, init) {
@@ -816,7 +816,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-PiNqg2p4.mjs");
+		const { oauthStart } = await import("./grok-client-CSU0Of2p.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -845,7 +845,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-PiNqg2p4.mjs");
+		const { oauthPoll } = await import("./grok-client-CSU0Of2p.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -923,7 +923,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-PiNqg2p4.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-CSU0Of2p.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1598,7 +1598,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let usedLive = false;
 		let finalAnswer = "";
 		let aborted = false;
-		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-BZT9S-NP.mjs");
+		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-DGxwu4Mf.mjs");
 		try {
 			if (isLocalSlash) {
 				set({ streamStatus: "Running skill…" });
@@ -1609,7 +1609,7 @@ var useGrokHub = create()(persist((set, get) => ({
 					patchBot(finalAnswer, { streaming: false });
 				}
 			} else {
-				const { grokChatStream } = await import("./grok-client-PiNqg2p4.mjs");
+				const { grokChatStream } = await import("./grok-client-CSU0Of2p.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").filter((c) => c.id !== botId).slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
@@ -1852,7 +1852,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let model;
 		let err = null;
 		try {
-			const { grokImagine } = await import("./grok-client-PiNqg2p4.mjs");
+			const { grokImagine } = await import("./grok-client-CSU0Of2p.mjs");
 			const live = await grokImagine({
 				prompt: p,
 				apiKey: get().apiKey || void 0,
@@ -3492,20 +3492,27 @@ function ChatView() {
 							!busy && chips.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "mx-auto w-full max-w-[min(56rem,100%)] 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "mb-1 flex items-center justify-between gap-2 px-0.5",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "text-[10px] font-medium uppercase tracking-wide text-[var(--color-subtle)]",
-										children: "Quick assist"
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "text-[10px] text-[var(--color-subtle)]",
-										children: [
-											chips.length,
-											" suggestion",
-											chips.length === 1 ? "" : "s"
-										]
-									})]
+									className: "mb-1 flex items-center justify-center gap-2 px-0.5",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "text-[10px] font-medium uppercase tracking-wide text-[var(--color-subtle)]",
+											children: "Quick assist"
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "text-[10px] text-[var(--color-subtle)]",
+											children: "·"
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "text-[10px] text-[var(--color-subtle)]",
+											children: [
+												chips.length,
+												" suggestion",
+												chips.length === 1 ? "" : "s"
+											]
+										})
+									]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-									className: "flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+									className: "flex flex-wrap items-center justify-center gap-1.5",
 									role: "listbox",
 									"aria-label": "Quick assistant suggestions",
 									children: chips.map((c) => {
@@ -3516,7 +3523,7 @@ function ChatView() {
 											disabled: busy,
 											title: c.value.startsWith("__") ? c.label : c.value,
 											onClick: () => void onChip(c),
-											className: cn("inline-flex max-w-[14rem] shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors", "border-[var(--color-border)] text-[var(--color-muted)]", "hover:border-[var(--color-border-strong)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]", "disabled:opacity-50", c.kind === "shell" && "font-mono", c.score >= 80 && "border-[color-mix(in_oklab,var(--color-info)_35%,var(--color-border))]"),
+											className: cn("inline-flex max-w-[14rem] items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors", "border-[var(--color-border)] text-[var(--color-muted)]", "hover:border-[var(--color-border-strong)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]", "disabled:opacity-50", c.kind === "shell" && "font-mono", c.score >= 80 && "border-[color-mix(in_oklab,var(--color-info)_35%,var(--color-border))]"),
 											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Icon, { className: "h-3 w-3 shrink-0 opacity-70" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 												className: "truncate",
 												children: c.label
