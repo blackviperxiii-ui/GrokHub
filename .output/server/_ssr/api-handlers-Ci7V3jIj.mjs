@@ -1,5 +1,5 @@
-import { t as APP_VERSION } from "./version-erPv52O7.mjs";
-import { XAI_BASE, callXaiChat, callXaiChatStream, callXaiImagine, probeXaiBearer } from "./grok-DY9vmTDN.mjs";
+import { t as APP_VERSION } from "./version--uvLFSIF.mjs";
+import { XAI_BASE, callXaiChat, callXaiChatStream, callXaiImagine, probeXaiBearer } from "./grok-DJrUcBfP.mjs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream, existsSync, readFileSync } from "node:fs";
@@ -8,7 +8,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs$1 from "node:fs/promises";
 import os from "node:os";
-//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-C65QrCIL.js
+//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-Ci7V3jIj.js
 /**
 * GitHub update helpers — Node only (server / Electron main).
 *
@@ -549,7 +549,7 @@ var XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:a
 var XAI_OAUTH_ISSUER = "https://auth.x.ai";
 var XAI_OAUTH_DISCOVERY = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
 var XAI_DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-var XAI_UA = "GrokHub/0.2.8 (xAI OAuth; Linux)";
+var XAI_UA = "GrokHub/0.2.9 (xAI OAuth; Linux)";
 function formBody(data) {
 	return new URLSearchParams(data).toString();
 }
@@ -901,6 +901,48 @@ async function dispatchApi(route, action, body) {
 			} catch {
 				return { models: [] };
 			}
+		}
+		if (action === "classifyModels") {
+			const models = Array.isArray(body.models) ? body.models.map(String).filter(Boolean) : [];
+			if (!models.length) return {
+				ok: false,
+				error: "models required"
+			};
+			const { buildClassifyPrompt, parseGrokSlotPlan, pickSlotModel } = await import("./version--uvLFSIF.mjs").then((n) => n.h).then((n) => n.m);
+			let accessToken = body.accessToken ? String(body.accessToken) : void 0;
+			const apiKey = body.apiKey ? String(body.apiKey) : void 0;
+			if (body.tokens && typeof body.tokens === "object") try {
+				accessToken = (await ensureAccessToken(body.tokens)).accessToken;
+			} catch {}
+			const classifierModel = pickSlotModel("fast", models) || "grok-4-1-fast-non-reasoning";
+			const result = await callXaiChat({
+				messages: [{
+					role: "user",
+					content: buildClassifyPrompt(models)
+				}],
+				mode: "fast",
+				model: classifierModel,
+				apiKey,
+				accessToken,
+				temperature: .1,
+				maxTokens: 800
+			});
+			if (!result.ok || !result.content) return {
+				ok: false,
+				error: result.error || "classify failed",
+				model: result.model
+			};
+			const plan = parseGrokSlotPlan(result.content, models);
+			if (!plan) return {
+				ok: false,
+				error: "Could not parse Grok classification JSON",
+				raw: result.content.slice(0, 500)
+			};
+			return {
+				ok: true,
+				plan,
+				classifierModel: result.model || classifierModel
+			};
 		}
 		if (action === "imagine") {
 			const prompt = String(body.prompt || "");

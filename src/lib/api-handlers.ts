@@ -175,6 +175,63 @@ export async function dispatchApi(
       }
     }
 
+    if (action === "classifyModels") {
+      const models = Array.isArray(body.models)
+        ? (body.models as unknown[]).map(String).filter(Boolean)
+        : [];
+      if (!models.length) {
+        return { ok: false, error: "models required" };
+      }
+      const {
+        buildClassifyPrompt,
+        parseGrokSlotPlan,
+        pickSlotModel,
+      } = await import("./models-catalog");
+      let accessToken = body.accessToken ? String(body.accessToken) : undefined;
+      const apiKey = body.apiKey ? String(body.apiKey) : undefined;
+      if (body.tokens && typeof body.tokens === "object") {
+        try {
+          const ensured = await ensureAccessToken(body.tokens as XaiOAuthTokens);
+          accessToken = ensured.accessToken;
+        } catch {
+          /* keep raw */
+        }
+      }
+      // Use a cheap/fast model for classification when possible
+      const classifierModel =
+        pickSlotModel("fast", models) || "grok-4-1-fast-non-reasoning";
+      const prompt = buildClassifyPrompt(models);
+      const result = await callXaiChat({
+        messages: [{ role: "user", content: prompt }],
+        mode: "fast",
+        model: classifierModel,
+        apiKey,
+        accessToken,
+        temperature: 0.1,
+        maxTokens: 800,
+      });
+      if (!result.ok || !result.content) {
+        return {
+          ok: false,
+          error: result.error || "classify failed",
+          model: result.model,
+        };
+      }
+      const plan = parseGrokSlotPlan(result.content, models);
+      if (!plan) {
+        return {
+          ok: false,
+          error: "Could not parse Grok classification JSON",
+          raw: result.content.slice(0, 500),
+        };
+      }
+      return {
+        ok: true,
+        plan,
+        classifierModel: result.model || classifierModel,
+      };
+    }
+
     if (action === "imagine") {
       const prompt = String(body.prompt || "");
       let accessToken = body.accessToken ? String(body.accessToken) : undefined;

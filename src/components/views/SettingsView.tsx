@@ -437,9 +437,9 @@ export function SettingsView() {
             <Button
               size="sm"
               variant="secondary"
-              onClick={() => void refreshModels()}
+              onClick={() => void refreshModels({ force: true })}
             >
-              Refresh models
+              Refresh + reclassify
             </Button>
           </div>
         </CardHeader>
@@ -481,7 +481,9 @@ export function SettingsView() {
             </div>
           )}
           <div className="text-[10px] text-[var(--color-subtle)]">
-            Source: {modelCatalog.source}
+            Source: {modelCatalog.source} · slots by{" "}
+            {modelCatalog.classifiedBy === "grok" ? "Grok" : "heuristic"}
+            {modelCatalog.classifyNotes ? ` · ${modelCatalog.classifyNotes}` : ""}
             {lastModelsFetchAt
               ? ` · last poll ${new Date(lastModelsFetchAt).toLocaleTimeString()}`
               : " · not polled yet"}

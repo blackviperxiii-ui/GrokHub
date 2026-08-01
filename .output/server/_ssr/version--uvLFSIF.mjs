@@ -1,5 +1,40 @@
-//#region node_modules/.nitro/vite/services/ssr/assets/version-erPv52O7.js
-/** Preferred API ids per product slot (first match against live list wins). */
+import { r as __exportAll } from "../_runtime.mjs";
+import { t as __exportAll$1 } from "./rolldown-runtime-D7D4PA-g.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/version--uvLFSIF.js
+var version__uvLFSIF_exports = /* @__PURE__ */ __exportAll({
+	a: () => modeBadge,
+	c: () => resolveModeWithCatalog,
+	d: () => buildCatalog,
+	f: () => emptyCatalog,
+	h: () => needsGrokClassification,
+	i: () => getModesWithCatalog,
+	l: () => stripAssistantChrome,
+	m: () => models_catalog_exports,
+	n: () => autoRouteFor,
+	o: () => modelIdForMode,
+	p: () => friendlyModelName,
+	r: () => getMode,
+	s: () => resolveMode,
+	t: () => APP_VERSION,
+	u: () => applyGrokPlan
+});
+var models_catalog_exports = /* @__PURE__ */ __exportAll$1({
+	ESSENTIAL_NAME_HINTS: () => ESSENTIAL_NAME_HINTS,
+	SLOT_CANDIDATES: () => SLOT_CANDIDATES,
+	applyGrokPlan: () => applyGrokPlan,
+	buildCatalog: () => buildCatalog,
+	buildClassifyPrompt: () => buildClassifyPrompt,
+	emptyCatalog: () => emptyCatalog,
+	filterEssential: () => filterEssential,
+	friendlyModelName: () => friendlyModelName,
+	modelsSignature: () => modelsSignature,
+	needsGrokClassification: () => needsGrokClassification,
+	parseGrokSlotPlan: () => parseGrokSlotPlan,
+	pickSlotModel: () => pickSlotModel,
+	resolveSlotsHeuristic: () => resolveSlotsHeuristic,
+	routeAuto: () => routeAuto
+});
+/** Heuristic preferred API ids per product slot (first match against live list wins). */
 var SLOT_CANDIDATES = {
 	fast: [
 		"grok-4-1-fast-non-reasoning",
@@ -30,8 +65,8 @@ var SLOT_CANDIDATES = {
 		"grok-4"
 	],
 	build: [
-		"grok-code-fast-1",
 		"grok-build-0.1",
+		"grok-code-fast-1",
 		"grok-build",
 		"build-0.1",
 		"grok-code",
@@ -55,18 +90,24 @@ var ESSENTIAL_NAME_HINTS = [
 	/grok-build/i,
 	/build-0\.1/i,
 	/grok-2-image/i,
-	/imagine/i
+	/imagine/i,
+	/^grok-4$/i
 ];
+/** Skip non-product models even if API returns them. */
+var SKIP_MODEL_RE = /embed|whisper|tts|audio|moderation|realtime|search|beta-internal|deprecated/i;
 var FALLBACK_SLOTS = {
 	fast: "grok-4-1-fast-non-reasoning",
 	balanced: "grok-4.3",
 	smart: "grok-4.5",
 	heavy: "grok-4.5",
-	build: "grok-code-fast-1",
+	build: "grok-build-0.1",
 	imagine: "grok-2-image"
 };
 function normalizeId(id) {
 	return id.trim();
+}
+function modelsSignature(ids) {
+	return [...ids].map((s) => s.trim().toLowerCase()).filter(Boolean).sort().join("|");
 }
 function scoreMatch(live, candidate) {
 	const a = live.toLowerCase();
@@ -80,7 +121,7 @@ function scoreMatch(live, candidate) {
 	if (a2.includes(b2) || b2.includes(a2)) return 50;
 	return 0;
 }
-/** Pick best live model for a slot from discovered ids. */
+/** Pick best live model for a slot from discovered ids (heuristic). */
 function pickSlotModel(slot, liveIds) {
 	const candidates = SLOT_CANDIDATES[slot];
 	let best = FALLBACK_SLOTS[slot];
@@ -92,19 +133,22 @@ function pickSlotModel(slot, liveIds) {
 			best = live;
 		}
 	}
-	if (bestScore === 0 && liveIds.length === 0) return FALLBACK_SLOTS[slot];
 	if (bestScore === 0) return FALLBACK_SLOTS[slot];
 	return best;
 }
 function filterEssential(liveIds) {
 	if (!liveIds.length) return Object.values(FALLBACK_SLOTS).filter((v, i, a) => a.indexOf(v) === i);
 	const out = [];
-	for (const id of liveIds) if (ESSENTIAL_NAME_HINTS.some((re) => re.test(id))) out.push(id);
-	const slots = resolveSlots(liveIds);
-	for (const id of Object.values(slots)) if (!out.includes(id)) out.push(id);
-	return out.sort((a, b) => a.localeCompare(b));
+	for (const id of liveIds) {
+		if (SKIP_MODEL_RE.test(id)) continue;
+		if (ESSENTIAL_NAME_HINTS.some((re) => re.test(id))) out.push(id);
+	}
+	const slots = resolveSlotsHeuristic(liveIds);
+	for (const id of Object.values(slots)) if (id && !out.includes(id) && liveIds.some((l) => l.toLowerCase() === id.toLowerCase())) out.push(id);
+	else if (id && !out.includes(id) && liveIds.includes(id)) out.push(id);
+	return out.map((id) => liveIds.find((l) => l.toLowerCase() === id.toLowerCase()) || id).filter((v, i, a) => a.findIndex((x) => x.toLowerCase() === v.toLowerCase()) === i).sort((a, b) => a.localeCompare(b));
 }
-function resolveSlots(liveIds) {
+function resolveSlotsHeuristic(liveIds) {
 	return {
 		fast: pickSlotModel("fast", liveIds),
 		balanced: pickSlotModel("balanced", liveIds),
@@ -114,19 +158,128 @@ function resolveSlots(liveIds) {
 		imagine: pickSlotModel("imagine", liveIds)
 	};
 }
-function buildCatalog(liveIds) {
+function buildCatalog(liveIds, prior) {
 	const all = liveIds.map(normalizeId).filter(Boolean);
-	const slots = resolveSlots(all);
+	const sig = modelsSignature(all);
+	if (prior && prior.signature === sig && prior.classifiedBy === "grok" && prior.slots) return {
+		all,
+		essential: prior.essential?.length ? prior.essential : filterEssential(all),
+		slots: prior.slots,
+		fetchedAt: Date.now(),
+		source: all.length ? "live" : "fallback",
+		classifiedBy: "grok",
+		classifiedAt: prior.classifiedAt || Date.now(),
+		signature: sig,
+		classifyNotes: prior.classifyNotes
+	};
+	const slots = resolveSlotsHeuristic(all);
 	return {
 		all,
 		essential: filterEssential(all),
 		slots,
 		fetchedAt: Date.now(),
-		source: all.length ? "live" : "fallback"
+		source: all.length ? "live" : "fallback",
+		classifiedBy: "heuristic",
+		classifiedAt: Date.now(),
+		signature: sig
 	};
 }
 function emptyCatalog() {
 	return buildCatalog([]);
+}
+/** Apply a Grok-produced slot plan onto a catalog (validates ids against live list). */
+function applyGrokPlan(catalog, plan) {
+	const live = catalog.all;
+	const liveSet = new Map(live.map((id) => [id.toLowerCase(), id]));
+	const pick = (want, fallback) => {
+		if (!want) return fallback;
+		const hit = liveSet.get(want.toLowerCase());
+		if (hit) return hit;
+		for (const id of live) if (scoreMatch(id, want) >= 60) return id;
+		return fallback;
+	};
+	const heuristic = resolveSlotsHeuristic(live);
+	const slots = {
+		fast: pick(plan.slots.fast, heuristic.fast),
+		balanced: pick(plan.slots.balanced, heuristic.balanced),
+		smart: pick(plan.slots.smart, heuristic.smart),
+		heavy: pick(plan.slots.heavy, heuristic.heavy),
+		build: pick(plan.slots.build, heuristic.build),
+		imagine: pick(plan.slots.imagine, heuristic.imagine)
+	};
+	let essential = (plan.essential || []).map((id) => liveSet.get(id.toLowerCase()) || id).filter((id) => liveSet.has(id.toLowerCase()) || live.includes(id));
+	if (!essential.length) essential = filterEssential(live);
+	for (const id of Object.values(slots)) {
+		const liveId = liveSet.get(id.toLowerCase()) || id;
+		if (!essential.some((e) => e.toLowerCase() === liveId.toLowerCase())) essential.push(liveId);
+	}
+	essential = essential.filter((v, i, a) => a.findIndex((x) => x.toLowerCase() === v.toLowerCase()) === i).sort((a, b) => a.localeCompare(b));
+	return {
+		...catalog,
+		slots,
+		essential,
+		classifiedBy: "grok",
+		classifiedAt: Date.now(),
+		classifyNotes: plan.notes,
+		source: live.length ? "live" : catalog.source
+	};
+}
+function needsGrokClassification(catalog, maxAgeMs = 1440 * 60 * 1e3) {
+	if (!catalog.all.length) return false;
+	if (catalog.classifiedBy !== "grok") return true;
+	if (catalog.signature !== modelsSignature(catalog.all)) return true;
+	if (Date.now() - (catalog.classifiedAt || 0) > maxAgeMs) return true;
+	return false;
+}
+/** Prompt Grok to classify live model ids into product slots. */
+function buildClassifyPrompt(modelIds) {
+	return `You classify xAI Grok API model IDs for GrokHub (desktop agent).
+
+Available model IDs (use ONLY these exact strings):
+${modelIds.map((m) => `- ${m}`).join("\n")}
+
+Assign the best model for each product slot. Prefer newest generation in that class.
+Slots:
+- fast: quick low-token chat (non-reasoning / mini / fast variants)
+- balanced: solid everyday chat (e.g. 4.3-class)
+- smart: hard reasoning / expert (e.g. 4.5-class flagship)
+- heavy: multi-angle / max brain (usually same as smart or best available)
+- build: long coding sessions / agent coding (code or build models)
+- imagine: image generation (if none, use empty string "")
+
+Also list "essential": only product chat/code/image models worth showing in the UI (exclude embeddings, audio, internal).
+
+Return ONLY valid JSON, no markdown:
+{"fast":"...","balanced":"...","smart":"...","heavy":"...","build":"...","imagine":"...","essential":["..."],"notes":"one short sentence"}`;
+}
+/** Parse Grok classifier JSON (tolerates fences / extra text). */
+function parseGrokSlotPlan(text, liveIds) {
+	if (!text?.trim()) return null;
+	let raw = text.trim();
+	const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+	if (fence?.[1]) raw = fence[1].trim();
+	const brace = raw.match(/\{[\s\S]*\}/);
+	if (brace) raw = brace[0];
+	try {
+		const j = JSON.parse(raw);
+		const get = (k) => typeof j[k] === "string" ? String(j[k]).trim() : "";
+		const slots = {
+			fast: get("fast"),
+			balanced: get("balanced"),
+			smart: get("smart"),
+			heavy: get("heavy"),
+			build: get("build"),
+			imagine: get("imagine")
+		};
+		if (!slots.fast && !slots.balanced && !slots.smart) return null;
+		return {
+			slots,
+			essential: Array.isArray(j.essential) ? j.essential.map(String).filter(Boolean) : filterEssential(liveIds),
+			notes: typeof j.notes === "string" ? j.notes : void 0
+		};
+	} catch {
+		return null;
+	}
 }
 var IMAGE_RE = /\b(imagine|image|picture|photo|draw|render|generate\s+(an?\s+)?(image|pic|art|logo|icon|wallpaper)|illustration|visuali[sz]e)\b/i;
 var CODE_RE = /\b(code|coding|implement|refactor|typescript|javascript|python|rust|golang|react|component|function|class|bugfix|compile|lint|docker|kubernetes|pkgbuild|aur|api\s+route|pull\s+request|unit\s+test|css|html|sql|bash|shell\s+script|write\s+(me\s+)?(a\s+)?(script|app|site|page|endpoint))\b/i;
@@ -136,14 +289,6 @@ var TEAM_RE = /\b(team\s+of|multi-?agent|heavy|debate|red\s*team|from\s+every\s+
 var FAST_RE = /\b(hi|hello|hey|thanks|thank\s+you|ping|quick|tl;?dr|eli5|short\s+answer|one\s+line|yes\/no|what\s+time|who\s+are\s+you)\b/i;
 /**
 * Auto mode router — picks intent + concrete model balancing quality vs tokens.
-*
-* Rules of thumb:
-* - Image → Imagine pipeline (no chat model burn)
-* - Long coding sessions → Build (code model)
-* - Needs brains (hard reasoning) → 4.5 / smart
-* - Medium analysis → 4.3 / balanced
-* - Quick chat → 4.1 fast
-* - Team / multi-angle → heavy slot (4.5 when available)
 */
 function routeAuto(prompt, catalog = emptyCatalog()) {
 	const p = prompt.trim();
@@ -153,59 +298,60 @@ function routeAuto(prompt, catalog = emptyCatalog()) {
 		routedMode: "imagine",
 		modelId: slots.imagine,
 		intent: "image",
-		reason: "Image generation intent → Imagine",
+		reason: `Image → ${friendlyModelName(slots.imagine)}`,
 		openImagine: true
 	};
 	if (TEAM_RE.test(p) || words > 80 && SMART_RE.test(p)) return {
 		routedMode: "heavy",
 		modelId: slots.heavy,
 		intent: "team",
-		reason: "Multi-angle / heavy reasoning → smart model"
+		reason: `Heavy/team → ${friendlyModelName(slots.heavy)}`
 	};
 	const codeHit = CODE_RE.test(p);
 	if (codeHit && (words > 24 || p.includes("```") || /\b(full|complete|entire|rewrite|migrate|scaffold|implement)\b/i.test(p)) || codeHit && /\b(app|site|package|module|service)\b/i.test(p)) return {
 		routedMode: "build",
 		modelId: slots.build,
 		intent: "code",
-		reason: "Coding session → Build model"
+		reason: `Coding → ${friendlyModelName(slots.build)}`
 	};
 	if (codeHit && words <= 24) return {
 		routedMode: "fast",
 		modelId: slots.fast,
 		intent: "chat_fast",
-		reason: "Short code question → Fast"
+		reason: `Short code Q → ${friendlyModelName(slots.fast)}`
 	};
 	if (RESEARCH_RE.test(p) || SMART_RE.test(p) || words > 60 || p.length > 400) return {
 		routedMode: "expert",
 		modelId: slots.smart,
 		intent: "chat_smart",
-		reason: "Deep / research prompt → 4.5-class model"
+		reason: `Deep reasoning → ${friendlyModelName(slots.smart)}`
 	};
 	if (words > 28 || /\b(plan|explain|how\s+do\s+i|help\s+me|walk\s+through|step\s+by\s+step)\b/i.test(p)) return {
 		routedMode: "expert",
 		modelId: slots.balanced,
 		intent: "chat_balanced",
-		reason: "Medium complexity → 4.3-class model"
+		reason: `Medium → ${friendlyModelName(slots.balanced)}`
 	};
 	if (FAST_RE.test(p) || words <= 12) return {
 		routedMode: "fast",
 		modelId: slots.fast,
 		intent: "chat_fast",
-		reason: "Quick chat → Fast (token thrifty)"
+		reason: `Quick chat → ${friendlyModelName(slots.fast)}`
 	};
 	return {
 		routedMode: "expert",
 		modelId: slots.balanced,
 		intent: "chat_balanced",
-		reason: "Default Auto → balanced model"
+		reason: `Default Auto → ${friendlyModelName(slots.balanced)}`
 	};
 }
-/** Human label for a model id. */
 function friendlyModelName(id) {
+	if (!id) return "—";
 	if (/4\.5|4-5/i.test(id)) return "Grok 4.5";
 	if (/4\.3/i.test(id)) return "Grok 4.3";
 	if (/4-1-fast|4\.1.?fast|4-fast/i.test(id)) return "Grok 4.1 Fast";
-	if (/code|build/i.test(id)) return "Grok Build";
+	if (/build-0\.1|grok-build/i.test(id)) return "Grok Build 0.1";
+	if (/code/i.test(id)) return "Grok Code";
 	if (/image|imagine/i.test(id)) return "Imagine";
 	if (/^grok-4$/i.test(id)) return "Grok 4";
 	return id;
@@ -346,7 +492,7 @@ function stripAssistantChrome(content) {
 	return content.replace(/^\[(?:Auto → )?[^\]]+\]\s*\n*/gm, "").replace(/^— Offline fallback —\s*\n*/gm, "").replace(/^Could not reach Grok\.\s*\n*/gm, "").replace(/^Grok connection error:.*$/gm, "").replace(/^Your OAuth session is saved\..*$/gm, "").replace(/^Fix: Settings →.*$/gm, "").replace(/^Not connected to Grok\..*$/gm, "").trim();
 }
 /** Single source of truth for display / packaging version. */
-var APP_VERSION = "0.2.8";
+var APP_VERSION = "0.2.9";
 `${APP_VERSION}`;
 //#endregion
-export { friendlyModelName as a, modeBadge as c, resolveModeWithCatalog as d, stripAssistantChrome as f, emptyCatalog as i, modelIdForMode as l, autoRouteFor as n, getMode as o, buildCatalog as r, getModesWithCatalog as s, APP_VERSION as t, resolveMode as u };
+export { emptyCatalog as a, getModesWithCatalog as c, needsGrokClassification as d, resolveMode as f, version__uvLFSIF_exports as h, buildCatalog as i, modeBadge as l, stripAssistantChrome as m, applyGrokPlan as n, friendlyModelName as o, resolveModeWithCatalog as p, autoRouteFor as r, getMode as s, APP_VERSION as t, modelIdForMode as u };

@@ -122,9 +122,10 @@ export function ModePicker() {
               </button>
             );
           })}
-          {catalog.source === "live" && (
+          {catalog.essential.length > 0 && (
             <div className="border-t border-[var(--color-border)] px-2.5 py-1.5 text-[10px] text-[var(--color-subtle)]">
-              Live · {catalog.essential.length} essential models
+              {catalog.source === "live" ? "Live" : "Fallback"} · {catalog.essential.length}{" "}
+              models · slots by {catalog.classifiedBy === "grok" ? "Grok" : "heuristic"}
             </div>
           )}
         </div>

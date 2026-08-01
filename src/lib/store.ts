@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { renderImaginePreview } from "./imagine";
 import { getMode, resolveMode, resolveModeWithCatalog, stripAssistantChrome, modelIdForMode, autoRouteFor } from "./modes";
-import { buildCatalog, emptyCatalog, type ResolvedCatalog } from "./models-catalog";
+import { buildCatalog, emptyCatalog, applyGrokPlan, needsGrokClassification, type ResolvedCatalog, type GrokSlotPlan } from "./models-catalog";
 import { createSeeds } from "./seed";
 import type {
   ActivityItem,
@@ -118,7 +118,7 @@ type State = {
   }) => void;
   sendChat: (text: string) => Promise<void>;
   stopChat: () => void;
-  refreshModels: () => Promise<void>;
+  refreshModels: (opts?: { force?: boolean }) => Promise<void>;
   setImaginePrompt: (v: string) => void;
   setImagineAspect: (v: ImagineAspect) => void;
   runImagine: (prompt?: string) => Promise<void>;
@@ -615,7 +615,7 @@ export const useGrokHub = create<State>()(
           /* optional when offline */
         }
         const now = Date.now();
-        const catalog = models.length ? buildCatalog(models) : get().modelCatalog || emptyCatalog();
+        const catalog = models.length ? buildCatalog(models, get().modelCatalog) : get().modelCatalog || emptyCatalog();
         set((st) => ({
           profile: {
             displayName: opts?.displayName ?? st.profile.displayName,
@@ -661,9 +661,11 @@ export const useGrokHub = create<State>()(
             status: "success",
           });
         }
+        // Reclassify slots with Grok when the live list is new / stale
+        if (models.length) void get().refreshModels();
       },
 
-      refreshModels: async () => {
+      refreshModels: async (opts) => {
         try {
           const st = get();
           const res = await fetch("/api/grok", {
@@ -684,7 +686,40 @@ export const useGrokHub = create<State>()(
             set({ lastModelsFetchAt: Date.now() });
             return;
           }
-          const catalog = buildCatalog(models);
+
+          let catalog = buildCatalog(models, st.modelCatalog);
+
+          const shouldClassify =
+            Boolean(st.oauth?.accessToken || st.apiKey || st.grokConnected) &&
+            (Boolean(opts?.force) || needsGrokClassification(catalog));
+
+          if (shouldClassify) {
+            try {
+              const cRes = await fetch("/api/grok", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  action: "classifyModels",
+                  models,
+                  apiKey: st.apiKey || "",
+                  accessToken: st.oauth?.accessToken || "",
+                  tokens: st.oauth || undefined,
+                }),
+              });
+              if (cRes.ok) {
+                const cData = (await cRes.json()) as {
+                  ok?: boolean;
+                  plan?: GrokSlotPlan;
+                };
+                if (cData.ok && cData.plan) {
+                  catalog = applyGrokPlan(catalog, cData.plan);
+                }
+              }
+            } catch {
+              /* keep heuristic */
+            }
+          }
+
           set((s) => ({
             modelCatalog: catalog,
             lastModelsFetchAt: Date.now(),
@@ -693,9 +728,20 @@ export const useGrokHub = create<State>()(
               models: catalog.essential,
             },
             grokStatusDetail: s.grokConnected
-              ? `Live · ${catalog.essential.length} models · Auto ready`
+              ? `Live · ${catalog.essential.length} models · slots by ${catalog.classifiedBy}`
               : s.grokStatusDetail,
           }));
+
+          if (catalog.classifiedBy === "grok" && shouldClassify) {
+            get().pushActivity({
+              kind: "system",
+              title: "Model slots updated by Grok",
+              detail:
+                catalog.classifyNotes ||
+                `Fast ${catalog.slots.fast} · Smart ${catalog.slots.smart} · Build ${catalog.slots.build}`,
+              status: "success",
+            });
+          }
         } catch {
           set({ lastModelsFetchAt: Date.now() });
         }
@@ -1826,6 +1872,22 @@ export const useGrokHub = create<State>()(
         chat: s.chat,
         activity: s.activity.slice(0, 40),
       }),
+      migrate: (persisted: unknown) => {
+        const s = (persisted || {}) as Record<string, unknown>;
+        const cat = s.modelCatalog as Record<string, unknown> | undefined;
+        if (cat && (!cat.classifiedBy || !cat.slots)) {
+          s.modelCatalog = emptyCatalog();
+        } else if (cat && !cat.classifiedBy) {
+          s.modelCatalog = {
+            ...emptyCatalog(),
+            ...cat,
+            classifiedBy: cat.classifiedBy || "heuristic",
+            classifiedAt: cat.classifiedAt || 0,
+            signature: cat.signature || "",
+          };
+        }
+        return s as typeof s;
+      },
       skipHydration: true,
     },
   ),

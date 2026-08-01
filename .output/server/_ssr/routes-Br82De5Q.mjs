@@ -1,12 +1,12 @@
 import { o as __toESM } from "../_runtime.mjs";
-import { a as friendlyModelName, c as modeBadge, d as resolveModeWithCatalog, f as stripAssistantChrome, i as emptyCatalog, l as modelIdForMode, n as autoRouteFor, o as getMode, r as buildCatalog, s as getModesWithCatalog, t as APP_VERSION, u as resolveMode } from "./version-erPv52O7.mjs";
+import { a as emptyCatalog, c as getModesWithCatalog, d as needsGrokClassification, f as resolveMode, i as buildCatalog, l as modeBadge, m as stripAssistantChrome, n as applyGrokPlan, o as friendlyModelName, p as resolveModeWithCatalog, r as autoRouteFor, s as getMode, t as APP_VERSION, u as modelIdForMode } from "./version--uvLFSIF.mjs";
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
 import { N as require_jsx_runtime, P as require_react, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
 import { A as ExternalLink, C as Image, D as Gauge, E as Hammer, F as Cable, I as Brain, L as ArrowRight, M as Command, N as ChevronRight, O as Folder, P as Check, R as AppWindow, S as Link2Off, T as HardDrive, _ as Minus, a as TimerReset, b as Menu, c as Sparkles, d as Settings, f as Send, g as Play, h as Plus, i as Trash2, j as Download, k as FolderOpen, l as ShieldCheck, m as Plug, n as X, o as Terminal, p as RefreshCw, r as Users, s as Square, t as Zap, u as ShieldAlert, v as MessageSquare, w as History, x as LoaderCircle, y as MessageSquarePlus, z as Activity } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-Cw4jZ7xd.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-Br82De5Q.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function rpc(path, action, body = {}, init) {
@@ -816,7 +816,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-CwD1pJQ1.mjs");
+		const { oauthStart } = await import("./grok-client-BX9Svvp-.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -845,7 +845,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-CwD1pJQ1.mjs");
+		const { oauthPoll } = await import("./grok-client-BX9Svvp-.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -923,7 +923,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-CwD1pJQ1.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-BX9Svvp-.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -983,7 +983,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			}
 		} catch {}
 		const now = Date.now();
-		const catalog = models.length ? buildCatalog(models) : get().modelCatalog || emptyCatalog();
+		const catalog = models.length ? buildCatalog(models, get().modelCatalog) : get().modelCatalog || emptyCatalog();
 		set((st) => ({
 			profile: {
 				displayName: opts?.displayName ?? st.profile.displayName,
@@ -1018,8 +1018,9 @@ var useGrokHub = create()(persist((set, get) => ({
 			detail: opts?.displayName || opts?.email || `${catalog.essential.length} essential models (${catalog.source})`,
 			status: "success"
 		});
+		if (models.length) get().refreshModels();
 	},
-	refreshModels: async () => {
+	refreshModels: async (opts) => {
 		try {
 			const st = get();
 			const res = await fetch("/api/grok", {
@@ -1040,7 +1041,25 @@ var useGrokHub = create()(persist((set, get) => ({
 				set({ lastModelsFetchAt: Date.now() });
 				return;
 			}
-			const catalog = buildCatalog(models);
+			let catalog = buildCatalog(models, st.modelCatalog);
+			const shouldClassify = Boolean(st.oauth?.accessToken || st.apiKey || st.grokConnected) && (Boolean(opts?.force) || needsGrokClassification(catalog));
+			if (shouldClassify) try {
+				const cRes = await fetch("/api/grok", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({
+						action: "classifyModels",
+						models,
+						apiKey: st.apiKey || "",
+						accessToken: st.oauth?.accessToken || "",
+						tokens: st.oauth || void 0
+					})
+				});
+				if (cRes.ok) {
+					const cData = await cRes.json();
+					if (cData.ok && cData.plan) catalog = applyGrokPlan(catalog, cData.plan);
+				}
+			} catch {}
 			set((s) => ({
 				modelCatalog: catalog,
 				lastModelsFetchAt: Date.now(),
@@ -1048,8 +1067,14 @@ var useGrokHub = create()(persist((set, get) => ({
 					...s.profile,
 					models: catalog.essential
 				},
-				grokStatusDetail: s.grokConnected ? `Live · ${catalog.essential.length} models · Auto ready` : s.grokStatusDetail
+				grokStatusDetail: s.grokConnected ? `Live · ${catalog.essential.length} models · slots by ${catalog.classifiedBy}` : s.grokStatusDetail
 			}));
+			if (catalog.classifiedBy === "grok" && shouldClassify) get().pushActivity({
+				kind: "system",
+				title: "Model slots updated by Grok",
+				detail: catalog.classifyNotes || `Fast ${catalog.slots.fast} · Smart ${catalog.slots.smart} · Build ${catalog.slots.build}`,
+				status: "success"
+			});
 		} catch {
 			set({ lastModelsFetchAt: Date.now() });
 		}
@@ -1573,7 +1598,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let usedLive = false;
 		let finalAnswer = "";
 		let aborted = false;
-		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-DY9vmTDN.mjs");
+		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-DJrUcBfP.mjs");
 		try {
 			if (isLocalSlash) {
 				set({ streamStatus: "Running skill…" });
@@ -1584,7 +1609,7 @@ var useGrokHub = create()(persist((set, get) => ({
 					patchBot(finalAnswer, { streaming: false });
 				}
 			} else {
-				const { grokChatStream } = await import("./grok-client-CwD1pJQ1.mjs");
+				const { grokChatStream } = await import("./grok-client-BX9Svvp-.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").filter((c) => c.id !== botId).slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
@@ -1827,7 +1852,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let model;
 		let err = null;
 		try {
-			const { grokImagine } = await import("./grok-client-CwD1pJQ1.mjs");
+			const { grokImagine } = await import("./grok-client-BX9Svvp-.mjs");
 			const live = await grokImagine({
 				prompt: p,
 				apiKey: get().apiKey || void 0,
@@ -1974,6 +1999,19 @@ var useGrokHub = create()(persist((set, get) => ({
 		chat: s.chat,
 		activity: s.activity.slice(0, 40)
 	}),
+	migrate: (persisted) => {
+		const s = persisted || {};
+		const cat = s.modelCatalog;
+		if (cat && (!cat.classifiedBy || !cat.slots)) s.modelCatalog = emptyCatalog();
+		else if (cat && !cat.classifiedBy) s.modelCatalog = {
+			...emptyCatalog(),
+			...cat,
+			classifiedBy: cat.classifiedBy || "heuristic",
+			classifiedAt: cat.classifiedAt || 0,
+			signature: cat.signature || ""
+		};
+		return s;
+	},
 	skipHydration: true
 }));
 function wait(ms) {
@@ -2137,12 +2175,15 @@ function ModePicker() {
 						]
 					})]
 				}, m.id);
-			}), catalog.source === "live" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			}), catalog.essential.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "border-t border-[var(--color-border)] px-2.5 py-1.5 text-[10px] text-[var(--color-subtle)]",
 				children: [
-					"Live · ",
+					catalog.source === "live" ? "Live" : "Fallback",
+					" · ",
 					catalog.essential.length,
-					" essential models"
+					" ",
+					"models · slots by ",
+					catalog.classifiedBy === "grok" ? "Grok" : "heuristic"
 				]
 			})]
 		})]
@@ -4466,8 +4507,8 @@ function SettingsView() {
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Polled from xAI · only 4.5 / 4.3 / Fast / Build / Imagine class ids" })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
 					size: "sm",
 					variant: "secondary",
-					onClick: () => void refreshModels(),
-					children: "Refresh models"
+					onClick: () => void refreshModels({ force: true }),
+					children: "Refresh + reclassify"
 				})]
 			}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 				className: "space-y-3",
@@ -4511,6 +4552,10 @@ function SettingsView() {
 						children: [
 							"Source: ",
 							modelCatalog.source,
+							" · slots by",
+							" ",
+							modelCatalog.classifiedBy === "grok" ? "Grok" : "heuristic",
+							modelCatalog.classifyNotes ? ` · ${modelCatalog.classifyNotes}` : "",
 							lastModelsFetchAt ? ` · last poll ${new Date(lastModelsFetchAt).toLocaleTimeString()}` : " · not polled yet"
 						]
 					})
