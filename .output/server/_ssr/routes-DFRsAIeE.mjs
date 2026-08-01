@@ -1,22 +1,23 @@
 import { o as __toESM } from "../_runtime.mjs";
-import { a as modelIdForMode, i as modeBadge, n as GROK_MODES, o as resolveMode, r as getMode, s as stripAssistantChrome, t as APP_VERSION } from "./version-aISqRfJc.mjs";
+import { a as modelIdForMode, i as modeBadge, n as GROK_MODES, o as resolveMode, r as getMode, s as stripAssistantChrome, t as APP_VERSION } from "./version-Od4YDoyU.mjs";
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
 import { N as require_jsx_runtime, P as require_react, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
 import { A as ExternalLink, C as Image, D as Gauge, E as Hammer, F as Cable, I as Brain, L as ArrowRight, M as Command, N as ChevronRight, O as Folder, P as Check, R as AppWindow, S as Link2Off, T as HardDrive, _ as Minus, a as TimerReset, b as Menu, c as Sparkles, d as Settings, f as Send, g as Play, h as Plus, i as Trash2, j as Download, k as FolderOpen, l as ShieldCheck, m as Plug, n as X, o as Terminal, p as RefreshCw, r as Users, s as Square, t as Zap, u as ShieldAlert, v as MessageSquare, w as History, x as LoaderCircle, y as MessageSquarePlus, z as Activity } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-8H0vprrC.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-DFRsAIeE.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
-async function rpc(path, action, body = {}) {
+async function rpc(path, action, body = {}, init) {
 	const res = await fetch(path, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({
 			action,
 			...body
-		})
+		}),
+		signal: init?.signal
 	});
 	const data = await res.json().catch(() => ({}));
 	if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -25,7 +26,121 @@ async function rpc(path, action, body = {}) {
 async function grokChat(opts) {
 	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
 	if (desktop?.chat) return desktop.chat(opts);
-	return rpc("/api/grok", "chat", opts);
+	return rpc("/api/grok", "chat", opts, { signal: opts.signal });
+}
+/**
+* Stream chat tokens. Prefer Electron IPC stream; fall back to SSE /api/grok,
+* then non-stream chat.
+*/
+async function grokChatStream(opts, handlers) {
+	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
+	if (desktop?.chatStream) return desktop.chatStream(opts, handlers);
+	try {
+		const res = await fetch("/api/grok", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				accept: "text/event-stream"
+			},
+			body: JSON.stringify({
+				action: "chatStream",
+				...opts
+			}),
+			signal: handlers.signal
+		});
+		const ctype = res.headers.get("content-type") || "";
+		if (res.ok && (ctype.includes("text/event-stream") || ctype.includes("ndjson"))) {
+			handlers.onStatus?.("streaming");
+			const reader = res.body?.getReader();
+			if (!reader) throw new Error("no stream body");
+			const decoder = new TextDecoder();
+			let buffer = "";
+			let content = "";
+			let model;
+			let tokens;
+			while (true) {
+				if (handlers.signal?.aborted) {
+					try {
+						await reader.cancel();
+					} catch {}
+					return {
+						ok: false,
+						aborted: true,
+						error: "Stopped",
+						content,
+						model
+					};
+				}
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				const parts = buffer.split("\n");
+				buffer = parts.pop() || "";
+				for (const raw of parts) {
+					const line = raw.trim();
+					if (!line || line.startsWith(":")) continue;
+					let payload = line;
+					if (line.startsWith("data:")) payload = line.slice(5).trim();
+					if (payload === "[DONE]") continue;
+					try {
+						const evt = JSON.parse(payload);
+						if (evt.type === "delta" && evt.delta) {
+							content += evt.delta;
+							handlers.onDelta(evt.delta);
+						} else if (evt.type === "status" && evt.content) handlers.onStatus?.(evt.content);
+						else if (evt.type === "done") {
+							model = evt.model || model;
+							tokens = evt.tokens || tokens;
+							if (evt.content && !content) {
+								content = evt.content;
+								handlers.onDelta(evt.content);
+							}
+						} else if (evt.type === "error") return {
+							ok: false,
+							error: evt.error || "stream error",
+							content,
+							model,
+							tokens
+						};
+						else if (evt.delta) {
+							content += evt.delta;
+							handlers.onDelta(evt.delta);
+						}
+					} catch {}
+				}
+			}
+			if (!content.trim()) return {
+				ok: false,
+				error: "Empty stream",
+				model,
+				tokens
+			};
+			return {
+				ok: true,
+				content,
+				model,
+				tokens
+			};
+		}
+		if (res.ok) {
+			const data = await res.json();
+			if (data.ok && data.content) handlers.onDelta(data.content);
+			return data;
+		}
+	} catch (e) {
+		if (handlers.signal?.aborted || e instanceof Error && e.name === "AbortError") return {
+			ok: false,
+			aborted: true,
+			error: "Stopped"
+		};
+	}
+	handlers.onStatus?.("fallback");
+	const full = await grokChat({
+		...opts,
+		signal: handlers.signal
+	});
+	if (full.ok && full.content) handlers.onDelta(full.content);
+	return full;
 }
 async function grokProbe(opts) {
 	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
@@ -664,6 +779,8 @@ var useGrokHub = create()(persist((set, get) => ({
 	usage: createUsage("pro"),
 	heartbeatAt: boot.heartbeatAt,
 	running: false,
+	streamStatus: null,
+	streamingMessageId: null,
 	apiKey: "",
 	githubToken: "",
 	oauth: null,
@@ -697,7 +814,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-B4KQiicj.mjs");
+		const { oauthStart } = await import("./grok-client-Djb-LbBk.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -726,7 +843,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-B4KQiicj.mjs");
+		const { oauthPoll } = await import("./grok-client-Djb-LbBk.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -804,7 +921,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-B4KQiicj.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-Djb-LbBk.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1299,9 +1416,41 @@ var useGrokHub = create()(persist((set, get) => ({
 			status: "success"
 		});
 	},
+	stopChat: () => {
+		++chatGeneration;
+		try {
+			activeChatAbort?.abort();
+		} catch {}
+		activeChatAbort = null;
+		set((s) => {
+			const sid = s.streamingMessageId;
+			return {
+				chat: s.chat.map((m) => m.id === sid ? {
+					...m,
+					streaming: false,
+					stopped: true,
+					content: m.content?.trim() ? `${m.content}${m.content.endsWith("\n") ? "" : "\n"}\n_Stopped._` : "_Stopped._"
+				} : m),
+				running: false,
+				streamStatus: null,
+				streamingMessageId: null
+			};
+		});
+		get().setAgentStatus("primary", "idle", 0);
+		get().setAgentStatus("builder", "idle", 0);
+		get().setAgentStatus("research", "idle", 0);
+		get().setAgentStatus("ops", "idle", 0);
+		get().pushActivity({
+			kind: "chat",
+			title: "Stopped",
+			detail: "User interrupted the agent",
+			status: "failed"
+		});
+	},
 	sendChat: async (text) => {
 		const trimmed = text.trim();
 		if (!trimmed) return;
+		if (get().running) return;
 		const mode = get().mode;
 		const routed = resolveMode(mode, trimmed);
 		const m = getMode(routed);
@@ -1332,9 +1481,30 @@ var useGrokHub = create()(persist((set, get) => ({
 			ts: Date.now(),
 			mode
 		};
+		const botId = uid("msg");
+		const botPlaceholder = {
+			id: botId,
+			role: "assistant",
+			content: "",
+			ts: Date.now(),
+			mode: routed,
+			streaming: true
+		};
+		try {
+			activeChatAbort?.abort();
+		} catch {}
+		const abort = new AbortController();
+		activeChatAbort = abort;
+		const gen = ++chatGeneration;
 		set((s) => ({
-			chat: [...s.chat, userMsg],
-			running: true
+			chat: [
+				...s.chat,
+				userMsg,
+				botPlaceholder
+			],
+			running: true,
+			streamStatus: "Thinking…",
+			streamingMessageId: botId
 		}));
 		if (get().agents.length === 0) await get().syncFromGrok();
 		get().setAgentStatus(routed === "build" ? "builder" : routed === "heavy" ? "research" : "primary", "working", 1);
@@ -1342,16 +1512,31 @@ var useGrokHub = create()(persist((set, get) => ({
 			get().setAgentStatus("ops", "working", 1);
 			get().setAgentStatus("builder", "working", 1);
 		}
+		const patchBot = (content, extra) => {
+			if (gen !== chatGeneration) return;
+			set((s) => ({ chat: s.chat.map((row) => row.id === botId ? {
+				...row,
+				content,
+				...extra
+			} : row) }));
+		};
 		const isLocalSlash = trimmed.startsWith("/morning") || trimmed.startsWith("/standup") || trimmed.startsWith("/docs") || trimmed.startsWith("/prints");
-		let answer;
 		let usedLive = false;
+		let finalAnswer = "";
+		let aborted = false;
 		try {
 			if (isLocalSlash) {
+				set({ streamStatus: "Running skill…" });
 				await wait(280);
-				answer = replyFor(trimmed, get(), routed);
+				if (abort.signal.aborted || gen !== chatGeneration) aborted = true;
+				else {
+					finalAnswer = replyFor(trimmed, get(), routed);
+					patchBot(finalAnswer, { streaming: false });
+				}
 			} else {
-				const { grokChat } = await import("./grok-client-B4KQiicj.mjs");
-				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").slice(-16).map((c) => ({
+				const { grokChatStream } = await import("./grok-client-Djb-LbBk.mjs");
+				const { extractHostCommands } = await import("./grok-BHPoOd67.mjs");
+				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").filter((c) => c.id !== botId).slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
 				})).filter((c) => c.content.trim().length > 0);
@@ -1360,26 +1545,100 @@ var useGrokHub = create()(persist((set, get) => ({
 					content: trimmed
 				});
 				const modelId = modelIdForMode(mode, trimmed);
-				const result = await grokChat({
-					messages: history,
-					mode: routed,
-					model: modelId,
-					apiKey: get().apiKey || void 0,
-					accessToken: get().oauth?.accessToken,
-					tokens: get().oauth
-				});
-				if (result.tokens) set({ oauth: result.tokens });
-				if (result.ok && result.content) {
-					usedLive = true;
-					answer = stripAssistantChrome(result.content);
-					set({
-						grokConnected: true,
-						grokStatusDetail: get().oauth ? `Live · ${result.model || modelId}` : `Live · ${result.model || modelId}`
+				let rounds = 0;
+				const maxRounds = 4;
+				let accumulated = "";
+				while (rounds < maxRounds) {
+					rounds += 1;
+					if (abort.signal.aborted || gen !== chatGeneration) {
+						aborted = true;
+						break;
+					}
+					set({ streamStatus: rounds === 1 ? "Streaming…" : `Host tool round ${rounds}…` });
+					let roundText = "";
+					const result = await grokChatStream({
+						messages: history,
+						mode: routed,
+						model: modelId,
+						apiKey: get().apiKey || void 0,
+						accessToken: get().oauth?.accessToken,
+						tokens: get().oauth
+					}, {
+						signal: abort.signal,
+						onStatus: (st) => {
+							if (gen !== chatGeneration) return;
+							set({ streamStatus: st === "streaming" ? "Streaming…" : st === "fallback" ? "Responding…" : st === "connecting" ? "Connecting…" : st });
+						},
+						onDelta: (piece) => {
+							if (gen !== chatGeneration) return;
+							roundText += piece;
+							accumulated = roundText;
+							patchBot(roundText, { streaming: true });
+						}
 					});
-				} else {
+					if (result.tokens) set({ oauth: result.tokens });
+					if (result.aborted || abort.signal.aborted || gen !== chatGeneration) {
+						aborted = true;
+						break;
+					}
+					if (result.ok && (result.content || roundText)) {
+						usedLive = true;
+						const full = stripAssistantChrome(result.content || roundText);
+						accumulated = full;
+						patchBot(full, { streaming: true });
+						set({
+							grokConnected: true,
+							grokStatusDetail: `Live · ${result.model || modelId}`
+						});
+						const cmds = extractHostCommands(full);
+						if (!cmds.length) {
+							finalAnswer = full;
+							break;
+						}
+						set({ streamStatus: "Running on your desktop…" });
+						const { hostExec } = await import("./host-client-WUUmAwRI.mjs");
+						const outputs = [];
+						for (const cmd of cmds.slice(0, 3)) {
+							if (abort.signal.aborted || gen !== chatGeneration) {
+								aborted = true;
+								break;
+							}
+							set({ streamStatus: `Host: ${cmd.slice(0, 48)}…` });
+							try {
+								const r = await hostExec(cmd, void 0, 45e3);
+								outputs.push([
+									`$ ${cmd}`,
+									`exit ${r.code ?? "?"} · ${r.ms}ms · ${r.cwd}`,
+									r.stdout || "(no stdout)",
+									r.stderr ? `[stderr]\n${r.stderr}` : ""
+								].filter(Boolean).join("\n"));
+							} catch (e) {
+								outputs.push(`$ ${cmd}\n[host error] ${e instanceof Error ? e.message : "failed"}`);
+							}
+						}
+						if (aborted) break;
+						const toolBlock = [
+							"HOST_RESULT:",
+							outputs.join("\n\n---\n\n"),
+							"",
+							"Use the host results above to answer the user. Do not invent files."
+						].join("\n");
+						history.push({
+							role: "assistant",
+							content: full
+						});
+						history.push({
+							role: "user",
+							content: toolBlock
+						});
+						const mid = `${full}\n\n---\n${outputs.join("\n\n")}\n\n_Working…_`;
+						patchBot(mid, { streaming: true });
+						accumulated = mid;
+						continue;
+					}
 					const hasOauth = Boolean(get().oauth?.accessToken);
 					const err = result.error || "Unknown error";
-					answer = [
+					finalAnswer = [
 						"Could not reach Grok.",
 						err,
 						"",
@@ -1391,52 +1650,78 @@ var useGrokHub = create()(persist((set, get) => ({
 						grokConnected: false,
 						grokStatusDetail: hasOauth ? `OAuth session · chat failed: ${err}` : err
 					});
+					patchBot(finalAnswer, { streaming: false });
+					break;
 				}
+				if (!finalAnswer && accumulated && !aborted) finalAnswer = stripAssistantChrome(accumulated.replace(/\n_Working…_\s*$/, ""));
 			}
 		} catch (e) {
-			const msg = e instanceof Error ? e.message : "request failed";
-			answer = [
-				`Grok connection error: ${msg}`,
-				"",
-				replyFor(trimmed, get(), routed)
-			].join("\n");
-			set({
-				grokConnected: false,
-				grokStatusDetail: msg
+			if (abort.signal.aborted || gen !== chatGeneration) aborted = true;
+			else {
+				const msg = e instanceof Error ? e.message : "request failed";
+				finalAnswer = [
+					`Grok connection error: ${msg}`,
+					"",
+					replyFor(trimmed, get(), routed)
+				].join("\n");
+				set({
+					grokConnected: false,
+					grokStatusDetail: msg
+				});
+				patchBot(finalAnswer, { streaming: false });
+			}
+		}
+		if (gen !== chatGeneration) return;
+		if (aborted) {
+			if (get().running) set((s) => ({
+				running: false,
+				streamStatus: null,
+				streamingMessageId: null,
+				chat: s.chat.map((row) => row.id === botId ? {
+					...row,
+					streaming: false,
+					stopped: true,
+					content: row.content?.trim() ? `${row.content}${row.content.endsWith("\n") ? "" : "\n"}\n_Stopped._` : "_Stopped._"
+				} : row)
+			}));
+		} else {
+			const answer = stripAssistantChrome(finalAnswer || "");
+			set((s) => {
+				const chat = s.chat.map((row) => row.id === botId ? {
+					...row,
+					content: answer || row.content || "(empty)",
+					streaming: false,
+					stopped: false,
+					ts: Date.now(),
+					mode: routed
+				} : row);
+				const tid = s.activeThreadId;
+				return {
+					chat,
+					threads: s.threads.map((th) => th.id === tid ? {
+						...th,
+						messages: chat,
+						updatedAt: Date.now(),
+						title: titleFromMessages(chat),
+						mode: routed
+					} : th),
+					running: false,
+					streamStatus: null,
+					streamingMessageId: null
+				};
+			});
+			get().pushActivity({
+				kind: "chat",
+				title: usedLive ? `Grok · ${m.label}` : `Agent reply · ${m.label}`,
+				detail: `${trimmed.slice(0, 80)} · ${bill.cost}u`,
+				status: usedLive ? "success" : "failed"
 			});
 		}
-		const bot = {
-			id: uid("msg"),
-			role: "assistant",
-			content: answer,
-			ts: Date.now(),
-			mode: routed
-		};
-		set((s) => {
-			const chat = [...s.chat, bot];
-			const tid = s.activeThreadId;
-			return {
-				chat,
-				threads: s.threads.map((t) => t.id === tid ? {
-					...t,
-					messages: chat,
-					updatedAt: Date.now(),
-					title: titleFromMessages(chat),
-					mode: routed
-				} : t),
-				running: false
-			};
-		});
+		if (activeChatAbort === abort) activeChatAbort = null;
 		get().setAgentStatus("primary", "idle", 0);
 		get().setAgentStatus("builder", "idle", 0);
 		get().setAgentStatus("research", "idle", 0);
 		get().setAgentStatus("ops", "idle", 0);
-		get().pushActivity({
-			kind: "chat",
-			title: usedLive ? `Grok · ${m.label}` : `Agent reply · ${m.label}`,
-			detail: `${trimmed.slice(0, 80)} · ${bill.cost}u`,
-			status: usedLive ? "success" : "failed"
-		});
 	},
 	setImaginePrompt: (v) => set({ imaginePrompt: v }),
 	setImagineAspect: (v) => set({ imagineAspect: v }),
@@ -1481,7 +1766,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let model;
 		let err = null;
 		try {
-			const { grokImagine } = await import("./grok-client-B4KQiicj.mjs");
+			const { grokImagine } = await import("./grok-client-Djb-LbBk.mjs");
 			const live = await grokImagine({
 				prompt: p,
 				apiKey: get().apiKey || void 0,
@@ -1592,6 +1877,8 @@ var useGrokHub = create()(persist((set, get) => ({
 			mode: "auto",
 			heartbeatAt: fresh.heartbeatAt,
 			running: false,
+			streamStatus: null,
+			streamingMessageId: null,
 			nav: "chat",
 			modeMenuOpen: false,
 			usage: createUsage("pro"),
@@ -1627,6 +1914,9 @@ var useGrokHub = create()(persist((set, get) => ({
 function wait(ms) {
 	return new Promise((r) => setTimeout(r, ms));
 }
+/** Active chat stream abort (module-level so Stop works across re-renders) */
+var activeChatAbort = null;
+var chatGeneration = 0;
 /** Avatar with automatic initials fallback when URL is missing or fails to load. */
 function ProfileAvatar({ src, name, email, className, size = "md" }) {
 	const [failed, setFailed] = (0, import_react.useState)(false);
@@ -2490,7 +2780,9 @@ var SUGGESTIONS = [
 function ChatView() {
 	const chat = useGrokHub((s) => s.chat);
 	const sendChat = useGrokHub((s) => s.sendChat);
+	const stopChat = useGrokHub((s) => s.stopChat);
 	const running = useGrokHub((s) => s.running);
+	const streamStatus = useGrokHub((s) => s.streamStatus);
 	const mode = useGrokHub((s) => s.mode);
 	const setNav = useGrokHub((s) => s.setNav);
 	const pushActivity = useGrokHub((s) => s.pushActivity);
@@ -2501,13 +2793,18 @@ function ChatView() {
 	const [text, setText] = (0, import_react.useState)("");
 	const [localRunning, setLocalRunning] = (0, import_react.useState)(false);
 	const endRef = (0, import_react.useRef)(null);
+	const inputRef = (0, import_react.useRef)(null);
 	const modeMeta = getMode(mode);
 	const busy = running || localRunning;
 	const plan = PLAN_LIMITS[usage.plan];
 	const pct = Math.round(usagePercent(usage));
 	(0, import_react.useEffect)(() => {
 		endRef.current?.scrollIntoView({ behavior: "smooth" });
-	}, [chat, busy]);
+	}, [
+		chat,
+		busy,
+		streamStatus
+	]);
 	async function runShell(command) {
 		setLocalRunning(true);
 		const userLine = command.startsWith("$") ? command : `$ ${command}`;
@@ -2525,7 +2822,9 @@ function ChatView() {
 					...t,
 					messages: chat,
 					updatedAt: Date.now()
-				} : t)
+				} : t),
+				running: true,
+				streamStatus: "Host running…"
 			};
 		});
 		try {
@@ -2583,11 +2882,16 @@ function ChatView() {
 			setNav("settings");
 		} finally {
 			setLocalRunning(false);
+			useGrokHub.setState({
+				running: false,
+				streamStatus: null
+			});
 		}
 	}
 	async function onSend(value) {
+		if (busy) return;
 		const payload = (value ?? text).trim();
-		if (!payload || busy) return;
+		if (!payload) return;
 		if (payload.toLowerCase().includes("imagine") && !payload.startsWith("/") && !payload.startsWith("$")) setNav("imagine");
 		setText("");
 		if (payload.startsWith("$") || payload.startsWith("/sh ")) {
@@ -2595,6 +2899,17 @@ function ChatView() {
 			return;
 		}
 		await sendChat(payload);
+	}
+	function onStop() {
+		if (localRunning) {
+			setLocalRunning(false);
+			useGrokHub.setState({
+				running: false,
+				streamStatus: null
+			});
+			return;
+		}
+		stopChat();
 	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "chat-stage mx-auto flex h-full min-h-0 w-full flex-col gap-3",
@@ -2623,6 +2938,7 @@ function ChatView() {
 									size: "sm",
 									variant: "secondary",
 									onClick: () => newThread(),
+									disabled: busy,
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageSquarePlus, { className: "h-3.5 w-3.5" }), "New"]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
 									className: "font-mono",
@@ -2661,60 +2977,113 @@ function ChatView() {
 							chat.map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 								className: cn("flex", m.role === "user" ? "justify-end" : "justify-start"),
 								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: cn("chat-bubble rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap", m.role === "user" ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]" : m.role === "system" ? "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted)]" : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-fg)]"),
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-[var(--color-subtle)]",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-											m.role,
-											" · ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RelativeTime, { ts: m.ts })
-										] }), m.mode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case",
-											children: getMode(m.mode).label
-										})]
-									}), m.content]
+									className: cn("chat-bubble rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap", m.role === "user" ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]" : m.role === "system" ? "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted)]" : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-fg)]", m.streaming && "border-[color-mix(in_oklab,var(--color-info)_35%,var(--color-border))]"),
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+											className: "mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-[var(--color-subtle)]",
+											children: [
+												/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+													m.role,
+													" · ",
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RelativeTime, { ts: m.ts })
+												] }),
+												m.mode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case",
+													children: getMode(m.mode).label
+												}),
+												m.streaming && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+													className: "inline-flex items-center gap-1 rounded border border-[color-mix(in_oklab,var(--color-info)_40%,transparent)] px-1.5 py-px font-mono normal-case text-[var(--color-info)]",
+													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoaderCircle, { className: "h-2.5 w-2.5 animate-spin" }), "streaming"]
+												}),
+												m.stopped && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case text-[var(--color-warn)]",
+													children: "stopped"
+												})
+											]
+										}),
+										m.content || (m.streaming ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "inline-flex items-center gap-1.5 text-[var(--color-subtle)]",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-info)]" }), "…"]
+										}) : ""),
+										m.streaming && m.content ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-[var(--color-fg)] align-middle opacity-70" }) : null
+									]
 								})
 							}, m.id)),
-							busy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "text-xs text-[var(--color-subtle)]",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							busy && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "flex items-center gap-2 text-xs text-[var(--color-subtle)]",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoaderCircle, { className: "h-3.5 w-3.5 animate-spin text-[var(--color-info)]" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "shimmer rounded px-1",
-									children: localRunning ? "Host running…" : `${modeMeta.label} · thinking…`
-								})
+									children: streamStatus || (localRunning ? "Host running…" : `${modeMeta.label} · working…`)
+								})]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { ref: endRef })
 						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "shrink-0 space-y-2 border-t border-[var(--color-border)] p-3 md:p-4 3xl:px-8 uw:px-12",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "flex flex-wrap gap-1.5",
-							children: SUGGESTIONS.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								disabled: busy,
-								onClick: () => void onSend(s),
-								className: "rounded-full border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-muted)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]",
-								children: s
-							}, s))
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
-							className: "mx-auto flex w-full max-w-[min(56rem,100%)] gap-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]",
-							onSubmit: (e) => {
-								e.preventDefault();
-								onSend();
-							},
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
-								value: text,
-								onChange: (e) => setText(e.target.value),
-								placeholder: "Message Grok… or $ shell",
-								disabled: busy,
-								className: "flex-1"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-								type: "submit",
-								disabled: busy || !text.trim(),
-								size: "icon",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Send, { className: "h-4 w-4" })
-							})]
-						})]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "flex flex-wrap gap-1.5",
+								children: SUGGESTIONS.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									disabled: busy,
+									onClick: () => void onSend(s),
+									className: "rounded-full border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-muted)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)] disabled:opacity-50",
+									children: s
+								}, s))
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+								className: "mx-auto flex w-full max-w-[min(56rem,100%)] gap-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]",
+								onSubmit: (e) => {
+									e.preventDefault();
+									if (busy) {
+										onStop();
+										return;
+									}
+									onSend();
+								},
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
+									ref: inputRef,
+									value: text,
+									onChange: (e) => setText(e.target.value),
+									placeholder: busy ? "Agent running — press Stop to interrupt…" : "Message Grok… or $ shell",
+									className: "flex-1",
+									onKeyDown: (e) => {
+										if (e.key === "Escape" && busy) {
+											e.preventDefault();
+											onStop();
+										}
+									}
+								}), busy ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+									type: "button",
+									variant: "secondary",
+									size: "icon",
+									onClick: onStop,
+									"aria-label": "Stop",
+									title: "Stop (Esc)",
+									className: "border border-[color-mix(in_oklab,var(--color-danger)_40%,transparent)] text-[var(--color-danger)]",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Square, { className: "h-3.5 w-3.5 fill-current" })
+								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+									type: "submit",
+									disabled: !text.trim(),
+									size: "icon",
+									"aria-label": "Send",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Send, { className: "h-4 w-4" })
+								})]
+							}),
+							busy && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "mx-auto flex w-full max-w-[min(56rem,100%)] items-center justify-between text-[10px] text-[var(--color-subtle)] 3xl:max-w-[min(64rem,100%)]",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "inline-flex items-center gap-1.5",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "pulse-live inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-info)]" }), streamStatus || "Running"]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "font-medium text-[var(--color-danger)] hover:underline",
+									onClick: onStop,
+									children: "Stop generating"
+								})]
+							})
+						]
 					})
 				]
 			})]
@@ -4672,4 +5041,4 @@ function HomePage() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AppShell, {});
 }
 //#endregion
-export { grokProbe as a, oauthStart as c, HomePage as component, grokImagine as i, checkUpdate as n, oauthEnsure as o, grokChat as r, oauthPoll as s, applyUpdate as t };
+export { grokImagine as a, oauthPoll as c, HomePage as component, grokChatStream as i, oauthStart as l, checkUpdate as n, grokProbe as o, grokChat as r, oauthEnsure as s, applyUpdate as t };

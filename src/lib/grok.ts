@@ -9,11 +9,18 @@ export function modelForMode(mode: GrokModeId, prompt = ""): string {
 }
 
 export function systemPromptForMode(mode: GrokModeId, prompt = ""): string {
-  const base = `You are Grok, running inside GrokHub (a desktop agent control plane).
+  const base = `You are Grok, running inside GrokHub (a desktop agent control plane on the user's Linux machine).
 Help with coding, ops, research, and local machine tasks.
 Be direct and practical. Prefer short structured answers with bullets when listing steps.
-The user may have unsandboxed host access ($ shell, files, apps) on their Linux desktop.
-Do not prefix replies with mode labels like [Fast] or [Auto → …]. Just answer.`;
+Do not prefix replies with mode labels like [Fast] or [Auto → …]. Just answer.
+
+You have unsandboxed host access when the desktop gateway is connected.
+When you need real filesystem / shell data (Downloads, home, processes, etc.), do NOT invent results.
+Output exactly one host command on its own line in this form:
+HOST_CMD: <bash command>
+Wait for the runtime to paste the command output back before concluding.
+You may use multiple HOST_CMD rounds if needed. Prefer non-interactive commands (ls, head, cat, find, stat).
+After you have results, summarize them clearly for the user.`;
 
   const id = resolveMode(mode, prompt);
   switch (id) {
@@ -45,6 +52,7 @@ export type GrokChatRequest = {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  signal?: AbortSignal;
 };
 
 export type GrokChatResult = {
@@ -54,6 +62,7 @@ export type GrokChatResult = {
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
   error?: string;
   status?: number;
+  aborted?: boolean;
 };
 
 function resolveBearer(req: GrokChatRequest): { bearer: string; source: "oauth" | "key" | "env" } | null {
@@ -69,6 +78,35 @@ function resolveBearer(req: GrokChatRequest): { bearer: string; source: "oauth" 
   return null;
 }
 
+function buildBody(req: GrokChatRequest, stream: boolean) {
+  const mode = req.mode ?? "auto";
+  const lastUser = [...req.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  const routed = resolveMode(mode, lastUser);
+  const model = req.model || modelForMode(mode, lastUser);
+  const system = systemPromptForMode(mode, lastUser);
+  const messages: GrokChatMessage[] = [
+    { role: "system", content: system },
+    ...req.messages.filter((m) => m.role !== "system"),
+  ];
+  const temperature =
+    req.temperature ??
+    (routed === "fast" ? 0.5 : routed === "build" ? 0.4 : routed === "heavy" ? 0.8 : 0.7);
+  const max_tokens =
+    req.maxTokens ??
+    (routed === "heavy" ? 4096 : routed === "build" ? 8192 : routed === "expert" ? 3072 : 2048);
+  return {
+    model,
+    body: {
+      model,
+      messages,
+      temperature,
+      max_tokens,
+      stream,
+    },
+    routed,
+  };
+}
+
 export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult> {
   const auth = resolveBearer(req);
   if (!auth) {
@@ -80,23 +118,7 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
     };
   }
 
-  const mode = req.mode ?? "auto";
-  const lastUser = [...req.messages].reverse().find((m) => m.role === "user")?.content ?? "";
-  const routed = resolveMode(mode, lastUser);
-  const model = req.model || modelForMode(mode, lastUser);
-  const system = systemPromptForMode(mode, lastUser);
-
-  const messages: GrokChatMessage[] = [
-    { role: "system", content: system },
-    ...req.messages.filter((m) => m.role !== "system"),
-  ];
-
-  const temperature =
-    req.temperature ??
-    (routed === "fast" ? 0.5 : routed === "build" ? 0.4 : routed === "heavy" ? 0.8 : 0.7);
-  const max_tokens =
-    req.maxTokens ??
-    (routed === "heavy" ? 4096 : routed === "build" ? 8192 : routed === "expert" ? 3072 : 2048);
+  const { model, body } = buildBody(req, false);
 
   try {
     const res = await fetch(`${XAI_BASE}/chat/completions`, {
@@ -105,13 +127,8 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
         "content-type": "application/json",
         authorization: `Bearer ${auth.bearer}`,
       },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature,
-        max_tokens,
-        stream: false,
-      }),
+      body: JSON.stringify(body),
+      signal: req.signal,
     });
 
     const data = (await res.json().catch(() => ({}))) as {
@@ -122,7 +139,6 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
     };
 
     if (!res.ok) {
-      // Retry once with grok-4 if grok-4.3 is unavailable on this account
       if (
         res.status === 404 ||
         (typeof data.error === "object" &&
@@ -155,11 +171,160 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
       status: res.status,
     };
   } catch (e) {
+    if (req.signal?.aborted || (e instanceof Error && e.name === "AbortError")) {
+      return { ok: false, aborted: true, error: "Stopped" };
+    }
     return {
       ok: false,
       error: e instanceof Error ? e.message : "Network error calling xAI",
     };
   }
+}
+
+export type StreamHandlers = {
+  onDelta?: (text: string) => void;
+  onStatus?: (status: string) => void;
+  signal?: AbortSignal;
+};
+
+/** Stream Grok tokens (SSE). Calls onDelta for each piece of content. */
+export async function callXaiChatStream(
+  req: GrokChatRequest,
+  handlers: StreamHandlers = {},
+): Promise<GrokChatResult> {
+  const auth = resolveBearer(req);
+  if (!auth) {
+    return {
+      ok: false,
+      status: 401,
+      error:
+        "Not connected to Grok. Use Settings → Connect with Grok OAuth (SuperGrok / X Premium) or paste an xAI API key.",
+    };
+  }
+
+  const signal = handlers.signal || req.signal;
+  const { model, body } = buildBody(req, true);
+  handlers.onStatus?.("connecting");
+
+  try {
+    const res = await fetch(`${XAI_BASE}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${auth.bearer}`,
+        accept: "text/event-stream",
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    if (!res.ok) {
+      // Fall back to non-stream once for model aliases / older accounts
+      const errText = await res.text().catch(() => "");
+      if (res.status === 404 || /model|not found|invalid/i.test(errText)) {
+        if (model === "grok-4.3") {
+          return callXaiChatStream({ ...req, model: "grok-4" }, handlers);
+        }
+        if (model === "grok-4-1-fast-non-reasoning") {
+          return callXaiChatStream({ ...req, model: "grok-3-mini-fast" }, handlers);
+        }
+      }
+      // Non-stream fallback
+      handlers.onStatus?.("fallback");
+      const full = await callXaiChat({ ...req, model, signal });
+      if (full.ok && full.content) handlers.onDelta?.(full.content);
+      return full;
+    }
+
+    if (!res.body) {
+      handlers.onStatus?.("fallback");
+      const full = await callXaiChat({ ...req, model, signal });
+      if (full.ok && full.content) handlers.onDelta?.(full.content);
+      return full;
+    }
+
+    handlers.onStatus?.("streaming");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let content = "";
+    let usedModel = model;
+
+    while (true) {
+      if (signal?.aborted) {
+        try {
+          await reader.cancel();
+        } catch {
+          /* ignore */
+        }
+        return { ok: false, aborted: true, error: "Stopped", content, model: usedModel };
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line || line.startsWith(":")) continue;
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (data === "[DONE]") continue;
+        try {
+          const json = JSON.parse(data) as {
+            model?: string;
+            choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
+          };
+          if (json.model) usedModel = json.model;
+          const piece =
+            json.choices?.[0]?.delta?.content ||
+            json.choices?.[0]?.message?.content ||
+            "";
+          if (piece) {
+            content += piece;
+            handlers.onDelta?.(piece);
+          }
+        } catch {
+          /* skip bad chunk */
+        }
+      }
+    }
+
+    if (!content.trim()) {
+      return { ok: false, error: "Empty stream from Grok", model: usedModel };
+    }
+    handlers.onStatus?.("done");
+    return { ok: true, content, model: usedModel };
+  } catch (e) {
+    if (signal?.aborted || (e instanceof Error && e.name === "AbortError")) {
+      return { ok: false, aborted: true, error: "Stopped" };
+    }
+    // Network / stream failure → one non-stream retry
+    handlers.onStatus?.("fallback");
+    try {
+      const full = await callXaiChat({ ...req, model, signal });
+      if (full.ok && full.content) handlers.onDelta?.(full.content);
+      return full;
+    } catch (e2) {
+      if (signal?.aborted || (e2 instanceof Error && e2.name === "AbortError")) {
+        return { ok: false, aborted: true, error: "Stopped" };
+      }
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : "Network error calling xAI",
+      };
+    }
+  }
+}
+
+/** Parse HOST_CMD lines the model emits for desktop execution. */
+export function extractHostCommands(text: string): string[] {
+  const cmds: string[] = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*HOST_CMD:\s*(.+)\s*$/i);
+    if (m?.[1]) cmds.push(m[1].trim());
+  }
+  return cmds;
 }
 
 export async function probeXaiKey(apiKey: string): Promise<{ ok: boolean; detail: string }> {

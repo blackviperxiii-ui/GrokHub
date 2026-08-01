@@ -1,7 +1,14 @@
 /**
  * Unified JSON API handlers for /api/grok and /api/update (Node only).
  */
-import { callXaiChat, callXaiImagine, probeXaiBearer, XAI_BASE, type GrokChatMessage } from "./grok";
+import {
+  callXaiChat,
+  callXaiChatStream,
+  callXaiImagine,
+  probeXaiBearer,
+  XAI_BASE,
+  type GrokChatMessage,
+} from "./grok";
 import type { GrokModeId } from "./types";
 import { applyUpdate, checkForUpdate } from "./update";
 import {
@@ -10,6 +17,88 @@ import {
   startXaiDeviceCode,
   type XaiOAuthTokens,
 } from "./xai-oauth";
+
+async function resolveChatAuth(body: Record<string, unknown>) {
+  const apiKey = body.apiKey ? String(body.apiKey) : undefined;
+  let accessToken = body.accessToken ? String(body.accessToken) : undefined;
+  let tokensOut: XaiOAuthTokens | undefined;
+  let refreshed = false;
+
+  if (body.tokens && typeof body.tokens === "object") {
+    try {
+      const ensured = await ensureAccessToken(body.tokens as XaiOAuthTokens);
+      accessToken = ensured.accessToken;
+      tokensOut = ensured.tokens;
+      refreshed = ensured.refreshed;
+    } catch (e) {
+      if (!accessToken && !(body.tokens as XaiOAuthTokens).accessToken) {
+        throw e;
+      }
+      accessToken = accessToken || (body.tokens as XaiOAuthTokens).accessToken;
+    }
+  }
+  if (!accessToken && body.tokens && typeof body.tokens === "object") {
+    const t = body.tokens as XaiOAuthTokens;
+    if (t.accessToken) accessToken = t.accessToken;
+  }
+  return { apiKey, accessToken, tokensOut, refreshed };
+}
+
+/** SSE ReadableStream for chat streaming over HTTP */
+export function createGrokChatSseStream(body: Record<string, unknown>): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const messages = (body.messages as GrokChatMessage[]) || [];
+  const mode = (body.mode as GrokModeId) || "auto";
+  const model = body.model ? String(body.model) : undefined;
+
+  return new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) => {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      };
+      try {
+        const auth = await resolveChatAuth(body);
+        send({ type: "status", content: "streaming" });
+        const result = await callXaiChatStream(
+          {
+            messages,
+            mode,
+            model,
+            apiKey: auth.apiKey,
+            accessToken: auth.accessToken,
+          },
+          {
+            onDelta: (delta) => send({ type: "delta", delta }),
+            onStatus: (status) => send({ type: "status", content: status }),
+          },
+        );
+        if (result.aborted) {
+          send({ type: "error", error: "Stopped", ok: false });
+        } else if (!result.ok) {
+          send({ type: "error", error: result.error || "stream failed", ok: false });
+        } else {
+          send({
+            type: "done",
+            ok: true,
+            content: result.content,
+            model: result.model,
+            tokens: auth.tokensOut,
+            refreshed: auth.refreshed,
+          });
+        }
+      } catch (e) {
+        send({
+          type: "error",
+          error: e instanceof Error ? e.message : "stream failed",
+          ok: false,
+        });
+      } finally {
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      }
+    },
+  });
+}
 
 export async function dispatchApi(
   route: "grok" | "update",
@@ -32,7 +121,6 @@ export async function dispatchApi(
       const tokens = body.tokens as XaiOAuthTokens | undefined;
       if (!tokens?.accessToken) throw new Error("tokens required");
       const ensured = await ensureAccessToken(tokens);
-      // Verify still works
       const probe = await probeXaiBearer(ensured.accessToken);
       return {
         ok: probe.ok,
@@ -102,44 +190,60 @@ export async function dispatchApi(
       return callXaiImagine({ prompt, accessToken, apiKey });
     }
 
+    // chatStream handled as SSE at the route layer via createGrokChatSseStream
+    if (action === "chatStream") {
+      // Non-SSE callers get a full buffered stream result
+      const messages = (body.messages as GrokChatMessage[]) || [];
+      const mode = (body.mode as GrokModeId) || "auto";
+      const model = body.model ? String(body.model) : undefined;
+      const auth = await resolveChatAuth(body);
+      let content = "";
+      const result = await callXaiChatStream(
+        {
+          messages,
+          mode,
+          model,
+          apiKey: auth.apiKey,
+          accessToken: auth.accessToken,
+        },
+        {
+          onDelta: (d) => {
+            content += d;
+          },
+        },
+      );
+      return {
+        ...result,
+        content: result.content || content,
+        ...(auth.tokensOut ? { tokens: auth.tokensOut } : {}),
+        refreshed: auth.refreshed,
+      };
+    }
+
     if (action === "chat") {
       const messages = (body.messages as GrokChatMessage[]) || [];
       const mode = (body.mode as GrokModeId) || "auto";
-      const apiKey = body.apiKey ? String(body.apiKey) : undefined;
-      let accessToken = body.accessToken ? String(body.accessToken) : undefined;
       const model = body.model ? String(body.model) : undefined;
-      let tokensOut: XaiOAuthTokens | undefined;
-      let refreshed = false;
-
-      if (body.tokens && typeof body.tokens === "object") {
-        try {
-          const ensured = await ensureAccessToken(body.tokens as XaiOAuthTokens);
-          accessToken = ensured.accessToken;
-          tokensOut = ensured.tokens;
-          refreshed = ensured.refreshed;
-        } catch (e) {
-          // Fall back to raw token on the payload if refresh failed
-          if (!accessToken) {
-            return {
-              ok: false,
-              error: e instanceof Error ? e.message : "OAuth refresh failed",
-            };
-          }
-        }
+      try {
+        const auth = await resolveChatAuth(body);
+        const result = await callXaiChat({
+          messages,
+          mode,
+          model,
+          apiKey: auth.apiKey,
+          accessToken: auth.accessToken,
+        });
+        return {
+          ...result,
+          ...(auth.tokensOut ? { tokens: auth.tokensOut } : {}),
+          refreshed: auth.refreshed,
+        };
+      } catch (e) {
+        return {
+          ok: false,
+          error: e instanceof Error ? e.message : "OAuth refresh failed",
+        };
       }
-
-      // Also accept tokens.accessToken when top-level accessToken omitted
-      if (!accessToken && body.tokens && typeof body.tokens === "object") {
-        const t = body.tokens as XaiOAuthTokens;
-        if (t.accessToken) accessToken = t.accessToken;
-      }
-
-      const result = await callXaiChat({ messages, mode, model, apiKey, accessToken });
-      return {
-        ...result,
-        ...(tokensOut ? { tokens: tokensOut } : {}),
-        refreshed,
-      };
     }
 
     throw new Error(`Unknown grok action: ${action}`);
@@ -158,8 +262,8 @@ export async function dispatchApi(
         repo: body.repo ? String(body.repo) : undefined,
         branch: body.branch ? String(body.branch) : undefined,
         token: body.token ? String(body.token) : undefined,
-        force: body.force === true || body.force === "1" || body.force === 1,
-        restart: body.restart === true || body.restart === "1" || body.restart === 1,
+        force: Boolean(body.force),
+        restart: body.restart !== false,
       });
     }
     throw new Error(`Unknown update action: ${action}`);

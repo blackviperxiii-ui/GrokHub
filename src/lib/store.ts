@@ -57,6 +57,10 @@ type State = {
   usage: UsageSnapshot;
   heartbeatAt: number;
   running: boolean;
+  /** Live status line while agent is working (streaming / host / stopped) */
+  streamStatus: string | null;
+  /** Id of the assistant message currently streaming */
+  streamingMessageId: string | null;
   /** xAI API key (local only; never sent to third parties except api.x.ai) */
   apiKey: string;
   /** Optional GitHub token for private-repo updates */
@@ -109,6 +113,7 @@ type State = {
     time: string;
   }) => void;
   sendChat: (text: string) => Promise<void>;
+  stopChat: () => void;
   setImaginePrompt: (v: string) => void;
   setImagineAspect: (v: ImagineAspect) => void;
   runImagine: (prompt?: string) => Promise<void>;
@@ -388,6 +393,8 @@ export const useGrokHub = create<State>()(
       usage: createUsage("pro"),
       heartbeatAt: boot.heartbeatAt,
       running: false,
+      streamStatus: null,
+      streamingMessageId: null,
       apiKey: "",
       githubToken: "",
       oauth: null,
@@ -1097,9 +1104,56 @@ export const useGrokHub = create<State>()(
         });
       },
 
+      stopChat: () => {
+        const gen = ++chatGeneration;
+        try {
+          activeChatAbort?.abort();
+        } catch {
+          /* ignore */
+        }
+        activeChatAbort = null;
+        set((s) => {
+          const sid = s.streamingMessageId;
+          const chat = s.chat.map((m) =>
+            m.id === sid
+              ? {
+                  ...m,
+                  streaming: false,
+                  stopped: true,
+                  content: m.content?.trim()
+                    ? `${m.content}${m.content.endsWith("\n") ? "" : "\n"}\n_Stopped._`
+                    : "_Stopped._",
+                }
+              : m,
+          );
+          return {
+            chat,
+            running: false,
+            streamStatus: null,
+            streamingMessageId: null,
+          };
+        });
+        get().setAgentStatus("primary", "idle", 0);
+        get().setAgentStatus("builder", "idle", 0);
+        get().setAgentStatus("research", "idle", 0);
+        get().setAgentStatus("ops", "idle", 0);
+        get().pushActivity({
+          kind: "chat",
+          title: "Stopped",
+          detail: "User interrupted the agent",
+          status: "failed",
+        });
+        void gen;
+      },
+
       sendChat: async (text) => {
         const trimmed = text.trim();
         if (!trimmed) return;
+        if (get().running) {
+          // Already running — ignore new sends (use Stop first)
+          return;
+        }
+
         const mode = get().mode;
         const routed = resolveMode(mode, trimmed);
         const m = getMode(routed);
@@ -1125,6 +1179,7 @@ export const useGrokHub = create<State>()(
           }));
           return;
         }
+
         const userMsg: ChatMessage = {
           id: uid("msg"),
           role: "user",
@@ -1132,8 +1187,33 @@ export const useGrokHub = create<State>()(
           ts: Date.now(),
           mode,
         };
-        set((s) => ({ chat: [...s.chat, userMsg], running: true }));
-        // Ensure agents exist before status updates
+        const botId = uid("msg");
+        const botPlaceholder: ChatMessage = {
+          id: botId,
+          role: "assistant",
+          content: "",
+          ts: Date.now(),
+          mode: routed,
+          streaming: true,
+        };
+
+        // Abort any previous stream
+        try {
+          activeChatAbort?.abort();
+        } catch {
+          /* ignore */
+        }
+        const abort = new AbortController();
+        activeChatAbort = abort;
+        const gen = ++chatGeneration;
+
+        set((s) => ({
+          chat: [...s.chat, userMsg, botPlaceholder],
+          running: true,
+          streamStatus: "Thinking…",
+          streamingMessageId: botId,
+        }));
+
         if (get().agents.length === 0) {
           await get().syncFromGrok();
         }
@@ -1142,68 +1222,181 @@ export const useGrokHub = create<State>()(
           "working",
           1,
         );
-
         if (routed === "heavy") {
           get().setAgentStatus("ops", "working", 1);
           get().setAgentStatus("builder", "working", 1);
         }
 
-        // Local slash demos still work offline; everything else hits xAI Grok
+        const patchBot = (content: string, extra?: Partial<ChatMessage>) => {
+          if (gen !== chatGeneration) return;
+          set((s) => ({
+            chat: s.chat.map((row) =>
+              row.id === botId ? { ...row, content, ...extra } : row,
+            ),
+          }));
+        };
+
         const isLocalSlash =
           trimmed.startsWith("/morning") ||
           trimmed.startsWith("/standup") ||
           trimmed.startsWith("/docs") ||
           trimmed.startsWith("/prints");
 
-        let answer: string;
         let usedLive = false;
+        let finalAnswer = "";
+        let aborted = false;
+
         try {
           if (isLocalSlash) {
+            set({ streamStatus: "Running skill…" });
             await wait(280);
-            answer = replyFor(trimmed, get(), routed);
+            if (abort.signal.aborted || gen !== chatGeneration) {
+              aborted = true;
+            } else {
+              finalAnswer = replyFor(trimmed, get(), routed);
+              patchBot(finalAnswer, { streaming: false });
+            }
           } else {
-            const { grokChat } = await import("./grok-client");
-            const history = get()
+            const { grokChatStream } = await import("./grok-client");
+            const { extractHostCommands } = await import("./grok");
+
+            // Multi-turn host tool loop (model can emit HOST_CMD: lines)
+            const history: Array<{ role: "user" | "assistant"; content: string }> = get()
               .chat.filter((c) => c.role === "user" || c.role === "assistant")
+              .filter((c) => c.id !== botId)
               .slice(-16)
               .map((c) => ({
                 role: c.role as "user" | "assistant",
                 content:
-                  c.role === "assistant"
-                    ? stripAssistantChrome(c.content)
-                    : c.content,
+                  c.role === "assistant" ? stripAssistantChrome(c.content) : c.content,
               }))
               .filter((c) => c.content.trim().length > 0);
-            // ensure last user message is present
             if (!history.length || history[history.length - 1]?.content !== trimmed) {
               history.push({ role: "user", content: trimmed });
             }
+
             const modelId = modelIdForMode(mode, trimmed);
-            const result = await grokChat({
-              messages: history,
-              mode: routed,
-              model: modelId,
-              apiKey: get().apiKey || undefined,
-              accessToken: get().oauth?.accessToken,
-              tokens: get().oauth,
-            });
-            if (result.tokens) {
-              set({ oauth: result.tokens });
-            }
-            if (result.ok && result.content) {
-              usedLive = true;
-              // Clean answer only — mode is shown on the message badge, not in the body
-              answer = stripAssistantChrome(result.content);
+            let rounds = 0;
+            const maxRounds = 4;
+            let accumulated = "";
+
+            while (rounds < maxRounds) {
+              rounds += 1;
+              if (abort.signal.aborted || gen !== chatGeneration) {
+                aborted = true;
+                break;
+              }
               set({
-                grokConnected: true,
-                grokStatusDetail: get().oauth
-                  ? `Live · ${result.model || modelId}`
-                  : `Live · ${result.model || modelId}`,
+                streamStatus:
+                  rounds === 1 ? "Streaming…" : `Host tool round ${rounds}…`,
               });
-            } else {
+              let roundText = "";
+              const result = await grokChatStream(
+                {
+                  messages: history,
+                  mode: routed,
+                  model: modelId,
+                  apiKey: get().apiKey || undefined,
+                  accessToken: get().oauth?.accessToken,
+                  tokens: get().oauth,
+                },
+                {
+                  signal: abort.signal,
+                  onStatus: (st) => {
+                    if (gen !== chatGeneration) return;
+                    set({
+                      streamStatus:
+                        st === "streaming"
+                          ? "Streaming…"
+                          : st === "fallback"
+                            ? "Responding…"
+                            : st === "connecting"
+                              ? "Connecting…"
+                              : st,
+                    });
+                  },
+                  onDelta: (piece) => {
+                    if (gen !== chatGeneration) return;
+                    roundText += piece;
+                    accumulated = roundText;
+                    patchBot(roundText, { streaming: true });
+                  },
+                },
+              );
+
+              if (result.tokens) set({ oauth: result.tokens });
+              if (result.aborted || abort.signal.aborted || gen !== chatGeneration) {
+                aborted = true;
+                break;
+              }
+
+              if (result.ok && (result.content || roundText)) {
+                usedLive = true;
+                const full = stripAssistantChrome(result.content || roundText);
+                accumulated = full;
+                patchBot(full, { streaming: true });
+                set({
+                  grokConnected: true,
+                  grokStatusDetail: `Live · ${result.model || modelId}`,
+                });
+
+                const cmds = extractHostCommands(full);
+                if (!cmds.length) {
+                  finalAnswer = full;
+                  break;
+                }
+
+                // Execute host commands and feed results back
+                set({ streamStatus: "Running on your desktop…" });
+                const { hostExec } = await import("./host-client");
+                const outputs: string[] = [];
+                for (const cmd of cmds.slice(0, 3)) {
+                  if (abort.signal.aborted || gen !== chatGeneration) {
+                    aborted = true;
+                    break;
+                  }
+                  set({ streamStatus: `Host: ${cmd.slice(0, 48)}…` });
+                  try {
+                    const r = await hostExec(cmd, undefined, 45_000);
+                    outputs.push(
+                      [
+                        `$ ${cmd}`,
+                        `exit ${r.code ?? "?"} · ${r.ms}ms · ${r.cwd}`,
+                        r.stdout || "(no stdout)",
+                        r.stderr ? `[stderr]\n${r.stderr}` : "",
+                      ]
+                        .filter(Boolean)
+                        .join("\n"),
+                    );
+                  } catch (e) {
+                    outputs.push(
+                      `$ ${cmd}\n[host error] ${e instanceof Error ? e.message : "failed"}`,
+                    );
+                  }
+                }
+                if (aborted) break;
+
+                const toolBlock = [
+                  "HOST_RESULT:",
+                  outputs.join("\n\n---\n\n"),
+                  "",
+                  "Use the host results above to answer the user. Do not invent files.",
+                ].join("\n");
+
+                history.push({ role: "assistant", content: full });
+                history.push({ role: "user", content: toolBlock });
+                // Show intermediate host output in the bubble
+                const mid = `${full}\n\n---\n${outputs.join("\n\n")}\n\n_Working…_`;
+                patchBot(mid, { streaming: true });
+                accumulated = mid;
+                // continue loop for next model turn
+                continue;
+              }
+
+              // Failed live call
               const hasOauth = Boolean(get().oauth?.accessToken);
               const err = result.error || "Unknown error";
-              answer = [
+              finalAnswer = [
                 "Could not reach Grok.",
                 err,
                 "",
@@ -1219,51 +1412,100 @@ export const useGrokHub = create<State>()(
                   ? `OAuth session · chat failed: ${err}`
                   : err,
               });
+              patchBot(finalAnswer, { streaming: false });
+              break;
+            }
+
+            if (!finalAnswer && accumulated && !aborted) {
+              finalAnswer = stripAssistantChrome(accumulated.replace(/\n_Working…_\s*$/, ""));
             }
           }
         } catch (e) {
-          const msg = e instanceof Error ? e.message : "request failed";
-          answer = [
-            `Grok connection error: ${msg}`,
-            "",
-            replyFor(trimmed, get(), routed),
-          ].join("\n");
-          set({ grokConnected: false, grokStatusDetail: msg });
+          if (abort.signal.aborted || gen !== chatGeneration) {
+            aborted = true;
+          } else {
+            const msg = e instanceof Error ? e.message : "request failed";
+            finalAnswer = [
+              `Grok connection error: ${msg}`,
+              "",
+              replyFor(trimmed, get(), routed),
+            ].join("\n");
+            set({ grokConnected: false, grokStatusDetail: msg });
+            patchBot(finalAnswer, { streaming: false });
+          }
         }
 
-        const bot: ChatMessage = {
-          id: uid("msg"),
-          role: "assistant",
-          content: answer,
-          ts: Date.now(),
-          mode: routed,
-        };
-        set((s) => {
-          const chat = [...s.chat, bot];
-          const tid = s.activeThreadId;
-          const threads = s.threads.map((t) =>
-            t.id === tid
-              ? {
-                  ...t,
-                  messages: chat,
-                  updatedAt: Date.now(),
-                  title: titleFromMessages(chat),
-                  mode: routed,
-                }
-              : t,
-          );
-          return { chat, threads, running: false };
-        });
+        if (gen !== chatGeneration) return;
+
+        if (aborted) {
+          // stopChat already cleaned UI
+          if (get().running) {
+            set((s) => ({
+              running: false,
+              streamStatus: null,
+              streamingMessageId: null,
+              chat: s.chat.map((row) =>
+                row.id === botId
+                  ? {
+                      ...row,
+                      streaming: false,
+                      stopped: true,
+                      content: row.content?.trim()
+                        ? `${row.content}${row.content.endsWith("\n") ? "" : "\n"}\n_Stopped._`
+                        : "_Stopped._",
+                    }
+                  : row,
+              ),
+            }));
+          }
+        } else {
+          const answer = stripAssistantChrome(finalAnswer || "");
+          set((s) => {
+            const chat = s.chat.map((row) =>
+              row.id === botId
+                ? {
+                    ...row,
+                    content: answer || row.content || "(empty)",
+                    streaming: false,
+                    stopped: false,
+                    ts: Date.now(),
+                    mode: routed,
+                  }
+                : row,
+            );
+            const tid = s.activeThreadId;
+            const threads = s.threads.map((th) =>
+              th.id === tid
+                ? {
+                    ...th,
+                    messages: chat,
+                    updatedAt: Date.now(),
+                    title: titleFromMessages(chat),
+                    mode: routed,
+                  }
+                : th,
+            );
+            return {
+              chat,
+              threads,
+              running: false,
+              streamStatus: null,
+              streamingMessageId: null,
+            };
+          });
+          get().pushActivity({
+            kind: "chat",
+            title: usedLive ? `Grok · ${m.label}` : `Agent reply · ${m.label}`,
+            detail: `${trimmed.slice(0, 80)} · ${bill.cost}u`,
+            status: usedLive ? "success" : "failed",
+          });
+        }
+
+        if (activeChatAbort === abort) activeChatAbort = null;
         get().setAgentStatus("primary", "idle", 0);
         get().setAgentStatus("builder", "idle", 0);
         get().setAgentStatus("research", "idle", 0);
         get().setAgentStatus("ops", "idle", 0);
-        get().pushActivity({
-          kind: "chat",
-          title: usedLive ? `Grok · ${m.label}` : `Agent reply · ${m.label}`,
-          detail: `${trimmed.slice(0, 80)} · ${bill.cost}u`,
-          status: usedLive ? "success" : "failed",
-        });
       },
 
       setImaginePrompt: (v) => set({ imaginePrompt: v }),
@@ -1451,6 +1693,8 @@ export const useGrokHub = create<State>()(
           mode: "auto",
           heartbeatAt: fresh.heartbeatAt,
           running: false,
+          streamStatus: null,
+          streamingMessageId: null,
           nav: "chat",
           modeMenuOpen: false,
           usage: createUsage("pro"),
@@ -1491,3 +1735,7 @@ export const useGrokHub = create<State>()(
 function wait(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+/** Active chat stream abort (module-level so Stop works across re-renders) */
+let activeChatAbort: AbortController | null = null;
+let chatGeneration = 0;

@@ -62,6 +62,29 @@ function hostApiPlugin(): Plugin {
           const payload = JSON.parse(bodyText) as Record<string, unknown>;
           const action = String(payload.action || "");
 
+          // SSE chat stream
+          if (pathOnly === "/api/grok" && action === "chatStream") {
+            const mod = (await server.ssrLoadModule("/src/lib/api-handlers.ts")) as {
+              createGrokChatSseStream: (body: Record<string, unknown>) => ReadableStream<Uint8Array>;
+            };
+            const stream = mod.createGrokChatSseStream(payload);
+            res.statusCode = 200;
+            res.setHeader("content-type", "text/event-stream; charset=utf-8");
+            res.setHeader("cache-control", "no-cache, no-transform");
+            res.setHeader("connection", "keep-alive");
+            const reader = stream.getReader();
+            const pump = async () => {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                res.write(Buffer.from(value));
+              }
+              res.end();
+            };
+            await pump();
+            return;
+          }
+
           let result: unknown;
           if (pathOnly === "/api/host") {
             const mod = (await server.ssrLoadModule("/src/lib/host-api-handlers.ts")) as {

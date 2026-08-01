@@ -111,6 +111,10 @@ export type ChatMessage = {
   content: string;
   ts: number;
   mode?: GrokModeId;
+  /** True while tokens are still arriving */
+  streaming?: boolean;
+  /** Stopped by user mid-stream */
+  stopped?: boolean;
 };
 
 /** Grok-style conversation history entry */

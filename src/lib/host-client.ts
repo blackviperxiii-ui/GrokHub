@@ -24,6 +24,22 @@ export type DesktopGrokBridge = {
     accessToken?: string;
     tokens?: XaiOAuthTokens | null;
   }) => Promise<GrokChatResult & { tokens?: XaiOAuthTokens; refreshed?: boolean }>;
+  chatStream?: (
+    payload: {
+      messages: GrokChatMessage[];
+      mode?: GrokModeId;
+      model?: string;
+      apiKey?: string;
+      accessToken?: string;
+      tokens?: XaiOAuthTokens | null;
+    },
+    handlers: {
+      onDelta: (piece: string) => void;
+      onStatus?: (status: string) => void;
+      signal?: AbortSignal;
+    },
+  ) => Promise<GrokChatResult & { tokens?: XaiOAuthTokens; refreshed?: boolean }>;
+  stopChatStream?: (streamId?: string) => void;
   imagine?: (payload: {
     prompt: string;
     apiKey?: string;

@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.2.5";
+const APP_VERSION = "0.2.6";
 
 function shaMatch(a, b) {
   if (!a || !b) return false;
@@ -93,10 +93,14 @@ function modelForMode(mode, prompt = "") {
 }
 
 function systemPrompt(mode, prompt = "") {
-  const base = `You are Grok, running inside GrokHub (a desktop agent control plane).
+  const base = `You are Grok, running inside GrokHub (a desktop agent control plane on the user's Linux machine).
 Help with coding, ops, research, and local machine tasks.
 Be direct and practical. Prefer short structured answers with bullets when listing steps.
-Do not prefix replies with mode labels like [Fast] or [Auto → …]. Just answer.`;
+Do not prefix replies with mode labels like [Fast] or [Auto → …]. Just answer.
+
+When you need real filesystem / shell data, output:
+HOST_CMD: <bash command>
+Do not invent file listings — wait for HOST_RESULT.`;
   const id = resolveMode(mode, prompt);
   if (id === "fast") return `${base}\nMode: Fast — concise answers, minimal preamble.`;
   if (id === "expert") return `${base}\nMode: Expert — reason carefully, surface tradeoffs.`;
@@ -540,7 +544,7 @@ const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const XAI_UA = "GrokHub/0.2.5 (xAI OAuth; Electron)";
+const XAI_UA = "GrokHub/0.2.6 (xAI OAuth; Electron)";
 
 async function xaiDiscovery() {
   const res = await fetch(XAI_OAUTH_DISCOVERY, {
@@ -814,8 +818,115 @@ async function callXaiImagine(req = {}) {
   return { ok: false, error: lastErr };
 }
 
+
+async function callXaiChatStream(req = {}, handlers = {}) {
+  // OAuth refresh then stream via callXaiChatWithOAuth path tokens
+  let accessToken =
+    (req.accessToken && String(req.accessToken).trim()) ||
+    (req.tokens && req.tokens.accessToken && String(req.tokens.accessToken).trim()) ||
+    "";
+  let tokensOut = req.tokens || null;
+  if (req.tokens && req.tokens.accessToken) {
+    try {
+      const ensured = await oauthEnsure(req.tokens);
+      accessToken = ensured.accessToken || ensured.tokens?.accessToken || accessToken;
+      tokensOut = ensured.tokens || tokensOut;
+    } catch {}
+  }
+  const apiKey =
+    accessToken ||
+    (req.apiKey && String(req.apiKey).trim()) ||
+    process.env.XAI_API_KEY ||
+    process.env.GROK_API_KEY ||
+    "";
+  if (!apiKey) {
+    return { ok: false, status: 401, error: "Not connected to Grok." };
+  }
+  const mode = req.mode || "auto";
+  const lastUser = [...(req.messages || [])].reverse().find((m) => m.role === "user")?.content || "";
+  const routed = resolveMode(mode, lastUser);
+  const model = req.model || modelForMode(mode, lastUser);
+  const messages = [
+    { role: "system", content: systemPrompt(mode, lastUser) },
+    ...(req.messages || []).filter((m) => m.role !== "system"),
+  ];
+  const temperature =
+    routed === "fast" ? 0.5 : routed === "build" ? 0.4 : routed === "heavy" ? 0.8 : 0.7;
+  const max_tokens =
+    routed === "heavy" ? 4096 : routed === "build" ? 8192 : routed === "expert" ? 3072 : 2048;
+  const signal = handlers.signal;
+  try {
+    handlers.onStatus && handlers.onStatus("connecting");
+    const res = await fetch(`${XAI_BASE}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+        accept: "text/event-stream",
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature,
+        max_tokens,
+        stream: true,
+      }),
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      // non-stream fallback
+      handlers.onStatus && handlers.onStatus("fallback");
+      const r = await callXaiChat({ ...req, accessToken, apiKey: req.apiKey, model });
+      if (r.ok && r.content && handlers.onDelta) handlers.onDelta(r.content);
+      return { ...r, ...(tokensOut ? { tokens: tokensOut } : {}) };
+    }
+    handlers.onStatus && handlers.onStatus("streaming");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let content = "";
+    let usedModel = model;
+    while (true) {
+      if (signal && signal.aborted) {
+        try { await reader.cancel(); } catch {}
+        return { ok: false, aborted: true, error: "Stopped", content, model: usedModel, tokens: tokensOut };
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (data === "[DONE]") continue;
+        try {
+          const json = JSON.parse(data);
+          if (json.model) usedModel = json.model;
+          const piece = (json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content) || "";
+          if (piece) {
+            content += piece;
+            if (handlers.onDelta) handlers.onDelta(piece);
+          }
+        } catch {}
+      }
+    }
+    if (!content.trim()) return { ok: false, error: "Empty stream", model: usedModel };
+    handlers.onStatus && handlers.onStatus("done");
+    return { ok: true, content, model: usedModel, ...(tokensOut ? { tokens: tokensOut } : {}) };
+  } catch (e) {
+    if (signal && signal.aborted) return { ok: false, aborted: true, error: "Stopped" };
+    handlers.onStatus && handlers.onStatus("fallback");
+    const r = await callXaiChat({ ...req, accessToken, apiKey: req.apiKey, model });
+    if (r.ok && r.content && handlers.onDelta) handlers.onDelta(r.content);
+    return { ...r, ...(tokensOut ? { tokens: tokensOut } : {}) };
+  }
+}
+
 module.exports = {
   callXaiChat: callXaiChatWithOAuth,
+  callXaiChatStream,
   callXaiImagine,
   probeXaiKey,
   checkForUpdate,

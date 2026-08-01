@@ -1,4 +1,5 @@
-import { a as modelIdForMode, o as resolveMode, t as APP_VERSION } from "./version-aISqRfJc.mjs";
+import { t as APP_VERSION } from "./version-Od4YDoyU.mjs";
+import { XAI_BASE, callXaiChat, callXaiChatStream, callXaiImagine, probeXaiBearer } from "./grok-BHPoOd67.mjs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream, existsSync, readFileSync } from "node:fs";
@@ -7,207 +8,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs$1 from "node:fs/promises";
 import os from "node:os";
-//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-UkkfHXBK.js
-var XAI_BASE = "https://api.x.ai/v1";
-/** Map GrokHub modes → xAI model IDs */
-function modelForMode(mode, prompt = "") {
-	return modelIdForMode(mode, prompt);
-}
-function systemPromptForMode(mode, prompt = "") {
-	const base = `You are Grok, running inside GrokHub (a desktop agent control plane).
-Help with coding, ops, research, and local machine tasks.
-Be direct and practical. Prefer short structured answers with bullets when listing steps.
-The user may have unsandboxed host access ($ shell, files, apps) on their Linux desktop.
-Do not prefix replies with mode labels like [Fast] or [Auto → …]. Just answer.`;
-	switch (resolveMode(mode, prompt)) {
-		case "fast": return `${base}\nMode: Fast — concise answers, minimal preamble.`;
-		case "expert": return `${base}\nMode: Expert — reason carefully, surface tradeoffs, cite assumptions.`;
-		case "heavy": return `${base}\nMode: Heavy (team of experts) — consider multiple angles (ops, research, build, critique), then synthesize a clear recommendation.`;
-		case "build": return `${base}\nMode: Build — prioritize working code, file paths, and implementable steps. Prefer complete snippets.`;
-		default: return base;
-	}
-}
-function resolveBearer(req) {
-	if (req.accessToken?.trim()) return {
-		bearer: req.accessToken.trim(),
-		source: "oauth"
-	};
-	if (req.apiKey?.trim()) return {
-		bearer: req.apiKey.trim(),
-		source: "key"
-	};
-	const env = process.env.XAI_API_KEY?.trim() || process.env.GROK_API_KEY?.trim() || "";
-	if (env) return {
-		bearer: env,
-		source: "env"
-	};
-	return null;
-}
-async function callXaiChat(req) {
-	const auth = resolveBearer(req);
-	if (!auth) return {
-		ok: false,
-		status: 401,
-		error: "Not connected to Grok. Use Settings → Connect with Grok OAuth (SuperGrok / X Premium) or paste an xAI API key."
-	};
-	const mode = req.mode ?? "auto";
-	const lastUser = [...req.messages].reverse().find((m) => m.role === "user")?.content ?? "";
-	const routed = resolveMode(mode, lastUser);
-	const model = req.model || modelForMode(mode, lastUser);
-	const messages = [{
-		role: "system",
-		content: systemPromptForMode(mode, lastUser)
-	}, ...req.messages.filter((m) => m.role !== "system")];
-	const temperature = req.temperature ?? (routed === "fast" ? .5 : routed === "build" ? .4 : routed === "heavy" ? .8 : .7);
-	const max_tokens = req.maxTokens ?? (routed === "heavy" ? 4096 : routed === "build" ? 8192 : routed === "expert" ? 3072 : 2048);
-	try {
-		const res = await fetch(`${XAI_BASE}/chat/completions`, {
-			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				authorization: `Bearer ${auth.bearer}`
-			},
-			body: JSON.stringify({
-				model,
-				messages,
-				temperature,
-				max_tokens,
-				stream: false
-			})
-		});
-		const data = await res.json().catch(() => ({}));
-		if (!res.ok) {
-			if (res.status === 404 || typeof data.error === "object" && /model|not found|invalid/i.test(data.error?.message || "")) {
-				if (model === "grok-4.3") return callXaiChat({
-					...req,
-					model: "grok-4"
-				});
-				if (model === "grok-4-1-fast-non-reasoning") return callXaiChat({
-					...req,
-					model: "grok-3-mini-fast"
-				});
-			}
-			const msg = typeof data.error === "string" ? data.error : data.error?.message || `xAI error ${res.status}`;
-			return {
-				ok: false,
-				status: res.status,
-				error: msg,
-				model
-			};
-		}
-		const content = data.choices?.[0]?.message?.content?.trim();
-		if (!content) return {
-			ok: false,
-			status: res.status,
-			error: "Empty response from Grok",
-			model
-		};
-		return {
-			ok: true,
-			content,
-			model: data.model || model,
-			usage: data.usage,
-			status: res.status
-		};
-	} catch (e) {
-		return {
-			ok: false,
-			error: e instanceof Error ? e.message : "Network error calling xAI"
-		};
-	}
-}
-async function probeXaiKey(apiKey) {
-	const key = apiKey.trim();
-	if (!key) return {
-		ok: false,
-		detail: "API key is empty"
-	};
-	try {
-		const res = await fetch(`${XAI_BASE}/models`, { headers: { authorization: `Bearer ${key}` } });
-		if (res.ok) return {
-			ok: true,
-			detail: "Connected to xAI · models reachable"
-		};
-		const text = await res.text();
-		return {
-			ok: false,
-			detail: `xAI ${res.status}: ${text.slice(0, 160)}`
-		};
-	} catch (e) {
-		return {
-			ok: false,
-			detail: e instanceof Error ? e.message : "probe failed"
-		};
-	}
-}
-async function probeXaiBearer(bearer) {
-	return probeXaiKey(bearer);
-}
-/** Live Grok / xAI image generation (falls through models if one id is unavailable). */
-async function callXaiImagine(req) {
-	const auth = resolveBearer({
-		accessToken: req.accessToken,
-		apiKey: req.apiKey,
-		messages: []
-	});
-	if (!auth) return {
-		ok: false,
-		error: "Not connected — Grok OAuth or API key required for live Imagine"
-	};
-	const prompt = req.prompt.trim();
-	if (!prompt) return {
-		ok: false,
-		error: "empty prompt"
-	};
-	const models = [
-		req.model,
-		"grok-2-image",
-		"grok-2-image-1212",
-		"grok-imagine-image"
-	].filter(Boolean);
-	let lastErr = "image generation failed";
-	for (const model of models) try {
-		const res = await fetch(`${XAI_BASE}/images/generations`, {
-			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				authorization: `Bearer ${auth.bearer}`
-			},
-			body: JSON.stringify({
-				model,
-				prompt,
-				n: 1,
-				response_format: "b64_json"
-			})
-		});
-		const data = await res.json().catch(() => ({}));
-		if (!res.ok) {
-			lastErr = typeof data.error === "string" ? data.error : data.error?.message || `xAI image ${res.status} (${model})`;
-			continue;
-		}
-		const row = data.data?.[0];
-		const b64 = row?.b64_json || row?.b64 || row?.image || "";
-		if (b64) return {
-			ok: true,
-			imageDataUrl: b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`,
-			model: data.model || model,
-			source: "xai"
-		};
-		if (row?.url) return {
-			ok: true,
-			imageDataUrl: row.url,
-			model: data.model || model,
-			source: "xai"
-		};
-		lastErr = "empty image response";
-	} catch (e) {
-		lastErr = e instanceof Error ? e.message : "network error";
-	}
-	return {
-		ok: false,
-		error: lastErr
-	};
-}
+//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-UsMyVIWh.js
 /**
 * GitHub update helpers — Node only (server / Electron main).
 *
@@ -748,7 +549,7 @@ var XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:a
 var XAI_OAUTH_ISSUER = "https://auth.x.ai";
 var XAI_OAUTH_DISCOVERY = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
 var XAI_DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-var XAI_UA = "GrokHub/0.2.5 (xAI OAuth; Linux)";
+var XAI_UA = "GrokHub/0.2.6 (xAI OAuth; Linux)";
 function formBody(data) {
 	return new URLSearchParams(data).toString();
 }
@@ -965,6 +766,93 @@ async function ensureAccessToken(tokens) {
 /**
 * Unified JSON API handlers for /api/grok and /api/update (Node only).
 */
+async function resolveChatAuth(body) {
+	const apiKey = body.apiKey ? String(body.apiKey) : void 0;
+	let accessToken = body.accessToken ? String(body.accessToken) : void 0;
+	let tokensOut;
+	let refreshed = false;
+	if (body.tokens && typeof body.tokens === "object") try {
+		const ensured = await ensureAccessToken(body.tokens);
+		accessToken = ensured.accessToken;
+		tokensOut = ensured.tokens;
+		refreshed = ensured.refreshed;
+	} catch (e) {
+		if (!accessToken && !body.tokens.accessToken) throw e;
+		accessToken = accessToken || body.tokens.accessToken;
+	}
+	if (!accessToken && body.tokens && typeof body.tokens === "object") {
+		const t = body.tokens;
+		if (t.accessToken) accessToken = t.accessToken;
+	}
+	return {
+		apiKey,
+		accessToken,
+		tokensOut,
+		refreshed
+	};
+}
+/** SSE ReadableStream for chat streaming over HTTP */
+function createGrokChatSseStream(body) {
+	const encoder = new TextEncoder();
+	const messages = body.messages || [];
+	const mode = body.mode || "auto";
+	const model = body.model ? String(body.model) : void 0;
+	return new ReadableStream({ async start(controller) {
+		const send = (obj) => {
+			controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+		};
+		try {
+			const auth = await resolveChatAuth(body);
+			send({
+				type: "status",
+				content: "streaming"
+			});
+			const result = await callXaiChatStream({
+				messages,
+				mode,
+				model,
+				apiKey: auth.apiKey,
+				accessToken: auth.accessToken
+			}, {
+				onDelta: (delta) => send({
+					type: "delta",
+					delta
+				}),
+				onStatus: (status) => send({
+					type: "status",
+					content: status
+				})
+			});
+			if (result.aborted) send({
+				type: "error",
+				error: "Stopped",
+				ok: false
+			});
+			else if (!result.ok) send({
+				type: "error",
+				error: result.error || "stream failed",
+				ok: false
+			});
+			else send({
+				type: "done",
+				ok: true,
+				content: result.content,
+				model: result.model,
+				tokens: auth.tokensOut,
+				refreshed: auth.refreshed
+			});
+		} catch (e) {
+			send({
+				type: "error",
+				error: e instanceof Error ? e.message : "stream failed",
+				ok: false
+			});
+		} finally {
+			controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+			controller.close();
+		}
+	} });
+}
 async function dispatchApi(route, action, body) {
 	if (route === "grok") {
 		if (action === "oauthStart") return {
@@ -1027,40 +915,51 @@ async function dispatchApi(route, action, body) {
 				apiKey
 			});
 		}
+		if (action === "chatStream") {
+			const messages = body.messages || [];
+			const mode = body.mode || "auto";
+			const model = body.model ? String(body.model) : void 0;
+			const auth = await resolveChatAuth(body);
+			let content = "";
+			const result = await callXaiChatStream({
+				messages,
+				mode,
+				model,
+				apiKey: auth.apiKey,
+				accessToken: auth.accessToken
+			}, { onDelta: (d) => {
+				content += d;
+			} });
+			return {
+				...result,
+				content: result.content || content,
+				...auth.tokensOut ? { tokens: auth.tokensOut } : {},
+				refreshed: auth.refreshed
+			};
+		}
 		if (action === "chat") {
 			const messages = body.messages || [];
 			const mode = body.mode || "auto";
-			const apiKey = body.apiKey ? String(body.apiKey) : void 0;
-			let accessToken = body.accessToken ? String(body.accessToken) : void 0;
 			const model = body.model ? String(body.model) : void 0;
-			let tokensOut;
-			let refreshed = false;
-			if (body.tokens && typeof body.tokens === "object") try {
-				const ensured = await ensureAccessToken(body.tokens);
-				accessToken = ensured.accessToken;
-				tokensOut = ensured.tokens;
-				refreshed = ensured.refreshed;
+			try {
+				const auth = await resolveChatAuth(body);
+				return {
+					...await callXaiChat({
+						messages,
+						mode,
+						model,
+						apiKey: auth.apiKey,
+						accessToken: auth.accessToken
+					}),
+					...auth.tokensOut ? { tokens: auth.tokensOut } : {},
+					refreshed: auth.refreshed
+				};
 			} catch (e) {
-				if (!accessToken) return {
+				return {
 					ok: false,
 					error: e instanceof Error ? e.message : "OAuth refresh failed"
 				};
 			}
-			if (!accessToken && body.tokens && typeof body.tokens === "object") {
-				const t = body.tokens;
-				if (t.accessToken) accessToken = t.accessToken;
-			}
-			return {
-				...await callXaiChat({
-					messages,
-					mode,
-					model,
-					apiKey,
-					accessToken
-				}),
-				...tokensOut ? { tokens: tokensOut } : {},
-				refreshed
-			};
 		}
 		throw new Error(`Unknown grok action: ${action}`);
 	}
@@ -1074,12 +973,12 @@ async function dispatchApi(route, action, body) {
 			repo: body.repo ? String(body.repo) : void 0,
 			branch: body.branch ? String(body.branch) : void 0,
 			token: body.token ? String(body.token) : void 0,
-			force: body.force === true || body.force === "1" || body.force === 1,
-			restart: body.restart === true || body.restart === "1" || body.restart === 1
+			force: Boolean(body.force),
+			restart: body.restart !== false
 		});
 		throw new Error(`Unknown update action: ${action}`);
 	}
 	throw new Error(`Unknown route: ${route}`);
 }
 //#endregion
-export { dispatchApi };
+export { createGrokChatSseStream, dispatchApi };

@@ -1,4 +1,4 @@
-import { MessageSquarePlus, Send } from "lucide-react";
+import { Loader2, MessageSquarePlus, Send, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
 import { useGrokHub } from "@/lib/store";
@@ -21,7 +21,9 @@ const SUGGESTIONS = [
 export function ChatView() {
   const chat = useGrokHub((s) => s.chat);
   const sendChat = useGrokHub((s) => s.sendChat);
+  const stopChat = useGrokHub((s) => s.stopChat);
   const running = useGrokHub((s) => s.running);
+  const streamStatus = useGrokHub((s) => s.streamStatus);
   const mode = useGrokHub((s) => s.mode);
   const setNav = useGrokHub((s) => s.setNav);
   const pushActivity = useGrokHub((s) => s.pushActivity);
@@ -32,6 +34,7 @@ export function ChatView() {
   const [text, setText] = useState("");
   const [localRunning, setLocalRunning] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const modeMeta = getMode(mode);
   const busy = running || localRunning;
   const plan = PLAN_LIMITS[usage.plan];
@@ -39,7 +42,7 @@ export function ChatView() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chat, busy]);
+  }, [chat, busy, streamStatus]);
 
   async function runShell(command: string) {
     setLocalRunning(true);
@@ -60,7 +63,7 @@ export function ChatView() {
           ? { ...t, messages: chat, updatedAt: Date.now() }
           : t,
       );
-      return { chat, threads };
+      return { chat, threads, running: true, streamStatus: "Host running…" };
     });
     try {
       const bill = recordUsage("host");
@@ -130,12 +133,14 @@ export function ChatView() {
       setNav("settings");
     } finally {
       setLocalRunning(false);
+      useGrokHub.setState({ running: false, streamStatus: null });
     }
   }
 
   async function onSend(value?: string) {
+    if (busy) return;
     const payload = (value ?? text).trim();
-    if (!payload || busy) return;
+    if (!payload) return;
     if (
       payload.toLowerCase().includes("imagine") &&
       !payload.startsWith("/") &&
@@ -149,6 +154,16 @@ export function ChatView() {
       return;
     }
     await sendChat(payload);
+  }
+
+  function onStop() {
+    if (localRunning) {
+      // shell has no abort yet — just clear indicator; next host calls can be skipped
+      setLocalRunning(false);
+      useGrokHub.setState({ running: false, streamStatus: null });
+      return;
+    }
+    stopChat();
   }
 
   return (
@@ -165,7 +180,7 @@ export function ChatView() {
             </div>
             <div className="flex flex-col items-end gap-1">
               <div className="flex gap-1">
-                <Button size="sm" variant="secondary" onClick={() => newThread()}>
+                <Button size="sm" variant="secondary" onClick={() => newThread()} disabled={busy}>
                   <MessageSquarePlus className="h-3.5 w-3.5" />
                   New
                 </Button>
@@ -198,6 +213,7 @@ export function ChatView() {
                       : m.role === "system"
                         ? "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted)]"
                         : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-fg)]",
+                    m.streaming && "border-[color-mix(in_oklab,var(--color-info)_35%,var(--color-border))]",
                   )}
                 >
                   <div className="mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-[var(--color-subtle)]">
@@ -209,15 +225,39 @@ export function ChatView() {
                         {getMode(m.mode).label}
                       </span>
                     )}
+                    {m.streaming && (
+                      <span className="inline-flex items-center gap-1 rounded border border-[color-mix(in_oklab,var(--color-info)_40%,transparent)] px-1.5 py-px font-mono normal-case text-[var(--color-info)]">
+                        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                        streaming
+                      </span>
+                    )}
+                    {m.stopped && (
+                      <span className="rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case text-[var(--color-warn)]">
+                        stopped
+                      </span>
+                    )}
                   </div>
-                  {m.content}
+                  {m.content ||
+                    (m.streaming ? (
+                      <span className="inline-flex items-center gap-1.5 text-[var(--color-subtle)]">
+                        <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-info)]" />
+                        …
+                      </span>
+                    ) : (
+                      ""
+                    ))}
+                  {m.streaming && m.content ? (
+                    <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-[var(--color-fg)] align-middle opacity-70" />
+                  ) : null}
                 </div>
               </div>
             ))}
             {busy && (
-              <div className="text-xs text-[var(--color-subtle)]">
+              <div className="flex items-center gap-2 text-xs text-[var(--color-subtle)]">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-info)]" />
                 <span className="shimmer rounded px-1">
-                  {localRunning ? "Host running…" : `${modeMeta.label} · thinking…`}
+                  {streamStatus ||
+                    (localRunning ? "Host running…" : `${modeMeta.label} · working…`)}
                 </span>
               </div>
             )}
@@ -232,7 +272,7 @@ export function ChatView() {
                   type="button"
                   disabled={busy}
                   onClick={() => void onSend(s)}
-                  className="rounded-full border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-muted)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]"
+                  className="rounded-full border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-muted)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)] disabled:opacity-50"
                 >
                   {s}
                 </button>
@@ -242,20 +282,64 @@ export function ChatView() {
               className="mx-auto flex w-full max-w-[min(56rem,100%)] gap-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]"
               onSubmit={(e) => {
                 e.preventDefault();
+                if (busy) {
+                  onStop();
+                  return;
+                }
                 void onSend();
               }}
             >
               <Input
+                ref={inputRef}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder="Message Grok… or $ shell"
-                disabled={busy}
+                placeholder={
+                  busy
+                    ? "Agent running — press Stop to interrupt…"
+                    : "Message Grok… or $ shell"
+                }
+                // Keep input editable so user can type next thought; send becomes Stop while busy
                 className="flex-1"
+                onKeyDown={(e) => {
+                  if (e.key === "Escape" && busy) {
+                    e.preventDefault();
+                    onStop();
+                  }
+                }}
               />
-              <Button type="submit" disabled={busy || !text.trim()} size="icon">
-                <Send className="h-4 w-4" />
-              </Button>
+              {busy ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="icon"
+                  onClick={onStop}
+                  aria-label="Stop"
+                  title="Stop (Esc)"
+                  className="border border-[color-mix(in_oklab,var(--color-danger)_40%,transparent)] text-[var(--color-danger)]"
+                >
+                  <Square className="h-3.5 w-3.5 fill-current" />
+                </Button>
+              ) : (
+                <Button type="submit" disabled={!text.trim()} size="icon" aria-label="Send">
+                  <Send className="h-4 w-4" />
+                </Button>
+              )}
             </form>
+            {busy && (
+              <div className="mx-auto flex w-full max-w-[min(56rem,100%)] items-center justify-between text-[10px] text-[var(--color-subtle)] 3xl:max-w-[min(64rem,100%)]">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="pulse-live inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-info)]" />
+                  {streamStatus || "Running"}
+                </span>
+                <button
+                  type="button"
+                  className="font-medium text-[var(--color-danger)] hover:underline"
+                  onClick={onStop}
+                >
+                  Stop generating
+                </button>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
