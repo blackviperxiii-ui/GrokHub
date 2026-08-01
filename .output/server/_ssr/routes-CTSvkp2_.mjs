@@ -1,12 +1,12 @@
 import { o as __toESM } from "../_runtime.mjs";
-import { a as emptyCatalog, c as getModesWithCatalog, d as needsGrokClassification, f as resolveMode, i as buildCatalog, l as modeBadge, m as stripAssistantChrome, n as applyGrokPlan, o as friendlyModelName, p as resolveModeWithCatalog, r as autoRouteFor, s as getMode, t as APP_VERSION, u as modelIdForMode } from "./version--uvLFSIF.mjs";
+import { a as emptyCatalog, c as getModesWithCatalog, d as needsGrokClassification, f as resolveMode, i as buildCatalog, l as modeBadge, m as stripAssistantChrome, n as applyGrokPlan, o as friendlyModelName, p as resolveModeWithCatalog, r as autoRouteFor, s as getMode, t as APP_VERSION, u as modelIdForMode } from "./version-Ca3CA1NW.mjs";
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
 import { N as require_jsx_runtime, P as require_react, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
-import { A as ExternalLink, C as Image, D as Gauge, E as Hammer, F as Cable, I as Brain, L as ArrowRight, M as Command, N as ChevronRight, O as Folder, P as Check, R as AppWindow, S as Link2Off, T as HardDrive, _ as Minus, a as TimerReset, b as Menu, c as Sparkles, d as Settings, f as Send, g as Play, h as Plus, i as Trash2, j as Download, k as FolderOpen, l as ShieldCheck, m as Plug, n as X, o as Terminal, p as RefreshCw, r as Users, s as Square, t as Zap, u as ShieldAlert, v as MessageSquare, w as History, x as LoaderCircle, y as MessageSquarePlus, z as Activity } from "../_libs/lucide-react.mjs";
+import { A as ExternalLink, B as Activity, C as Image, D as Gauge, E as Hammer, F as Check, I as Cable, L as Brain, M as Compass, N as Command, O as Folder, P as ChevronRight, R as ArrowRight, S as Link2Off, T as HardDrive, _ as Minus, a as TimerReset, b as Menu, c as Sparkles, d as Settings, f as Send, g as Play, h as Plus, i as Trash2, j as Download, k as FolderOpen, l as ShieldCheck, m as Plug, n as X, o as Terminal, p as RefreshCw, r as Users, s as Square, t as Zap, u as ShieldAlert, v as MessageSquare, w as History, x as LoaderCircle, y as MessageSquarePlus, z as AppWindow } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-Br82De5Q.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-CTSvkp2_.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function rpc(path, action, body = {}, init) {
@@ -816,7 +816,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-BX9Svvp-.mjs");
+		const { oauthStart } = await import("./grok-client-PiNqg2p4.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -845,7 +845,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-BX9Svvp-.mjs");
+		const { oauthPoll } = await import("./grok-client-PiNqg2p4.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -923,7 +923,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-BX9Svvp-.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-PiNqg2p4.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1598,7 +1598,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let usedLive = false;
 		let finalAnswer = "";
 		let aborted = false;
-		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-DJrUcBfP.mjs");
+		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-BZT9S-NP.mjs");
 		try {
 			if (isLocalSlash) {
 				set({ streamStatus: "Running skill…" });
@@ -1609,7 +1609,7 @@ var useGrokHub = create()(persist((set, get) => ({
 					patchBot(finalAnswer, { streaming: false });
 				}
 			} else {
-				const { grokChatStream } = await import("./grok-client-BX9Svvp-.mjs");
+				const { grokChatStream } = await import("./grok-client-PiNqg2p4.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").filter((c) => c.id !== botId).slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
@@ -1852,7 +1852,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let model;
 		let err = null;
 		try {
-			const { grokImagine } = await import("./grok-client-BX9Svvp-.mjs");
+			const { grokImagine } = await import("./grok-client-PiNqg2p4.mjs");
 			const live = await grokImagine({
 				prompt: p,
 				apiKey: get().apiKey || void 0,
@@ -2699,6 +2699,289 @@ function AutomationsView() {
 		})
 	});
 }
+var MAX_DEFAULT = 8;
+var MAX_HARD = 10;
+function recentUserMessages(chat, n = 12) {
+	return chat.filter((m) => m.role === "user").slice(-n).map((m) => m.content.trim()).filter(Boolean).reverse();
+}
+function uniqByValue(chips) {
+	const seen = /* @__PURE__ */ new Set();
+	const out = [];
+	for (const c of chips) {
+		const key = c.value.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		out.push(c);
+	}
+	return out;
+}
+function shorten(s, n = 36) {
+	const t = s.replace(/\s+/g, " ").trim();
+	if (t.length <= n) return t;
+	return t.slice(0, n - 1) + "…";
+}
+/** Infer follow-ups from a prior user line. */
+function followUpsFrom(msg) {
+	const lower = msg.toLowerCase();
+	const out = [];
+	if (/download/i.test(lower)) {
+		out.push({
+			id: "fu-dl",
+			label: "List Downloads again",
+			value: "List what's in my Downloads folder",
+			kind: "chat",
+			score: 70
+		});
+		out.push({
+			id: "fu-dl-shell",
+			label: "$ ls Downloads",
+			value: "$ ls -la \"$HOME/Downloads\" | head -40",
+			kind: "shell",
+			score: 65
+		});
+	}
+	if (/desktop|host|uname|shell|cli/i.test(lower) || lower.startsWith("$")) {
+		out.push({
+			id: "fu-disk",
+			label: "Disk free",
+			value: "$ df -h | head -12",
+			kind: "shell",
+			score: 55
+		});
+		out.push({
+			id: "fu-ps",
+			label: "Top processes",
+			value: "$ ps aux --sort=-%mem | head -12",
+			kind: "shell",
+			score: 50
+		});
+	}
+	if (/code|bug|error|implement|refactor|build/i.test(lower)) {
+		out.push({
+			id: "fu-build",
+			label: "Switch to Build",
+			value: "__mode:build",
+			kind: "mode",
+			score: 60,
+			hint: "mode"
+		});
+		out.push({
+			id: "fu-explain",
+			label: "Explain the approach",
+			value: "Explain the approach step by step",
+			kind: "chat",
+			score: 52
+		});
+	}
+	if (/imagine|image|draw|picture|logo/i.test(lower)) out.push({
+		id: "fu-imagine",
+		label: "Open Imagine",
+		value: "__nav:imagine",
+		kind: "nav",
+		score: 68
+	});
+	if (/usage|quota|limit|plan/i.test(lower)) out.push({
+		id: "fu-usage",
+		label: "Usage details",
+		value: "What's my SuperGrok usage right now?",
+		kind: "chat",
+		score: 48
+	});
+	return out;
+}
+/**
+* Build ranked quick-assistant chips.
+* Always returns ≤ max (default 8, hard cap 10).
+*/
+function buildQuickChips(input) {
+	const max = Math.min(input.max ?? MAX_DEFAULT, MAX_HARD);
+	const chips = [];
+	const users = recentUserMessages(input.chat);
+	const lastUser = users[0] || "";
+	const pct = Math.round(usagePercent(input.usage));
+	const plan = PLAN_LIMITS[input.usage.plan];
+	const recentActivity = input.activity.slice(0, 12);
+	const draft = (input.draft || "").trim().toLowerCase();
+	if (!input.grokConnected) chips.push({
+		id: "ctx-connect",
+		label: "Connect Grok",
+		value: "__nav:settings",
+		kind: "nav",
+		score: 100,
+		hint: "oauth"
+	});
+	if (input.hostOnline === false) chips.push({
+		id: "ctx-host",
+		label: "Connect desktop host",
+		value: "__nav:settings",
+		kind: "nav",
+		score: 95
+	});
+	else if (input.hostOnline) chips.push({
+		id: "ctx-uname",
+		label: "$ uname -a",
+		value: "$ uname -a && whoami && pwd",
+		kind: "shell",
+		score: 40
+	});
+	if (pct >= 80) chips.push({
+		id: "ctx-quota",
+		label: `Usage ${pct}%`,
+		value: "What's my usage and how can I save units?",
+		kind: "chat",
+		score: 85
+	});
+	for (let i = 0; i < Math.min(users.length, 5); i++) {
+		const msg = users[i];
+		const ageBoost = 30 - i * 5;
+		if (msg.length < 80 && i > 0) chips.push({
+			id: `recent-${i}`,
+			label: shorten(msg, 28),
+			value: msg,
+			kind: msg.startsWith("$") ? "shell" : "chat",
+			score: 45 + ageBoost,
+			hint: "recent"
+		});
+		chips.push(...followUpsFrom(msg).map((c) => ({
+			...c,
+			score: c.score + ageBoost * .3
+		})));
+	}
+	for (const a of recentActivity) {
+		if (a.kind === "desktop") chips.push({
+			id: `act-host-${a.id}`,
+			label: "Host status",
+			value: "$ uname -a && df -h | head -8",
+			kind: "shell",
+			score: 42
+		});
+		if (a.kind === "imagine") chips.push({
+			id: `act-img-${a.id}`,
+			label: "Imagine again",
+			value: "__nav:imagine",
+			kind: "nav",
+			score: 50
+		});
+		if (a.kind === "chat" && a.status === "failed") chips.push({
+			id: `act-retry-${a.id}`,
+			label: "Retry last ask",
+			value: lastUser || "Try that again",
+			kind: "chat",
+			score: 72
+		});
+		if (a.kind === "system" && /update/i.test(a.title + a.detail)) chips.push({
+			id: `act-upd-${a.id}`,
+			label: "Check updates",
+			value: "__nav:settings",
+			kind: "nav",
+			score: 35
+		});
+		if (a.kind === "usage") chips.push({
+			id: `act-usage-${a.id}`,
+			label: "Usage",
+			value: "What's my usage right now?",
+			kind: "chat",
+			score: 44
+		});
+	}
+	const otherThreads = input.threads.filter((t) => t.messages.some((m) => m.role === "user")).slice(0, 3);
+	for (const th of otherThreads) {
+		const first = th.messages.find((m) => m.role === "user");
+		if (!first) continue;
+		chips.push({
+			id: `thread-${th.id}`,
+			label: shorten(th.title || first.content, 26),
+			value: `Continue: ${shorten(first.content, 120)}`,
+			kind: "chat",
+			score: 28,
+			hint: "history"
+		});
+	}
+	if (input.connectors.filter((c) => c.status === "connected").some((c) => c.id === "desktop-host")) chips.push({
+		id: "conn-files",
+		label: "Browse home",
+		value: "$ ls -la \"$HOME\" | head -30",
+		kind: "shell",
+		score: 38
+	});
+	const defaults = [
+		{
+			id: "def-help",
+			label: "What can you help with?",
+			value: "What can you help me with in GrokHub?",
+			kind: "chat",
+			score: 20
+		},
+		{
+			id: "def-modes",
+			label: "Explain my modes",
+			value: "Explain Auto / Fast / Expert / Heavy / Build and when to use each",
+			kind: "chat",
+			score: 18
+		},
+		{
+			id: "def-usage",
+			label: "My usage",
+			value: `What's my usage? (${plan.label})`,
+			kind: "chat",
+			score: 16
+		},
+		{
+			id: "def-imagine",
+			label: "Imagine",
+			value: "__nav:imagine",
+			kind: "nav",
+			score: 15
+		},
+		{
+			id: "def-auto",
+			label: input.mode === "auto" ? "How Auto routes" : "Use Auto mode",
+			value: input.mode === "auto" ? "How does Auto choose models for my prompts?" : "__mode:auto",
+			kind: input.mode === "auto" ? "chat" : "mode",
+			score: 14
+		}
+	];
+	chips.push(...defaults);
+	let ranked = uniqByValue(chips).filter((c) => c.value.trim().toLowerCase() !== draft).sort((a, b) => b.score - a.score);
+	if (draft.length >= 1) {
+		const pred = ranked.map((c) => {
+			const hay = `${c.label} ${c.value}`.toLowerCase();
+			let boost = 0;
+			if (hay.startsWith(draft)) boost += 40;
+			else if (hay.includes(draft)) boost += 25;
+			for (const tok of draft.split(/\s+/)) if (tok.length > 2 && hay.includes(tok)) boost += 8;
+			if (draft.startsWith("$") && c.kind === "shell") boost += 30;
+			if (/imagine|draw|image/.test(draft) && c.kind === "nav" && c.value.includes("imagine")) boost += 35;
+			return {
+				...c,
+				score: c.score + boost
+			};
+		}).filter((c) => {
+			const hay = `${c.label} ${c.value}`.toLowerCase();
+			if (draft.length < 2) return true;
+			return c.score >= 80 || hay.includes(draft) || draft.split(/\s+/).some((tok) => tok.length > 2 && hay.includes(tok));
+		}).sort((a, b) => b.score - a.score);
+		ranked = pred.length ? pred : ranked;
+	}
+	const picked = [];
+	const kindCount = {};
+	for (const c of ranked) {
+		if (picked.length >= max) break;
+		const k = c.kind;
+		const n = kindCount[k] || 0;
+		if (k === "shell" && n >= 3) continue;
+		if (k === "nav" && n >= 2) continue;
+		if (k === "mode" && n >= 1) continue;
+		picked.push(c);
+		kindCount[k] = n + 1;
+	}
+	if (picked.length < Math.min(4, max)) for (const c of ranked) {
+		if (picked.length >= max) break;
+		if (picked.some((p) => p.id === c.id)) continue;
+		picked.push(c);
+	}
+	return picked.slice(0, max);
+}
 /**
 * Desktop host / gateway connector.
 * When the unsandboxed bridge is offline, this is the CTA to reconnect so Grok
@@ -2893,12 +3176,12 @@ function HostGatewayBanner({ variant = "card", className, onOpenDesktop }) {
 		})]
 	});
 }
-var SUGGESTIONS = [
-	"What can you help me with?",
-	"$ uname -a",
-	"What's my usage?",
-	"Explain my modes"
-];
+function chipIcon(kind) {
+	if (kind === "shell") return Terminal;
+	if (kind === "nav") return Compass;
+	if (kind === "mode") return Gauge;
+	return Sparkles;
+}
 function ChatView() {
 	const chat = useGrokHub((s) => s.chat);
 	const sendChat = useGrokHub((s) => s.sendChat);
@@ -2906,20 +3189,62 @@ function ChatView() {
 	const running = useGrokHub((s) => s.running);
 	const streamStatus = useGrokHub((s) => s.streamStatus);
 	const mode = useGrokHub((s) => s.mode);
+	const setMode = useGrokHub((s) => s.setMode);
 	const setNav = useGrokHub((s) => s.setNav);
 	const pushActivity = useGrokHub((s) => s.pushActivity);
 	const recordUsage = useGrokHub((s) => s.recordUsage);
 	const usage = useGrokHub((s) => s.usage);
 	const grokConnected = useGrokHub((s) => s.grokConnected);
 	const newThread = useGrokHub((s) => s.newThread);
+	const activity = useGrokHub((s) => s.activity);
+	const threads = useGrokHub((s) => s.threads);
+	const connectors = useGrokHub((s) => s.connectors);
 	const [text, setText] = (0, import_react.useState)("");
 	const [localRunning, setLocalRunning] = (0, import_react.useState)(false);
+	const [hostOnline, setHostOnline] = (0, import_react.useState)(void 0);
 	const endRef = (0, import_react.useRef)(null);
 	const inputRef = (0, import_react.useRef)(null);
 	const modeMeta = getMode(mode);
 	const busy = running || localRunning;
 	const plan = PLAN_LIMITS[usage.plan];
 	const pct = Math.round(usagePercent(usage));
+	(0, import_react.useEffect)(() => {
+		let cancelled = false;
+		(async () => {
+			try {
+				const { hostInfo } = await import("./host-client-WUUmAwRI.mjs");
+				const i = await hostInfo();
+				if (!cancelled) setHostOnline(i.bridge !== "none" && Boolean(i.unsandboxed));
+			} catch {
+				if (!cancelled) setHostOnline(false);
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+	const chips = (0, import_react.useMemo)(() => buildQuickChips({
+		chat,
+		activity,
+		threads,
+		connectors,
+		mode,
+		grokConnected,
+		usage,
+		draft: text,
+		hostOnline,
+		max: text.trim().length > 0 ? 10 : Math.min(10, Math.max(4, 4 + Math.min(chat.length, 4)))
+	}), [
+		chat,
+		activity,
+		threads,
+		connectors,
+		mode,
+		grokConnected,
+		usage,
+		text,
+		hostOnline
+	]);
 	(0, import_react.useEffect)(() => {
 		endRef.current?.scrollIntoView({ behavior: "smooth" });
 	}, [
@@ -3009,6 +3334,26 @@ function ChatView() {
 				streamStatus: null
 			});
 		}
+	}
+	async function onChip(chip) {
+		if (busy) return;
+		if (chip.kind === "nav" && chip.value.startsWith("__nav:")) {
+			const nav = chip.value.slice(6);
+			setNav(nav);
+			return;
+		}
+		if (chip.kind === "mode" && chip.value.startsWith("__mode:")) {
+			const m = chip.value.slice(7);
+			setMode(m);
+			return;
+		}
+		if (chip.kind === "shell" || chip.value.startsWith("$") || chip.value.startsWith("/sh ")) {
+			setText("");
+			await runShell(chip.value);
+			return;
+		}
+		setText("");
+		await sendChat(chip.value);
 	}
 	async function onSend(value) {
 		if (busy) return;
@@ -3144,15 +3489,41 @@ function ChatView() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "shrink-0 space-y-2 border-t border-[var(--color-border)] p-3 md:p-4 3xl:px-8 uw:px-12",
 						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "flex flex-wrap gap-1.5",
-								children: SUGGESTIONS.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									disabled: busy,
-									onClick: () => void onSend(s),
-									className: "rounded-full border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-muted)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)] disabled:opacity-50",
-									children: s
-								}, s))
+							!busy && chips.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "mx-auto w-full max-w-[min(56rem,100%)] 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "mb-1 flex items-center justify-between gap-2 px-0.5",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "text-[10px] font-medium uppercase tracking-wide text-[var(--color-subtle)]",
+										children: "Quick assist"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "text-[10px] text-[var(--color-subtle)]",
+										children: [
+											chips.length,
+											" suggestion",
+											chips.length === 1 ? "" : "s"
+										]
+									})]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+									role: "listbox",
+									"aria-label": "Quick assistant suggestions",
+									children: chips.map((c) => {
+										const Icon = chipIcon(c.kind);
+										return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											type: "button",
+											role: "option",
+											disabled: busy,
+											title: c.value.startsWith("__") ? c.label : c.value,
+											onClick: () => void onChip(c),
+											className: cn("inline-flex max-w-[14rem] shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors", "border-[var(--color-border)] text-[var(--color-muted)]", "hover:border-[var(--color-border-strong)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]", "disabled:opacity-50", c.kind === "shell" && "font-mono", c.score >= 80 && "border-[color-mix(in_oklab,var(--color-info)_35%,var(--color-border))]"),
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Icon, { className: "h-3 w-3 shrink-0 opacity-70" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "truncate",
+												children: c.label
+											})]
+										}, c.id);
+									})
+								})]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 								className: "mx-auto flex w-full max-w-[min(56rem,100%)] gap-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]",

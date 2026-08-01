@@ -1,6 +1,7 @@
-import { Loader2, MessageSquarePlus, Send, Square } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Loader2, MessageSquarePlus, Send, Square, Sparkles, Terminal, Compass, Gauge } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
+import { buildQuickChips, type QuickChip } from "@/lib/quick-assistant";
 import { useGrokHub } from "@/lib/store";
 import { formatUnits, PLAN_LIMITS, usagePercent } from "@/lib/usage";
 import { cn } from "@/lib/utils";
@@ -11,12 +12,12 @@ import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Input } from "../ui/input";
 
-const SUGGESTIONS = [
-  "What can you help me with?",
-  "$ uname -a",
-  "What's my usage?",
-  "Explain my modes",
-];
+function chipIcon(kind: QuickChip["kind"]) {
+  if (kind === "shell") return Terminal;
+  if (kind === "nav") return Compass;
+  if (kind === "mode") return Gauge;
+  return Sparkles;
+}
 
 export function ChatView() {
   const chat = useGrokHub((s) => s.chat);
@@ -25,20 +26,62 @@ export function ChatView() {
   const running = useGrokHub((s) => s.running);
   const streamStatus = useGrokHub((s) => s.streamStatus);
   const mode = useGrokHub((s) => s.mode);
+  const setMode = useGrokHub((s) => s.setMode);
   const setNav = useGrokHub((s) => s.setNav);
   const pushActivity = useGrokHub((s) => s.pushActivity);
   const recordUsage = useGrokHub((s) => s.recordUsage);
   const usage = useGrokHub((s) => s.usage);
   const grokConnected = useGrokHub((s) => s.grokConnected);
   const newThread = useGrokHub((s) => s.newThread);
+  const activity = useGrokHub((s) => s.activity);
+  const threads = useGrokHub((s) => s.threads);
+  const connectors = useGrokHub((s) => s.connectors);
   const [text, setText] = useState("");
   const [localRunning, setLocalRunning] = useState(false);
+  const [hostOnline, setHostOnline] = useState<boolean | undefined>(undefined);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const modeMeta = getMode(mode);
   const busy = running || localRunning;
   const plan = PLAN_LIMITS[usage.plan];
   const pct = Math.round(usagePercent(usage));
+
+  // Lightweight host presence for chips (non-blocking)
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { hostInfo } = await import("@/lib/host-client");
+        const i = await hostInfo();
+        if (!cancelled) {
+          setHostOnline(i.bridge !== "none" && Boolean(i.unsandboxed));
+        }
+      } catch {
+        if (!cancelled) setHostOnline(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const chips = useMemo(
+    () =>
+      buildQuickChips({
+        chat,
+        activity,
+        threads,
+        connectors,
+        mode,
+        grokConnected,
+        usage,
+        draft: text,
+        hostOnline,
+        // 4 when empty draft + idle; grow with context up to 10
+        max: text.trim().length > 0 ? 10 : Math.min(10, Math.max(4, 4 + Math.min(chat.length, 4))),
+      }),
+    [chat, activity, threads, connectors, mode, grokConnected, usage, text, hostOnline],
+  );
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -137,6 +180,31 @@ export function ChatView() {
     }
   }
 
+  async function onChip(chip: QuickChip) {
+    if (busy) return;
+    if (chip.kind === "nav" && chip.value.startsWith("__nav:")) {
+      const nav = chip.value.slice("__nav:".length) as
+        | "settings"
+        | "imagine"
+        | "desktop"
+        | "chat";
+      setNav(nav);
+      return;
+    }
+    if (chip.kind === "mode" && chip.value.startsWith("__mode:")) {
+      const m = chip.value.slice("__mode:".length) as "auto" | "fast" | "expert" | "heavy" | "build";
+      setMode(m);
+      return;
+    }
+    if (chip.kind === "shell" || chip.value.startsWith("$") || chip.value.startsWith("/sh ")) {
+      setText("");
+      await runShell(chip.value);
+      return;
+    }
+    setText("");
+    await sendChat(chip.value);
+  }
+
   async function onSend(value?: string) {
     if (busy) return;
     const payload = (value ?? text).trim();
@@ -158,7 +226,6 @@ export function ChatView() {
 
   function onStop() {
     if (localRunning) {
-      // shell has no abort yet — just clear indicator; next host calls can be skipped
       setLocalRunning(false);
       useGrokHub.setState({ running: false, streamStatus: null });
       return;
@@ -265,19 +332,49 @@ export function ChatView() {
           </div>
 
           <div className="shrink-0 space-y-2 border-t border-[var(--color-border)] p-3 md:p-4 3xl:px-8 uw:px-12">
-            <div className="flex flex-wrap gap-1.5">
-              {SUGGESTIONS.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void onSend(s)}
-                  className="rounded-full border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-muted)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)] disabled:opacity-50"
+            {/* Quick assistant — predictive chips from recent activity */}
+            {!busy && chips.length > 0 && (
+              <div className="mx-auto w-full max-w-[min(56rem,100%)] 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]">
+                <div className="mb-1 flex items-center justify-between gap-2 px-0.5">
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--color-subtle)]">
+                    Quick assist
+                  </span>
+                  <span className="text-[10px] text-[var(--color-subtle)]">
+                    {chips.length} suggestion{chips.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <div
+                  className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  role="listbox"
+                  aria-label="Quick assistant suggestions"
                 >
-                  {s}
-                </button>
-              ))}
-            </div>
+                  {chips.map((c) => {
+                    const Icon = chipIcon(c.kind);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        role="option"
+                        disabled={busy}
+                        title={c.value.startsWith("__") ? c.label : c.value}
+                        onClick={() => void onChip(c)}
+                        className={cn(
+                          "inline-flex max-w-[14rem] shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors",
+                          "border-[var(--color-border)] text-[var(--color-muted)]",
+                          "hover:border-[var(--color-border-strong)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]",
+                          "disabled:opacity-50",
+                          c.kind === "shell" && "font-mono",
+                          c.score >= 80 && "border-[color-mix(in_oklab,var(--color-info)_35%,var(--color-border))]",
+                        )}
+                      >
+                        <Icon className="h-3 w-3 shrink-0 opacity-70" />
+                        <span className="truncate">{c.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <form
               className="mx-auto flex w-full max-w-[min(56rem,100%)] gap-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]"
               onSubmit={(e) => {
@@ -298,7 +395,6 @@ export function ChatView() {
                     ? "Agent running — press Stop to interrupt…"
                     : "Message Grok… or $ shell"
                 }
-                // Keep input editable so user can type next thought; send becomes Stop while busy
                 className="flex-1"
                 onKeyDown={(e) => {
                   if (e.key === "Escape" && busy) {

@@ -11,7 +11,7 @@ export const XAI_OAUTH_ISSUER = "https://auth.x.ai";
 export const XAI_OAUTH_DISCOVERY = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
 export const XAI_DEVICE_CODE_GRANT =
   "urn:ietf:params:oauth:grant-type:device_code";
-export const XAI_UA = "GrokHub/0.2.9 (xAI OAuth; Linux)";
+export const XAI_UA = "GrokHub/0.2.10 (xAI OAuth; Linux)";
 
 export type XaiOAuthTokens = {
   accessToken: string;

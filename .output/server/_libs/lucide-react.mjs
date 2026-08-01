@@ -235,6 +235,21 @@ var Command = createLucideIcon("command", [["path", {
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var Compass = createLucideIcon("compass", [["path", {
+	d: "m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z",
+	key: "9ktpf1"
+}], ["circle", {
+	cx: "12",
+	cy: "12",
+	r: "10",
+	key: "1mglay"
+}]]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var Download = createLucideIcon("download", [
 	["path", {
 		d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4",
@@ -803,4 +818,4 @@ var Zap = createLucideIcon("zap", [["path", {
 	key: "1xq2db"
 }]]);
 //#endregion
-export { ExternalLink as A, Image as C, Gauge as D, Hammer as E, Cable as F, Brain as I, ArrowRight as L, Command as M, ChevronRight as N, Folder as O, Check as P, AppWindow as R, Link2Off as S, HardDrive as T, Minus as _, TimerReset as a, Menu as b, Sparkles as c, Settings as d, Send as f, Play as g, Plus as h, Trash2 as i, Download as j, FolderOpen as k, ShieldCheck as l, Plug as m, X as n, Terminal as o, RefreshCw as p, Users as r, Square as s, Zap as t, ShieldAlert as u, MessageSquare as v, History as w, LoaderCircle as x, MessageSquarePlus as y, Activity as z };
+export { ExternalLink as A, Activity as B, Image as C, Gauge as D, Hammer as E, Check as F, Cable as I, Brain as L, Compass as M, Command as N, Folder as O, ChevronRight as P, ArrowRight as R, Link2Off as S, HardDrive as T, Minus as _, TimerReset as a, Menu as b, Sparkles as c, Settings as d, Send as f, Play as g, Plus as h, Trash2 as i, Download as j, FolderOpen as k, ShieldCheck as l, Plug as m, X as n, Terminal as o, RefreshCw as p, Users as r, Square as s, Zap as t, ShieldAlert as u, MessageSquare as v, History as w, LoaderCircle as x, MessageSquarePlus as y, AppWindow as z };
