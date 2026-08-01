@@ -813,7 +813,8 @@ export const useGrokClaw = create<State>()(
       },
     }),
     {
-      name: "grokclaw-v4",
+      name: "grokclaw-v5",
+
       partialize: (s) => ({
         connectors: s.connectors,
         skills: s.skills,
