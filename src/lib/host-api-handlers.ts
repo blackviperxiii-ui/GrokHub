@@ -11,6 +11,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { HostApp, HostExecResult, HostFileEntry, HostInfo } from "./host-types";
+import type { OpenClawWorkspaceRaw } from "./openclaw-import";
+import { defaultOpenClawPaths } from "./openclaw-import";
 
 const execAsync = promisify(execCb);
 const MAX_STDOUT = 200_000;
@@ -291,6 +293,192 @@ export async function handleOpenApp(opts: {
   }
 }
 
+async function walkSkillMds(
+  root: string,
+  relBase: string,
+  depth: number,
+  out: { dirName: string; relativePath: string; content: string }[],
+): Promise<void> {
+  if (depth > 6 || out.length >= 200) return;
+  let names: string[];
+  try {
+    names = await fs.readdir(root);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (name.startsWith(".") || name === "node_modules") continue;
+    const full = path.join(root, name);
+    const rel = relBase ? `${relBase}/${name}` : name;
+    let st;
+    try {
+      st = await fs.stat(full);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) {
+      await walkSkillMds(full, rel, depth + 1, out);
+    } else if (st.isFile() && /^skill\.md$/i.test(name) && st.size < 512_000) {
+      try {
+        const content = await fs.readFile(full, "utf8");
+        const dirName = path.basename(path.dirname(full));
+        out.push({ dirName, relativePath: rel, content });
+      } catch {
+        /* skip */
+      }
+    }
+  }
+}
+
+/** Read an OpenClaw workspace directory into a portable payload. */
+export async function handleReadOpenClawWorkspace(
+  dirPath?: string,
+): Promise<OpenClawWorkspaceRaw & { ok: boolean; error?: string; candidates?: string[] }> {
+  const home = os.homedir();
+  const candidates = defaultOpenClawPaths(home);
+  let target = dirPath?.trim()
+    ? path.resolve(dirPath.trim().replace(/^~(?=\/|$)/, home))
+    : "";
+
+  if (!target) {
+    for (const c of candidates) {
+      try {
+        const st = await fs.stat(c);
+        if (st.isDirectory()) {
+          target = c;
+          break;
+        }
+      } catch {
+        /* next */
+      }
+    }
+  }
+
+  if (!target) {
+    return {
+      ok: false,
+      error:
+        "No OpenClaw workspace found. Pass a path or create ~/.openclaw/workspace",
+      root: "",
+      files: [],
+      skills: [],
+      candidates,
+    };
+  }
+
+  let st;
+  try {
+    st = await fs.stat(target);
+  } catch {
+    return {
+      ok: false,
+      error: `Path not found: ${target}`,
+      root: target,
+      files: [],
+      skills: [],
+      candidates,
+    };
+  }
+  if (!st.isDirectory()) {
+    return {
+      ok: false,
+      error: `Not a directory: ${target}`,
+      root: target,
+      files: [],
+      skills: [],
+      candidates,
+    };
+  }
+
+  const files: OpenClawWorkspaceRaw["files"] = [];
+  const core = [
+    "AGENTS.md",
+    "SOUL.md",
+    "USER.md",
+    "IDENTITY.md",
+    "TOOLS.md",
+    "HEARTBEAT.md",
+    "MEMORY.md",
+    "BOOT.md",
+    "BOOTSTRAP.md",
+  ];
+  for (const name of core) {
+    const full = path.join(target, name);
+    try {
+      const buf = await fs.readFile(full);
+      if (buf.length > 400_000) continue;
+      files.push({
+        name,
+        relativePath: name,
+        content: buf.toString("utf8"),
+      });
+    } catch {
+      /* missing ok */
+    }
+  }
+
+  try {
+    const memDir = path.join(target, "memory");
+    const memNames = await fs.readdir(memDir);
+    const days = memNames
+      .filter((n) => /^\d{4}-\d{2}-\d{2}\.md$/.test(n))
+      .sort()
+      .reverse()
+      .slice(0, 3);
+    for (const n of days) {
+      try {
+        const buf = await fs.readFile(path.join(memDir, n));
+        if (buf.length > 200_000) continue;
+        files.push({
+          name: n,
+          relativePath: `memory/${n}`,
+          content: buf.toString("utf8"),
+        });
+      } catch {
+        /* skip */
+      }
+    }
+  } catch {
+    /* no memory dir */
+  }
+
+  const skills: OpenClawWorkspaceRaw["skills"] = [];
+  for (const skillRoot of [
+    path.join(target, "skills"),
+    path.join(target, ".agents", "skills"),
+  ]) {
+    await walkSkillMds(
+      skillRoot,
+      path.relative(target, skillRoot) || "skills",
+      0,
+      skills,
+    );
+  }
+
+  if (skills.length === 0) {
+    const managed = path.join(home, ".openclaw", "skills");
+    await walkSkillMds(managed, "managed-skills", 0, skills);
+  }
+
+  let configHint: string | null = null;
+  try {
+    const cfg = path.join(home, ".openclaw", "openclaw.json");
+    const buf = await fs.readFile(cfg);
+    configHint = buf.subarray(0, 80_000).toString("utf8");
+  } catch {
+    configHint = null;
+  }
+
+  return {
+    ok: true,
+    root: target,
+    files,
+    skills,
+    configHint,
+    candidates,
+  };
+}
+
 export async function dispatchHost(
   action: string,
   body: Record<string, unknown>,
@@ -321,6 +509,10 @@ export async function dispatchHost(
         desktopFile: body.desktopFile as string | undefined,
         path: body.path as string | undefined,
       });
+    case "readOpenClawWorkspace":
+      return handleReadOpenClawWorkspace(
+        body.path ? String(body.path) : undefined,
+      );
     default:
       throw new Error(`unknown host action: ${action}`);
   }

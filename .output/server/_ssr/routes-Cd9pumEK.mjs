@@ -1,13 +1,13 @@
 import { o as __toESM } from "../_runtime.mjs";
-import { C as usagePercent, S as unitsFromTokens, _ as needsGrokClassification, a as buildCatalog, b as resolveModeWithCatalog, c as emptyCatalog, d as friendlyModelName, f as getMode, g as modelIdForMode, h as modeBadge, i as autoRouteFor, l as ensurePeriod, m as inferPlanFromAuth, n as PLAN_LIMITS, o as costFor, p as getModesWithCatalog, r as applyGrokPlan, s as createUsage, t as APP_VERSION, u as formatUnits, w as usageTone, x as stripAssistantChrome, y as resolveMode } from "./version-DAFAcQCy.mjs";
+import { C as usagePercent, S as unitsFromTokens, _ as needsGrokClassification, a as buildCatalog, b as resolveModeWithCatalog, c as emptyCatalog, d as friendlyModelName, f as getMode, g as modelIdForMode, h as modeBadge, i as autoRouteFor, l as ensurePeriod, m as inferPlanFromAuth, n as PLAN_LIMITS, o as costFor, p as getModesWithCatalog, r as applyGrokPlan, s as createUsage, t as APP_VERSION, u as formatUnits, w as usageTone, x as stripAssistantChrome, y as resolveMode } from "./version-2C_HLcex.mjs";
 import { n as formatUsdFromCents, t as formatResetAt } from "./grok-website-usage-CUFrqYHh.mjs";
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
 import { F as require_react, P as require_jsx_runtime, g as require_react_dom, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
-import { A as FolderOpen, B as AppWindow, C as Link2Off, D as Hammer, E as HardDrive, F as ChevronRight, I as Check, L as Cable, M as Download, N as Compass, O as Gauge, P as Command, R as Brain, S as Link2, T as History, V as Activity, _ as Minus, a as TimerReset, b as Menu, c as Sparkles, d as Settings, f as Send, g as Play, h as Plus, i as Trash2, j as ExternalLink, k as Folder, l as ShieldCheck, m as Plug, n as X, o as Terminal, p as RefreshCw, r as Users, s as Square, t as Zap, u as ShieldAlert, v as MessageSquare, w as Image, x as LoaderCircle, y as MessageSquarePlus, z as ArrowRight } from "../_libs/lucide-react.mjs";
+import { A as FolderOpen, B as ArrowRight, C as Link2Off, D as Hammer, E as HardDrive, F as Command, H as Activity, I as ChevronRight, L as Check, M as ExternalLink, N as Download, O as Gauge, P as Compass, R as Cable, S as Link2, T as History, V as AppWindow, _ as Minus, a as TimerReset, b as Menu, c as Sparkles, d as Settings, f as Send, g as Play, h as Plus, i as Trash2, j as FolderInput, k as Folder, l as ShieldCheck, m as Plug, n as X, o as Terminal, p as RefreshCw, r as Users, s as Square, t as Zap, u as ShieldAlert, v as MessageSquare, w as Image, x as LoaderCircle, y as MessageSquarePlus, z as Brain } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-1ASuRC-M.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-Cd9pumEK.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 var import_react_dom = require_react_dom();
@@ -698,6 +698,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	githubToken: "",
 	oauth: null,
 	ssoCookie: "",
+	openClawWorkspace: null,
 	oauthPending: null,
 	grokConnected: null,
 	grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
@@ -728,7 +729,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-D8Qe0kQf.mjs");
+		const { oauthStart } = await import("./grok-client-BA6wcZ48.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -757,7 +758,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-D8Qe0kQf.mjs");
+		const { oauthPoll } = await import("./grok-client-BA6wcZ48.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -872,9 +873,73 @@ var useGrokHub = create()(persist((set, get) => ({
 			};
 		}
 	},
+	importOpenClawWorkspace: async (path) => {
+		try {
+			const { hostReadOpenClawWorkspace } = await import("./host-client-Dpy0UU0G.mjs");
+			const { mapOpenClawWorkspace } = await import("./openclaw-import-CL8OB3U2.mjs");
+			const raw = await hostReadOpenClawWorkspace(path);
+			if (!raw?.ok) return {
+				ok: false,
+				detail: raw?.error || "Could not read OpenClaw workspace"
+			};
+			const mapped = mapOpenClawWorkspace(raw);
+			set((s) => {
+				const bySlash = new Map(s.skills.map((sk) => [sk.slash, sk]));
+				for (const sk of mapped.skills) bySlash.set(sk.slash, sk);
+				const mergedSkills = Array.from(bySlash.values());
+				const others = s.agents.filter((a) => !a.id.startsWith("openclaw-"));
+				const mergedAgents = [...mapped.agents, ...others];
+				const autoNames = new Set(s.automations.map((a) => a.name));
+				return {
+					skills: mergedSkills,
+					agents: mergedAgents,
+					automations: [...mapped.automations.filter((a) => !autoNames.has(a.name)), ...s.automations],
+					openClawWorkspace: {
+						root: mapped.root,
+						importedAt: Date.now(),
+						filesImported: mapped.filesImported,
+						contextBundle: mapped.contextBundle,
+						identityName: mapped.identityName
+					}
+				};
+			});
+			get().pushActivity({
+				kind: "system",
+				title: "OpenClaw workspace imported",
+				detail: `${mapped.root} · ${mapped.skills.length} skills · ${mapped.filesImported.length} files`,
+				status: "success"
+			});
+			const warn = mapped.warnings.length ? ` · ${mapped.warnings[0]}` : "";
+			return {
+				ok: true,
+				detail: `Imported ${mapped.skills.length} skills, ${mapped.automations.length} automations from ${mapped.root}${warn}`,
+				skills: mapped.skills.length,
+				automations: mapped.automations.length
+			};
+		} catch (e) {
+			return {
+				ok: false,
+				detail: e instanceof Error ? e.message : "import failed"
+			};
+		}
+	},
+	clearOpenClawWorkspace: () => {
+		set((s) => ({
+			openClawWorkspace: null,
+			agents: s.agents.filter((a) => !a.id.startsWith("openclaw-")),
+			skills: s.skills.filter((sk) => !sk.id.startsWith("ocskill")),
+			automations: s.automations.filter((a) => !a.name.startsWith("OpenClaw "))
+		}));
+		get().pushActivity({
+			kind: "system",
+			title: "OpenClaw workspace cleared",
+			detail: "Imported skills/agents/context removed",
+			status: "success"
+		});
+	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-D8Qe0kQf.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-BA6wcZ48.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1286,7 +1351,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		}
 		if (id === "desktop-host") {
 			try {
-				const { hostInfo } = await import("./host-client-WUUmAwRI.mjs");
+				const { hostInfo } = await import("./host-client-Dpy0UU0G.mjs");
 				const info = await hostInfo();
 				if (info.bridge === "none" || !info.unsandboxed) {
 					get().pushActivity({
@@ -1631,7 +1696,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let usedLive = false;
 		let finalAnswer = "";
 		let aborted = false;
-		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-ClfZho8Z.mjs");
+		const { extractHostCommands, stripHostCommands, inferHostCommandsFromUser } = await import("./grok-DQgOeaph.mjs");
 		try {
 			if (isLocalSlash) {
 				set({ streamStatus: "Running skill…" });
@@ -1643,7 +1708,7 @@ var useGrokHub = create()(persist((set, get) => ({
 					patchBot(finalAnswer, { streaming: false });
 				}
 			} else {
-				const { grokChatStream } = await import("./grok-client-D8Qe0kQf.mjs");
+				const { grokChatStream } = await import("./grok-client-BA6wcZ48.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").filter((c) => c.id !== botId).slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
@@ -1665,13 +1730,15 @@ var useGrokHub = create()(persist((set, get) => ({
 					}
 					set({ streamStatus: rounds === 1 ? "Streaming…" : `Host tool round ${rounds}…` });
 					let roundText = "";
+					const oc = get().openClawWorkspace;
 					const result = await grokChatStream({
 						messages: history,
 						mode: routed,
 						model: modelId,
 						apiKey: get().apiKey || void 0,
 						accessToken: get().oauth?.accessToken,
-						tokens: get().oauth
+						tokens: get().oauth,
+						workspaceContext: oc?.contextBundle || void 0
 					}, {
 						signal: abort.signal,
 						onStatus: (st) => {
@@ -1709,7 +1776,7 @@ var useGrokHub = create()(persist((set, get) => ({
 							break;
 						}
 						set({ streamStatus: "Running on your desktop…" });
-						const { hostExec } = await import("./host-client-WUUmAwRI.mjs");
+						const { hostExec } = await import("./host-client-Dpy0UU0G.mjs");
 						const outputs = [];
 						for (const cmd of cmds.slice(0, 3)) {
 							if (abort.signal.aborted || gen !== chatGeneration) {
@@ -1888,7 +1955,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		let model;
 		let err = null;
 		try {
-			const { grokImagine } = await import("./grok-client-D8Qe0kQf.mjs");
+			const { grokImagine } = await import("./grok-client-BA6wcZ48.mjs");
 			const live = await grokImagine({
 				prompt: p,
 				apiKey: get().apiKey || void 0,
@@ -2009,7 +2076,9 @@ var useGrokHub = create()(persist((set, get) => ({
 			grokConnected: null,
 			grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
 			oauth: null,
-			oauthPending: null
+			oauthPending: null,
+			ssoCookie: "",
+			openClawWorkspace: null
 		});
 	}
 }), {
@@ -2027,6 +2096,11 @@ var useGrokHub = create()(persist((set, get) => ({
 		imagineJobs: s.imagineJobs.slice(0, 8).map(({ imageDataUrl: _drop, ...rest }) => rest),
 		imagineAspect: s.imagineAspect,
 		apiKey: s.apiKey,
+		openClawWorkspace: s.openClawWorkspace ? {
+			...s.openClawWorkspace,
+			contextBundle: s.openClawWorkspace.contextBundle.slice(0, 48e3)
+		} : null,
+		ssoCookie: s.ssoCookie,
 		githubToken: s.githubToken,
 		oauth: s.oauth,
 		profile: s.profile,
@@ -3132,7 +3206,7 @@ function HostGatewayBanner({ variant = "card", className, onOpenDesktop }) {
 		setBusy(true);
 		setError(null);
 		try {
-			const mod = await import("./host-client-WUUmAwRI.mjs");
+			const mod = await import("./host-client-Dpy0UU0G.mjs");
 			setIsElectron(mod.isDesktopShell());
 			const i = await mod.hostInfo();
 			setInfo(i);
@@ -3346,7 +3420,7 @@ function ChatView() {
 		let cancelled = false;
 		(async () => {
 			try {
-				const { hostInfo } = await import("./host-client-WUUmAwRI.mjs");
+				const { hostInfo } = await import("./host-client-Dpy0UU0G.mjs");
 				const i = await hostInfo();
 				if (!cancelled) setHostOnline(i.bridge !== "none" && Boolean(i.unsandboxed));
 			} catch {
@@ -3420,7 +3494,7 @@ function ChatView() {
 				return;
 			}
 			const cmd = command.replace(/^\$\s*/, "").replace(/^\/sh\s+/, "").trim();
-			const { hostExec } = await import("./host-client-WUUmAwRI.mjs");
+			const { hostExec } = await import("./host-client-Dpy0UU0G.mjs");
 			const r = await hostExec(cmd);
 			const body = [
 				`[Desktop host · ${r.ok ? "ok" : "fail"} · exit ${r.code ?? "?"} · ${bill.cost}u]`,
@@ -4055,7 +4129,7 @@ function DesktopHostView() {
 		let cancelled = false;
 		(async () => {
 			try {
-				const mod = await import("./host-client-WUUmAwRI.mjs");
+				const mod = await import("./host-client-Dpy0UU0G.mjs");
 				if (cancelled) return;
 				setApi(mod);
 				setIsShell(mod.isDesktopShell());
@@ -4682,6 +4756,9 @@ function SettingsView() {
 	const startGrokOAuth = useGrokHub((s) => s.startGrokOAuth);
 	const pollGrokOAuth = useGrokHub((s) => s.pollGrokOAuth);
 	const clearGrokOAuth = useGrokHub((s) => s.clearGrokOAuth);
+	const importOpenClawWorkspace = useGrokHub((s) => s.importOpenClawWorkspace);
+	const clearOpenClawWorkspace = useGrokHub((s) => s.clearOpenClawWorkspace);
+	const openClawWorkspace = useGrokHub((s) => s.openClawWorkspace);
 	const { user, isPending } = useCurrentUserState();
 	const [keyDraft, setKeyDraft] = (0, import_react.useState)(apiKey);
 	const [ghDraft, setGhDraft] = (0, import_react.useState)(githubToken);
@@ -4691,6 +4768,9 @@ function SettingsView() {
 	const [update, setUpdate] = (0, import_react.useState)(null);
 	const [updateBusy, setUpdateBusy] = (0, import_react.useState)(false);
 	const [updateLog, setUpdateLog] = (0, import_react.useState)("");
+	const [ocPath, setOcPath] = (0, import_react.useState)("~/.openclaw/workspace");
+	const [ocBusy, setOcBusy] = (0, import_react.useState)(false);
+	const [ocDetail, setOcDetail] = (0, import_react.useState)("");
 	const pollRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		setKeyDraft(apiKey);
@@ -4976,6 +5056,89 @@ function SettingsView() {
 				})
 			})] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsageMeterPanel, {}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardTitle, {
+				className: "flex items-center gap-2 text-sm",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderInput, { className: "h-4 w-4 text-[var(--color-muted)]" }), "Import OpenClaw workspace"]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardDescription, { children: [
+				"Pull skills, persona, and memory from an OpenClaw agent home (",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "font-mono",
+					children: "~/.openclaw/workspace"
+				}),
+				"). Credentials and sqlite sessions are not imported."
+			] })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+				className: "space-y-3",
+				children: [
+					openClawWorkspace ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-success)_35%,transparent)] bg-[color-mix(in_oklab,var(--color-success)_8%,transparent)] px-3 py-2 text-sm",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "font-medium",
+								children: openClawWorkspace.identityName || "Workspace linked"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "truncate font-mono text-xs text-[var(--color-muted)]",
+								children: openClawWorkspace.root
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "mt-1 text-xs text-[var(--color-subtle)]",
+								children: [
+									openClawWorkspace.filesImported.length,
+									" files · imported",
+									" ",
+									new Date(openClawWorkspace.importedAt).toLocaleString()
+								]
+							})
+						]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "text-xs text-[var(--color-subtle)]",
+						children: "Default path is scanned automatically if you leave it blank."
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex flex-wrap gap-2",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
+								value: ocPath,
+								onChange: (e) => setOcPath(e.target.value),
+								placeholder: "~/.openclaw/workspace",
+								className: "min-w-[220px] flex-1 font-mono text-xs"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+								disabled: ocBusy,
+								onClick: () => {
+									setOcBusy(true);
+									setOcDetail("");
+									importOpenClawWorkspace(ocPath.trim() || void 0).then((r) => {
+										setOcDetail(r.detail);
+										setOcBusy(false);
+									});
+								},
+								children: ocBusy ? "Importing…" : "Import workspace"
+							}),
+							openClawWorkspace && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+								variant: "secondary",
+								onClick: () => clearOpenClawWorkspace(),
+								children: "Clear import"
+							})
+						]
+					}),
+					ocDetail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "text-xs text-[var(--color-muted)]",
+						children: ocDetail
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "text-[11px] text-[var(--color-subtle)]",
+						children: [
+							"Imports ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "font-mono",
+								children: "skills/**/SKILL.md"
+							}),
+							", AGENTS/SOUL/USER/IDENTITY, HEARTBEAT → automation, and injects context into Agent chat."
+						]
+					})
+				]
+			})] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
 				children: "xAI API key (optional fallback)"
@@ -5221,10 +5384,15 @@ function SkillsView() {
 	const runSkill = useGrokHub((s) => s.runSkill);
 	const addSkill = useGrokHub((s) => s.addSkill);
 	const running = useGrokHub((s) => s.running);
+	const importOpenClawWorkspace = useGrokHub((s) => s.importOpenClawWorkspace);
+	const openClawWorkspace = useGrokHub((s) => s.openClawWorkspace);
 	const [name, setName] = (0, import_react.useState)("");
 	const [slash, setSlash] = (0, import_react.useState)("");
 	const [description, setDescription] = (0, import_react.useState)("");
 	const [instructions, setInstructions] = (0, import_react.useState)("");
+	const [ocPath, setOcPath] = (0, import_react.useState)("~/.openclaw/workspace");
+	const [ocBusy, setOcBusy] = (0, import_react.useState)(false);
+	const [ocDetail, setOcDetail] = (0, import_react.useState)("");
 	function onCreate() {
 		if (!name.trim() || !instructions.trim()) return;
 		addSkill({
@@ -5238,9 +5406,57 @@ function SkillsView() {
 		setDescription("");
 		setInstructions("");
 	}
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "space-y-5",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardTitle, {
+			className: "flex items-center gap-2 text-sm",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderInput, { className: "h-4 w-4 text-[var(--color-muted)]" }), "Import from OpenClaw"]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardDescription, { children: [
+			"Load workspace skills from",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "font-mono",
+				children: "~/.openclaw/workspace/skills"
+			}),
+			" (or another path)."
+		] })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+			className: "flex flex-wrap items-center gap-2",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
+					value: ocPath,
+					onChange: (e) => setOcPath(e.target.value),
+					className: "min-w-[200px] max-w-md flex-1 font-mono text-xs",
+					placeholder: "~/.openclaw/workspace"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+					size: "sm",
+					disabled: ocBusy,
+					onClick: () => {
+						setOcBusy(true);
+						setOcDetail("");
+						importOpenClawWorkspace(ocPath.trim() || void 0).then((r) => {
+							setOcDetail(r.detail);
+							setOcBusy(false);
+						});
+					},
+					children: ocBusy ? "Importing…" : "Import workspace"
+				}),
+				openClawWorkspace && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Badge, {
+					variant: "success",
+					children: [
+						openClawWorkspace.identityName || "Linked",
+						" ·",
+						" ",
+						openClawWorkspace.filesImported.length,
+						" files"
+					]
+				}),
+				ocDetail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "w-full text-xs text-[var(--color-muted)]",
+					children: ocDetail
+				})
+			]
+		})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "grid gap-4 lg:grid-cols-[1fr_340px]",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "grid gap-3 sm:grid-cols-2",
@@ -5254,9 +5470,9 @@ function SkillsView() {
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, {
 							className: "mt-1 font-mono text-xs",
 							children: sk.slash
-						})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+						})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Badge, {
 							variant: sk.kind === "builtin" ? "info" : "default",
-							children: sk.kind
+							children: [sk.kind, sk.id.startsWith("ocskill") ? " · openclaw" : ""]
 						})]
 					}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 						className: "mt-auto flex flex-1 flex-col gap-3",
@@ -5297,7 +5513,7 @@ function SkillsView() {
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardTitle, {
 					className: "flex items-center gap-2 text-sm",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Plus, { className: "h-4 w-4" }), "Skill Creator"]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Teach once — slash command sticks across sessions (local demo memory)." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Teach once — slash command sticks across sessions." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 					className: "space-y-3",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -5353,7 +5569,7 @@ function SkillsView() {
 					]
 				})]
 			})]
-		})
+		})]
 	});
 }
 var NAV = [
@@ -5447,7 +5663,7 @@ function AppShell() {
 			useGrokHub.getState().refreshModels();
 			(async () => {
 				try {
-					const { hostInfo } = await import("./host-client-WUUmAwRI.mjs");
+					const { hostInfo } = await import("./host-client-Dpy0UU0G.mjs");
 					const info = await hostInfo();
 					if (info.unsandboxed && info.bridge !== "none") useGrokHub.setState((s) => ({ connectors: s.connectors.map((c) => c.id === "desktop-host" ? {
 						...c,

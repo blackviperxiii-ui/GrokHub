@@ -1,5 +1,5 @@
-import { g as modelIdForMode, v as parseRateLimitHeaders, y as resolveMode } from "./version-DAFAcQCy.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/grok-ClfZho8Z.js
+import { g as modelIdForMode, v as parseRateLimitHeaders, y as resolveMode } from "./version-2C_HLcex.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/grok-DQgOeaph.js
 var XAI_BASE = "https://api.x.ai/v1";
 /** Map GrokHub modes → xAI model IDs */
 function modelForMode(mode, prompt = "") {
@@ -53,7 +53,7 @@ function buildBody(req, stream) {
 			model,
 			messages: [{
 				role: "system",
-				content: systemPromptForMode(mode, lastUser)
+				content: systemPromptForMode(mode, lastUser) + (req.workspaceContext?.trim() ? `\n\n## Imported OpenClaw workspace context\n${req.workspaceContext.trim().slice(0, 24e3)}` : "")
 			}, ...req.messages.filter((m) => m.role !== "system")],
 			temperature: req.temperature ?? (routed === "fast" ? .5 : routed === "build" ? .4 : routed === "heavy" ? .8 : .7),
 			max_tokens: req.maxTokens ?? (routed === "heavy" ? 4096 : routed === "build" ? 8192 : routed === "expert" ? 3072 : 2048),

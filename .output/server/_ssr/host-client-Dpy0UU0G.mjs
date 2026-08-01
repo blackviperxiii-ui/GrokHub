@@ -1,4 +1,4 @@
-//#region node_modules/.nitro/vite/services/ssr/assets/host-client-WUUmAwRI.js
+//#region node_modules/.nitro/vite/services/ssr/assets/host-client-Dpy0UU0G.js
 function electronHost() {
 	return typeof window !== "undefined" ? window.grokhubDesktop?.host : void 0;
 }
@@ -95,8 +95,13 @@ async function hostOpenApp(opts) {
 	if (e?.openApp) return e.openApp(opts);
 	return rpc("openApp", opts);
 }
+async function hostReadOpenClawWorkspace(path) {
+	const e = electronHost();
+	if (e?.readOpenClawWorkspace) return e.readOpenClawWorkspace(path);
+	return rpc("readOpenClawWorkspace", { path });
+}
 function isDesktopShell() {
 	return typeof window !== "undefined" && Boolean(window.grokhubDesktop);
 }
 //#endregion
-export { hostExec, hostInfo, hostListApps, hostListDir, hostOpenApp, hostReadFile, hostWriteFile, isDesktopShell };
+export { hostExec, hostInfo, hostListApps, hostListDir, hostOpenApp, hostReadFile, hostReadOpenClawWorkspace, hostWriteFile, isDesktopShell };

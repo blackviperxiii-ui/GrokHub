@@ -100,6 +100,13 @@ export type DesktopBridge = {
       desktopFile?: string;
       path?: string;
     }) => Promise<{ ok: boolean; detail: string }>;
+    readOpenClawWorkspace?: (
+      path?: string,
+    ) => Promise<import("./openclaw-import").OpenClawWorkspaceRaw & {
+      ok: boolean;
+      error?: string;
+      candidates?: string[];
+    }>;
   };
   grok?: DesktopGrokBridge;
 };
@@ -217,6 +224,18 @@ export async function hostOpenApp(opts: {
   const e = electronHost();
   if (e?.openApp) return e.openApp(opts);
   return rpc<{ ok: boolean; detail: string }>("openApp", opts);
+}
+
+export async function hostReadOpenClawWorkspace(path?: string) {
+  const e = electronHost();
+  if (e?.readOpenClawWorkspace) return e.readOpenClawWorkspace(path);
+  return rpc<
+    import("./openclaw-import").OpenClawWorkspaceRaw & {
+      ok: boolean;
+      error?: string;
+      candidates?: string[];
+    }
+  >("readOpenClawWorkspace", { path });
 }
 
 export function isDesktopShell(): boolean {

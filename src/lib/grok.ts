@@ -54,6 +54,8 @@ export type GrokChatRequest = {
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
+  /** OpenClaw workspace / standing agent context */
+  workspaceContext?: string;
 };
 
 export type GrokChatResult = {
@@ -89,7 +91,11 @@ function buildBody(req: GrokChatRequest, stream: boolean) {
   const lastUser = [...req.messages].reverse().find((m) => m.role === "user")?.content ?? "";
   const routed = resolveMode(mode, lastUser);
   const model = req.model || modelForMode(mode, lastUser);
-  const system = systemPromptForMode(mode, lastUser);
+  const system =
+    systemPromptForMode(mode, lastUser) +
+    (req.workspaceContext?.trim()
+      ? `\n\n## Imported OpenClaw workspace context\n${req.workspaceContext.trim().slice(0, 24_000)}`
+      : "");
   const messages: GrokChatMessage[] = [
     { role: "system", content: system },
     ...req.messages.filter((m) => m.role !== "system"),

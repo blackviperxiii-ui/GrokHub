@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
       ipcRenderer.invoke("host:exec", command, cwd, timeoutMs),
     listApps: () => ipcRenderer.invoke("host:listApps"),
     openApp: (opts) => ipcRenderer.invoke("host:openApp", opts),
+    readOpenClawWorkspace: (p) => ipcRenderer.invoke("host:readOpenClawWorkspace", p),
   },
   grok: {
     chat: (payload) => ipcRenderer.invoke("grok:chat", payload),

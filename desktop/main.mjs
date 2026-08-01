@@ -432,6 +432,10 @@ function registerIpc() {
     "host:openApp",
     wrap((_e, opts) => host.openApp(opts || {})),
   );
+  ipcMain.handle(
+    "host:readOpenClawWorkspace",
+    wrap((_e, p) => host.readOpenClawWorkspace(p)),
+  );
 
   ipcMain.handle("grok:chat", (_e, payload) => grokBridge.callXaiChat(payload || {}));
   ipcMain.handle("grok:imagine", (_e, payload) => grokBridge.callXaiImagine(payload || {}));

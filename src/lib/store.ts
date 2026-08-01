@@ -75,6 +75,14 @@ type State = {
   oauth: import("./xai-oauth").XaiOAuthTokens | null;
   /** grok.com SSO cookie for website Usage (Settings → Usage weekly limit) */
   ssoCookie: string;
+  /** Imported OpenClaw workspace metadata + prompt context */
+  openClawWorkspace: {
+    root: string;
+    importedAt: number;
+    filesImported: string[];
+    contextBundle: string;
+    identityName: string | null;
+  } | null;
   oauthPending: {
     deviceCode: string;
     userCode: string;
@@ -95,6 +103,13 @@ type State = {
   clearGrokOAuth: () => void;
   setSsoCookie: (cookie: string) => void;
   linkGrokWebsiteSession: () => Promise<{ ok: boolean; detail: string }>;
+  importOpenClawWorkspace: (path?: string) => Promise<{
+    ok: boolean;
+    detail: string;
+    skills?: number;
+    automations?: number;
+  }>;
+  clearOpenClawWorkspace: () => void;
   probeGrok: () => Promise<boolean>;
   syncFromGrok: (opts?: { displayName?: string | null; email?: string | null; imageUrl?: string | null }) => Promise<void>;
   newThread: () => void;
@@ -418,6 +433,7 @@ export const useGrokHub = create<State>()(
       githubToken: "",
       oauth: null,
       ssoCookie: "",
+      openClawWorkspace: null,
       oauthPending: null,
       grokConnected: null,
       grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
@@ -591,6 +607,77 @@ export const useGrokHub = create<State>()(
             detail: e instanceof Error ? e.message : "link failed",
           };
         }
+      },
+
+      importOpenClawWorkspace: async (path) => {
+        try {
+          const { hostReadOpenClawWorkspace } = await import("./host-client");
+          const { mapOpenClawWorkspace } = await import("./openclaw-import");
+          const raw = await hostReadOpenClawWorkspace(path);
+          if (!raw?.ok) {
+            return {
+              ok: false,
+              detail: raw?.error || "Could not read OpenClaw workspace",
+            };
+          }
+          const mapped = mapOpenClawWorkspace(raw);
+          set((s) => {
+            const bySlash = new Map(s.skills.map((sk) => [sk.slash, sk]));
+            for (const sk of mapped.skills) {
+              bySlash.set(sk.slash, sk);
+            }
+            const mergedSkills = Array.from(bySlash.values());
+            const others = s.agents.filter((a) => !a.id.startsWith("openclaw-"));
+            const mergedAgents = [...mapped.agents, ...others];
+            const autoNames = new Set(s.automations.map((a) => a.name));
+            const newAutos = mapped.automations.filter((a) => !autoNames.has(a.name));
+            return {
+              skills: mergedSkills,
+              agents: mergedAgents,
+              automations: [...newAutos, ...s.automations],
+              openClawWorkspace: {
+                root: mapped.root,
+                importedAt: Date.now(),
+                filesImported: mapped.filesImported,
+                contextBundle: mapped.contextBundle,
+                identityName: mapped.identityName,
+              },
+            };
+          });
+          get().pushActivity({
+            kind: "system",
+            title: "OpenClaw workspace imported",
+            detail: `${mapped.root} · ${mapped.skills.length} skills · ${mapped.filesImported.length} files`,
+            status: "success",
+          });
+          const warn = mapped.warnings.length ? ` · ${mapped.warnings[0]}` : "";
+          return {
+            ok: true,
+            detail: `Imported ${mapped.skills.length} skills, ${mapped.automations.length} automations from ${mapped.root}${warn}`,
+            skills: mapped.skills.length,
+            automations: mapped.automations.length,
+          };
+        } catch (e) {
+          return {
+            ok: false,
+            detail: e instanceof Error ? e.message : "import failed",
+          };
+        }
+      },
+
+      clearOpenClawWorkspace: () => {
+        set((s) => ({
+          openClawWorkspace: null,
+          agents: s.agents.filter((a) => !a.id.startsWith("openclaw-")),
+          skills: s.skills.filter((sk) => !sk.id.startsWith("ocskill")),
+          automations: s.automations.filter((a) => !a.name.startsWith("OpenClaw ")),
+        }));
+        get().pushActivity({
+          kind: "system",
+          title: "OpenClaw workspace cleared",
+          detail: "Imported skills/agents/context removed",
+          status: "success",
+        });
       },
 
       probeGrok: async () => {
@@ -1560,6 +1647,7 @@ export const useGrokHub = create<State>()(
                   rounds === 1 ? "Streaming…" : `Host tool round ${rounds}…`,
               });
               let roundText = "";
+              const oc = get().openClawWorkspace;
               const result = await grokChatStream(
                 {
                   messages: history,
@@ -1568,6 +1656,7 @@ export const useGrokHub = create<State>()(
                   apiKey: get().apiKey || undefined,
                   accessToken: get().oauth?.accessToken,
                   tokens: get().oauth,
+                  workspaceContext: oc?.contextBundle || undefined,
                 },
                 {
                   signal: abort.signal,
@@ -2009,6 +2098,8 @@ export const useGrokHub = create<State>()(
           grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
           oauth: null,
           oauthPending: null,
+          ssoCookie: "",
+          openClawWorkspace: null,
         });
       },
     }),
@@ -2028,6 +2119,14 @@ export const useGrokHub = create<State>()(
         imagineJobs: s.imagineJobs.slice(0, 8).map(({ imageDataUrl: _drop, ...rest }) => rest),
         imagineAspect: s.imagineAspect,
         apiKey: s.apiKey,
+        openClawWorkspace: s.openClawWorkspace
+          ? {
+              ...s.openClawWorkspace,
+              // Cap context bundle size in storage
+              contextBundle: s.openClawWorkspace.contextBundle.slice(0, 48_000),
+            }
+          : null,
+        ssoCookie: s.ssoCookie,
         githubToken: s.githubToken,
         oauth: s.oauth,
         profile: s.profile,

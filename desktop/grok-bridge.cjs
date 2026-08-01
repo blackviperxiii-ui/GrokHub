@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.2.14";
+const APP_VERSION = "0.2.15";
 
 function shaMatch(a, b) {
   if (!a || !b) return false;
@@ -129,8 +129,13 @@ async function callXaiChat(req = {}) {
     .find((m) => m.role === "user")?.content;
   const routed = resolveMode(mode, lastUser || "");
   const model = req.model || modelForMode(mode, lastUser || "");
+  const sys =
+    systemPrompt(mode, lastUser || "") +
+    (req.workspaceContext && String(req.workspaceContext).trim()
+      ? `\n\n## Imported OpenClaw workspace context\n${String(req.workspaceContext).trim().slice(0, 24000)}`
+      : "");
   const messages = [
-    { role: "system", content: systemPrompt(mode, lastUser || "") },
+    { role: "system", content: sys },
     ...(req.messages || []).filter((m) => m.role !== "system"),
   ];
   const temperature =

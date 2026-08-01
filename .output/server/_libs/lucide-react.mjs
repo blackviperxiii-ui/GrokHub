@@ -293,6 +293,26 @@ var ExternalLink = createLucideIcon("external-link", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var FolderInput = createLucideIcon("folder-input", [
+	["path", {
+		d: "M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1",
+		key: "fm4g5t"
+	}],
+	["path", {
+		d: "M2 13h10",
+		key: "pgb2dq"
+	}],
+	["path", {
+		d: "m9 16 3-3-3-3",
+		key: "6m91ic"
+	}]
+]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var FolderOpen = createLucideIcon("folder-open", [["path", {
 	d: "m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2",
 	key: "usdka0"
@@ -841,4 +861,4 @@ var Zap = createLucideIcon("zap", [["path", {
 	key: "1xq2db"
 }]]);
 //#endregion
-export { FolderOpen as A, AppWindow as B, Link2Off as C, Hammer as D, HardDrive as E, ChevronRight as F, Check as I, Cable as L, Download as M, Compass as N, Gauge as O, Command as P, Brain as R, Link2 as S, History as T, Activity as V, Minus as _, TimerReset as a, Menu as b, Sparkles as c, Settings as d, Send as f, Play as g, Plus as h, Trash2 as i, ExternalLink as j, Folder as k, ShieldCheck as l, Plug as m, X as n, Terminal as o, RefreshCw as p, Users as r, Square as s, Zap as t, ShieldAlert as u, MessageSquare as v, Image as w, LoaderCircle as x, MessageSquarePlus as y, ArrowRight as z };
+export { FolderOpen as A, ArrowRight as B, Link2Off as C, Hammer as D, HardDrive as E, Command as F, Activity as H, ChevronRight as I, Check as L, ExternalLink as M, Download as N, Gauge as O, Compass as P, Cable as R, Link2 as S, History as T, AppWindow as V, Minus as _, TimerReset as a, Menu as b, Sparkles as c, Settings as d, Send as f, Play as g, Plus as h, Trash2 as i, FolderInput as j, Folder as k, ShieldCheck as l, Plug as m, X as n, Terminal as o, RefreshCw as p, Users as r, Square as s, Zap as t, ShieldAlert as u, MessageSquare as v, Image as w, LoaderCircle as x, MessageSquarePlus as y, Brain as z };

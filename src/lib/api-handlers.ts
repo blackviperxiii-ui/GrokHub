@@ -67,6 +67,9 @@ export function createGrokChatSseStream(body: Record<string, unknown>): Readable
             model,
             apiKey: auth.apiKey,
             accessToken: auth.accessToken,
+            workspaceContext: body.workspaceContext
+              ? String(body.workspaceContext)
+              : undefined,
           },
           {
             onDelta: (delta) => send({ type: "delta", delta }),
@@ -309,6 +312,9 @@ export async function dispatchApi(
           model,
           apiKey: auth.apiKey,
           accessToken: auth.accessToken,
+          workspaceContext: body.workspaceContext
+            ? String(body.workspaceContext)
+            : undefined,
         },
         {
           onDelta: (d) => {
@@ -336,6 +342,9 @@ export async function dispatchApi(
           model,
           apiKey: auth.apiKey,
           accessToken: auth.accessToken,
+          workspaceContext: body.workspaceContext
+            ? String(body.workspaceContext)
+            : undefined,
         });
         return {
           ...result,

@@ -1,7 +1,7 @@
 import { r as __exportAll } from "../_runtime.mjs";
 import { t as __exportAll$1 } from "./rolldown-runtime-D7D4PA-g.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/version-DAFAcQCy.js
-var version_DAFAcQCy_exports = /* @__PURE__ */ __exportAll({
+//#region node_modules/.nitro/vite/services/ssr/assets/version-2C_HLcex.js
+var version_2C_HLcex_exports = /* @__PURE__ */ __exportAll({
 	C: () => friendlyModelName,
 	S: () => emptyCatalog,
 	T: () => needsGrokClassification,
@@ -667,7 +667,7 @@ function inferPlanFromAuth(opts) {
 	return "free";
 }
 /** Single source of truth for display / packaging version. */
-var APP_VERSION = "0.2.14";
+var APP_VERSION = "0.2.15";
 `${APP_VERSION}`;
 //#endregion
-export { usagePercent as C, unitsFromTokens as S, version_DAFAcQCy_exports as T, needsGrokClassification as _, buildCatalog as a, resolveModeWithCatalog as b, emptyCatalog as c, friendlyModelName as d, getMode as f, modelIdForMode as g, modeBadge as h, autoRouteFor as i, ensurePeriod as l, inferPlanFromAuth as m, PLAN_LIMITS as n, costFor as o, getModesWithCatalog as p, applyGrokPlan as r, createUsage as s, APP_VERSION as t, formatUnits as u, parseRateLimitHeaders as v, usageTone as w, stripAssistantChrome as x, resolveMode as y };
+export { usagePercent as C, unitsFromTokens as S, version_2C_HLcex_exports as T, needsGrokClassification as _, buildCatalog as a, resolveModeWithCatalog as b, emptyCatalog as c, friendlyModelName as d, getMode as f, modelIdForMode as g, modeBadge as h, autoRouteFor as i, ensurePeriod as l, inferPlanFromAuth as m, PLAN_LIMITS as n, costFor as o, getModesWithCatalog as p, applyGrokPlan as r, createUsage as s, APP_VERSION as t, formatUnits as u, parseRateLimitHeaders as v, usageTone as w, stripAssistantChrome as x, resolveMode as y };

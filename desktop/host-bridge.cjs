@@ -265,6 +265,125 @@ async function openApp(opts = {}) {
   }
 }
 
+
+async function walkSkillMds(root, relBase, depth, out) {
+  if (depth > 6 || out.length >= 200) return;
+  let names;
+  try {
+    names = await fs.readdir(root);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (name.startsWith(".") || name === "node_modules") continue;
+    const full = path.join(root, name);
+    const rel = relBase ? `${relBase}/${name}` : name;
+    let st;
+    try {
+      st = await fs.stat(full);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) {
+      await walkSkillMds(full, rel, depth + 1, out);
+    } else if (st.isFile() && /^skill\.md$/i.test(name) && st.size < 512000) {
+      try {
+        const content = await fs.readFile(full, "utf8");
+        out.push({ dirName: path.basename(path.dirname(full)), relativePath: rel, content });
+      } catch {
+        /* skip */
+      }
+    }
+  }
+}
+
+async function readOpenClawWorkspace(dirPath) {
+  const home = os.homedir();
+  const candidates = [
+    path.join(home, ".openclaw", "workspace"),
+    path.join(home, ".openclaw", "workspace-default"),
+    path.join(home, "openclaw", "workspace"),
+  ];
+  let target = dirPath && String(dirPath).trim()
+    ? path.resolve(String(dirPath).trim().replace(/^~(?=\/|$)/, home))
+    : "";
+  if (!target) {
+    for (const c of candidates) {
+      try {
+        const st = await fs.stat(c);
+        if (st.isDirectory()) {
+          target = c;
+          break;
+        }
+      } catch {
+        /* next */
+      }
+    }
+  }
+  if (!target) {
+    return {
+      ok: false,
+      error: "No OpenClaw workspace found. Pass a path or create ~/.openclaw/workspace",
+      root: "",
+      files: [],
+      skills: [],
+      candidates,
+    };
+  }
+  let st;
+  try {
+    st = await fs.stat(target);
+  } catch {
+    return { ok: false, error: `Path not found: ${target}`, root: target, files: [], skills: [], candidates };
+  }
+  if (!st.isDirectory()) {
+    return { ok: false, error: `Not a directory: ${target}`, root: target, files: [], skills: [], candidates };
+  }
+  const files = [];
+  const core = ["AGENTS.md","SOUL.md","USER.md","IDENTITY.md","TOOLS.md","HEARTBEAT.md","MEMORY.md","BOOT.md","BOOTSTRAP.md"];
+  for (const name of core) {
+    try {
+      const buf = await fs.readFile(path.join(target, name));
+      if (buf.length > 400000) continue;
+      files.push({ name, relativePath: name, content: buf.toString("utf8") });
+    } catch {
+      /* missing */
+    }
+  }
+  try {
+    const memDir = path.join(target, "memory");
+    const memNames = await fs.readdir(memDir);
+    const days = memNames.filter((n) => /^\d{4}-\d{2}-\d{2}\.md$/.test(n)).sort().reverse().slice(0, 3);
+    for (const n of days) {
+      try {
+        const buf = await fs.readFile(path.join(memDir, n));
+        if (buf.length > 200000) continue;
+        files.push({ name: n, relativePath: `memory/${n}`, content: buf.toString("utf8") });
+      } catch {
+        /* skip */
+      }
+    }
+  } catch {
+    /* no memory */
+  }
+  const skills = [];
+  for (const skillRoot of [path.join(target, "skills"), path.join(target, ".agents", "skills")]) {
+    await walkSkillMds(skillRoot, path.relative(target, skillRoot) || "skills", 0, skills);
+  }
+  if (!skills.length) {
+    await walkSkillMds(path.join(home, ".openclaw", "skills"), "managed-skills", 0, skills);
+  }
+  let configHint = null;
+  try {
+    const buf = await fs.readFile(path.join(home, ".openclaw", "openclaw.json"));
+    configHint = buf.subarray(0, 80000).toString("utf8");
+  } catch {
+    configHint = null;
+  }
+  return { ok: true, root: target, files, skills, configHint, candidates };
+}
+
+
 module.exports = {
   info,
   listDir,
@@ -273,4 +392,5 @@ module.exports = {
   runExec,
   listApps,
   openApp,
+  readOpenClawWorkspace,
 };

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, FolderInput } from "lucide-react";
 import { getModesWithCatalog } from "@/lib/modes";
 import { friendlyModelName } from "@/lib/models-catalog";
 import { applyUpdate, checkUpdate } from "@/lib/grok-client";
@@ -42,6 +42,9 @@ export function SettingsView() {
   const startGrokOAuth = useGrokHub((s) => s.startGrokOAuth);
   const pollGrokOAuth = useGrokHub((s) => s.pollGrokOAuth);
   const clearGrokOAuth = useGrokHub((s) => s.clearGrokOAuth);
+  const importOpenClawWorkspace = useGrokHub((s) => s.importOpenClawWorkspace);
+  const clearOpenClawWorkspace = useGrokHub((s) => s.clearOpenClawWorkspace);
+  const openClawWorkspace = useGrokHub((s) => s.openClawWorkspace);
   const { user, isPending } = useCurrentUserState();
 
   const [keyDraft, setKeyDraft] = useState(apiKey);
@@ -52,6 +55,9 @@ export function SettingsView() {
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateLog, setUpdateLog] = useState<string>("");
+  const [ocPath, setOcPath] = useState("~/.openclaw/workspace");
+  const [ocBusy, setOcBusy] = useState(false);
+  const [ocDetail, setOcDetail] = useState("");
   const pollRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -391,6 +397,73 @@ export function SettingsView() {
       </Card>
 
       <UsageMeterPanel />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <FolderInput className="h-4 w-4 text-[var(--color-muted)]" />
+            Import OpenClaw workspace
+          </CardTitle>
+          <CardDescription>
+            Pull skills, persona, and memory from an OpenClaw agent home (
+            <span className="font-mono">~/.openclaw/workspace</span>
+            ). Credentials and sqlite sessions are not imported.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {openClawWorkspace ? (
+            <div className="rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-success)_35%,transparent)] bg-[color-mix(in_oklab,var(--color-success)_8%,transparent)] px-3 py-2 text-sm">
+              <div className="font-medium">
+                {openClawWorkspace.identityName || "Workspace linked"}
+              </div>
+              <div className="truncate font-mono text-xs text-[var(--color-muted)]">
+                {openClawWorkspace.root}
+              </div>
+              <div className="mt-1 text-xs text-[var(--color-subtle)]">
+                {openClawWorkspace.filesImported.length} files · imported{" "}
+                {new Date(openClawWorkspace.importedAt).toLocaleString()}
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-[var(--color-subtle)]">
+              Default path is scanned automatically if you leave it blank.
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Input
+              value={ocPath}
+              onChange={(e) => setOcPath(e.target.value)}
+              placeholder="~/.openclaw/workspace"
+              className="min-w-[220px] flex-1 font-mono text-xs"
+            />
+            <Button
+              disabled={ocBusy}
+              onClick={() => {
+                setOcBusy(true);
+                setOcDetail("");
+                void importOpenClawWorkspace(ocPath.trim() || undefined).then((r) => {
+                  setOcDetail(r.detail);
+                  setOcBusy(false);
+                });
+              }}
+            >
+              {ocBusy ? "Importing…" : "Import workspace"}
+            </Button>
+            {openClawWorkspace && (
+              <Button variant="secondary" onClick={() => clearOpenClawWorkspace()}>
+                Clear import
+              </Button>
+            )}
+          </div>
+          {ocDetail && (
+            <p className="text-xs text-[var(--color-muted)]">{ocDetail}</p>
+          )}
+          <p className="text-[11px] text-[var(--color-subtle)]">
+            Imports <span className="font-mono">skills/**/SKILL.md</span>, AGENTS/SOUL/USER/IDENTITY,
+            HEARTBEAT → automation, and injects context into Agent chat.
+          </p>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

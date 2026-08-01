@@ -1,4 +1,4 @@
-import { Play, Plus, Sparkles } from "lucide-react";
+import { FolderInput, Play, Plus, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useGrokHub } from "@/lib/store";
 import { Badge } from "../ui/badge";
@@ -13,11 +13,16 @@ export function SkillsView() {
   const runSkill = useGrokHub((s) => s.runSkill);
   const addSkill = useGrokHub((s) => s.addSkill);
   const running = useGrokHub((s) => s.running);
+  const importOpenClawWorkspace = useGrokHub((s) => s.importOpenClawWorkspace);
+  const openClawWorkspace = useGrokHub((s) => s.openClawWorkspace);
 
   const [name, setName] = useState("");
   const [slash, setSlash] = useState("");
   const [description, setDescription] = useState("");
   const [instructions, setInstructions] = useState("");
+  const [ocPath, setOcPath] = useState("~/.openclaw/workspace");
+  const [ocBusy, setOcBusy] = useState(false);
+  const [ocDetail, setOcDetail] = useState("");
 
   function onCreate() {
     if (!name.trim() || !instructions.trim()) return;
@@ -35,6 +40,50 @@ export function SkillsView() {
 
   return (
     <div className="space-y-5">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <FolderInput className="h-4 w-4 text-[var(--color-muted)]" />
+            Import from OpenClaw
+          </CardTitle>
+          <CardDescription>
+            Load workspace skills from{" "}
+            <span className="font-mono">~/.openclaw/workspace/skills</span> (or another path).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-2">
+          <Input
+            value={ocPath}
+            onChange={(e) => setOcPath(e.target.value)}
+            className="min-w-[200px] max-w-md flex-1 font-mono text-xs"
+            placeholder="~/.openclaw/workspace"
+          />
+          <Button
+            size="sm"
+            disabled={ocBusy}
+            onClick={() => {
+              setOcBusy(true);
+              setOcDetail("");
+              void importOpenClawWorkspace(ocPath.trim() || undefined).then((r) => {
+                setOcDetail(r.detail);
+                setOcBusy(false);
+              });
+            }}
+          >
+            {ocBusy ? "Importing…" : "Import workspace"}
+          </Button>
+          {openClawWorkspace && (
+            <Badge variant="success">
+              {openClawWorkspace.identityName || "Linked"} ·{" "}
+              {openClawWorkspace.filesImported.length} files
+            </Badge>
+          )}
+          {ocDetail && (
+            <span className="w-full text-xs text-[var(--color-muted)]">{ocDetail}</span>
+          )}
+        </CardContent>
+      </Card>
+
       <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
         <div className="grid gap-3 sm:grid-cols-2">
           {skills.map((sk) => (
@@ -52,6 +101,7 @@ export function SkillsView() {
                   </div>
                   <Badge variant={sk.kind === "builtin" ? "info" : "default"}>
                     {sk.kind}
+                    {sk.id.startsWith("ocskill") ? " · openclaw" : ""}
                   </Badge>
                 </div>
               </CardHeader>
@@ -94,7 +144,7 @@ export function SkillsView() {
               Skill Creator
             </CardTitle>
             <CardDescription>
-              Teach once — slash command sticks across sessions (local demo memory).
+              Teach once — slash command sticks across sessions.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">

@@ -58,6 +58,7 @@ export async function grokChatStream(
     apiKey?: string;
     accessToken?: string;
     tokens?: XaiOAuthTokens | null;
+    workspaceContext?: string;
   },
   handlers: StreamHandlers,
 ): Promise<GrokChatResult & { tokens?: XaiOAuthTokens; refreshed?: boolean }> {
