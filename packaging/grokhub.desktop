@@ -1,12 +1,15 @@
 [Desktop Entry]
 Type=Application
+Version=1.0
 Name=GrokHub
 GenericName=Grok Agent Control Plane
 Comment=Grok-native agent desktop — modes, Imagine, Connectors, Skills, Automations
 Exec=grokhub %U
 Icon=grokhub
 Terminal=false
-Categories=Utility;Development;Office;
-Keywords=grok;ai;agent;xai;hub;
+Categories=Utility;Development;Office;Network;
+Keywords=grok;ai;agent;xai;hub;electron;
+StartupNotify=true
 StartupWMClass=GrokHub
+# System electron often reports class "electron" unless launcher sets --class
 X-GNOME-UsesNotifications=true

@@ -33,6 +33,15 @@ package() {
     "${pkgdir}/usr/share/applications/grokhub.desktop"
   install -Dm644 packaging/grokhub.svg \
     "${pkgdir}/usr/share/icons/hicolor/scalable/apps/grokhub.svg"
+
+  if [[ -d packaging/icons/hicolor ]]; then
+    cp -a packaging/icons/hicolor/. "${pkgdir}/usr/share/icons/hicolor/"
+  fi
+  if [[ -f packaging/icons/grokhub-128.png ]]; then
+    install -Dm644 packaging/icons/grokhub-128.png \
+      "${pkgdir}/usr/share/pixmaps/grokhub.png"
+  fi
+
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${_pkgname}/LICENSE"
 
   find "${pkgdir}/usr/lib/${_pkgname}" -type f -exec chmod 644 {} +

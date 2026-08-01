@@ -38,7 +38,6 @@ start_ui() {
     return 0
   fi
 
-  # Reap stale pid
   if [[ -f "$PIDFILE" ]]; then
     old="$(cat "$PIDFILE" 2>/dev/null || true)"
     if [[ -n "${old:-}" ]] && kill -0 "$old" 2>/dev/null; then
@@ -60,7 +59,6 @@ start_ui() {
     export NITRO_PORT="$PORT"
     export HOST="127.0.0.1"
     export NITRO_HOST="127.0.0.1"
-    # Prefer loopback only for the agent UI
     exec node .output/server/index.mjs
   ) >>"$LOG" 2>&1 &
   echo $! >"$PIDFILE"
@@ -80,4 +78,13 @@ start_ui() {
 start_ui
 
 export GROKHUB_URL="$URL"
-exec electron "$APP_ROOT/desktop/main.mjs" "$@"
+
+# Taskbar / panel icon matching:
+#  - --class=GrokHub matches StartupWMClass in the .desktop file
+#  - --name=GrokHub sets the window title/app id for many WMs
+#  - Electron also loads desktop/icons/icon.png as the window icon
+exec electron \
+  --class=GrokHub \
+  --name=GrokHub \
+  "$APP_ROOT/desktop/main.mjs" \
+  "$@"

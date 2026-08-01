@@ -1,5 +1,5 @@
-# Maintainer: GrokClaw contributors
-pkgname=grokclaw
+# Maintainer: GrokHub contributors
+pkgname=grokhub
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Grok-native agent control plane (modes, Imagine, connectors) — Arch desktop"
@@ -17,7 +17,7 @@ prepare() {
 
 build() {
   cd "$startdir/.."
-  npm run build
+  GROKHUB_DESKTOP=1 npm run build
 }
 
 package() {
@@ -25,29 +25,20 @@ package() {
   install -dm755 "$pkgdir/usr/lib/$pkgname"
   install -dm755 "$pkgdir/usr/bin"
   install -dm755 "$pkgdir/usr/share/applications"
-  install -dm755 "$pkgdir/usr/share/icons/hicolor/256x256/apps"
 
-  cp -a desktop "$pkgdir/usr/lib/$pkgname/"
+  cp -a desktop .output "$pkgdir/usr/lib/$pkgname/" 2>/dev/null || cp -a desktop "$pkgdir/usr/lib/$pkgname/"
   cp -a package.json "$pkgdir/usr/lib/$pkgname/" 2>/dev/null || true
 
-  cat > "$pkgdir/usr/bin/grokclaw" << 'EOF'
-#!/bin/sh
-export GROKCLAW_WAYLAND="${GROKCLAW_WAYLAND:-1}"
-export GROKCLAW_TRAY="${GROKCLAW_TRAY:-1}"
-if [ -n "$GROKCLAW_URL" ]; then
-  :
-elif [ -f /usr/lib/grokclaw/.url ]; then
-  export GROKCLAW_URL="$(cat /usr/lib/grokclaw/.url)"
-else
-  export GROKCLAW_URL="http://127.0.0.1:8080"
-fi
-exec electron /usr/lib/grokclaw/desktop/main.mjs "$@"
-EOF
-  chmod 755 "$pkgdir/usr/bin/grokclaw"
-
-  install -Dm644 packaging/grokclaw.desktop \
-    "$pkgdir/usr/share/applications/grokclaw.desktop"
-
-  install -Dm644 packaging/grokclaw.svg \
-    "$pkgdir/usr/share/icons/hicolor/scalable/apps/grokclaw.svg"
+  install -Dm755 packaging/aur/grokhub.sh "$pkgdir/usr/bin/grokhub"
+  install -Dm644 packaging/grokhub.desktop \
+    "$pkgdir/usr/share/applications/grokhub.desktop"
+  install -Dm644 packaging/grokhub.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/grokhub.svg"
+  if [[ -d packaging/icons/hicolor ]]; then
+    cp -a packaging/icons/hicolor/. "$pkgdir/usr/share/icons/hicolor/"
+  fi
+  if [[ -f packaging/icons/grokhub-128.png ]]; then
+    install -Dm644 packaging/icons/grokhub-128.png \
+      "$pkgdir/usr/share/pixmaps/grokhub.png"
+  fi
 }

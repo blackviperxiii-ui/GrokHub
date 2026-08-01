@@ -1,4 +1,8 @@
 post_install() {
+  # Refresh caches so the panel / launcher picks up Icon=grokhub
+  gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+  update-desktop-database /usr/share/applications 2>/dev/null || true
+
   cat <<'EOF'
 
   GrokHub v0.1 installed.
@@ -6,7 +10,11 @@ post_install() {
   Run:    grokhub
   Menu:   Applications → GrokHub
 
-  Depends on system packages: electron, nodejs
+  Taskbar icon: Grok mark (PNG + SVG in hicolor).
+  If a generic Electron icon appears, fully quit GrokHub and relaunch
+  (or log out once so the panel reloads WM_CLASS=GrokHub).
+
+  Depends: electron, nodejs
   Unsandboxed host agent — commands run as your user.
 
   Env:
@@ -19,4 +27,9 @@ EOF
 
 post_upgrade() {
   post_install
+}
+
+post_remove() {
+  gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+  update-desktop-database /usr/share/applications 2>/dev/null || true
 }

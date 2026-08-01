@@ -44,6 +44,16 @@ package() {
     "${pkgdir}/usr/share/applications/grokhub.desktop"
   install -Dm644 packaging/grokhub.svg \
     "${pkgdir}/usr/share/icons/hicolor/scalable/apps/grokhub.svg"
+
+  # PNG sizes for taskbar / panel (SVG alone is often ignored by Electron + some docks)
+  if [[ -d packaging/icons/hicolor ]]; then
+    cp -a packaging/icons/hicolor/. "${pkgdir}/usr/share/icons/hicolor/"
+  fi
+  if [[ -f packaging/icons/grokhub-128.png ]]; then
+    install -Dm644 packaging/icons/grokhub-128.png \
+      "${pkgdir}/usr/share/pixmaps/grokhub.png"
+  fi
+
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/grokhub/LICENSE"
 
   find "${pkgdir}/usr/lib/grokhub" -type f -exec chmod 644 {} +

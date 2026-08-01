@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, screen } from "electron";
 import path from "node:path";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -10,10 +11,88 @@ const grokBridge = require("./grok-bridge.cjs");
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
 
+/** Resolve app icon from desktop/icons or system theme paths. */
+function resolveIconPath(candidates) {
+  for (const p of candidates) {
+    try {
+      if (p && fs.existsSync(p)) return p;
+    } catch {
+      /* next */
+    }
+  }
+  return null;
+}
+
+function iconCandidates(names) {
+  const roots = [
+    path.join(__dirname, "icons"),
+    path.join(__dirname, "..", "packaging", "icons"),
+    path.join(__dirname, "..", "packaging"),
+    "/usr/share/icons/hicolor/256x256/apps",
+    "/usr/share/icons/hicolor/128x128/apps",
+    "/usr/share/pixmaps",
+  ];
+  const out = [];
+  for (const root of roots) {
+    for (const name of names) {
+      out.push(path.join(root, name));
+    }
+  }
+  return out;
+}
+
+function loadAppIcon() {
+  const file = resolveIconPath(
+    iconCandidates([
+      "icon.png",
+      "icon-512.png",
+      "grokhub-256.png",
+      "grokhub-128.png",
+      "grokhub.png",
+      "grokhub.svg",
+    ]),
+  );
+  if (!file) return nativeImage.createEmpty();
+  const img = nativeImage.createFromPath(file);
+  return img.isEmpty() ? nativeImage.createEmpty() : img;
+}
+
+function loadTrayIcon() {
+  const file = resolveIconPath(
+    iconCandidates([
+      "tray.png",
+      "grokhub-32.png",
+      "grokhub-48.png",
+      "icon.png",
+      "grokhub.png",
+    ]),
+  );
+  if (!file) return loadAppIcon();
+  let img = nativeImage.createFromPath(file);
+  if (img.isEmpty()) return loadAppIcon();
+  // Linux trays often want ~22–32px
+  const size = img.getSize();
+  if (size.width > 32) {
+    img = img.resize({ width: 32, height: 32, quality: "best" });
+  }
+  return img;
+}
+
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
 /** @type {Tray | null} */
 let tray = null;
+
+// Must run before app ready — sets WM_CLASS / taskbar identity on Linux
+app.setName("GrokHub");
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("class", "GrokHub");
+}
+try {
+  app.setAppUserModelId("com.grokhub.app");
+} catch {
+  /* non-windows */
+}
 
 function fitToWorkArea(win) {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -32,6 +111,7 @@ function fitToWorkArea(win) {
 function createWindow() {
   const display = screen.getPrimaryDisplay();
   const { width: aw, height: ah } = display.workAreaSize;
+  const icon = loadAppIcon();
 
   mainWindow = new BrowserWindow({
     width: Math.min(1600, aw),
@@ -41,8 +121,10 @@ function createWindow() {
     show: false,
     backgroundColor: "#0a0a0b",
     title: "GrokHub",
+    icon: icon.isEmpty() ? undefined : icon,
     frame: false,
     titleBarStyle: "hidden",
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -51,6 +133,14 @@ function createWindow() {
       webSecurity: true,
     },
   });
+
+  if (!icon.isEmpty()) {
+    try {
+      mainWindow.setIcon(icon);
+    } catch {
+      /* ignore */
+    }
+  }
 
   fitToWorkArea(mainWindow);
 
@@ -64,6 +154,13 @@ function createWindow() {
 
   mainWindow.once("ready-to-show", () => {
     fitToWorkArea(mainWindow);
+    if (!icon.isEmpty()) {
+      try {
+        mainWindow?.setIcon(icon);
+      } catch {
+        /* ignore */
+      }
+    }
     if (process.env.GROKHUB_START_MINIMIZED === "1") {
       mainWindow?.hide();
     } else {
@@ -87,8 +184,20 @@ function createWindow() {
 
 function createTray() {
   if (process.env.GROKHUB_TRAY === "0") return;
-  const icon = nativeImage.createEmpty();
-  tray = new Tray(icon);
+  const icon = loadTrayIcon();
+  // Empty tray icons crash / are invisible on some DEs
+  if (icon.isEmpty()) {
+    // 1x1 dark pixel fallback so Tray still constructs
+    const fallback = nativeImage.createFromBuffer(
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+    );
+    tray = new Tray(fallback);
+  } else {
+    tray = new Tray(icon);
+  }
   tray.setToolTip("GrokHub");
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -172,6 +281,14 @@ if (process.env.GROKHUB_WAYLAND !== "0") {
 app.commandLine.appendSwitch("no-sandbox");
 
 app.whenReady().then(() => {
+  // Dock / taskbar name
+  if (process.platform === "linux") {
+    try {
+      app.setName("GrokHub");
+    } catch {
+      /* ignore */
+    }
+  }
   registerIpc();
   createWindow();
   createTray();
