@@ -1,9 +1,10 @@
 export type NavId =
+  | "chat"
+  | "history"
   | "command"
   | "connectors"
   | "skills"
   | "automations"
-  | "chat"
   | "agents"
   | "imagine"
   | "desktop"
@@ -80,59 +81,81 @@ export type ActivityItem = {
     | "agent"
     | "imagine"
     | "desktop"
-    | "usage";
+    | "usage"
+    | "auth";
   title: string;
   detail: string;
-  status?: RunStatus;
+  status: RunStatus;
 };
 
-export type ChatMessage = {
-  id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  ts: number;
-  mode?: GrokModeId;
-};
+export type AgentStatus = "idle" | "working" | "offline";
 
 export type Agent = {
   id: string;
   name: string;
   role: string;
   model: string;
-  status: "idle" | "working" | "offline";
+  status: AgentStatus;
   tasks: number;
   color: string;
 };
 
-export type ImagineAspect = "1:1" | "16:9" | "9:16" | "3:2" | "2:3";
+export type ChatRole = "user" | "assistant" | "system";
+
+export type ChatMessage = {
+  id: string;
+  role: ChatRole;
+  content: string;
+  ts: number;
+  mode?: GrokModeId;
+};
+
+/** Grok-style conversation history entry */
+export type ChatThread = {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: ChatMessage[];
+  mode?: GrokModeId;
+};
+
+export type ImagineAspect = "1:1" | "16:9" | "9:16" | "4:3" | "3:2" | "2:3";
+
 
 export type ImagineJob = {
   id: string;
   prompt: string;
   aspect: ImagineAspect;
   ts: number;
-  status: "queued" | "rendering" | "ready" | "failed";
+  status: "rendering" | "ready" | "failed";
+  mode?: GrokModeId;
   imageDataUrl?: string;
-  mode: GrokModeId;
 };
 
-/** Subscription tier for quota metering */
-export type SubscriptionPlanId = "free" | "super" | "pro";
+export type SubscriptionPlanId = "free" | "pro" | "super";
 
-export type UsageBucket = "message" | "imagine" | "automation" | "skill" | "host";
+
+
+export type UsageBucket = "message" | "imagine" | "automation" | "host" | "skill";
 
 export type UsageSnapshot = {
   plan: SubscriptionPlanId;
-  /** Billing period bounds (ms) */
   periodStart: number;
   periodEnd: number;
-  /** Abstract compute units burned this period */
   usedUnits: number;
-  /** Event counters */
   messages: number;
   imagine: number;
   automations: number;
   host: number;
-  /** Per-mode message counts */
   byMode: Record<GrokModeId, number>;
+};
+
+/** Profile synced after Grok OAuth / API connect — never seeded with personal defaults. */
+export type GrokProfile = {
+  displayName: string | null;
+  email: string | null;
+  imageUrl: string | null;
+  models: string[];
+  connectedAt: number | null;
 };

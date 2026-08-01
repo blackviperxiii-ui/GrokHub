@@ -1,5 +1,5 @@
-import { r as __toESM } from "../_runtime.mjs";
-import { M as require_react } from "./@tanstack/react-router+[...].mjs";
+import { o as __toESM } from "../_runtime.mjs";
+import { P as require_react } from "./@tanstack/react-router+[...].mjs";
 //#region node_modules/lucide-react/dist/esm/shared/src/utils.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 /**
@@ -344,6 +344,26 @@ var HardDrive = createLucideIcon("hard-drive", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var History = createLucideIcon("history", [
+	["path", {
+		d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
+		key: "1357e3"
+	}],
+	["path", {
+		d: "M3 3v5h5",
+		key: "1xhq8a"
+	}],
+	["path", {
+		d: "M12 7v5l4 2",
+		key: "1fdv2h"
+	}]
+]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var Image = createLucideIcon("image", [
 	["rect", {
 		width: "18",
@@ -423,6 +443,26 @@ var Menu = createLucideIcon("menu", [
 	["path", {
 		d: "M4 6h16",
 		key: "1o0s65"
+	}]
+]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
+var MessageSquarePlus = createLucideIcon("message-square-plus", [
+	["path", {
+		d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
+		key: "1lielz"
+	}],
+	["path", {
+		d: "M12 7v6",
+		key: "lw1j43"
+	}],
+	["path", {
+		d: "M9 10h6",
+		key: "9gxzsh"
 	}]
 ]);
 /**
@@ -628,6 +668,40 @@ var TimerReset = createLucideIcon("timer-reset", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var Trash2 = createLucideIcon("trash-2", [
+	["path", {
+		d: "M3 6h18",
+		key: "d0wm0j"
+	}],
+	["path", {
+		d: "M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6",
+		key: "4alrt4"
+	}],
+	["path", {
+		d: "M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2",
+		key: "v07s0e"
+	}],
+	["line", {
+		x1: "10",
+		x2: "10",
+		y1: "11",
+		y2: "17",
+		key: "1uufr5"
+	}],
+	["line", {
+		x1: "14",
+		x2: "14",
+		y1: "11",
+		y2: "17",
+		key: "xtxkd"
+	}]
+]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var Users = createLucideIcon("users", [
 	["path", {
 		d: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2",
@@ -672,4 +746,4 @@ var Zap = createLucideIcon("zap", [["path", {
 	key: "1xq2db"
 }]]);
 //#endregion
-export { Brain as A, Folder as C, ChevronRight as D, Command as E, AppWindow as M, Activity as N, Check as O, Gauge as S, Download as T, LoaderCircle as _, Terminal as a, HardDrive as b, ShieldAlert as c, RefreshCw as d, Plus as f, Menu as g, MessageSquare as h, TimerReset as i, ArrowRight as j, Cable as k, Settings as l, Minus as m, X as n, Square as o, Play as p, Users as r, Sparkles as s, Zap as t, Send as u, Link2Off as v, FolderOpen as w, Hammer as x, Image as y };
+export { ChevronRight as A, HardDrive as C, FolderOpen as D, Folder as E, AppWindow as F, Activity as I, Cable as M, Brain as N, Download as O, ArrowRight as P, History as S, Gauge as T, MessageSquarePlus as _, TimerReset as a, Link2Off as b, Sparkles as c, Send as d, RefreshCw as f, MessageSquare as g, Minus as h, Trash2 as i, Check as j, Command as k, ShieldAlert as l, Play as m, X as n, Terminal as o, Plus as p, Users as r, Square as s, Zap as t, Settings as u, Menu as v, Hammer as w, Image as x, LoaderCircle as y };

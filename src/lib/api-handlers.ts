@@ -1,7 +1,7 @@
 /**
  * Unified JSON API handlers for /api/grok and /api/update (Node only).
  */
-import { callXaiChat, probeXaiKey, type GrokChatMessage } from "./grok";
+import { callXaiChat, probeXaiKey, XAI_BASE, type GrokChatMessage } from "./grok";
 import type { GrokModeId } from "./types";
 import { applyUpdate, checkForUpdate } from "./update";
 
@@ -26,6 +26,25 @@ export async function dispatchApi(
         ...result,
         envConfigured: Boolean(process.env.XAI_API_KEY || process.env.GROK_API_KEY),
       };
+    }
+    if (action === "models") {
+      const apiKey =
+        String(body.apiKey || "") ||
+        process.env.XAI_API_KEY ||
+        process.env.GROK_API_KEY ||
+        "";
+      if (!apiKey) return { models: [] };
+      try {
+        const res = await fetch(`${XAI_BASE}/models`, {
+          headers: { authorization: `Bearer ${apiKey}` },
+        });
+        if (!res.ok) return { models: [] };
+        const data = (await res.json()) as { data?: Array<{ id?: string }> };
+        const models = (data.data || []).map((m) => m.id || "").filter(Boolean);
+        return { models };
+      } catch {
+        return { models: [] };
+      }
     }
     if (action === "chat") {
       const messages = (body.messages as GrokChatMessage[]) || [];

@@ -3,8 +3,10 @@ import {
   Cable,
   Command,
   HardDrive,
+  History,
   ImageIcon,
   MessageSquare,
+  MessageSquarePlus,
   Minus,
   Settings,
   Sparkles,
@@ -15,10 +17,14 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { getMode } from "@/lib/modes";
 import { useGrokHub } from "@/lib/store";
 import type { NavId } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { authEnabled } from "@/lib/auth/client";
+import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { UserButton } from "@/lib/auth/gates";
 import { GrokHubMark } from "./GrokLogo";
 import { ModePicker } from "./ModePicker";
 import { RelativeTime } from "./RelativeTime";
@@ -31,6 +37,7 @@ import { ChatView } from "./views/ChatView";
 import { CommandView } from "./views/CommandView";
 import { ConnectorsView } from "./views/ConnectorsView";
 import { DesktopHostView } from "./views/DesktopHostView";
+import { HistoryView } from "./views/HistoryView";
 import { ImagineView } from "./views/ImagineView";
 import { SettingsView } from "./views/SettingsView";
 import { SkillsView } from "./views/SkillsView";
@@ -39,6 +46,7 @@ const APP_VERSION = "0.1";
 
 const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { id: "chat", label: "Agent", icon: MessageSquare },
+  { id: "history", label: "History", icon: History },
   { id: "command", label: "Command", icon: Command },
   { id: "desktop", label: "Desktop", icon: HardDrive },
   { id: "imagine", label: "Imagine", icon: ImageIcon },
@@ -61,6 +69,12 @@ export function AppShell() {
   const grokConnected = useGrokHub((s) => s.grokConnected);
   const grokStatusDetail = useGrokHub((s) => s.grokStatusDetail);
   const probeGrok = useGrokHub((s) => s.probeGrok);
+  const syncFromGrok = useGrokHub((s) => s.syncFromGrok);
+  const newThread = useGrokHub((s) => s.newThread);
+  const threads = useGrokHub((s) => s.threads);
+  const selectThread = useGrokHub((s) => s.selectThread);
+  const activeThreadId = useGrokHub((s) => s.activeThreadId);
+  const { user, isPending } = useCurrentUserState();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const modeMeta = getMode(mode);
@@ -68,12 +82,26 @@ export function AppShell() {
   useEffect(() => {
     const p = useGrokHub.persist.rehydrate();
     Promise.resolve(p).finally(() => {
+      // Always land on Agent for a clean session entry
+      useGrokHub.setState({ nav: "chat" });
       useGrokHub.getState().refreshStaleTimes();
       useGrokHub.getState().tickHeartbeat();
       void useGrokHub.getState().probeGrok();
     });
     setIsDesktop(Boolean(window.grokhubDesktop));
   }, []);
+
+  // After Grok OAuth, pull identity into profile (no personal defaults in source)
+  useEffect(() => {
+    if (isPending) return;
+    if (user && !user.isDevFallback) {
+      void syncFromGrok({
+        displayName: user.displayName,
+        email: user.primaryEmail,
+        imageUrl: user.profileImageUrl,
+      });
+    }
+  }, [user, isPending, syncFromGrok]);
 
   useEffect(() => {
     const hb = window.setInterval(() => tickHeartbeat(), 30000);
@@ -86,6 +114,7 @@ export function AppShell() {
 
   const drag = { WebkitAppRegion: "drag" } as CSSProperties;
   const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
+  const recent = [...threads].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6);
 
   return (
     <div className="flex h-dvh max-h-dvh flex-col overflow-hidden bg-[var(--color-bg)] text-[var(--color-fg)]">
@@ -123,6 +152,20 @@ export function AppShell() {
         <div className="flex min-w-0 items-center gap-2" style={noDrag}>
           <UsageMeterChip className="hidden max-w-[160px] sm:flex" />
           <ModePicker />
+          {isPending ? (
+            <div className="hidden h-7 w-20 animate-pulse rounded bg-[var(--color-elevated)] sm:block" />
+          ) : user && !user.isDevFallback ? (
+            <div className="hidden scale-90 sm:block">
+              <UserButton />
+            </div>
+          ) : authEnabled ? (
+            <Link
+              to="/login"
+              className="hidden rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] text-[var(--color-muted)] hover:text-[var(--color-fg)] sm:inline"
+            >
+              Sign in
+            </Link>
+          ) : null}
           {isDesktop && (
             <div className="ml-1 flex items-center gap-0.5">
               <button
@@ -155,8 +198,14 @@ export function AppShell() {
       </div>
 
       <div className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 overflow-hidden">
-        <aside className="hidden w-56 shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-surface)] md:flex">
-          <nav className="scroll-panel flex flex-1 flex-col gap-1 p-3">
+        <aside className="hidden w-60 shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-surface)] md:flex">
+          <div className="shrink-0 p-3 pb-1">
+            <Button size="sm" className="w-full" variant="secondary" onClick={() => newThread()}>
+              <MessageSquarePlus className="h-4 w-4" />
+              New chat
+            </Button>
+          </div>
+          <nav className="scroll-panel flex flex-1 flex-col gap-1 p-3 pt-1">
             {NAV.map((item) => {
               const Icon = item.icon;
               const active = nav === item.id;
@@ -177,6 +226,27 @@ export function AppShell() {
                 </button>
               );
             })}
+
+            <div className="mt-3 border-t border-[var(--color-border)] pt-3">
+              <div className="mb-1.5 px-1 text-[10px] font-medium uppercase tracking-wide text-[var(--color-subtle)]">
+                Recent
+              </div>
+              {recent.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => selectThread(t.id)}
+                  className={cn(
+                    "mb-0.5 flex w-full flex-col rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-xs transition-colors",
+                    t.id === activeThreadId
+                      ? "bg-[var(--color-elevated)] text-[var(--color-fg)]"
+                      : "text-[var(--color-muted)] hover:bg-[var(--color-elevated)]/50",
+                  )}
+                >
+                  <span className="truncate font-medium">{t.title}</span>
+                </button>
+              ))}
+            </div>
           </nav>
 
           <div className="shrink-0 space-y-3 border-t border-[var(--color-border)] p-4">
@@ -201,7 +271,7 @@ export function AppShell() {
                 refreshStaleTimes();
               }}
             >
-              Reset demo
+              Reset to clean install
             </Button>
           </div>
         </aside>
@@ -223,7 +293,12 @@ export function AppShell() {
                   {NAV.find((n) => n.id === nav)?.label}
                 </div>
                 <div className="truncate text-xs text-[var(--color-subtle)]">
-                  GrokHub v{APP_VERSION} · {grokConnected ? "live Grok" : "connect in Settings"}
+                  GrokHub v{APP_VERSION} ·{" "}
+                  {user && !user.isDevFallback
+                    ? user.displayName || user.primaryEmail || "Signed in"
+                    : grokConnected
+                      ? "API connected"
+                      : "Sign in to connect Grok"}
                 </div>
               </div>
             </div>
@@ -271,19 +346,21 @@ export function AppShell() {
           )}
 
           <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
-            <div className="scroll-panel min-h-0 flex-1">
-              {nav === "command" && <CommandView />}
-              {nav === "connectors" && <ConnectorsView />}
-              {nav === "skills" && <SkillsView />}
-              {nav === "automations" && <AutomationsView />}
-              {nav === "agents" && <AgentsView />}
-              {nav === "imagine" && <ImagineView />}
-              {nav === "desktop" && <DesktopHostView />}
-              {nav === "settings" && <SettingsView />}
-            </div>
-            {nav === "chat" && (
+            {(nav === "chat" || nav === "history") && nav === "chat" ? (
               <div className="min-h-0 flex-1 overflow-hidden">
                 <ChatView />
+              </div>
+            ) : (
+              <div className="scroll-panel min-h-0 flex-1">
+                {nav === "history" && <HistoryView />}
+                {nav === "command" && <CommandView />}
+                {nav === "connectors" && <ConnectorsView />}
+                {nav === "skills" && <SkillsView />}
+                {nav === "automations" && <AutomationsView />}
+                {nav === "agents" && <AgentsView />}
+                {nav === "imagine" && <ImagineView />}
+                {nav === "desktop" && <DesktopHostView />}
+                {nav === "settings" && <SettingsView />}
               </div>
             )}
           </main>

@@ -1,4 +1,4 @@
-import { Send } from "lucide-react";
+import { MessageSquarePlus, Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
 import { useGrokHub } from "@/lib/store";
@@ -12,7 +12,6 @@ import { Input } from "../ui/input";
 
 const SUGGESTIONS = [
   "What can you help me with?",
-  "/morning",
   "$ uname -a",
   "What's my usage?",
   "Explain my modes",
@@ -28,6 +27,7 @@ export function ChatView() {
   const recordUsage = useGrokHub((s) => s.recordUsage);
   const usage = useGrokHub((s) => s.usage);
   const grokConnected = useGrokHub((s) => s.grokConnected);
+  const newThread = useGrokHub((s) => s.newThread);
   const [text, setText] = useState("");
   const [localRunning, setLocalRunning] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -43,18 +43,24 @@ export function ChatView() {
   async function runShell(command: string) {
     setLocalRunning(true);
     const userLine = command.startsWith("$") ? command : `$ ${command}`;
-    useGrokHub.setState((s) => ({
-      chat: [
+    useGrokHub.setState((s) => {
+      const chat = [
         ...s.chat,
         {
           id: `u_${Date.now()}`,
-          role: "user",
+          role: "user" as const,
           content: userLine,
           ts: Date.now(),
           mode,
         },
-      ],
-    }));
+      ];
+      const threads = s.threads.map((t) =>
+        t.id === s.activeThreadId
+          ? { ...t, messages: chat, updatedAt: Date.now() }
+          : t,
+      );
+      return { chat, threads };
+    });
     try {
       const bill = recordUsage("host");
       if (!bill.ok) {
@@ -83,18 +89,24 @@ export function ChatView() {
       ]
         .filter(Boolean)
         .join("\n");
-      useGrokHub.setState((s) => ({
-        chat: [
+      useGrokHub.setState((s) => {
+        const chat = [
           ...s.chat,
           {
             id: `a_${Date.now()}`,
-            role: "assistant",
+            role: "assistant" as const,
             content: body,
             ts: Date.now(),
             mode,
           },
-        ],
-      }));
+        ];
+        const threads = s.threads.map((t) =>
+          t.id === s.activeThreadId
+            ? { ...t, messages: chat, updatedAt: Date.now() }
+            : t,
+        );
+        return { chat, threads };
+      });
       pushActivity({
         kind: "desktop",
         title: r.ok ? "Host command ok" : "Host command failed",
@@ -143,16 +155,22 @@ export function ChatView() {
         <CardHeader className="shrink-0 border-b border-[var(--color-border)]">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <CardTitle className="text-sm">Agent session</CardTitle>
+              <CardTitle className="text-sm">Agent</CardTitle>
               <CardDescription>
-                Live Grok via xAI · <span className="font-mono">$</span> for host shell · mode units
-                apply
+                Live Grok · <span className="font-mono">$</span> host shell · History in the
+                sidebar
               </CardDescription>
             </div>
             <div className="flex flex-col items-end gap-1">
-              <Badge className="font-mono">{modeMeta.label}</Badge>
+              <div className="flex gap-1">
+                <Button size="sm" variant="secondary" onClick={() => newThread()}>
+                  <MessageSquarePlus className="h-3.5 w-3.5" />
+                  New
+                </Button>
+                <Badge className="font-mono">{modeMeta.label}</Badge>
+              </div>
               <Badge variant={grokConnected ? "success" : "default"} className="text-[10px]">
-                {grokConnected ? "Grok live" : "Offline / key needed"}
+                {grokConnected ? "Grok live" : "Connect in Settings"}
               </Badge>
               <span className="text-[10px] tabular text-[var(--color-subtle)]">
                 {formatUnits(usage.usedUnits)}/{formatUnits(plan.units)} · {pct}%

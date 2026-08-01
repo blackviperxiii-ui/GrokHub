@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { GROK_MODES } from "@/lib/modes";
 import { applyUpdate, checkUpdate } from "@/lib/grok-client";
+import { GROK_PROVIDERS, authEnabled, signIn, signOut } from "@/lib/auth/client";
+import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { useGrokHub } from "@/lib/store";
 import type { GrokModeId } from "@/lib/types";
 import type { UpdateStatus } from "@/lib/update";
@@ -25,6 +28,9 @@ export function SettingsView() {
   const grokConnected = useGrokHub((s) => s.grokConnected);
   const grokStatusDetail = useGrokHub((s) => s.grokStatusDetail);
   const probeGrok = useGrokHub((s) => s.probeGrok);
+  const syncFromGrok = useGrokHub((s) => s.syncFromGrok);
+  const profile = useGrokHub((s) => s.profile);
+  const { user, isPending } = useCurrentUserState();
 
   const [keyDraft, setKeyDraft] = useState(apiKey);
   const [ghDraft, setGhDraft] = useState(githubToken);
@@ -62,7 +68,14 @@ export function SettingsView() {
     setApiKey(keyDraft.trim());
     setProbing(true);
     try {
-      await probeGrok();
+      const ok = await probeGrok();
+      if (ok && user && !user.isDevFallback) {
+        await syncFromGrok({
+          displayName: user.displayName,
+          email: user.primaryEmail,
+          imageUrl: user.profileImageUrl,
+        });
+      }
     } finally {
       setProbing(false);
     }
@@ -103,21 +116,96 @@ export function SettingsView() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-5 pb-8">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Grok account (OAuth)</CardTitle>
+          <CardDescription>
+            Sign in through the Grok Build auth broker (auth.grok.me) with Google or X. Identity is
+            pulled after login — nothing personal is preloaded in the app package.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {isPending ? (
+            <div className="h-10 animate-pulse rounded bg-[var(--color-elevated)]" />
+          ) : user && !user.isDevFallback ? (
+            <div className="flex flex-wrap items-center gap-3">
+              {user.profileImageUrl ? (
+                <img
+                  src={user.profileImageUrl}
+                  alt=""
+                  className="h-10 w-10 rounded-full object-cover"
+                />
+              ) : (
+                <div className="grid h-10 w-10 place-items-center rounded-full bg-[var(--color-elevated)] text-sm font-medium">
+                  {(user.displayName || user.primaryEmail || "?").charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">{user.displayName || "Grok user"}</div>
+                <div className="truncate text-xs text-[var(--color-muted)]">
+                  {user.primaryEmail || "Signed in via Grok OAuth"}
+                </div>
+              </div>
+              <Badge variant="success">OAuth</Badge>
+              {authEnabled && (
+                <Button variant="secondary" size="sm" onClick={() => void signOut()}>
+                  Sign out
+                </Button>
+              )}
+            </div>
+          ) : authEnabled ? (
+            <div className="space-y-2">
+              {GROK_PROVIDERS.map((p) => (
+                <Button
+                  key={p.providerId}
+                  className="w-full"
+                  variant={p.idp === "google" ? "default" : "secondary"}
+                  onClick={() => void signIn(p.providerId, { callbackURL: "/" })}
+                >
+                  Continue with {p.label}
+                </Button>
+              ))}
+              <p className="text-center text-xs text-[var(--color-subtle)]">
+                Or open the{" "}
+                <Link to="/login" className="underline underline-offset-2">
+                  sign-in page
+                </Link>
+              </p>
+            </div>
+          ) : (
+            <p className="text-sm text-[var(--color-muted)]">Auth is disabled in this build.</p>
+          )}
+          {profile.models.length > 0 && (
+            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+              <div className="text-[10px] uppercase tracking-wide text-[var(--color-subtle)]">
+                Models from xAI
+              </div>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {profile.models.slice(0, 12).map((m) => (
+                  <Badge key={m} className="font-mono text-[10px]">
+                    {m}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <UsageMeterPanel />
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Grok / xAI connection</CardTitle>
+          <CardTitle className="text-sm">xAI API key (chat)</CardTitle>
           <CardDescription>
-            Agent chat uses the live xAI API (api.x.ai). Paste a key from{" "}
-            <span className="font-mono">console.x.ai</span> or export{" "}
-            <span className="font-mono">XAI_API_KEY</span> in the environment.
+            Agent replies use the live xAI API. Key from console.x.ai — or env{" "}
+            <span className="font-mono">XAI_API_KEY</span>. Stored only on this device.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant={grokConnected ? "success" : "default"}>
-              {grokConnected ? "Connected" : "Not connected"}
+              {grokConnected ? "API connected" : "API not connected"}
             </Badge>
             <span className="text-xs text-[var(--color-muted)]">{grokStatusDetail}</span>
           </div>
@@ -145,9 +233,6 @@ export function SettingsView() {
               Clear key
             </Button>
           </div>
-          <p className="text-xs text-[var(--color-subtle)]">
-            Key stays on this device (local storage). It is only sent to api.x.ai when you chat.
-          </p>
         </CardContent>
       </Card>
 
@@ -155,8 +240,7 @@ export function SettingsView() {
         <CardHeader>
           <CardTitle className="text-sm">Updates (GitHub)</CardTitle>
           <CardDescription>
-            Pull the latest GrokHub build from the repository and reinstall. Private repos need a
-            GitHub token with contents:read.
+            Install the latest clean release from the public package repo.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -177,7 +261,6 @@ export function SettingsView() {
                 <div>
                   {update.repo}@{update.branch}
                 </div>
-                {update.remoteMessage && <div className="text-[var(--color-subtle)]">{update.remoteMessage}</div>}
                 <div>{update.detail}</div>
               </div>
             </div>
@@ -215,25 +298,14 @@ export function SettingsView() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Model modes (baked in)</CardTitle>
+          <CardTitle className="text-sm">Model modes</CardTitle>
           <CardDescription>
-            Same control surface as Grok web — Auto, Fast, Expert, Heavy, Build. All on Grok 4.5
-            family models via xAI.
+            Auto, Fast, Expert, Heavy, Build — mapped to live xAI Grok models after you connect.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
           {GROK_MODES.map((m) => {
             const selected = m.id === mode;
-            const cost =
-              m.id === "heavy"
-                ? "8 units"
-                : m.id === "expert"
-                  ? "4 units"
-                  : m.id === "build"
-                    ? "2 units"
-                    : m.id === "auto"
-                      ? "1.5 units"
-                      : "1 unit";
             return (
               <button
                 key={m.id}
@@ -251,9 +323,7 @@ export function SettingsView() {
                     {m.label}
                     {m.id === "build" && <Badge className="text-[10px]">Beta</Badge>}
                   </div>
-                  <div className="text-xs text-[var(--color-muted)]">
-                    {m.subtitle} · {cost}/turn
-                  </div>
+                  <div className="text-xs text-[var(--color-muted)]">{m.subtitle}</div>
                 </div>
                 {selected && (
                   <span className="text-xs text-[var(--color-muted)]">Active</span>
@@ -266,16 +336,12 @@ export function SettingsView() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Unsandboxed desktop host</CardTitle>
+          <CardTitle className="text-sm">Desktop host</CardTitle>
           <CardDescription>
-            Full user-session access: shell, files, and installed apps. Host CLI burns 0.25 units
-            per command.
+            Unsandboxed shell, files, and apps. Opens from the Desktop tab.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-warn)_35%,transparent)] bg-[color-mix(in_oklab,var(--color-warn)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warn)]">
-            Commands run as your Linux user. Treat this like giving an agent your terminal.
-          </div>
           <Button onClick={() => setNav("desktop")}>Open Desktop host</Button>
         </CardContent>
       </Card>
@@ -283,16 +349,14 @@ export function SettingsView() {
       <Card>
         <CardHeader>
           <CardTitle className="text-sm">Arch Linux desktop shell</CardTitle>
-          <CardDescription>
-            Electron preferences for Wayland/X11. Window auto-fits the work area on launch.
-          </CardDescription>
+          <CardDescription>Window auto-fits the work area on launch.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {(
             [
-              ["wayland", "Prefer Wayland", "Ozone platform flags for Hyprland / KDE / GNOME"],
-              ["tray", "System tray", "Minimize to tray; click icon to restore"],
-              ["launchOnLogin", "Launch on login", "Autostart via ~/.config/autostart"],
+              ["wayland", "Prefer Wayland", "Ozone flags for Hyprland / KDE / GNOME"],
+              ["tray", "System tray", "Minimize to tray"],
+              ["launchOnLogin", "Launch on login", "Autostart entry"],
               ["startMinimized", "Start minimized", "Boot to tray only"],
             ] as const
           ).map(([key, label, hint]) => (
@@ -316,7 +380,7 @@ export function SettingsView() {
       </Card>
 
       <Button variant="secondary" onClick={resetDemo}>
-        Reset demo data
+        Reset to clean install
       </Button>
     </div>
   );

@@ -9,8 +9,10 @@ import type {
   Automation,
   AutomationSchedule,
   ChatMessage,
+  ChatThread,
   Connector,
   GrokModeId,
+  GrokProfile,
   ImagineAspect,
   ImagineJob,
   NavId,
@@ -37,7 +39,10 @@ type State = {
   automations: Automation[];
   activity: ActivityItem[];
   chat: ChatMessage[];
+  threads: ChatThread[];
+  activeThreadId: string | null;
   agents: Agent[];
+  profile: GrokProfile;
   imagineJobs: ImagineJob[];
   imaginePrompt: string;
   imagineAspect: ImagineAspect;
@@ -63,6 +68,10 @@ type State = {
   setApiKey: (key: string) => void;
   setGithubToken: (token: string) => void;
   probeGrok: () => Promise<boolean>;
+  syncFromGrok: (opts?: { displayName?: string | null; email?: string | null; imageUrl?: string | null }) => Promise<void>;
+  newThread: () => void;
+  selectThread: (id: string) => void;
+  deleteThread: (id: string) => void;
   setPlan: (plan: SubscriptionPlanId) => void;
 
   recordUsage: (bucket: UsageBucket, mode?: GrokModeId) => { ok: boolean; cost: number };
@@ -323,6 +332,23 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
   ].join("\n");
 }
 
+function emptyProfile(): GrokProfile {
+  return {
+    displayName: null,
+    email: null,
+    imageUrl: null,
+    models: [],
+    connectedAt: null,
+  };
+}
+
+function titleFromMessages(messages: ChatMessage[]): string {
+  const first = messages.find((m) => m.role === "user");
+  if (!first) return "New chat";
+  const t = first.content.replace(/\s+/g, " ").trim();
+  return t.length > 48 ? t.slice(0, 48) + "…" : t || "New chat";
+}
+
 function initialFromSeeds() {
   const s = createSeeds();
   return {
@@ -331,8 +357,11 @@ function initialFromSeeds() {
     automations: s.automations,
     activity: s.activity,
     chat: s.chat,
+    threads: s.threads,
+    activeThreadId: s.activeThreadId,
     agents: s.agents,
     heartbeatAt: s.heartbeatAt,
+    profile: emptyProfile(),
   };
 }
 
@@ -341,15 +370,18 @@ const boot = initialFromSeeds();
 export const useGrokHub = create<State>()(
   persist(
     (set, get) => ({
-      nav: "command",
-      mode: "build",
+      nav: "chat",
+      mode: "auto",
       modeMenuOpen: false,
       connectors: boot.connectors,
       skills: boot.skills,
       automations: boot.automations,
       activity: boot.activity,
       chat: boot.chat,
+      threads: boot.threads,
+      activeThreadId: boot.activeThreadId,
       agents: boot.agents,
+      profile: boot.profile,
       imagineJobs: [],
       imaginePrompt: "",
       imagineAspect: "1:1",
@@ -389,6 +421,9 @@ export const useGrokHub = create<State>()(
             grokConnected: r.ok,
             grokStatusDetail: r.detail + (r.envConfigured && !get().apiKey ? " (env key)" : ""),
           });
+          if (r.ok) {
+            await get().syncFromGrok();
+          }
           return r.ok;
         } catch (e) {
           const msg = e instanceof Error ? e.message : "probe failed";
@@ -397,10 +432,128 @@ export const useGrokHub = create<State>()(
         }
       },
 
+      syncFromGrok: async (opts) => {
+        const models: string[] = [];
+        try {
+          const key = get().apiKey || "";
+          const res = await fetch("/api/grok", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "models", apiKey: key }),
+          });
+          if (res.ok) {
+            const data = (await res.json()) as { models?: string[] };
+            if (Array.isArray(data.models)) models.push(...data.models);
+          }
+        } catch {
+          /* optional when offline */
+        }
+        const now = Date.now();
+        set((st) => ({
+          profile: {
+            displayName: opts?.displayName ?? st.profile.displayName,
+            email: opts?.email ?? st.profile.email,
+            imageUrl: opts?.imageUrl ?? st.profile.imageUrl,
+            models: models.length ? models : st.profile.models,
+            connectedAt: st.profile.connectedAt ?? (st.grokConnected ? now : null),
+          },
+          agents:
+            st.agents.length > 0
+              ? st.agents
+              : [
+                  {
+                    id: "primary",
+                    name: (opts?.displayName || "Primary").split(/\s+/)[0] || "Primary",
+                    role: "Primary co-pilot",
+                    model: "Grok · Auto",
+                    status: "idle" as const,
+                    tasks: 0,
+                    color: "#d4d4d8",
+                  },
+                  {
+                    id: "builder",
+                    name: "Build",
+                    role: "Build mode",
+                    model: "Grok · Build",
+                    status: "idle" as const,
+                    tasks: 0,
+                    color: "#7dd3fc",
+                  },
+                ],
+        }));
+        if (opts?.displayName || opts?.email || models.length) {
+          get().pushActivity({
+            kind: "auth",
+            title: "Grok profile synced",
+            detail: opts?.displayName || opts?.email || `${models.length} models`,
+            status: "success",
+          });
+        }
+      },
+
+      newThread: () => {
+        const now = Date.now();
+        const thread: ChatThread = {
+          id: uid("thread"),
+          title: "New chat",
+          createdAt: now,
+          updatedAt: now,
+          messages: [
+            {
+              id: uid("msg"),
+              role: "system",
+              content: "New chat. Ask Grok anything — modes apply from the picker.",
+              ts: now,
+            },
+          ],
+        };
+        set((s) => ({
+          threads: [thread, ...s.threads],
+          activeThreadId: thread.id,
+          chat: thread.messages,
+          nav: "chat",
+        }));
+      },
+
+      selectThread: (id) => {
+        const t = get().threads.find((x) => x.id === id);
+        if (!t) return;
+        set({
+          activeThreadId: id,
+          chat: t.messages,
+          nav: "chat",
+          mode: t.mode || get().mode,
+        });
+      },
+
+      deleteThread: (id) => {
+        const remaining = get().threads.filter((t) => t.id !== id);
+        if (remaining.length === 0) {
+          get().newThread();
+          return;
+        }
+        const nextActive =
+          get().activeThreadId === id
+            ? remaining[0]!
+            : remaining.find((t) => t.id === get().activeThreadId) || remaining[0]!;
+        set({
+          threads: remaining,
+          activeThreadId: nextActive.id,
+          chat: nextActive.messages,
+        });
+      },
+
       setPlan: (plan) => {
         const prev = get().usage;
-        const next = ensurePeriod({ ...createUsage(plan), usedUnits: 0, messages: 0, imagine: 0, automations: 0, host: 0, byMode: { auto: 0, fast: 0, expert: 0, heavy: 0, build: 0 } });
-        // Keep relative fill if switching mid-demo feels empty — seed partial for demo plans
+        const next = ensurePeriod({
+          ...createUsage(plan),
+          usedUnits: 0,
+          messages: 0,
+          imagine: 0,
+          automations: 0,
+          host: 0,
+          byMode: { auto: 0, fast: 0, expert: 0, heavy: 0, build: 0 },
+        });
         const seeded = createUsage(plan);
         set({
           usage: {
@@ -675,11 +828,16 @@ export const useGrokHub = create<State>()(
           mode,
         };
         set((s) => ({ chat: [...s.chat, userMsg], running: true }));
+        // Ensure agents exist before status updates
+        if (get().agents.length === 0) {
+          await get().syncFromGrok();
+        }
         get().setAgentStatus(
           routed === "build" ? "builder" : routed === "heavy" ? "research" : "primary",
           "working",
           1,
         );
+
         if (routed === "heavy") {
           get().setAgentStatus("ops", "working", 1);
           get().setAgentStatus("builder", "working", 1);
@@ -764,7 +922,22 @@ export const useGrokHub = create<State>()(
           ts: Date.now(),
           mode: routed,
         };
-        set((s) => ({ chat: [...s.chat, bot], running: false }));
+        set((s) => {
+          const chat = [...s.chat, bot];
+          const tid = s.activeThreadId;
+          const threads = s.threads.map((t) =>
+            t.id === tid
+              ? {
+                  ...t,
+                  messages: chat,
+                  updatedAt: Date.now(),
+                  title: titleFromMessages(chat),
+                  mode: routed,
+                }
+              : t,
+          );
+          return { chat, threads, running: false };
+        });
         get().setAgentStatus("primary", "idle", 0);
         get().setAgentStatus("builder", "idle", 0);
         get().setAgentStatus("research", "idle", 0);
@@ -901,27 +1074,33 @@ export const useGrokHub = create<State>()(
           automations: fresh.automations,
           activity: fresh.activity,
           chat: fresh.chat,
+          threads: fresh.threads,
+          activeThreadId: fresh.activeThreadId,
           agents: fresh.agents,
+          profile: emptyProfile(),
           imagineJobs: [],
           imaginePrompt: "",
           imagineAspect: "1:1",
-          mode: "build",
+          mode: "auto",
           heartbeatAt: fresh.heartbeatAt,
           running: false,
-          nav: "command",
+          nav: "chat",
           modeMenuOpen: false,
           usage: createUsage("pro"),
+          grokConnected: null,
+          grokStatusDetail: "Not connected — sign in and add your xAI key in Settings",
         });
       },
     }),
     {
-      name: "grokhub-v2",
+      name: "grokhub-clean-v1",
       partialize: (s) => ({
+        // Only user-owned data — never ship demo personalization in the package.
         connectors: s.connectors,
         skills: s.skills,
         automations: s.automations,
-        activity: s.activity,
-        chat: s.chat,
+        threads: s.threads,
+        activeThreadId: s.activeThreadId,
         agents: s.agents,
         mode: s.mode,
         desktop: s.desktop,
@@ -930,6 +1109,10 @@ export const useGrokHub = create<State>()(
         imagineAspect: s.imagineAspect,
         apiKey: s.apiKey,
         githubToken: s.githubToken,
+        profile: s.profile,
+        // chat is derived from active thread; still keep for quick rehydrate
+        chat: s.chat,
+        activity: s.activity.slice(0, 40),
       }),
       skipHydration: true,
     },
