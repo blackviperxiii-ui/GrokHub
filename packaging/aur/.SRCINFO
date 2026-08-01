@@ -2,7 +2,7 @@ pkgbase = grokhub
 	pkgdesc = Grok-native agent control plane (modes, Imagine, connectors, unsandboxed desktop host)
 	pkgver = 0.1
 	pkgrel = 1
-	url = https://github.com/blackviperxiii-ui/spring-dove-reef-apple
+	url = https://github.com/blackviperxiii-ui/Grok-Hub
 	arch = x86_64
 	license = MIT
 	makedepends = npm
@@ -12,7 +12,7 @@ pkgbase = grokhub
 	depends = curl
 	options = !strip
 	options = !debug
-	source = grokhub::git+https://github.com/blackviperxiii-ui/spring-dove-reef-apple.git#branch=main
+	source = grokhub::git+https://github.com/blackviperxiii-ui/Grok-Hub.git#branch=main
 	sha256sums = SKIP
 
 pkgname = grokhub

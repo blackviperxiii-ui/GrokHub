@@ -50,7 +50,7 @@ export function SettingsView() {
           remoteSha: null,
           remoteMessage: null,
           updateAvailable: false,
-          repo: "blackviperxiii-ui/spring-dove-reef-apple",
+          repo: "blackviperxiii-ui/Grok-Hub",
           branch: "main",
           installRoot: null,
           detail: e instanceof Error ? e.message : "check failed",

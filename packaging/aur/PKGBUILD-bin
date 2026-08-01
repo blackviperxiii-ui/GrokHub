@@ -6,7 +6,7 @@ pkgver=0.1
 pkgrel=1
 pkgdesc="Grok-native agent control plane (prebuilt) — modes, Imagine, unsandboxed desktop host"
 arch=('x86_64')
-url="https://github.com/blackviperxiii-ui/spring-dove-reef-apple"
+url="https://github.com/blackviperxiii-ui/Grok-Hub"
 license=('MIT')
 depends=('electron' 'nodejs' 'curl')
 makedepends=('git')
@@ -14,7 +14,7 @@ provides=('grokhub')
 conflicts=('grokhub')
 options=('!strip' '!debug')
 install=grokhub.install
-source=("${_pkgname}::git+https://github.com/blackviperxiii-ui/spring-dove-reef-apple.git#branch=main")
+source=("${_pkgname}::git+https://github.com/blackviperxiii-ui/Grok-Hub.git#branch=main")
 sha256sums=('SKIP')
 
 package() {

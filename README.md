@@ -2,7 +2,7 @@
 
 **v0.1** — Grok-native agent control plane. OpenClaw-style shell with **Grok modes** (Auto / Fast / Expert / Heavy / Build), **Imagine**, connectors, skills, automations, usage meter, and an **unsandboxed Arch desktop host** (CLI · files · apps).
 
-**Repo:** https://github.com/blackviperxiii-ui/spring-dove-reef-apple
+**Repo:** https://github.com/blackviperxiii-ui/Grok-Hub
 
 ---
 
@@ -11,8 +11,8 @@
 ```bash
 sudo pacman -S --needed git electron nodejs npm curl base-devel
 
-git clone https://github.com/blackviperxiii-ui/spring-dove-reef-apple.git
-cd spring-dove-reef-apple
+git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
+cd Grok-Hub
 
 sudo ./scripts/install-arch.sh
 grokhub

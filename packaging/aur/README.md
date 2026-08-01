@@ -1,13 +1,13 @@
 # GrokHub Arch packages (v0.1)
 
-**GitHub:** https://github.com/blackviperxiii-ui/spring-dove-reef-apple
+**GitHub:** https://github.com/blackviperxiii-ui/Grok-Hub
 
 ## Install
 
 ```bash
 sudo pacman -S --needed git electron nodejs npm curl base-devel
-git clone https://github.com/blackviperxiii-ui/spring-dove-reef-apple.git
-cd spring-dove-reef-apple
+git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
+cd Grok-Hub
 sudo ./scripts/install-arch.sh
 grokhub
 ```

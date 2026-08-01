@@ -10,7 +10,7 @@ import os from "node:os";
 
 const execAsync = promisify(execCb);
 
-export const DEFAULT_REPO = "blackviperxiii-ui/spring-dove-reef-apple";
+export const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 export const DEFAULT_BRANCH = "main";
 export const APP_VERSION = "0.1";
 

@@ -64,7 +64,7 @@ pkgbase = ${NAME}
 	pkgdesc = Grok-native agent control plane (modes, Imagine, connectors, unsandboxed desktop host)
 	pkgver = ${PKGVER}
 	pkgrel = 1
-	url = https://github.com/blackviperxiii-ui/spring-dove-reef-apple
+	url = https://github.com/blackviperxiii-ui/Grok-Hub
 
 	arch = x86_64
 	license = MIT
