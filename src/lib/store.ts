@@ -46,6 +46,8 @@ type State = {
   imagineJobs: ImagineJob[];
   imaginePrompt: string;
   imagineAspect: ImagineAspect;
+  imagineBusy: boolean;
+  imagineError: string | null;
   desktop: {
     startMinimized: boolean;
     launchOnLogin: boolean;
@@ -89,6 +91,7 @@ type State = {
   recordUsage: (bucket: UsageBucket, mode?: GrokModeId) => { ok: boolean; cost: number };
   resetUsagePeriod: () => void;
   toggleConnector: (id: string) => void;
+  connectConnector: (id: string) => Promise<void>;
   toggleSkill: (id: string) => void;
   addSkill: (input: {
     name: string;
@@ -374,6 +377,8 @@ export const useGrokHub = create<State>()(
       imagineJobs: [],
       imaginePrompt: "",
       imagineAspect: "1:1",
+      imagineBusy: false,
+      imagineError: null,
       desktop: {
         startMinimized: false,
         launchOnLogin: false,
@@ -778,28 +783,181 @@ export const useGrokHub = create<State>()(
       },
 
       toggleConnector: (id) => {
-        set((s) => ({
-          connectors: s.connectors.map((c) => {
-            if (c.id !== id) return c;
-            return {
-              ...c,
-              status: c.status === "connected" ? "disconnected" : "connected",
-              lastUsed: c.status === "connected" ? c.lastUsed : Date.now(),
-            } as Connector;
-          }),
-        }));
+        void get().connectConnector(id);
+      },
+
+      connectConnector: async (id) => {
         const c = get().connectors.find((x) => x.id === id);
-        if (c) {
+        if (!c) return;
+
+        // Disconnect path
+        if (c.status === "connected") {
+          if (id === "grok-xai") {
+            get().clearGrokOAuth();
+          }
+          set((s) => ({
+            connectors: s.connectors.map((row) =>
+              row.id === id
+                ? { ...row, status: "disconnected" as const, lastUsed: row.lastUsed }
+                : row,
+            ),
+          }));
           get().pushActivity({
             kind: "connector",
-            title: c.status === "connected" ? `Connected ${c.name}` : `Disconnected ${c.name}`,
-            detail:
-              c.status === "connected"
-                ? `Tools available: ${c.tools.join(", ")}`
-                : "OAuth session cleared (demo)",
+            title: `Disconnected ${c.name}`,
+            detail: "Connector turned off",
             status: "success",
           });
+          return;
         }
+
+        // Connect paths
+        if (id === "grok-xai") {
+          if (get().oauth?.accessToken || get().apiKey) {
+            set((s) => ({
+              connectors: s.connectors.map((row) =>
+                row.id === id
+                  ? { ...row, status: "connected" as const, lastUsed: Date.now() }
+                  : row,
+              ),
+              grokConnected: true,
+            }));
+            get().pushActivity({
+              kind: "connector",
+              title: "Grok connected",
+              detail: get().oauth?.email || "Session active",
+              status: "success",
+            });
+            return;
+          }
+          set({ nav: "settings" });
+          get().pushActivity({
+            kind: "connector",
+            title: "Connect Grok first",
+            detail: "Settings → Connect with Grok OAuth",
+            status: "failed",
+          });
+          return;
+        }
+
+        if (id === "desktop-host") {
+          try {
+            const { hostInfo } = await import("./host-client");
+            const info = await hostInfo();
+            if (info.bridge === "none" || !info.unsandboxed) {
+              get().pushActivity({
+                kind: "connector",
+                title: "Desktop host offline",
+                detail: "Relaunch the Electron desktop app for unsandboxed access",
+                status: "failed",
+              });
+              set((s) => ({
+                connectors: s.connectors.map((row) =>
+                  row.id === id ? { ...row, status: "error" as const } : row,
+                ),
+              }));
+              return;
+            }
+            set((s) => ({
+              connectors: s.connectors.map((row) =>
+                row.id === id
+                  ? { ...row, status: "connected" as const, lastUsed: Date.now() }
+                  : row,
+              ),
+            }));
+            get().pushActivity({
+              kind: "connector",
+              title: "Desktop host connected",
+              detail: `${info.user}@${info.hostname} · ${info.bridge}`,
+              status: "success",
+            });
+          } catch (e) {
+            get().pushActivity({
+              kind: "connector",
+              title: "Desktop host failed",
+              detail: e instanceof Error ? e.message : "error",
+              status: "failed",
+            });
+          }
+          return;
+        }
+
+        if (id === "github") {
+          const token = get().githubToken?.trim();
+          if (!token) {
+            set({ nav: "settings" });
+            get().pushActivity({
+              kind: "connector",
+              title: "GitHub token required",
+              detail: "Settings → Updates → paste a GitHub token (repo scope)",
+              status: "failed",
+            });
+            return;
+          }
+          try {
+            const res = await fetch("https://api.github.com/user", {
+              headers: {
+                authorization: `Bearer ${token}`,
+                accept: "application/vnd.github+json",
+                "user-agent": "GrokHub",
+              },
+            });
+            if (!res.ok) throw new Error(`GitHub ${res.status}`);
+            const user = (await res.json()) as { login?: string };
+            set((s) => ({
+              connectors: s.connectors.map((row) =>
+                row.id === id
+                  ? { ...row, status: "connected" as const, lastUsed: Date.now() }
+                  : row,
+              ),
+            }));
+            get().pushActivity({
+              kind: "connector",
+              title: "GitHub connected",
+              detail: user.login || "token ok",
+              status: "success",
+            });
+          } catch (e) {
+            get().pushActivity({
+              kind: "connector",
+              title: "GitHub connect failed",
+              detail: e instanceof Error ? e.message : "error",
+              status: "failed",
+            });
+          }
+          return;
+        }
+
+        // Generic connectors — enable for agent context; open vendor home for account linking
+        const homes: Record<string, string> = {
+          gmail: "https://accounts.google.com/",
+          gdrive: "https://drive.google.com/",
+          notion: "https://www.notion.so/login",
+          outlook: "https://outlook.live.com/",
+          teams: "https://teams.microsoft.com/",
+          linear: "https://linear.app/",
+          "custom-mcp": "",
+        };
+        const url = homes[id];
+        if (url && typeof window !== "undefined") {
+          window.open(url, "_blank", "noopener,noreferrer");
+        }
+        set((s) => ({
+          connectors: s.connectors.map((row) =>
+            row.id === id
+              ? { ...row, status: "connected" as const, lastUsed: Date.now() }
+              : row,
+          ),
+        }));
+        get().pushActivity({
+          kind: "connector",
+          title: `Enabled ${c.name}`,
+          detail:
+            id === "custom-mcp"
+              ? "Mark enabled — point MCP URL from Grok skills when available"
+              : "Enabled for agent context. Finish account sign-in in the browser if prompted.",
+          status: "success",
+        });
       },
 
       toggleSkill: (id) => {
@@ -1115,7 +1273,15 @@ export const useGrokHub = create<State>()(
         const p = (prompt ?? get().imaginePrompt).trim();
         if (!p) return;
         const bill = get().recordUsage("imagine");
-        if (!bill.ok) return;
+        if (!bill.ok) {
+          get().pushActivity({
+            kind: "imagine",
+            title: "Imagine blocked",
+            detail: "Usage quota exceeded — wait for period reset or switch plan in Settings",
+            status: "failed",
+          });
+          return;
+        }
         const aspect = get().imagineAspect;
         const mode = get().mode;
         const id = uid("img");
@@ -1129,8 +1295,9 @@ export const useGrokHub = create<State>()(
         };
         set((s) => ({
           imagineJobs: [job, ...s.imagineJobs].slice(0, 24),
-          running: true,
+          imagineBusy: true,
           imaginePrompt: p,
+          imagineError: null,
         }));
         get().pushActivity({
           kind: "imagine",
@@ -1138,19 +1305,59 @@ export const useGrokHub = create<State>()(
           detail: `${p.slice(0, 100)} · ${bill.cost}u`,
           status: "running",
         });
-        const m = getMode(resolveMode(mode, p));
-        await wait(m.latencyMs[0] + Math.random() * (m.latencyMs[1] - m.latencyMs[0]));
-        const imageDataUrl = renderImaginePreview(p, aspect);
+
+        let imageDataUrl: string | undefined;
+        let source: "xai" | "local" = "local";
+        let model: string | undefined;
+        let err: string | null = null;
+
+        try {
+          const { grokImagine } = await import("./grok-client");
+          const live = await grokImagine({
+            prompt: p,
+            apiKey: get().apiKey || undefined,
+            accessToken: get().oauth?.accessToken,
+            tokens: get().oauth,
+          });
+          if (live.ok && live.imageDataUrl) {
+            imageDataUrl = live.imageDataUrl;
+            source = "xai";
+            model = live.model;
+            if (live.tokens) set({ oauth: live.tokens });
+          } else {
+            err = live.error || "live Imagine unavailable";
+          }
+        } catch (e) {
+          err = e instanceof Error ? e.message : "Imagine request failed";
+        }
+
+        // Local SVG preview if live path failed
+        if (!imageDataUrl) {
+          imageDataUrl = renderImaginePreview(p, aspect);
+          source = "local";
+        }
+
         set((s) => ({
-          running: false,
+          imagineBusy: false,
+          imagineError: source === "local" && err ? err : null,
           imagineJobs: s.imagineJobs.map((j) =>
-            j.id === id ? { ...j, status: "ready", imageDataUrl } : j,
+            j.id === id
+              ? {
+                  ...j,
+                  status: "ready" as const,
+                  imageDataUrl,
+                  // stash source in mode field suffix is ugly — keep mode, detail in activity
+                }
+              : j,
           ),
         }));
         get().pushActivity({
           kind: "imagine",
-          title: "Imagine ready",
-          detail: p.slice(0, 120),
+          title: source === "xai" ? "Imagine ready (Grok)" : "Imagine ready (local preview)",
+          detail:
+            source === "xai"
+              ? `${p.slice(0, 80)} · ${model || "xAI"}`
+              : `${p.slice(0, 80)}${err ? ` · live failed: ${err}` : " · offline SVG"}`,
           status: "success",
         });
       },
@@ -1239,6 +1446,8 @@ export const useGrokHub = create<State>()(
           imagineJobs: [],
           imaginePrompt: "",
           imagineAspect: "1:1",
+          imagineBusy: false,
+          imagineError: null,
           mode: "auto",
           heartbeatAt: fresh.heartbeatAt,
           running: false,
@@ -1253,7 +1462,7 @@ export const useGrokHub = create<State>()(
       },
     }),
     {
-      name: "grokhub-clean-v2",
+      name: "grokhub-clean-v3",
       partialize: (s) => ({
         connectors: s.connectors,
         skills: s.skills,
@@ -1264,7 +1473,8 @@ export const useGrokHub = create<State>()(
         mode: s.mode,
         desktop: s.desktop,
         usage: s.usage,
-        imagineJobs: s.imagineJobs.slice(0, 8),
+        // Never persist large image payloads (breaks localStorage quota)
+        imagineJobs: s.imagineJobs.slice(0, 8).map(({ imageDataUrl: _drop, ...rest }) => rest),
         imagineAspect: s.imagineAspect,
         apiKey: s.apiKey,
         githubToken: s.githubToken,

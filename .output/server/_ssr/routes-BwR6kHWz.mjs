@@ -1,12 +1,12 @@
 import { o as __toESM } from "../_runtime.mjs";
-import { a as modelIdForMode, i as modeBadge, n as GROK_MODES, o as resolveMode, r as getMode, s as stripAssistantChrome, t as APP_VERSION } from "./version-oVkq3SFd.mjs";
+import { a as modelIdForMode, i as modeBadge, n as GROK_MODES, o as resolveMode, r as getMode, s as stripAssistantChrome, t as APP_VERSION } from "./version-BWlGhsus.mjs";
 import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
 import { N as require_jsx_runtime, P as require_react, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
 import { A as Command, C as HardDrive, D as FolderOpen, E as Folder, F as ArrowRight, I as AppWindow, L as Activity, M as Check, N as Cable, O as ExternalLink, P as Brain, S as History, T as Gauge, _ as MessageSquarePlus, a as TimerReset, b as Link2Off, c as Sparkles, d as Send, f as RefreshCw, g as MessageSquare, h as Minus, i as Trash2, j as ChevronRight, k as Download, l as ShieldAlert, m as Play, n as X, o as Terminal, p as Plus, r as Users, s as Square, t as Zap, u as Settings, v as Menu, w as Hammer, x as Image, y as LoaderCircle } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-Buup9FAZ.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-BwR6kHWz.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function rpc(path, action, body = {}) {
@@ -49,6 +49,11 @@ async function oauthEnsure(tokens) {
 	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
 	if (desktop?.oauthEnsure) return desktop.oauthEnsure(tokens);
 	return rpc("/api/grok", "oauthEnsure", { tokens });
+}
+async function grokImagine(opts) {
+	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
+	if (desktop?.imagine) return desktop.imagine(opts);
+	return rpc("/api/grok", "imagine", opts);
 }
 async function checkUpdate(token) {
 	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
@@ -166,6 +171,19 @@ function catalogConnectors() {
 				"chat",
 				"models",
 				"imagine"
+			]
+		},
+		{
+			id: "desktop-host",
+			name: "Desktop Host",
+			category: "Local",
+			description: "Unsandboxed shell, files, and apps on this Arch machine.",
+			status: "disconnected",
+			tools: [
+				"exec",
+				"list_dir",
+				"read_file",
+				"open_app"
 			]
 		},
 		{
@@ -635,6 +653,8 @@ var useGrokHub = create()(persist((set, get) => ({
 	imagineJobs: [],
 	imaginePrompt: "",
 	imagineAspect: "1:1",
+	imagineBusy: false,
+	imagineError: null,
 	desktop: {
 		startMinimized: false,
 		launchOnLogin: false,
@@ -677,7 +697,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
 	startGrokOAuth: async () => {
-		const { oauthStart } = await import("./grok-client-DEq41qcx.mjs");
+		const { oauthStart } = await import("./grok-client-Cb6uzGBf.mjs");
 		const start = await oauthStart();
 		set({
 			oauthPending: {
@@ -706,7 +726,7 @@ var useGrokHub = create()(persist((set, get) => ({
 			});
 			return "failed";
 		}
-		const { oauthPoll } = await import("./grok-client-DEq41qcx.mjs");
+		const { oauthPoll } = await import("./grok-client-Cb6uzGBf.mjs");
 		const r = await oauthPoll(pending.deviceCode);
 		if (r.status === "ready") {
 			set({
@@ -784,7 +804,7 @@ var useGrokHub = create()(persist((set, get) => ({
 	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe, oauthEnsure } = await import("./grok-client-DEq41qcx.mjs");
+			const { grokProbe, oauthEnsure } = await import("./grok-client-Cb6uzGBf.mjs");
 			let accessToken = get().oauth?.accessToken;
 			if (get().oauth) try {
 				const ensured = await oauthEnsure(get().oauth);
@@ -1009,19 +1029,151 @@ var useGrokHub = create()(persist((set, get) => ({
 		});
 	},
 	toggleConnector: (id) => {
-		set((s) => ({ connectors: s.connectors.map((c) => {
-			if (c.id !== id) return c;
-			return {
-				...c,
-				status: c.status === "connected" ? "disconnected" : "connected",
-				lastUsed: c.status === "connected" ? c.lastUsed : Date.now()
-			};
-		}) }));
+		get().connectConnector(id);
+	},
+	connectConnector: async (id) => {
 		const c = get().connectors.find((x) => x.id === id);
-		if (c) get().pushActivity({
+		if (!c) return;
+		if (c.status === "connected") {
+			if (id === "grok-xai") get().clearGrokOAuth();
+			set((s) => ({ connectors: s.connectors.map((row) => row.id === id ? {
+				...row,
+				status: "disconnected",
+				lastUsed: row.lastUsed
+			} : row) }));
+			get().pushActivity({
+				kind: "connector",
+				title: `Disconnected ${c.name}`,
+				detail: "Connector turned off",
+				status: "success"
+			});
+			return;
+		}
+		if (id === "grok-xai") {
+			if (get().oauth?.accessToken || get().apiKey) {
+				set((s) => ({
+					connectors: s.connectors.map((row) => row.id === id ? {
+						...row,
+						status: "connected",
+						lastUsed: Date.now()
+					} : row),
+					grokConnected: true
+				}));
+				get().pushActivity({
+					kind: "connector",
+					title: "Grok connected",
+					detail: get().oauth?.email || "Session active",
+					status: "success"
+				});
+				return;
+			}
+			set({ nav: "settings" });
+			get().pushActivity({
+				kind: "connector",
+				title: "Connect Grok first",
+				detail: "Settings → Connect with Grok OAuth",
+				status: "failed"
+			});
+			return;
+		}
+		if (id === "desktop-host") {
+			try {
+				const { hostInfo } = await import("./host-client-WUUmAwRI.mjs");
+				const info = await hostInfo();
+				if (info.bridge === "none" || !info.unsandboxed) {
+					get().pushActivity({
+						kind: "connector",
+						title: "Desktop host offline",
+						detail: "Relaunch the Electron desktop app for unsandboxed access",
+						status: "failed"
+					});
+					set((s) => ({ connectors: s.connectors.map((row) => row.id === id ? {
+						...row,
+						status: "error"
+					} : row) }));
+					return;
+				}
+				set((s) => ({ connectors: s.connectors.map((row) => row.id === id ? {
+					...row,
+					status: "connected",
+					lastUsed: Date.now()
+				} : row) }));
+				get().pushActivity({
+					kind: "connector",
+					title: "Desktop host connected",
+					detail: `${info.user}@${info.hostname} · ${info.bridge}`,
+					status: "success"
+				});
+			} catch (e) {
+				get().pushActivity({
+					kind: "connector",
+					title: "Desktop host failed",
+					detail: e instanceof Error ? e.message : "error",
+					status: "failed"
+				});
+			}
+			return;
+		}
+		if (id === "github") {
+			const token = get().githubToken?.trim();
+			if (!token) {
+				set({ nav: "settings" });
+				get().pushActivity({
+					kind: "connector",
+					title: "GitHub token required",
+					detail: "Settings → Updates → paste a GitHub token (repo scope)",
+					status: "failed"
+				});
+				return;
+			}
+			try {
+				const res = await fetch("https://api.github.com/user", { headers: {
+					authorization: `Bearer ${token}`,
+					accept: "application/vnd.github+json",
+					"user-agent": "GrokHub"
+				} });
+				if (!res.ok) throw new Error(`GitHub ${res.status}`);
+				const user = await res.json();
+				set((s) => ({ connectors: s.connectors.map((row) => row.id === id ? {
+					...row,
+					status: "connected",
+					lastUsed: Date.now()
+				} : row) }));
+				get().pushActivity({
+					kind: "connector",
+					title: "GitHub connected",
+					detail: user.login || "token ok",
+					status: "success"
+				});
+			} catch (e) {
+				get().pushActivity({
+					kind: "connector",
+					title: "GitHub connect failed",
+					detail: e instanceof Error ? e.message : "error",
+					status: "failed"
+				});
+			}
+			return;
+		}
+		const url = {
+			gmail: "https://accounts.google.com/",
+			gdrive: "https://drive.google.com/",
+			notion: "https://www.notion.so/login",
+			outlook: "https://outlook.live.com/",
+			teams: "https://teams.microsoft.com/",
+			linear: "https://linear.app/",
+			"custom-mcp": ""
+		}[id];
+		if (url && typeof window !== "undefined") window.open(url, "_blank", "noopener,noreferrer");
+		set((s) => ({ connectors: s.connectors.map((row) => row.id === id ? {
+			...row,
+			status: "connected",
+			lastUsed: Date.now()
+		} : row) }));
+		get().pushActivity({
 			kind: "connector",
-			title: c.status === "connected" ? `Connected ${c.name}` : `Disconnected ${c.name}`,
-			detail: c.status === "connected" ? `Tools available: ${c.tools.join(", ")}` : "OAuth session cleared (demo)",
+			title: `Enabled ${c.name}`,
+			detail: id === "custom-mcp" ? "Mark enabled — point MCP URL from Grok skills when available" : "Enabled for agent context. Finish account sign-in in the browser if prompted.",
 			status: "success"
 		});
 	},
@@ -1198,7 +1350,7 @@ var useGrokHub = create()(persist((set, get) => ({
 				await wait(280);
 				answer = replyFor(trimmed, get(), routed);
 			} else {
-				const { grokChat } = await import("./grok-client-DEq41qcx.mjs");
+				const { grokChat } = await import("./grok-client-Cb6uzGBf.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").slice(-16).map((c) => ({
 					role: c.role,
 					content: c.role === "assistant" ? stripAssistantChrome(c.content) : c.content
@@ -1292,7 +1444,15 @@ var useGrokHub = create()(persist((set, get) => ({
 		const p = (prompt ?? get().imaginePrompt).trim();
 		if (!p) return;
 		const bill = get().recordUsage("imagine");
-		if (!bill.ok) return;
+		if (!bill.ok) {
+			get().pushActivity({
+				kind: "imagine",
+				title: "Imagine blocked",
+				detail: "Usage quota exceeded — wait for period reset or switch plan in Settings",
+				status: "failed"
+			});
+			return;
+		}
 		const aspect = get().imagineAspect;
 		const mode = get().mode;
 		const id = uid("img");
@@ -1306,8 +1466,9 @@ var useGrokHub = create()(persist((set, get) => ({
 		};
 		set((s) => ({
 			imagineJobs: [job, ...s.imagineJobs].slice(0, 24),
-			running: true,
-			imaginePrompt: p
+			imagineBusy: true,
+			imaginePrompt: p,
+			imagineError: null
 		}));
 		get().pushActivity({
 			kind: "imagine",
@@ -1315,11 +1476,34 @@ var useGrokHub = create()(persist((set, get) => ({
 			detail: `${p.slice(0, 100)} · ${bill.cost}u`,
 			status: "running"
 		});
-		const m = getMode(resolveMode(mode, p));
-		await wait(m.latencyMs[0] + Math.random() * (m.latencyMs[1] - m.latencyMs[0]));
-		const imageDataUrl = renderImaginePreview(p, aspect);
+		let imageDataUrl;
+		let source = "local";
+		let model;
+		let err = null;
+		try {
+			const { grokImagine } = await import("./grok-client-Cb6uzGBf.mjs");
+			const live = await grokImagine({
+				prompt: p,
+				apiKey: get().apiKey || void 0,
+				accessToken: get().oauth?.accessToken,
+				tokens: get().oauth
+			});
+			if (live.ok && live.imageDataUrl) {
+				imageDataUrl = live.imageDataUrl;
+				source = "xai";
+				model = live.model;
+				if (live.tokens) set({ oauth: live.tokens });
+			} else err = live.error || "live Imagine unavailable";
+		} catch (e) {
+			err = e instanceof Error ? e.message : "Imagine request failed";
+		}
+		if (!imageDataUrl) {
+			imageDataUrl = renderImaginePreview(p, aspect);
+			source = "local";
+		}
 		set((s) => ({
-			running: false,
+			imagineBusy: false,
+			imagineError: source === "local" && err ? err : null,
 			imagineJobs: s.imagineJobs.map((j) => j.id === id ? {
 				...j,
 				status: "ready",
@@ -1328,8 +1512,8 @@ var useGrokHub = create()(persist((set, get) => ({
 		}));
 		get().pushActivity({
 			kind: "imagine",
-			title: "Imagine ready",
-			detail: p.slice(0, 120),
+			title: source === "xai" ? "Imagine ready (Grok)" : "Imagine ready (local preview)",
+			detail: source === "xai" ? `${p.slice(0, 80)} · ${model || "xAI"}` : `${p.slice(0, 80)}${err ? ` · live failed: ${err}` : " · offline SVG"}`,
 			status: "success"
 		});
 	},
@@ -1403,6 +1587,8 @@ var useGrokHub = create()(persist((set, get) => ({
 			imagineJobs: [],
 			imaginePrompt: "",
 			imagineAspect: "1:1",
+			imagineBusy: false,
+			imagineError: null,
 			mode: "auto",
 			heartbeatAt: fresh.heartbeatAt,
 			running: false,
@@ -1416,7 +1602,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		});
 	}
 }), {
-	name: "grokhub-clean-v2",
+	name: "grokhub-clean-v3",
 	partialize: (s) => ({
 		connectors: s.connectors,
 		skills: s.skills,
@@ -1427,7 +1613,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		mode: s.mode,
 		desktop: s.desktop,
 		usage: s.usage,
-		imagineJobs: s.imagineJobs.slice(0, 8),
+		imagineJobs: s.imagineJobs.slice(0, 8).map(({ imageDataUrl: _drop, ...rest }) => rest),
 		imagineAspect: s.imagineAspect,
 		apiKey: s.apiKey,
 		githubToken: s.githubToken,
@@ -2545,14 +2731,24 @@ function StatCard({ label, value, hint, icon, onClick }) {
 }
 function ConnectorsView() {
 	const connectors = useGrokHub((s) => s.connectors);
-	const toggleConnector = useGrokHub((s) => s.toggleConnector);
+	const connectConnector = useGrokHub((s) => s.connectConnector);
+	const oauth = useGrokHub((s) => s.oauth);
 	const [q, setQ] = (0, import_react.useState)("");
+	const [busyId, setBusyId] = (0, import_react.useState)(null);
 	const filtered = (0, import_react.useMemo)(() => {
 		const needle = q.trim().toLowerCase();
 		if (!needle) return connectors;
 		return connectors.filter((c) => c.name.toLowerCase().includes(needle) || c.category.toLowerCase().includes(needle) || c.description.toLowerCase().includes(needle));
 	}, [connectors, q]);
 	const connected = connectors.filter((c) => c.status === "connected").length;
+	async function onToggle(id) {
+		setBusyId(id);
+		try {
+			await connectConnector(id);
+		} finally {
+			setBusyId(null);
+		}
+	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "space-y-5",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Card, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, {
@@ -2560,7 +2756,11 @@ function ConnectorsView() {
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardTitle, {
 				className: "flex items-center gap-2",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Cable, { className: "h-4 w-4" }), "Grok Connectors"]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardDescription, { children: ["OAuth tools Grok can use in chat — email, files, code, CRM, and custom MCP.", ` ${connected} connected.`] })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardDescription, { children: [
+				"Grok, Desktop Host, and GitHub use real auth. Other connectors enable agent context and open the vendor sign-in page.",
+				` ${connected} connected.`,
+				oauth?.email ? ` · Grok as ${oauth.email}` : ""
+			] })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
 				value: q,
 				onChange: (e) => setQ(e.target.value),
 				placeholder: "Search connectors",
@@ -2570,6 +2770,8 @@ function ConnectorsView() {
 			className: "grid gap-3 md:grid-cols-2 xl:grid-cols-3",
 			children: filtered.map((c) => {
 				const on = c.status === "connected";
+				const err = c.status === "error";
+				const busy = busyId === c.id;
 				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, {
 					className: "flex flex-col",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardHeader, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -2581,8 +2783,8 @@ function ConnectorsView() {
 							className: "mt-1",
 							children: c.category
 						})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
-							variant: on ? "success" : "default",
-							children: on ? "connected" : "offline"
+							variant: on ? "success" : err ? "danger" : "default",
+							children: on ? "connected" : err ? "error" : "offline"
 						})]
 					}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 						className: "mt-auto flex flex-1 flex-col gap-4",
@@ -2606,8 +2808,9 @@ function ConnectorsView() {
 								variant: on ? "secondary" : "default",
 								size: "sm",
 								className: "mt-auto w-full",
-								onClick: () => toggleConnector(c.id),
-								children: on ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link2Off, { className: "h-3.5 w-3.5" }), "Disconnect"] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Check, { className: "h-3.5 w-3.5" }), "Connect"] })
+								disabled: busy,
+								onClick: () => void onToggle(c.id),
+								children: busy ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoaderCircle, { className: "h-3.5 w-3.5 animate-spin" }), "Working…"] }) : on ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link2Off, { className: "h-3.5 w-3.5" }), "Disconnect"] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Check, { className: "h-3.5 w-3.5" }), "Connect"] })
 							})
 						]
 					})]
@@ -3109,7 +3312,9 @@ function ImagineView() {
 	const prompt = useGrokHub((s) => s.imaginePrompt);
 	const aspect = useGrokHub((s) => s.imagineAspect);
 	const jobs = useGrokHub((s) => s.imagineJobs);
-	const running = useGrokHub((s) => s.running);
+	const busy = useGrokHub((s) => s.imagineBusy);
+	const err = useGrokHub((s) => s.imagineError);
+	const grokConnected = useGrokHub((s) => s.grokConnected);
 	const mode = useGrokHub((s) => s.mode);
 	const setImaginePrompt = useGrokHub((s) => s.setImaginePrompt);
 	const setImagineAspect = useGrokHub((s) => s.setImagineAspect);
@@ -3121,37 +3326,55 @@ function ImagineView() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardTitle, {
 				className: "flex items-center gap-2 text-sm",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Image, { className: "h-4 w-4" }), "Imagine"]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Baked into GrokHub desktop — local preview renderer for Arch offline use. Pair with Expert/Heavy modes for stronger art direction in chat." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Live Grok image generation when OAuth/API is connected; local SVG preview as fallback." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 				className: "space-y-3",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "flex flex-wrap gap-2",
-					children: [ASPECTS.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						onClick: () => setImagineAspect(a),
-						className: a === aspect ? "rounded-full border border-[var(--color-border-strong)] bg-[var(--color-elevated)] px-3 py-1.5 text-xs font-medium" : "rounded-full border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-muted)] hover:border-[var(--color-border-strong)]",
-						children: a
-					}, a)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
-						className: "ml-auto font-mono",
-						children: mode
-					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
-					className: "flex flex-col gap-2 sm:flex-row",
-					onSubmit: (e) => {
-						e.preventDefault();
-						runImagine();
-					},
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
-						value: prompt,
-						onChange: (e) => setImaginePrompt(e.target.value),
-						placeholder: "Moody night desk, dual monitors, soft amber lamp, film still…",
-						disabled: running
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-						type: "submit",
-						disabled: running || !prompt.trim(),
-						className: "sm:w-36",
-						children: running ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoaderCircle, { className: "h-4 w-4 animate-spin" }), "Render"] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sparkles, { className: "h-4 w-4" }), "Generate"] })
-					})]
-				})]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex flex-wrap gap-2",
+						children: [
+							ASPECTS.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								onClick: () => setImagineAspect(a),
+								className: a === aspect ? "rounded-full border border-[var(--color-border-strong)] bg-[var(--color-elevated)] px-3 py-1.5 text-xs font-medium" : "rounded-full border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-muted)] hover:border-[var(--color-border-strong)]",
+								children: a
+							}, a)),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+								className: "ml-auto font-mono",
+								children: mode
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+								variant: grokConnected ? "success" : "default",
+								children: grokConnected ? "live ready" : "local only"
+							})
+						]
+					}),
+					err && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rounded-[var(--radius-sm)] border border-[color-mix(in_oklab,var(--color-warn)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-warn)_10%,transparent)] px-3 py-2 text-xs text-[var(--color-warn)]",
+						children: [
+							"Live Imagine: ",
+							err,
+							" — showing local preview."
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+						className: "flex flex-col gap-2 sm:flex-row",
+						onSubmit: (e) => {
+							e.preventDefault();
+							runImagine();
+						},
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
+							value: prompt,
+							onChange: (e) => setImaginePrompt(e.target.value),
+							placeholder: "Moody night desk, dual monitors, soft amber lamp, film still…",
+							disabled: busy
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+							type: "submit",
+							disabled: busy || !prompt.trim(),
+							className: "sm:w-36",
+							children: busy ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoaderCircle, { className: "h-4 w-4 animate-spin" }), "Render"] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sparkles, { className: "h-4 w-4" }), "Generate"] })
+						})]
+					})
+				]
 			})] }),
 			latest?.imageDataUrl && latest.status === "ready" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, {
 				className: "overflow-hidden",
@@ -3165,9 +3388,9 @@ function ImagineView() {
 						children: latest.prompt
 					})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
 						href: latest.imageDataUrl,
-						download: `grokhub-imagine-${latest.id}.svg`,
+						download: `grokhub-imagine-${latest.id}.${latest.imageDataUrl.startsWith("data:image/svg") ? "svg" : "png"}`,
 						className: "inline-flex h-9 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 text-xs font-medium hover:border-[var(--color-border-strong)]",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Download, { className: "h-3.5 w-3.5" }), "Save SVG"]
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Download, { className: "h-3.5 w-3.5" }), "Save"]
 					})]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)]",
@@ -3946,9 +4169,26 @@ function AppShell() {
 		const p = useGrokHub.persist.rehydrate();
 		Promise.resolve(p).finally(() => {
 			useGrokHub.setState({ nav: "chat" });
-			useGrokHub.getState().refreshStaleTimes();
-			useGrokHub.getState().tickHeartbeat();
+			const st = useGrokHub.getState();
+			st.refreshStaleTimes();
+			st.tickHeartbeat();
+			if (st.oauth?.accessToken) useGrokHub.setState({ connectors: st.connectors.map((c) => c.id === "grok-xai" ? {
+				...c,
+				status: "connected",
+				lastUsed: Date.now()
+			} : c) });
 			useGrokHub.getState().probeGrok();
+			(async () => {
+				try {
+					const { hostInfo } = await import("./host-client-WUUmAwRI.mjs");
+					const info = await hostInfo();
+					if (info.unsandboxed && info.bridge !== "none") useGrokHub.setState((s) => ({ connectors: s.connectors.map((c) => c.id === "desktop-host" ? {
+						...c,
+						status: "connected",
+						lastUsed: Date.now()
+					} : c) }));
+				} catch {}
+			})();
 		});
 		setIsDesktop(Boolean(window.grokhubDesktop));
 	}, []);
@@ -4232,4 +4472,4 @@ function HomePage() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AppShell, {});
 }
 //#endregion
-export { oauthEnsure as a, HomePage as component, grokProbe as i, checkUpdate as n, oauthPoll as o, grokChat as r, oauthStart as s, applyUpdate as t };
+export { grokProbe as a, oauthStart as c, HomePage as component, grokImagine as i, checkUpdate as n, oauthEnsure as o, grokChat as r, oauthPoll as s, applyUpdate as t };

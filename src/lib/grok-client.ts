@@ -77,6 +77,26 @@ export async function oauthEnsure(tokens: XaiOAuthTokens) {
   }>("/api/grok", "oauthEnsure", { tokens });
 }
 
+export async function grokImagine(opts: {
+  prompt: string;
+  apiKey?: string;
+  accessToken?: string;
+  tokens?: XaiOAuthTokens | null;
+}): Promise<{
+  ok: boolean;
+  imageDataUrl?: string;
+  model?: string;
+  source?: string;
+  error?: string;
+  tokens?: XaiOAuthTokens;
+}> {
+  const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
+  if (desktop?.imagine) {
+    return desktop.imagine(opts);
+  }
+  return rpc("/api/grok", "imagine", opts as unknown as Record<string, unknown>);
+}
+
 export async function checkUpdate(token?: string) {
   const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
   if (desktop?.checkUpdate) {

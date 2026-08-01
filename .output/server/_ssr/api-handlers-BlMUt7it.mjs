@@ -1,4 +1,4 @@
-import { a as modelIdForMode, o as resolveMode, t as APP_VERSION } from "./version-oVkq3SFd.mjs";
+import { a as modelIdForMode, o as resolveMode, t as APP_VERSION } from "./version-BWlGhsus.mjs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream, existsSync, readFileSync } from "node:fs";
@@ -7,7 +7,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs$1 from "node:fs/promises";
 import os from "node:os";
-//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-D_XZUoxo.js
+//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-BlMUt7it.js
 var XAI_BASE = "https://api.x.ai/v1";
 /** Map GrokHub modes → xAI model IDs */
 function modelForMode(mode, prompt = "") {
@@ -142,6 +142,71 @@ async function probeXaiKey(apiKey) {
 }
 async function probeXaiBearer(bearer) {
 	return probeXaiKey(bearer);
+}
+/** Live Grok / xAI image generation (falls through models if one id is unavailable). */
+async function callXaiImagine(req) {
+	const auth = resolveBearer({
+		accessToken: req.accessToken,
+		apiKey: req.apiKey,
+		messages: []
+	});
+	if (!auth) return {
+		ok: false,
+		error: "Not connected — Grok OAuth or API key required for live Imagine"
+	};
+	const prompt = req.prompt.trim();
+	if (!prompt) return {
+		ok: false,
+		error: "empty prompt"
+	};
+	const models = [
+		req.model,
+		"grok-2-image",
+		"grok-2-image-1212",
+		"grok-imagine-image"
+	].filter(Boolean);
+	let lastErr = "image generation failed";
+	for (const model of models) try {
+		const res = await fetch(`${XAI_BASE}/images/generations`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				authorization: `Bearer ${auth.bearer}`
+			},
+			body: JSON.stringify({
+				model,
+				prompt,
+				n: 1,
+				response_format: "b64_json"
+			})
+		});
+		const data = await res.json().catch(() => ({}));
+		if (!res.ok) {
+			lastErr = typeof data.error === "string" ? data.error : data.error?.message || `xAI image ${res.status} (${model})`;
+			continue;
+		}
+		const row = data.data?.[0];
+		const b64 = row?.b64_json || row?.b64 || row?.image || "";
+		if (b64) return {
+			ok: true,
+			imageDataUrl: b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`,
+			model: data.model || model,
+			source: "xai"
+		};
+		if (row?.url) return {
+			ok: true,
+			imageDataUrl: row.url,
+			model: data.model || model,
+			source: "xai"
+		};
+		lastErr = "empty image response";
+	} catch (e) {
+		lastErr = e instanceof Error ? e.message : "network error";
+	}
+	return {
+		ok: false,
+		error: lastErr
+	};
 }
 /**
 * GitHub update helpers — Node only (server / Electron main).
@@ -683,7 +748,7 @@ var XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:a
 var XAI_OAUTH_ISSUER = "https://auth.x.ai";
 var XAI_OAUTH_DISCOVERY = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
 var XAI_DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-var XAI_UA = "GrokHub/0.2.3 (xAI OAuth; Linux)";
+var XAI_UA = "GrokHub/0.2.4 (xAI OAuth; Linux)";
 function formBody(data) {
 	return new URLSearchParams(data).toString();
 }
@@ -948,6 +1013,19 @@ async function dispatchApi(route, action, body) {
 			} catch {
 				return { models: [] };
 			}
+		}
+		if (action === "imagine") {
+			const prompt = String(body.prompt || "");
+			let accessToken = body.accessToken ? String(body.accessToken) : void 0;
+			const apiKey = body.apiKey ? String(body.apiKey) : void 0;
+			if (body.tokens && typeof body.tokens === "object") try {
+				accessToken = (await ensureAccessToken(body.tokens)).accessToken;
+			} catch {}
+			return callXaiImagine({
+				prompt,
+				accessToken,
+				apiKey
+			});
 		}
 		if (action === "chat") {
 			const messages = body.messages || [];

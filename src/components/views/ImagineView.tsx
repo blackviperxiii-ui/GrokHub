@@ -13,7 +13,9 @@ export function ImagineView() {
   const prompt = useGrokHub((s) => s.imaginePrompt);
   const aspect = useGrokHub((s) => s.imagineAspect);
   const jobs = useGrokHub((s) => s.imagineJobs);
-  const running = useGrokHub((s) => s.running);
+  const busy = useGrokHub((s) => s.imagineBusy);
+  const err = useGrokHub((s) => s.imagineError);
+  const grokConnected = useGrokHub((s) => s.grokConnected);
   const mode = useGrokHub((s) => s.mode);
   const setImaginePrompt = useGrokHub((s) => s.setImaginePrompt);
   const setImagineAspect = useGrokHub((s) => s.setImagineAspect);
@@ -30,8 +32,7 @@ export function ImagineView() {
             Imagine
           </CardTitle>
           <CardDescription>
-            Baked into GrokHub desktop — local preview renderer for Arch offline use.
-            Pair with Expert/Heavy modes for stronger art direction in chat.
+            Live Grok image generation when OAuth/API is connected; local SVG preview as fallback.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -51,7 +52,15 @@ export function ImagineView() {
               </button>
             ))}
             <Badge className="ml-auto font-mono">{mode}</Badge>
+            <Badge variant={grokConnected ? "success" : "default"}>
+              {grokConnected ? "live ready" : "local only"}
+            </Badge>
           </div>
+          {err && (
+            <div className="rounded-[var(--radius-sm)] border border-[color-mix(in_oklab,var(--color-warn)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-warn)_10%,transparent)] px-3 py-2 text-xs text-[var(--color-warn)]">
+              Live Imagine: {err} — showing local preview.
+            </div>
+          )}
           <form
             className="flex flex-col gap-2 sm:flex-row"
             onSubmit={(e) => {
@@ -63,11 +72,10 @@ export function ImagineView() {
               value={prompt}
               onChange={(e) => setImaginePrompt(e.target.value)}
               placeholder="Moody night desk, dual monitors, soft amber lamp, film still…"
-
-              disabled={running}
+              disabled={busy}
             />
-            <Button type="submit" disabled={running || !prompt.trim()} className="sm:w-36">
-              {running ? (
+            <Button type="submit" disabled={busy || !prompt.trim()} className="sm:w-36">
+              {busy ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Render
@@ -92,11 +100,11 @@ export function ImagineView() {
             </div>
             <a
               href={latest.imageDataUrl}
-              download={`grokhub-imagine-${latest.id}.svg`}
+              download={`grokhub-imagine-${latest.id}.${latest.imageDataUrl.startsWith("data:image/svg") ? "svg" : "png"}`}
               className="inline-flex h-9 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 text-xs font-medium hover:border-[var(--color-border-strong)]"
             >
               <Download className="h-3.5 w-3.5" />
-              Save SVG
+              Save
             </a>
           </CardHeader>
           <CardContent>

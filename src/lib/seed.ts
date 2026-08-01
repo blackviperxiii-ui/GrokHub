@@ -36,6 +36,14 @@ function catalogConnectors(): Connector[] {
       tools: ["chat", "models", "imagine"],
     },
     {
+      id: "desktop-host",
+      name: "Desktop Host",
+      category: "Local",
+      description: "Unsandboxed shell, files, and apps on this Arch machine.",
+      status: "disconnected",
+      tools: ["exec", "list_dir", "read_file", "open_app"],
+    },
+    {
       id: "gmail",
       name: "Gmail & Calendar",
       category: "Google",

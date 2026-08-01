@@ -1,4 +1,4 @@
-import { Cable, Check, Link2Off } from "lucide-react";
+import { Cable, Check, Link2Off, Loader2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useGrokHub } from "@/lib/store";
 import { RelativeTime } from "../RelativeTime";
@@ -9,8 +9,10 @@ import { Input } from "../ui/input";
 
 export function ConnectorsView() {
   const connectors = useGrokHub((s) => s.connectors);
-  const toggleConnector = useGrokHub((s) => s.toggleConnector);
+  const connectConnector = useGrokHub((s) => s.connectConnector);
+  const oauth = useGrokHub((s) => s.oauth);
   const [q, setQ] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -25,6 +27,15 @@ export function ConnectorsView() {
 
   const connected = connectors.filter((c) => c.status === "connected").length;
 
+  async function onToggle(id: string) {
+    setBusyId(id);
+    try {
+      await connectConnector(id);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div className="space-y-5">
       <Card>
@@ -35,8 +46,10 @@ export function ConnectorsView() {
               Grok Connectors
             </CardTitle>
             <CardDescription>
-              OAuth tools Grok can use in chat — email, files, code, CRM, and custom MCP.
+              Grok, Desktop Host, and GitHub use real auth. Other connectors enable agent context
+              and open the vendor sign-in page.
               {` ${connected} connected.`}
+              {oauth?.email ? ` · Grok as ${oauth.email}` : ""}
             </CardDescription>
           </div>
           <Input
@@ -51,6 +64,8 @@ export function ConnectorsView() {
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {filtered.map((c) => {
           const on = c.status === "connected";
+          const err = c.status === "error";
+          const busy = busyId === c.id;
           return (
             <Card key={c.id} className="flex flex-col">
               <CardHeader>
@@ -59,8 +74,8 @@ export function ConnectorsView() {
                     <CardTitle className="text-sm">{c.name}</CardTitle>
                     <CardDescription className="mt-1">{c.category}</CardDescription>
                   </div>
-                  <Badge variant={on ? "success" : "default"}>
-                    {on ? "connected" : "offline"}
+                  <Badge variant={on ? "success" : err ? "danger" : "default"}>
+                    {on ? "connected" : err ? "error" : "offline"}
                   </Badge>
                 </div>
               </CardHeader>
@@ -85,9 +100,15 @@ export function ConnectorsView() {
                   variant={on ? "secondary" : "default"}
                   size="sm"
                   className="mt-auto w-full"
-                  onClick={() => toggleConnector(c.id)}
+                  disabled={busy}
+                  onClick={() => void onToggle(c.id)}
                 >
-                  {on ? (
+                  {busy ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Working…
+                    </>
+                  ) : on ? (
                     <>
                       <Link2Off className="h-3.5 w-3.5" />
                       Disconnect

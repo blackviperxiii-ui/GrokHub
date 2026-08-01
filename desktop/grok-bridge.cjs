@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.2.3";
+const APP_VERSION = "0.2.4";
 
 function shaMatch(a, b) {
   if (!a || !b) return false;
@@ -202,16 +202,54 @@ function installRoots() {
   ].filter(Boolean);
 }
 
-async function findInstallRoot() {
-  for (const root of installRoots()) {
+async function isInstallRoot(root) {
+  if (!root) return false;
+  for (const rel of [
+    path.join(".output", "server", "index.mjs"),
+    "package.json",
+    "VERSION",
+    path.join("desktop", "main.mjs"),
+  ]) {
     try {
-      const st = await fs.stat(path.join(root, "package.json"));
-      if (st.isFile()) return root;
+      await fs.stat(path.join(root, rel));
+      return true;
     } catch {
-      /* next */
+      /* try next marker */
     }
   }
+  return false;
+}
+
+async function findInstallRoot() {
+  for (const root of installRoots()) {
+    if (await isInstallRoot(root)) return root;
+  }
   return null;
+}
+
+async function readLocalVersion(root) {
+  let version = APP_VERSION;
+  let sha = null;
+  if (!root) return { version, sha };
+  try {
+    const av = (await fs.readFile(path.join(root, "APP_VERSION"), "utf8")).trim();
+    if (av) version = av;
+  } catch {}
+  try {
+    const pkg = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
+    if (pkg.version) version = String(pkg.version);
+  } catch {}
+  try {
+    const v = (await fs.readFile(path.join(root, "VERSION"), "utf8")).trim();
+    if (v) sha = v.split(/\s+/)[0];
+  } catch {}
+  if (!sha) {
+    try {
+      const { stdout } = await execAsync("git rev-parse HEAD", { cwd: root, timeout: 8000 });
+      sha = stdout.trim() || null;
+    } catch {}
+  }
+  return { version, sha };
 }
 
 async function checkForUpdate(opts = {}) {
@@ -224,22 +262,7 @@ async function checkForUpdate(opts = {}) {
     process.env.GROKHUB_GITHUB_TOKEN ||
     "";
   const installRoot = await findInstallRoot();
-  let version = APP_VERSION;
-  let sha = null;
-  if (installRoot) {
-    try {
-      const pkg = JSON.parse(await fs.readFile(path.join(installRoot, "package.json"), "utf8"));
-      if (pkg.version) version = String(pkg.version);
-    } catch {
-      /* ignore */
-    }
-    try {
-      const { stdout } = await execAsync("git rev-parse HEAD", { cwd: installRoot, timeout: 8000 });
-      sha = stdout.trim().slice(0, 12);
-    } catch {
-      /* ignore */
-    }
-  }
+  const local = await readLocalVersion(installRoot);
   const headers = {
     accept: "application/vnd.github+json",
     "user-agent": "GrokHub-Updater",
@@ -255,12 +278,15 @@ async function checkForUpdate(opts = {}) {
     );
     if (res.ok) {
       const data = await res.json();
-      remoteSha = (data.sha || "").slice(0, 12);
+      remoteSha = data.sha || null;
       remoteMessage = (data.commit?.message || "").split("\n")[0] || null;
-      detail =
-        sha && remoteSha === sha
-          ? "Already on latest commit."
-          : "Update available from GitHub.";
+      if (shaMatch(local.sha, remoteSha)) {
+        detail = `Up to date · v${local.version} · ${(local.sha || "").slice(0, 12)}`;
+      } else if (!local.sha) {
+        detail = "Local VERSION missing — install recommended.";
+      } else {
+        detail = `Update available · ${local.sha.slice(0, 12)} → ${String(remoteSha).slice(0, 12)}`;
+      }
     } else {
       detail = token
         ? "Could not read remote commit (check repo access)."
@@ -269,12 +295,14 @@ async function checkForUpdate(opts = {}) {
   } catch (e) {
     detail = e instanceof Error ? e.message : "Update check failed";
   }
+  const remoteShort = remoteSha ? String(remoteSha).slice(0, 12) : null;
+  const localShort = local.sha ? String(local.sha).slice(0, 12) : null;
   return {
-    currentVersion: version,
-    currentSha: sha,
-    remoteSha,
+    currentVersion: local.version,
+    currentSha: localShort,
+    remoteSha: remoteShort,
     remoteMessage,
-    updateAvailable: Boolean(remoteSha && !shaMatch(sha, remoteSha)),
+    updateAvailable: Boolean(remoteSha && !shaMatch(local.sha, remoteSha)),
     repo,
     branch,
     installRoot,
@@ -512,7 +540,7 @@ const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const XAI_UA = "GrokHub/0.2.3 (xAI OAuth; Electron)";
+const XAI_UA = "GrokHub/0.2.4 (xAI OAuth; Electron)";
 
 async function xaiDiscovery() {
   const res = await fetch(XAI_OAUTH_DISCOVERY, {
@@ -715,8 +743,80 @@ async function callXaiChatWithOAuth(req = {}) {
 
 // patch callXaiChat to accept accessToken
 
+
+async function callXaiImagine(req = {}) {
+  const apiKey =
+    (req.accessToken && String(req.accessToken).trim()) ||
+    (req.apiKey && String(req.apiKey).trim()) ||
+    process.env.XAI_API_KEY ||
+    process.env.GROK_API_KEY ||
+    "";
+  if (!apiKey) {
+    return {
+      ok: false,
+      error: "Not connected — Grok OAuth or API key required for live Imagine",
+    };
+  }
+  const prompt = String(req.prompt || "").trim();
+  if (!prompt) return { ok: false, error: "empty prompt" };
+  const models = [
+    req.model,
+    "grok-2-image",
+    "grok-2-image-1212",
+    "grok-imagine-image",
+  ].filter(Boolean);
+  let lastErr = "image generation failed";
+  for (const model of models) {
+    try {
+      const res = await fetch(`${XAI_BASE}/images/generations`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          prompt,
+          n: 1,
+          response_format: "b64_json",
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        lastErr =
+          typeof data.error === "string"
+            ? data.error
+            : data.error?.message || `xAI image ${res.status} (${model})`;
+        continue;
+      }
+      const b64 =
+        data.data?.[0]?.b64_json ||
+        data.data?.[0]?.b64 ||
+        data.data?.[0]?.image ||
+        "";
+      const url = data.data?.[0]?.url || "";
+      if (b64) {
+        return {
+          ok: true,
+          imageDataUrl: `data:image/png;base64,${b64}`,
+          model: data.model || model,
+          source: "xai",
+        };
+      }
+      if (url) {
+        return { ok: true, imageDataUrl: url, model: data.model || model, source: "xai" };
+      }
+      lastErr = "empty image response";
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : "network error";
+    }
+  }
+  return { ok: false, error: lastErr };
+}
+
 module.exports = {
   callXaiChat: callXaiChatWithOAuth,
+  callXaiImagine,
   probeXaiKey,
   checkForUpdate,
   applyUpdate,

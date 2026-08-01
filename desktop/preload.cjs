@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
   },
   grok: {
     chat: (payload) => ipcRenderer.invoke("grok:chat", payload),
+    imagine: (payload) => ipcRenderer.invoke("grok:imagine", payload),
     probe: (apiKey, accessToken) => ipcRenderer.invoke("grok:probe", apiKey, accessToken),
     oauthStart: () => ipcRenderer.invoke("grok:oauthStart"),
     oauthPoll: (deviceCode) => ipcRenderer.invoke("grok:oauthPoll", deviceCode),

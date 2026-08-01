@@ -93,9 +93,38 @@ export function AppShell() {
     Promise.resolve(p).finally(() => {
       // Always land on Agent for a clean session entry
       useGrokHub.setState({ nav: "chat" });
-      useGrokHub.getState().refreshStaleTimes();
-      useGrokHub.getState().tickHeartbeat();
+      const st = useGrokHub.getState();
+      st.refreshStaleTimes();
+      st.tickHeartbeat();
+      // Reflect persisted OAuth on the Grok connector
+      if (st.oauth?.accessToken) {
+        useGrokHub.setState({
+          connectors: st.connectors.map((c) =>
+            c.id === "grok-xai"
+              ? { ...c, status: "connected" as const, lastUsed: Date.now() }
+              : c,
+          ),
+        });
+      }
       void useGrokHub.getState().probeGrok();
+      // Auto-probe desktop host connector
+      void (async () => {
+        try {
+          const { hostInfo } = await import("@/lib/host-client");
+          const info = await hostInfo();
+          if (info.unsandboxed && info.bridge !== "none") {
+            useGrokHub.setState((s) => ({
+              connectors: s.connectors.map((c) =>
+                c.id === "desktop-host"
+                  ? { ...c, status: "connected" as const, lastUsed: Date.now() }
+                  : c,
+              ),
+            }));
+          }
+        } catch {
+          /* ignore */
+        }
+      })();
     });
     setIsDesktop(Boolean(window.grokhubDesktop));
   }, []);

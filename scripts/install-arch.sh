@@ -91,3 +91,15 @@ If the panel still shows a generic Electron icon, log out/in once or run:
   gtk-update-icon-cache -f /usr/share/icons/hicolor
 
 EOF
+
+# Stamp version files for updater
+if [[ -n "${GROKHUB_SRC:-}" && -f "$GROKHUB_SRC/VERSION" ]]; then
+  install -Dm644 "$GROKHUB_SRC/VERSION" "$APP_ROOT/VERSION"
+elif command -v git >/dev/null 2>&1 && [[ -d "${GROKHUB_SRC:-.}/.git" ]]; then
+  git -C "${GROKHUB_SRC:-.}" rev-parse HEAD > "$APP_ROOT/VERSION" || true
+fi
+if [[ -f "${GROKHUB_SRC:-.}/package.json" ]]; then
+  node -e "const p=require('./package.json'); require('fs').writeFileSync(process.argv[1], p.version+'\n')" "$APP_ROOT/APP_VERSION" 2>/dev/null || echo "0.2.4" > "$APP_ROOT/APP_VERSION"
+else
+  echo "0.2.4" > "$APP_ROOT/APP_VERSION"
+fi

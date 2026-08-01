@@ -434,6 +434,7 @@ function registerIpc() {
   );
 
   ipcMain.handle("grok:chat", (_e, payload) => grokBridge.callXaiChat(payload || {}));
+  ipcMain.handle("grok:imagine", (_e, payload) => grokBridge.callXaiImagine(payload || {}));
   ipcMain.handle("grok:probe", async (_e, apiKey, accessToken) => {
     const bearer =
       (accessToken && String(accessToken)) ||

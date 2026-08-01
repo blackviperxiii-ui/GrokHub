@@ -24,6 +24,18 @@ export type DesktopGrokBridge = {
     accessToken?: string;
     tokens?: XaiOAuthTokens | null;
   }) => Promise<GrokChatResult & { tokens?: XaiOAuthTokens; refreshed?: boolean }>;
+  imagine?: (payload: {
+    prompt: string;
+    apiKey?: string;
+    accessToken?: string;
+    tokens?: XaiOAuthTokens | null;
+  }) => Promise<{
+    ok: boolean;
+    imageDataUrl?: string;
+    model?: string;
+    source?: string;
+    error?: string;
+  }>;
   probe?: (
     apiKey?: string,
     accessToken?: string,

@@ -180,3 +180,88 @@ export async function probeXaiKey(apiKey: string): Promise<{ ok: boolean; detail
 export async function probeXaiBearer(bearer: string): Promise<{ ok: boolean; detail: string }> {
   return probeXaiKey(bearer);
 }
+
+export type GrokImagineResult = {
+  ok: boolean;
+  imageDataUrl?: string;
+  model?: string;
+  source?: "xai" | "local";
+  error?: string;
+};
+
+/** Live Grok / xAI image generation (falls through models if one id is unavailable). */
+export async function callXaiImagine(req: {
+  prompt: string;
+  accessToken?: string;
+  apiKey?: string;
+  model?: string;
+}): Promise<GrokImagineResult> {
+  const auth = resolveBearer({
+    accessToken: req.accessToken,
+    apiKey: req.apiKey,
+    messages: [],
+  });
+  if (!auth) {
+    return {
+      ok: false,
+      error: "Not connected — Grok OAuth or API key required for live Imagine",
+    };
+  }
+  const prompt = req.prompt.trim();
+  if (!prompt) return { ok: false, error: "empty prompt" };
+
+  const models = [
+    req.model,
+    "grok-2-image",
+    "grok-2-image-1212",
+    "grok-imagine-image",
+  ].filter(Boolean) as string[];
+
+  let lastErr = "image generation failed";
+  for (const model of models) {
+    try {
+      const res = await fetch(`${XAI_BASE}/images/generations`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${auth.bearer}`,
+        },
+        body: JSON.stringify({
+          model,
+          prompt,
+          n: 1,
+          response_format: "b64_json",
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: { message?: string } | string;
+        data?: Array<{ b64_json?: string; b64?: string; url?: string; image?: string }>;
+        model?: string;
+      };
+      if (!res.ok) {
+        lastErr =
+          typeof data.error === "string"
+            ? data.error
+            : data.error?.message || `xAI image ${res.status} (${model})`;
+        continue;
+      }
+      const row = data.data?.[0];
+      const b64 = row?.b64_json || row?.b64 || row?.image || "";
+      if (b64) {
+        return {
+          ok: true,
+          imageDataUrl: b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`,
+          model: data.model || model,
+          source: "xai",
+        };
+      }
+      if (row?.url) {
+        return { ok: true, imageDataUrl: row.url, model: data.model || model, source: "xai" };
+      }
+      lastErr = "empty image response";
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : "network error";
+    }
+  }
+  return { ok: false, error: lastErr };
+}

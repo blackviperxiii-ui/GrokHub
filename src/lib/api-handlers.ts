@@ -1,7 +1,7 @@
 /**
  * Unified JSON API handlers for /api/grok and /api/update (Node only).
  */
-import { callXaiChat, probeXaiBearer, XAI_BASE, type GrokChatMessage } from "./grok";
+import { callXaiChat, callXaiImagine, probeXaiBearer, XAI_BASE, type GrokChatMessage } from "./grok";
 import type { GrokModeId } from "./types";
 import { applyUpdate, checkForUpdate } from "./update";
 import {
@@ -85,6 +85,21 @@ export async function dispatchApi(
       } catch {
         return { models: [] };
       }
+    }
+
+    if (action === "imagine") {
+      const prompt = String(body.prompt || "");
+      let accessToken = body.accessToken ? String(body.accessToken) : undefined;
+      const apiKey = body.apiKey ? String(body.apiKey) : undefined;
+      if (body.tokens && typeof body.tokens === "object") {
+        try {
+          const ensured = await ensureAccessToken(body.tokens as XaiOAuthTokens);
+          accessToken = ensured.accessToken;
+        } catch {
+          /* use raw */
+        }
+      }
+      return callXaiImagine({ prompt, accessToken, apiKey });
     }
 
     if (action === "chat") {
