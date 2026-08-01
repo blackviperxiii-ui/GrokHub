@@ -21,7 +21,17 @@ Put the host command on its OWN line, alone, like:
 HOST_CMD: ls -la "$HOME/Downloads"
 Never glue HOST_CMD onto a prose sentence. Prefer one simple command (ls, head, cat, find, stat).
 The runtime executes it and returns HOST_RESULT — then summarize clearly for the user.
-You may use multiple HOST_CMD rounds if needed.`;
+You may use multiple HOST_CMD rounds if needed.
+
+## Connectors
+Only use tools listed as LIVE in the connector context below. Do not invent mail, calendar, or Notion results.
+For live cloud tools, put a command on its OWN line:
+CONNECTOR_CMD: github search_code query:useState repo:facebook/react
+CONNECTOR_CMD: github list_issues repo:owner/name
+CONNECTOR_CMD: github list_repos
+CONNECTOR_CMD: github user
+The runtime returns CONNECTOR_RESULT. Summarize for the user; do not invent GitHub data.
+Website-linked connectors (Gmail, Notion, etc.) may be marked connected for status only — if tools are not LIVE, say so and suggest the Grok website for those tools.`;
 
   const id = resolveMode(mode, prompt);
   switch (id) {
@@ -36,6 +46,31 @@ You may use multiple HOST_CMD rounds if needed.`;
     default:
       return base;
   }
+}
+
+/** Extra system block describing which connectors are actually usable. */
+export function connectorContextBlock(
+  connectors: Array<{
+    id: string;
+    name: string;
+    status: string;
+    tools: string[];
+    accountLabel?: string | null;
+    liveTools?: boolean;
+    source?: string;
+  }>,
+): string {
+  const connected = connectors.filter((c) => c.status === "connected");
+  if (!connected.length) {
+    return "\n\n## Connector status\nNone connected. User can link Grok website or GitHub token in Settings.";
+  }
+  const lines = connected.map((c) => {
+    const live = c.liveTools || c.id === "github" || c.id === "desktop-host" || c.id === "grok-xai";
+    const acct = c.accountLabel ? ` · ${c.accountLabel}` : "";
+    const src = c.source ? ` · via ${c.source}` : "";
+    return `- ${c.name} (${c.id}): ${live ? "LIVE tools" : "status only (website)"}${acct}${src} · tools: ${c.tools.join(", ")}`;
+  });
+  return `\n\n## Connector status\n${lines.join("\n")}\nOnly call CONNECTOR_CMD for LIVE tools.`;
 }
 
 export type GrokChatMessage = {
@@ -448,17 +483,55 @@ export async function probeXaiBearer(bearer: string): Promise<{ ok: boolean; det
 export type GrokImagineResult = {
   ok: boolean;
   imageDataUrl?: string;
+  videoDataUrl?: string;
   model?: string;
   source?: "xai" | "local";
   error?: string;
+  mediaKind?: "image" | "video";
 };
 
-/** Live Grok / xAI image generation (falls through models if one id is unavailable). */
+function sizeForAspect(aspect?: string): string | undefined {
+  switch (aspect) {
+    case "16:9":
+      return "1792x1024";
+    case "9:16":
+      return "1024x1792";
+    case "3:2":
+      return "1536x1024";
+    case "2:3":
+      return "1024x1536";
+    case "4:3":
+      return "1536x1152";
+    case "1:1":
+      return "1024x1024";
+    default:
+      return undefined; // auto
+  }
+}
+
+function qualityHint(quality?: string, kind?: string): string {
+  if (kind === "video") {
+    return quality === "quality"
+      ? "cinematic motion, high detail, smooth camera, 720p look"
+      : "fast motion sketch, simple scene";
+  }
+  return quality === "quality"
+    ? "ultra detailed, sharp focus, professional lighting, high fidelity"
+    : "clean composition, efficient render";
+}
+
+/** Live Grok / xAI image (and best-effort video) generation. */
 export async function callXaiImagine(req: {
   prompt: string;
   accessToken?: string;
   apiKey?: string;
   model?: string;
+  aspect?: string;
+  quality?: "speed" | "quality";
+  mediaKind?: "image" | "video";
+  n?: number;
+  /** data URL or https URL for reference / img2img style guidance */
+  referenceDataUrl?: string;
 }): Promise<GrokImagineResult> {
   const auth = resolveBearer({
     accessToken: req.accessToken,
@@ -474,8 +547,105 @@ export async function callXaiImagine(req: {
   const prompt = req.prompt.trim();
   if (!prompt) return { ok: false, error: "empty prompt" };
 
+  const mediaKind = req.mediaKind || "image";
+  const qHint = qualityHint(req.quality, mediaKind);
+  const fullPrompt = `${prompt}\n\n[${qHint}]`.trim();
+  const size = sizeForAspect(req.aspect);
+  const n = Math.min(4, Math.max(1, req.n || 1));
+
+  if (mediaKind === "video") {
+    // Best-effort video endpoints — xAI surface evolves; try known patterns
+    const videoModels = [
+      req.model,
+      "grok-imagine-video",
+      "grok-imagine-video-1.5",
+      "grok-2-video",
+    ].filter(Boolean) as string[];
+    const endpoints = [
+      `${XAI_BASE}/videos/generations`,
+      `${XAI_BASE}/video/generations`,
+      `${XAI_BASE}/images/generations`,
+    ];
+    let lastErr = "video generation unavailable on this API path";
+    for (const model of videoModels) {
+      for (const url of endpoints) {
+        try {
+          const body: Record<string, unknown> = {
+            model,
+            prompt: fullPrompt,
+            n: 1,
+          };
+          if (size) body.size = size;
+          if (req.aspect && req.aspect !== "auto") body.aspect_ratio = req.aspect;
+          if (req.referenceDataUrl) {
+            body.image = req.referenceDataUrl.startsWith("data:")
+              ? req.referenceDataUrl
+              : req.referenceDataUrl;
+            body.image_url = req.referenceDataUrl;
+          }
+          const res = await fetch(url, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${auth.bearer}`,
+            },
+            body: JSON.stringify(body),
+          });
+          const data = (await res.json().catch(() => ({}))) as {
+            error?: { message?: string } | string;
+            data?: Array<{
+              b64_json?: string;
+              url?: string;
+              video_url?: string;
+              video?: string;
+            }>;
+            model?: string;
+          };
+          if (!res.ok) {
+            lastErr =
+              typeof data.error === "string"
+                ? data.error
+                : data.error?.message || `xAI video ${res.status} (${model})`;
+            continue;
+          }
+          const row = data.data?.[0];
+          const vid = row?.video_url || row?.video || row?.url || "";
+          if (vid) {
+            return {
+              ok: true,
+              videoDataUrl: vid,
+              model: data.model || model,
+              source: "xai",
+              mediaKind: "video",
+            };
+          }
+          // Some responses return image frames only
+          const b64 = row?.b64_json || "";
+          if (b64) {
+            return {
+              ok: true,
+              imageDataUrl: b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`,
+              model: data.model || model,
+              source: "xai",
+              mediaKind: "image",
+              error: "API returned an image frame instead of video for this model",
+            };
+          }
+        } catch (e) {
+          lastErr = e instanceof Error ? e.message : "network error";
+        }
+      }
+    }
+    return {
+      ok: false,
+      error: `${lastErr}. Video may require SuperGrok + website Imagine; try Image mode or Grok web.`,
+      mediaKind: "video",
+    };
+  }
+
   const models = [
     req.model,
+    req.quality === "quality" ? "grok-imagine-image" : "grok-2-image",
     "grok-2-image",
     "grok-2-image-1212",
     "grok-imagine-image",
@@ -484,18 +654,27 @@ export async function callXaiImagine(req: {
   let lastErr = "image generation failed";
   for (const model of models) {
     try {
+      const body: Record<string, unknown> = {
+        model,
+        prompt: fullPrompt,
+        n,
+        response_format: "b64_json",
+      };
+      if (size) body.size = size;
+      if (req.aspect && req.aspect !== "auto") {
+        body.aspect_ratio = req.aspect;
+      }
+      // Reference image for edit / restyle style flows when API accepts it
+      if (req.referenceDataUrl) {
+        body.image = req.referenceDataUrl;
+      }
       const res = await fetch(`${XAI_BASE}/images/generations`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${auth.bearer}`,
         },
-        body: JSON.stringify({
-          model,
-          prompt,
-          n: 1,
-          response_format: "b64_json",
-        }),
+        body: JSON.stringify(body),
       });
       const data = (await res.json().catch(() => ({}))) as {
         error?: { message?: string } | string;
@@ -517,15 +696,22 @@ export async function callXaiImagine(req: {
           imageDataUrl: b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`,
           model: data.model || model,
           source: "xai",
+          mediaKind: "image",
         };
       }
       if (row?.url) {
-        return { ok: true, imageDataUrl: row.url, model: data.model || model, source: "xai" };
+        return {
+          ok: true,
+          imageDataUrl: row.url,
+          model: data.model || model,
+          source: "xai",
+          mediaKind: "image",
+        };
       }
       lastErr = "empty image response";
     } catch (e) {
       lastErr = e instanceof Error ? e.message : "network error";
     }
   }
-  return { ok: false, error: lastErr };
+  return { ok: false, error: lastErr, mediaKind: "image" };
 }

@@ -77,6 +77,19 @@ export type DesktopGrokBridge = {
     ssoCookie?: string;
     bearer?: string;
   }) => Promise<import("./grok-website-usage").GrokWebsiteUsage>;
+  websiteConnectors?: (opts: {
+    ssoCookie?: string;
+    bearer?: string;
+  }) => Promise<{
+    ok: boolean;
+    connectors: Array<{
+      id: string;
+      name: string;
+      accountLabel?: string | null;
+      status: string;
+    }>;
+    detail?: string;
+  }>;
 };
 
 export type DesktopBridge = {
@@ -89,6 +102,20 @@ export type DesktopBridge = {
     set: (key: string, value: string) => Promise<{ ok?: boolean }>;
     get: (key: string) => Promise<{ value?: string }>;
     delete: (key: string) => Promise<{ ok?: boolean }>;
+  };
+  state?: {
+    get: (name: string) => Promise<{ value?: string | null; path?: string; updatedAt?: number }>;
+    set: (name: string, value: string) => Promise<{ ok?: boolean; path?: string }>;
+    remove: (name: string) => Promise<{ ok?: boolean }>;
+    info: () => Promise<{
+      path?: string;
+      userData?: string;
+      bytes?: number;
+      updatedAt?: number;
+      keys?: string[];
+    }>;
+    exportAll: () => Promise<unknown>;
+    importAll: (payload: string | unknown) => Promise<{ ok: boolean; error?: string }>;
   };
   host?: {
     info: () => Promise<HostInfo>;

@@ -294,7 +294,17 @@ export async function dispatchApi(
           /* use raw */
         }
       }
-      return callXaiImagine({ prompt, accessToken, apiKey });
+      return callXaiImagine({
+        prompt,
+        accessToken,
+        apiKey,
+        model: body.model ? String(body.model) : undefined,
+        aspect: body.aspect ? String(body.aspect) : undefined,
+        quality: body.quality === "quality" || body.quality === "speed" ? body.quality : undefined,
+        mediaKind: body.mediaKind === "video" ? "video" : "image",
+        n: typeof body.n === "number" ? body.n : undefined,
+        referenceDataUrl: body.referenceDataUrl ? String(body.referenceDataUrl) : undefined,
+      });
     }
 
     // chatStream handled as SSE at the route layer via createGrokChatSseStream

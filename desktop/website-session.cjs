@@ -427,10 +427,183 @@ async function getStoredSso() {
   return { cookie: sso || cookieHeader || "" };
 }
 
+const CONNECTOR_REST = [
+  "https://grok.com/rest/connectors",
+  "https://grok.com/rest/apps",
+  "https://grok.com/rest/integrations",
+  "https://grok.com/rest/user/connectors",
+];
+
+const CONNECTOR_PAGES = [
+  "https://grok.com/skills",
+  "https://grok.com/connectors",
+  "https://grok.com/",
+];
+
+const KNOWN_NAMES = [
+  "GitHub",
+  "Notion",
+  "Microsoft Teams",
+  "Outlook Calendar",
+  "Outlook",
+  "Google Calendar",
+  "Google Drive",
+  "Gmail",
+  "Box",
+  "Canva",
+  "Stripe",
+  "Vercel",
+  "Linear",
+];
+
+function mapConnectorName(name) {
+  const k = String(name || "")
+    .trim()
+    .toLowerCase();
+  const aliases = {
+    github: "github",
+    notion: "notion",
+    "microsoft teams": "teams",
+    teams: "teams",
+    outlook: "outlook",
+    "outlook calendar": "outlook-calendar",
+    "google calendar": "google-calendar",
+    "google drive": "gdrive",
+    gmail: "gmail",
+    box: "box",
+    canva: "canva",
+    stripe: "stripe",
+    vercel: "vercel",
+    linear: "linear",
+  };
+  if (aliases[k]) return aliases[k];
+  for (const [a, id] of Object.entries(aliases)) {
+    if (k.includes(a)) return id;
+  }
+  return null;
+}
+
+function parseHtmlConnectors(html) {
+  const hits = [];
+  for (const name of KNOWN_NAMES) {
+    const re = new RegExp(
+      name + "[\\s\\S]{0,240}?(Connected|connected|[\\w.+-]+@[\\w.-]+)",
+      "i",
+    );
+    const m = String(html).match(re);
+    if (!m) continue;
+    const id = mapConnectorName(name);
+    if (!id || hits.some((h) => h.id === id)) continue;
+    const tail = m[1] || "";
+    const email = /@/.test(tail) ? tail : null;
+    if (!/connected/i.test(m[0]) && !email) continue;
+    hits.push({ id, name, accountLabel: email, status: "connected" });
+  }
+  return hits;
+}
+
+function walkJsonConnectors(node, hits, depth) {
+  if (depth > 8 || node == null) return;
+  if (Array.isArray(node)) {
+    for (const item of node) walkJsonConnectors(item, hits, depth + 1);
+    return;
+  }
+  if (typeof node !== "object") return;
+  const o = node;
+  const name = String(
+    o.name || o.displayName || o.title || o.provider || o.appName || "",
+  ).trim();
+  const account = String(
+    o.email || o.account || o.accountEmail || o.userEmail || o.username || "",
+  ).trim();
+  const status = String(o.status || o.state || "").toLowerCase();
+  const connected =
+    status.includes("connect") ||
+    o.connected === true ||
+    o.isConnected === true ||
+    o.installed === true;
+  if (name && (connected || account)) {
+    const id = mapConnectorName(name);
+    if (id && !hits.some((h) => h.id === id)) {
+      hits.push({
+        id,
+        name,
+        accountLabel: account || null,
+        status: "connected",
+      });
+    }
+  }
+  for (const v of Object.values(o)) {
+    if (v && typeof v === "object") walkJsonConnectors(v, hits, depth + 1);
+  }
+}
+
+/**
+ * List Grok website Installed connectors using the persistent login partition.
+ */
+async function fetchWebsiteConnectors(opts = {}) {
+  const ses = grokSession();
+  const collected = await collectSessionCookies();
+  let cookie = String(opts.ssoCookie || collected.cookieHeader || collected.sso || "").trim();
+  if (cookie && !cookie.includes("=")) cookie = `sso=${cookie}`;
+  if (!cookie) {
+    return {
+      ok: false,
+      connectors: [],
+      detail: "No website session — link Grok website first",
+    };
+  }
+
+  const headers = {
+    accept: "application/json, text/html, */*",
+    "user-agent": CHROME_UA,
+    cookie,
+  };
+
+  for (const url of CONNECTOR_REST) {
+    try {
+      const res = await ses.fetch(url, { method: "GET", headers });
+      if (!res.ok) continue;
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("json")) continue;
+      const json = await res.json();
+      const hits = [];
+      walkJsonConnectors(json, hits, 0);
+      if (hits.length) {
+        return { ok: true, connectors: hits, detail: `REST ${url} · ${hits.length}` };
+      }
+    } catch {
+      /* next */
+    }
+  }
+
+  for (const url of CONNECTOR_PAGES) {
+    try {
+      const res = await ses.fetch(url, { method: "GET", headers });
+      if (!res.ok) continue;
+      const html = await res.text();
+      const hits = parseHtmlConnectors(html);
+      if (hits.length) {
+        return { ok: true, connectors: hits, detail: `HTML ${url} · ${hits.length}` };
+      }
+    } catch {
+      /* next */
+    }
+  }
+
+  return {
+    ok: false,
+    connectors: [],
+    detail:
+      "No connectors found — open Grok website → Skills and Connectors, ensure they show Connected, then re-link",
+  };
+}
+
 module.exports = {
   PARTITION,
   linkWebsiteSession,
   fetchWebsiteUsage,
+  fetchWebsiteConnectors,
   getStoredSso,
   collectSessionCookies,
 };

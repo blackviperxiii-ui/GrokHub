@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { persist, createJSONStorage } from "zustand/middleware";
+import { persistentStorage } from "./persistent-storage";
 import { renderImaginePreview } from "./imagine";
 import { getMode, resolveMode, resolveModeWithCatalog, stripAssistantChrome, modelIdForMode, autoRouteFor } from "./modes";
 import { buildCatalog, emptyCatalog, applyGrokPlan, needsGrokClassification, type ResolvedCatalog, type GrokSlotPlan } from "./models-catalog";
@@ -16,6 +17,8 @@ import type {
   GrokProfile,
   ImagineAspect,
   ImagineJob,
+  ImagineMediaKind,
+  ImagineQuality,
   NavId,
   Skill,
   SubscriptionPlanId,
@@ -33,6 +36,14 @@ import {
 } from "./usage";
 import { uid } from "./utils";
 import { computeNextRun } from "./automation-schedule";
+import {
+  emptyQuickAssistMemory,
+  normalizeMemory,
+  rememberChipClick,
+  rememberTypedPrompt,
+  type QuickAssistMemory,
+} from "./quick-assist-memory";
+import type { QuickChip } from "./quick-assistant";
 
 /** Waits for user approval of host commands (agent tool loop). */
 let hostConfirmWaiter: ((allow: boolean) => void) | null = null;
@@ -68,6 +79,9 @@ type State = {
   imagineJobs: ImagineJob[];
   imaginePrompt: string;
   imagineAspect: ImagineAspect;
+  imagineMediaKind: ImagineMediaKind;
+  imagineQuality: ImagineQuality;
+  imagineReference: string | null;
   imagineBusy: boolean;
   imagineError: string | null;
   desktop: {
@@ -86,6 +100,8 @@ type State = {
     risks: string[];
     botId: string;
   } | null;
+  /** Adaptive quick-assist chip habits */
+  quickAssistMemory: QuickAssistMemory;
   usage: UsageSnapshot;
   heartbeatAt: number;
   running: boolean;
@@ -128,6 +144,10 @@ type State = {
   resolveHostConfirm: (allow: boolean) => void;
   tickAutomations: () => Promise<void>;
   hydrateSecrets: () => Promise<void>;
+  recordQuickAssistChip: (chip: QuickChip) => void;
+  recordQuickAssistTyped: (text: string) => void;
+  clearQuickAssistMemory: () => void;
+  syncWebsiteConnectors: () => Promise<{ ok: boolean; detail: string; count: number }>;
   setApiKey: (key: string) => void;
   setGithubToken: (token: string) => void;
   startGrokOAuth: () => Promise<void>;
@@ -181,6 +201,9 @@ type State = {
   refreshModels: (opts?: { force?: boolean }) => Promise<void>;
   setImaginePrompt: (v: string) => void;
   setImagineAspect: (v: ImagineAspect) => void;
+  setImagineMediaKind: (v: ImagineMediaKind) => void;
+  setImagineQuality: (v: ImagineQuality) => void;
+  setImagineReference: (v: string | null) => void;
   runImagine: (prompt?: string) => Promise<void>;
   pushActivity: (item: Omit<ActivityItem, "id" | "ts"> & { ts?: number }) => void;
   tickHeartbeat: () => void;
@@ -446,7 +469,10 @@ export const useGrokHub = create<State>()(
       profile: boot.profile,
       imagineJobs: [],
       imaginePrompt: "",
-      imagineAspect: "1:1",
+      imagineAspect: "auto",
+      imagineMediaKind: "image",
+      imagineQuality: "speed",
+      imagineReference: null,
       imagineBusy: false,
       imagineError: null,
       desktop: {
@@ -463,6 +489,7 @@ export const useGrokHub = create<State>()(
       streamStatus: null,
       streamingMessageId: null,
       pendingHostConfirm: null,
+      quickAssistMemory: emptyQuickAssistMemory(),
       modelCatalog: emptyCatalog(),
       lastModelsFetchAt: 0,
       apiKey: "",
@@ -512,6 +539,109 @@ export const useGrokHub = create<State>()(
           if (Object.keys(patch).length) set(patch);
         } catch {
           /* ignore */
+        }
+      },
+
+      recordQuickAssistChip: (chip) => {
+        set((s) => ({
+          quickAssistMemory: rememberChipClick(s.quickAssistMemory, chip),
+        }));
+      },
+
+      recordQuickAssistTyped: (text) => {
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        set((s) => ({
+          quickAssistMemory: rememberTypedPrompt(s.quickAssistMemory, trimmed),
+        }));
+      },
+
+      clearQuickAssistMemory: () => {
+        set({ quickAssistMemory: emptyQuickAssistMemory() });
+      },
+
+      syncWebsiteConnectors: async () => {
+        try {
+          const { fetchWebsiteConnectors } = await import("./website-connectors");
+          const { createSeeds } = await import("./seed");
+          const r = await fetchWebsiteConnectors({
+            ssoCookie: get().ssoCookie || undefined,
+            bearer: get().oauth?.accessToken,
+          });
+          // Ensure catalog has all known ids
+          const catalog = createSeeds().connectors;
+          set((s) => {
+            const byId = new Map(s.connectors.map((c) => [c.id, c]));
+            for (const c of catalog) {
+              if (!byId.has(c.id)) byId.set(c.id, c);
+            }
+            // Apply website hits
+            for (const hit of r.connectors) {
+              const prev = byId.get(hit.id);
+              if (!prev) {
+                byId.set(hit.id, {
+                  id: hit.id,
+                  name: hit.name,
+                  category: "Website",
+                  description: "Linked on Grok website",
+                  status: "connected",
+                  tools: [],
+                  accountLabel: hit.accountLabel,
+                  source: "website",
+                  liveTools: hit.id === "github",
+                  lastUsed: Date.now(),
+                });
+                continue;
+              }
+              byId.set(hit.id, {
+                ...prev,
+                status: "connected",
+                accountLabel: hit.accountLabel || prev.accountLabel,
+                source: prev.source === "token" || prev.liveTools ? prev.source : "website",
+                // GitHub stays live if token present
+                liveTools:
+                  prev.id === "github"
+                    ? Boolean(get().githubToken) || prev.liveTools
+                    : prev.id === "desktop-host" || prev.id === "grok-xai"
+                      ? true
+                      : false,
+                lastUsed: Date.now(),
+                description: hit.accountLabel
+                  ? `${prev.description.split(" · ")[0]} · ${hit.accountLabel}`
+                  : prev.description,
+              });
+            }
+            // GitHub token implies connected + live
+            if (get().githubToken) {
+              const gh = byId.get("github");
+              if (gh) {
+                byId.set("github", {
+                  ...gh,
+                  status: "connected",
+                  liveTools: true,
+                  source: "token",
+                  lastUsed: Date.now(),
+                });
+              }
+            }
+            return { connectors: Array.from(byId.values()) };
+          });
+          if (r.ok && r.connectors.length) {
+            get().pushActivity({
+              kind: "connector",
+              title: "Website connectors synced",
+              detail: r.detail,
+              status: "success",
+            });
+          }
+          return {
+            ok: r.ok,
+            detail: r.detail,
+            count: r.connectors.length,
+          };
+        } catch (e) {
+          const detail = e instanceof Error ? e.message : "sync failed";
+          return { ok: false, detail, count: 0 };
         }
       },
 
@@ -662,6 +792,7 @@ export const useGrokHub = create<State>()(
             if (r?.cookie) {
               set({ ssoCookie: r.cookie });
               await get().refreshUsage();
+              void get().syncWebsiteConnectors();
               get().pushActivity({
                 kind: "auth",
                 title: "Grok website linked",
@@ -1341,7 +1472,14 @@ export const useGrokHub = create<State>()(
             set((s) => ({
               connectors: s.connectors.map((row) =>
                 row.id === id
-                  ? { ...row, status: "connected" as const, lastUsed: Date.now() }
+                  ? {
+                      ...row,
+                      status: "connected" as const,
+                      lastUsed: Date.now(),
+                      liveTools: true,
+                      source: "token" as const,
+                      accountLabel: user.login || row.accountLabel,
+                    }
                   : row,
               ),
             }));
@@ -1362,14 +1500,55 @@ export const useGrokHub = create<State>()(
           return;
         }
 
-        // Planned connectors — honest "coming soon", do not fake connected
+        // Website-backed connectors — sync from linked Grok session (no fake connected)
+        const websiteIds = new Set([
+          "gmail",
+          "gdrive",
+          "google-calendar",
+          "notion",
+          "outlook",
+          "outlook-calendar",
+          "teams",
+          "linear",
+          "box",
+          "canva",
+          "stripe",
+          "vercel",
+        ]);
+        if (websiteIds.has(id) || (c.source === "website" && id !== "github")) {
+          if (!get().ssoCookie) {
+            set({ nav: "settings" });
+            get().pushActivity({
+              kind: "connector",
+              title: `Link Grok website for ${c.name}`,
+              detail: "Settings → Link Grok website, then Connect again to sync Installed status",
+              status: "failed",
+            });
+            return;
+          }
+          const synced = await get().syncWebsiteConnectors();
+          const row = get().connectors.find((x) => x.id === id);
+          if (row?.status === "connected") {
+            get().pushActivity({
+              kind: "connector",
+              title: `${c.name} synced from website`,
+              detail: row.accountLabel || synced.detail,
+              status: "success",
+            });
+          } else {
+            get().pushActivity({
+              kind: "connector",
+              title: `${c.name} not found on website`,
+              detail:
+                "Open grok.com → Skills and Connectors, connect it there, then re-sync (Connect again).",
+              status: "failed",
+            });
+          }
+          return;
+        }
+
+        // Planned / custom — open vendor home only (not marked connected)
         const homes: Record<string, string> = {
-          gmail: "https://accounts.google.com/",
-          gdrive: "https://drive.google.com/",
-          notion: "https://www.notion.so/login",
-          outlook: "https://outlook.live.com/",
-          teams: "https://teams.microsoft.com/",
-          linear: "https://linear.app/",
           "custom-mcp": "",
         };
         const url = homes[id];
@@ -1378,9 +1557,8 @@ export const useGrokHub = create<State>()(
         }
         get().pushActivity({
           kind: "connector",
-          title: `${c.name} — coming soon`,
-          detail:
-            "Live API wiring is not available yet. Only Grok, Desktop Host, and GitHub are fully integrated.",
+          title: `${c.name}`,
+          detail: "No local connector wiring for this id yet.",
           status: "queued",
         });
       },
@@ -1746,6 +1924,13 @@ export const useGrokHub = create<State>()(
           stripHostCommands,
           inferHostCommandsFromUser,
         } = await import("./grok");
+        const {
+          extractConnectorCommands,
+          stripConnectorCommands,
+          runConnectorTool,
+        } = await import("./connector-tools");
+        const scrubAssistant = (s: string) =>
+          stripConnectorCommands(stripHostCommands(s));
 
         try {
           if (isLocalSlash) {
@@ -1805,7 +1990,13 @@ export const useGrokHub = create<State>()(
                   apiKey: get().apiKey || undefined,
                   accessToken: get().oauth?.accessToken,
                   tokens: get().oauth,
-                  workspaceContext: oc?.contextBundle || undefined,
+                  workspaceContext: [
+                    oc?.contextBundle || "",
+                    (await import("./grok")).connectorContextBlock(get().connectors),
+                  ]
+                    .filter(Boolean)
+                    .join("\n")
+                    .slice(0, 28_000) || undefined,
                 },
                 {
                   signal: abort.signal,
@@ -1827,19 +2018,16 @@ export const useGrokHub = create<State>()(
                     roundText += piece;
                     accumulated = roundText;
                     // Batch UI patches to animation frames (smoother streaming)
-                    const visibleDelta = stripHostCommands(roundText) || "…";
+                    const scrub = (s: string) => scrubAssistant(s) || "…";
                     if (!(globalThis as unknown as { __ghRaf?: number }).__ghRaf) {
                       (globalThis as unknown as { __ghRaf?: number }).__ghRaf =
                         requestAnimationFrame(() => {
                           (globalThis as unknown as { __ghRaf?: number }).__ghRaf = 0;
                           if (gen !== chatGeneration) return;
-                          patchBot(
-                            stripHostCommands(roundText) || "…",
-                            { streaming: true },
-                          );
+                          patchBot(scrub(roundText), { streaming: true });
                         });
                     }
-                    void visibleDelta;
+                    void scrub;
                   },
                 },
               );
@@ -1863,7 +2051,7 @@ export const useGrokHub = create<State>()(
                   bill = get().recordUsage("message", routed);
                 }
                 const full = stripAssistantChrome(result.content || roundText);
-                const visible = stripHostCommands(full);
+                const visible = scrubAssistant(full);
                 accumulated = full;
                 // Never show raw HOST_CMD lines to the user
                 patchBot(
@@ -1876,10 +2064,95 @@ export const useGrokHub = create<State>()(
                 });
 
                 let cmds = extractHostCommands(full);
+                let connCmds = extractConnectorCommands(full);
                 // First round: if user asked about local files and model forgot HOST_CMD, infer
                 if (!cmds.length && rounds === 1) {
                   cmds = inferHostCommandsFromUser(trimmed);
                 }
+                if (!cmds.length && !connCmds.length) {
+                  finalAnswer = visible || full;
+                  break;
+                }
+
+                // Connector tools (GitHub live; website connectors status-aware)
+                if (connCmds.length) {
+                  set({ streamStatus: "Running connector tools…" });
+                  const outputs: string[] = [];
+                  for (const cc of connCmds.slice(0, 3)) {
+                    if (abort.signal.aborted || gen !== chatGeneration) {
+                      aborted = true;
+                      break;
+                    }
+                    set({ streamStatus: `Connector: ${cc.connectorId} ${cc.tool}…` });
+                    const row = get().connectors.find((c) => c.id === cc.connectorId);
+                    patchBot(
+                      `${visible || "Using connector…"}\n\n_Running_\n\`CONNECTOR_CMD: ${cc.connectorId} ${cc.tool}\``,
+                      { streaming: true },
+                    );
+                    try {
+                      const r = await runConnectorTool({
+                        connectorId: cc.connectorId,
+                        tool: cc.tool,
+                        args: cc.args,
+                        githubToken: get().githubToken,
+                        websiteConnected: row?.status === "connected",
+                        accountLabel: row?.accountLabel,
+                      });
+                      outputs.push(
+                        [
+                          `CONNECTOR ${cc.connectorId} ${cc.tool}`,
+                          r.ok ? "ok" : "failed",
+                          r.detail,
+                        ].join("\n"),
+                      );
+                      get().pushActivity({
+                        kind: "connector",
+                        title: `${cc.connectorId}:${cc.tool}`,
+                        detail: r.detail.slice(0, 160),
+                        status: r.ok ? "success" : "failed",
+                      });
+                      if (r.ok) {
+                        set((s) => ({
+                          connectors: s.connectors.map((c) =>
+                            c.id === cc.connectorId
+                              ? { ...c, lastUsed: Date.now() }
+                              : c,
+                          ),
+                        }));
+                      }
+                    } catch (e) {
+                      outputs.push(
+                        `CONNECTOR ${cc.connectorId} ${cc.tool}\n[error] ${
+                          e instanceof Error ? e.message : "failed"
+                        }`,
+                      );
+                    }
+                  }
+                  if (aborted) break;
+                  const toolBlock = [
+                    "CONNECTOR_RESULT (authoritative — use this, do not invent data):",
+                    outputs.join("\n\n---\n\n"),
+                    "",
+                    "Summarize for the user. Only emit another CONNECTOR_CMD if needed.",
+                  ].join("\n");
+                  history.push({ role: "assistant", content: full });
+                  history.push({ role: "user", content: toolBlock });
+                  patchBot(
+                    [
+                      visible || "Checked connectors.",
+                      "",
+                      "```",
+                      outputs.join("\n\n"),
+                      "```",
+                      "",
+                      "_Summarizing…_",
+                    ].join("\n"),
+                    { streaming: true },
+                  );
+                  // If also host cmds, continue to host below after connector round
+                  if (!cmds.length) continue;
+                }
+
                 if (!cmds.length) {
                   finalAnswer = visible || full;
                   break;
@@ -2093,6 +2366,9 @@ export const useGrokHub = create<State>()(
 
       setImaginePrompt: (v) => set({ imaginePrompt: v }),
       setImagineAspect: (v) => set({ imagineAspect: v }),
+      setImagineMediaKind: (v) => set({ imagineMediaKind: v }),
+      setImagineQuality: (v) => set({ imagineQuality: v }),
+      setImagineReference: (v) => set({ imagineReference: v }),
 
       runImagine: async (prompt) => {
         const p = (prompt ?? get().imaginePrompt).trim();
@@ -2108,6 +2384,9 @@ export const useGrokHub = create<State>()(
           return;
         }
         const aspect = get().imagineAspect;
+        const mediaKind = get().imagineMediaKind;
+        const quality = get().imagineQuality;
+        const referenceDataUrl = get().imagineReference || undefined;
         const mode = get().mode;
         const id = uid("img");
         const job: ImagineJob = {
@@ -2117,6 +2396,9 @@ export const useGrokHub = create<State>()(
           ts: Date.now(),
           status: "rendering",
           mode,
+          mediaKind,
+          quality,
+          referenceDataUrl,
         };
         set((s) => ({
           imagineJobs: [job, ...s.imagineJobs].slice(0, 24),
@@ -2126,15 +2408,17 @@ export const useGrokHub = create<State>()(
         }));
         get().pushActivity({
           kind: "imagine",
-          title: "Imagine rendering",
-          detail: `${p.slice(0, 100)} · ${bill.cost}u`,
+          title: mediaKind === "video" ? "Imagine video rendering" : "Imagine rendering",
+          detail: `${p.slice(0, 80)} · ${aspect} · ${quality} · ${bill.cost}u`,
           status: "running",
         });
 
         let imageDataUrl: string | undefined;
+        let videoDataUrl: string | undefined;
         let source: "xai" | "local" = "local";
         let model: string | undefined;
         let err: string | null = null;
+        let outKind = mediaKind;
 
         try {
           const { grokImagine } = await import("./grok-client");
@@ -2143,11 +2427,20 @@ export const useGrokHub = create<State>()(
             apiKey: get().apiKey || undefined,
             accessToken: get().oauth?.accessToken,
             tokens: get().oauth,
+            aspect,
+            quality,
+            mediaKind,
+            referenceDataUrl,
           });
-          if (live.ok && live.imageDataUrl) {
+          if (live.ok && (live.imageDataUrl || live.videoDataUrl)) {
             imageDataUrl = live.imageDataUrl;
+            videoDataUrl = live.videoDataUrl;
             source = "xai";
             model = live.model;
+            if (live.mediaKind === "video" || live.mediaKind === "image") {
+              outKind = live.mediaKind;
+            }
+            if (live.error) err = live.error;
             if (live.tokens) set({ oauth: live.tokens });
           } else {
             err = live.error || "live Imagine unavailable";
@@ -2156,32 +2449,44 @@ export const useGrokHub = create<State>()(
           err = e instanceof Error ? e.message : "Imagine request failed";
         }
 
-        // Local SVG preview if live path failed
-        if (!imageDataUrl) {
-          imageDataUrl = renderImaginePreview(p, aspect);
+        // Local SVG preview if live image path failed (not for successful video)
+        if (!imageDataUrl && !videoDataUrl) {
+          const localAspect = aspect === "auto" ? "1:1" : aspect;
+          imageDataUrl = renderImaginePreview(p, localAspect);
           source = "local";
+          outKind = "image";
         }
 
         set((s) => ({
           imagineBusy: false,
-          imagineError: source === "local" && err ? err : null,
+          imagineError: source === "local" && err ? err : err && source === "xai" ? err : null,
           imagineJobs: s.imagineJobs.map((j) =>
             j.id === id
               ? {
                   ...j,
                   status: "ready" as const,
                   imageDataUrl,
-                  // stash source in mode field suffix is ugly — keep mode, detail in activity
+                  videoDataUrl,
+                  mediaKind: outKind,
+                  quality,
+                  model,
+                  source,
+                  error: err || undefined,
                 }
               : j,
           ),
         }));
         get().pushActivity({
           kind: "imagine",
-          title: source === "xai" ? "Imagine ready (Grok)" : "Imagine ready (local preview)",
+          title:
+            source === "xai"
+              ? outKind === "video"
+                ? "Imagine video ready (Grok)"
+                : "Imagine ready (Grok)"
+              : "Imagine ready (local preview)",
           detail:
             source === "xai"
-              ? `${p.slice(0, 80)} · ${model || "xAI"}`
+              ? `${p.slice(0, 80)} · ${model || "xAI"} · ${aspect}/${quality}`
               : `${p.slice(0, 80)}${err ? ` · live failed: ${err}` : " · offline SVG"}`,
           status: "success",
         });
@@ -2216,41 +2521,10 @@ export const useGrokHub = create<State>()(
       },
 
       refreshStaleTimes: () => {
+        // Never wipe user chat, threads, skills, or automations on age.
+        // Only refresh heartbeat + roll usage period if needed.
         const now = Date.now();
-        const DAY = 86_400_000;
-        const activity = get().activity;
-        const chat = get().chat;
-        const oldest = Math.min(
-          ...activity.map((a) => a.ts),
-          ...chat.map((m) => m.ts),
-          now,
-        );
-        if (now - oldest < 2 * DAY) {
-          set((s) => ({ heartbeatAt: now, usage: ensurePeriod(s.usage) }));
-          return;
-        }
-        const fresh = createSeeds(now);
         set((s) => ({
-          activity: fresh.activity,
-          chat: fresh.chat,
-          automations: fresh.automations.map((a) => {
-            const prev = s.automations.find((x) => x.id === a.id);
-            return prev
-              ? {
-                  ...a,
-                  enabled: prev.enabled,
-                  runCount: prev.runCount,
-                  lastRun: prev.lastRun && now - prev.lastRun < 2 * DAY ? prev.lastRun : a.lastRun,
-                }
-              : a;
-          }),
-          connectors: s.connectors.map((c) => ({
-            ...c,
-            lastUsed:
-              c.lastUsed && now - c.lastUsed < 2 * DAY
-                ? c.lastUsed
-                : fresh.connectors.find((x) => x.id === c.id)?.lastUsed,
-          })),
           heartbeatAt: now,
           usage: ensurePeriod(s.usage, now),
         }));
@@ -2289,37 +2563,59 @@ export const useGrokHub = create<State>()(
           oauthPending: null,
           ssoCookie: "",
           openClawWorkspace: null,
+          quickAssistMemory: emptyQuickAssistMemory(),
+          pendingHostConfirm: null,
         });
       },
     }),
     {
-      name: "grokhub-clean-v4",
+      name: "grokhub-memory-v1",
+      storage: createJSONStorage(() => persistentStorage),
       partialize: (s) => ({
         connectors: s.connectors,
         skills: s.skills,
         automations: s.automations,
-        threads: s.threads,
+        // Cap thread list but keep full message history per active threads
+        threads: s.threads.slice(0, 80).map((t) => ({
+          ...t,
+          messages: (t.messages || []).slice(-120),
+        })),
         activeThreadId: s.activeThreadId,
         agents: s.agents,
         mode: s.mode,
         desktop: s.desktop,
         usage: s.usage,
-        // Never persist large image payloads (breaks localStorage quota)
-        imagineJobs: s.imagineJobs.slice(0, 8).map(({ imageDataUrl: _drop, ...rest }) => rest),
+        // Persist imagine job metadata; drop huge payloads (userData has more room than localStorage but still cap)
+        imagineJobs: s.imagineJobs.slice(0, 16).map((j) => {
+          const { imageDataUrl, videoDataUrl, referenceDataUrl, ...rest } = j;
+          // keep tiny svg previews only
+          const keepImg =
+            imageDataUrl &&
+            imageDataUrl.startsWith("data:image/svg") &&
+            imageDataUrl.length < 80_000
+              ? imageDataUrl
+              : undefined;
+          return { ...rest, imageDataUrl: keepImg };
+        }),
         imagineAspect: s.imagineAspect,
-        // Secrets intentionally omitted — Electron safeStorage / session only
+        imagineMediaKind: s.imagineMediaKind,
+        imagineQuality: s.imagineQuality,
         openClawWorkspace: s.openClawWorkspace
           ? {
               ...s.openClawWorkspace,
-              contextBundle: s.openClawWorkspace.contextBundle.slice(0, 48_000),
+              contextBundle: s.openClawWorkspace.contextBundle.slice(0, 80_000),
             }
           : null,
         profile: s.profile,
         modelCatalog: s.modelCatalog,
         lastModelsFetchAt: s.lastModelsFetchAt,
-        chat: s.chat,
-        activity: s.activity.slice(0, 40),
+        chat: s.chat.slice(-200),
+        activity: s.activity.slice(0, 100),
+        quickAssistMemory: s.quickAssistMemory,
+        // nav not forced — restore last view except desktop
+        // Secrets stay in safeStorage (userData), not here
       }),
+      version: 1,
       migrate: (persisted: unknown) => {
         const s = (persisted || {}) as Record<string, unknown>;
         const cat = s.modelCatalog as Record<string, unknown> | undefined;
@@ -2333,6 +2629,19 @@ export const useGrokHub = create<State>()(
             classifiedAt: cat.classifiedAt || 0,
             signature: cat.signature || "",
           };
+        }
+        s.quickAssistMemory = normalizeMemory(s.quickAssistMemory);
+        // merge catalog connectors (new website ids without wiping status)
+        try {
+          const cat = createSeeds().connectors;
+          const cur = Array.isArray(s.connectors) ? (s.connectors as import("./types").Connector[]) : [];
+          const byId = new Map(cur.map((c) => [c.id, c]));
+          for (const c of cat) {
+            if (!byId.has(c.id)) byId.set(c.id, c);
+          }
+          s.connectors = Array.from(byId.values());
+        } catch {
+          /* ignore */
         }
         // Host safety defaults for upgrades
         const desk = s.desktop as Record<string, unknown> | undefined;

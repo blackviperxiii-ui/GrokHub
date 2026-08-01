@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { ExternalLink, FolderInput } from "lucide-react";
+import { ExternalLink, FolderInput, HardDrive } from "lucide-react";
 import { getModesWithCatalog } from "@/lib/modes";
 import { friendlyModelName } from "@/lib/models-catalog";
 import { applyUpdate, checkUpdate } from "@/lib/grok-client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { exportMemory, importMemory, memoryInfo } from "@/lib/persistent-storage";
 import { useGrokHub } from "@/lib/store";
 import type { GrokModeId } from "@/lib/types";
 import type { UpdateStatus } from "@/lib/update";
@@ -26,6 +27,20 @@ export function SettingsView() {
   const setDesktop = useGrokHub((s) => s.setDesktop);
   const setNav = useGrokHub((s) => s.setNav);
   const resetDemo = useGrokHub((s) => s.resetDemo);
+  const clearQuickAssistMemory = useGrokHub((s) => s.clearQuickAssistMemory);
+  const quickAssistMemory = useGrokHub((s) => s.quickAssistMemory);
+  const [memInfo, setMemInfo] = useState<{
+    path?: string;
+    userData?: string;
+    bytes?: number;
+    updatedAt?: number;
+  } | null>(null);
+  const [memMsg, setMemMsg] = useState("");
+  const importRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    void memoryInfo().then(setMemInfo);
+  }, []);
   const apiKey = useGrokHub((s) => s.apiKey);
   const setApiKey = useGrokHub((s) => s.setApiKey);
   const githubToken = useGrokHub((s) => s.githubToken);
@@ -644,13 +659,106 @@ export function SettingsView() {
 
       <Card>
         <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <HardDrive className="h-4 w-4 text-[var(--color-muted)]" />
+            Persistent memory
+          </CardTitle>
+          <CardDescription>
+            Chat, threads, skills, automations, connectors, usage, and chip habits are saved to disk
+            under your user data folder. App updates replace code only — this memory is not wiped.
+            OAuth tokens use encrypted safe storage in the same folder.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {memInfo && (
+            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-2 font-mono text-[11px] text-[var(--color-muted)]">
+              <div className="truncate">path: {memInfo.path || "—"}</div>
+              {memInfo.userData && (
+                <div className="truncate">userData: {memInfo.userData}</div>
+              )}
+              <div>
+                size:{" "}
+                {typeof memInfo.bytes === "number"
+                  ? `${(memInfo.bytes / 1024).toFixed(1)} KB`
+                  : "—"}
+                {memInfo.updatedAt
+                  ? ` · saved ${new Date(memInfo.updatedAt).toLocaleString()}`
+                  : ""}
+              </div>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                void exportMemory().then((r) => {
+                  if (!r.ok || !r.json) {
+                    setMemMsg(r.error || "Export failed");
+                    return;
+                  }
+                  const blob = new Blob([r.json], { type: "application/json" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `grokhub-memory-${new Date().toISOString().slice(0, 10)}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  setMemMsg("Memory exported");
+                  void memoryInfo().then(setMemInfo);
+                });
+              }}
+            >
+              Export backup
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => importRef.current?.click()}
+            >
+              Import backup
+            </Button>
+            <input
+              ref={importRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                  void importMemory(String(reader.result || "")).then((r) => {
+                    setMemMsg(
+                      r.ok
+                        ? "Import OK — reload the app to apply"
+                        : r.error || "Import failed",
+                    );
+                    if (r.ok) {
+                      // force rehydrate
+                      void useGrokHub.persist.rehydrate();
+                      void memoryInfo().then(setMemInfo);
+                    }
+                  });
+                };
+                reader.readAsText(file);
+                e.target.value = "";
+              }}
+            />
+          </div>
+          {memMsg && <p className="text-xs text-[var(--color-muted)]">{memMsg}</p>}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle className="text-sm">Danger zone</CardTitle>
           <CardDescription>
             Wipe local chat history, connectors, and preferences on this device. Does not revoke
             Grok OAuth on xAI servers — disconnect first if you want a full sign-out.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-wrap gap-2">
           <Button
             variant="secondary"
             onClick={() => {
@@ -663,6 +771,22 @@ export function SettingsView() {
             }}
           >
             Reset to clean install
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              if (
+                typeof window !== "undefined" &&
+                window.confirm("Clear learned quick-assist habits?")
+              ) {
+                clearQuickAssistMemory();
+              }
+            }}
+          >
+            Clear chip habits
+            {quickAssistMemory.hits.length
+              ? ` (${quickAssistMemory.hits.length})`
+              : ""}
           </Button>
         </CardContent>
       </Card>

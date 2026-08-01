@@ -19,6 +19,10 @@ function dims(aspect: ImagineAspect): { w: number; h: number } {
       return { w: 900, h: 600 };
     case "2:3":
       return { w: 600, h: 900 };
+    case "4:3":
+      return { w: 900, h: 675 };
+    case "auto":
+    case "1:1":
     default:
       return { w: 768, h: 768 };
   }
@@ -38,7 +42,7 @@ function escapeXml(s: string): string {
 
 /** Local offline Imagine preview (SVG) — desktop-ready without API keys. */
 export function renderImaginePreview(prompt: string, aspect: ImagineAspect): string {
-  const { w, h } = dims(aspect);
+  const { w, h } = dims(aspect === "auto" ? "1:1" : aspect);
   const h1 = hash(prompt);
   const h2 = hash(prompt + "::b");
   const h3 = hash(prompt + "::c");
@@ -83,3 +87,15 @@ export function renderImaginePreview(prompt: string, aspect: ImagineAspect): str
 
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
+
+/** Website-style prompt templates / tools */
+export const IMAGINE_PRESETS: Array<{ id: string; label: string; prefix: string }> = [
+  { id: "photo-edit", label: "Photo edit", prefix: "Photo edit: " },
+  { id: "restyle", label: "Restyle", prefix: "Restyle in a bold artistic style: " },
+  { id: "resize", label: "Smart resize", prefix: "Smart compose for social, subject centered: " },
+  { id: "bg-remove", label: "BG remover", prefix: "Subject on clean transparent-style studio background: " },
+  { id: "pfp", label: "Profile pic", prefix: "Square profile picture portrait, clean background: " },
+  { id: "emoji", label: "Emoji", prefix: "Cute emoji sticker, bold outline, simple shapes: " },
+  { id: "merch", label: "Merch", prefix: "Merch mockup design, print-ready graphic: " },
+  { id: "cinematic", label: "Cinematic", prefix: "Cinematic still, anamorphic lens flare, film grain: " },
+];

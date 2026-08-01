@@ -288,6 +288,24 @@ export function AppShell() {
       })();
     });
     setIsDesktop(Boolean(window.grokhubDesktop));
+
+    // Flush memory on hide/close so restarts keep the latest turn
+    const flush = () => {
+      try {
+        void useGrokHub.persist.rehydrate; // keep ref
+        // zustand persist writes on each set; force a no-op write by touching heartbeat
+        useGrokHub.setState((s) => ({ heartbeatAt: s.heartbeatAt }));
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener("beforeunload", flush);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") flush();
+    });
+    return () => {
+      window.removeEventListener("beforeunload", flush);
+    };
   }, []);
 
   // Poll essential models every 5 minutes while connected
@@ -316,6 +334,9 @@ export function AppShell() {
       if (st.ssoCookie || st.oauth?.accessToken || st.apiKey || document.visibilityState === "visible") {
         // Still refresh local units when visible; website pool needs SSO
         void st.refreshUsage();
+      }
+      if (st.ssoCookie) {
+        void st.syncWebsiteConnectors();
       }
     };
     tick();

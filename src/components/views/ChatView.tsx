@@ -39,6 +39,9 @@ export function ChatView() {
   const connectors = useGrokHub((s) => s.connectors);
   const pendingHostConfirm = useGrokHub((s) => s.pendingHostConfirm);
   const resolveHostConfirm = useGrokHub((s) => s.resolveHostConfirm);
+  const quickAssistMemory = useGrokHub((s) => s.quickAssistMemory);
+  const recordQuickAssistChip = useGrokHub((s) => s.recordQuickAssistChip);
+  const recordQuickAssistTyped = useGrokHub((s) => s.recordQuickAssistTyped);
   const [text, setText] = useState("");
   const [localRunning, setLocalRunning] = useState(false);
   const [hostOnline, setHostOnline] = useState<boolean | undefined>(undefined);
@@ -80,10 +83,11 @@ export function ChatView() {
         usage,
         draft: text,
         hostOnline,
+        memory: quickAssistMemory,
         // 4 when empty draft + idle; grow with context up to 10
         max: text.trim().length > 0 ? 10 : Math.min(10, Math.max(4, 4 + Math.min(chat.length, 4))),
       }),
-    [chat, activity, threads, connectors, mode, grokConnected, usage, text, hostOnline],
+    [chat, activity, threads, connectors, mode, grokConnected, usage, text, hostOnline, quickAssistMemory],
   );
 
   useEffect(() => {
@@ -185,6 +189,7 @@ export function ChatView() {
 
   async function onChip(chip: QuickChip) {
     if (busy) return;
+    recordQuickAssistChip(chip);
     if (chip.kind === "nav" && chip.value.startsWith("__nav:")) {
       const nav = chip.value.slice("__nav:".length) as
         | "settings"
@@ -212,6 +217,7 @@ export function ChatView() {
     if (busy) return;
     const payload = (value ?? text).trim();
     if (!payload) return;
+    recordQuickAssistTyped(payload);
     if (
       payload.toLowerCase().includes("imagine") &&
       !payload.startsWith("/") &&
@@ -350,6 +356,9 @@ export function ChatView() {
                   <span className="text-[10px] text-[var(--color-subtle)]">·</span>
                   <span className="text-[10px] text-[var(--color-subtle)]">
                     {chips.length} suggestion{chips.length === 1 ? "" : "s"}
+                    {quickAssistMemory.totalEvents > 0
+                      ? ` · learns from you (${quickAssistMemory.hits.length} habits)`
+                      : " · adapts as you use it"}
                   </span>
                 </div>
                 <div
@@ -374,6 +383,8 @@ export function ChatView() {
                           "disabled:opacity-50",
                           c.kind === "shell" && "font-mono",
                           c.score >= 80 && "border-[color-mix(in_oklab,var(--color-info)_35%,var(--color-border))]",
+                          (c.hint === "habit" || c.hint === "learned") &&
+                            "border-[color-mix(in_oklab,var(--color-success)_30%,var(--color-border))]",
                         )}
                       >
                         <Icon className="h-3 w-3 shrink-0 opacity-70" />

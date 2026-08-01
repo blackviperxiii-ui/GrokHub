@@ -359,6 +359,7 @@ async function applyUpdate(opts = {}) {
     steps.push(`Created ${root}`);
   }
   steps.push(`Install root: ${root}`);
+  steps.push("User data / memory is outside the install tree and is not modified by updates");
 
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "grokhub-up-"));
   const tarball = path.join(tmp, "update.tar.gz");
@@ -767,8 +768,78 @@ async function callXaiImagine(req = {}) {
   }
   const prompt = String(req.prompt || "").trim();
   if (!prompt) return { ok: false, error: "empty prompt" };
+  const mediaKind = req.mediaKind === "video" ? "video" : "image";
+  const quality = req.quality === "quality" ? "quality" : "speed";
+  const aspect = req.aspect || "auto";
+  const qHint =
+    quality === "quality"
+      ? mediaKind === "video"
+        ? "cinematic motion, high detail, smooth camera"
+        : "ultra detailed, sharp focus, professional lighting"
+      : mediaKind === "video"
+        ? "fast motion sketch"
+        : "clean composition, efficient render";
+  const fullPrompt = `${prompt}\n\n[${qHint}]`;
+  const sizeMap = {
+    "16:9": "1792x1024",
+    "9:16": "1024x1792",
+    "3:2": "1536x1024",
+    "2:3": "1024x1536",
+    "4:3": "1536x1152",
+    "1:1": "1024x1024",
+  };
+  const size = sizeMap[aspect];
+
+  if (mediaKind === "video") {
+    const videoModels = [req.model, "grok-imagine-video", "grok-imagine-video-1.5"].filter(Boolean);
+    let lastErr = "video generation unavailable";
+    for (const model of videoModels) {
+      for (const url of [`${XAI_BASE}/videos/generations`, `${XAI_BASE}/images/generations`]) {
+        try {
+          const body = { model, prompt: fullPrompt, n: 1 };
+          if (size) body.size = size;
+          if (aspect && aspect !== "auto") body.aspect_ratio = aspect;
+          if (req.referenceDataUrl) body.image = req.referenceDataUrl;
+          const res = await fetch(url, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify(body),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            lastErr = data.error?.message || data.error || `xAI ${res.status}`;
+            continue;
+          }
+          const row = data.data?.[0] || {};
+          const vid = row.video_url || row.video || row.url || "";
+          if (vid) {
+            return { ok: true, videoDataUrl: vid, model: data.model || model, source: "xai", mediaKind: "video" };
+          }
+          const b64 = row.b64_json || row.b64 || "";
+          if (b64) {
+            return {
+              ok: true,
+              imageDataUrl: `data:image/png;base64,${b64}`,
+              model: data.model || model,
+              source: "xai",
+              mediaKind: "image",
+              error: "API returned image for video request",
+            };
+          }
+        } catch (e) {
+          lastErr = e instanceof Error ? e.message : "network error";
+        }
+      }
+    }
+    return { ok: false, error: lastErr + " — try Image mode or Grok website video", mediaKind: "video" };
+  }
+
   const models = [
     req.model,
+    quality === "quality" ? "grok-imagine-image" : "grok-2-image",
     "grok-2-image",
     "grok-2-image-1212",
     "grok-imagine-image",
@@ -776,18 +847,22 @@ async function callXaiImagine(req = {}) {
   let lastErr = "image generation failed";
   for (const model of models) {
     try {
+      const body = {
+        model,
+        prompt: fullPrompt,
+        n: Math.min(4, Math.max(1, Number(req.n) || 1)),
+        response_format: "b64_json",
+      };
+      if (size) body.size = size;
+      if (aspect && aspect !== "auto") body.aspect_ratio = aspect;
+      if (req.referenceDataUrl) body.image = req.referenceDataUrl;
       const res = await fetch(`${XAI_BASE}/images/generations`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({
-          model,
-          prompt,
-          n: 1,
-          response_format: "b64_json",
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -809,17 +884,18 @@ async function callXaiImagine(req = {}) {
           imageDataUrl: `data:image/png;base64,${b64}`,
           model: data.model || model,
           source: "xai",
+          mediaKind: "image",
         };
       }
       if (url) {
-        return { ok: true, imageDataUrl: url, model: data.model || model, source: "xai" };
+        return { ok: true, imageDataUrl: url, model: data.model || model, source: "xai", mediaKind: "image" };
       }
       lastErr = "empty image response";
     } catch (e) {
       lastErr = e instanceof Error ? e.message : "network error";
     }
   }
-  return { ok: false, error: lastErr };
+  return { ok: false, error: lastErr, mediaKind: "image" };
 }
 
 

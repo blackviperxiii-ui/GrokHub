@@ -9,6 +9,7 @@ const host = require("./host-bridge.cjs");
 const grokBridge = require("./grok-bridge.cjs");
 const websiteSession = require("./website-session.cjs");
 const secretsStore = require("./secrets-store.cjs");
+const stateStore = require("./state-store.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -498,9 +499,25 @@ function registerIpc() {
     });
   });
 
+  ipcMain.handle("grok:websiteConnectors", async (_e, opts) => {
+    return websiteSession.fetchWebsiteConnectors({
+      ssoCookie: String(opts?.ssoCookie || ""),
+      bearer: String(opts?.bearer || ""),
+    });
+  });
+
   ipcMain.handle("secrets:set", (_e, key, value) => secretsStore.set(String(key), String(value ?? "")));
   ipcMain.handle("secrets:get", (_e, key) => secretsStore.get(String(key)));
   ipcMain.handle("secrets:delete", (_e, key) => secretsStore.del(String(key)));
+
+  ipcMain.handle("state:get", (_e, name) => stateStore.get(String(name || "")));
+  ipcMain.handle("state:set", (_e, name, value) =>
+    stateStore.set(String(name || ""), value == null ? "" : String(value)),
+  );
+  ipcMain.handle("state:remove", (_e, name) => stateStore.remove(String(name || "")));
+  ipcMain.handle("state:info", () => stateStore.info());
+  ipcMain.handle("state:export", () => stateStore.exportAll());
+  ipcMain.handle("state:import", (_e, payload) => stateStore.importAll(payload));
 
   // Non-stream chat already registered; expose stream buffer helper if bridge supports it
   if (typeof grokBridge.callXaiChatStream === "function") {

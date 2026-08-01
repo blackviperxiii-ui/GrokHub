@@ -36,10 +36,19 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     linkWebsiteSession: () => ipcRenderer.invoke("grok:linkWebsiteSession"),
     getWebsiteSso: () => ipcRenderer.invoke("grok:getWebsiteSso"),
     websiteUsage: (opts) => ipcRenderer.invoke("grok:websiteUsage", opts),
+    websiteConnectors: (opts) => ipcRenderer.invoke("grok:websiteConnectors", opts),
   },
   secrets: {
     set: (key, value) => ipcRenderer.invoke("secrets:set", key, value),
     get: (key) => ipcRenderer.invoke("secrets:get", key),
     delete: (key) => ipcRenderer.invoke("secrets:delete", key),
+  },
+  state: {
+    get: (name) => ipcRenderer.invoke("state:get", name),
+    set: (name, value) => ipcRenderer.invoke("state:set", name, value),
+    remove: (name) => ipcRenderer.invoke("state:remove", name),
+    info: () => ipcRenderer.invoke("state:info"),
+    exportAll: () => ipcRenderer.invoke("state:export"),
+    importAll: (payload) => ipcRenderer.invoke("state:import", payload),
   },
 });

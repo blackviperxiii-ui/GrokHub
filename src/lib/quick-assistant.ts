@@ -1,6 +1,7 @@
 /**
  * Predictive quick-assistant chips for the Agent composer.
- * Ranked from recent chat, activity, host/Grok state — max 10, not crowded.
+ * Ranked from recent chat, activity, host/Grok state + adaptive memory.
+ * Max 10, not crowded.
  */
 import type {
   ActivityItem,
@@ -11,6 +12,10 @@ import type {
   UsageSnapshot,
 } from "./types";
 import { PLAN_LIMITS, usagePercent } from "./usage";
+import {
+  applyMemoryToChips,
+  type QuickAssistMemory,
+} from "./quick-assist-memory";
 
 export type QuickChipKind = "chat" | "shell" | "nav" | "mode";
 
@@ -38,6 +43,8 @@ export type QuickAssistantInput = {
   draft?: string;
   hostOnline?: boolean;
   max?: number;
+  /** Adaptive history from prior chip clicks + typed prompts */
+  memory?: QuickAssistMemory | null;
 };
 
 const MAX_DEFAULT = 8;
@@ -337,8 +344,11 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
   ];
   chips.push(...defaults);
 
+  // ── Adaptive memory: habits + frequency + time-of-day + transitions ───
+  let withMemory = applyMemoryToChips(chips, input.memory);
+
   // Don't suggest the exact draft text as a chip
-  let ranked = uniqByValue(chips)
+  let ranked = uniqByValue(withMemory)
     .filter((c) => c.value.trim().toLowerCase() !== draft)
     .sort((a, b) => b.score - a.score);
 

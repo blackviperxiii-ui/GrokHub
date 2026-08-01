@@ -36,6 +36,12 @@ export type Connector = {
   status: ConnectorStatus;
   tools: string[];
   lastUsed?: number;
+  /** Account email/login when known (website sync or OAuth) */
+  accountLabel?: string | null;
+  /** Where connection was established */
+  source?: "local" | "website" | "token";
+  /** True when GrokHub can execute tools for this connector */
+  liveTools?: boolean;
 };
 
 export type Skill = {
@@ -127,8 +133,12 @@ export type ChatThread = {
   mode?: GrokModeId;
 };
 
-export type ImagineAspect = "1:1" | "16:9" | "9:16" | "4:3" | "3:2" | "2:3";
+export type ImagineAspect = "auto" | "1:1" | "16:9" | "9:16" | "4:3" | "3:2" | "2:3";
 
+export type ImagineMediaKind = "image" | "video";
+
+/** Speed ≈ faster/cheaper draft; Quality ≈ higher fidelity */
+export type ImagineQuality = "speed" | "quality";
 
 export type ImagineJob = {
   id: string;
@@ -138,6 +148,15 @@ export type ImagineJob = {
   status: "rendering" | "ready" | "failed";
   mode?: GrokModeId;
   imageDataUrl?: string;
+  /** video object URL / data url when available */
+  videoDataUrl?: string;
+  mediaKind?: ImagineMediaKind;
+  quality?: ImagineQuality;
+  model?: string;
+  source?: "xai" | "local";
+  error?: string;
+  /** optional reference image used for img2img / restyle */
+  referenceDataUrl?: string;
 };
 
 export type SubscriptionPlanId = "free" | "super" | "pro";

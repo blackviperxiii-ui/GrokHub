@@ -218,12 +218,20 @@ export async function grokImagine(opts: {
   apiKey?: string;
   accessToken?: string;
   tokens?: XaiOAuthTokens | null;
+  aspect?: string;
+  quality?: "speed" | "quality";
+  mediaKind?: "image" | "video";
+  n?: number;
+  referenceDataUrl?: string;
+  model?: string;
 }): Promise<{
   ok: boolean;
   imageDataUrl?: string;
+  videoDataUrl?: string;
   model?: string;
   source?: string;
   error?: string;
+  mediaKind?: string;
   tokens?: XaiOAuthTokens;
 }> {
   const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
