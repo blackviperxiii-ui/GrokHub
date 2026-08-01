@@ -292,7 +292,7 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
       "",
       `Reading: ${text}`,
       "",
-      "Constraints: local-first control plane, Grok 4.5 modes, Arch desktop target.",
+      "Constraints: local-first control plane, Grok modes (Fast/Expert/Heavy/Build), Arch desktop target.",
       "Approach: gather connector state → apply enabled skills → leave run log.",
       "Tradeoff: Fast is cheaper/latency; Expert/Heavy spend units for depth.",
       "",
