@@ -70,6 +70,13 @@ export type DesktopGrokBridge = {
     force?: boolean;
     restart?: boolean;
   }) => Promise<UpdateResult>;
+  /** grok.com website SSO for weekly SuperGrok usage */
+  linkWebsiteSession?: () => Promise<{ cookie?: string; error?: string }>;
+  getWebsiteSso?: () => Promise<{ cookie?: string }>;
+  websiteUsage?: (opts: {
+    ssoCookie?: string;
+    bearer?: string;
+  }) => Promise<import("./grok-website-usage").GrokWebsiteUsage>;
 };
 
 export type DesktopBridge = {

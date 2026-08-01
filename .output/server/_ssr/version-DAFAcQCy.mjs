@@ -1,34 +1,32 @@
 import { r as __exportAll } from "../_runtime.mjs";
 import { t as __exportAll$1 } from "./rolldown-runtime-D7D4PA-g.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/version-BUc8U3iw.js
-var version_BUc8U3iw_exports = /* @__PURE__ */ __exportAll({
-	C: () => buildCatalog,
-	D: () => needsGrokClassification,
-	E: () => models_catalog_exports,
-	S: () => applyGrokPlan,
-	T: () => friendlyModelName,
-	_: () => modeBadge,
-	a: () => daysLeftInPeriod,
-	b: () => resolveModeWithCatalog,
-	c: () => formatUnits,
-	d: () => unitsFromTokens,
-	f: () => usagePercent,
-	g: () => getModesWithCatalog,
-	h: () => getMode,
+//#region node_modules/.nitro/vite/services/ssr/assets/version-DAFAcQCy.js
+var version_DAFAcQCy_exports = /* @__PURE__ */ __exportAll({
+	C: () => friendlyModelName,
+	S: () => emptyCatalog,
+	T: () => needsGrokClassification,
+	_: () => resolveMode,
+	a: () => ensurePeriod,
+	b: () => applyGrokPlan,
+	c: () => parseRateLimitHeaders,
+	d: () => usageTone,
+	f: () => autoRouteFor,
+	g: () => modelIdForMode,
+	h: () => modeBadge,
 	i: () => createUsage,
-	l: () => inferPlanFromAuth,
-	m: () => autoRouteFor,
+	l: () => unitsFromTokens,
+	m: () => getModesWithCatalog,
 	n: () => PLAN_LIMITS,
-	o: () => ensurePeriod,
-	p: () => usageTone,
+	o: () => formatUnits,
+	p: () => getMode,
 	r: () => costFor,
-	s: () => formatTokens,
+	s: () => inferPlanFromAuth,
 	t: () => APP_VERSION,
-	u: () => parseRateLimitHeaders,
-	v: () => modelIdForMode,
-	w: () => emptyCatalog,
-	x: () => stripAssistantChrome,
-	y: () => resolveMode
+	u: () => usagePercent,
+	v: () => resolveModeWithCatalog,
+	w: () => models_catalog_exports,
+	x: () => buildCatalog,
+	y: () => stripAssistantChrome
 });
 var models_catalog_exports = /* @__PURE__ */ __exportAll$1({
 	ESSENTIAL_NAME_HINTS: () => ESSENTIAL_NAME_HINTS,
@@ -591,7 +589,8 @@ function createUsage(plan = "pro", now = Date.now()) {
 		source: "local",
 		rateLimitRemaining: null,
 		rateLimitLimit: null,
-		rateLimitResetAt: null
+		rateLimitResetAt: null,
+		website: null
 	};
 }
 function ensurePeriod(u, now = Date.now()) {
@@ -602,9 +601,13 @@ function ensurePeriod(u, now = Date.now()) {
 		completionTokens: u.completionTokens ?? 0,
 		totalTokens: u.totalTokens ?? 0,
 		lastPolledAt: u.lastPolledAt ?? 0,
-		source: u.source ?? "local"
+		source: u.source ?? "local",
+		website: u.website ?? null
 	};
-	return createUsage(u.plan, now);
+	return {
+		...createUsage(u.plan, now),
+		website: u.website ?? null
+	};
 }
 function usagePercent(u) {
 	const lim = PLAN_LIMITS[u.plan].units;
@@ -620,14 +623,6 @@ function formatUnits(n) {
 	if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
 	if (Number.isInteger(n)) return String(n);
 	return n.toFixed(1);
-}
-function formatTokens(n) {
-	if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-	if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
-	return String(Math.round(n));
-}
-function daysLeftInPeriod(u, now = Date.now()) {
-	return Math.max(0, Math.ceil((u.periodEnd - now) / 864e5));
 }
 function costFor(bucket, mode) {
 	if (bucket === "message" || bucket === "skill") return MODE_UNIT_COST[mode ?? "fast"] ?? 1;
@@ -672,7 +667,7 @@ function inferPlanFromAuth(opts) {
 	return "free";
 }
 /** Single source of truth for display / packaging version. */
-var APP_VERSION = "0.2.13";
+var APP_VERSION = "0.2.14";
 `${APP_VERSION}`;
 //#endregion
-export { stripAssistantChrome as C, version_BUc8U3iw_exports as D, usageTone as E, resolveModeWithCatalog as S, usagePercent as T, modeBadge as _, buildCatalog as a, parseRateLimitHeaders as b, daysLeftInPeriod as c, formatTokens as d, formatUnits as f, inferPlanFromAuth as g, getModesWithCatalog as h, autoRouteFor as i, emptyCatalog as l, getMode as m, PLAN_LIMITS as n, costFor as o, friendlyModelName as p, applyGrokPlan as r, createUsage as s, APP_VERSION as t, ensurePeriod as u, modelIdForMode as v, unitsFromTokens as w, resolveMode as x, needsGrokClassification as y };
+export { usagePercent as C, unitsFromTokens as S, version_DAFAcQCy_exports as T, needsGrokClassification as _, buildCatalog as a, resolveModeWithCatalog as b, emptyCatalog as c, friendlyModelName as d, getMode as f, modelIdForMode as g, modeBadge as h, autoRouteFor as i, ensurePeriod as l, inferPlanFromAuth as m, PLAN_LIMITS as n, costFor as o, getModesWithCatalog as p, applyGrokPlan as r, createUsage as s, APP_VERSION as t, formatUnits as u, parseRateLimitHeaders as v, usageTone as w, stripAssistantChrome as x, resolveMode as y };

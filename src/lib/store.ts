@@ -73,6 +73,8 @@ type State = {
   githubToken: string;
   /** xAI Grok OAuth tokens (SuperGrok / X Premium device-code) */
   oauth: import("./xai-oauth").XaiOAuthTokens | null;
+  /** grok.com SSO cookie for website Usage (Settings → Usage weekly limit) */
+  ssoCookie: string;
   oauthPending: {
     deviceCode: string;
     userCode: string;
@@ -91,6 +93,8 @@ type State = {
   startGrokOAuth: () => Promise<void>;
   pollGrokOAuth: () => Promise<"pending" | "ready" | "failed">;
   clearGrokOAuth: () => void;
+  setSsoCookie: (cookie: string) => void;
+  linkGrokWebsiteSession: () => Promise<{ ok: boolean; detail: string }>;
   probeGrok: () => Promise<boolean>;
   syncFromGrok: (opts?: { displayName?: string | null; email?: string | null; imageUrl?: string | null }) => Promise<void>;
   newThread: () => void;
@@ -413,6 +417,7 @@ export const useGrokHub = create<State>()(
       apiKey: "",
       githubToken: "",
       oauth: null,
+      ssoCookie: "",
       oauthPending: null,
       grokConnected: null,
       grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
@@ -536,6 +541,7 @@ export const useGrokHub = create<State>()(
         set({
           oauth: null,
           oauthPending: null,
+          ssoCookie: "",
           grokConnected: get().apiKey ? null : false,
           grokStatusDetail: "Grok OAuth cleared",
         });
@@ -550,6 +556,41 @@ export const useGrokHub = create<State>()(
           detail: "Session removed from this device",
           status: "success",
         });
+      },
+
+      setSsoCookie: (cookie) => {
+        set({ ssoCookie: cookie.trim() });
+        void get().refreshUsage();
+      },
+
+      linkGrokWebsiteSession: async () => {
+        try {
+          if (typeof window !== "undefined" && window.grokhubDesktop?.grok?.linkWebsiteSession) {
+            const r = await window.grokhubDesktop.grok.linkWebsiteSession();
+            if (r?.cookie) {
+              set({ ssoCookie: r.cookie });
+              await get().refreshUsage();
+              get().pushActivity({
+                kind: "auth",
+                title: "Grok website linked",
+                detail: "Weekly usage will sync from grok.com",
+                status: "success",
+              });
+              return { ok: true, detail: "Grok website session linked" };
+            }
+            return { ok: false, detail: r?.error || "No SSO cookie captured" };
+          }
+          return {
+            ok: false,
+            detail:
+              "Desktop: use Link Grok website session. Or paste your grok.com sso cookie in Settings.",
+          };
+        } catch (e) {
+          return {
+            ok: false,
+            detail: e instanceof Error ? e.message : "link failed",
+          };
+        }
       },
 
       probeGrok: async () => {
@@ -895,53 +936,88 @@ export const useGrokHub = create<State>()(
       refreshUsage: async () => {
         const st = get();
         let usage = ensurePeriod(st.usage);
-        // Auto-align plan when OAuth / API key present
         const inferred = inferPlanFromAuth({
           hasOauth: Boolean(st.oauth?.accessToken),
           hasApiKey: Boolean(st.apiKey?.trim()),
           email: st.oauth?.email || st.profile?.email,
           name: st.oauth?.name || st.profile?.displayName,
         });
-        // Only upgrade free → super/pro when credentials appear; never force-downgrade user choice
         if (usage.plan === "free" && inferred !== "free") {
           usage = { ...usage, plan: inferred };
         }
-        // Lightweight live probe: models list proves auth; capture nothing else if rate limits absent
+
+        // Prefer live Grok website weekly pool (same data as Settings → Usage)
         try {
-          if (st.oauth?.accessToken || st.apiKey) {
-            const res = await fetch("/api/grok", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                action: "usageProbe",
-                apiKey: st.apiKey || "",
-                accessToken: st.oauth?.accessToken || "",
-              }),
-            });
-            if (res.ok) {
-              const data = (await res.json()) as {
-                ok?: boolean;
-                rateLimit?: {
-                  remaining: number | null;
-                  limit: number | null;
-                  resetAt: number | null;
-                };
-                planHint?: string;
-              };
-              if (data.rateLimit) {
-                usage = {
-                  ...usage,
-                  rateLimitRemaining: data.rateLimit.remaining,
-                  rateLimitLimit: data.rateLimit.limit,
-                  rateLimitResetAt: data.rateLimit.resetAt,
-                  source: usage.totalTokens > 0 ? "live" : usage.source,
-                };
+          const { fetchGrokWebsiteUsage } = await import("./grok-website-usage");
+          let sso = st.ssoCookie?.trim() || "";
+          // Electron: try to pull SSO from linked session if empty
+          if (!sso && typeof window !== "undefined" && window.grokhubDesktop?.grok?.getWebsiteSso) {
+            try {
+              const r = await window.grokhubDesktop.grok.getWebsiteSso();
+              if (r?.cookie) {
+                sso = r.cookie;
+                set({ ssoCookie: sso });
               }
+            } catch {
+              /* ignore */
             }
           }
+          const web = await fetchGrokWebsiteUsage({
+            ssoCookie: sso || null,
+            bearer: null, // website pool needs SSO; management keys are separate
+          });
+          if (web.ok) {
+            const planMap =
+              web.planId === "heavy" || web.planId === "pro"
+                ? ("pro" as const)
+                : web.planId === "free"
+                  ? ("free" as const)
+                  : ("super" as const);
+            const unitCap = PLAN_LIMITS[planMap].units;
+            usage = {
+              ...usage,
+              plan: planMap,
+              periodStart: web.periodStart || usage.periodStart,
+              periodEnd: web.periodEnd || usage.periodEnd,
+              usedUnits: Math.round((web.creditUsagePercent / 100) * unitCap * 100) / 100,
+              source: "website",
+              lastPolledAt: Date.now(),
+              website: {
+                planLabel: web.planLabel,
+                creditUsagePercent: web.creditUsagePercent,
+                periodType: web.periodType,
+                periodStart: web.periodStart,
+                periodEnd: web.periodEnd,
+                productUsage: web.productUsage,
+                prepaidBalanceCents: web.prepaidBalanceCents,
+                onDemandCapCents: web.onDemandCapCents,
+                onDemandUsedCents: web.onDemandUsedCents,
+                error: null,
+              },
+            };
+            set({ usage });
+            return;
+          } else if (web.error) {
+            usage = {
+              ...usage,
+              website: {
+                planLabel: usage.website?.planLabel || "—",
+                creditUsagePercent: usage.website?.creditUsagePercent ?? 0,
+                periodType: usage.website?.periodType || "unknown",
+                periodStart: usage.website?.periodStart ?? null,
+                periodEnd: usage.website?.periodEnd ?? null,
+                productUsage: usage.website?.productUsage || [],
+                prepaidBalanceCents: usage.website?.prepaidBalanceCents ?? 0,
+                onDemandCapCents: usage.website?.onDemandCapCents ?? 0,
+                onDemandUsedCents: usage.website?.onDemandUsedCents ?? 0,
+                error: web.error,
+              },
+            };
+          }
         } catch {
-          /* offline */
+          /* fall through to local */
         }
+
         usage = { ...usage, lastPolledAt: Date.now() };
         set({ usage });
       },

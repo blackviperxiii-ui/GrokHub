@@ -1,5 +1,5 @@
-import { b as parseRateLimitHeaders, v as modelIdForMode, x as resolveMode } from "./version-BUc8U3iw.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/grok-C7lH-J7d.js
+import { g as modelIdForMode, v as parseRateLimitHeaders, y as resolveMode } from "./version-DAFAcQCy.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/grok-ClfZho8Z.js
 var XAI_BASE = "https://api.x.ai/v1";
 /** Map GrokHub modes → xAI model IDs */
 function modelForMode(mode, prompt = "") {

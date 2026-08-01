@@ -467,6 +467,132 @@ function registerIpc() {
     }
     return r;
   });
+
+  /** Capture grok.com SSO cookie (website Usage / weekly SuperGrok limit). */
+  ipcMain.handle("grok:getWebsiteSso", async () => {
+    try {
+      const { session } = await import("electron");
+      const cookies = await session.defaultSession.cookies.get({
+        domain: ".grok.com",
+      });
+      const sso =
+        cookies.find((c) => c.name === "sso") ||
+        cookies.find((c) => c.name === "sso-rw") ||
+        cookies.find((c) => c.name.toLowerCase().includes("sso"));
+      if (!sso?.value) return { cookie: "" };
+      return { cookie: `sso=${sso.value}` };
+    } catch (e) {
+      return { cookie: "", error: e instanceof Error ? e.message : "cookie read failed" };
+    }
+  });
+
+  ipcMain.handle("grok:linkWebsiteSession", async () => {
+    const { session } = await import("electron");
+    return new Promise((resolve) => {
+      const win = new BrowserWindow({
+        width: 980,
+        height: 780,
+        title: "Link Grok website session",
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+        },
+      });
+      let settled = false;
+      const finish = async (force = false) => {
+        if (settled) return;
+        try {
+          const cookies = await win.webContents.session.cookies.get({
+            domain: ".grok.com",
+          });
+          const sso =
+            cookies.find((c) => c.name === "sso") ||
+            cookies.find((c) => c.name === "sso-rw");
+          if (sso?.value) {
+            try {
+              await session.defaultSession.cookies.set({
+                url: "https://grok.com",
+                name: sso.name,
+                value: sso.value,
+                domain: sso.domain || ".grok.com",
+                path: sso.path || "/",
+                secure: true,
+                httpOnly: true,
+                expirationDate: sso.expirationDate,
+              });
+            } catch {
+              /* ignore copy */
+            }
+            settled = true;
+            if (!win.isDestroyed()) win.close();
+            resolve({ cookie: `sso=${sso.value}` });
+            return;
+          }
+        } catch {
+          /* keep waiting */
+        }
+        if (force) {
+          settled = true;
+          if (!win.isDestroyed()) win.close();
+          resolve({
+            error:
+              "Signed in but no sso cookie found. Stay on grok.com until the home page loads, then try again.",
+          });
+        }
+      };
+
+      win.webContents.on("did-navigate", () => void finish(false));
+      win.webContents.on("did-navigate-in-page", () => void finish(false));
+      win.webContents.on("did-finish-load", () => void finish(false));
+      const poll = setInterval(() => void finish(false), 1500);
+      win.on("closed", () => {
+        clearInterval(poll);
+        if (!settled) {
+          settled = true;
+          resolve({ error: "Window closed before session was linked" });
+        }
+      });
+      setTimeout(() => {
+        clearInterval(poll);
+        void finish(true);
+      }, 180_000);
+      win.loadURL("https://grok.com/");
+    });
+  });
+
+  ipcMain.handle("grok:websiteUsage", async (_e, opts) => {
+    const ssoCookie = String(opts?.ssoCookie || "");
+    const bearer = String(opts?.bearer || "");
+    return fetchWebsiteUsageFromMain(ssoCookie, bearer);
+  });
+}
+
+async function fetchWebsiteUsageFromMain(ssoCookie, bearer) {
+  try {
+    const res = await fetch("http://127.0.0.1:8080/api/grok", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "websiteUsage", ssoCookie, bearer }),
+    });
+    if (res.ok) return await res.json();
+  } catch {
+    /* fall through */
+  }
+  return {
+    ok: false,
+    error: "Local API offline — start GrokHub server to sync website usage",
+    planLabel: "—",
+    planId: "free",
+    creditUsagePercent: 0,
+    periodType: "unknown",
+    periodStart: null,
+    periodEnd: null,
+    productUsage: [],
+    prepaidBalanceCents: 0,
+    onDemandCapCents: 0,
+    onDemandUsedCents: 0,
+  };
 }
 
 if (process.env.GROKHUB_WAYLAND !== "0") {

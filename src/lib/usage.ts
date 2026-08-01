@@ -99,12 +99,12 @@ export function createUsage(plan: SubscriptionPlanId = "pro", now = Date.now()):
     rateLimitRemaining: null,
     rateLimitLimit: null,
     rateLimitResetAt: null,
+    website: null,
   };
 }
 
 export function ensurePeriod(u: UsageSnapshot, now = Date.now()): UsageSnapshot {
   if (now < u.periodEnd && now >= u.periodStart) {
-    // Migrate older snapshots missing token fields
     return {
       ...createUsage(u.plan, u.periodStart),
       ...u,
@@ -113,9 +113,12 @@ export function ensurePeriod(u: UsageSnapshot, now = Date.now()): UsageSnapshot 
       totalTokens: u.totalTokens ?? 0,
       lastPolledAt: u.lastPolledAt ?? 0,
       source: u.source ?? "local",
+      website: u.website ?? null,
     };
   }
-  return createUsage(u.plan, now);
+  // New calendar period — keep website snapshot until next poll
+  const next = createUsage(u.plan, now);
+  return { ...next, website: u.website ?? null };
 }
 
 export function usagePercent(u: UsageSnapshot): number {

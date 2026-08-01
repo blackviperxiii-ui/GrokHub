@@ -162,11 +162,24 @@ export type UsageSnapshot = {
   /** Last successful usage poll */
   lastPolledAt: number;
   /** How the meter was last updated */
-  source: "local" | "live";
+  source: "local" | "live" | "website";
   /** Optional remaining quota from rate-limit headers */
   rateLimitRemaining?: number | null;
   rateLimitLimit?: number | null;
   rateLimitResetAt?: number | null;
+  /** Grok website weekly pool (Settings → Usage) */
+  website?: {
+    planLabel: string;
+    creditUsagePercent: number;
+    periodType: "weekly" | "monthly" | "unknown";
+    periodStart: number | null;
+    periodEnd: number | null;
+    productUsage: Array<{ product: string; label: string; usagePercent: number }>;
+    prepaidBalanceCents: number;
+    onDemandCapCents: number;
+    onDemandUsedCents: number;
+    error?: string | null;
+  } | null;
 };
 
 /** Profile synced after Grok OAuth / API connect — never seeded with personal defaults. */

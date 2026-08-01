@@ -28,5 +28,8 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     oauthEnsure: (tokens) => ipcRenderer.invoke("grok:oauthEnsure", tokens),
     checkUpdate: (opts) => ipcRenderer.invoke("update:check", opts),
     applyUpdate: (opts) => ipcRenderer.invoke("update:apply", opts),
+    linkWebsiteSession: () => ipcRenderer.invoke("grok:linkWebsiteSession"),
+    getWebsiteSso: () => ipcRenderer.invoke("grok:getWebsiteSso"),
+    websiteUsage: (opts) => ipcRenderer.invoke("grok:websiteUsage", opts),
   },
 });

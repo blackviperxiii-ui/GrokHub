@@ -157,6 +157,14 @@ export async function dispatchApi(
       };
     }
 
+    if (action === "websiteUsage") {
+      const { fetchGrokWebsiteUsageDirect } = await import("./grok-website-usage");
+      return fetchGrokWebsiteUsageDirect({
+        ssoCookie: String(body.ssoCookie || ""),
+        bearer: String(body.bearer || body.accessToken || "") || null,
+      });
+    }
+
     if (action === "usageProbe") {
       const bearer =
         String(body.accessToken || "") ||

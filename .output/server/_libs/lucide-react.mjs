@@ -456,6 +456,29 @@ var Link2Off = createLucideIcon("link-2-off", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var Link2 = createLucideIcon("link-2", [
+	["path", {
+		d: "M9 17H7A5 5 0 0 1 7 7h2",
+		key: "8i5ue5"
+	}],
+	["path", {
+		d: "M15 7h2a5 5 0 1 1 0 10h-2",
+		key: "1b9ql8"
+	}],
+	["line", {
+		x1: "8",
+		x2: "16",
+		y1: "12",
+		y2: "12",
+		key: "1jonct"
+	}]
+]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var LoaderCircle = createLucideIcon("loader-circle", [["path", {
 	d: "M21 12a9 9 0 1 1-6.219-8.56",
 	key: "13zald"
@@ -818,4 +841,4 @@ var Zap = createLucideIcon("zap", [["path", {
 	key: "1xq2db"
 }]]);
 //#endregion
-export { ExternalLink as A, Activity as B, Image as C, Gauge as D, Hammer as E, Check as F, Cable as I, Brain as L, Compass as M, Command as N, Folder as O, ChevronRight as P, ArrowRight as R, Link2Off as S, HardDrive as T, Minus as _, TimerReset as a, Menu as b, Sparkles as c, Settings as d, Send as f, Play as g, Plus as h, Trash2 as i, Download as j, FolderOpen as k, ShieldCheck as l, Plug as m, X as n, Terminal as o, RefreshCw as p, Users as r, Square as s, Zap as t, ShieldAlert as u, MessageSquare as v, History as w, LoaderCircle as x, MessageSquarePlus as y, AppWindow as z };
+export { FolderOpen as A, AppWindow as B, Link2Off as C, Hammer as D, HardDrive as E, ChevronRight as F, Check as I, Cable as L, Download as M, Compass as N, Gauge as O, Command as P, Brain as R, Link2 as S, History as T, Activity as V, Minus as _, TimerReset as a, Menu as b, Sparkles as c, Settings as d, Send as f, Play as g, Plus as h, Trash2 as i, ExternalLink as j, Folder as k, ShieldCheck as l, Plug as m, X as n, Terminal as o, RefreshCw as p, Users as r, Square as s, Zap as t, ShieldAlert as u, MessageSquare as v, Image as w, LoaderCircle as x, MessageSquarePlus as y, ArrowRight as z };

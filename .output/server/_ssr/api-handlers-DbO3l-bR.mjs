@@ -1,5 +1,5 @@
-import { b as parseRateLimitHeaders, t as APP_VERSION } from "./version-BUc8U3iw.mjs";
-import { XAI_BASE, callXaiChat, callXaiChatStream, callXaiImagine, probeXaiBearer } from "./grok-C7lH-J7d.mjs";
+import { t as APP_VERSION, v as parseRateLimitHeaders } from "./version-DAFAcQCy.mjs";
+import { XAI_BASE, callXaiChat, callXaiChatStream, callXaiImagine, probeXaiBearer } from "./grok-ClfZho8Z.mjs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream, existsSync, readFileSync } from "node:fs";
@@ -8,7 +8,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs$1 from "node:fs/promises";
 import os from "node:os";
-//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-C2b-BvfE.js
+//#region node_modules/.nitro/vite/services/ssr/assets/api-handlers-DbO3l-bR.js
 /**
 * GitHub update helpers — Node only (server / Electron main).
 *
@@ -893,6 +893,13 @@ async function dispatchApi(route, action, body) {
 				authMode: accessToken ? "oauth" : apiKey ? "apiKey" : "env"
 			};
 		}
+		if (action === "websiteUsage") {
+			const { fetchGrokWebsiteUsageDirect } = await import("./grok-website-usage-CUFrqYHh.mjs").then((n) => n.r).then((n) => n.r);
+			return fetchGrokWebsiteUsageDirect({
+				ssoCookie: String(body.ssoCookie || ""),
+				bearer: String(body.bearer || body.accessToken || "") || null
+			});
+		}
 		if (action === "usageProbe") {
 			const bearer = String(body.accessToken || "") || String(body.apiKey || "") || process.env.XAI_API_KEY || process.env.GROK_API_KEY || "";
 			if (!bearer) return {
@@ -936,7 +943,7 @@ async function dispatchApi(route, action, body) {
 				ok: false,
 				error: "models required"
 			};
-			const { buildClassifyPrompt, parseGrokSlotPlan, pickSlotModel } = await import("./version-BUc8U3iw.mjs").then((n) => n.D).then((n) => n.E);
+			const { buildClassifyPrompt, parseGrokSlotPlan, pickSlotModel } = await import("./version-DAFAcQCy.mjs").then((n) => n.T).then((n) => n.w);
 			let accessToken = body.accessToken ? String(body.accessToken) : void 0;
 			const apiKey = body.apiKey ? String(body.apiKey) : void 0;
 			if (body.tokens && typeof body.tokens === "object") try {

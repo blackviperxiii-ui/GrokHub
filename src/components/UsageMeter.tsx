@@ -1,32 +1,44 @@
 import type { CSSProperties } from "react";
-import { Gauge, RefreshCw } from "lucide-react";
+import { Gauge, RefreshCw, Link2 } from "lucide-react";
 import {
-  daysLeftInPeriod,
-  formatTokens,
   formatUnits,
   PLAN_LIMITS,
   usagePercent,
   usageTone,
 } from "@/lib/usage";
+import { formatResetAt, formatUsdFromCents } from "@/lib/grok-website-usage";
 import { useGrokHub } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Input } from "./ui/input";
+import { useState } from "react";
 
 function barColor(tone: "ok" | "warn" | "danger") {
   if (tone === "danger") return "bg-[var(--color-danger)]";
   if (tone === "warn") return "bg-[var(--color-warn)]";
-  return "bg-[var(--color-fg)]";
+  return "bg-[var(--color-info)]";
 }
 
-/** Compact titlebar chip — navigates to Settings usage panel */
+const PRODUCT_COLORS = [
+  "bg-[var(--color-info)]",
+  "bg-[var(--color-success)]",
+  "bg-[var(--color-warn)]",
+  "bg-[var(--color-danger)]",
+  "bg-[var(--color-muted)]",
+];
+
+/** Compact titlebar chip — shows website weekly % when available */
 export function UsageMeterChip({ className }: { className?: string }) {
   const usage = useGrokHub((s) => s.usage);
   const setNav = useGrokHub((s) => s.setNav);
-  const plan = PLAN_LIMITS[usage.plan];
-  const pct = usagePercent(usage);
+  const web = usage.website;
+  const pct = web?.creditUsagePercent != null && usage.source === "website"
+    ? web.creditUsagePercent
+    : usagePercent(usage);
   const tone = usageTone(pct);
+  const label = web?.planLabel || PLAN_LIMITS[usage.plan].label;
   const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
   return (
@@ -38,7 +50,11 @@ export function UsageMeterChip({ className }: { className?: string }) {
         e.stopPropagation();
         setNav("settings");
       }}
-      title={`${plan.label}: ${formatUnits(usage.usedUnits)} / ${formatUnits(plan.units)} units · ${formatTokens(usage.totalTokens || 0)} tokens · open Settings`}
+      title={
+        web
+          ? `${label}: ${Math.round(pct)}% weekly · resets ${formatResetAt(web.periodEnd)}`
+          : `${label}: ${formatUnits(usage.usedUnits)} units · open Settings`
+      }
       className={cn(
         "flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-1 text-left transition-colors hover:border-[var(--color-border-strong)]",
         className,
@@ -57,7 +73,7 @@ export function UsageMeterChip({ className }: { className?: string }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[10px] font-medium text-[var(--color-fg)]">
-            {plan.label}
+            {label}
           </span>
           <span className="tabular text-[10px] text-[var(--color-subtle)]">
             {Math.round(pct)}%
@@ -74,27 +90,36 @@ export function UsageMeterChip({ className }: { className?: string }) {
   );
 }
 
-/** Full breakdown card for Command / Settings */
+/** Full panel matching Grok website Settings → Usage */
 export function UsageMeterPanel({ compact }: { compact?: boolean }) {
   const usage = useGrokHub((s) => s.usage);
-  const setPlan = useGrokHub((s) => s.setPlan);
-  const resetUsage = useGrokHub((s) => s.resetUsagePeriod);
+  const ssoCookie = useGrokHub((s) => s.ssoCookie);
+  const setSsoCookie = useGrokHub((s) => s.setSsoCookie);
+  const linkWebsite = useGrokHub((s) => s.linkGrokWebsiteSession);
   const refreshUsage = useGrokHub((s) => s.refreshUsage);
-  const plan = PLAN_LIMITS[usage.plan];
-  const pct = usagePercent(usage);
-  const tone = usageTone(pct);
-  const left = daysLeftInPeriod(usage);
-  const remaining = Math.max(0, plan.units - usage.usedUnits);
-  const lastPoll = usage.lastPolledAt
-    ? new Date(usage.lastPolledAt).toLocaleTimeString()
-    : "—";
+  const [ssoDraft, setSsoDraft] = useState("");
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkDetail, setLinkDetail] = useState<string | null>(null);
 
-  const rows: { label: string; used: number; cap: number }[] = [
-    { label: "Agent messages", used: usage.messages, cap: plan.messages },
-    { label: "Imagine", used: usage.imagine, cap: plan.imagine },
-    { label: "Automations", used: usage.automations, cap: plan.automations },
-    { label: "Host CLI", used: usage.host, cap: plan.host },
-  ];
+  const web = usage.website;
+  const pct = web?.creditUsagePercent ?? usagePercent(usage);
+  const tone = usageTone(pct);
+  const planTitle =
+    web?.periodType === "weekly"
+      ? `Weekly ${web.planLabel || "SuperGrok"} Limit`
+      : web?.planLabel
+        ? `${web.planLabel} usage`
+        : "Subscription usage";
+
+  const products = (web?.productUsage || []).filter((p) => p.usagePercent > 0);
+
+  async function onLink() {
+    setLinkBusy(true);
+    setLinkDetail(null);
+    const r = await linkWebsite();
+    setLinkDetail(r.detail);
+    setLinkBusy(false);
+  }
 
   return (
     <Card>
@@ -103,174 +128,166 @@ export function UsageMeterPanel({ compact }: { compact?: boolean }) {
           <div>
             <CardTitle className="flex items-center gap-2 text-sm">
               <Gauge className="h-4 w-4 text-[var(--color-muted)]" />
-              Usage · subscription limits
+              Usage
             </CardTitle>
             <CardDescription>
-              Live token usage from Grok replies + local host/Imagine. Polled every minute.
+              Live from Grok website Settings → Usage · polled every minute
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
             <Badge
               variant={
-                tone === "danger" ? "danger" : tone === "warn" ? "warn" : "success"
+                usage.source === "website"
+                  ? "success"
+                  : tone === "danger"
+                    ? "danger"
+                    : "default"
               }
             >
-              {plan.label}
+              {usage.source === "website" ? "grok.com" : usage.source}
             </Badge>
-            <Badge variant="default" className="text-[10px]">
-              {usage.source === "live" ? "live tokens" : "local"}
-            </Badge>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void refreshUsage()}
+              title="Refresh now"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div>
-          <div className="mb-1.5 flex items-end justify-between gap-2">
-            <div>
-              <div className="text-2xl font-semibold tracking-tight tabular">
-                {formatUnits(usage.usedUnits)}
-                <span className="text-sm font-normal text-[var(--color-muted)]">
-                  {" "}
-                  / {formatUnits(plan.units)}
-                </span>
-              </div>
-              <div className="text-xs text-[var(--color-subtle)]">
-                {formatUnits(remaining)} units left · {left}d until reset
-              </div>
-              <div className="mt-0.5 text-[10px] text-[var(--color-subtle)]">
-                Tokens this period: {formatTokens(usage.totalTokens || 0)} (
-                {formatTokens(usage.promptTokens || 0)} in ·{" "}
-                {formatTokens(usage.completionTokens || 0)} out)
-              </div>
-            </div>
-            <div
-              className={cn(
-                "text-lg font-semibold tabular",
-                tone === "danger"
-                  ? "text-[var(--color-danger)]"
-                  : tone === "warn"
-                    ? "text-[var(--color-warn)]"
-                    : "text-[var(--color-fg)]",
-              )}
-            >
+        {/* Weekly pool — website style */}
+        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+          <div className="mb-1 text-xs font-medium text-[var(--color-muted)]">
+            {planTitle}
+          </div>
+          <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+            <div className="text-2xl font-semibold tabular tracking-tight">
               {Math.round(pct)}%
+              <span className="ml-1.5 text-sm font-normal text-[var(--color-muted)]">
+                used
+              </span>
+            </div>
+            <div className="text-xs text-[var(--color-subtle)]">
+              Resets {formatResetAt(web?.periodEnd || usage.periodEnd)}
             </div>
           </div>
-          <div className="h-2.5 overflow-hidden rounded-full bg-[var(--color-border)]">
-            <div
-              className={cn("h-full rounded-full transition-all duration-500", barColor(tone))}
-              style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
-            />
-          </div>
-        </div>
-
-        {(usage.rateLimitRemaining != null || usage.rateLimitLimit != null) && (
-          <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-muted)]">
-            API rate limit remaining:{" "}
-            <span className="tabular text-[var(--color-fg)]">
-              {usage.rateLimitRemaining ?? "—"}
-              {usage.rateLimitLimit != null ? ` / ${usage.rateLimitLimit}` : ""}
-            </span>
-          </div>
-        )}
-
-        <div className="grid gap-2 sm:grid-cols-2">
-          {rows.map((r) => {
-            const p = r.cap > 0 ? Math.min(100, (r.used / r.cap) * 100) : 0;
-            const t = usageTone(p);
-            return (
+          {/* Stacked product bar */}
+          <div className="mb-2 flex h-2.5 overflow-hidden rounded-full bg-[var(--color-border)]">
+            {products.length > 0 ? (
+              products.map((p, i) => (
+                <div
+                  key={p.product + i}
+                  className={cn("h-full", PRODUCT_COLORS[i % PRODUCT_COLORS.length])}
+                  style={{ width: `${Math.min(100, p.usagePercent)}%` }}
+                  title={`${p.label}: ${Math.round(p.usagePercent)}%`}
+                />
+              ))
+            ) : (
               <div
-                key={r.label}
-                className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2"
-              >
-                <div className="flex justify-between text-xs">
-                  <span className="text-[var(--color-muted)]">{r.label}</span>
-                  <span className="tabular text-[var(--color-fg)]">
-                    {r.used}
-                    <span className="text-[var(--color-subtle)]"> / {r.cap}</span>
-                  </span>
-                </div>
-                <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--color-border)]">
-                  <div
-                    className={cn("h-full rounded-full", barColor(t))}
-                    style={{ width: `${p}%` }}
+                className={cn("h-full rounded-full transition-all", barColor(tone))}
+                style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
+              />
+            )}
+          </div>
+          {products.length > 0 && (
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[var(--color-muted)]">
+              {products.map((p, i) => (
+                <span key={p.product + i} className="inline-flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "inline-block h-1.5 w-1.5 rounded-full",
+                      PRODUCT_COLORS[i % PRODUCT_COLORS.length],
+                    )}
                   />
-                </div>
-              </div>
-            );
-          })}
+                  {p.label}{" "}
+                  <span className="tabular text-[var(--color-fg)]">
+                    {Math.round(p.usagePercent)}%
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
+          {web?.error && (
+            <p className="mt-2 text-xs text-[var(--color-warn)]">{web.error}</p>
+          )}
+          {!web && (
+            <p className="mt-2 text-xs text-[var(--color-subtle)]">
+              Link your Grok website session below to show the same weekly limit as
+              grok.com (Build / App Builder / Chat breakdown).
+            </p>
+          )}
         </div>
 
-        {!compact && (
-          <>
+        {/* Extra credits */}
+        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+          <div className="mb-2 text-xs font-medium text-[var(--color-muted)]">
+            Extra Usage Credits
+          </div>
+          <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-subtle)]">
-                By mode (messages)
+              <div className="text-lg font-semibold tabular">
+                {formatUsdFromCents(web?.prepaidBalanceCents ?? 0)}
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {(
-                  [
-                    ["fast", "Fast"],
-                    ["auto", "Auto"],
-                    ["build", "Build"],
-                    ["expert", "Expert"],
-                    ["heavy", "Heavy"],
-                  ] as const
-                ).map(([id, label]) => (
-                  <span
-                    key={id}
-                    className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]"
-                  >
-                    {label}{" "}
-                    <span className="tabular text-[var(--color-fg)]">{usage.byMode[id] ?? 0}</span>
-                  </span>
-                ))}
-              </div>
+              <div className="text-xs text-[var(--color-subtle)]">Additional Credits</div>
             </div>
+          </div>
+        </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              {(
-                [
-                  ["free", "Free"],
-                  ["super", "SuperGrok"],
-                  ["pro", "SuperGrok Pro"],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setPlan(id)}
-                  className={cn(
-                    "rounded-full border px-3 py-1 text-xs transition-colors",
-                    usage.plan === id
-                      ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]"
-                      : "border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-border-strong)]",
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
+        {/* Link website session */}
+        {!compact && (
+          <div className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] p-3">
+            <div className="text-xs font-medium text-[var(--color-fg)]">
+              Grok website session
+            </div>
+            <p className="text-[11px] text-[var(--color-subtle)]">
+              Weekly SuperGrok limits live on grok.com, not the xAI API key. Link the
+              same browser login (SSO) used for Settings → Usage.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => void onLink()} disabled={linkBusy}>
+                <Link2 className="h-3.5 w-3.5" />
+                {linkBusy ? "Linking…" : "Link Grok website"}
+              </Button>
+              {ssoCookie ? (
+                <Badge variant="success">SSO linked</Badge>
+              ) : (
+                <Badge>Not linked</Badge>
+              )}
+            </div>
+            {linkDetail && (
+              <p className="text-[11px] text-[var(--color-muted)]">{linkDetail}</p>
+            )}
+            <div className="flex gap-2">
+              <Input
+                value={ssoDraft}
+                onChange={(e) => setSsoDraft(e.target.value)}
+                placeholder="Or paste sso=… cookie from grok.com"
+                className="font-mono text-xs"
+              />
               <Button
                 size="sm"
                 variant="secondary"
-                className="ml-auto"
-                onClick={() => void refreshUsage()}
+                disabled={!ssoDraft.trim()}
+                onClick={() => {
+                  setSsoCookie(ssoDraft.trim());
+                  setSsoDraft("");
+                  setLinkDetail("SSO cookie saved — refreshing usage…");
+                }}
               >
-                <RefreshCw className="h-3.5 w-3.5" />
-                Refresh
+                Save
               </Button>
-              <button
-                type="button"
-                onClick={() => resetUsage()}
-                className="rounded-full border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]"
-              >
-                Reset period
-              </button>
             </div>
-            <div className="text-[10px] text-[var(--color-subtle)]">
-              Last poll {lastPoll} · units from xAI token usage when available
-            </div>
-          </>
+          </div>
+        )}
+
+        {usage.lastPolledAt > 0 && (
+          <div className="text-[10px] text-[var(--color-subtle)]">
+            Last poll {new Date(usage.lastPolledAt).toLocaleTimeString()}
+            {usage.source === "website" ? " · source grok.com" : ""}
+          </div>
         )}
       </CardContent>
     </Card>
