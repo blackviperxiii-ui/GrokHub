@@ -7,6 +7,7 @@ import type {
 import type { GrokChatMessage, GrokChatResult } from "./grok";
 import type { GrokModeId } from "./types";
 import type { UpdateResult, UpdateStatus } from "./update";
+import type { DeviceCodeStart, PollResult, XaiOAuthTokens } from "./xai-oauth";
 
 /**
  * Client host bridge.
@@ -19,8 +20,21 @@ export type DesktopGrokBridge = {
     messages: GrokChatMessage[];
     mode?: GrokModeId;
     apiKey?: string;
-  }) => Promise<GrokChatResult>;
-  probe?: (apiKey?: string) => Promise<{ ok: boolean; detail: string; envConfigured?: boolean }>;
+    accessToken?: string;
+    tokens?: XaiOAuthTokens | null;
+  }) => Promise<GrokChatResult & { tokens?: XaiOAuthTokens; refreshed?: boolean }>;
+  probe?: (
+    apiKey?: string,
+    accessToken?: string,
+  ) => Promise<{ ok: boolean; detail: string; envConfigured?: boolean; authMode?: string }>;
+  oauthStart?: () => Promise<DeviceCodeStart & { ok: boolean }>;
+  oauthPoll?: (deviceCode: string) => Promise<PollResult>;
+  oauthEnsure?: (tokens: XaiOAuthTokens) => Promise<{
+    ok: boolean;
+    detail: string;
+    refreshed: boolean;
+    tokens: XaiOAuthTokens;
+  }>;
   checkUpdate?: (opts?: { token?: string }) => Promise<UpdateStatus>;
   applyUpdate?: (opts?: { token?: string }) => Promise<UpdateResult>;
 };

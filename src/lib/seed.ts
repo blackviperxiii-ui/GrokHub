@@ -28,6 +28,14 @@ export type SeedBundle = {
 function catalogConnectors(): Connector[] {
   return [
     {
+      id: "grok-xai",
+      name: "Grok (xAI)",
+      category: "Grok",
+      description: "Live Grok via SuperGrok / X Premium OAuth or API key.",
+      status: "disconnected",
+      tools: ["chat", "models", "imagine"],
+    },
+    {
       id: "gmail",
       name: "Gmail & Calendar",
       category: "Google",

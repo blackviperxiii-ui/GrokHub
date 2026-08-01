@@ -59,6 +59,15 @@ type State = {
   apiKey: string;
   /** Optional GitHub token for private-repo updates */
   githubToken: string;
+  /** xAI Grok OAuth tokens (SuperGrok / X Premium device-code) */
+  oauth: import("./xai-oauth").XaiOAuthTokens | null;
+  oauthPending: {
+    deviceCode: string;
+    userCode: string;
+    verificationUri: string;
+    verificationUriComplete?: string;
+    expiresAt: number;
+  } | null;
   grokConnected: boolean | null;
   grokStatusDetail: string;
   setNav: (nav: NavId) => void;
@@ -67,6 +76,9 @@ type State = {
   setDesktop: (patch: Partial<State["desktop"]>) => void;
   setApiKey: (key: string) => void;
   setGithubToken: (token: string) => void;
+  startGrokOAuth: () => Promise<void>;
+  pollGrokOAuth: () => Promise<"pending" | "ready" | "failed">;
+  clearGrokOAuth: () => void;
   probeGrok: () => Promise<boolean>;
   syncFromGrok: (opts?: { displayName?: string | null; email?: string | null; imageUrl?: string | null }) => Promise<void>;
   newThread: () => void;
@@ -396,8 +408,10 @@ export const useGrokHub = create<State>()(
       running: false,
       apiKey: "",
       githubToken: "",
+      oauth: null,
+      oauthPending: null,
       grokConnected: null,
-      grokStatusDetail: "Not connected — add an xAI API key in Settings",
+      grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
 
       setNav: (nav) => set({ nav, modeMenuOpen: false }),
       setMode: (mode) => {
@@ -413,17 +427,168 @@ export const useGrokHub = create<State>()(
       setDesktop: (patch) => set((s) => ({ desktop: { ...s.desktop, ...patch } })),
       setApiKey: (key) => set({ apiKey: key, grokConnected: null }),
       setGithubToken: (token) => set({ githubToken: token }),
+
+      startGrokOAuth: async () => {
+        const { oauthStart } = await import("./grok-client");
+        const start = await oauthStart();
+        set({
+          oauthPending: {
+            deviceCode: start.deviceCode,
+            userCode: start.userCode,
+            verificationUri: start.verificationUri,
+            verificationUriComplete: start.verificationUriComplete,
+            expiresAt: Date.now() + (start.expiresIn || 1800) * 1000,
+          },
+          grokStatusDetail: `Approve code ${start.userCode} at accounts.x.ai`,
+        });
+        get().pushActivity({
+          kind: "auth",
+          title: "Grok OAuth started",
+          detail: `Enter code ${start.userCode}`,
+          status: "running",
+        });
+      },
+
+      pollGrokOAuth: async () => {
+        const pending = get().oauthPending;
+        if (!pending) return "failed";
+        if (Date.now() > pending.expiresAt) {
+          set({
+            oauthPending: null,
+            grokStatusDetail: "OAuth code expired — start again",
+          });
+          return "failed";
+        }
+        const { oauthPoll } = await import("./grok-client");
+        const r = await oauthPoll(pending.deviceCode);
+        if (r.status === "ready") {
+          set({
+            oauth: r.tokens,
+            oauthPending: null,
+            grokConnected: true,
+            grokStatusDetail: `Grok OAuth · ${r.tokens.email || r.tokens.name || "connected"}`,
+          });
+          // Mark a logical Grok connector if present
+          set((s) => ({
+            connectors: s.connectors.map((c) =>
+              c.id === "custom-mcp" || c.name.toLowerCase().includes("grok")
+                ? c
+                : c,
+            ),
+          }));
+          await get().syncFromGrok({
+            displayName: r.tokens.name ?? null,
+            email: r.tokens.email ?? null,
+            imageUrl: r.tokens.picture ?? null,
+          });
+          // Ensure a connected "Grok" connector row exists
+          set((s) => {
+            const hasGrok = s.connectors.some((c) => c.id === "grok-xai");
+            const grokConn = {
+              id: "grok-xai",
+              name: "Grok (xAI)",
+              category: "Grok",
+              description: "Live Grok via SuperGrok / X Premium OAuth or API key.",
+              status: "connected" as const,
+              tools: ["chat", "models", "imagine"],
+              lastUsed: Date.now(),
+            };
+            return {
+              connectors: hasGrok
+                ? s.connectors.map((c) =>
+                    c.id === "grok-xai"
+                      ? { ...c, status: "connected" as const, lastUsed: Date.now() }
+                      : c,
+                  )
+                : [grokConn, ...s.connectors],
+            };
+          });
+          get().pushActivity({
+            kind: "auth",
+            title: "Grok OAuth connected",
+            detail: r.tokens.email || r.tokens.name || "Session active",
+            status: "success",
+          });
+          return "ready";
+        }
+        if (r.status === "expired" || r.status === "denied") {
+          set({
+            oauthPending: null,
+            grokConnected: false,
+            grokStatusDetail: r.error || "OAuth failed",
+          });
+          get().pushActivity({
+            kind: "auth",
+            title: "Grok OAuth failed",
+            detail: r.error,
+            status: "failed",
+          });
+          return "failed";
+        }
+        return "pending";
+      },
+
+      clearGrokOAuth: () => {
+        set({
+          oauth: null,
+          oauthPending: null,
+          grokConnected: get().apiKey ? null : false,
+          grokStatusDetail: "Grok OAuth cleared",
+        });
+        set((s) => ({
+          connectors: s.connectors.map((c) =>
+            c.id === "grok-xai" ? { ...c, status: "disconnected" as const } : c,
+          ),
+        }));
+        get().pushActivity({
+          kind: "auth",
+          title: "Grok OAuth signed out",
+          detail: "Session removed from this device",
+          status: "success",
+        });
+      },
+
       probeGrok: async () => {
         try {
-          const { grokProbe } = await import("./grok-client");
-          const r = await grokProbe(get().apiKey || undefined);
+          const { grokProbe, oauthEnsure } = await import("./grok-client");
+          let accessToken = get().oauth?.accessToken;
+          if (get().oauth) {
+            try {
+              const ensured = await oauthEnsure(get().oauth!);
+              if (ensured.tokens) set({ oauth: ensured.tokens });
+              accessToken = ensured.tokens?.accessToken || accessToken;
+              if (ensured.ok) {
+                set({
+                  grokConnected: true,
+                  grokStatusDetail: ensured.detail || "Grok OAuth live",
+                });
+                return true;
+              }
+            } catch (e) {
+              // fall through to api key
+              const msg = e instanceof Error ? e.message : "oauth ensure failed";
+              if (!get().apiKey) {
+                set({ grokConnected: false, grokStatusDetail: msg });
+                return false;
+              }
+            }
+          }
+          const r = await grokProbe({
+            apiKey: get().apiKey || undefined,
+            accessToken,
+          });
           set({
             grokConnected: r.ok,
-            grokStatusDetail: r.detail + (r.envConfigured && !get().apiKey ? " (env key)" : ""),
+            grokStatusDetail:
+              r.detail +
+              (r.authMode === "oauth"
+                ? " · OAuth"
+                : r.envConfigured && !get().apiKey && !accessToken
+                  ? " (env key)"
+                  : r.authMode === "apiKey"
+                    ? " · API key"
+                    : ""),
           });
-          if (r.ok) {
-            await get().syncFromGrok();
-          }
           return r.ok;
         } catch (e) {
           const msg = e instanceof Error ? e.message : "probe failed";
@@ -436,10 +601,15 @@ export const useGrokHub = create<State>()(
         const models: string[] = [];
         try {
           const key = get().apiKey || "";
+          const accessToken = get().oauth?.accessToken || "";
           const res = await fetch("/api/grok", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ action: "models", apiKey: key }),
+            body: JSON.stringify({
+              action: "models",
+              apiKey: key,
+              accessToken,
+            }),
           });
           if (res.ok) {
             const data = (await res.json()) as { models?: string[] };
@@ -873,7 +1043,12 @@ export const useGrokHub = create<State>()(
               messages: history,
               mode: routed,
               apiKey: get().apiKey || undefined,
+              accessToken: get().oauth?.accessToken,
+              tokens: get().oauth,
             });
+            if (result.tokens) {
+              set({ oauth: result.tokens });
+            }
             if (result.ok && result.content) {
               usedLive = true;
               answer = [
@@ -1088,14 +1263,15 @@ export const useGrokHub = create<State>()(
           modeMenuOpen: false,
           usage: createUsage("pro"),
           grokConnected: null,
-          grokStatusDetail: "Not connected — sign in and add your xAI key in Settings",
+          grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
+          oauth: null,
+          oauthPending: null,
         });
       },
     }),
     {
-      name: "grokhub-clean-v1",
+      name: "grokhub-clean-v2",
       partialize: (s) => ({
-        // Only user-owned data — never ship demo personalization in the package.
         connectors: s.connectors,
         skills: s.skills,
         automations: s.automations,
@@ -1109,8 +1285,8 @@ export const useGrokHub = create<State>()(
         imagineAspect: s.imagineAspect,
         apiKey: s.apiKey,
         githubToken: s.githubToken,
+        oauth: s.oauth,
         profile: s.profile,
-        // chat is derived from active thread; still keep for quick rehydrate
         chat: s.chat,
         activity: s.activity.slice(0, 40),
       }),

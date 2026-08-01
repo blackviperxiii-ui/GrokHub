@@ -3,9 +3,9 @@ import { n as GROK_PROVIDERS } from "./providers-DD9Wq7fi.mjs";
 import { N as require_jsx_runtime, P as require_react, h as Link } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { a as signIn, c as useCurrentUser, i as formatRelative, l as useCurrentUserState, n as GrokHubMark, o as signOut, r as cn, s as uid, t as Button } from "./button-Cz9j7Ln5.mjs";
-import { A as ChevronRight, C as HardDrive, D as FolderOpen, E as Folder, F as AppWindow, I as Activity, M as Cable, N as Brain, O as Download, P as ArrowRight, S as History, T as Gauge, _ as MessageSquarePlus, a as TimerReset, b as Link2Off, c as Sparkles, d as Send, f as RefreshCw, g as MessageSquare, h as Minus, i as Trash2, j as Check, k as Command, l as ShieldAlert, m as Play, n as X, o as Terminal, p as Plus, r as Users, s as Square, t as Zap, u as Settings, v as Menu, w as Hammer, x as Image, y as LoaderCircle } from "../_libs/lucide-react.mjs";
+import { A as Command, C as HardDrive, D as FolderOpen, E as Folder, F as ArrowRight, I as AppWindow, L as Activity, M as Check, N as Cable, O as ExternalLink, P as Brain, S as History, T as Gauge, _ as MessageSquarePlus, a as TimerReset, b as Link2Off, c as Sparkles, d as Send, f as RefreshCw, g as MessageSquare, h as Minus, i as Trash2, j as ChevronRight, k as Download, l as ShieldAlert, m as Play, n as X, o as Terminal, p as Plus, r as Users, s as Square, t as Zap, u as Settings, v as Menu, w as Hammer, x as Image, y as LoaderCircle } from "../_libs/lucide-react.mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-DsyJi2E0.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-BCszUoql.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function rpc(path, action, body = {}) {
@@ -26,10 +26,28 @@ async function grokChat(opts) {
 	if (desktop?.chat) return desktop.chat(opts);
 	return rpc("/api/grok", "chat", opts);
 }
-async function grokProbe(apiKey) {
+async function grokProbe(opts) {
 	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
-	if (desktop?.probe) return desktop.probe(apiKey);
-	return rpc("/api/grok", "probe", { apiKey: apiKey || "" });
+	if (desktop?.probe) return desktop.probe(opts?.apiKey, opts?.accessToken);
+	return rpc("/api/grok", "probe", {
+		apiKey: opts?.apiKey || "",
+		accessToken: opts?.accessToken || ""
+	});
+}
+async function oauthStart() {
+	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
+	if (desktop?.oauthStart) return desktop.oauthStart();
+	return rpc("/api/grok", "oauthStart", {});
+}
+async function oauthPoll(deviceCode) {
+	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
+	if (desktop?.oauthPoll) return desktop.oauthPoll(deviceCode);
+	return rpc("/api/grok", "oauthPoll", { deviceCode });
+}
+async function oauthEnsure(tokens) {
+	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
+	if (desktop?.oauthEnsure) return desktop.oauthEnsure(tokens);
+	return rpc("/api/grok", "oauthEnsure", { tokens });
 }
 async function checkUpdate(token) {
 	const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : void 0;
@@ -185,6 +203,18 @@ function renderImaginePreview(prompt, aspect) {
 /** Catalog of integrations — all disconnected until the user connects them. */
 function catalogConnectors() {
 	return [
+		{
+			id: "grok-xai",
+			name: "Grok (xAI)",
+			category: "Grok",
+			description: "Live Grok via SuperGrok / X Premium OAuth or API key.",
+			status: "disconnected",
+			tools: [
+				"chat",
+				"models",
+				"imagine"
+			]
+		},
 		{
 			id: "gmail",
 			name: "Gmail & Calendar",
@@ -683,8 +713,10 @@ var useGrokHub = create()(persist((set, get) => ({
 	running: false,
 	apiKey: "",
 	githubToken: "",
+	oauth: null,
+	oauthPending: null,
 	grokConnected: null,
-	grokStatusDetail: "Not connected — add an xAI API key in Settings",
+	grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
 	setNav: (nav) => set({
 		nav,
 		modeMenuOpen: false
@@ -711,15 +743,145 @@ var useGrokHub = create()(persist((set, get) => ({
 		grokConnected: null
 	}),
 	setGithubToken: (token) => set({ githubToken: token }),
+	startGrokOAuth: async () => {
+		const { oauthStart } = await import("./grok-client-BhOSqU44.mjs");
+		const start = await oauthStart();
+		set({
+			oauthPending: {
+				deviceCode: start.deviceCode,
+				userCode: start.userCode,
+				verificationUri: start.verificationUri,
+				verificationUriComplete: start.verificationUriComplete,
+				expiresAt: Date.now() + (start.expiresIn || 1800) * 1e3
+			},
+			grokStatusDetail: `Approve code ${start.userCode} at accounts.x.ai`
+		});
+		get().pushActivity({
+			kind: "auth",
+			title: "Grok OAuth started",
+			detail: `Enter code ${start.userCode}`,
+			status: "running"
+		});
+	},
+	pollGrokOAuth: async () => {
+		const pending = get().oauthPending;
+		if (!pending) return "failed";
+		if (Date.now() > pending.expiresAt) {
+			set({
+				oauthPending: null,
+				grokStatusDetail: "OAuth code expired — start again"
+			});
+			return "failed";
+		}
+		const { oauthPoll } = await import("./grok-client-BhOSqU44.mjs");
+		const r = await oauthPoll(pending.deviceCode);
+		if (r.status === "ready") {
+			set({
+				oauth: r.tokens,
+				oauthPending: null,
+				grokConnected: true,
+				grokStatusDetail: `Grok OAuth · ${r.tokens.email || r.tokens.name || "connected"}`
+			});
+			set((s) => ({ connectors: s.connectors.map((c) => c.id === "custom-mcp" || c.name.toLowerCase().includes("grok") ? c : c) }));
+			await get().syncFromGrok({
+				displayName: r.tokens.name ?? null,
+				email: r.tokens.email ?? null,
+				imageUrl: r.tokens.picture ?? null
+			});
+			set((s) => {
+				return { connectors: s.connectors.some((c) => c.id === "grok-xai") ? s.connectors.map((c) => c.id === "grok-xai" ? {
+					...c,
+					status: "connected",
+					lastUsed: Date.now()
+				} : c) : [{
+					id: "grok-xai",
+					name: "Grok (xAI)",
+					category: "Grok",
+					description: "Live Grok via SuperGrok / X Premium OAuth or API key.",
+					status: "connected",
+					tools: [
+						"chat",
+						"models",
+						"imagine"
+					],
+					lastUsed: Date.now()
+				}, ...s.connectors] };
+			});
+			get().pushActivity({
+				kind: "auth",
+				title: "Grok OAuth connected",
+				detail: r.tokens.email || r.tokens.name || "Session active",
+				status: "success"
+			});
+			return "ready";
+		}
+		if (r.status === "expired" || r.status === "denied") {
+			set({
+				oauthPending: null,
+				grokConnected: false,
+				grokStatusDetail: r.error || "OAuth failed"
+			});
+			get().pushActivity({
+				kind: "auth",
+				title: "Grok OAuth failed",
+				detail: r.error,
+				status: "failed"
+			});
+			return "failed";
+		}
+		return "pending";
+	},
+	clearGrokOAuth: () => {
+		set({
+			oauth: null,
+			oauthPending: null,
+			grokConnected: get().apiKey ? null : false,
+			grokStatusDetail: "Grok OAuth cleared"
+		});
+		set((s) => ({ connectors: s.connectors.map((c) => c.id === "grok-xai" ? {
+			...c,
+			status: "disconnected"
+		} : c) }));
+		get().pushActivity({
+			kind: "auth",
+			title: "Grok OAuth signed out",
+			detail: "Session removed from this device",
+			status: "success"
+		});
+	},
 	probeGrok: async () => {
 		try {
-			const { grokProbe } = await import("./grok-client-B2_Mei3W.mjs");
-			const r = await grokProbe(get().apiKey || void 0);
+			const { grokProbe, oauthEnsure } = await import("./grok-client-BhOSqU44.mjs");
+			let accessToken = get().oauth?.accessToken;
+			if (get().oauth) try {
+				const ensured = await oauthEnsure(get().oauth);
+				if (ensured.tokens) set({ oauth: ensured.tokens });
+				accessToken = ensured.tokens?.accessToken || accessToken;
+				if (ensured.ok) {
+					set({
+						grokConnected: true,
+						grokStatusDetail: ensured.detail || "Grok OAuth live"
+					});
+					return true;
+				}
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : "oauth ensure failed";
+				if (!get().apiKey) {
+					set({
+						grokConnected: false,
+						grokStatusDetail: msg
+					});
+					return false;
+				}
+			}
+			const r = await grokProbe({
+				apiKey: get().apiKey || void 0,
+				accessToken
+			});
 			set({
 				grokConnected: r.ok,
-				grokStatusDetail: r.detail + (r.envConfigured && !get().apiKey ? " (env key)" : "")
+				grokStatusDetail: r.detail + (r.authMode === "oauth" ? " · OAuth" : r.envConfigured && !get().apiKey && !accessToken ? " (env key)" : r.authMode === "apiKey" ? " · API key" : "")
 			});
-			if (r.ok) await get().syncFromGrok();
 			return r.ok;
 		} catch (e) {
 			set({
@@ -733,12 +895,14 @@ var useGrokHub = create()(persist((set, get) => ({
 		const models = [];
 		try {
 			const key = get().apiKey || "";
+			const accessToken = get().oauth?.accessToken || "";
 			const res = await fetch("/api/grok", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
 					action: "models",
-					apiKey: key
+					apiKey: key,
+					accessToken
 				})
 			});
 			if (res.ok) {
@@ -1101,7 +1265,7 @@ var useGrokHub = create()(persist((set, get) => ({
 				await wait(280);
 				answer = replyFor(trimmed, get(), routed);
 			} else {
-				const { grokChat } = await import("./grok-client-B2_Mei3W.mjs");
+				const { grokChat } = await import("./grok-client-BhOSqU44.mjs");
 				const history = get().chat.filter((c) => c.role === "user" || c.role === "assistant").slice(-16).map((c) => ({
 					role: c.role,
 					content: c.content
@@ -1113,8 +1277,11 @@ var useGrokHub = create()(persist((set, get) => ({
 				const result = await grokChat({
 					messages: history,
 					mode: routed,
-					apiKey: get().apiKey || void 0
+					apiKey: get().apiKey || void 0,
+					accessToken: get().oauth?.accessToken,
+					tokens: get().oauth
 				});
+				if (result.tokens) set({ oauth: result.tokens });
 				if (result.ok && result.content) {
 					usedLive = true;
 					answer = [
@@ -1316,11 +1483,13 @@ var useGrokHub = create()(persist((set, get) => ({
 			modeMenuOpen: false,
 			usage: createUsage("pro"),
 			grokConnected: null,
-			grokStatusDetail: "Not connected — sign in and add your xAI key in Settings"
+			grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
+			oauth: null,
+			oauthPending: null
 		});
 	}
 }), {
-	name: "grokhub-clean-v1",
+	name: "grokhub-clean-v2",
 	partialize: (s) => ({
 		connectors: s.connectors,
 		skills: s.skills,
@@ -1335,6 +1504,7 @@ var useGrokHub = create()(persist((set, get) => ({
 		imagineAspect: s.imagineAspect,
 		apiKey: s.apiKey,
 		githubToken: s.githubToken,
+		oauth: s.oauth,
 		profile: s.profile,
 		chat: s.chat,
 		activity: s.activity.slice(0, 40)
@@ -3121,19 +3291,50 @@ function SettingsView() {
 	const probeGrok = useGrokHub((s) => s.probeGrok);
 	const syncFromGrok = useGrokHub((s) => s.syncFromGrok);
 	const profile = useGrokHub((s) => s.profile);
+	const oauth = useGrokHub((s) => s.oauth);
+	const oauthPending = useGrokHub((s) => s.oauthPending);
+	const startGrokOAuth = useGrokHub((s) => s.startGrokOAuth);
+	const pollGrokOAuth = useGrokHub((s) => s.pollGrokOAuth);
+	const clearGrokOAuth = useGrokHub((s) => s.clearGrokOAuth);
 	const { user, isPending } = useCurrentUserState();
 	const [keyDraft, setKeyDraft] = (0, import_react.useState)(apiKey);
 	const [ghDraft, setGhDraft] = (0, import_react.useState)(githubToken);
 	const [probing, setProbing] = (0, import_react.useState)(false);
+	const [oauthBusy, setOauthBusy] = (0, import_react.useState)(false);
+	const [oauthErr, setOauthErr] = (0, import_react.useState)("");
 	const [update, setUpdate] = (0, import_react.useState)(null);
 	const [updateBusy, setUpdateBusy] = (0, import_react.useState)(false);
 	const [updateLog, setUpdateLog] = (0, import_react.useState)("");
+	const pollRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		setKeyDraft(apiKey);
 	}, [apiKey]);
 	(0, import_react.useEffect)(() => {
 		setGhDraft(githubToken);
 	}, [githubToken]);
+	(0, import_react.useEffect)(() => {
+		if (!oauthPending) {
+			if (pollRef.current) {
+				window.clearInterval(pollRef.current);
+				pollRef.current = null;
+			}
+			return;
+		}
+		const tick = async () => {
+			try {
+				const r = await pollGrokOAuth();
+				if (r === "ready" || r === "failed") setOauthBusy(false);
+			} catch (e) {
+				setOauthErr(e instanceof Error ? e.message : "poll failed");
+				setOauthBusy(false);
+			}
+		};
+		tick();
+		pollRef.current = window.setInterval(() => void tick(), 5e3);
+		return () => {
+			if (pollRef.current) window.clearInterval(pollRef.current);
+		};
+	}, [oauthPending, pollGrokOAuth]);
 	(0, import_react.useEffect)(() => {
 		checkUpdate(githubToken || void 0).then(setUpdate).catch((e) => setUpdate({
 			currentVersion: "0.1",
@@ -3147,6 +3348,19 @@ function SettingsView() {
 			detail: e instanceof Error ? e.message : "check failed"
 		}));
 	}, [githubToken]);
+	async function onStartOAuth() {
+		setOauthErr("");
+		setOauthBusy(true);
+		try {
+			await startGrokOAuth();
+			const pending = useGrokHub.getState().oauthPending;
+			if (pending?.verificationUriComplete) window.open(pending.verificationUriComplete, "_blank", "noopener,noreferrer");
+			else if (pending?.verificationUri) window.open(pending.verificationUri, "_blank", "noopener,noreferrer");
+		} catch (e) {
+			setOauthErr(e instanceof Error ? e.message : "Could not start OAuth");
+			setOauthBusy(false);
+		}
+	}
 	async function saveAndProbe() {
 		setApiKey(keyDraft.trim());
 		setProbing(true);
@@ -3200,10 +3414,108 @@ function SettingsView() {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
-				children: "Grok account (OAuth)"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Sign in through the Grok Build auth broker (auth.grok.me) with Google or X. Identity is pulled after login — nothing personal is preloaded in the app package." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+				children: "Connect to Grok (xAI OAuth)"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardDescription, { children: [
+				"Sign in with your ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "SuperGrok" }),
+				" or ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "X Premium+" }),
+				" account via xAI device code — same flow as OpenClaw / Grok CLI. No API key required for subscription access."
+			] })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 				className: "space-y-3",
-				children: [isPending ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "h-10 animate-pulse rounded bg-[var(--color-elevated)]" }) : user && !user.isDevFallback ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex flex-wrap items-center gap-2",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+							variant: oauth ? "success" : grokConnected ? "success" : "default",
+							children: oauth ? "OAuth connected" : grokConnected ? "API connected" : "Not connected"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "text-xs text-[var(--color-muted)]",
+							children: grokStatusDetail
+						})]
+					}),
+					oauth && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex flex-wrap items-center gap-3 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-success)_35%,transparent)] bg-[color-mix(in_oklab,var(--color-success)_8%,transparent)] px-3 py-3",
+						children: [
+							oauth.picture ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+								src: oauth.picture,
+								alt: "",
+								className: "h-10 w-10 rounded-full object-cover"
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "grid h-10 w-10 place-items-center rounded-full bg-[var(--color-elevated)] text-sm font-medium",
+								children: (oauth.name || oauth.email || "G").charAt(0).toUpperCase()
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "min-w-0 flex-1",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "text-sm font-medium",
+									children: oauth.name || "Grok account"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "truncate text-xs text-[var(--color-muted)]",
+									children: oauth.email || "OAuth session active"
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+								variant: "secondary",
+								size: "sm",
+								onClick: () => clearGrokOAuth(),
+								children: "Disconnect"
+							})
+						]
+					}),
+					oauthPending && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-elevated)] p-4",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "text-xs uppercase tracking-wide text-[var(--color-subtle)]",
+								children: "Approve this code"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "font-mono text-3xl font-semibold tracking-[0.2em] text-[var(--color-fg)]",
+								children: oauthPending.userCode
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "text-sm text-[var(--color-muted)]",
+								children: "Open the link, sign in to xAI / Grok, and enter the code. This window polls automatically."
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "flex flex-wrap gap-2",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
+									onClick: () => window.open(oauthPending.verificationUriComplete || oauthPending.verificationUri, "_blank", "noopener,noreferrer"),
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExternalLink, { className: "h-4 w-4" }), "Open accounts.x.ai"]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+									variant: "secondary",
+									onClick: () => void pollGrokOAuth(),
+									children: "Check now"
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "text-xs text-[var(--color-subtle)]",
+								children: ["Waiting for approval… ", oauthBusy ? "polling" : ""]
+							})
+						]
+					}),
+					!oauth && !oauthPending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+						onClick: () => void onStartOAuth(),
+						disabled: oauthBusy,
+						children: oauthBusy ? "Starting…" : "Connect with Grok OAuth"
+					}),
+					oauthErr && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "text-sm text-[var(--color-danger)]",
+						children: oauthErr
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "text-xs text-[var(--color-subtle)]",
+						children: "Uses xAI public OAuth client (device code). Tokens stay on this device only and are never committed to git."
+					})
+				]
+			})] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
+				className: "text-sm",
+				children: "App account (optional)"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Grok Build app identity via Google/X (auth.grok.me). Separate from live Grok model access above." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, {
+				className: "space-y-3",
+				children: isPending ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "h-10 animate-pulse rounded bg-[var(--color-elevated)]" }) : user && !user.isDevFallback ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "flex flex-wrap items-center gap-3",
 					children: [
 						user.profileImageUrl ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
@@ -3218,15 +3530,11 @@ function SettingsView() {
 							className: "min-w-0 flex-1",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 								className: "text-sm font-medium",
-								children: user.displayName || "Grok user"
+								children: user.displayName || "Signed in"
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 								className: "truncate text-xs text-[var(--color-muted)]",
-								children: user.primaryEmail || "Signed in via Grok OAuth"
+								children: user.primaryEmail
 							})]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
-							variant: "success",
-							children: "OAuth"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
 							variant: "secondary",
@@ -3236,97 +3544,69 @@ function SettingsView() {
 						})
 					]
 				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "space-y-2",
-					children: [GROK_PROVIDERS.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Button, {
-						className: "w-full",
-						variant: p.idp === "google" ? "default" : "secondary",
+					className: "flex flex-wrap gap-2",
+					children: [GROK_PROVIDERS.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+						variant: "secondary",
+						size: "sm",
 						onClick: () => void signIn(p.providerId, { callbackURL: "/" }),
-						children: ["Continue with ", p.label]
-					}, p.providerId)), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-						className: "text-center text-xs text-[var(--color-subtle)]",
-						children: [
-							"Or open the",
-							" ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
-								to: "/login",
-								className: "underline underline-offset-2",
-								children: "sign-in page"
-							})
-						]
+						children: p.label
+					}, p.providerId)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Link, {
+						to: "/login",
+						className: "self-center text-xs text-[var(--color-muted)] underline-offset-2 hover:underline",
+						children: "Full sign-in page"
 					})]
-				}), profile.models.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "text-[10px] uppercase tracking-wide text-[var(--color-subtle)]",
-						children: "Models from xAI"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "mt-1 flex flex-wrap gap-1",
-						children: profile.models.slice(0, 12).map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
-							className: "font-mono text-[10px]",
-							children: m
-						}, m))
-					})]
-				})]
+				})
 			})] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsageMeterPanel, {}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
-				children: "xAI API key (chat)"
+				children: "xAI API key (optional fallback)"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardDescription, { children: [
-				"Agent replies use the live xAI API. Key from console.x.ai — or env",
+				"Pay-per-token console key if you are not using SuperGrok OAuth. From",
 				" ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "font-mono",
-					children: "XAI_API_KEY"
+					children: "console.x.ai"
 				}),
-				". Stored only on this device."
+				"."
 			] })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 				className: "space-y-3",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex flex-wrap items-center gap-2",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
-							variant: grokConnected ? "success" : "default",
-							children: grokConnected ? "API connected" : "API not connected"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "text-xs text-[var(--color-muted)]",
-							children: grokStatusDetail
-						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "space-y-1.5",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-							className: "text-xs font-medium text-[var(--color-muted)]",
-							children: "xAI API key"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
-							type: "password",
-							autoComplete: "off",
-							value: keyDraft,
-							onChange: (e) => setKeyDraft(e.target.value),
-							placeholder: "xai-…"
-						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex flex-wrap gap-2",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-							onClick: () => void saveAndProbe(),
-							disabled: probing,
-							children: probing ? "Testing…" : "Save & test"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-							variant: "secondary",
-							onClick: () => {
-								setKeyDraft("");
-								setApiKey("");
-							},
-							children: "Clear key"
-						})]
-					})
-				]
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
+					type: "password",
+					autoComplete: "off",
+					value: keyDraft,
+					onChange: (e) => setKeyDraft(e.target.value),
+					placeholder: "xai-…"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "flex flex-wrap gap-2",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+						onClick: () => void saveAndProbe(),
+						disabled: probing,
+						children: probing ? "Testing…" : "Save & test key"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+						variant: "secondary",
+						onClick: () => {
+							setKeyDraft("");
+							setApiKey("");
+						},
+						children: "Clear key"
+					})]
+				})]
 			})] }),
+			profile.models.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardHeader, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
+				className: "text-sm",
+				children: "Models from your connection"
+			}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "flex flex-wrap gap-1",
+				children: profile.models.slice(0, 16).map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
+					className: "font-mono text-[10px]",
+					children: m
+				}, m))
+			}) })] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
 				children: "Updates (GitHub)"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Install the latest clean release from the public package repo." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Install the latest clean release from the package repo." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardContent, {
 				className: "space-y-3",
 				children: [
 					update && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -3340,36 +3620,17 @@ function SettingsView() {
 								variant: "success",
 								children: "Up to date"
 							})]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "mt-2 space-y-1 font-mono text-xs text-[var(--color-muted)]",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-									"local ",
-									update.currentSha || "—",
-									" → remote ",
-									update.remoteSha || "—"
-								] }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-									update.repo,
-									"@",
-									update.branch
-								] }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: update.detail })
-							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "mt-2 font-mono text-xs text-[var(--color-muted)]",
+							children: update.detail
 						})]
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "space-y-1.5",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-							className: "text-xs font-medium text-[var(--color-muted)]",
-							children: "GitHub token (optional, private repo)"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
-							type: "password",
-							autoComplete: "off",
-							value: ghDraft,
-							onChange: (e) => setGhDraft(e.target.value),
-							placeholder: "ghp_… or github_pat_…"
-						})]
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
+						type: "password",
+						autoComplete: "off",
+						value: ghDraft,
+						onChange: (e) => setGhDraft(e.target.value),
+						placeholder: "GitHub token (optional)"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "flex flex-wrap gap-2",
@@ -3393,7 +3654,7 @@ function SettingsView() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
 				children: "Model modes"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Auto, Fast, Expert, Heavy, Build — mapped to live xAI Grok models after you connect." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, {
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Mapped to live xAI models after you connect." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, {
 				className: "space-y-2",
 				children: GROK_MODES.map((m) => {
 					const selected = m.id === mode;
@@ -3401,12 +3662,9 @@ function SettingsView() {
 						type: "button",
 						onClick: () => setMode(m.id),
 						className: cn("flex w-full items-center justify-between gap-3 rounded-[var(--radius-md)] border px-3 py-3 text-left transition-colors", selected ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)]" : "border-[var(--color-border)] hover:border-[var(--color-border-strong)]"),
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex items-center gap-2 text-sm font-medium",
-							children: [m.label, m.id === "build" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Badge, {
-								className: "text-[10px]",
-								children: "Beta"
-							})]
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "text-sm font-medium",
+							children: m.label
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "text-xs text-[var(--color-muted)]",
 							children: m.subtitle
@@ -3417,26 +3675,23 @@ function SettingsView() {
 					}, m.id);
 				})
 			})] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardHeader, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
 				children: "Desktop host"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Unsandboxed shell, files, and apps. Opens from the Desktop tab." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, {
-				className: "space-y-3",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
-					onClick: () => setNav("desktop"),
-					children: "Open Desktop host"
-				})
-			})] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(CardHeader, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
+			}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Button, {
+				onClick: () => setNav("desktop"),
+				children: "Open Desktop host"
+			}) })] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardHeader, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardTitle, {
 				className: "text-sm",
-				children: "Arch Linux desktop shell"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardDescription, { children: "Window auto-fits the work area on launch." })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, {
+				children: "Arch Linux shell preferences"
+			}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CardContent, {
 				className: "space-y-3",
 				children: [
 					[
 						"wayland",
 						"Prefer Wayland",
-						"Ozone flags for Hyprland / KDE / GNOME"
+						"Ozone flags"
 					],
 					[
 						"tray",
@@ -3446,12 +3701,12 @@ function SettingsView() {
 					[
 						"launchOnLogin",
 						"Launch on login",
-						"Autostart entry"
+						"Autostart"
 					],
 					[
 						"startMinimized",
 						"Start minimized",
-						"Boot to tray only"
+						"Tray only"
 					]
 				].map(([key, label, hint]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3",
@@ -3970,4 +4225,4 @@ function HomePage() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AppShell, {});
 }
 //#endregion
-export { HomePage as component, grokProbe as i, checkUpdate as n, grokChat as r, applyUpdate as t };
+export { oauthEnsure as a, HomePage as component, grokProbe as i, checkUpdate as n, oauthPoll as o, grokChat as r, oauthStart as s, applyUpdate as t };

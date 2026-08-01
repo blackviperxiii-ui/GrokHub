@@ -51,6 +51,7 @@ Be direct and practical. Prefer short structured answers.`;
 
 async function callXaiChat(req = {}) {
   const apiKey =
+    (req.accessToken && String(req.accessToken).trim()) ||
     (req.apiKey && String(req.apiKey).trim()) ||
     process.env.XAI_API_KEY ||
     process.env.GROK_API_KEY ||
@@ -60,7 +61,7 @@ async function callXaiChat(req = {}) {
       ok: false,
       status: 401,
       error:
-        "No xAI API key. Add one in Settings or set XAI_API_KEY.",
+        "Not connected to Grok. Use Grok OAuth (SuperGrok / X Premium) or an xAI API key.",
     };
   }
   const mode = req.mode || "auto";
@@ -291,9 +292,158 @@ async function applyUpdate(opts = {}) {
   }
 }
 
+
+// ── xAI Grok OAuth device-code (OpenClaw / Grok CLI public client) ──
+const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
+const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
+const XAI_OAUTH_DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
+const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+const XAI_UA = "GrokHub/0.1 (xAI OAuth; Electron)";
+
+async function xaiDiscovery() {
+  const res = await fetch(XAI_OAUTH_DISCOVERY, {
+    headers: { accept: "application/json", "user-agent": XAI_UA },
+  });
+  if (!res.ok) throw new Error("xAI discovery failed");
+  return res.json();
+}
+
+async function oauthStart() {
+  const d = await xaiDiscovery();
+  const res = await fetch(d.device_authorization_endpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      accept: "application/json",
+      "user-agent": XAI_UA,
+    },
+    body: new URLSearchParams({
+      client_id: XAI_OAUTH_CLIENT_ID,
+      scope: XAI_OAUTH_SCOPE,
+    }).toString(),
+  });
+  const j = await res.json();
+  if (!res.ok) throw new Error(j.error_description || j.error || "device code failed");
+  return {
+    ok: true,
+    deviceCode: j.device_code,
+    userCode: j.user_code,
+    verificationUri: j.verification_uri,
+    verificationUriComplete: j.verification_uri_complete,
+    expiresIn: j.expires_in || 1800,
+    interval: j.interval || 5,
+  };
+}
+
+async function oauthPoll(deviceCode) {
+  const d = await xaiDiscovery();
+  const res = await fetch(d.token_endpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      accept: "application/json",
+      "user-agent": XAI_UA,
+    },
+    body: new URLSearchParams({
+      grant_type: XAI_DEVICE_GRANT,
+      client_id: XAI_OAUTH_CLIENT_ID,
+      device_code: deviceCode,
+    }).toString(),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (res.ok && j.access_token) {
+    let email, name, picture;
+    try {
+      const ui = await fetch(d.userinfo_endpoint || "https://auth.x.ai/oauth2/userinfo", {
+        headers: { authorization: `Bearer ${j.access_token}`, "user-agent": XAI_UA },
+      });
+      if (ui.ok) {
+        const u = await ui.json();
+        email = u.email;
+        name = u.name;
+        picture = u.picture;
+      }
+    } catch {}
+    return {
+      status: "ready",
+      tokens: {
+        accessToken: j.access_token,
+        refreshToken: j.refresh_token,
+        expiresAt: j.expires_in ? Date.now() + j.expires_in * 1000 : undefined,
+        idToken: j.id_token,
+        email,
+        name,
+        picture,
+        connectedAt: Date.now(),
+      },
+    };
+  }
+  const err = j.error || "unknown";
+  if (err === "authorization_pending") return { status: "pending", error: err };
+  if (err === "slow_down") return { status: "slow_down" };
+  if (err === "expired_token") return { status: "expired", error: j.error_description || err };
+  if (err === "access_denied") return { status: "denied", error: j.error_description || err };
+  return { status: "pending", error: j.error_description || err };
+}
+
+async function oauthEnsure(tokens) {
+  let access = tokens.accessToken;
+  let next = { ...tokens };
+  const skew = 60000;
+  if (tokens.expiresAt && tokens.expiresAt - skew < Date.now() && tokens.refreshToken) {
+    const d = await xaiDiscovery();
+    const res = await fetch(d.token_endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        accept: "application/json",
+        "user-agent": XAI_UA,
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: XAI_OAUTH_CLIENT_ID,
+        refresh_token: tokens.refreshToken,
+      }).toString(),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error_description || j.error || "refresh failed");
+    next = {
+      ...tokens,
+      accessToken: j.access_token,
+      refreshToken: j.refresh_token || tokens.refreshToken,
+      expiresAt: j.expires_in ? Date.now() + j.expires_in * 1000 : tokens.expiresAt,
+    };
+    access = next.accessToken;
+  }
+  const probe = await probeXaiKey(access);
+  return { ok: probe.ok, detail: probe.detail, refreshed: next !== tokens, tokens: next };
+}
+
+async function callXaiChatWithOAuth(req = {}) {
+  if (req.tokens?.accessToken) {
+    try {
+      const ensured = await oauthEnsure(req.tokens);
+      const r = await callXaiChat({
+        ...req,
+        accessToken: ensured.accessToken,
+        apiKey: req.apiKey,
+      });
+      return { ...r, tokens: ensured.tokens, refreshed: ensured.refreshed };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "oauth failed" };
+    }
+  }
+  return callXaiChat(req);
+}
+
+// patch callXaiChat to accept accessToken
+
 module.exports = {
-  callXaiChat,
+  callXaiChat: callXaiChatWithOAuth,
   probeXaiKey,
   checkForUpdate,
   applyUpdate,
+  oauthStart,
+  oauthPoll,
+  oauthEnsure,
 };

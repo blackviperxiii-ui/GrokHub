@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
+import { ExternalLink } from "lucide-react";
 import { GROK_MODES } from "@/lib/modes";
 import { applyUpdate, checkUpdate } from "@/lib/grok-client";
 import { GROK_PROVIDERS, authEnabled, signIn, signOut } from "@/lib/auth/client";
@@ -30,14 +31,22 @@ export function SettingsView() {
   const probeGrok = useGrokHub((s) => s.probeGrok);
   const syncFromGrok = useGrokHub((s) => s.syncFromGrok);
   const profile = useGrokHub((s) => s.profile);
+  const oauth = useGrokHub((s) => s.oauth);
+  const oauthPending = useGrokHub((s) => s.oauthPending);
+  const startGrokOAuth = useGrokHub((s) => s.startGrokOAuth);
+  const pollGrokOAuth = useGrokHub((s) => s.pollGrokOAuth);
+  const clearGrokOAuth = useGrokHub((s) => s.clearGrokOAuth);
   const { user, isPending } = useCurrentUserState();
 
   const [keyDraft, setKeyDraft] = useState(apiKey);
   const [ghDraft, setGhDraft] = useState(githubToken);
   const [probing, setProbing] = useState(false);
+  const [oauthBusy, setOauthBusy] = useState(false);
+  const [oauthErr, setOauthErr] = useState("");
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateLog, setUpdateLog] = useState<string>("");
+  const pollRef = useRef<number | null>(null);
 
   useEffect(() => {
     setKeyDraft(apiKey);
@@ -45,6 +54,33 @@ export function SettingsView() {
   useEffect(() => {
     setGhDraft(githubToken);
   }, [githubToken]);
+
+  // Auto-poll device code while pending
+  useEffect(() => {
+    if (!oauthPending) {
+      if (pollRef.current) {
+        window.clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      return;
+    }
+    const tick = async () => {
+      try {
+        const r = await pollGrokOAuth();
+        if (r === "ready" || r === "failed") {
+          setOauthBusy(false);
+        }
+      } catch (e) {
+        setOauthErr(e instanceof Error ? e.message : "poll failed");
+        setOauthBusy(false);
+      }
+    };
+    void tick();
+    pollRef.current = window.setInterval(() => void tick(), 5000);
+    return () => {
+      if (pollRef.current) window.clearInterval(pollRef.current);
+    };
+  }, [oauthPending, pollGrokOAuth]);
 
   useEffect(() => {
     void checkUpdate(githubToken || undefined)
@@ -63,6 +99,23 @@ export function SettingsView() {
         }),
       );
   }, [githubToken]);
+
+  async function onStartOAuth() {
+    setOauthErr("");
+    setOauthBusy(true);
+    try {
+      await startGrokOAuth();
+      const pending = useGrokHub.getState().oauthPending;
+      if (pending?.verificationUriComplete) {
+        window.open(pending.verificationUriComplete, "_blank", "noopener,noreferrer");
+      } else if (pending?.verificationUri) {
+        window.open(pending.verificationUri, "_blank", "noopener,noreferrer");
+      }
+    } catch (e) {
+      setOauthErr(e instanceof Error ? e.message : "Could not start OAuth");
+      setOauthBusy(false);
+    }
+  }
 
   async function saveAndProbe() {
     setApiKey(keyDraft.trim());
@@ -116,12 +169,104 @@ export function SettingsView() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-5 pb-8">
+      {/* Primary: real xAI Grok OAuth */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Grok account (OAuth)</CardTitle>
+          <CardTitle className="text-sm">Connect to Grok (xAI OAuth)</CardTitle>
           <CardDescription>
-            Sign in through the Grok Build auth broker (auth.grok.me) with Google or X. Identity is
-            pulled after login — nothing personal is preloaded in the app package.
+            Sign in with your <strong>SuperGrok</strong> or <strong>X Premium+</strong> account
+            via xAI device code — same flow as OpenClaw / Grok CLI. No API key required for
+            subscription access.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={oauth ? "success" : grokConnected ? "success" : "default"}>
+              {oauth ? "OAuth connected" : grokConnected ? "API connected" : "Not connected"}
+            </Badge>
+            <span className="text-xs text-[var(--color-muted)]">{grokStatusDetail}</span>
+          </div>
+
+          {oauth && (
+            <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-success)_35%,transparent)] bg-[color-mix(in_oklab,var(--color-success)_8%,transparent)] px-3 py-3">
+              {oauth.picture ? (
+                <img src={oauth.picture} alt="" className="h-10 w-10 rounded-full object-cover" />
+              ) : (
+                <div className="grid h-10 w-10 place-items-center rounded-full bg-[var(--color-elevated)] text-sm font-medium">
+                  {(oauth.name || oauth.email || "G").charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">{oauth.name || "Grok account"}</div>
+                <div className="truncate text-xs text-[var(--color-muted)]">
+                  {oauth.email || "OAuth session active"}
+                </div>
+              </div>
+              <Button variant="secondary" size="sm" onClick={() => clearGrokOAuth()}>
+                Disconnect
+              </Button>
+            </div>
+          )}
+
+          {oauthPending && (
+            <div className="space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-elevated)] p-4">
+              <div className="text-xs uppercase tracking-wide text-[var(--color-subtle)]">
+                Approve this code
+              </div>
+              <div className="font-mono text-3xl font-semibold tracking-[0.2em] text-[var(--color-fg)]">
+                {oauthPending.userCode}
+              </div>
+              <p className="text-sm text-[var(--color-muted)]">
+                Open the link, sign in to xAI / Grok, and enter the code. This window polls
+                automatically.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  onClick={() =>
+                    window.open(
+                      oauthPending.verificationUriComplete || oauthPending.verificationUri,
+                      "_blank",
+                      "noopener,noreferrer",
+                    )
+                  }
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  Open accounts.x.ai
+                </Button>
+                <Button variant="secondary" onClick={() => void pollGrokOAuth()}>
+                  Check now
+                </Button>
+              </div>
+              <p className="text-xs text-[var(--color-subtle)]">
+                Waiting for approval… {oauthBusy ? "polling" : ""}
+              </p>
+            </div>
+          )}
+
+          {!oauth && !oauthPending && (
+            <Button onClick={() => void onStartOAuth()} disabled={oauthBusy}>
+              {oauthBusy ? "Starting…" : "Connect with Grok OAuth"}
+            </Button>
+          )}
+
+          {oauthErr && (
+            <p className="text-sm text-[var(--color-danger)]">{oauthErr}</p>
+          )}
+
+          <p className="text-xs text-[var(--color-subtle)]">
+            Uses xAI public OAuth client (device code). Tokens stay on this device only and are
+            never committed to git.
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* Optional app identity via Grok Build broker */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">App account (optional)</CardTitle>
+          <CardDescription>
+            Grok Build app identity via Google/X (auth.grok.me). Separate from live Grok model
+            access above.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -141,12 +286,11 @@ export function SettingsView() {
                 </div>
               )}
               <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium">{user.displayName || "Grok user"}</div>
+                <div className="text-sm font-medium">{user.displayName || "Signed in"}</div>
                 <div className="truncate text-xs text-[var(--color-muted)]">
-                  {user.primaryEmail || "Signed in via Grok OAuth"}
+                  {user.primaryEmail}
                 </div>
               </div>
-              <Badge variant="success">OAuth</Badge>
               {authEnabled && (
                 <Button variant="secondary" size="sm" onClick={() => void signOut()}>
                   Sign out
@@ -154,40 +298,26 @@ export function SettingsView() {
               )}
             </div>
           ) : authEnabled ? (
-            <div className="space-y-2">
+            <div className="flex flex-wrap gap-2">
               {GROK_PROVIDERS.map((p) => (
                 <Button
                   key={p.providerId}
-                  className="w-full"
-                  variant={p.idp === "google" ? "default" : "secondary"}
+                  variant="secondary"
+                  size="sm"
                   onClick={() => void signIn(p.providerId, { callbackURL: "/" })}
                 >
-                  Continue with {p.label}
+                  {p.label}
                 </Button>
               ))}
-              <p className="text-center text-xs text-[var(--color-subtle)]">
-                Or open the{" "}
-                <Link to="/login" className="underline underline-offset-2">
-                  sign-in page
-                </Link>
-              </p>
+              <Link
+                to="/login"
+                className="self-center text-xs text-[var(--color-muted)] underline-offset-2 hover:underline"
+              >
+                Full sign-in page
+              </Link>
             </div>
           ) : (
-            <p className="text-sm text-[var(--color-muted)]">Auth is disabled in this build.</p>
-          )}
-          {profile.models.length > 0 && (
-            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
-              <div className="text-[10px] uppercase tracking-wide text-[var(--color-subtle)]">
-                Models from xAI
-              </div>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {profile.models.slice(0, 12).map((m) => (
-                  <Badge key={m} className="font-mono text-[10px]">
-                    {m}
-                  </Badge>
-                ))}
-              </div>
-            </div>
+            <p className="text-sm text-[var(--color-muted)]">Auth disabled.</p>
           )}
         </CardContent>
       </Card>
@@ -196,32 +326,23 @@ export function SettingsView() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">xAI API key (chat)</CardTitle>
+          <CardTitle className="text-sm">xAI API key (optional fallback)</CardTitle>
           <CardDescription>
-            Agent replies use the live xAI API. Key from console.x.ai — or env{" "}
-            <span className="font-mono">XAI_API_KEY</span>. Stored only on this device.
+            Pay-per-token console key if you are not using SuperGrok OAuth. From{" "}
+            <span className="font-mono">console.x.ai</span>.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={grokConnected ? "success" : "default"}>
-              {grokConnected ? "API connected" : "API not connected"}
-            </Badge>
-            <span className="text-xs text-[var(--color-muted)]">{grokStatusDetail}</span>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-[var(--color-muted)]">xAI API key</label>
-            <Input
-              type="password"
-              autoComplete="off"
-              value={keyDraft}
-              onChange={(e) => setKeyDraft(e.target.value)}
-              placeholder="xai-…"
-            />
-          </div>
+          <Input
+            type="password"
+            autoComplete="off"
+            value={keyDraft}
+            onChange={(e) => setKeyDraft(e.target.value)}
+            placeholder="xai-…"
+          />
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => void saveAndProbe()} disabled={probing}>
-              {probing ? "Testing…" : "Save & test"}
+              {probing ? "Testing…" : "Save & test key"}
             </Button>
             <Button
               variant="secondary"
@@ -236,12 +357,27 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
+      {profile.models.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Models from your connection</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-1">
+              {profile.models.slice(0, 16).map((m) => (
+                <Badge key={m} className="font-mono text-[10px]">
+                  {m}
+                </Badge>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-sm">Updates (GitHub)</CardTitle>
-          <CardDescription>
-            Install the latest clean release from the public package repo.
-          </CardDescription>
+          <CardDescription>Install the latest clean release from the package repo.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {update && (
@@ -254,29 +390,18 @@ export function SettingsView() {
                   <Badge variant="success">Up to date</Badge>
                 )}
               </div>
-              <div className="mt-2 space-y-1 font-mono text-xs text-[var(--color-muted)]">
-                <div>
-                  local {update.currentSha || "—"} → remote {update.remoteSha || "—"}
-                </div>
-                <div>
-                  {update.repo}@{update.branch}
-                </div>
-                <div>{update.detail}</div>
+              <div className="mt-2 font-mono text-xs text-[var(--color-muted)]">
+                {update.detail}
               </div>
             </div>
           )}
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-[var(--color-muted)]">
-              GitHub token (optional, private repo)
-            </label>
-            <Input
-              type="password"
-              autoComplete="off"
-              value={ghDraft}
-              onChange={(e) => setGhDraft(e.target.value)}
-              placeholder="ghp_… or github_pat_…"
-            />
-          </div>
+          <Input
+            type="password"
+            autoComplete="off"
+            value={ghDraft}
+            onChange={(e) => setGhDraft(e.target.value)}
+            placeholder="GitHub token (optional)"
+          />
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" disabled={updateBusy} onClick={() => void onCheckUpdate()}>
               Check for updates
@@ -299,9 +424,7 @@ export function SettingsView() {
       <Card>
         <CardHeader>
           <CardTitle className="text-sm">Model modes</CardTitle>
-          <CardDescription>
-            Auto, Fast, Expert, Heavy, Build — mapped to live xAI Grok models after you connect.
-          </CardDescription>
+          <CardDescription>Mapped to live xAI models after you connect.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
           {GROK_MODES.map((m) => {
@@ -319,15 +442,10 @@ export function SettingsView() {
                 )}
               >
                 <div>
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    {m.label}
-                    {m.id === "build" && <Badge className="text-[10px]">Beta</Badge>}
-                  </div>
+                  <div className="text-sm font-medium">{m.label}</div>
                   <div className="text-xs text-[var(--color-muted)]">{m.subtitle}</div>
                 </div>
-                {selected && (
-                  <span className="text-xs text-[var(--color-muted)]">Active</span>
-                )}
+                {selected && <span className="text-xs text-[var(--color-muted)]">Active</span>}
               </button>
             );
           })}
@@ -337,27 +455,23 @@ export function SettingsView() {
       <Card>
         <CardHeader>
           <CardTitle className="text-sm">Desktop host</CardTitle>
-          <CardDescription>
-            Unsandboxed shell, files, and apps. Opens from the Desktop tab.
-          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent>
           <Button onClick={() => setNav("desktop")}>Open Desktop host</Button>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Arch Linux desktop shell</CardTitle>
-          <CardDescription>Window auto-fits the work area on launch.</CardDescription>
+          <CardTitle className="text-sm">Arch Linux shell preferences</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {(
             [
-              ["wayland", "Prefer Wayland", "Ozone flags for Hyprland / KDE / GNOME"],
+              ["wayland", "Prefer Wayland", "Ozone flags"],
               ["tray", "System tray", "Minimize to tray"],
-              ["launchOnLogin", "Launch on login", "Autostart entry"],
-              ["startMinimized", "Start minimized", "Boot to tray only"],
+              ["launchOnLogin", "Launch on login", "Autostart"],
+              ["startMinimized", "Start minimized", "Tray only"],
             ] as const
           ).map(([key, label, hint]) => (
             <label

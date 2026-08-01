@@ -47,7 +47,10 @@ export type GrokChatMessage = {
 };
 
 export type GrokChatRequest = {
+  /** Console API key (xai-…) */
   apiKey?: string;
+  /** OAuth access token from SuperGrok / X Premium device-code login */
+  accessToken?: string;
   mode?: GrokModeId;
   messages: GrokChatMessage[];
   model?: string;
@@ -64,18 +67,27 @@ export type GrokChatResult = {
   status?: number;
 };
 
+function resolveBearer(req: GrokChatRequest): { bearer: string; source: "oauth" | "key" | "env" } | null {
+  if (req.accessToken?.trim()) {
+    return { bearer: req.accessToken.trim(), source: "oauth" };
+  }
+  if (req.apiKey?.trim()) {
+    return { bearer: req.apiKey.trim(), source: "key" };
+  }
+  const env =
+    process.env.XAI_API_KEY?.trim() || process.env.GROK_API_KEY?.trim() || "";
+  if (env) return { bearer: env, source: "env" };
+  return null;
+}
+
 export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult> {
-  const apiKey =
-    req.apiKey?.trim() ||
-    process.env.XAI_API_KEY?.trim() ||
-    process.env.GROK_API_KEY?.trim() ||
-    "";
-  if (!apiKey) {
+  const auth = resolveBearer(req);
+  if (!auth) {
     return {
       ok: false,
       status: 401,
       error:
-        "No xAI API key. Add one in Settings (XAI_API_KEY) or set the XAI_API_KEY environment variable.",
+        "Not connected to Grok. Use Settings → Connect with Grok OAuth (SuperGrok / X Premium) or paste an xAI API key.",
     };
   }
 
@@ -94,7 +106,7 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
+        authorization: `Bearer ${auth.bearer}`,
       },
       body: JSON.stringify({
         model,
@@ -153,4 +165,8 @@ export async function probeXaiKey(apiKey: string): Promise<{ ok: boolean; detail
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : "probe failed" };
   }
+}
+
+export async function probeXaiBearer(bearer: string): Promise<{ ok: boolean; detail: string }> {
+  return probeXaiKey(bearer);
 }

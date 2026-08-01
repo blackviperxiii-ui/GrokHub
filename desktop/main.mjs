@@ -143,13 +143,23 @@ function registerIpc() {
   ipcMain.handle("host:openApp", (_e, opts) => host.openApp(opts || {}));
 
   ipcMain.handle("grok:chat", (_e, payload) => grokBridge.callXaiChat(payload || {}));
-  ipcMain.handle("grok:probe", async (_e, apiKey) => {
-    const r = await grokBridge.probeXaiKey(apiKey);
+  ipcMain.handle("grok:probe", async (_e, apiKey, accessToken) => {
+    const bearer =
+      (accessToken && String(accessToken)) ||
+      (apiKey && String(apiKey)) ||
+      process.env.XAI_API_KEY ||
+      process.env.GROK_API_KEY ||
+      "";
+    const r = await grokBridge.probeXaiKey(bearer);
     return {
       ...r,
       envConfigured: Boolean(process.env.XAI_API_KEY || process.env.GROK_API_KEY),
+      authMode: accessToken ? "oauth" : apiKey ? "apiKey" : "env",
     };
   });
+  ipcMain.handle("grok:oauthStart", () => grokBridge.oauthStart());
+  ipcMain.handle("grok:oauthPoll", (_e, deviceCode) => grokBridge.oauthPoll(deviceCode));
+  ipcMain.handle("grok:oauthEnsure", (_e, tokens) => grokBridge.oauthEnsure(tokens));
   ipcMain.handle("update:check", (_e, opts) => grokBridge.checkForUpdate(opts || {}));
   ipcMain.handle("update:apply", (_e, opts) => grokBridge.applyUpdate(opts || {}));
 }

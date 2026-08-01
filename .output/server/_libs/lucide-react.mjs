@@ -258,6 +258,26 @@ var Download = createLucideIcon("download", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var ExternalLink = createLucideIcon("external-link", [
+	["path", {
+		d: "M15 3h6v6",
+		key: "1q9fwt"
+	}],
+	["path", {
+		d: "M10 14 21 3",
+		key: "gplh6r"
+	}],
+	["path", {
+		d: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6",
+		key: "a6xqqp"
+	}]
+]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var FolderOpen = createLucideIcon("folder-open", [["path", {
 	d: "m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2",
 	key: "usdka0"
@@ -746,4 +766,4 @@ var Zap = createLucideIcon("zap", [["path", {
 	key: "1xq2db"
 }]]);
 //#endregion
-export { ChevronRight as A, HardDrive as C, FolderOpen as D, Folder as E, AppWindow as F, Activity as I, Cable as M, Brain as N, Download as O, ArrowRight as P, History as S, Gauge as T, MessageSquarePlus as _, TimerReset as a, Link2Off as b, Sparkles as c, Send as d, RefreshCw as f, MessageSquare as g, Minus as h, Trash2 as i, Check as j, Command as k, ShieldAlert as l, Play as m, X as n, Terminal as o, Plus as p, Users as r, Square as s, Zap as t, Settings as u, Menu as v, Hammer as w, Image as x, LoaderCircle as y };
+export { Command as A, HardDrive as C, FolderOpen as D, Folder as E, ArrowRight as F, AppWindow as I, Activity as L, Check as M, Cable as N, ExternalLink as O, Brain as P, History as S, Gauge as T, MessageSquarePlus as _, TimerReset as a, Link2Off as b, Sparkles as c, Send as d, RefreshCw as f, MessageSquare as g, Minus as h, Trash2 as i, ChevronRight as j, Download as k, ShieldAlert as l, Play as m, X as n, Terminal as o, Plus as p, Users as r, Square as s, Zap as t, Settings as u, Menu as v, Hammer as w, Image as x, LoaderCircle as y };
