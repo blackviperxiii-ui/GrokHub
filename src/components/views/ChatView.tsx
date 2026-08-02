@@ -96,7 +96,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
     Boolean(m.streaming) &&
     m.role === "assistant" &&
     (busy || Boolean(streamStatus)) &&
-    (streamingMessageId == null || m.id === streamingMessageId);
+    streamingMessageId != null &&
+    m.id === streamingMessageId;
   return (
     <div
       className={cn(
@@ -411,6 +412,7 @@ export function ChatView() {
   const setReplyTo = useGrokHub((s) => s.setReplyTo);
   const [text, setText] = useState("");
   const [localRunning, setLocalRunning] = useState(false);
+  const localHostJobRef = useRef<string | null>(null);
   const [pendingBusy, setPendingBusy] = useState(false);
   const [hostOnline, setHostOnline] = useState<boolean | undefined>(undefined);
   const [historyExtra, setHistoryExtra] = useState(0);
@@ -658,6 +660,8 @@ export function ChatView() {
 
   async function runShell(command: string) {
     setLocalRunning(true);
+    const jobId = `local-host-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    localHostJobRef.current = jobId;
     const userLine = command.startsWith("$") ? command : `$ ${command}`;
     useGrokHub.setState((s) => {
       const nextChat = [
@@ -684,7 +688,13 @@ export function ChatView() {
         return;
       }
       const { hostExec } = await import("@/lib/host-client");
-      const r = await hostExec(command.replace(/^\$\s*/, "").replace(/^\/sh\s+/, ""));
+      const r = await hostExec(
+        command.replace(/^\$\s*/, "").replace(/^\/sh\s+/, ""),
+        undefined,
+        undefined,
+        { jobId },
+      );
+      if (localHostJobRef.current !== jobId) return;
       const out = [
         r.ok ? "```" : "```text",
         `$ ${r.command || command}`,
@@ -712,6 +722,7 @@ export function ChatView() {
         return { chat: nextChat, threads: nextThreads, running: false, streamStatus: null };
       });
     } catch (e) {
+      if (localHostJobRef.current !== jobId) return;
       useGrokHub.setState((s) => ({
         chat: [
           ...s.chat,
@@ -726,6 +737,7 @@ export function ChatView() {
         streamStatus: null,
       }));
     } finally {
+      if (localHostJobRef.current === jobId) localHostJobRef.current = null;
       setLocalRunning(false);
     }
   }
@@ -1008,8 +1020,13 @@ export function ChatView() {
 
   function onStop() {
     setPendingBusy(false);
-    if (localRunning) {
+    if (localRunning || localHostJobRef.current) {
+      const jid = localHostJobRef.current;
+      localHostJobRef.current = null;
       setLocalRunning(false);
+      if (jid) {
+        void import("@/lib/host-client").then(({ hostKillExec }) => hostKillExec(jid)).catch(() => {});
+      }
       useGrokHub.setState({ running: false, streamStatus: null });
       return;
     }

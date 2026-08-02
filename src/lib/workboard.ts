@@ -184,16 +184,22 @@ export function setWorkItemStatus(
 ): WorkboardState {
   const q = idOrTitle.trim().toLowerCase();
   const now = Date.now();
+  // Prefer exact id, then exact title, then a single unique title substring — never bulk-update all partial matches
+  const byId = state.items.find((i) => i.id === idOrTitle || i.id.toLowerCase() === q);
+  const byExactTitle = state.items.find((i) => i.title.toLowerCase() === q);
+  const bySub = state.items.filter((i) => i.title.toLowerCase().includes(q));
+  const target =
+    byId ||
+    byExactTitle ||
+    (bySub.length === 1 ? bySub[0] : null);
+  if (!target) return state;
   return {
     version: 1,
-    items: state.items.map((i) => {
-      const match =
-        i.id === idOrTitle ||
-        i.id.toLowerCase() === q ||
-        i.title.toLowerCase().includes(q);
-      if (!match) return i;
-      return { ...i, status, updatedAt: now, lastTouchedAt: now };
-    }),
+    items: state.items.map((i) =>
+      i.id === target.id
+        ? { ...i, status, updatedAt: now, lastTouchedAt: now }
+        : i,
+    ),
     updatedAt: now,
   };
 }

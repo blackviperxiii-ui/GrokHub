@@ -493,7 +493,7 @@ export function AppShell() {
   const showOffline = grokConnected === false && !oauth?.accessToken && !apiKey;
 
   const primaryNav = NAV.filter((item) =>
-    ["chat", "history", "imagine", "command"].includes(item.id),
+    ["chat", "history", "command", "workboard", "imagine"].includes(item.id),
   );
   const toolsNav = NAV.filter((item) =>
     ["connectors", "skills", "automations", "agents", "settings"].includes(item.id),

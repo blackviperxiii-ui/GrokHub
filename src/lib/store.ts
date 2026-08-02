@@ -120,7 +120,8 @@ import type { QuickChip } from "./quick-assistant";
 /** Waits for user approval of host commands (agent tool loop). */
 let hostConfirmWaiter: ((allow: boolean) => void) | null = null;
 /** In-flight host exec job id (for Stop → killExec). */
-let activeHostJobId: string | null = null;
+const activeHostJobIds = new Set<string>();
+let activeHostJobId: string | null = null; // last job (compat)
 
 function requestHostConfirm(
   set: (partial: Partial<State> | ((s: State) => Partial<State>)) => void,
@@ -2078,6 +2079,9 @@ export const useGrokHub = create<State>()(
       },
 
       newThread: () => {
+        if (get().running || get().streamingMessageId) {
+          try { get().stopChat(); } catch { /* ignore */ }
+        }
         const now = Date.now();
         // Empty thread — no repeating welcome spam on every New chat / restart
         const thread: ChatThread = {
@@ -2124,6 +2128,9 @@ export const useGrokHub = create<State>()(
       },
 
       deleteThread: (id) => {
+        if (get().activeThreadId === id && (get().running || get().streamingMessageId)) {
+          try { get().stopChat(); } catch { /* ignore */ }
+        }
         const remaining = get().threads.filter((t) => t.id !== id);
         if (remaining.length === 0) {
           get().newThread();
@@ -2271,6 +2278,9 @@ export const useGrokHub = create<State>()(
 
 
       clearChat: () => {
+        if (get().running || get().streamingMessageId) {
+          try { get().stopChat(); } catch { /* ignore */ }
+        }
         const tid = get().activeThreadId;
         set((s) => ({
           chat: [],
@@ -2590,7 +2600,7 @@ export const useGrokHub = create<State>()(
               host: base.host + (bucket === "host" ? 1 : 0),
               byMode,
               lastPolledAt: Date.now(),
-              source: "local",
+              source: base.source === "website" ? "website" : "local",
             },
           };
         });
@@ -2613,6 +2623,7 @@ export const useGrokHub = create<State>()(
           const lim = PLAN_LIMITS[base.plan];
           if (base.usedUnits + cost > lim.units * 1.05) {
             ok = false;
+            return { usage: base };
           }
           const prompt = tokens.prompt_tokens ?? 0;
           const completion = tokens.completion_tokens ?? Math.max(0, (tokens.total_tokens ?? 0) - prompt);
@@ -2629,7 +2640,7 @@ export const useGrokHub = create<State>()(
               completionTokens: base.completionTokens + completion,
               totalTokens: base.totalTokens + total,
               lastPolledAt: Date.now(),
-              source: "live",
+              source: base.source === "website" ? "website" : "live",
               rateLimitRemaining: rateLimit?.remaining ?? base.rateLimitRemaining ?? null,
               rateLimitLimit: rateLimit?.limit ?? base.rateLimitLimit ?? null,
               rateLimitResetAt: rateLimit?.resetAt ?? base.rateLimitResetAt ?? null,
@@ -3141,9 +3152,6 @@ export const useGrokHub = create<State>()(
         }
         const { computeNextRun } = await import("./automation-schedule");
         set((s) => ({
-          running: false,
-          streamStatus: null,
-          streamingMessageId: null,
           automations: s.automations.map((a) =>
             a.id === id
               ? {
@@ -3261,9 +3269,11 @@ export const useGrokHub = create<State>()(
           /* ignore */
         }
         activeChatAbort = null;
-        const killId = activeHostJobId;
+        const killIds = [...activeHostJobIds];
+        if (activeHostJobId) killIds.push(activeHostJobId);
+        activeHostJobIds.clear();
         activeHostJobId = null;
-        if (killId) {
+        for (const killId of [...new Set(killIds)]) {
           void import("./host-client").then(({ hostKillExec }) => hostKillExec(killId)).catch(() => {});
         }
         try {
@@ -3277,18 +3287,19 @@ export const useGrokHub = create<State>()(
         let partial = "";
         let pendingPrompt = "";
         set((s) => {
-          const chat = s.chat.map((m) =>
-            m.id === sid
-              ? {
-                  ...m,
-                  streaming: false,
-                  stopped: true,
-                  content: m.content?.trim()
-                    ? `${m.content}${m.content.endsWith("\n") ? "" : "\n"}\n_Stopped._`
-                    : "_Stopped._",
-                }
-              : m,
-          );
+          const chat = s.chat.map((m) => {
+            if (m.id === sid) {
+              const base = (m.content || "").trim();
+              return {
+                ...m,
+                streaming: false,
+                stopped: true,
+                content: base ? `${base}\n_Stopped._` : "_Stopped._",
+              };
+            }
+            if (m.streaming) return { ...m, streaming: false };
+            return m;
+          });
           const stopped = chat.find((m) => m.id === sid);
           partial = (stopped?.content || "").replace(/\n*_Stopped\._\s*$/m, "").trim();
           const lastUser = [...chat].reverse().find((m) => m.role === "user");
@@ -3837,6 +3848,8 @@ if (cmd === "tools") {
             nav: "imagine",
             imaginePrompt: trimmed,
           }));
+          if (activeChatAbort === abort) activeChatAbort = null;
+          endChatTurnPersist();
           return;
         }
         const routed = resolveModeWithCatalog(mode, trimmed, catalog, routeCtx);
@@ -3861,6 +3874,8 @@ if (cmd === "tools") {
               streamStatus: null,
               streamingMessageId: null,
             }));
+            if (activeChatAbort === abort) activeChatAbort = null;
+            endChatTurnPersist();
             return;
           }
         }
@@ -4657,13 +4672,13 @@ if (!cmds.length) {
                   }, 1000);
                   try {
                     const jobId = `host-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-                    activeHostJobId = jobId;
+                    activeHostJobId = jobId; activeHostJobIds.add(jobId);
                     let r;
                     try {
                       r = await hostExec(cmd, undefined, timeoutMs, { jobId });
                     } finally {
                       clearInterval(hostTick);
-                      if (activeHostJobId === jobId) activeHostJobId = null;
+                      activeHostJobIds.delete(jobId); if (activeHostJobId === jobId) activeHostJobId = null;
                     }
                     const out = clipHostOutput(
                       [
@@ -4808,7 +4823,7 @@ if (!cmds.length) {
         }
 
         if (gen !== chatGeneration) {
-          // Superseded by a newer send — still clear THIS bubble if it still owns stream
+          // Superseded — clear THIS bubble only; do not unpause persist if a newer turn owns it
           try {
             if (get().streamingMessageId === botId || get().chat.some((m) => m.id === botId && m.streaming)) {
               finalizeChatStream(set, botId);
@@ -4816,7 +4831,9 @@ if (!cmds.length) {
           } catch {
             /* ignore */
           }
-          endChatTurnPersist();
+          if (activeChatAbort === abort) {
+            endChatTurnPersist();
+          }
           return;
         }
 
@@ -5034,10 +5051,11 @@ if (!cmds.length) {
         } finally {
         // Safety net: never leave bubbles in streaming state after turn ends
         try {
-          const stuck = get().chat.some(
-            (m) => m.id === botId && m.streaming,
-          ) || get().streamingMessageId === botId || get().running;
-          if (stuck || get().streamStatus) {
+          const owns =
+            get().streamingMessageId === botId ||
+            get().chat.some((m) => m.id === botId && m.streaming);
+          // Never tear down a newer turn (bare get().running is wrong here)
+          if (owns) {
             finalizeChatStream(set, botId);
           }
         } catch {
@@ -5052,12 +5070,17 @@ if (!cmds.length) {
           }
         }
 
-        if (activeChatAbort === abort) activeChatAbort = null;
-        endChatTurnPersist();
-        get().setAgentStatus("primary", "idle", 0);
-        get().setAgentStatus("builder", "idle", 0);
-        get().setAgentStatus("research", "idle", 0);
-        get().setAgentStatus("ops", "idle", 0);
+        const ours = activeChatAbort === abort;
+        if (ours) activeChatAbort = null;
+        if (ours || gen === chatGeneration) {
+          endChatTurnPersist();
+        }
+        if (ours || gen === chatGeneration) {
+          get().setAgentStatus("primary", "idle", 0);
+          get().setAgentStatus("builder", "idle", 0);
+          get().setAgentStatus("research", "idle", 0);
+          get().setAgentStatus("ops", "idle", 0);
+        }
         }
       },
 
@@ -5608,8 +5631,11 @@ function finalizeChatStream(
   botId: string,
   opts?: { content?: string; markStopped?: boolean },
 ) {
-  set((s: any) => {
-    const chat = s.chat.map((row: any) => {
+  set((s) => {
+    const owns =
+      s.streamingMessageId === botId ||
+      s.chat.some((row: { id: string; streaming?: boolean }) => row.id === botId && row.streaming);
+    const chat = s.chat.map((row: ChatMessage) => {
       if (row.id === botId) {
         return {
           ...row,
@@ -5620,23 +5646,23 @@ function finalizeChatStream(
             : {}),
         };
       }
-      // Clear any orphaned streaming assistants
-      if (row.role === "assistant" && row.streaming) {
+      // Only clear other orphans if we still own the stream slot
+      if (owns && row.role === "assistant" && row.streaming) {
         return { ...row, streaming: false };
       }
       return row;
     });
     const tid = s.activeThreadId;
-    const threads = s.threads.map((th: any) => {
+    const threads = s.threads.map((th: ChatThread) => {
       if (th.id === tid) {
         return { ...th, messages: chat, updatedAt: Date.now() };
       }
-      if (!Array.isArray(th.messages)) return th;
-      const msgs = th.messages.map((m: any) =>
-        m.streaming ? { ...m, streaming: false } : m,
-      );
-      return msgs === th.messages ? th : { ...th, messages: msgs };
+      return th;
     });
+    if (!owns) {
+      // Another turn owns the stream — only patch this bot bubble in chat/threads
+      return { chat, threads };
+    }
     return {
       chat,
       threads,
@@ -5647,10 +5673,10 @@ function finalizeChatStream(
   });
 }
 
-
 function endChatTurnPersist() {
   void import("./persistent-storage").then(({ setPersistPaused }) => setPersistPaused(false));
   activeHostJobId = null;
+  activeHostJobIds.clear();
 }
 
 /** Active chat stream abort (module-level so Stop works across re-renders) */
