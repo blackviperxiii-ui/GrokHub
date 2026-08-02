@@ -24,6 +24,18 @@ import {
   memoryFsInfo,
 } from "./file-memory";
 
+/** Skip meta complaints that bloat MEMORY and re-trigger mid-session. */
+const NOISE_TOPIC =
+  /\b(stream(ing)?|stuck|check again|you keep|breaking|self-?improv|learning loop|placeholder|still broken|look again)\b/i;
+
+function isNoisyTopic(s0: string): boolean {
+  const s = s0.trim();
+  if (s.length < 8) return true;
+  if (NOISE_TOPIC.test(s) && s.length < 160) return true;
+  if (/^(fix|check|look|update|push)\b/i.test(s) && s.length < 48) return true;
+  return false;
+}
+
 export type TurnLearnInput = {
   ok: boolean;
   mode: GrokModeId;
@@ -65,7 +77,7 @@ export function extractSessionSignals(userText: string, assistantText: string): 
       .replace(/^\/\w+\s*/, "")
       .slice(0, 120)
       .trim();
-    if (topic) topics.push(topic);
+    if (topic && !isNoisyTopic(topic)) topics.push(topic);
   }
 
   // Paths
@@ -94,10 +106,10 @@ export function extractSessionSignals(userText: string, assistantText: string): 
     prefs.push("User sometimes wants thorough / deep-dive answers");
   }
   if (/\b(fix|bug|broken|doesn't work|not working)\b/i.test(user)) {
-    topics.push("Debugging / fixing something broken");
+    if (!isNoisyTopic(user)) topics.push("Debugging / fixing something broken");
   }
   if (/\b(self-?improv|learning|memory)\b/i.test(user)) {
-    facts.push("User is actively working on GrokHub learning/memory features");
+    // Don't re-log learning meta every turn — only once as a soft fact later via prefs
   }
   if (/\b(workboard|HOST_CMD|desktop host)\b/i.test(user + asst)) {
     facts.push("Session uses desktop host / agent tooling");
@@ -170,14 +182,19 @@ export async function applyTurnLearning(
     });
   }
   for (const t of signals.topics) {
+    if (isNoisyTopic(t)) continue;
+    // Skip re-logging identical focus within existing insights
+    const key = `topic:${t.toLowerCase().slice(0, 40)}`;
+    if (learning.insights.some((i) => i.key === key && i.hits >= 1)) continue;
     learning = upsertInsight(learning, {
-      key: `topic:${t.toLowerCase().slice(0, 40)}`,
+      key,
       text: `Recent focus: ${t}`,
       confidence: 0.45,
       source: "distill",
     });
   }
   for (const f of signals.facts) {
+    if (isNoisyTopic(f)) continue;
     learning = upsertInsight(learning, {
       key: `fact:${f.toLowerCase().slice(0, 40)}`,
       text: f,
@@ -217,8 +234,8 @@ export async function applyTurnLearning(
 
   // --- Disk writes (best effort, always attempt) ---
   const memoryFacts = [
-    ...signals.facts,
-    ...signals.topics.map((t) => `Focus: ${t}`),
+    ...signals.facts.filter((f) => !isNoisyTopic(f)),
+    ...signals.topics.filter((t) => !isNoisyTopic(t)).map((t) => `Focus: ${t}`),
   ];
   const userFacts = signals.prefs;
 

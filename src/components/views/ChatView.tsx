@@ -89,6 +89,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onDelete,
   onRate,
 }: MessageRowProps) {
+  // Prefer live stream ownership over stale m.streaming flags after turn ends
+  const showStreaming =
+    Boolean(m.streaming) &&
+    m.role === "assistant" &&
+    (busy || Boolean(streamStatus));
   return (
     <div
       className={cn(
@@ -104,7 +109,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
             : m.role === "system"
               ? "border-[var(--color-border)] bg-[var(--color-panel)] text-[var(--color-muted)]"
               : "border-[var(--color-border)] bg-[var(--color-panel)] text-[var(--color-fg)]",
-          m.streaming &&
+          showStreaming &&
             "border-[color-mix(in_oklab,var(--color-info)_45%,var(--color-border))] shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-info)_20%,transparent)]",
         )}
       >
@@ -169,7 +174,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
               {m.routeModel.replace(/^grok-/, "")}
             </span>
           )}
-          {m.streaming && (
+          {showStreaming && (
             <span
               className="inline-flex max-w-[min(100%,18rem)] items-center gap-1 rounded border border-[color-mix(in_oklab,var(--color-info)_40%,transparent)] px-1.5 py-px font-mono normal-case text-[var(--color-info)]"
               title={streamStatus || "Working…"}
@@ -211,7 +216,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
             </div>
           ) : (
             <>
-              <MarkdownBody content={m.content} streaming={Boolean(m.streaming)} />
+              <MarkdownBody content={m.content} streaming={showStreaming} />
               {m.streaming && streamStatus ? (
                 <div
                   className="mt-2 flex items-center gap-2 border-t border-[var(--color-border)] pt-2 text-[11px] text-[var(--color-muted)]"
@@ -224,7 +229,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
               ) : null}
             </>
           )
-        ) : m.streaming ? (
+        ) : showStreaming ? (
           <span className="inline-flex items-center gap-2 text-sm text-[var(--color-muted)]" role="status" aria-live="polite">
             <span className="relative flex h-2 w-2">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--color-info)] opacity-60" />
@@ -236,7 +241,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           ""
         )}
 
-        {m.content && !m.streaming && (
+        {m.content && !showStreaming && (
           <div
             className={cn(
               "mt-2 flex flex-wrap items-center gap-0.5 border-t border-[var(--color-border)] pt-1.5",
@@ -509,6 +514,35 @@ export function ChatView() {
       return;
     }
     endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chat, busy, streamStatus]);
+
+  // Heal stale streaming flags left after aborted/interrupted turns
+  useEffect(() => {
+    if (busy || streamStatus) return;
+    const stuck = chat.some((m) => m.role === "assistant" && m.streaming);
+    if (!stuck) return;
+    useGrokHub.setState((s) => {
+      const nextChat = s.chat.map((m) =>
+        m.streaming ? { ...m, streaming: false } : m,
+      );
+      const threads = s.threads.map((th) =>
+        th.id === s.activeThreadId
+          ? { ...th, messages: nextChat, updatedAt: Date.now() }
+          : {
+              ...th,
+              messages: (th.messages || []).map((m) =>
+                m.streaming ? { ...m, streaming: false } : m,
+              ),
+            },
+      );
+      return {
+        chat: nextChat,
+        threads,
+        streamingMessageId: null,
+        streamStatus: null,
+        running: false,
+      };
+    });
   }, [chat, busy, streamStatus]);
 
   useEffect(() => {

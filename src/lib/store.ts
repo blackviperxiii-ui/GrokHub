@@ -3721,6 +3721,7 @@ if (cmd === "tools") {
         const abort = new AbortController();
         activeChatAbort = abort;
         const gen = ++chatGeneration;
+        const pendingMemoryNotes: string[] = [];
 
         void import("./persistent-storage").then(({ setPersistPaused }) => setPersistPaused(true));
         set((s) => {
@@ -4263,13 +4264,11 @@ while (rounds < maxRounds && !aborted) {
                 } catch {
                   /* ignore */
                 }
-                // Agent durable notes → MEMORY.md + learning
+                // Collect MEMORY_NOTE for post-stream write (never block stream)
                 try {
                   const mn = extractMemoryNotes(fullRaw);
                   if (mn.notes.length) {
-                    const nextL = await applyAgentMemoryNotes(get().learning, mn.notes);
-                    set({ learning: nextL });
-                    void get().flushLearningToDisk();
+                    pendingMemoryNotes.push(...mn.notes);
                   }
                 } catch {
                   /* ignore */
@@ -4787,6 +4786,14 @@ if (!cmds.length) {
         }
 
         if (gen !== chatGeneration) {
+          // Superseded by a newer send — still clear THIS bubble if it still owns stream
+          try {
+            if (get().streamingMessageId === botId || get().chat.some((m) => m.id === botId && m.streaming)) {
+              finalizeChatStream(set, botId);
+            }
+          } catch {
+            /* ignore */
+          }
           endChatTurnPersist();
           return;
         }
@@ -4849,20 +4856,25 @@ if (!cmds.length) {
           } catch {
             /* ignore */
           }
-          try {
-            const turn = await applyTurnLearning(get().learning, {
-              ok: false,
-              mode: routed,
-              routeTier: auto?.tier,
-              userText: trimmed,
-              assistantText: finalAnswer || "",
-              threadId: get().activeThreadId || undefined,
-              online: Boolean(get().oauth?.accessToken || get().apiKey),
-            });
-            set({ learning: turn.learning });
-          } catch {
-            /* ignore */
-          }
+          void (async () => {
+            try {
+              await wait(0);
+              if (get().running) return;
+              const turn = await applyTurnLearning(get().learning, {
+                ok: false,
+                mode: routed,
+                routeTier: auto?.tier,
+                userText: trimmed,
+                assistantText: finalAnswer || "",
+                threadId: get().activeThreadId || undefined,
+                online: Boolean(get().oauth?.accessToken || get().apiKey),
+              });
+              if (get().running) return;
+              set({ learning: turn.learning });
+            } catch {
+              /* ignore */
+            }
+          })();
         } else {
           const answer = stripHostCommands(stripAssistantChrome(finalAnswer || ""));
           set((s) => {
@@ -4905,10 +4917,11 @@ if (!cmds.length) {
           } catch {
             /* ignore */
           }
-          try {
+          // Learning is post-stream only — never await on the UI/stream path
+          {
             const botRow = get().chat.find((m) => m.id === botId);
             const th = get().threads.find((x) => x.id === get().activeThreadId);
-            const turn = await applyTurnLearning(get().learning, {
+            const snap = {
               ok: Boolean(usedLive) || Boolean(answer?.trim()),
               mode: routed,
               routeTier: botRow?.routeTier || auto?.tier,
@@ -4920,20 +4933,59 @@ if (!cmds.length) {
               usedHostTools: /host|HOST_CMD|Desktop host/i.test(answer || ""),
               usedConnectors: /connector|CONNECTOR_CMD/i.test(answer || ""),
               online: Boolean(get().oauth?.accessToken || get().apiKey),
+            };
+            void (async () => {
+              try {
+                // Yield so React paints streaming:false first
+                await wait(0);
+                if (pendingMemoryNotes.length) {
+                  try {
+                    const nextL = await applyAgentMemoryNotes(
+                      get().learning,
+                      pendingMemoryNotes,
+                    );
+                    if (!get().running) set({ learning: nextL });
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                const turn = await applyTurnLearning(get().learning, snap);
+                // Only apply if still same thread (avoid clobber mid-new-turn)
+                if (get().running) return;
+                set({ learning: turn.learning });
+                if (turn.didReflect) {
+                  get().pushActivity({
+                    kind: "system",
+                    title: "Learning reflect",
+                    detail: `Wrote insights · ${turn.diskRoot || "memory"}`,
+                    status: "success",
+                  });
+                }
+                if (turn.learning.totalTurns > 0 && turn.learning.totalTurns % 12 === 0) {
+                  void get().runSelfImprove();
+                }
+              } catch {
+                /* ignore */
+              }
+            })();
+          }
+        }
+
+        // Safety net: never leave bubbles in streaming state after turn ends
+        try {
+          const stuck = get().chat.some(
+            (m) => m.id === botId && m.streaming,
+          ) || get().streamingMessageId === botId || get().running;
+          if (stuck || get().streamStatus) {
+            finalizeChatStream(set, botId);
+          }
+        } catch {
+          try {
+            set({
+              running: false,
+              streamStatus: null,
+              streamingMessageId: null,
             });
-            set({ learning: turn.learning });
-            if (turn.didReflect) {
-              get().pushActivity({
-                kind: "system",
-                title: "Learning reflect",
-                detail: `Wrote insights · ${turn.diskRoot || "memory"}`,
-                status: "success",
-              });
-            }
-            // Heavier LLM reflect less often
-            if (turn.learning.totalTurns > 0 && turn.learning.totalTurns % 12 === 0) {
-              void get().runSelfImprove();
-            }
           } catch {
             /* ignore */
           }
@@ -5465,6 +5517,55 @@ if (!cmds.length) {
 function wait(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+/**
+ * Always clear streaming chrome for a finished/aborted/superseded turn.
+ * Prevents assistant bubbles stuck with streaming:true forever.
+ */
+function finalizeChatStream(
+  set: (fn: (s: any) => any) => void,
+  botId: string,
+  opts?: { content?: string; markStopped?: boolean },
+) {
+  set((s: any) => {
+    const chat = s.chat.map((row: any) => {
+      if (row.id === botId) {
+        return {
+          ...row,
+          streaming: false,
+          ...(opts?.markStopped ? { stopped: true } : {}),
+          ...(opts?.content != null && opts.content !== ""
+            ? { content: opts.content }
+            : {}),
+        };
+      }
+      // Clear any orphaned streaming assistants
+      if (row.role === "assistant" && row.streaming) {
+        return { ...row, streaming: false };
+      }
+      return row;
+    });
+    const tid = s.activeThreadId;
+    const threads = s.threads.map((th: any) => {
+      if (th.id === tid) {
+        return { ...th, messages: chat, updatedAt: Date.now() };
+      }
+      if (!Array.isArray(th.messages)) return th;
+      const msgs = th.messages.map((m: any) =>
+        m.streaming ? { ...m, streaming: false } : m,
+      );
+      return msgs === th.messages ? th : { ...th, messages: msgs };
+    });
+    return {
+      chat,
+      threads,
+      running: false,
+      streamStatus: null,
+      streamingMessageId: null,
+    };
+  });
+}
+
 
 function endChatTurnPersist() {
   void import("./persistent-storage").then(({ setPersistPaused }) => setPersistPaused(false));
