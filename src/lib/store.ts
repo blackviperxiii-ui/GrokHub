@@ -140,6 +140,13 @@ import { formatToolRegistryForPrompt } from "./tool-registry";
 import { buildGoalStepPrompt, parseGoalOutcome } from "./goal-loop";
 import { agentCoreEnqueue, agentCoreSetPaused, agentCoreSync } from "./agent-core-client";
 
+/** In-flight LLM auto-titles (thread id). */
+const autoTitleInflight = new Set<string>();
+/** Last successful auto-title timestamp per thread */
+const autoTitleLastAt = new Map<string, number>();
+/** Message count when we last titled */
+const autoTitleMsgCount = new Map<string, number>();
+
 /** Waits for user approval of host commands (agent tool loop). */
 let hostConfirmWaiter: ((allow: boolean) => void) | null = null;
 /** In-flight host exec job id (for Stop → killExec). */
@@ -779,6 +786,132 @@ function finalizeChatTitle(label: string): string {
   title = title.replace(/[,:;.\-–—]+$/g, "").trim();
   if (title.length < 2) return "Chat";
   return title;
+}
+
+
+/** Build a tiny transcript for fast-mode title naming. */
+function buildTitleTranscript(messages: ChatMessage[], maxTurns = 6): string {
+  const lines: string[] = [];
+  const slice = messages.filter((m) => m.role === "user" || m.role === "assistant").slice(-maxTurns);
+  for (const m of slice) {
+    const who = m.role === "user" ? "User" : "Assistant";
+    const body = String(m.content || "")
+      .replace(/```[\s\S]*?```/g, "[code]")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 280);
+    if (!body) continue;
+    lines.push(`${who}: ${body}`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Use Fast mode for a super-short chat name (summary → 2–5 words).
+ * Respects titleLocked. Heuristic title stays as interim until this lands.
+ */
+async function autoRenameThreadWithFast(
+  get: () => State,
+  set: (partial: Partial<State> | ((s: State) => Partial<State>)) => void,
+  threadId: string | null | undefined,
+): Promise<void> {
+  if (!threadId) return;
+  const th = get().threads.find((x) => x.id === threadId);
+  if (!th || th.titleLocked) return;
+  const msgs = th.id === get().activeThreadId ? get().chat : th.messages || [];
+  const users = msgs.filter((m) => m.role === "user");
+  const assts = msgs.filter((m) => m.role === "assistant" && !m.streaming);
+  if (!users.length || !assts.length) return;
+
+  // Don't spam: only re-title when new content arrived (or still "New chat")
+  const n = msgs.length;
+  const lastN = autoTitleMsgCount.get(threadId) || 0;
+  const title = (th.title || "").trim();
+  const stillGeneric =
+    !title ||
+    /^new chat$/i.test(title) ||
+    title.length < 3 ||
+    /^chat$/i.test(title);
+  if (!stillGeneric && n - lastN < 2) return;
+  const lastAt = autoTitleLastAt.get(threadId) || 0;
+  if (Date.now() - lastAt < 12_000 && !stillGeneric) return;
+  if (autoTitleInflight.has(threadId)) return;
+
+  const can =
+    Boolean(get().oauth?.accessToken || get().apiKey || get().ssoCookie) ||
+    get().preferFreeGrok !== false;
+  if (!can) return;
+
+  autoTitleInflight.add(threadId);
+  try {
+    const transcript = buildTitleTranscript(msgs, 8);
+    if (!transcript.trim()) return;
+
+    const { grokChat } = await import("./grok-client");
+    const { pickSlotModel } = await import("./models-catalog");
+    const catalog = get().modelCatalog;
+    const fastModel =
+      catalog?.slots?.fast ||
+      pickSlotModel("fast", catalog?.all || []) ||
+      undefined;
+
+    const prompt = [
+      "Summarize what this chat is about in your head, then output ONLY a super short chat title.",
+      "Rules:",
+      "- 2 to 5 words max",
+      "- No quotes, no trailing punctuation, no emojis",
+      "- No phrases like Chat about / Discussion of / Conversation",
+      "- Prefer a concrete topic (feature, bug, file, product)",
+      "- Title case preferred",
+      "",
+      "Transcript:",
+      transcript,
+      "",
+      "Title:",
+    ].join("\n");
+
+    const result = await grokChat({
+      messages: [{ role: "user", content: prompt }],
+      mode: "fast",
+      model: fastModel,
+      apiKey: get().apiKey || undefined,
+      accessToken: get().oauth?.accessToken,
+      tokens: get().oauth,
+      ssoCookie: get().ssoCookie || undefined,
+      freeTier: !get().oauth?.accessToken && !get().apiKey,
+    });
+
+    if (!result.ok || !result.content) return;
+    // Re-check lock — user may have renamed mid-flight
+    const live = get().threads.find((x) => x.id === threadId);
+    if (!live || live.titleLocked) return;
+
+    let raw = String(result.content || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l && !/^title\s*:/i.test(l)) || String(result.content);
+    raw = raw
+      .replace(/^title\s*:\s*/i, "")
+      .replace(/^["'“”]+|["'“”]+$/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const next = finalizeChatTitle(raw);
+    if (next.length < 2 || /^new chat$/i.test(next)) return;
+
+    set((s) => ({
+      threads: s.threads.map((x) =>
+        x.id === threadId && !x.titleLocked
+          ? { ...x, title: next, updatedAt: Date.now() }
+          : x,
+      ),
+    }));
+    autoTitleLastAt.set(threadId, Date.now());
+    autoTitleMsgCount.set(threadId, n);
+  } catch {
+    /* keep heuristic title */
+  } finally {
+    autoTitleInflight.delete(threadId);
+  }
 }
 
 /** Update thread messages (+ auto title unless user locked it). */
@@ -5713,6 +5846,11 @@ if (!cmds.length) {
           get().setAgentStatus("builder", "idle", 0);
           get().setAgentStatus("research", "idle", 0);
           get().setAgentStatus("ops", "idle", 0);
+          // Fast-mode LLM title (super short summary) — respects titleLocked
+          if (!aborted) {
+            const tid = get().activeThreadId;
+            void autoRenameThreadWithFast(get, set, tid);
+          }
           void get().processAgentQueue();
         }
         } // end finally
