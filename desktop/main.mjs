@@ -343,19 +343,29 @@ function createWindow() {
     process.env.GROKHUB_URL ||
     `http://127.0.0.1:${uiServer.pickPort()}`;
 
-  void mainWindow.loadURL(startUrl).catch((err) => {
-    const msg = err instanceof Error ? err.message : String(err);
+  const showLoadError = (msg) => {
+    const html = `<!doctype html><html><body style="font-family:system-ui;background:#0a0a0b;color:#eee;padding:2rem;line-height:1.5">
+      <h1 style="margin:0 0 1rem">GrokHub UI failed to load</h1>
+      <p>${String(msg || "unknown error").replace(/</g, "<")}</p>
+      <p>Tried: <code>${startUrl}</code></p>
+      <p style="color:#9ca3af">Fix: reinstall with a built <code>.output</code> folder<br/>
+      Arch: <code>sudo ./scripts/install-arch.sh</code><br/>
+      Windows: re-run the installer or <code>scripts\\install-windows.ps1</code></p>
+      <p style="color:#6b7280;font-size:12px">Logs: $XDG_RUNTIME_DIR/grokhub/ui.log or %LOCALAPPDATA%\\GrokHub\\runtime\\ui.log</p>
+    </body></html>`;
     void mainWindow.loadURL(
-      "data:text/html;charset=utf-8," +
-        encodeURIComponent(
-          `<!doctype html><html><body style="font-family:system-ui;background:#0a0a0b;color:#eee;padding:2rem">
-          <h1>GrokHub UI failed to load</h1>
-          <p>${msg}</p>
-          <p>Tried: <code>${startUrl}</code></p>
-          <p>Ensure the app was installed with a built <code>.output</code> folder, or run <code>npm run desktop:build</code>.</p>
-          </body></html>`,
-        ),
+      "data:text/html;charset=utf-8," + encodeURIComponent(html),
     );
+  };
+
+  mainWindow.webContents.on("did-fail-load", (_e, code, desc, url, isMain) => {
+    if (!isMain) return;
+    if (code === -3) return; // aborted
+    showLoadError(`${desc} (${code}) loading ${url}`);
+  });
+
+  void mainWindow.loadURL(startUrl).catch((err) => {
+    showLoadError(err instanceof Error ? err.message : String(err));
   });
 
   let saveTimer = null;

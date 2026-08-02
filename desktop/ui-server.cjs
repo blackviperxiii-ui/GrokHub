@@ -90,7 +90,35 @@ function runtimeDir() {
 /**
  * Prefer Electron-as-Node so packaged apps need no system Node install.
  */
+function whichNode() {
+  const { execFileSync } = require("node:child_process");
+  try {
+    if (process.platform === "win32") {
+      const out = execFileSync("where", ["node"], { encoding: "utf8" }).trim();
+      return out.split(/\r?\n/)[0] || "node.exe";
+    }
+    const out = execFileSync("bash", ["-lc", "command -v node"], {
+      encoding: "utf8",
+    }).trim();
+    if (out) return out;
+  } catch {
+    /* fall through */
+  }
+  return null;
+}
+
 function nodeSpawnSpec(entry) {
+  // Prefer real Node on PATH — most reliable for Nitro on Arch/system electron.
+  const nodeBin = whichNode();
+  if (nodeBin) {
+    return {
+      bin: nodeBin,
+      args: [entry],
+      envExtra: {},
+      shell: process.platform === "win32",
+    };
+  }
+  // Packaged Windows/mac without system node: Electron-as-Node
   const hasElectron =
     Boolean(process.versions.electron) ||
     /electron|grokhub/i.test(process.execPath);
@@ -104,7 +132,7 @@ function nodeSpawnSpec(entry) {
   if (process.platform === "win32") {
     return { bin: "node.exe", args: [entry], envExtra: {}, shell: true };
   }
-  return { bin: process.execPath, args: [entry], envExtra: {} };
+  return { bin: "node", args: [entry], envExtra: {}, shell: false };
 }
 
 /**
