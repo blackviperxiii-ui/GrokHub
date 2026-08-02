@@ -21,6 +21,10 @@ export type QuickAssistHit = {
   successes?: number;
   /** Failed / aborted turns after this chip */
   failures?: number;
+  /** Context fingerprints where this chip was useful (e.g. mid+code) */
+  contextTags?: string[];
+  /** Times dismissed / explicitly avoided */
+  dismisses?: number;
 };
 
 export type QuickAssistMemory = {
@@ -72,6 +76,10 @@ export function normalizeMemory(raw: unknown): QuickAssistMemory {
           : [],
         successes: Math.max(0, Number(h.successes) || 0),
         failures: Math.max(0, Number(h.failures) || 0),
+        contextTags: Array.isArray(h.contextTags)
+          ? h.contextTags.map(String).slice(0, 12)
+          : [],
+        dismisses: Math.max(0, Number(h.dismisses) || 0),
       })),
     transitions:
       m.transitions && typeof m.transitions === "object" ? m.transitions : {},
@@ -101,11 +109,19 @@ function bumpHour(hourHits: number[], hour: number): number[] {
   return arr;
 }
 
+function mergeTags(prev: string[] | undefined, tag?: string): string[] {
+  const out = [...(prev || [])];
+  if (tag && !out.includes(tag)) out.unshift(tag);
+  return out.slice(0, 12);
+}
+
 function upsertHit(
   memory: QuickAssistMemory,
   hit: Omit<QuickAssistHit, "uses" | "typedUses" | "lastUsedAt" | "hourHits"> & {
     usesDelta?: number;
     typedDelta?: number;
+    contextTag?: string;
+    dismissDelta?: number;
   },
 ): QuickAssistMemory {
   const hour = new Date().getHours();
@@ -123,6 +139,8 @@ function upsertHit(
             typedUses: h.typedUses + (hit.typedDelta ?? 0),
             lastUsedAt: Date.now(),
             hourHits: bumpHour(h.hourHits, hour),
+            contextTags: mergeTags(h.contextTags, hit.contextTag),
+            dismisses: (h.dismisses || 0) + (hit.dismissDelta ?? 0),
           }
         : h,
     );
@@ -139,6 +157,8 @@ function upsertHit(
         hourHits: bumpHour([], hour),
         successes: 0,
         failures: 0,
+        contextTags: hit.contextTag ? [hit.contextTag] : [],
+        dismisses: hit.dismissDelta ?? 0,
       },
       ...memory.hits,
     ];
@@ -184,6 +204,7 @@ function recordTransition(
 export function rememberChipClick(
   memory: QuickAssistMemory,
   chip: QuickChip,
+  contextTag?: string,
 ): QuickAssistMemory {
   const key = chipMemoryKey(chip);
   let next = upsertHit(memory, {
@@ -192,9 +213,26 @@ export function rememberChipClick(
     value: chip.value,
     kind: chip.kind,
     usesDelta: 1,
+    contextTag,
   });
   next = recordTransition(next, memory.lastChipKey, key);
   return next;
+}
+
+/** User dismissed a chip — soft-avoid in ranking. */
+export function rememberChipDismiss(
+  memory: QuickAssistMemory,
+  chip: QuickChip,
+): QuickAssistMemory {
+  const key = chipMemoryKey(chip);
+  return upsertHit(memory, {
+    key,
+    label: chip.label,
+    value: chip.value,
+    kind: chip.kind,
+    usesDelta: 0,
+    dismissDelta: 1,
+  });
 }
 
 /**
@@ -299,6 +337,10 @@ export function memoryBoostForChip(
     if (hit.hourHits[hour] && hit.hourHits[hour]! > 0) {
       boost += Math.min(10, hit.hourHits[hour]! * 2);
     }
+    // Dismiss penalty
+    if (hit.dismisses && hit.dismisses > 0) {
+      boost -= Math.min(40, hit.dismisses * 12);
+    }
   }
 
   // Transition: after last chip, what usually follows
@@ -393,4 +435,39 @@ export function rememberChipOutcome(
   // If key missing (shouldn't), no-op
   if (!hits.some((h) => h.key === key)) return memory;
   return { ...memory, hits, updatedAt: Date.now() };
+}
+
+
+/** Extra boost when chip was learned in a matching context fingerprint. */
+export function memoryBoostForContext(
+  memory: QuickAssistMemory,
+  chip: QuickChip,
+  contextTag: string | null | undefined,
+): number {
+  if (!contextTag || !memory.hits.length) return 0;
+  const key = chipMemoryKey(chip);
+  const hit =
+    memory.hits.find((h) => h.key === key) ||
+    memory.hits.find(
+      (h) => h.value.trim().toLowerCase() === chip.value.trim().toLowerCase(),
+    );
+  if (!hit?.contextTags?.length) return 0;
+  if (hit.contextTags.includes(contextTag)) return 14;
+  // partial overlap (same stage prefix)
+  const stage = contextTag.split("+")[0];
+  if (hit.contextTags.some((t) => t.startsWith(stage + "+") || t === stage)) return 6;
+  return 0;
+}
+
+/** Top habit labels for LLM prompt. */
+export function topHabitLabels(memory: QuickAssistMemory, n = 6): string[] {
+  return [...memory.hits]
+    .filter((h) => h.uses >= 1 && !(h.dismisses && h.dismisses >= 2))
+    .sort((a, b) => {
+      const sa = a.uses * 2 + (a.successes || 0) * 3 - (a.failures || 0) * 2 - (a.dismisses || 0) * 4;
+      const sb = b.uses * 2 + (b.successes || 0) * 3 - (b.failures || 0) * 2 - (b.dismisses || 0) * 4;
+      return sb - sa;
+    })
+    .slice(0, n)
+    .map((h) => h.label);
 }

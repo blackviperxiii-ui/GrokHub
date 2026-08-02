@@ -113,9 +113,16 @@ import {
   rememberChipClick,
   rememberTypedPrompt,
   rememberChipOutcome,
+  rememberChipDismiss,
+  topHabitLabels,
   type QuickAssistMemory,
 } from "./quick-assist-memory";
 import type { QuickChip } from "./quick-assistant";
+import {
+  buildChipSuggestPrompt,
+  contextFingerprint,
+  parseLlmChips,
+} from "./quick-assist-llm";
 import {
   type AgentJob,
   type AgentQueueState,
@@ -260,6 +267,11 @@ type State = {
   quickAssistDismissed: string[];
   /** Bumps to rotate alternate chip packs */
   quickAssistRotation: number;
+  /** Fast-mode LLM chip suggestions for current context */
+  quickAssistLlmChips: QuickChip[];
+  quickAssistLlmAt: number;
+  quickAssistLlmTag: string | null;
+  quickAssistLlmBusy: boolean;
   /** Self-improvement: outcomes, feedback, distilled insights */
   learning: LearningState;
   workboard: WorkboardState;
@@ -335,6 +347,8 @@ type State = {
   exportDiagnostics: () => Promise<{ ok: boolean; text?: string; error?: string }>;
   dismissQuickAssistChip: (chip: QuickChip) => void;
   rotateQuickAssist: () => void;
+  /** Refresh context chips via Fast mode */
+  refreshQuickAssistLlm: (opts?: { force?: boolean }) => Promise<void>;
   syncWebsiteConnectors: () => Promise<{ ok: boolean; detail: string; count: number }>;
   setApiKey: (key: string) => void;
   setGithubToken: (token: string) => void;
@@ -1005,6 +1019,10 @@ export const useGrokHub = create<State>()(
       quickAssistMemory: emptyQuickAssistMemory(),
       quickAssistDismissed: [],
       quickAssistRotation: 0,
+      quickAssistLlmChips: [],
+      quickAssistLlmAt: 0,
+      quickAssistLlmTag: null,
+      quickAssistLlmBusy: false,
       learning: emptyLearning(),
       workboard: emptyWorkboard(),
       projectWorkspace: null,
@@ -1227,9 +1245,9 @@ export const useGrokHub = create<State>()(
       },
 
       recordQuickAssistChip: (chip) => {
+        const tag = contextFingerprint(get().chat, get().activity);
         set((s) => ({
-          quickAssistMemory: rememberChipClick(s.quickAssistMemory, chip),
-          // Rotate pack after a click so the next suggestions feel fresh
+          quickAssistMemory: rememberChipClick(s.quickAssistMemory, chip, tag),
           quickAssistRotation: (s.quickAssistRotation || 0) + 1,
         }));
       },
@@ -1253,6 +1271,9 @@ export const useGrokHub = create<State>()(
           quickAssistMemory: emptyQuickAssistMemory(),
           quickAssistDismissed: [],
           quickAssistRotation: 0,
+          quickAssistLlmChips: [],
+          quickAssistLlmAt: 0,
+          quickAssistLlmTag: null,
         });
       },
 
@@ -1447,10 +1468,15 @@ export const useGrokHub = create<State>()(
         const key = (chip.value || chip.id || "").trim();
         if (!key) return;
         set((s) => ({
+          quickAssistMemory: rememberChipDismiss(s.quickAssistMemory, chip),
           quickAssistDismissed: [...new Set([...(s.quickAssistDismissed || []), key, chip.id])].slice(
             -60,
           ),
           quickAssistRotation: (s.quickAssistRotation || 0) + 1,
+          // Drop matching LLM chips immediately
+          quickAssistLlmChips: (s.quickAssistLlmChips || []).filter(
+            (c) => c.id !== chip.id && c.value.trim().toLowerCase() !== key.toLowerCase(),
+          ),
         }));
       },
 
@@ -1460,6 +1486,77 @@ export const useGrokHub = create<State>()(
           // Clear a few oldest dismissals so Suggest can reintroduce useful chips
           quickAssistDismissed: (s.quickAssistDismissed || []).slice(-20),
         }));
+        // Also ask Fast mode for a fresh pack when possible
+        void get().refreshQuickAssistLlm({ force: true });
+      },
+
+      refreshQuickAssistLlm: async (opts) => {
+        const force = Boolean(opts?.force);
+        const s0 = get();
+        if (s0.quickAssistLlmBusy) return;
+        const chat = s0.chat;
+        // Need some signal (or empty with force for defaults)
+        if (!force && chat.length < 1) return;
+        const tag = contextFingerprint(chat, s0.activity);
+        // Skip if same context & recent (< 25s) unless forced
+        if (
+          !force &&
+          s0.quickAssistLlmTag === tag &&
+          s0.quickAssistLlmChips?.length &&
+          Date.now() - (s0.quickAssistLlmAt || 0) < 25_000
+        ) {
+          return;
+        }
+        const can =
+          Boolean(s0.oauth?.accessToken || s0.apiKey || s0.ssoCookie) ||
+          s0.preferFreeGrok !== false;
+        if (!can) return;
+
+        set({ quickAssistLlmBusy: true });
+        try {
+          const { grokChat } = await import("./grok-client");
+          const habits = topHabitLabels(s0.quickAssistMemory, 6);
+          const threadTitle =
+            s0.threads.find((th) => th.id === s0.activeThreadId)?.title || null;
+          const prompt = buildChipSuggestPrompt({
+            chat,
+            threadTitle,
+            habits,
+            dismissed: s0.quickAssistDismissed,
+          });
+          const fastModel = s0.modelCatalog?.slots?.fast;
+          const result = await grokChat({
+            messages: [{ role: "user", content: prompt }],
+            mode: "fast",
+            model: fastModel,
+            apiKey: s0.apiKey || undefined,
+            accessToken: s0.oauth?.accessToken,
+            tokens: s0.oauth,
+            ssoCookie: s0.ssoCookie || undefined,
+            freeTier: !s0.oauth?.accessToken && !s0.apiKey,
+          });
+          if (!result.ok || !result.content) {
+            set({ quickAssistLlmBusy: false });
+            return;
+          }
+          const chips = parseLlmChips(result.content).map((c, i) => ({
+            ...c,
+            id: `llm-${tag.slice(0, 12)}-${i}-${c.label.slice(0, 8).replace(/\s/g, "")}`,
+            score: 99 - i,
+          }));
+          if (!chips.length) {
+            set({ quickAssistLlmBusy: false });
+            return;
+          }
+          set({
+            quickAssistLlmChips: chips,
+            quickAssistLlmAt: Date.now(),
+            quickAssistLlmTag: tag,
+            quickAssistLlmBusy: false,
+          });
+        } catch {
+          set({ quickAssistLlmBusy: false });
+        }
       },
 
       syncWebsiteConnectors: async () => {
@@ -5850,6 +5947,8 @@ if (!cmds.length) {
           if (!aborted) {
             const tid = get().activeThreadId;
             void autoRenameThreadWithFast(get, set, tid);
+            // Refresh context-aware quick chips via Fast mode
+            void get().refreshQuickAssistLlm({ force: true });
           }
           void get().processAgentQueue();
         }

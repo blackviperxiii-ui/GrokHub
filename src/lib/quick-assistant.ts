@@ -13,6 +13,7 @@ import type {
 import { PLAN_LIMITS, usagePercent } from "./usage";
 import {
   applyMemoryToChips,
+  memoryBoostForContext,
   type QuickAssistMemory,
 } from "./quick-assist-memory";
 
@@ -48,6 +49,10 @@ export type QuickAssistantInput = {
   rotation?: number;
   /** Active thread title for topic chips */
   threadTitle?: string | null;
+  /** Fast-mode LLM-generated chips for this context */
+  llmChips?: QuickChip[] | null;
+  /** Context fingerprint for memory boost */
+  contextTag?: string | null;
 };
 
 /** Visible default — keep the dock clean; hard cap still 10 for refresh packs */
@@ -903,8 +908,26 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
     );
   }
 
+  // ── LLM context chips (Fast mode) ─────────────────────────────────────
+  if (input.llmChips?.length) {
+    for (const c of input.llmChips) {
+      chips.push({
+        ...c,
+        score: Math.max(c.score, 95),
+        hint: c.hint || "Suggested for this chat",
+      });
+    }
+  }
+
   // ── Memory ────────────────────────────────────────────────────────────
   let withMemory = applyMemoryToChips(chips, input.memory);
+  if (input.contextTag && input.memory?.hits?.length) {
+    withMemory = withMemory.map((c) => ({
+      ...c,
+      score:
+        c.score + memoryBoostForContext(input.memory as QuickAssistMemory, c, input.contextTag),
+    }));
+  }
   withMemory = withMemory.filter(
     (c) => !dismissed.has(c.value.trim().toLowerCase()) && !dismissed.has(c.id),
   );

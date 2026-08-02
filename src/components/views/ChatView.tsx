@@ -27,6 +27,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
 import { tierMeta } from "@/lib/models-catalog";
 import { buildQuickChips, type QuickChip } from "@/lib/quick-assistant";
+import { contextFingerprint } from "@/lib/quick-assist-llm";
 import { streamStatusPill } from "@/lib/tool-status";
 import { estimateThreadContextPercent } from "@/lib/context-manager";
 import { useGrokHub } from "@/lib/store";
@@ -438,6 +439,9 @@ export function ChatView() {
   const quickAssistRotation = useGrokHub((s) => s.quickAssistRotation);
   const dismissQuickAssistChip = useGrokHub((s) => s.dismissQuickAssistChip);
   const rotateQuickAssist = useGrokHub((s) => s.rotateQuickAssist);
+  const refreshQuickAssistLlm = useGrokHub((s) => s.refreshQuickAssistLlm);
+  const quickAssistLlmChips = useGrokHub((s) => s.quickAssistLlmChips);
+  const quickAssistLlmBusy = useGrokHub((s) => s.quickAssistLlmBusy);
   const sessionResume = useGrokHub((s) => s.sessionResume);
   const resumeLastSession = useGrokHub((s) => s.resumeLastSession);
   const continueInterruptedSession = useGrokHub((s) => s.continueInterruptedSession);
@@ -559,8 +563,10 @@ export function ChatView() {
         memory: quickAssistMemory,
         dismissed: quickAssistDismissed,
         rotation: quickAssistRotation,
-        max: 4,
+        max: 5,
         threadTitle: threads.find((th) => th.id === activeThreadId)?.title || null,
+        llmChips: quickAssistLlmChips,
+        contextTag: contextFingerprint(chat, activity),
       }),
     [
       chat,
@@ -576,8 +582,20 @@ export function ChatView() {
       quickAssistDismissed,
       quickAssistRotation,
       activeThreadId,
+      quickAssistLlmChips,
     ],
   );
+
+  // Debounced Fast-mode chip refresh when conversation context changes
+  useEffect(() => {
+    if (busy) return;
+    if (chat.length === 0) return;
+    const t = window.setTimeout(() => {
+      void refreshQuickAssistLlm();
+    }, 900);
+    return () => window.clearTimeout(t);
+  }, [chat.length, activeThreadId, busy, refreshQuickAssistLlm]);
+
 
   // Open suggestions for empty chats so the primary chip is obvious
   useEffect(() => {
@@ -1429,12 +1447,18 @@ export function ChatView() {
                   {chipsOpen && (
                     <button
                       type="button"
-                      onClick={() => rotateQuickAssist()}
-                      className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-fg)]"
-                      title="Generate new suggestions"
+                      onClick={() => {
+                        rotateQuickAssist();
+                        setChipsOpen(true);
+                      }}
+                      disabled={quickAssistLlmBusy}
+                      className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-fg)] disabled:opacity-50"
+                      title="Generate new suggestions (Fast mode + habits)"
                     >
-                      <RefreshCw className="h-2.5 w-2.5" />
-                      Refresh
+                      <RefreshCw
+                        className={cn("h-2.5 w-2.5", quickAssistLlmBusy && "animate-spin")}
+                      />
+                      {quickAssistLlmBusy ? "Thinking…" : "Refresh"}
                     </button>
                   )}
                 </div>
