@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.8";
+const APP_VERSION = "0.8.9";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -97,14 +97,31 @@ function scheduleAppRestart(appRoot) {
   const { spawn } = require("node:child_process");
   const port = process.env.GROKHUB_PORT || "18765";
   const root = appRoot || process.env.GROKHUB_HOME || process.cwd();
-  const runtime = process.env.XDG_RUNTIME_DIR || "/tmp";
+  let home = process.env.HOME || process.env.USERPROFILE || "";
+  try {
+    if (!home) home = os.homedir() || "";
+  } catch {
+    home = "";
+  }
+  // Derive home from user install path if env is stripped (pkexec / sanitized spawn)
+  if (!home && String(root).includes("/.local/lib/grokhub")) {
+    home = String(root).replace(/\/\.local\/lib\/grokhub\/?$/, "");
+  }
+  if (!home && String(root).includes("/.local/share/grokhub")) {
+    home = String(root).replace(/\/\.local\/share\/grokhub\/?$/, "");
+  }
+  const runtime = process.env.XDG_RUNTIME_DIR || (home ? path.join(home, ".cache") : "/tmp");
   const pidfile = path.join(runtime, "grokhub", "ui.pid");
   const log = path.join(runtime, "grokhub", "restart.log");
+  const userBin = home ? path.join(home, ".local", "bin", "grokhub") : "";
+  // IMPORTANT: this is a JS template literal — use \${...} for shell vars, ${jsVar} for Node.
   const script = `
 set +e
+export HOME="${home || "/tmp"}"
+export USER="\${USER:-$(id -un 2>/dev/null || echo user)}"
 mkdir -p "${runtime}/grokhub"
 exec >>"${log}" 2>&1
-echo "[restart] $(date -Iseconds) root=${root}"
+echo "[restart] $(date -Iseconds) root=${root} HOME=\$HOME"
 # Wait for previous Electron to exit and release files
 sleep 2.8
 # Free incomplete .new only; KEEP .prev for one-shot rollback from Settings
@@ -127,22 +144,22 @@ export GROKHUB_URL="http://127.0.0.1:${port}"
 # dual /usr + ~/.local installs would jump back to a broken system package).
 if [ -x "${root}/packaging/aur/grokhub.sh" ]; then
   echo "[restart] exec ${root}/packaging/aur/grokhub.sh"
-  nohup env GROKHUB_HOME="${root}" bash "${root}/packaging/aur/grokhub.sh" >/dev/null 2>&1 &
+  nohup env HOME="\$HOME" GROKHUB_HOME="${root}" bash "${root}/packaging/aur/grokhub.sh" >/dev/null 2>&1 &
   exit 0
 fi
-if [ -x "${HOME}/.local/bin/grokhub" ]; then
-  echo "[restart] exec user bin with GROKHUB_HOME"
-  nohup env GROKHUB_HOME="${root}" "${HOME}/.local/bin/grokhub" >/dev/null 2>&1 &
+if [ -n "${userBin}" ] && [ -x "${userBin}" ]; then
+  echo "[restart] exec user bin ${userBin}"
+  nohup env HOME="\$HOME" GROKHUB_HOME="${root}" "${userBin}" >/dev/null 2>&1 &
   exit 0
 fi
 if [ "${root}" = "/usr/lib/grokhub" ] && [ -x /usr/bin/grokhub ]; then
   echo "[restart] exec system /usr/bin/grokhub"
-  nohup env GROKHUB_HOME="${root}" /usr/bin/grokhub >/dev/null 2>&1 &
+  nohup env HOME="\$HOME" GROKHUB_HOME="${root}" /usr/bin/grokhub >/dev/null 2>&1 &
   exit 0
 fi
 if command -v grokhub >/dev/null 2>&1; then
   echo "[restart] exec grokhub with GROKHUB_HOME=${root}"
-  nohup env GROKHUB_HOME="${root}" grokhub >/dev/null 2>&1 &
+  nohup env HOME="\$HOME" GROKHUB_HOME="${root}" grokhub >/dev/null 2>&1 &
   exit 0
 fi
 if [ -f "${root}/desktop/main.mjs" ] && command -v electron >/dev/null 2>&1; then
@@ -162,7 +179,7 @@ if [ -f "${root}/desktop/main.mjs" ] && command -v electron >/dev/null 2>&1; the
     done
   fi
   echo "[restart] exec electron"
-  nohup electron --class=grokhub --name=grokhub "${root}/desktop/main.mjs" >/dev/null 2>&1 &
+  nohup env HOME="\$HOME" GROKHUB_HOME="${root}" electron --class=grokhub --name=grokhub "${root}/desktop/main.mjs" >/dev/null 2>&1 &
   exit 0
 fi
 echo "[restart] no launcher found"
@@ -171,7 +188,13 @@ exit 1
   const child = spawn("bash", ["-c", script], {
     detached: true,
     stdio: "ignore",
-    env: { ...process.env, GROKHUB_HOME: root },
+    env: {
+      ...process.env,
+      HOME: home || process.env.HOME || "/tmp",
+      GROKHUB_HOME: root,
+      GROKHUB_PORT: String(port),
+      XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || runtime,
+    },
   });
   child.unref();
 }
@@ -1505,7 +1528,7 @@ const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const XAI_UA = "GrokHub/0.8.8 (xAI OAuth; Electron)";
+const XAI_UA = "GrokHub/0.8.9 (xAI OAuth; Electron)";
 
 async function xaiDiscovery() {
   const res = await fetch(XAI_OAUTH_DISCOVERY, {
