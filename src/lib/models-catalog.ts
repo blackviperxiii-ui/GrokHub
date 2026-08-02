@@ -15,10 +15,10 @@ export type RouteIntent =
   | "team";
 
 /** User-facing Adaptive tier shown on messages */
-export type RouteTier = "fast" | "think" | "deep" | "build" | "imagine";
+export type RouteTier = "fast" | "balanced" | "think" | "deep" | "build" | "imagine";
 
 export type AutoRouteResult = {
-  routedMode: "fast" | "expert" | "heavy" | "build" | "imagine";
+  routedMode: "fast" | "balanced" | "expert" | "heavy" | "build" | "imagine";
   modelId: string;
   intent: RouteIntent;
   reason: string;
@@ -38,7 +38,7 @@ export type RouteContext = {
   recentAssistantText?: string;
   hasAttachments?: boolean;
   lastRouteTier?: RouteTier;
-  lastRoutedMode?: "fast" | "expert" | "heavy" | "max" | "build" | "imagine";
+  lastRoutedMode?: "fast" | "balanced" | "expert" | "heavy" | "max" | "build" | "imagine";
 
   /** Soft bias from learning engine: positive = prefer tier */
   learningBias?: Partial<Record<RouteTier, number>>;
@@ -516,6 +516,13 @@ export function tierMeta(tier: RouteTier): {
       short: "Fast",
       tone: "border-[color-mix(in_oklab,var(--color-success)_45%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-success)_14%,transparent)] text-[var(--color-success)]",
     };
+  if (tier === "balanced")
+    return {
+      label: "⚖️ Balanced",
+      emoji: "⚖️",
+      short: "Balanced",
+      tone: "border-[color-mix(in_oklab,var(--color-muted)_50%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-elevated)_80%,transparent)] text-[var(--color-fg)]",
+    };
   if (tier === "think")
     return {
       label: "🧠 Think",
@@ -575,7 +582,11 @@ function scorePrompt(prompt: string, ctx: RouteContext = {}) {
     ctx.lastRoutedMode === "heavy" ||
     ctx.lastRoutedMode === "build";
   const stickyThink =
-    stickyDeep || ctx.lastRouteTier === "think" || ctx.lastRoutedMode === "expert";
+    stickyDeep ||
+    ctx.lastRouteTier === "think" ||
+    ctx.lastRouteTier === "balanced" ||
+    ctx.lastRoutedMode === "expert" ||
+    ctx.lastRoutedMode === "balanced";
 
   let complexity = 0;
   if (words <= 5) complexity += 4;
@@ -627,6 +638,7 @@ function scorePrompt(prompt: string, ctx: RouteContext = {}) {
   // Learning bias: nudge complexity/analytical/code/simple from past outcomes
   const bias = ctx.learningBias || {};
   if (bias.fast) simple += bias.fast * 40;
+  if (bias.balanced) complexity += (bias.balanced || 0) * 12;
   if (bias.think) analytical += (bias.think || 0) * 35;
   if (bias.deep) {
     analytical += bias.deep * 25;
@@ -664,9 +676,10 @@ function scorePrompt(prompt: string, ctx: RouteContext = {}) {
 
 const TIER_RANK: Record<RouteTier, number> = {
   fast: 0,
-  think: 1,
-  build: 2,
-  deep: 3,
+  balanced: 1,
+  think: 2,
+  build: 3,
+  deep: 4,
   imagine: 1,
 };
 
@@ -712,6 +725,10 @@ export function routeAuto(
       } else if (prev === "think") {
         finalTier = "think";
         finalMode = "expert";
+        finalModel = slots.smart;
+      } else if (prev === "balanced") {
+        finalTier = "balanced";
+        finalMode = "balanced";
         finalModel = slots.balanced;
       } else {
         finalTier = "fast";
@@ -741,11 +758,11 @@ export function routeAuto(
       (s.stickyThink || s.debugHit || s.judgmentHit || (ctx.historyTurns || 0) >= 2)
     ) {
       if (ctx.lastRouteTier === "deep" && tier === "fast") {
-        finalTier = "think";
-        finalMode = "expert";
+        finalTier = "balanced";
+        finalMode = "balanced";
         finalModel = slots.balanced;
-        finalWhy = `${why} · held 🧠 Think (was Deep).`;
-      } else if (ctx.lastRouteTier === "deep" && tier === "think") {
+        finalWhy = `${why} · eased to ⚖️ Balanced (was Deep).`;
+      } else if (ctx.lastRouteTier === "deep" && (tier === "think" || tier === "balanced")) {
         if (s.debugHit && s.analytical >= 28) {
           finalTier = "deep";
           finalMode = "heavy";
@@ -754,7 +771,7 @@ export function routeAuto(
         } else {
           finalTier = "think";
           finalMode = "expert";
-          finalModel = slots.balanced;
+          finalModel = slots.smart;
           finalWhy = `${why} · eased to 🧠 Think (was Deep).`;
         }
       } else if (ctx.lastRouteTier === "build" && tier === "fast") {
@@ -764,17 +781,22 @@ export function routeAuto(
           finalModel = slots.build;
           finalWhy = `${why} · stayed 🛠️ Build (coding thread).`;
         } else {
-          finalTier = "think";
-          finalMode = "expert";
+          finalTier = "balanced";
+          finalMode = "balanced";
           finalModel = slots.balanced;
-          finalWhy = `${why} · moved to 🧠 Think (no longer pure code).`;
+          finalWhy = `${why} · moved to ⚖️ Balanced (no longer pure code).`;
         }
       } else if (ctx.lastRouteTier === "think" && tier === "fast" && s.words > 4) {
-        finalTier = "think";
-        finalMode = "expert";
+        finalTier = "balanced";
+        finalMode = "balanced";
         finalModel = slots.balanced;
-        finalWhy = `${why} · held 🧠 Think (avoid Fast bounce).`;
-      } else if (ctx.lastRouteTier === "build" && tier === "think" && s.codeHit) {
+        finalWhy = `${why} · eased to ⚖️ Balanced (avoid Fast bounce).`;
+      } else if (ctx.lastRouteTier === "balanced" && tier === "fast" && s.words > 4) {
+        finalTier = "balanced";
+        finalMode = "balanced";
+        finalModel = slots.balanced;
+        finalWhy = `${why} · held ⚖️ Balanced (avoid Fast bounce).`;
+      } else if (ctx.lastRouteTier === "build" && (tier === "think" || tier === "balanced") && s.codeHit) {
         finalTier = "build";
         finalMode = "build";
         finalModel = slots.build;
@@ -898,20 +920,31 @@ export function routeAuto(
   ) {
     const useSmart =
       s.analytical >= 34 || s.complexity >= 48 || s.archHit || (s.judgmentHit && s.words > 8);
+    if (useSmart) {
+      return finish(
+        "expert",
+        slots.smart,
+        "chat_smart",
+        "think",
+        s.judgmentHit
+          ? "Adaptive chose Think — judgment / feedback needs real reasoning."
+          : s.debugHit
+            ? "Adaptive chose Think — debugging / something’s off."
+            : s.archHit
+              ? "Adaptive chose Think — architecture / analysis."
+              : "Adaptive chose Think — analytical prompt; stronger model.",
+      );
+    }
     return finish(
-      "expert",
-      useSmart ? slots.smart : slots.balanced,
-      useSmart ? "chat_smart" : "chat_balanced",
-      "think",
-      s.judgmentHit
-        ? "Adaptive chose Think — judgment / feedback needs real reasoning."
+      "balanced",
+      slots.balanced,
+      "chat_balanced",
+      "balanced",
+      s.uxHit
+        ? "Adaptive chose Balanced — UX / product polish (everyday model)."
         : s.debugHit
-          ? "Adaptive chose Think — debugging / something’s off."
-          : s.uxHit
-            ? "Adaptive chose Think — UX / product polish."
-            : useSmart
-              ? "Adaptive chose Think — analytical prompt; stronger model."
-              : "Adaptive chose Think — more than a quick chat.",
+          ? "Adaptive chose Balanced — light debug / check-in."
+          : "Adaptive chose Balanced — solid everyday chat (4.3-class).",
     );
   }
 
@@ -936,11 +969,11 @@ export function routeAuto(
   }
 
   return finish(
-    "expert",
+    "balanced",
     slots.balanced,
     "chat_balanced",
-    "think",
-    "Adaptive chose Think — default for non-trivial prompts.",
+    "balanced",
+    "Adaptive chose Balanced — default for non-trivial everyday prompts.",
   );
 }
 

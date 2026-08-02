@@ -1017,6 +1017,7 @@ export function SettingsView() {
             const modes = getModesWithCatalog(modelCatalog, modelOverrides);
             const labels: Record<string, string> = {
               fast: "Fast",
+              balanced: "Balanced",
               expert: "Expert / Think",
               heavy: "Heavy",
               max: "Max",
@@ -1209,7 +1210,7 @@ export function SettingsView() {
         <CardHeader>
           <CardTitle className="text-sm">Model modes</CardTitle>
           <CardDescription>
-            Adaptive scores complexity, code, and intent — then routes ⚡ Fast · 🧠 Think · 🔬 Deep · 🛠️ Build · Imagine.
+            Adaptive scores complexity, code, and intent — then routes ⚡ Fast · ⚖️ Balanced · 🧠 Think · 🔬 Deep · 🛠️ Build · Imagine.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">

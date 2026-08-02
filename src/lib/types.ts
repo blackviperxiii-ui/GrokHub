@@ -13,7 +13,7 @@ export type NavId =
   | "settings";
 
 /** Matches Grok web model modes (Auto / Fast / Expert / Heavy / Build). */
-export type GrokModeId = "auto" | "fast" | "expert" | "heavy" | "max" | "build";
+export type GrokModeId = "auto" | "fast" | "balanced" | "expert" | "heavy" | "max" | "build";
 
 export type GrokMode = {
   id: GrokModeId;
@@ -23,7 +23,7 @@ export type GrokMode = {
   model: string;
   /** xAI API model id used for live requests */
   modelId: string;
-  icon: "auto" | "fast" | "expert" | "heavy" | "max" | "build";
+  icon: "auto" | "fast" | "balanced" | "expert" | "heavy" | "max" | "build";
   latencyMs: [number, number];
   depth: "light" | "standard" | "deep" | "team" | "code";
 };
@@ -134,7 +134,7 @@ export type ChatMessage = {
   ts: number;
   mode?: GrokModeId;
   /** Adaptive tier actually used (⚡ Fast / 🧠 Think / 🔬 Deep / …) */
-  routeTier?: "fast" | "think" | "deep" | "build" | "imagine";
+  routeTier?: "fast" | "balanced" | "think" | "deep" | "build" | "imagine";
   /** Human explanation for hover */
   routeReason?: string;
   /** Concrete model id used */

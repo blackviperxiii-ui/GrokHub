@@ -23,6 +23,7 @@ export type ModelModeOverrides = Partial<
 
 export const OVERRIDABLE_MODES: Exclude<GrokModeId, "auto">[] = [
   "fast",
+  "balanced",
   "expert",
   "heavy",
   "max",
@@ -66,7 +67,7 @@ export const GROK_MODES: GrokMode[] = [
   {
     id: "auto",
     label: "Adaptive",
-    subtitle: "Smart router · Fast · Think · Deep · Build",
+    subtitle: "Smart router · Fast · Balanced · Think · Deep · Build",
     model: "Adaptive",
     modelId: "auto",
     icon: "auto",
@@ -82,6 +83,16 @@ export const GROK_MODES: GrokMode[] = [
     icon: "fast",
     latencyMs: [250, 500],
     depth: "light",
+  },
+  {
+    id: "balanced",
+    label: "Balanced",
+    subtitle: "Everyday chat · Grok 4.3 class",
+    model: "Grok 4.3",
+    modelId: "grok-4.3",
+    icon: "balanced",
+    latencyMs: [500, 1000],
+    depth: "standard",
   },
   {
     id: "expert",
@@ -133,6 +144,7 @@ export function getMode(id: GrokModeId): GrokMode {
 function autoModelForMode(id: GrokModeId, catalog: ResolvedCatalog): string {
   const s = catalog.slots;
   if (id === "fast") return s.fast;
+  if (id === "balanced") return s.balanced;
   if (id === "expert") return s.smart;
   if (id === "heavy") return pickFlagshipModel(catalog.all || []) || s.heavy;
   if (id === "max") return pickFlagshipModel(catalog.all || []) || s.heavy || "grok-4.5";
@@ -152,7 +164,7 @@ export function getModesWithCatalog(
       return {
         ...m,
         label: "Adaptive",
-        subtitle: `Routes ⚡ Fast · 🧠 Think · 🔬 Deep · 🛠️ Build`,
+        subtitle: `Routes ⚡ Fast · ⚖️ Balanced · 🧠 Think · 🔬 Deep · 🛠️ Build`,
         model: "Adaptive",
       };
     }
@@ -168,6 +180,16 @@ export function getModesWithCatalog(
         subtitle: pinned
           ? `⚡ Override · ${name}`
           : `⚡ Quick chat · ${name}`,
+      };
+    }
+    if (m.id === "balanced") {
+      return {
+        ...m,
+        modelId,
+        model: name,
+        subtitle: pinned
+          ? `⚖️ Override · ${name}`
+          : `⚖️ Everyday · ${name}`,
       };
     }
     if (m.id === "expert") {
@@ -249,7 +271,7 @@ export function modelIdForMode(
   if (id === "auto") {
     const r = routeAuto(prompt, catalog, ctx);
     const routed: GrokModeId =
-      r.routedMode === "imagine" ? "fast" : r.routedMode;
+      r.routedMode === "imagine" ? "fast" : (r.routedMode as GrokModeId);
     return applyModelOverride(routed, r.modelId, ov);
   }
   return applyModelOverride(id, autoModelForMode(id, catalog), ov);
@@ -274,6 +296,7 @@ export function autoRouteFor(
 /** Map a fixed mode to display tier tags. */
 export function tierForMode(id: GrokModeId): AutoRouteResult["tier"] {
   if (id === "fast") return "fast";
+  if (id === "balanced") return "balanced";
   if (id === "build") return "build";
   if (id === "heavy" || id === "max") return "deep";
   if (id === "expert") return "think";

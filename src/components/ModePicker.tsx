@@ -2,6 +2,7 @@ import {
   Brain,
   Crown,
   Hammer,
+  Scale,
   Sparkles,
   Users,
   Zap,
@@ -17,6 +18,7 @@ import { cn } from "@/lib/utils";
 const ICONS: Record<GrokModeId, LucideIcon> = {
   auto: Sparkles,
   fast: Zap,
+  balanced: Scale,
   expert: Brain,
   heavy: Users,
   max: Crown,

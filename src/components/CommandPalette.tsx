@@ -238,6 +238,7 @@ export function CommandPalette({
         })),
       mode("auto", "Adaptive"),
       mode("fast", "Fast"),
+      mode("balanced", "Balanced"),
       mode("expert", "Expert"),
       mode("heavy", "Heavy"),
       mode("max", "Max"),

@@ -58,6 +58,7 @@ export const PLAN_LIMITS: Record<SubscriptionPlanId, PlanLimits> = {
 export const MODE_UNIT_COST: Record<GrokModeId, number> = {
   fast: 0.8,
   auto: 1.2,
+  balanced: 1.5,
   build: 2,
   expert: 3.5,
   heavy: 7,
@@ -91,7 +92,7 @@ export function createUsage(plan: SubscriptionPlanId = "pro", now = Date.now()):
     imagine: 0,
     automations: 0,
     host: 0,
-    byMode: { auto: 0, fast: 0, expert: 0, heavy: 0, max: 0, build: 0 },
+    byMode: { auto: 0, fast: 0, balanced: 0, expert: 0, heavy: 0, max: 0, build: 0 },
     promptTokens: 0,
     completionTokens: 0,
     totalTokens: 0,

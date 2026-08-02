@@ -108,6 +108,8 @@ Long-running interactive TUIs are awkward — prefer non-interactive commands an
   switch (id) {
     case "fast":
       return `${base}\nMode: Fast — concise answers, minimal preamble.`;
+    case "balanced":
+      return `${base}\nMode: Balanced — solid everyday chat (Grok 4.3-class). Clear and practical, not shallow.`;
     case "expert":
       return `${base}\nMode: Expert — reason carefully, surface tradeoffs, cite assumptions.`;
     case "heavy":

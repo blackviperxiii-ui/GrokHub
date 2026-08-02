@@ -4420,7 +4420,7 @@ syncWebsiteConnectors: async () => {
           }
           if (cmd === "mode" && arg) {
             const id = arg.toLowerCase() as import("./types").GrokModeId;
-            if (["auto", "fast", "expert", "heavy", "max", "build"].includes(id)) {
+            if (["auto", "fast", "balanced", "expert", "heavy", "max", "build"].includes(id)) {
               get().setMode(id);
               return;
             }
@@ -4820,6 +4820,7 @@ if (cmd === "tools") {
           lastRouteTier: lastAsst?.routeTier,
           lastRoutedMode:
             lastAsst?.mode === "fast" ||
+            lastAsst?.mode === "balanced" ||
             lastAsst?.mode === "expert" ||
             lastAsst?.mode === "heavy" ||
             lastAsst?.mode === "max" ||
@@ -4892,11 +4893,13 @@ if (cmd === "tools") {
                 routeTier:
                   routed === "fast"
                     ? ("fast" as const)
-                    : routed === "build"
-                      ? ("build" as const)
-                      : routed === "heavy"
-                        ? ("deep" as const)
-                        : ("think" as const),
+                    : routed === "balanced"
+                      ? ("balanced" as const)
+                      : routed === "build"
+                        ? ("build" as const)
+                        : routed === "heavy" || routed === "max"
+                          ? ("deep" as const)
+                          : ("think" as const),
                 routeReason: `Manual ${m.label} mode`,
                 routeModel: modelIdForMode(mode, trimmed, catalog, routeCtx, overrides),
               };
