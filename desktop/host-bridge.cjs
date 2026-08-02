@@ -35,7 +35,7 @@ function defaultShell() {
     return (
       process.env.ComSpec ||
       process.env.COMSPEC ||
-      require("node:path").join(process.env.SystemRoot || "C:\Windows", "System32", "cmd.exe")
+      require("node:path").join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe")
     );
   }
   return process.env.SHELL || "/bin/bash";
@@ -66,7 +66,7 @@ function hostEnv() {
     base.PATH =
       process.env.PATH ||
       process.env.Path ||
-      "C:\Windows\System32;C:\Windows;C:\Windows\System32\WindowsPowerShell\v1.0";
+      "C:\\Windows\\System32;C:\\Windows;C:\\Windows\\System32\\WindowsPowerShell\\v1.0";
     return base;
   }
   base.PATH =

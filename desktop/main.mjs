@@ -33,11 +33,15 @@ function iconCandidates(names) {
   const roots = [
     path.join(__dirname, "icons"),
     path.join(__dirname, "..", "packaging", "icons"),
+    path.join(__dirname, "..", "packaging", "windows"),
     path.join(__dirname, "..", "packaging"),
+    process.env.GROKHUB_HOME && path.join(process.env.GROKHUB_HOME, "icons"),
+    process.env.GROKHUB_HOME && path.join(process.env.GROKHUB_HOME, "desktop", "icons"),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "GrokHub", "icons"),
     "/usr/share/icons/hicolor/256x256/apps",
     "/usr/share/icons/hicolor/128x128/apps",
     "/usr/share/pixmaps",
-  ];
+  ].filter(Boolean);
   const out = [];
   for (const root of roots) {
     for (const name of names) {
@@ -50,6 +54,7 @@ function iconCandidates(names) {
 function loadAppIcon() {
   const file = resolveIconPath(
     iconCandidates([
+      "icon.ico",
       "icon.png",
       "icon-512.png",
       "grokhub-256.png",
@@ -287,6 +292,7 @@ function createWindow() {
     icon: icon.isEmpty() ? undefined : icon,
     frame: false,
     titleBarStyle: "hidden",
+    // Frameless + custom controls in AppShell (works on Windows/Linux)
     autoHideMenuBar: true,
     useContentSize: false,
     // Stay on the taskbar while open so the pin groups with this window

@@ -1,6 +1,6 @@
 # GrokHub
 
-**v0.5.2** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v0.6.0** — Grok-native agent control plane for **Windows** and **Arch Linux / CachyOS**.
 
 Modes (Auto / Fast / Expert / Heavy / Build) · Imagine · connectors · skills · automations · usage meter · free-Grok fallback · setup sync · unsandboxed host (CLI · files · apps).
 
@@ -8,7 +8,46 @@ Modes (Auto / Fast / Expert / Heavy / Build) · Imagine · connectors · skills 
 
 ---
 
-## Install (Arch Linux / CachyOS)
+## Install — Windows
+
+### Installer (recommended)
+
+1. Grab the latest **`GrokHub-*-win-x64.exe`** from [Releases](https://github.com/blackviperxiii-ui/Grok-Hub/releases).
+2. Run the setup wizard (Start Menu + Desktop shortcuts).
+3. Open **GrokHub** → **Settings** → connect access.
+
+### Portable
+
+Download **`GrokHub-*-portable.exe`** and run it — no install step.  
+User data still lives under `%APPDATA%\GrokHub`.
+
+### From source
+
+```powershell
+# Requires Node.js LTS: https://nodejs.org/
+git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
+cd Grok-Hub
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1
+```
+
+| After install | Path |
+|---------------|------|
+| Launcher | `%LOCALAPPDATA%\GrokHub\grokhub.cmd` |
+| CLI | `grokhub` (user PATH) |
+| Start Menu | **GrokHub** |
+| User data | `%APPDATA%\GrokHub` |
+
+Uninstall source install:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 -Uninstall
+```
+
+More detail: [packaging/windows/README.md](packaging/windows/README.md)
+
+---
+
+## Install — Arch Linux / CachyOS
 
 ```bash
 sudo pacman -S --needed git electron nodejs npm curl base-devel
@@ -49,7 +88,7 @@ More detail: [packaging/aur/README.md](packaging/aur/README.md)
    - **Link Grok website** — free grok.com account works (free-tier fallback)
    - **Connect with Grok OAuth** — SuperGrok / X Premium+
    - **xAI API key** — from [console.x.ai](https://console.x.ai)
-3. Optional: **Install app menu entry**.
+3. Optional: **Install app menu entry** (Start Menu on Windows / `.desktop` on Linux).
 4. Optional: GitHub token + **Setup sync** across machines.
 
 Secrets and chat history stay on the device; clean installs do not ship personal data.
@@ -65,7 +104,7 @@ Secrets and chat history stay on the device; clean installs do not ship personal
 | **Imagine** | Image / video · aspect · quality · reference |
 | **Connectors** | Website-linked status · tools where available |
 | **Skills / Automations** | Heartbeat schedules · multi-time runs |
-| **Desktop host** | Unsandboxed shell · files · apps |
+| **Desktop host** | Unsandboxed shell · files · apps (PowerShell on Windows, bash on Linux) |
 | **Usage** | Plan meter · poll from website |
 | **Updates** | Check / install from this GitHub repo |
 
@@ -76,20 +115,41 @@ Secrets and chat history stay on the device; clean installs do not ship personal
 ```bash
 npm install
 npm run dev              # UI on 0.0.0.0:8080
-npm run desktop:dev      # Electron → dev UI
+npm run desktop:dev      # Electron → dev UI (run `npm run dev` first)
 npm run desktop:build    # production .output for packaging
 npm run typecheck
 ```
+
+### Package Windows builds
+
+```bash
+npm run desktop:win              # NSIS installer + portable
+npm run desktop:win:portable     # portable only
+npm run desktop:win:dir          # unpacked dir (fast iterate)
+```
+
+Artifacts → `dist-desktop/`.
 
 | Script | Purpose |
 |--------|---------|
 | `npm run desktop` | Electron against `GROKHUB_URL` |
 | `npm run desktop:arch` | Arch helper launcher |
+| `npm run desktop:win` | Build Windows NSIS + portable |
 | `npm run aur:release` | AUR release helper |
 
 ---
 
 ## Uninstall
+
+**Windows (NSIS):** Settings → Apps → GrokHub → Uninstall  
+
+**Windows (source):**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 -Uninstall
+```
+
+**Linux:**
 
 ```bash
 sudo rm -f /usr/bin/grokhub /usr/share/applications/grokhub.desktop

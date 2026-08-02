@@ -13,3 +13,7 @@ packaging/aur/pkg/
 packaging/aur/src/
 packaging/aur/*.pkg.tar*
 .output
+
+dist-desktop/
+node_modules/
+.output/

@@ -148,19 +148,37 @@ function resolveWindowsExec() {
   if (process.env.GROKHUB_EXEC && fs.existsSync(process.env.GROKHUB_EXEC)) {
     return process.env.GROKHUB_EXEC;
   }
-  const local = path.join(
-    process.env.LOCALAPPDATA || path.join(home(), "AppData", "Local"),
-    "GrokHub",
-    "grokhub.cmd",
-  );
-  if (fs.existsSync(local)) return local;
-  const ps1 = path.join(
-    process.env.LOCALAPPDATA || path.join(home(), "AppData", "Local"),
-    "GrokHub",
-    "grokhub.ps1",
-  );
-  if (fs.existsSync(ps1)) return `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${ps1}"`;
-  return "grokhub";
+  // Packaged Electron (NSIS / portable) — prefer the running exe
+  try {
+    const { app } = require("electron");
+    if (app?.isPackaged && process.execPath && fs.existsSync(process.execPath)) {
+      return process.execPath;
+    }
+  } catch {
+    /* not in electron */
+  }
+  const localBase =
+    process.env.LOCALAPPDATA || path.join(home(), "AppData", "Local");
+  const candidates = [
+    path.join(localBase, "Programs", "GrokHub", "GrokHub.exe"),
+    path.join(localBase, "GrokHub", "GrokHub.exe"),
+    path.join(localBase, "GrokHub", "electron-runtime", "electron.exe"),
+    path.join(localBase, "GrokHub", "grokhub.cmd"),
+    path.join(localBase, "GrokHub", "grokhub.ps1"),
+  ];
+  for (const c of candidates) {
+    try {
+      if (c && fs.existsSync(c)) {
+        if (c.toLowerCase().endsWith(".ps1")) {
+          return `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${c}"`;
+        }
+        return c;
+      }
+    } catch {
+      /* next */
+    }
+  }
+  return "GrokHub";
 }
 
 function createWindowsShortcut(lnkPath, target, opts = {}) {
@@ -199,22 +217,41 @@ function installWindowsStartMenu(opts = {}) {
       const m = target.match(/-File\s+"([^"]+)"|-File\s+(\S+)/i);
       args = m ? `-NoProfile -ExecutionPolicy Bypass -File "${m[1] || m[2]}"` : "";
       target = "powershell.exe";
+    } else if (/electron\.exe$/i.test(target)) {
+      // Dev / source install: electron.exe needs the main script path
+      const appHome =
+        process.env.GROKHUB_HOME ||
+        path.join(
+          process.env.LOCALAPPDATA || path.join(home(), "AppData", "Local"),
+          "GrokHub",
+        );
+      const mainJs = path.join(appHome, "desktop", "main.mjs");
+      if (fs.existsSync(mainJs)) {
+        args = `"${mainJs}"`;
+      }
     }
+    // Packaged GrokHub.exe needs no args
     let icon = "";
     const iconCandidates = [
+      path.join(process.env.LOCALAPPDATA || "", "GrokHub", "icons", "icon.ico"),
       path.join(process.env.LOCALAPPDATA || "", "GrokHub", "icons", "icon.png"),
+      path.join(process.env.GROKHUB_HOME || "", "desktop", "icons", "icon.ico"),
       path.join(process.env.GROKHUB_HOME || "", "desktop", "icons", "icon.png"),
       path.join(process.env.GROKHUB_HOME || "", "desktop", "icons", "grokhub-256.png"),
+      path.join(process.env.LOCALAPPDATA || "", "Programs", "GrokHub", "resources", "app.asar.unpacked"),
     ];
     for (const c of iconCandidates) {
-      if (c && fs.existsSync(c)) {
+      if (c && fs.existsSync(c) && fs.statSync(c).isFile()) {
         icon = c;
         break;
       }
     }
+    if (!icon && /GrokHub\.exe$/i.test(target)) {
+      icon = target; // exe embeds icon
+    }
     createWindowsShortcut(lnk, target, {
       cwd: process.env.GROKHUB_HOME || path.dirname(target),
-      icon: icon ? `${icon},0` : undefined,
+      icon: icon ? (icon.toLowerCase().endsWith(".exe") ? `${icon},0` : `${icon},0`) : undefined,
       args,
     });
     return {

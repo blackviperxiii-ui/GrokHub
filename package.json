@@ -1,9 +1,18 @@
 {
   "name": "grokhub",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "private": true,
+  "description": "GrokHub — Grok-native agent control plane (Windows, Linux)",
+  "author": "ViperXIII",
+  "license": "MIT",
+  "homepage": "https://github.com/blackviperxiii-ui/Grok-Hub",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blackviperxiii-ui/Grok-Hub.git"
+  },
   "sideEffects": false,
   "type": "module",
+  "main": "desktop/main.mjs",
   "overrides": {
     "nf3": "0.3.17"
   },
@@ -17,9 +26,12 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "desktop": "electron desktop/main.mjs",
-    "desktop:dev": "GROKHUB_URL=http://127.0.0.1:8080 electron desktop/main.mjs",
+    "desktop:dev": "node scripts/desktop-dev.mjs",
     "desktop:arch": "bash scripts/arch-launch.sh",
     "desktop:build": "node scripts/desktop-build.mjs",
+    "desktop:win": "node scripts/build-windows.mjs",
+    "desktop:win:dir": "node scripts/build-windows.mjs --dir",
+    "desktop:win:portable": "node scripts/build-windows.mjs --portable",
     "aur:release": "bash scripts/make-aur-release.sh"
   },
   "dependencies": {
@@ -83,6 +95,8 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^37.10.3",
+    "electron-builder": "^26.15.3",
     "eslint": "^9.20.0",
     "eslint-config-prettier": "^10.1.1",
     "eslint-plugin-prettier": "^5.2.6",
@@ -97,5 +111,73 @@
     "typescript-eslint": "^8.56.1",
     "vite": "^8.1.0"
   },
-  "main": "desktop/main.mjs"
+  "build": {
+    "appId": "com.grokhub.app",
+    "productName": "GrokHub",
+    "copyright": "Copyright © 2026 ViperXIII",
+    "directories": {
+      "output": "dist-desktop",
+      "buildResources": "packaging/windows"
+    },
+    "files": [
+      "desktop/**/*",
+      ".output/**/*",
+      "package.json",
+      "APP_VERSION",
+      "VERSION",
+      "LICENSE",
+      "!desktop/**/*.map",
+      "!.output/**/*.map"
+    ],
+    "extraMetadata": {
+      "main": "desktop/main.mjs"
+    },
+    "asar": true,
+    "asarUnpack": [
+      ".output/**/*"
+    ],
+    "win": {
+      "icon": "packaging/windows/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "GrokHub",
+      "installerIcon": "packaging/windows/icon.ico",
+      "uninstallerIcon": "packaging/windows/icon.ico",
+      "installerHeaderIcon": "packaging/windows/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "dir"
+      ],
+      "category": "Utility",
+      "executableName": "grokhub"
+    }
+  }
 }

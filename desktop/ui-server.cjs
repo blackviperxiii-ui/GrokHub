@@ -15,20 +15,30 @@ function appRootFrom(desktopDir) {
     const h = path.resolve(process.env.GROKHUB_HOME);
     if (fs.existsSync(path.join(h, ".output", "server", "index.mjs"))) return h;
   }
-  // 2) Packaged Electron — resources/app (or app.asar.unpacked parent)
+  // 2) Packaged Electron — prefer app.asar.unpacked (spawn can't exec inside asar)
   try {
     const { app } = require("electron");
     if (app?.isPackaged) {
-      const p = app.getAppPath();
-      if (fs.existsSync(path.join(p, ".output", "server", "index.mjs"))) return p;
-      // some layouts put .output under resources/
+      const appPath = app.getAppPath();
+      const candidates = [];
+      // asarUnpack lands next to app.asar
+      if (appPath.endsWith(".asar")) {
+        candidates.push(appPath + ".unpacked");
+        candidates.push(path.join(path.dirname(appPath), "app.asar.unpacked"));
+      }
+      candidates.push(appPath);
       if (process.resourcesPath) {
         const r = process.resourcesPath;
-        if (fs.existsSync(path.join(r, ".output", "server", "index.mjs"))) return r;
-        if (fs.existsSync(path.join(r, "app", ".output", "server", "index.mjs")))
-          return path.join(r, "app");
+        candidates.push(path.join(r, "app.asar.unpacked"));
+        candidates.push(path.join(r, "app"));
+        candidates.push(r);
       }
-      return p;
+      for (const c of candidates) {
+        if (c && fs.existsSync(path.join(c, ".output", "server", "index.mjs"))) {
+          return c;
+        }
+      }
+      return appPath;
     }
   } catch {
     /* not in electron yet */
