@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts || npm install --ignore-scripts
+      - run: npm run typecheck
+      - name: Desktop production build
+        env:
+          GROKHUB_DESKTOP: "1"
+        run: npm run desktop:build
+      - name: HTTP smoke
+        run: |
+          export PORT=18765 NITRO_PORT=18765 HOST=127.0.0.1 NITRO_HOST=127.0.0.1
+          node .output/server/index.mjs > /tmp/ui.log 2>&1 &
+          echo $! > /tmp/ui.pid
+          ok=0
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:18765/ | grep -qi GrokHub; then ok=1; break; fi
+            sleep 0.25
+          done
+          if [ "$ok" != 1 ]; then
+            echo "smoke failed"; tail -n 80 /tmp/ui.log; exit 1
+          fi
+          curl -sf -o /dev/null http://127.0.0.1:18765/assets/ || true
+          kill "$(cat /tmp/ui.pid)" 2>/dev/null || true
+          echo "smoke ok"
+
+  windows-package:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts || npm install --ignore-scripts
+      - run: npm run desktop:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-dist
+          path: dist-desktop/*

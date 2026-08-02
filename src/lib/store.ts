@@ -3215,7 +3215,11 @@ if (!cmds.length) {
         profile: s.profile,
         modelCatalog: s.modelCatalog,
         lastModelsFetchAt: s.lastModelsFetchAt,
-        chat: s.chat.slice(-200),
+        chat: s.chat.slice(-200).map((m) => ({
+          ...m,
+          streaming: false,
+          // don't persist ephemeral stop flags forever
+        })),
         activity: s.activity.slice(0, 100),
         quickAssistMemory: s.quickAssistMemory,
         // nav not forced — restore last view except desktop

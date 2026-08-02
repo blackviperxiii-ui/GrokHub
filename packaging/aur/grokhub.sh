@@ -38,6 +38,16 @@ ui_up() {
   curl -sf -o /dev/null --max-time 1 "${URL}/" 2>/dev/null
 }
 
+# Require a real HTML document (not empty / connection refuse)
+ui_healthy() {
+  local body
+  body="$(curl -sf --max-time 2 "${URL}/" 2>/dev/null || true)"
+  if [[ -z "$body" ]]; then
+    return 1
+  fi
+  echo "$body" | grep -qiE 'GrokHub|<!DOCTYPE html>|tanstack|/assets/' 
+}
+
 start_ui() {
   if ui_up; then
     return 0
@@ -68,19 +78,25 @@ start_ui() {
   ) >>"$LOG" 2>&1 &
   echo $! >"$PIDFILE"
 
-  for _ in $(seq 1 80); do
-    if ui_up; then
+  for _ in $(seq 1 100); do
+    if ui_healthy; then
       return 0
     fi
     sleep 0.15
   done
 
-  echo "error: UI failed to start — see $LOG" >&2
+  echo "error: UI failed health check — see $LOG" >&2
   tail -n 40 "$LOG" >&2 || true
   exit 1
 }
 
 start_ui
+
+# Refuse to open Electron if UI still unhealthy
+if ! ui_healthy; then
+  echo "error: GrokHub UI not healthy at ${URL}" >&2
+  exit 1
+fi
 
 export GROKHUB_URL="$URL"
 

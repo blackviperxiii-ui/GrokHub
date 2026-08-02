@@ -1,13 +1,47 @@
 /**
  * Zustand storage that prefers Electron userData (survives updates),
  * and mirrors to localStorage for browser preview.
+ * Writes are debounced to avoid thrashing disk on every keystroke/heartbeat.
  */
 import type { StateStorage } from "zustand/middleware";
 
 const MIRROR_PREFIX = "grokhub.persist.";
+const DEBOUNCE_MS = 400;
+const pending = new Map<string, { value: string; timer: ReturnType<typeof setTimeout> }>();
+const lastWritten = new Map<string, string>();
 
 function electronState() {
   return typeof window !== "undefined" ? window.grokhubDesktop?.state : undefined;
+}
+
+async function flushWrite(name: string, value: string): Promise<void> {
+  if (lastWritten.get(name) === value) return;
+  lastWritten.set(name, value);
+  try {
+    localStorage.setItem(MIRROR_PREFIX + name, value);
+    localStorage.setItem(name, value);
+  } catch {
+    /* quota — electron path still saves */
+  }
+  const e = electronState();
+  if (e?.set) {
+    try {
+      await e.set(name, value);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** Force-flush all pending debounced writes (call on beforeunload). */
+export async function flushPersistentStorage(): Promise<void> {
+  const jobs: Promise<void>[] = [];
+  for (const [name, row] of pending) {
+    clearTimeout(row.timer);
+    pending.delete(name);
+    jobs.push(flushWrite(name, row.value));
+  }
+  await Promise.all(jobs);
 }
 
 export const persistentStorage: StateStorage = {
@@ -22,6 +56,7 @@ export const persistentStorage: StateStorage = {
           } catch {
             /* quota */
           }
+          lastWritten.set(name, r.value);
           return r.value;
         }
       } catch {
@@ -30,8 +65,10 @@ export const persistentStorage: StateStorage = {
     }
     try {
       const direct = localStorage.getItem(MIRROR_PREFIX + name) || localStorage.getItem(name);
-      if (direct) return direct;
-      // One-time migrate from older store keys
+      if (direct) {
+        lastWritten.set(name, direct);
+        return direct;
+      }
       if (name === "grokhub-memory-v1") {
         for (const legacy of ["grokhub-clean-v4", "grokhub-clean-v3", "grokhub-clean-v2"]) {
           const old = localStorage.getItem(legacy);
@@ -42,6 +79,7 @@ export const persistentStorage: StateStorage = {
             } catch {
               /* ignore */
             }
+            lastWritten.set(name, old);
             return old;
           }
         }
@@ -53,24 +91,23 @@ export const persistentStorage: StateStorage = {
   },
 
   setItem: async (name: string, value: string): Promise<void> => {
-    try {
-      localStorage.setItem(MIRROR_PREFIX + name, value);
-      // also write legacy key for older builds
-      localStorage.setItem(name, value);
-    } catch {
-      /* quota — electron path still saves */
-    }
-    const e = electronState();
-    if (e?.set) {
-      try {
-        await e.set(name, value);
-      } catch {
-        /* ignore */
-      }
-    }
+    if (lastWritten.get(name) === value) return;
+    const prev = pending.get(name);
+    if (prev) clearTimeout(prev.timer);
+    const timer = setTimeout(() => {
+      pending.delete(name);
+      void flushWrite(name, value);
+    }, DEBOUNCE_MS);
+    pending.set(name, { value, timer });
   },
 
   removeItem: async (name: string): Promise<void> => {
+    const prev = pending.get(name);
+    if (prev) {
+      clearTimeout(prev.timer);
+      pending.delete(name);
+    }
+    lastWritten.delete(name);
     try {
       localStorage.removeItem(MIRROR_PREFIX + name);
       localStorage.removeItem(name);
@@ -107,6 +144,7 @@ export async function memoryInfo(): Promise<{
 }
 
 export async function exportMemory(): Promise<{ ok: boolean; json?: string; error?: string }> {
+  await flushPersistentStorage();
   const e = electronState();
   if (e?.exportAll) {
     try {
@@ -116,7 +154,6 @@ export async function exportMemory(): Promise<{ ok: boolean; json?: string; erro
       return { ok: false, error: err instanceof Error ? err.message : "export failed" };
     }
   }
-  // browser: dump localStorage keys
   try {
     const keys: Record<string, string> = {};
     for (let i = 0; i < localStorage.length; i++) {

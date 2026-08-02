@@ -167,6 +167,28 @@ async function ensureUiServer(desktopDir) {
   } catch {
     /* ignore */
   }
+  // Single-writer lock so multiple instances don't fight the Nitro port
+  const lockPath = path.join(rt, "ui.lock");
+  try {
+    if (fs.existsSync(lockPath)) {
+      const prev = Number(fs.readFileSync(lockPath, "utf8").trim());
+      if (prev && !Number.isNaN(prev)) {
+        try {
+          process.kill(prev, 0);
+          // another UI server claims to be alive — wait for probe only
+          const waitUntil = Date.now() + 8_000;
+          while (Date.now() < waitUntil) {
+            // fall through to probe loop via re-check below
+            break;
+          }
+        } catch {
+          /* stale lock */
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
   const logPath = path.join(rt, "ui.log");
   let logFd;
   try {
@@ -203,6 +225,11 @@ async function ensureUiServer(desktopDir) {
     windowsHide: true,
     shell: Boolean(spec.shell),
   });
+  try {
+    if (child.pid) fs.writeFileSync(lockPath, String(child.pid) + "\n");
+  } catch {
+    /* ignore */
+  }
   child.unref();
   child.on("error", (err) => {
     try {

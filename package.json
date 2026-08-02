@@ -1,8 +1,8 @@
 {
   "name": "grokhub",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
-  "description": "GrokHub — Grok-native agent control plane (Windows, Linux)",
+  "description": "GrokHub \u2014 Grok-native agent control plane (Windows, Linux)",
   "author": "ViperXIII",
   "license": "MIT",
   "homepage": "https://github.com/blackviperxiii-ui/Grok-Hub",
@@ -32,7 +32,9 @@
     "desktop:win": "node scripts/build-windows.mjs",
     "desktop:win:dir": "node scripts/build-windows.mjs --dir",
     "desktop:win:portable": "node scripts/build-windows.mjs --portable",
-    "aur:release": "bash scripts/make-aur-release.sh"
+    "aur:release": "bash scripts/make-aur-release.sh",
+    "repair": "bash scripts/repair-install.sh",
+    "release:bundle": "bash scripts/make-release-bundle.sh"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.3",
@@ -114,7 +116,7 @@
   "build": {
     "appId": "com.grokhub.app",
     "productName": "GrokHub",
-    "copyright": "Copyright © 2026 ViperXIII",
+    "copyright": "Copyright \u00a9 2026 ViperXIII",
     "directories": {
       "output": "dist-desktop",
       "buildResources": "packaging/windows"

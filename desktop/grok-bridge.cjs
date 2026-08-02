@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.6.0";
+const APP_VERSION = "0.7.0";
 
 function shaMatch(a, b) {
   if (!a || !b) return false;
@@ -692,16 +692,45 @@ async function applyUpdate(opts = {}) {
   const stageRoot = path.join(tmp, "stage");
 
   try {
-    steps.push("Downloading GitHub archive…");
+    steps.push("Downloading update…");
     const headers = {
       accept: "application/vnd.github+json",
       "user-agent": "GrokHub-Updater",
     };
     if (token) headers.authorization = `Bearer ${token}`;
-    const urls = [
+
+    // Prefer published release bundles (include prebuilt .output) over source tarball
+    const urls = [];
+    try {
+      const relRes = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+        headers,
+      });
+      if (relRes.ok) {
+        const rel = await relRes.json();
+        const assets = Array.isArray(rel.assets) ? rel.assets : [];
+        for (const a of assets) {
+          const name = String(a.name || "");
+          if (/grokhub.*\.(tar\.gz|tgz)$/i.test(name) || /desktop.*bundle/i.test(name) || /with-output/i.test(name)) {
+            if (a.browser_download_url) {
+              urls.push(a.browser_download_url);
+              steps.push(`Release asset: ${name}`);
+            }
+          }
+        }
+        // Also try a conventional asset name
+        if (rel.tag_name) {
+          urls.push(
+            `https://github.com/${repo}/releases/download/${rel.tag_name}/grokhub-desktop-${rel.tag_name}.tar.gz`,
+          );
+        }
+      }
+    } catch {
+      /* fall through to branch tarball */
+    }
+    urls.push(
       `https://api.github.com/repos/${repo}/tarball/${branch}`,
       `https://codeload.github.com/${repo}/tar.gz/refs/heads/${branch}`,
-    ];
+    );
     let ok = false;
     let last = "";
     for (const url of urls) {
@@ -959,7 +988,7 @@ const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const XAI_UA = "GrokHub/0.6.0 (xAI OAuth; Electron)";
+const XAI_UA = "GrokHub/0.7.0 (xAI OAuth; Electron)";
 
 async function xaiDiscovery() {
   const res = await fetch(XAI_OAUTH_DISCOVERY, {

@@ -292,8 +292,7 @@ export function AppShell() {
     // Flush memory on hide/close so restarts keep the latest turn
     const flush = () => {
       try {
-        void useGrokHub.persist.rehydrate; // keep ref
-        // zustand persist writes on each set; force a no-op write by touching heartbeat
+        void import("@/lib/persistent-storage").then((m) => m.flushPersistentStorage());
         useGrokHub.setState((s) => ({ heartbeatAt: s.heartbeatAt }));
       } catch {
         /* ignore */
@@ -308,52 +307,52 @@ export function AppShell() {
     };
   }, []);
 
-  // Poll essential models every 5 minutes while connected
+  // Poll essential models every 5 minutes while connected (pause when hidden)
   useEffect(() => {
-    const MODELS_POLL_MS = 5 * 60 * 1000;
-    const tick = () => {
-      const st = useGrokHub.getState();
-      if (st.oauth?.accessToken || st.apiKey || st.grokConnected) {
-        void st.refreshModels();
-      }
-    };
-    const id = window.setInterval(tick, MODELS_POLL_MS);
-    // Also refresh shortly after mount if we already have credentials
-    const t = window.setTimeout(tick, 8_000);
-    return () => {
-      window.clearInterval(id);
-      window.clearTimeout(t);
-    };
+    let stop = () => {};
+    void import("@/lib/smart-poll").then(({ startSmartPoll }) => {
+      stop = startSmartPoll({
+        intervalMs: 5 * 60 * 1000,
+        maxBackoffMs: 30 * 60 * 1000,
+        onlyWhenVisible: true,
+        tick: () => {
+          const st = useGrokHub.getState();
+          if (st.oauth?.accessToken || st.apiKey || st.grokConnected) {
+            void st.refreshModels();
+          }
+        },
+      });
+    });
+    return () => stop();
   }, []);
 
-  // Subscription usage — poll every 1 minute when linked / authenticated
+  // Subscription usage — poll every 1 minute when linked; backoff when failing / hidden
   useEffect(() => {
-    const USAGE_POLL_MS = 60_000;
-    const tick = () => {
-      const st = useGrokHub.getState();
-      if (st.ssoCookie || st.oauth?.accessToken || st.apiKey || document.visibilityState === "visible") {
-        // Still refresh local units when visible; website pool needs SSO
-        void st.refreshUsage();
-      }
-      if (st.ssoCookie) {
-        void st.syncWebsiteConnectors();
-      }
-    };
-    tick();
-    const id = window.setInterval(tick, USAGE_POLL_MS);
-    const onVis = () => {
-      if (document.visibilityState === "visible") tick();
-    };
-    document.addEventListener("visibilitychange", onVis);
-    return () => {
-      window.clearInterval(id);
-      document.removeEventListener("visibilitychange", onVis);
-    };
+    let stop = () => {};
+    void import("@/lib/smart-poll").then(({ startSmartPoll }) => {
+      stop = startSmartPoll({
+        intervalMs: 60_000,
+        maxBackoffMs: 10 * 60 * 1000,
+        onlyWhenVisible: true,
+        tick: async () => {
+          const st = useGrokHub.getState();
+          try {
+            await st.refreshUsage();
+            if (st.ssoCookie) await st.syncWebsiteConnectors();
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      });
+    });
+    return () => stop();
   }, []);
 
   // Automations scheduler — every 30s
   useEffect(() => {
     const id = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
       void useGrokHub.getState().tickAutomations();
     }, 30_000);
     const t = window.setTimeout(() => void useGrokHub.getState().tickAutomations(), 5_000);

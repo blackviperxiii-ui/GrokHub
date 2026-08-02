@@ -71,11 +71,21 @@ const components: Components = {
 export function MarkdownBody({
   content,
   className,
+  streaming,
 }: {
   content: string;
   className?: string;
+  /** While streaming, skip full GFM parse for speed; plain text with pre-wrap */
+  streaming?: boolean;
 }) {
   if (!content) return null;
+  if (streaming) {
+    return (
+      <div className={cn("markdown-body min-w-0 break-words whitespace-pre-wrap", className)}>
+        {content}
+      </div>
+    );
+  }
   return (
     <div className={cn("markdown-body min-w-0 break-words", className)}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>

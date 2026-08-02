@@ -841,6 +841,27 @@ export function SettingsView() {
             <Button variant="secondary" disabled={updateBusy} onClick={() => void onCheckUpdate()}>
               Check for updates
             </Button>
+            <Button
+              variant="secondary"
+              disabled={updateBusy}
+              onClick={() => {
+                setUpdateLog(
+                  [
+                    "Repair install (preserves chats & secrets):",
+                    "",
+                    "  git pull",
+                    "  ./scripts/repair-install.sh",
+                    "",
+                    "Or: sudo ./scripts/install-arch.sh",
+                    "Windows: .\\scripts\\install-windows.ps1",
+                    "",
+                    "This rebuilds .output and reinstalls the desktop shell only.",
+                  ].join("\n"),
+                );
+              }}
+            >
+              Repair install help
+            </Button>
             <Button disabled={updateBusy} onClick={() => void onInstallUpdate()}>
               {updateBusy
                 ? "Installing…"

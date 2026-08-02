@@ -1,6 +1,6 @@
 # GrokHub
 
-**v0.6.0** — Grok-native agent control plane for **Windows** and **Arch Linux / CachyOS**.
+**v0.7.0** — Grok-native agent control plane for **Windows** and **Arch Linux / CachyOS**.
 
 Modes (Auto / Fast / Expert / Heavy / Build) · Imagine · connectors · skills · automations · usage meter · free-Grok fallback · setup sync · unsandboxed host (CLI · files · apps).
 
@@ -107,6 +107,25 @@ Secrets and chat history stay on the device; clean installs do not ship personal
 | **Desktop host** | Unsandboxed shell · files · apps (PowerShell on Windows, bash on Linux) |
 | **Usage** | Plan meter · poll from website |
 | **Updates** | Check / install from this GitHub repo |
+
+---
+
+## Repair (broken / blank window)
+
+Preserves chats & secrets; rebuilds UI and reinstalls the shell:
+
+```bash
+git pull
+./scripts/repair-install.sh
+grokhub
+```
+
+Release tarball **with** `.output` (for GitHub Releases / updater):
+
+```bash
+npm run release:bundle
+# upload dist-release/grokhub-desktop-v*.tar.gz as a release asset
+```
 
 ---
 

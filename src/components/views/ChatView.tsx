@@ -45,12 +45,23 @@ export function ChatView() {
   const [text, setText] = useState("");
   const [localRunning, setLocalRunning] = useState(false);
   const [hostOnline, setHostOnline] = useState<boolean | undefined>(undefined);
+  /** How many older messages are revealed beyond the default window */
+  const [historyExtra, setHistoryExtra] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const modeMeta = getMode(mode);
   const busy = running || localRunning;
   const plan = PLAN_LIMITS[usage.plan];
   const pct = Math.round(usagePercent(usage));
+
+  // Window long threads: default last 40 messages; user can load more
+  const WINDOW = 40;
+  const visibleChat = useMemo(() => {
+    const take = WINDOW + historyExtra;
+    if (chat.length <= take) return chat;
+    return chat.slice(chat.length - take);
+  }, [chat, historyExtra]);
+  const hiddenCount = Math.max(0, chat.length - visibleChat.length);
 
   // Lightweight host presence for chips (non-blocking)
   useEffect(() => {
@@ -276,7 +287,18 @@ export function ChatView() {
             <HostGatewayBanner variant="compact" />
           </div>
           <div className="scroll-panel min-h-0 flex-1 space-y-3 px-4 py-4 md:px-6 3xl:px-10 uw:px-16">
-            {chat.map((m) => (
+            {hiddenCount > 0 && (
+              <div className="flex justify-center">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setHistoryExtra((n) => n + WINDOW)}
+                >
+                  Show {Math.min(WINDOW, hiddenCount)} earlier · {hiddenCount} hidden
+                </Button>
+              </div>
+            )}
+            {visibleChat.map((m) => (
               <div
                 key={m.id}
                 className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}
@@ -317,7 +339,7 @@ export function ChatView() {
                     m.role === "user" ? (
                       <div className="whitespace-pre-wrap">{m.content}</div>
                     ) : (
-                      <MarkdownBody content={m.content} />
+                      <MarkdownBody content={m.content} streaming={Boolean(m.streaming)} />
                     )
                   ) : m.streaming ? (
                     <span className="inline-flex items-center gap-1.5 text-[var(--color-subtle)]">
