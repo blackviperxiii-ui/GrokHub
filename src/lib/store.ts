@@ -310,6 +310,9 @@ type State = {
   pinThread: (id: string, pinned?: boolean) => void;
   setThreadFolder: (id: string, folder: string | null) => void;
   dismissSessionResume: () => void;
+  updateBanner: { available: boolean; version?: string; detail?: string } | null;
+  setUpdateBanner: (v: { available: boolean; version?: string; detail?: string } | null) => void;
+  checkUpdateQuiet: () => Promise<void>;
   resumeLastSession: () => void;
   /** After an interrupt: drop partial assistant reply and re-run last user prompt */
   continueInterruptedSession: () => Promise<void>;
@@ -355,6 +358,7 @@ type State = {
     slash: string;
   }) => void;
   runSkill: (id: string) => Promise<void>;
+  startWorkItem: (id: string) => Promise<void>;
   toggleAutomation: (id: string) => void;
   runAutomation: (id: string) => Promise<void>;
   addAutomation: (input: {
@@ -386,209 +390,133 @@ type State = {
 };
 
 function replyFor(text: string, s: State, routed: GrokModeId): string {
+  /** Offline-only honest status — never invents inbox/calendar/Linear data. */
   const lower = text.toLowerCase();
   const connected = s.connectors.filter((c) => c.status === "connected");
+  const liveConnected = connected.filter((c) => c.liveTools);
+  const statusOnly = connected.filter((c) => !c.liveTools);
   const enabledSkills = s.skills.filter((sk) => sk.enabled);
-  const depth = getMode(routed).depth;
   const plan = PLAN_LIMITS[s.usage.plan];
   const pct = Math.round(usagePercent(s.usage));
+  const m = getMode(routed);
 
-  if (lower.includes("usage") || lower.includes("quota") || lower.includes("limit") || lower.includes("subscription")) {
+  if (
+    lower.includes("usage") ||
+    lower.includes("quota") ||
+    lower.includes("limit") ||
+    lower.includes("subscription")
+  ) {
     return [
-      "Subscription usage",
+      "Subscription usage (local meter)",
       "",
       `Plan: ${plan.label}`,
       `Units: ${s.usage.usedUnits.toFixed(1)} / ${plan.units} (${pct}%)`,
       `Messages ${s.usage.messages}/${plan.messages} · Imagine ${s.usage.imagine}/${plan.imagine}`,
       `Automations ${s.usage.automations}/${plan.automations} · Host ${s.usage.host}/${plan.host}`,
       "",
-      "Heavy = 8u · Expert = 4u · Build = 2u · Fast = 1u · Imagine = 5u",
-      "Open Settings for the full meter and plan switcher.",
+      "Open Settings → Usage for website pool details when Grok website is linked.",
     ].join("\n");
-  }
-
-  if (lower.startsWith("/morning") || lower.includes("morning brief")) {
-    const core = [
-      "",
-      "Morning Brief",
-      "",
-      `- Connectors live: ${connected.map((c) => c.name).join(", ") || "none"}`,
-      "- Calendar: 2 meetings after 13:00, free block 10:00–12:00",
-      "- Inbox: 4 unread · 1 invoice reminder · 1 shipping notice",
-      "- Linear: 2 P0s · GitHub: 3 review requests",
-      `- Usage: ${pct}% of ${plan.label} period budget`,
-    ];
-    if (depth === "light") {
-      return [...core, "", "Top move: clear P0 Linear, then PR reviews."].join("\n");
-    }
-    if (depth === "team") {
-      return [
-        ...core,
-        "",
-        "Team pass (Heavy):",
-        "- Ops: confirm dependencies on the two P0s",
-        "- Research: gather context from last related issue threads",
-        "- Build: draft a short checklist skill if the workflow repeats",
-        "- Primary: sequence deep work under 90 minutes",
-      ].join("\n");
-    }
-    if (depth === "code") {
-      return [
-        ...core,
-        "",
-        "Build angle:",
-        "- Ship GrokHub desktop install path first",
-        "- Wire mode routing tests before new connectors",
-        "- Package: Electron + Arch PKGBUILD ready",
-      ].join("\n");
-    }
-    return [
-      ...core,
-      "",
-      "Suggested order: P0 Linear → PR reviews → inbox drafts → lunch buffer.",
-      depth === "deep"
-        ? "Risk: context switching across tools — batch connector work."
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  if (lower.startsWith("/standup") || lower.includes("standup")) {
-    return [
-      "",
-      "Standup",
-      "",
-      "- Yesterday: connector triage + mode routing polish",
-      "- Today: desktop host checks and packaging notes",
-      "- Blockers: none — usage meter and Imagine ready for demos",
-      depth === "code"
-        ? "- Build: keep /standup skill logging shipped items weekly"
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
   }
 
   if (lower.includes("imagine") || lower.startsWith("/imagine")) {
     return [
+      "Imagine",
       "",
-      "Imagine is available in the Imagine panel.",
-      "Describe a scene there — GrokHub renders a local preview on this Arch desktop build.",
-      `Imagine quota: ${s.usage.imagine}/${plan.imagine} this period (5 units each).`,
+      "Open the Imagine tab to generate images or video.",
+      `Quota this period: ${s.usage.imagine}/${plan.imagine} (5 units each).`,
+      "Tip: describe a scene in chat while Adaptive is on — GrokHub will switch to Imagine when the ask is visual.",
     ].join("\n");
   }
 
-  if (lower.includes("mode") || lower.includes("fast") || lower.includes("expert") || lower.includes("heavy")) {
+  if (
+    lower.includes("mode") ||
+    lower.includes("fast") ||
+    lower.includes("expert") ||
+    lower.includes("heavy") ||
+    lower.includes("adaptive")
+  ) {
     return [
+      "Modes",
       "",
-      "Baked-in Grok modes (same as web):",
-      "- Adaptive — Real router: ⚡ Fast · 🧠 Think · 🔬 Deep · 🛠️ Build",
-      "- Fast — Quick responses · grok-4-1-fast · 1 unit",
-      "- Expert — Thinks hard · grok-4.3 · 4 units",
-      "- Heavy — Team of Experts · grok-4.3 · 8 units",
-      "- Build — Build apps and sites · grok-code-fast-1 · 2 units",
+      "- Adaptive — routes ⚡ Fast · 🧠 Think · 🔬 Deep · 🛠️ Build",
+      "- Fast / Expert / Heavy / Build — manual lock",
       "",
-      `Active: ${getMode(s.mode).label}${s.mode === "auto" ? ` (this turn → ${getMode(routed).label})` : ""}`,
-      "Change modes from the titlebar picker or Settings.",
+      `Active: ${getMode(s.mode).label}${s.mode === "auto" ? ` (this turn → ${m.label})` : ""}`,
     ].join("\n");
   }
 
   if (lower.includes("connector") || lower.includes("connect")) {
     return [
+      "Connectors",
       "",
-      "Connector status",
+      "Live tools (agent can call):",
+      ...(liveConnected.length
+        ? liveConnected.map((c) => `- ${c.name}: connected · ${c.tools.slice(0, 4).join(", ")}`)
+        : ["- (none connected)"]),
       "",
-      ...s.connectors.map((c) => `- ${c.name}: ${c.status}`),
+      "Website status only (not executable from this app yet):",
+      ...(statusOnly.length
+        ? statusOnly.map((c) => `- ${c.name}: ${c.status}`)
+        : ["- (none)"]),
+      "",
+      "GitHub PAT + Grok OAuth/API power live tools. Gmail/Drive/etc. show link status from grok.com when website SSO is linked.",
     ].join("\n");
   }
 
   if (lower.includes("automat") || lower.includes("schedule")) {
     return [
-      "",
       "Automations",
       "",
       ...s.automations.map(
         (a) =>
-          `- ${a.enabled ? "ON" : "OFF"} ${a.name} (${a.schedule} @ ${a.time}) · ${a.runCount} runs`,
+          `- ${a.enabled ? "ON" : "OFF"} ${a.name} (${a.schedule}${a.failCount ? ` · ${a.failCount} fails` : ""}) · ${a.runCount} runs`,
       ),
-    ].join("\n");
+      s.automations.length ? "" : "(none)",
+    ]
+      .filter((line, i, arr) => line !== "" || i < arr.length - 1)
+      .join("\n");
   }
 
   if (lower.includes("skill")) {
     return [
-      "",
       "Skills",
       "",
       ...enabledSkills.map((sk) => `- ${sk.slash} — ${sk.name}`),
+      "",
+      "Running a skill sends a real agent turn with that skill’s instructions (tools allowed).",
     ].join("\n");
   }
 
-  if (depth === "code" || lower.includes("build") || lower.includes("arch") || lower.includes("desktop")) {
+  if (lower.includes("workboard") || lower.includes("work board") || lower.startsWith("/board")) {
+    const open = (s.workboard?.items || []).filter(
+      (i) => !["done", "dismissed"].includes(i.status),
+    );
     return [
+      "Workboard",
       "",
-      "Build / desktop plan",
-      "",
-      "GrokHub ships as an Electron shell for Arch Linux:",
-      "- `desktop/main.mjs` — native window, tray, Wayland-friendly flags",
-      "- `packaging/PKGBUILD` — makepkg install",
-      "- Unsandboxed host: CLI, files, apps via Desktop tab or `$ command`",
-      "",
-      `Plan ${plan.label}: host CLI ${s.usage.host}/${plan.host} this period.`,
-    ].join("\n");
+      `Open items: ${open.length}`,
+      ...open.slice(0, 8).map((i) => `- [${i.status}] ${i.title}`),
+      open.length ? "" : "Pin tasks with WORK_PIN or the Workboard tab.",
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
-  if (depth === "team") {
-    return [
-      "",
-      "Heavy · Team of Experts",
-      "",
-      `Goal: ${text}`,
-      "",
-      "1) Planner — break into 3 workstreams",
-      "2) Researcher — pull connector context (mail/code/issues)",
-      "3) Critic — risk + cheapest path",
-      "4) Builder — ship checklist",
-      "",
-      `Context: ${connected.length} connectors · ${enabledSkills.length} skills · ${pct}% usage.`,
-    ].join("\n");
-  }
-
-  if (depth === "deep") {
-    return [
-      "",
-      "Expert analysis",
-      "",
-      `Reading: ${text}`,
-      "",
-      "Constraints: local-first control plane, Grok modes (Fast/Expert/Heavy/Build), Arch desktop target.",
-      "Approach: gather connector state → apply enabled skills → leave run log.",
-      "Tradeoff: Fast is cheaper/latency; Expert/Heavy spend units for depth.",
-      "",
-      `Live tools: ${connected.map((c) => c.name).join(", ") || "none connected"}.`,
-    ].join("\n");
-  }
-
-  if (depth === "light") {
-    return [
-      "",
-      `Got it — ${text.slice(0, 120)}${text.length > 120 ? "…" : ""}`,
-      `Using ${connected.length} connectors · ${enabledSkills.length} skills · ${pct}% quota.`,
-      "Say /morning, open Imagine, or switch to Expert for deeper work.",
-    ].join("\n");
-  }
-
+  // Generic offline status (no fictional calendar/inbox)
   return [
+    "GrokHub offline status",
     "",
-    "Primary co-pilot",
+    `Mode this turn: ${m.label}`,
+    `Usage: ${pct}% of ${plan.label}`,
+    `Live connectors: ${liveConnected.map((c) => c.name).join(", ") || "none"}`,
+    `Skills enabled: ${enabledSkills.length}`,
+    `Open workboard items: ${(s.workboard?.items || []).filter((i) => !["done", "dismissed"].includes(i.status)).length}`,
     "",
-    `Goal: ${text}`,
-    `Using ${connected.length} connectors and ${enabledSkills.length} enabled skills.`,
-    "Next: break into steps → pull tools → run skills → log.",
-    "Try /morning, /standup, Imagine, or Heavy mode for a team pass.",
-
+    "Connect Grok (OAuth, free website, or API key) for full agent replies.",
+    "Local slash helpers never invent inbox, calendar, or Linear data.",
   ].join("\n");
 }
+
 
 function emptyProfile(): GrokProfile {
   return {
@@ -830,6 +758,7 @@ export const useGrokHub = create<State>()(
       threads: boot.threads,
       activeThreadId: boot.activeThreadId,
       sessionResume: null,
+      updateBanner: null,
       replyTo: null,
       agents: boot.agents,
       profile: boot.profile,
@@ -2190,6 +2119,30 @@ export const useGrokHub = create<State>()(
       },
 
       dismissSessionResume: () => set({ sessionResume: null }),
+      setUpdateBanner: (v) => set({ updateBanner: v }),
+      checkUpdateQuiet: async () => {
+        try {
+          const { checkUpdate } = await import("./grok-client");
+          const st = await checkUpdate(get().githubToken || undefined);
+          if (st?.updateAvailable && (st.remoteSha || st.detail)) {
+            set({
+              updateBanner: {
+                available: true,
+                version: st.currentVersion,
+                detail:
+                  st.remoteMessage ||
+                  st.remoteSha?.slice(0, 8) ||
+                  st.detail ||
+                  "Update available",
+              },
+            });
+          } else {
+            set({ updateBanner: null });
+          }
+        } catch {
+          /* quiet */
+        }
+      },
 
       setAgentPrefs: (patch) => {
         set((s) => ({
@@ -3057,48 +3010,94 @@ export const useGrokHub = create<State>()(
       runSkill: async (id) => {
         const skill = get().skills.find((s) => s.id === id);
         if (!skill) return;
-        const mode = get().mode;
-        const routed = resolveMode(mode, skill.instructions);
-        const m = getMode(routed);
-        const bill = get().recordUsage("skill", routed);
-        if (!bill.ok) return;
-        set({ running: true });
-        get().setAgentStatus("primary", "working", 1);
-        get().pushActivity({
-          kind: "skill",
-          title: `Running ${skill.name}`,
-          detail: `${skill.slash} · ${m.label} · ${bill.cost}u`,
-          status: "running",
-        });
-        try {
-        await wait(m.latencyMs[0] + Math.random() * (m.latencyMs[1] - m.latencyMs[0]));
+        if (get().running || get().streamingMessageId) {
+          get().pushActivity({
+            kind: "skill",
+            title: `Skill busy: ${skill.name}`,
+            detail: "Wait for the current agent turn to finish",
+            status: "queued",
+          });
+          return;
+        }
         set((s) => ({
           skills: s.skills.map((sk) =>
             sk.id === id ? { ...sk, runs: sk.runs + 1 } : sk,
           ),
+          nav: "chat" as const,
         }));
-        } finally {
-        set({ running: false, streamStatus: null });
-        get().setAgentStatus("primary", "idle", 0);
-        }
         get().pushActivity({
           kind: "skill",
-          title: `${skill.name} finished`,
-          detail: skill.instructions.slice(0, 120),
-          status: "success",
+          title: `Running ${skill.name}`,
+          detail: `${skill.slash} · live agent`,
+          status: "running",
         });
-        set((s) => ({
-          chat: [
-            ...s.chat,
-            {
-              id: uid("msg"),
-              role: "assistant",
-              content: replyFor(skill.slash, get(), routed),
-              ts: Date.now(),
-              mode: routed,
-            },
-          ],
-        }));
+        const prompt = [
+          `[Skill: ${skill.name} ${skill.slash}]`,
+          skill.instructions.trim(),
+          "",
+          "Execute this skill fully. Use HOST_CMD / CONNECTOR_CMD when real data is needed. Do not invent connector data.",
+        ].join("\n");
+        try {
+          await get().sendChat(prompt);
+          get().pushActivity({
+            kind: "skill",
+            title: `${skill.name} finished`,
+            detail: skill.instructions.slice(0, 120),
+            status: "success",
+          });
+        } catch (e) {
+          get().pushActivity({
+            kind: "skill",
+            title: `${skill.name} failed`,
+            detail: e instanceof Error ? e.message : "skill failed",
+            status: "failed",
+          });
+        }
+      },
+
+
+      startWorkItem: async (id) => {
+        const item = get().workboard.items.find((w) => w.id === id);
+        if (!item) return;
+        if (get().running || get().streamingMessageId) {
+          get().pushActivity({
+            kind: "system",
+            title: "Agent busy",
+            detail: "Finish the current turn before starting a workboard task",
+            status: "queued",
+          });
+          return;
+        }
+        get().setWorkItemStatus(id, "in_progress");
+        const project = get().projectWorkspace?.path;
+        const prompt = [
+          `[Workboard task: ${item.title}]`,
+          item.detail ? `Detail: ${item.detail}` : "",
+          project ? `Project cwd: ${project}` : "",
+          "",
+          "Work this task end-to-end. Prefer HOST_CMD for real files/shell.",
+          "When finished, emit WORK_UPDATE: " + item.id + " status=done (or leave staged notes).",
+          "Do not invent data — use tools.",
+        ]
+          .filter(Boolean)
+          .join("\n");
+        set({ nav: "chat" });
+        get().pushActivity({
+          kind: "system",
+          title: `Started: ${item.title}`,
+          detail: "Agent turn from workboard",
+          status: "running",
+        });
+        try {
+          await get().sendChat(prompt);
+        } catch (e) {
+          get().pushActivity({
+            kind: "system",
+            title: `Work item stalled: ${item.title}`,
+            detail: e instanceof Error ? e.message : "failed",
+            status: "failed",
+          });
+        }
       },
 
       toggleAutomation: (id) => {
@@ -3171,6 +3170,11 @@ export const useGrokHub = create<State>()(
           summary = e instanceof Error ? e.message : "automation failed";
         }
         const { computeNextRun } = await import("./automation-schedule");
+        const threadId = get().activeThreadId;
+        const prevFail = auto.failCount || 0;
+        const failCount = ok ? 0 : prevFail + 1;
+        // Pause after 3 consecutive failures (non-once schedules)
+        const pauseFails = !ok && failCount >= 3 && auto.schedule !== "once";
         set((s) => ({
           automations: s.automations.map((a) =>
             a.id === id
@@ -3178,8 +3182,10 @@ export const useGrokHub = create<State>()(
                   ...a,
                   lastRun: Date.now(),
                   runCount: a.runCount + 1,
+                  failCount,
+                  lastThreadId: threadId || a.lastThreadId || null,
                   nextRun:
-                    a.schedule === "once"
+                    a.schedule === "once" || pauseFails
                       ? undefined
                       : computeNextRun(
                           a.schedule,
@@ -3189,11 +3195,20 @@ export const useGrokHub = create<State>()(
                           a.times,
                           a.heartbeatEveryMin,
                         ),
-                  enabled: a.schedule === "once" ? false : a.enabled,
+                  enabled:
+                    a.schedule === "once" || pauseFails ? false : a.enabled,
                 }
               : a,
           ),
         }));
+        if (pauseFails) {
+          get().pushActivity({
+            kind: "automation",
+            title: `Paused: ${auto.name}`,
+            detail: `${failCount} consecutive failures — re-enable in Automations`,
+            status: "failed",
+          });
+        }
         get().setAgentStatus("ops", "idle", 0);
         get().pushActivity({
           kind: "automation",
@@ -3368,7 +3383,7 @@ export const useGrokHub = create<State>()(
       },
 
       sendChat: async (text) => {
-        const trimmed = text.trim();
+        let trimmed = text.trim();
         if (!trimmed) return;
         if (get().running) {
           // Already running — ignore new sends (use Stop first)
@@ -3960,11 +3975,46 @@ if (cmd === "tools") {
           }));
         };
 
-        const isLocalSlash =
-          trimmed.startsWith("/morning") ||
-          trimmed.startsWith("/standup") ||
-          trimmed.startsWith("/docs") ||
-          trimmed.startsWith("/prints");
+        // Expand enabled skill slash into full instructions for the live agent
+        {
+          const slashMatch = trimmed.match(/^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/);
+          if (slashMatch) {
+            const cmd = slashMatch[1]!.toLowerCase();
+            const arg = (slashMatch[2] || "").trim();
+            const skill = get().skills.find(
+              (sk) =>
+                sk.enabled &&
+                sk.slash.replace(/^\//, "").toLowerCase() === cmd,
+            );
+            if (skill) {
+              trimmed = [
+                `[Skill: ${skill.name} /${cmd}]`,
+                skill.instructions.trim(),
+                arg ? `\nUser notes: ${arg}` : "",
+                "",
+                "Execute this skill. Use real tools; never invent connector/inbox data.",
+              ]
+                .filter(Boolean)
+                .join("\n");
+              // Keep user bubble readable as the slash; agent sees expanded prompt
+              set((s) => ({
+                chat: s.chat.map((row) =>
+                  row.id === userMsg.id
+                    ? {
+                        ...row,
+                        content: arg
+                          ? `${skill.slash} ${arg}`
+                          : skill.slash,
+                      }
+                    : row,
+                ),
+                skills: s.skills.map((sk) =>
+                  sk.id === skill.id ? { ...sk, runs: sk.runs + 1 } : sk,
+                ),
+              }));
+            }
+          }
+        }
 
         let usedLive = false;
         let finalAnswer = "";
@@ -3996,17 +4046,7 @@ if (cmd === "tools") {
           stripSelfModCommands(stripConnectorCommands(stripHostCommands(s)));
 
         try {
-          if (isLocalSlash) {
-            set({ streamStatus: "Running skill…" });
-            await wait(280);
-            if (abort.signal.aborted || gen !== chatGeneration) {
-              aborted = true;
-            } else {
-              bill = get().recordUsage("message", routed);
-              finalAnswer = replyFor(trimmed, get(), routed);
-              patchBot(finalAnswer, { streaming: false });
-            }
-          } else {
+          
             const { grokChatStream } = await import("./grok-client");
 
             // Multi-turn host tool loop (model can emit HOST_CMD: lines)
@@ -4120,6 +4160,12 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx);
             const freeTier =
               stTurn.usage.plan === "free" ||
               (!stTurn.oauth?.accessToken && !stTurn.apiKey);
+            const liveConn = stTurn.connectors.filter(
+              (c) => c.status === "connected" && c.liveTools,
+            );
+            const statusConn = stTurn.connectors.filter(
+              (c) => c.status === "connected" && !c.liveTools,
+            );
             const capabilityBlock = [
               "## GrokHub session capabilities",
               "- Context manager: budgeted history + optional thread summary (see /context).",
@@ -4140,7 +4186,14 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx);
                 : "- Host shell tools: available when Desktop Host is LIVE (use HOST_CMD).",
               stTurn.agentPrefs?.connectorToolsEnabled === false
                 ? "- Connector tools: DISABLED."
-                : "- Connector tools: use only LIVE tools via CONNECTOR_CMD.",
+                : "- Connector tools: ONLY connectors marked liveTools (Grok, Desktop Host, GitHub with PAT).",
+              liveConn.length
+                ? `- LIVE connectors: ${liveConn.map((c) => c.name).join(", ")}.`
+                : "- LIVE connectors: none connected.",
+              statusConn.length
+                ? `- Website status-only (DO NOT invent data or emit CONNECTOR_CMD for these): ${statusConn.map((c) => c.name).join(", ")}.`
+                : "- No website-only connectors connected.",
+              "- Never invent Gmail/Drive/Calendar/Notion/Linear contents. If a connector is not LIVE, say so and stop.",
             ].join("\n");
             const turnWorkspaceContext =
               [
@@ -4517,6 +4570,25 @@ while (rounds < maxRounds && !aborted) {
                   } else {
                     set({ streamStatus: "Self-modifying app…" });
                     const outputs: string[] = [];
+                    const needsMutate = selfCmds.some(
+                      (sc) => sc.kind === "write" || sc.kind === "patch",
+                    );
+                    if (needsMutate) {
+                      try {
+                        const snap = await selfModSnapshot(
+                          `pre-agent-${Date.now()}`,
+                        );
+                        outputs.push(
+                          snap.ok
+                            ? `SNAPSHOT auto ${(snap as { id?: string }).id || "ok"} (before writes)`
+                            : `SNAPSHOT auto failed — writes may still proceed`,
+                        );
+                      } catch (e) {
+                        outputs.push(
+                          `SNAPSHOT auto error: ${e instanceof Error ? e.message : "failed"}`,
+                        );
+                      }
+                    }
                     for (const sc of selfCmds.slice(0, 4)) {
                       if (abort.signal.aborted || gen !== chatGeneration) {
                         aborted = true;
@@ -4830,7 +4902,7 @@ if (!cmds.length) {
                 ),
               );
             }
-          }
+          
         } catch (e) {
           if (abort.signal.aborted || gen !== chatGeneration) {
             aborted = true;

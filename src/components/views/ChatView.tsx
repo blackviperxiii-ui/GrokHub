@@ -143,26 +143,36 @@ const ChatMessageRow = memo(function ChatMessageRow({
             {m.role} · <RelativeTime ts={m.ts} />
           </span>
           {(m.routeTier || m.mode) && m.role === "assistant" && (
-            <span
-              className={cn(
-                "adaptive-pill inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-bold normal-case tracking-wide shadow-sm",
-                m.routeTier
-                  ? tierMeta(m.routeTier).tone
-                  : "border-[var(--color-border)] bg-[var(--color-elevated)] text-[var(--color-muted)]",
-              )}
-              title={
-                m.routeReason
-                  ? m.routeReason
+            <span className="inline-flex max-w-full flex-col items-start gap-0.5 normal-case">
+              <span
+                className={cn(
+                  "adaptive-pill inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-bold tracking-wide shadow-sm",
+                  m.routeTier
+                    ? tierMeta(m.routeTier).tone
+                    : "border-[var(--color-border)] bg-[var(--color-elevated)] text-[var(--color-muted)]",
+                )}
+                title={
+                  m.routeReason
+                    ? m.routeReason
+                    : m.mode === "auto"
+                      ? "Adaptive router"
+                      : getMode(m.mode || "auto").label
+                }
+              >
+                {m.routeTier
+                  ? tierMeta(m.routeTier).label
                   : m.mode === "auto"
-                    ? "Adaptive router"
-                    : getMode(m.mode || "auto").label
-              }
-            >
-              {m.routeTier
-                ? tierMeta(m.routeTier).label
-                : m.mode === "auto"
-                  ? "Adaptive"
-                  : getMode(m.mode!).label}
+                    ? "Adaptive"
+                    : getMode(m.mode!).label}
+              </span>
+              {m.routeReason && (
+                <span
+                  className="max-w-[min(100%,20rem)] truncate text-[10px] font-normal normal-case tracking-normal text-[var(--color-subtle)]"
+                  title={m.routeReason}
+                >
+                  {m.routeReason}
+                </span>
+              )}
             </span>
           )}
           {m.edited && (

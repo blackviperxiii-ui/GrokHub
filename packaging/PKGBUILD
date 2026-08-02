@@ -1,6 +1,6 @@
 # Maintainer: GrokHub contributors
 pkgname=grokhub
-pkgver=0.8.24
+pkgver=0.8.25
 pkgrel=1
 pkgdesc="Grok-native agent control plane (modes, Imagine, connectors) — Arch desktop"
 arch=('x86_64')

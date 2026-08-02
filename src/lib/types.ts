@@ -85,6 +85,10 @@ export type Automation = {
   lastRun?: number;
   nextRun?: number;
   runCount: number;
+  /** Consecutive failed automation runs (reset on success). */
+  failCount?: number;
+  /** Thread that last ran this automation (deep-link). */
+  lastThreadId?: string | null;
 };
 
 export type RunStatus = "running" | "success" | "failed" | "queued";

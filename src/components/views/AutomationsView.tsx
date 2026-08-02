@@ -1,4 +1,4 @@
-import { HeartPulse, Play, Plus, TimerReset, X } from "lucide-react";
+import { HeartPulse, MessageSquare, Play, Plus, TimerReset, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { automationTimes } from "@/lib/automation-schedule";
 import { useGrokHub } from "@/lib/store";
@@ -34,6 +34,8 @@ export function AutomationsView() {
   const addAutomation = useGrokHub((s) => s.addAutomation);
   const running = useGrokHub((s) => s.running);
   const heartbeatAt = useGrokHub((s) => s.heartbeatAt);
+  const selectThread = useGrokHub((s) => s.selectThread);
+  const setNav = useGrokHub((s) => s.setNav);
 
   const [name, setName] = useState("");
   const [instructions, setInstructions] = useState("");
@@ -117,7 +119,7 @@ export function AutomationsView() {
                     <CardDescription className="mt-1">
                       {a.schedule === "heartbeat" ? (
                         <>
-                          every {a.heartbeatEveryMin || 5}m on heartbeat · {a.runCount} runs
+                          every {a.heartbeatEveryMin || 5}m on heartbeat · {a.runCount}{(a.failCount || 0) > 0 ? ` · ${a.failCount} fails` : ""} runs
                         </>
                       ) : (
                         <>
@@ -150,6 +152,19 @@ export function AutomationsView() {
                       <Play className="h-3.5 w-3.5" />
                       Run now
                     </Button>
+                {a.lastThreadId ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      selectThread(a.lastThreadId!);
+                      setNav("chat");
+                    }}
+                  >
+                    <MessageSquare className="h-3.5 w-3.5" />
+                    Last chat
+                  </Button>
+                ) : null}
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3">

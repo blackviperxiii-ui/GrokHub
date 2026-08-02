@@ -29,6 +29,7 @@ export function HistoryView() {
   const pinThread = useGrokHub((s) => s.pinThread);
   const setThreadFolder = useGrokHub((s) => s.setThreadFolder);
   const newThread = useGrokHub((s) => s.newThread);
+  const pushActivity = useGrokHub((s) => s.pushActivity);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [q, setQ] = useState("");
@@ -41,6 +42,32 @@ export function HistoryView() {
     setNowMs(Date.now());
   }, []);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  function exportAll() {
+    const lines: string[] = ["# GrokHub history export", ""];
+    const list = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
+    for (const th of list) {
+      lines.push(`## ${th.title || "Untitled"}`, "");
+      for (const m of th.messages || []) {
+        const who = m.role === "user" ? "You" : m.role === "assistant" ? "Grok" : "System";
+        lines.push(`### ${who}`, "", m.content || "", "");
+      }
+      lines.push("---", "");
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `grokhub-history-${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    pushActivity({
+      kind: "system",
+      title: "History exported",
+      detail: `${list.length} chats`,
+      status: "success",
+    });
+  }
 
   const folders = useMemo(() => {
     const set = new Set<string>();
@@ -125,10 +152,15 @@ export function HistoryView() {
               Search, pin, and folder chats. Select to resume exactly where you left off.
             </CardDescription>
           </div>
-          <Button size="sm" onClick={() => newThread()}>
-            <MessageSquarePlus className="h-4 w-4" />
-            New chat
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="secondary" onClick={exportAll}>
+              Export all
+            </Button>
+            <Button size="sm" onClick={() => newThread()}>
+              <MessageSquarePlus className="h-4 w-4" />
+              New chat
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-3 p-3 pt-0">
           <div className="relative">

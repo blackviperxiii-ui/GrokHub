@@ -15,8 +15,9 @@ export function AgentsView() {
             Multi-agent roster
           </CardTitle>
           <CardDescription>
-            OpenClaw-style named agents with a lean xAI model router. Primary stays cheap;
-            build model for code; escalate only when needed.
+            Preview roster for named agent roles (primary / ops / builder). Live multi-agent
+            orchestration is not fully wired yet — modes and the main Agent chat drive real work
+            today. Status dots reflect recent Adaptive routing activity only.
           </CardDescription>
         </CardHeader>
       </Card>

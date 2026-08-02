@@ -18,3 +18,4 @@ dist-desktop/
 node_modules/
 .output/
 dist-release/
+.vercel

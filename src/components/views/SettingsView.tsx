@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ExternalLink, FolderInput, HardDrive, Moon, RefreshCw, Sun, Monitor } from "lucide-react";
 
 const SETTINGS_SECTIONS = [
+  { id: "sec-wizard", label: "First-run" },
   { id: "sec-appearance", label: "Appearance" },
   { id: "sec-oauth", label: "Grok OAuth" },
   { id: "sec-free", label: "Free Grok" },
@@ -383,7 +384,31 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      {/* Primary: real xAI Grok OAuth */}
+      
+      <Card id="sec-wizard" className="border-[color-mix(in_oklab,var(--color-info)_30%,var(--color-border))]">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">First-run connect</CardTitle>
+          <CardDescription>
+            Recommended order: Grok OAuth (or free website / API key) → optional GitHub PAT → bind a project folder → install menu entry.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2 pt-0">
+          <Button size="sm" onClick={() => document.getElementById("sec-oauth")?.scrollIntoView({ behavior: "smooth" })}>
+            1. Grok OAuth
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => document.getElementById("sec-free")?.scrollIntoView({ behavior: "smooth" })}>
+            2. Free website
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => document.getElementById("sec-api")?.scrollIntoView({ behavior: "smooth" })}>
+            3. API key
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => document.getElementById("sec-project")?.scrollIntoView({ behavior: "smooth" })}>
+            4. Project folder
+          </Button>
+        </CardContent>
+      </Card>
+
+{/* Primary: real xAI Grok OAuth */}
       <Card id="sec-oauth">
         <CardHeader>
           <CardTitle className="text-sm">Connect to Grok (xAI OAuth)</CardTitle>

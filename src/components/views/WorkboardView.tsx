@@ -43,12 +43,15 @@ export function WorkboardView() {
   const setStatus = useGrokHub((s) => s.setWorkItemStatus);
   const pin = useGrokHub((s) => s.pinWorkItem);
   const remove = useGrokHub((s) => s.removeWorkItem);
+  const startWorkItem = useGrokHub((s) => s.startWorkItem);
   const setNav = useGrokHub((s) => s.setNav);
   const selectThread = useGrokHub((s) => s.selectThread);
+  const running = useGrokHub((s) => s.running);
   const [title, setTitle] = useState("");
   const [detail, setDetail] = useState("");
   const [priority, setPriority] = useState<WorkPriority>("normal");
   const [filter, setFilter] = useState<"open" | "all">("open");
+  const [dragId, setDragId] = useState<string | null>(null);
 
   const visible = useMemo(() => {
     if (filter === "all") return items;
@@ -151,6 +154,16 @@ export function WorkboardView() {
           <div
             key={col}
             className="flex min-h-[12rem] flex-col rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-panel)]"
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const id = e.dataTransfer.getData("text/work-id") || dragId;
+              if (id) setStatus(id, col);
+              setDragId(null);
+            }}
           >
             <div className="border-b border-[var(--color-border)] px-3 py-2">
               <div className="flex items-center justify-between gap-2">
@@ -168,10 +181,18 @@ export function WorkboardView() {
                 byCol[col].map((item) => (
                   <div
                     key={item.id}
+                    draggable
+                    onDragStart={(e) => {
+                      setDragId(item.id);
+                      e.dataTransfer.setData("text/work-id", item.id);
+                      e.dataTransfer.effectAllowed = "move";
+                    }}
+                    onDragEnd={() => setDragId(null)}
                     className={cn(
                       "rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] p-2 shadow-sm",
                       item.priority === "high" &&
                         "border-[color-mix(in_oklab,var(--color-danger)_35%,var(--color-border))]",
+                      dragId === item.id && "opacity-60",
                     )}
                   >
                     <div className="text-xs font-medium leading-snug text-[var(--color-fg)]">
@@ -202,10 +223,10 @@ export function WorkboardView() {
                           <Layers className="h-3 w-3" />
                         </IconBtn>
                       )}
-                      {(col === "approved" || col === "staged") && (
+                      {(col === "approved" || col === "staged" || col === "in_progress") && (
                         <IconBtn
-                          title="Start"
-                          onClick={() => setStatus(item.id, "in_progress")}
+                          title={running ? "Agent busy" : "Start with agent"}
+                          onClick={() => void startWorkItem(item.id)}
                         >
                           <Play className="h-3 w-3" />
                         </IconBtn>

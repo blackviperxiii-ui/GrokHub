@@ -95,12 +95,27 @@ export function ConnectorsView() {
               <CardDescription className="mt-0.5">{c.category}</CardDescription>
             </div>
             <Badge variant={on ? "success" : err ? "danger" : live ? "default" : "info"}>
-              {on ? "Connected" : err ? "Error" : live ? "Ready" : "Website"}
+              {on
+                ? live
+                  ? "Live tools"
+                  : "Status only"
+                : err
+                  ? "Error"
+                  : live
+                    ? "Ready"
+                    : "Status sync"}
             </Badge>
           </div>
         </CardHeader>
         <CardContent className="mt-auto flex flex-1 flex-col gap-3 pt-0">
           <p className="text-xs leading-relaxed text-[var(--color-muted)]">{c.description}</p>
+          {!live && (
+            <p className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-panel)] px-2 py-1.5 text-[10px] leading-snug text-[var(--color-subtle)]">
+              Website link shows connection status only. The agent cannot call Gmail/Drive/etc.
+              tools from this app yet — use live connectors (Grok, Desktop Host, GitHub) for
+              executable tools.
+            </p>
+          )}
           {c.accountLabel && (
             <p className="truncate font-mono text-[10px] text-[var(--color-subtle)]">{c.accountLabel}</p>
           )}

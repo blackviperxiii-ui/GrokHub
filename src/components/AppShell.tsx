@@ -22,6 +22,7 @@ import {
   Trash2,
   Users,
   X,
+  Download,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
@@ -235,6 +236,9 @@ export function AppShell() {
   const uiTheme = useGrokHub((s) => s.uiTheme);
   const toolsNavCollapsed = useGrokHub((s) => s.toolsNavCollapsed);
   const setToolsNavCollapsed = useGrokHub((s) => s.setToolsNavCollapsed);
+  const updateBanner = useGrokHub((s) => s.updateBanner);
+  const checkUpdateQuiet = useGrokHub((s) => s.checkUpdateQuiet);
+  const setUpdateBanner = useGrokHub((s) => s.setUpdateBanner);
   const { user, isPending } = useCurrentUserState();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
@@ -312,6 +316,7 @@ export function AppShell() {
         });
       }
       void useGrokHub.getState().refreshModels();
+      void useGrokHub.getState().checkUpdateQuiet();
       void (async () => {
         try {
           const { hostInfo } = await import("@/lib/host-client");
@@ -592,6 +597,33 @@ export function AppShell() {
               <TooltipContent>Command palette (Ctrl+K)</TooltipContent>
             </Tooltip>
             <UsageMeterChip className="hidden max-w-[140px] sm:flex" />
+            {updateBanner?.available && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => setNav("settings")}
+                    className="hidden items-center gap-1 rounded-full border border-[color-mix(in_oklab,var(--color-info)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-info)_12%,transparent)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-info)] sm:inline-flex"
+                  >
+                    <Download className="h-3 w-3" />
+                    Update
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {updateBanner.detail || "Update available — open Settings → Updates"}
+                  <button
+                    type="button"
+                    className="ml-2 underline"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setUpdateBanner(null);
+                    }}
+                  >
+                    dismiss
+                  </button>
+                </TooltipContent>
+              </Tooltip>
+            )}
             <ModePicker />
             {isPending && !oauth ? (
               <div className="hidden h-7 w-16 animate-pulse rounded bg-[var(--color-elevated)] sm:block" />

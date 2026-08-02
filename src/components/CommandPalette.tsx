@@ -4,6 +4,7 @@ import {
   Cable,
   ClipboardList,
   Command as CommandIcon,
+  Download,
   History,
   ImageIcon,
   MessageSquare,
@@ -16,6 +17,7 @@ import {
   Terminal,
   TimerReset,
   Users,
+  Wand2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useGrokHub } from "@/lib/store";
@@ -45,6 +47,11 @@ export function CommandPalette({
   const selectThread = useGrokHub((s) => s.selectThread);
   const threads = useGrokHub((s) => s.threads);
   const setUiTheme = useGrokHub((s) => s.setUiTheme);
+  const compactThread = useGrokHub((s) => s.compactThread);
+  const checkUpdateQuiet = useGrokHub((s) => s.checkUpdateQuiet);
+  const runAutomation = useGrokHub((s) => s.runAutomation);
+  const automations = useGrokHub((s) => s.automations);
+  const pinWorkItem = useGrokHub((s) => s.pinWorkItem);
   const [q, setQ] = useState("");
 
   useEffect(() => {
@@ -162,6 +169,58 @@ export function CommandPalette({
           window.dispatchEvent(new CustomEvent("grokhub:focus-chat-input"));
         },
       },
+      {
+        id: "act-compact",
+        label: "Compact this chat",
+        hint: "Context",
+        group: "Actions",
+        icon: Wand2,
+        run: () => {
+          compactThread();
+          onOpenChange(false);
+        },
+      },
+      {
+        id: "act-update",
+        label: "Check for updates",
+        group: "Actions",
+        icon: Download,
+        run: () => {
+          void checkUpdateQuiet();
+          setNav("settings");
+          onOpenChange(false);
+        },
+      },
+      {
+        id: "act-work",
+        label: "Pin workboard task",
+        hint: "Quick",
+        group: "Actions",
+        icon: ClipboardList,
+        run: () => {
+          pinWorkItem({
+            title: "New task",
+            detail: "From command palette",
+            priority: "normal",
+            source: "user",
+          });
+          setNav("workboard");
+          onOpenChange(false);
+        },
+      },
+      ...automations
+        .filter((a) => a.enabled)
+        .slice(0, 5)
+        .map((a) => ({
+          id: `auto-${a.id}`,
+          label: `Run automation: ${a.name}`,
+          group: "Automations",
+          icon: TimerReset,
+          run: () => {
+            void runAutomation(a.id);
+            onOpenChange(false);
+          },
+        })),
       mode("auto", "Adaptive"),
       mode("fast", "Fast"),
       mode("expert", "Expert"),
@@ -216,7 +275,20 @@ export function CommandPalette({
       }));
 
     return [...navItems, ...recent];
-  }, [threads, setNav, setMode, newThread, selectThread, setUiTheme, onOpenChange]);
+  }, [
+    threads,
+    setNav,
+    setMode,
+    newThread,
+    selectThread,
+    setUiTheme,
+    onOpenChange,
+    automations,
+    compactThread,
+    checkUpdateQuiet,
+    runAutomation,
+    pinWorkItem,
+  ]);
 
   const groups = useMemo(() => {
     const map = new Map<string, Item[]>();
