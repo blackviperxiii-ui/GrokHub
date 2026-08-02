@@ -6619,7 +6619,7 @@ if (!cmds.length) {
         setupSyncMeta: s.setupSyncMeta || { autoPullOnLogin: true, autoPushOnChange: false },
         // Restore last tab (connectors removed — remapped on hydrate)
         nav:
-          s.nav === "connectors" || s.nav === "desktop"
+          s.nav === "connectors" || s.nav === "agents" || s.nav === "desktop"
             ? "chat"
             : s.nav || "chat",
         // Secrets stay in safeStorage (userData), not here

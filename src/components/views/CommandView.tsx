@@ -22,7 +22,7 @@ export function CommandView() {
   const skills = useGrokHub((s) => s.skills);
   const automations = useGrokHub((s) => s.automations);
   const activity = useGrokHub((s) => s.activity);
-  const agents = useGrokHub((s) => s.agents);
+  const queueJobs = useGrokHub((s) => s.agentQueue?.jobs || []);
   const mode = useGrokHub((s) => s.mode);
   const setMode = useGrokHub((s) => s.setMode);
   const modelCatalog = useGrokHub((s) => s.modelCatalog);
@@ -60,11 +60,11 @@ export function CommandView() {
           onClick={() => setNav("automations")}
         />
         <StatCard
-          label="Agents"
-          value={String(agents.filter((a) => a.status !== "offline").length)}
-          hint="online roster"
+          label="Queue"
+          value={String(queueJobs.filter((j) => j.status === "queued" || j.status === "running").length)}
+          hint="agent jobs"
           icon={<Zap className="h-4 w-4" />}
-          onClick={() => setNav("agents")}
+          onClick={() => setNav("queue")}
         />
       </section>
 

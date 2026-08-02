@@ -16,7 +16,6 @@ import {
   Sun,
   Terminal,
   TimerReset,
-  Users,
   Wand2,
   Square,
   Keyboard,
@@ -139,13 +138,6 @@ export function CommandPalette({
         group: "Navigate",
         icon: TimerReset,
         run: () => go("automations"),
-      },
-      {
-        id: "nav-agents",
-        label: "Roster",
-        group: "Navigate",
-        icon: Users,
-        run: () => go("agents"),
       },
       {
         id: "nav-settings",

@@ -19,7 +19,6 @@ import { ListTodo,
   Square,
   TimerReset,
   Trash2,
-  Users,
   X,
   Download,
   Wand2,
@@ -49,9 +48,6 @@ import {
 } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
-const AgentsView = lazy(() =>
-  import("./views/AgentsView").then((m) => ({ default: m.AgentsView })),
-);
 const AutomationsView = lazy(() =>
   import("./views/AutomationsView").then((m) => ({ default: m.AutomationsView })),
 );
@@ -94,7 +90,6 @@ const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string 
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "queue", label: "Queue", icon: ListTodo },
   { id: "automations", label: "Automations", icon: TimerReset },
-  { id: "agents", label: "Roster", icon: Users },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
@@ -307,7 +302,7 @@ export function AppShell() {
     Promise.resolve(p).finally(() => {
       const restored = useGrokHub.getState().nav;
       const safeNav =
-        !restored || restored === "connectors" || restored === "desktop"
+        !restored || restored === "connectors" || restored === "agents" || restored === "desktop"
           ? "chat"
           : restored;
       useGrokHub.setState({
@@ -655,7 +650,7 @@ export function AppShell() {
     ["chat", "history", "command", "workboard", "imagine"].includes(item.id),
   );
   const toolsNav = NAV.filter((item) =>
-    ["queue", "skills", "automations", "agents", "settings"].includes(item.id),
+    ["queue", "skills", "automations", "settings"].includes(item.id),
   );
 
   const stageTitle =
@@ -1015,8 +1010,7 @@ export function AppShell() {
                     {nav === "command" && <CommandView />}
                                         {nav === "skills" && <SkillsView />}
                     {nav === "automations" && <AutomationsView />}
-                    {nav === "agents" && <AgentsView />}
-                    {nav === "workboard" && <WorkboardView />}
+                                        {nav === "workboard" && <WorkboardView />}
                     {nav === "queue" && <AgentQueueView />}
                     {nav === "imagine" && <ImagineView />}
                     {nav === "desktop" && <DesktopHostView />}
