@@ -26,6 +26,7 @@ export function CommandView() {
   const mode = useGrokHub((s) => s.mode);
   const setMode = useGrokHub((s) => s.setMode);
   const modelCatalog = useGrokHub((s) => s.modelCatalog);
+  const modelOverrides = useGrokHub((s) => s.modelOverrides);
   const setNav = useGrokHub((s) => s.setNav);
   const runAutomation = useGrokHub((s) => s.runAutomation);
   const sendChat = useGrokHub((s) => s.sendChat);
@@ -79,7 +80,7 @@ export function CommandView() {
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
-            {getModesWithCatalog(modelCatalog).map((m) => {
+            {getModesWithCatalog(modelCatalog, modelOverrides).map((m) => {
               const selected = m.id === mode;
               const costHint =
                 m.id === "max"

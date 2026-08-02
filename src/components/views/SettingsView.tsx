@@ -11,6 +11,7 @@ const SETTINGS_SECTIONS = [
   { id: "sec-setup", label: "Setup sync" },
   { id: "sec-api", label: "API key" },
   { id: "sec-models", label: "Models" },
+  { id: "sec-model-overrides", label: "Mode pins" },
   { id: "sec-updates", label: "Updates" },
   { id: "sec-modes", label: "Modes" },
   { id: "sec-agent", label: "Agent" },
@@ -23,7 +24,7 @@ const SETTINGS_SECTIONS = [
   { id: "sec-danger", label: "Danger zone" },
 ] as const;
 
-import { getModesWithCatalog } from "@/lib/modes";
+import { getModesWithCatalog, OVERRIDABLE_MODES, hasModelOverride, type ModelModeOverrides } from "@/lib/modes";
 import { friendlyModelName } from "@/lib/models-catalog";
 import { applyUpdate, checkUpdate, applyRollback, postUpdateSelfTest } from "@/lib/grok-client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
@@ -58,6 +59,9 @@ export function SettingsView() {
   const mode = useGrokHub((s) => s.mode);
   const setMode = useGrokHub((s) => s.setMode);
   const modelCatalog = useGrokHub((s) => s.modelCatalog);
+  const modelOverrides = useGrokHub((s) => s.modelOverrides);
+  const setModelOverride = useGrokHub((s) => s.setModelOverride);
+  const clearModelOverrides = useGrokHub((s) => s.clearModelOverrides);
   const refreshModels = useGrokHub((s) => s.refreshModels);
   const lastModelsFetchAt = useGrokHub((s) => s.lastModelsFetchAt);
   const desktop = useGrokHub((s) => s.desktop);
@@ -979,6 +983,135 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
+      <Card id="sec-model-overrides">
+        <CardHeader>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <CardTitle className="text-sm">Mode model overrides</CardTitle>
+              <CardDescription>
+                Pin a model per mode when auto-classification is wrong. Unset modes keep
+                auto-selected models from Refresh + reclassify.
+              </CardDescription>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => clearModelOverrides()}
+              disabled={!Object.keys(modelOverrides || {}).length}
+            >
+              Clear all pins
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {(() => {
+            const live = Array.from(
+              new Set([
+                ...(modelCatalog.all || []),
+                ...(modelCatalog.essential || []),
+                ...Object.values(modelCatalog.slots || {}),
+              ]),
+            )
+              .filter(Boolean)
+              .sort((a, b) => a.localeCompare(b));
+            const modes = getModesWithCatalog(modelCatalog, modelOverrides);
+            const labels: Record<string, string> = {
+              fast: "Fast",
+              expert: "Expert / Think",
+              heavy: "Heavy",
+              max: "Max",
+              build: "Build",
+            };
+            return OVERRIDABLE_MODES.map((id) => {
+              const m = modes.find((x) => x.id === id)!;
+              const pinned = hasModelOverride(modelOverrides, id);
+              const value = pinned
+                ? String(modelOverrides[id as keyof ModelModeOverrides] || "")
+                : "";
+              const inList = value && live.includes(value);
+              return (
+                <div
+                  key={id}
+                  className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5"
+                >
+                  <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-medium text-[var(--color-fg)]">
+                        {labels[id] || id}
+                        {pinned ? (
+                          <Badge className="ml-2" variant="info">
+                            Pinned
+                          </Badge>
+                        ) : (
+                          <Badge className="ml-2" variant="default">
+                            Auto
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-[var(--color-muted)]">
+                        Auto: {friendlyModelName(m.modelId)}
+                        {!pinned ? ` · ${m.modelId}` : ""}
+                      </div>
+                    </div>
+                    {pinned && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setModelOverride(id, null)}
+                      >
+                        Use auto
+                      </Button>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <select
+                      className="h-9 w-full flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-xs text-[var(--color-fg)]"
+                      value={pinned && inList ? value : pinned ? "__custom__" : ""}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (!v) setModelOverride(id, null);
+                        else if (v === "__custom__") {
+                          /* keep current custom text */
+                        } else setModelOverride(id, v);
+                      }}
+                    >
+                      <option value="">Auto (catalog)</option>
+                      {live.map((mid) => (
+                        <option key={mid} value={mid}>
+                          {friendlyModelName(mid)} — {mid}
+                        </option>
+                      ))}
+                      {pinned && !inList ? (
+                        <option value="__custom__">Custom: {value}</option>
+                      ) : (
+                        <option value="__custom__">Custom id…</option>
+                      )}
+                    </select>
+                    <Input
+                      className="font-mono text-xs sm:max-w-[240px]"
+                      placeholder="custom model id"
+                      value={pinned && !inList ? value : pinned ? value : ""}
+                      onChange={(e) => {
+                        const v = e.target.value.trim();
+                        setModelOverride(id, v || null);
+                      }}
+                      onBlur={(e) => {
+                        const v = e.target.value.trim();
+                        if (!v) setModelOverride(id, null);
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            });
+          })()}
+          <p className="text-[10px] text-[var(--color-subtle)]">
+            Adaptive still chooses Fast / Think / Deep / Build. When a routed mode has a pin,
+            that pin is used; other modes stay on auto catalog slots.
+          </p>
+        </CardContent>
+      </Card>
+
       <Card id="sec-updates">
         <CardHeader>
           <CardTitle className="text-sm">Updates (GitHub)</CardTitle>
@@ -1080,7 +1213,7 @@ export function SettingsView() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
-          {getModesWithCatalog(modelCatalog).map((m) => {
+          {getModesWithCatalog(modelCatalog, modelOverrides).map((m) => {
             const selected = m.id === mode;
             return (
               <button

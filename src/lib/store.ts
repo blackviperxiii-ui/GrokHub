@@ -62,7 +62,7 @@ import {
   applyAgentMemoryNotes,
 } from "./session-learn";
 import { renderImaginePreview } from "./imagine";
-import { getMode, resolveMode, resolveModeWithCatalog, stripAssistantChrome, modelIdForMode, autoRouteFor } from "./modes";
+import { getMode, resolveMode, resolveModeWithCatalog, stripAssistantChrome, modelIdForMode, autoRouteFor, cleanModelOverrides, type ModelModeOverrides } from "./modes";
 import { buildCatalog, emptyCatalog, applyGrokPlan, needsGrokClassification, type ResolvedCatalog, type GrokSlotPlan } from "./models-catalog";
 import { createSeeds } from "./seed";
 import type {
@@ -301,6 +301,8 @@ type State = {
   streamingMessageId: string | null;
   /** Live essential models from xAI */
   modelCatalog: ResolvedCatalog;
+  /** User pins for mode → model id; unset modes stay auto-classified */
+  modelOverrides: ModelModeOverrides;
   lastModelsFetchAt: number;
   /** xAI API key (local only; never sent to third parties except api.x.ai) */
   apiKey: string;
@@ -330,6 +332,8 @@ type State = {
   setNav: (nav: NavId) => void;
   setMode: (mode: GrokModeId) => void;
   setModeMenuOpen: (open: boolean) => void;
+  setModelOverride: (mode: Exclude<GrokModeId, "auto">, modelId: string | null) => void;
+  clearModelOverrides: () => void;
   setDesktop: (patch: Partial<State["desktop"]>) => void;
   resolveHostConfirm: (allow: boolean) => void;
   tickAutomations: (opts?: { heartbeatOnly?: boolean }) => Promise<void>;
@@ -1068,6 +1072,7 @@ export const useGrokHub = create<State>()(
       autonomy: defaultAutonomyConfig(),
       agentQueue: emptyAgentQueue(),
       modelCatalog: emptyCatalog(),
+      modelOverrides: {},
       lastModelsFetchAt: 0,
       apiKey: "",
       githubToken: "",
@@ -1093,6 +1098,14 @@ export const useGrokHub = create<State>()(
         });
       },
       setModeMenuOpen: (open) => set({ modeMenuOpen: open }),
+      setModelOverride: (mode, modelId) =>
+        set((s) => {
+          const next = { ...cleanModelOverrides(s.modelOverrides) };
+          if (modelId && modelId.trim()) next[mode] = modelId.trim();
+          else delete next[mode];
+          return { modelOverrides: next };
+        }),
+      clearModelOverrides: () => set({ modelOverrides: {} }),
       setDesktop: (patch) => {
         set((s) => ({ desktop: { ...s.desktop, ...patch } }));
         if (typeof patch.hostSafeMode === "boolean" && typeof window !== "undefined") {
@@ -4822,7 +4835,8 @@ if (cmd === "tools") {
                       ? ("expert" as const)
                       : undefined,
         };
-        const auto = autoRouteFor(trimmed, catalog, routeCtx);
+        const overrides = cleanModelOverrides(get().modelOverrides);
+        const auto = autoRouteFor(trimmed, catalog, routeCtx, overrides);
         if (mode === "auto" && auto.openImagine) {
           set((s) => ({
             chat: s.chat.filter((m) => m.id !== botId && m.id !== userMsg.id),
@@ -4884,7 +4898,7 @@ if (cmd === "tools") {
                         ? ("deep" as const)
                         : ("think" as const),
                 routeReason: `Manual ${m.label} mode`,
-                routeModel: modelIdForMode(mode, trimmed, catalog, routeCtx),
+                routeModel: modelIdForMode(mode, trimmed, catalog, routeCtx, overrides),
               };
 
         set((s) => ({
@@ -5097,7 +5111,7 @@ if (cmd === "tools") {
             const history: Array<{ role: "user" | "assistant"; content: string }> =
               ctxBuilt.messages;
 
-const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx);
+const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
             // Hold Adaptive decision so it feels intentional (not a flash)
             if (mode === "auto") {
               set({
@@ -6416,6 +6430,7 @@ if (!cmds.length) {
           streamStatus: null,
           streamingMessageId: null,
           modelCatalog: emptyCatalog(),
+          modelOverrides: {},
           lastModelsFetchAt: 0,
           nav: "chat",
           modeMenuOpen: false,
@@ -6508,6 +6523,7 @@ if (!cmds.length) {
           : null,
         profile: s.profile,
         modelCatalog: s.modelCatalog,
+        modelOverrides: cleanModelOverrides(s.modelOverrides),
         lastModelsFetchAt: s.lastModelsFetchAt,
         // chat is derived from active thread on hydrate — avoid dual storage bloat
         activity: s.activity.slice(0, 40).map((a) => ({
@@ -6540,6 +6556,9 @@ if (!cmds.length) {
             signature: cat.signature || "",
           };
         }
+        s.modelOverrides = cleanModelOverrides(
+          (s as { modelOverrides?: ModelModeOverrides }).modelOverrides,
+        );
         s.learning = normalizeLearning((s as { learning?: unknown }).learning);
         s.workboard = normalizeWorkboard((s as { workboard?: unknown }).workboard);
         s.autonomy = normalizeAutonomy((s as { autonomy?: unknown }).autonomy);
