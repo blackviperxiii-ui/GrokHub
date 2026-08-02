@@ -707,9 +707,14 @@ export function AppShell() {
         </div>
 
         {showOffline ? (
-          <div className="shrink-0 border-b border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-warn)_12%,var(--color-surface))] px-3 py-1.5 text-center text-[11px] text-[var(--color-muted)]">
-            Offline — free fallback when possible.{" "}
-            <button type="button" className="underline" onClick={() => setNav("settings")}>
+          <div className="shrink-0 border-b border-[color-mix(in_oklab,var(--color-warn)_28%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-warn)_14%,var(--color-surface))] px-3 py-1.5 text-center text-[11px] text-[var(--color-fg)]">
+            <span className="text-[var(--color-warn)]">Offline</span>
+            <span className="text-[var(--color-muted)]"> — free fallback when possible. </span>
+            <button
+              type="button"
+              className="font-medium text-[var(--color-fg)] underline decoration-[var(--color-warn)] underline-offset-2 hover:text-[var(--color-warn)]"
+              onClick={() => setNav("settings")}
+            >
               Connect Grok
             </button>
           </div>
@@ -784,7 +789,7 @@ export function AppShell() {
           </aside>
 
           <div className="app-stage flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-bg)]">
-            <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-panel)] px-4 py-2.5 md:px-6 3xl:px-8">
+            <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-panel)] px-4 py-2 md:px-6 3xl:px-8">
               <div className="flex min-w-0 items-center gap-3">
                 <Button
                   variant="ghost"
@@ -845,7 +850,7 @@ export function AppShell() {
                 <div className="mb-2 px-1">
                   <UsageMeterChip className="w-full" />
                 </div>
-                <div className="grid grid-cols-2 gap-1">
+                <div className="grid max-h-[min(50dvh,22rem)] grid-cols-2 gap-1 overflow-y-auto scroll-panel">
                   {NAV.map((item) => renderNavButton(item, true))}
                 </div>
               </div>

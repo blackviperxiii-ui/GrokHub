@@ -109,10 +109,10 @@ const ChatMessageRow = memo(function ChatMessageRow({
         className={cn(
           "chat-bubble relative rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed shadow-sm",
           m.role === "user"
-            ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]"
+            ? "border-[var(--color-border-strong)] bg-[var(--color-bubble-user)] text-[var(--color-fg)]"
             : m.role === "system"
               ? "border-[var(--color-border)] bg-[var(--color-panel)] text-[var(--color-muted)]"
-              : "border-[var(--color-border)] bg-[var(--color-panel)] text-[var(--color-fg)]",
+              : "border-[var(--color-border)] bg-[var(--color-bubble-assistant)] text-[var(--color-fg)]",
           showStreaming &&
             "border-[color-mix(in_oklab,var(--color-info)_45%,var(--color-border))] shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-info)_20%,transparent)]",
         )}
@@ -264,7 +264,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
           >
             <button
               type="button"
-              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+              className="focus-ring inline-flex items-center gap-1 rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+
               title="Reply to this message"
               onClick={() => onReply({ id: m.id, content: m.content, role: m.role })}
             >
@@ -273,7 +274,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
             </button>
             <button
               type="button"
-              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+              className="focus-ring inline-flex items-center gap-1 rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+
               title="Copy message"
               onClick={() => void onCopy(m.id, m.content)}
             >
@@ -288,7 +290,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
               <>
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[color-mix(in_oklab,var(--color-success)_12%,transparent)] hover:text-[var(--color-success)]"
+                  className="focus-ring inline-flex items-center gap-1 rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[color-mix(in_oklab,var(--color-success)_12%,transparent)] hover:text-[var(--color-success)]"
                   title="Helpful — teach GrokHub"
                   onClick={() => onRate(m.id, true)}
                 >
@@ -296,7 +298,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 </button>
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[color-mix(in_oklab,var(--color-danger)_12%,transparent)] hover:text-[var(--color-danger)]"
+                  className="focus-ring inline-flex items-center gap-1 rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[color-mix(in_oklab,var(--color-danger)_12%,transparent)] hover:text-[var(--color-danger)]"
                   title="Not helpful — teach GrokHub"
                   onClick={() => onRate(m.id, false)}
                 >
@@ -307,7 +309,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
             {m.role === "user" && !busy && (
               <button
                 type="button"
-                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+                className="focus-ring inline-flex items-center gap-1 rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+
                 title="Edit message"
                 onClick={() => onStartEdit(m.id, m.content)}
               >
@@ -318,7 +321,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
             {!busy && (
               <button
                 type="button"
-                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[color-mix(in_oklab,var(--color-danger)_12%,transparent)] hover:text-[var(--color-danger)]"
+                className="focus-ring inline-flex items-center gap-1 rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[color-mix(in_oklab,var(--color-danger)_12%,transparent)] hover:text-[var(--color-danger)]"
                 title="Delete message"
                 onClick={() => onDelete(m.id)}
               >
@@ -1047,7 +1050,7 @@ export function ChatView() {
     <div className="chat-stage mx-auto flex h-full min-h-0 w-full flex-col">
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--color-bg)]">
         {/* Slim toolbar — context budget + export */}
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--color-border)] px-4 py-1.5 md:px-6">
+        <div className="chat-meta-bar flex shrink-0 items-center justify-between gap-2 px-4 py-1 md:px-6">
           <ContextBudgetChip />
           <div className="flex items-center gap-1">
             <Button
@@ -1152,12 +1155,23 @@ export function ChatView() {
             className="scroll-panel min-h-0 flex-1 space-y-3 px-4 py-4 md:px-6 3xl:px-10 uw:px-16"
           >
             {chat.length === 0 && !busy && (
-              <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-                <p className="text-sm font-medium text-[var(--color-fg)]">Start a conversation</p>
-                <p className="max-w-sm text-xs text-[var(--color-muted)]">
-                  Ask anything, run <span className="font-mono">$ shell</span> commands, or try{" "}
-                  <span className="font-mono">/help</span> for slash commands.
-                </p>
+              <div className="mx-auto flex max-w-md flex-col items-center justify-center gap-3 py-20 text-center">
+                <div className="flex h-12 w-12 items-center justify-center rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-panel)] shadow-[var(--shadow-hairline)]">
+                  <span className="text-sm font-semibold tracking-tight text-[var(--color-fg)]">
+                    G
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  <p className="text-base font-semibold tracking-tight text-[var(--color-fg)]">
+                    Start a conversation
+                  </p>
+                  <p className="text-sm leading-relaxed text-[var(--color-muted)]">
+                    Ask anything, run <span className="font-mono text-[var(--color-fg)]">$ shell</span>{" "}
+                    commands, or try{" "}
+                    <span className="font-mono text-[var(--color-fg)]">/help</span> for slash
+                    commands.
+                  </p>
+                </div>
               </div>
             )}
             {hiddenCount > 0 && (
@@ -1441,6 +1455,7 @@ export function ChatView() {
                   disabled={busy || Boolean(pendingHostConfirm)}
                   title="Attach image or file"
                   aria-label="Attach file"
+                  className="h-9 w-9 sm:h-10 sm:w-10"
                   onClick={() => fileRef.current?.click()}
                 >
                   <Paperclip className="h-4 w-4" />
@@ -1459,8 +1474,8 @@ export function ChatView() {
                   onClick={() => void toggleVoice()}
                   className={
                     listening
-                      ? "recording-pulse border border-[color-mix(in_oklab,var(--color-danger)_45%,transparent)] text-[var(--color-danger)]"
-                      : undefined
+                      ? "h-9 w-9 recording-pulse border border-[color-mix(in_oklab,var(--color-danger)_45%,transparent)] text-[var(--color-danger)] sm:h-10 sm:w-10"
+                      : "h-9 w-9 sm:h-10 sm:w-10"
                   }
                 >
                   {listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
@@ -1519,7 +1534,7 @@ export function ChatView() {
                   onClick={onStop}
                   aria-label="Stop"
                   title="Stop (Esc)"
-                  className="border border-[color-mix(in_oklab,var(--color-danger)_40%,transparent)] text-[var(--color-danger)]"
+                  className="h-9 w-9 border border-[color-mix(in_oklab,var(--color-danger)_40%,transparent)] text-[var(--color-danger)] sm:h-10 sm:w-10"
                 >
                   <Square className="h-3.5 w-3.5 fill-current" />
                 </Button>
@@ -1529,6 +1544,7 @@ export function ChatView() {
                   disabled={!text.trim() && attachments.length === 0}
                   size="icon"
                   aria-label="Send"
+                  className="h-9 w-9 sm:h-10 sm:w-10"
                 >
                   <Send className="h-4 w-4" />
                 </Button>

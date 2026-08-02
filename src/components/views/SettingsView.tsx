@@ -336,7 +336,7 @@ export function SettingsView() {
     <div className="content-readable mx-auto space-y-5 pb-8">
       <nav
         aria-label="Settings sections"
-        className="sticky top-0 z-20 -mx-1 mb-1 flex gap-1.5 overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-panel)_92%,transparent)] px-2 py-2 backdrop-blur-md"
+        className="sticky top-0 z-20 -mx-1 mb-1 flex gap-1.5 overflow-x-auto scroll-hide rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-panel)_92%,transparent)] px-2 py-2 backdrop-blur-md"
       >
         {SETTINGS_SECTIONS.map((s) => (
           <a

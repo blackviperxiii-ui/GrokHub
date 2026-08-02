@@ -87,7 +87,7 @@ export function ConnectorsView() {
     const err = c.status === "error";
     const busy = busyId === c.id;
     return (
-      <Card key={c.id} className={cn("flex flex-col", on && "border-[color-mix(in_oklab,var(--color-success)_35%,var(--color-border))]")}>
+      <Card key={c.id} className={cn("card-quiet flex flex-col", on && "border-[color-mix(in_oklab,var(--color-success)_35%,var(--color-border))]")}>
         <CardHeader className="pb-2">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
@@ -110,7 +110,7 @@ export function ConnectorsView() {
         <CardContent className="mt-auto flex flex-1 flex-col gap-3 pt-0">
           <p className="text-xs leading-relaxed text-[var(--color-muted)]">{c.description}</p>
           {!live && (
-            <p className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-panel)] px-2 py-1.5 text-[10px] leading-snug text-[var(--color-subtle)]">
+            <p className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-[10px] leading-snug text-[var(--color-subtle)]">
               Website link shows connection status only. The agent cannot call Gmail/Drive/etc.
               tools from this app yet — use live connectors (Grok, Desktop Host, GitHub) for
               executable tools.
