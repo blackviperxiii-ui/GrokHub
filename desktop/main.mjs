@@ -42,6 +42,7 @@ const secretsStore = require("./secrets-store.cjs");
 const stateStore = require("./state-store.cjs");
 const imagineStore = require("./imagine-store.cjs");
 const selfMod = require("./self-mod.cjs");
+const memoryStore = require("./memory-store.cjs");
 const desktopEntry = require("./desktop-entry.cjs");
 const uiServer = require("./ui-server.cjs");
 const appLog = require("./log.cjs");
@@ -844,6 +845,16 @@ function registerIpc() {
   safeHandle("state:export", () => stateStore.exportAll());
   safeHandle("state:import", (_e, payload) => stateStore.importAll(payload));
 
+  safeHandle("memory:info", () => memoryStore.info());
+  safeHandle("memory:list", () => ({ ok: true, files: memoryStore.listFiles(), root: memoryStore.memoryRoot() }));
+  safeHandle("memory:read", (_e, rel) => memoryStore.read(rel));
+  safeHandle("memory:write", (_e, rel, content) => memoryStore.write(rel, content));
+  safeHandle("memory:append", (_e, rel, text, opts) => memoryStore.append(rel, text, opts || {}));
+  safeHandle("memory:appendFacts", (_e, facts, opts) =>
+    memoryStore.appendFacts(facts, opts || {}),
+  );
+  safeHandle("memory:pinBundle", (_e, opts) => memoryStore.buildPinBundle(opts || {}));
+
   safeHandle("selfmod:info", () => selfMod.info());
   safeHandle("selfmod:list", (_e, rel) => selfMod.listDirRel(rel));
   safeHandle("selfmod:read", (_e, rel) => selfMod.readFileRel(rel));
@@ -932,6 +943,21 @@ function registerIpc() {
       }
     });
   }
+}
+
+
+// Lower main-process priority slightly so long tool loops don't starve the desktop.
+// Opt out with GROKHUB_HIGH_PRIORITY=1. GPU: GROKHUB_DISABLE_GPU=1 disables HW accel.
+if (process.platform === "linux" && process.env.GROKHUB_HIGH_PRIORITY !== "1") {
+  try {
+    const { execFile } = require("node:child_process");
+    execFile("renice", ["+5", "-p", String(process.pid)], () => {});
+  } catch {
+    /* ignore */
+  }
+}
+if (process.env.GROKHUB_DISABLE_GPU === "1") {
+  app.disableHardwareAcceleration();
 }
 
 if (process.platform === "linux" && process.env.GROKHUB_WAYLAND !== "0") {

@@ -15,14 +15,12 @@ assert.equal(typeof bridge.postUpdateSelfTest, "function");
 assert.equal(typeof bridge.scheduleAppRestart, "function");
 assert.equal(typeof bridge.factoryReinstall, "function", "factoryReinstall must be defined (system install crash)");
 
-// Bridge source must contain factoryReinstall (packaging completeness)
 const bridgeSrc = fs.readFileSync(
   path.join(process.cwd(), "desktop/grok-bridge.cjs"),
   "utf8",
 );
 assert.match(bridgeSrc, /async function factoryReinstall/);
 assert.match(bridgeSrc, /isGrokHubUiPid/);
-// No executable fuser -k (ignore comments / strings that only warn about it)
 const liveFuser = bridgeSrc
   .split("\n")
   .filter((l) => /fuser\s+-k/.test(l))
@@ -52,7 +50,6 @@ const st = await bridge.postUpdateSelfTest({ root: process.cwd() });
 assert.equal(typeof st.ok, "boolean");
 assert.ok(Array.isArray(st.checks));
 
-// Launcher must refuse incomplete bridges
 const launcher = fs.readFileSync(
   path.join(process.cwd(), "packaging/aur/grokhub.sh"),
   "utf8",
@@ -65,4 +62,25 @@ assert.equal(
   "launcher must not invoke fuser -k",
 );
 
+// Context manager module present
+assert.ok(
+  fs.existsSync(path.join(process.cwd(), "src/lib/context-manager.ts")),
+  "context-manager.ts required",
+);
+const ctxSrc = fs.readFileSync(
+  path.join(process.cwd(), "src/lib/context-manager.ts"),
+  "utf8",
+);
+assert.match(ctxSrc, /export function buildContext/);
+assert.match(ctxSrc, /export function compactMessages/);
+assert.match(ctxSrc, /CONTEXT_BUDGET_TOKENS/);
+
+const mem = require("../desktop/memory-store.cjs");
+assert.equal(typeof mem.buildPinBundle, "function");
+assert.equal(typeof mem.appendFacts, "function");
+assert.equal(typeof mem.info, "function");
+const memSrc = fs.readFileSync(path.join(process.cwd(), "desktop/memory-store.cjs"), "utf8");
+assert.match(memSrc, /MEMORY\.md/);
+assert.match(memSrc, /USER\.md/);
+assert.ok(fs.existsSync(path.join(process.cwd(), "src/lib/file-memory.ts")));
 console.log("smoke-unit OK");

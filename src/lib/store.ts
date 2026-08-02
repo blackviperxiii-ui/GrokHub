@@ -3,7 +3,22 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import { persistentStorage } from "./persistent-storage";
 import { redactSecrets } from "./redact";
 import { friendlyAssistantError, formatUserError } from "./format-error";
-import { toolResultMarkdown, toolRunningMarkdown } from "./tool-status";
+import { toolResultMarkdown, toolRunningMarkdown, toolLoopWaitMarkdown } from "./tool-status";
+import {
+  buildContext,
+  compactMessages,
+  formatContextReport,
+  mergeFlushIntoMemory,
+  estimateThreadContextPercent,
+  CONTEXT_BUDGET_TOKENS,
+} from "./context-manager";
+import {
+  loadMemoryPinBundle,
+  memoryAppend,
+  memoryAppendFacts,
+  memoryRead,
+  migrateNotesToFileMemory,
+} from "./file-memory";
 import { renderImaginePreview } from "./imagine";
 import { getMode, resolveMode, resolveModeWithCatalog, stripAssistantChrome, modelIdForMode, autoRouteFor } from "./modes";
 import { buildCatalog, emptyCatalog, applyGrokPlan, needsGrokClassification, type ResolvedCatalog, type GrokSlotPlan } from "./models-catalog";
@@ -227,6 +242,10 @@ type State = {
   /** After an interrupt: drop partial assistant reply and re-run last user prompt */
   continueInterruptedSession: () => Promise<void>;
   setAgentPrefs: (patch: Partial<{ temperature: number; hostToolsEnabled: boolean; connectorToolsEnabled: boolean; memoryNotes: string }>) => void;
+  /** Compact older turns into a summary (API window); full chat kept */
+  compactThread: (threadId?: string | null) => { ok: boolean; detail: string };
+  /** Live context budget stats for active chat */
+  getContextStats: () => { percent: number; tokensEst: number; budget: number; shouldCompact: boolean; report: string };
   editChatMessage: (id: string, content: string, resend?: boolean) => Promise<void>;
   /** Delete one or more messages from the active thread */
   deleteChatMessages: (ids: string | string[]) => void;
@@ -1903,6 +1922,85 @@ export const useGrokHub = create<State>()(
         }));
       },
 
+      compactThread: (threadId) => {
+        const s = get();
+        const tid = threadId || s.activeThreadId;
+        if (!tid) return { ok: false, detail: "No active thread" };
+        const th = s.threads.find((x) => x.id === tid);
+        const messages =
+          tid === s.activeThreadId ? s.chat : th?.messages || [];
+        const result = compactMessages(messages, {
+          keepRecent: 10,
+          title: th?.title || "Chat",
+        });
+        if (!result) {
+          return {
+            ok: false,
+            detail: "Not enough messages to compact (need more than ~12 turns)",
+          };
+        }
+        const nextNotes = mergeFlushIntoMemory(
+          s.agentPrefs.memoryNotes || "",
+          result.flushFacts,
+        );
+        // M1: durable file memory (best-effort async)
+        if (result.flushFacts.length) {
+          void memoryAppendFacts(result.flushFacts, { target: "MEMORY.md" });
+          void memoryAppend(
+            "today",
+            `Compacted ${result.messageCount} msgs · ${result.flushFacts.length} facts`,
+          );
+        }
+        set((state) => ({
+          agentPrefs: {
+            ...state.agentPrefs,
+            memoryNotes: nextNotes,
+          },
+          threads: state.threads.map((thread) =>
+            thread.id === tid
+              ? {
+                  ...thread,
+                  summary: result.summary,
+                  summaryUpToId: result.summaryUpToId,
+                  compactedAt: result.compactedAt,
+                  compactedMessageCount: result.messageCount,
+                  updatedAt: Date.now(),
+                }
+              : thread,
+          ),
+        }));
+        get().pushActivity({
+          kind: "chat",
+          title: "Context compacted",
+          detail: `Folded ${result.messageCount} msgs · ~${result.tokensEst} tok summary`,
+          status: "success",
+        });
+        return {
+          ok: true,
+          detail: `Compacted ${result.messageCount} older messages into a summary (~${result.tokensEst} tokens). Full chat still visible. ${result.flushFacts.length ? `Flushed ${result.flushFacts.length} facts to memory.` : ""}`,
+        };
+      },
+
+      getContextStats: () => {
+        const s = get();
+        const th = s.threads.find((x) => x.id === s.activeThreadId);
+        const built = buildContext({
+          messages: s.chat,
+          thread: th || null,
+          memoryNotes: s.agentPrefs.memoryNotes,
+          openClawBundle: s.openClawWorkspace?.contextBundle,
+          trimTools: true,
+        });
+        return {
+          percent: built.percent,
+          tokensEst: built.tokensEst,
+          budget: built.budget,
+          shouldCompact: built.shouldCompact,
+          report: formatContextReport(built),
+        };
+      },
+
+
       clearChat: () => {
         const tid = get().activeThreadId;
         set((s) => ({
@@ -2998,7 +3096,10 @@ export const useGrokHub = create<State>()(
                     "- `/imagine [prompt]` — open Imagine",
                     "- `/export` — download chat as Markdown",
                     "- `/mode auto|fast|expert|heavy|build`",
-                    "- `/memory [note]` — append persistent memory note",
+                    "- `/memory [note]` — append to MEMORY.md (+ legacy notes)",
+                    "- `/memory show|user|today` — view file memory",
+                    "- `/context` — show context budget / layers",
+                    "- `/compact` — summarize older turns (frees API window)",
                     "- `/tools on|off` — host + connector tools",
                   ].join("\n"),
                   ts: Date.now(),
@@ -3046,12 +3147,47 @@ export const useGrokHub = create<State>()(
             }
           }
           if (cmd === "memory") {
-            if (arg) {
-              const prev = get().agentPrefs.memoryNotes || "";
-              const line = `- ${new Date().toISOString().slice(0, 10)}: ${arg}`;
-              get().setAgentPrefs({
-                memoryNotes: prev ? `${prev}\n${line}` : line,
-              });
+            const sub = arg.match(/^(show|user|today|list)\s*$/i)
+              ? arg.toLowerCase()
+              : arg.match(/^(user|today|memory)\s+([\s\S]+)$/i)
+                ? null
+                : null;
+            // /memory show | /memory user | /memory today | /memory list
+            // /memory user <note> | /memory today <note> | /memory <note>
+            const showMatch = arg.match(/^(show|list|user|today)$/i);
+            const targetMatch = arg.match(/^(user|today|memory)\s+([\s\S]+)$/i);
+            if (showMatch || !arg) {
+              const kind = (showMatch?.[1] || "show").toLowerCase();
+              let body = "";
+              if (kind === "list" || kind === "show") {
+                const mem = await memoryRead("MEMORY.md");
+                const user = await memoryRead("USER.md");
+                const today = await memoryRead("today");
+                const legacy = get().agentPrefs.memoryNotes || "";
+                body = [
+                  "**File memory** (survives updates)",
+                  "",
+                  "### USER.md",
+                  (user.content || "_empty_").slice(0, 2000),
+                  "",
+                  "### MEMORY.md",
+                  (mem.content || "_empty_").slice(0, 3000),
+                  "",
+                  "### Today",
+                  (today.content || "_empty_").slice(0, 1500),
+                  legacy
+                    ? "\n### Legacy app notes\n" + legacy.slice(0, 1000)
+                    : "",
+                  "",
+                  "_Write: `/memory note` · `/memory user …` · `/memory today …` · Settings → Memory_",
+                ].join("\n");
+              } else if (kind === "user") {
+                const user = await memoryRead("USER.md");
+                body = "**USER.md**\n\n" + (user.content || "_empty_");
+              } else if (kind === "today") {
+                const today = await memoryRead("today");
+                body = "**Today**\n\n" + (today.content || "_empty_");
+              }
               set((s) => ({
                 chat: [
                   ...s.chat,
@@ -3059,28 +3195,74 @@ export const useGrokHub = create<State>()(
                   {
                     id: uid("msg"),
                     role: "system",
-                    content: `Saved to persistent memory:\n${line}`,
+                    content: body,
                     ts: Date.now(),
                   },
                 ],
               }));
-            } else {
-              const notes = get().agentPrefs.memoryNotes || "_Empty — use `/memory your note`_";
-              set((s) => ({
-                chat: [
-                  ...s.chat,
-                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
-                  {
-                    id: uid("msg"),
-                    role: "system",
-                    content: `**Persistent memory**\n\n${notes}`,
-                    ts: Date.now(),
-                  },
-                ],
-              }));
+              return;
             }
+            const dest = targetMatch
+              ? targetMatch[1]!.toLowerCase()
+              : "memory";
+            const note = targetMatch ? targetMatch[2]!.trim() : arg;
+            const rel =
+              dest === "user" ? "user" : dest === "today" ? "today" : "memory";
+            const line = `- ${new Date().toISOString().slice(0, 10)}: ${note}`;
+            const prev = get().agentPrefs.memoryNotes || "";
+            get().setAgentPrefs({
+              memoryNotes: prev ? `${prev}\n${line}` : line,
+            });
+            await memoryAppend(rel, note);
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                {
+                  id: uid("msg"),
+                  role: "system",
+                  content: `Saved to file memory (**${rel === "memory" ? "MEMORY.md" : rel}**):\n${line}`,
+                  ts: Date.now(),
+                },
+              ],
+            }));
             return;
           }
+if (cmd === "context") {
+            const stats = get().getContextStats();
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                {
+                  id: uid("msg"),
+                  role: "system",
+                  content: stats.report,
+                  ts: Date.now(),
+                },
+              ],
+            }));
+            return;
+          }
+          if (cmd === "compact") {
+            const r = get().compactThread();
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                {
+                  id: uid("msg"),
+                  role: "system",
+                  content: r.ok
+                    ? `**Context compacted**\n\n${r.detail}\n\n${get().getContextStats().report}`
+                    : `**Compact skipped**\n\n${r.detail}`,
+                  ts: Date.now(),
+                },
+              ],
+            }));
+            return;
+          }
+
           if (cmd === "tools") {
             const on = !/off|false|0|no/i.test(arg || "on");
             get().setAgentPrefs({ hostToolsEnabled: on, connectorToolsEnabled: on });
@@ -3367,12 +3549,33 @@ export const useGrokHub = create<State>()(
 
             // Multi-turn host tool loop (model can emit HOST_CMD: lines)
             const { expandMessageMedia } = await import("./chat-media");
-            const rawHistory = get()
+            // Context manager: auto-compact if over budget, then budgeted history
+            {
+              const th0 = get().threads.find((x) => x.id === get().activeThreadId);
+              const probe = buildContext({
+                messages: get().chat.filter((c) => c.id !== botId),
+                thread: th0 || null,
+                memoryNotes: get().agentPrefs.memoryNotes,
+                openClawBundle: get().openClawWorkspace?.contextBundle,
+                trimTools: true,
+              });
+              if (probe.shouldCompact) {
+                const r = get().compactThread(get().activeThreadId);
+                if (r.ok) {
+                  set({ streamStatus: "Context compacted…" });
+                  await wait(120);
+                }
+              }
+            }
+
+            const thCtx = get().threads.find((x) => x.id === get().activeThreadId);
+            const rawForCtx = get()
               .chat.filter((c) => c.role === "user" || c.role === "assistant")
-              .filter((c) => c.id !== botId)
-              .slice(-24);
-            const history: Array<{ role: "user" | "assistant"; content: string }> = [];
-            for (const c of rawHistory) {
+              .filter((c) => c.id !== botId);
+
+            // Expand media + reply tags on a working copy
+            const expandedMsgs: ChatMessage[] = [];
+            for (const c of rawForCtx) {
               let content =
                 c.role === "assistant" ? stripAssistantChrome(c.content) : c.content;
               if (c.role === "user") {
@@ -3394,18 +3597,44 @@ export const useGrokHub = create<State>()(
                   content;
               }
               if (content.trim().length > 0) {
-                history.push({
-                  role: c.role as "user" | "assistant",
-                  content,
-                });
+                expandedMsgs.push({ ...c, content });
               }
             }
             const expandedTrimmed = await expandMessageMedia(trimmed);
-            if (!history.length || history[history.length - 1]?.content !== expandedTrimmed) {
-              history.push({ role: "user", content: expandedTrimmed });
+            if (
+              !expandedMsgs.length ||
+              expandedMsgs[expandedMsgs.length - 1]?.content !== expandedTrimmed
+            ) {
+              expandedMsgs.push({
+                id: uid("msg"),
+                role: "user",
+                content: expandedTrimmed,
+                ts: Date.now(),
+              });
             }
 
-            const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx);
+            // M1 file memory pin (USER.md / MEMORY.md / daily)
+            const notes = get().agentPrefs.memoryNotes || "";
+            if (notes.trim()) {
+              void migrateNotesToFileMemory(notes);
+            }
+            const fileMem = await loadMemoryPinBundle();
+            const ctxBuilt = buildContext({
+              messages: expandedMsgs,
+              thread: thCtx || null,
+              memoryNotes: notes,
+              fileMemoryBundle: fileMem.bundle || "",
+              openClawBundle: get().openClawWorkspace?.contextBundle,
+              connectorBlock: (await import("./grok")).connectorContextBlock(
+                get().connectors,
+              ),
+              capabilityBlock: undefined, // filled below after we know tool flags
+              trimTools: true,
+            });
+            const history: Array<{ role: "user" | "assistant"; content: string }> =
+              ctxBuilt.messages;
+
+const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx);
             // Hold Adaptive decision so it feels intentional (not a flash)
             if (mode === "auto") {
               set({
@@ -3421,45 +3650,54 @@ export const useGrokHub = create<State>()(
             let hostNudges = 0;
             let accumulated = "";
 
-            // Build workspace context once per user turn (not every tool round)
+            // Build workspace context once per user turn (budgeted pins + capabilities)
             const stTurn = get();
-            const ocTurn = stTurn.openClawWorkspace;
             const freeTier =
               stTurn.usage.plan === "free" ||
               (!stTurn.oauth?.accessToken && !stTurn.apiKey);
-            const turnWorkspaceContext = [
-              ocTurn?.contextBundle || "",
-              (await import("./grok")).connectorContextBlock(get().connectors),
+            const capabilityBlock = [
+              "## GrokHub session capabilities",
+              "- Context manager: budgeted history + optional thread summary (see /context).",
+              "- File memory: USER.md, MEMORY.md, daily notes (see /memory show).",
+              "- Persistent: chat history, settings, memory notes, Imagine media, connectors.",
+              stTurn.agentPrefs?.memoryNotes?.trim()
+                ? `- Memory notes loaded (${stTurn.agentPrefs.memoryNotes.trim().length} chars). Use them.`
+                : "- No custom memory notes yet (user can set via Settings or /memory).",
+              `- Threads in app: ${get().threads.length}; API window msgs: ${history.length}.`,
+              thCtx?.summary
+                ? "- This thread has a compacted summary of older turns."
+                : "- No compaction summary yet (auto when over budget, or /compact).",
+              stTurn.agentPrefs?.hostToolsEnabled === false
+                ? "- Host shell tools: DISABLED."
+                : "- Host shell tools: available when Desktop Host is LIVE (use HOST_CMD).",
+              stTurn.agentPrefs?.connectorToolsEnabled === false
+                ? "- Connector tools: DISABLED."
+                : "- Connector tools: use only LIVE tools via CONNECTOR_CMD.",
+            ].join("\n");
+            const turnWorkspaceContext =
               [
-                "## GrokHub session capabilities",
-                "- Persistent: chat history, settings, memory notes, Imagine media, connectors (survive restarts/updates).",
-                stTurn.agentPrefs?.memoryNotes?.trim()
-                  ? `- Memory notes loaded (${stTurn.agentPrefs.memoryNotes.trim().length} chars). Use them.`
-                  : "- No custom memory notes yet (user can set via Settings or /memory).",
-                `- Threads in app: ${get().threads.length}; messages this chat: ${history.length}.`,
-                stTurn.agentPrefs?.hostToolsEnabled === false
-                  ? "- Host shell tools: DISABLED."
-                  : "- Host shell tools: available when Desktop Host is LIVE (use HOST_CMD).",
-                stTurn.agentPrefs?.connectorToolsEnabled === false
-                  ? "- Connector tools: DISABLED."
-                  : "- Connector tools: use only LIVE tools via CONNECTOR_CMD.",
-              ].join("\n"),
-              stTurn.agentPrefs?.memoryNotes
-                ? "## User persistent memory notes\n" + stTurn.agentPrefs.memoryNotes
-                : "",
-              !stTurn.agentPrefs?.hostToolsEnabled
-                ? "NOTE: Host shell tools are DISABLED by user settings. Do not emit HOST_CMD."
-                : "",
-              !stTurn.agentPrefs?.connectorToolsEnabled
-                ? "NOTE: Connector tools are DISABLED by user settings. Do not emit CONNECTOR_CMD."
-                : "",
-            ]
-              .filter(Boolean)
-              .join("\n")
-              .slice(0, 28_000) || undefined;
+                ctxBuilt.workspaceContext,
+                capabilityBlock,
+                !stTurn.agentPrefs?.hostToolsEnabled
+                  ? "NOTE: Host shell tools are DISABLED by user settings. Do not emit HOST_CMD."
+                  : "",
+                !stTurn.agentPrefs?.connectorToolsEnabled
+                  ? "NOTE: Connector tools are DISABLED by user settings. Do not emit CONNECTOR_CMD."
+                  : "",
+                `## Context budget\n~${ctxBuilt.tokensEst} / ${ctxBuilt.budget} tokens (${ctxBuilt.percent}%).`,
+              ]
+                .filter(Boolean)
+                .join("\n\n")
+                .slice(0, 28_000) || undefined;
 
+            set({
+              streamStatus:
+                ctxBuilt.percent >= 70
+                  ? `Context ${ctxBuilt.percent}% · streaming…`
+                  : get().streamStatus,
+            });
 
-            while (rounds < maxRounds && !aborted) {
+while (rounds < maxRounds && !aborted) {
               rounds += 1;
               if (abort.signal.aborted || gen !== chatGeneration) {
                 aborted = true;
@@ -3471,8 +3709,18 @@ export const useGrokHub = create<State>()(
                     ? mode === "auto"
                       ? `Streaming · ${auto.tierLabel}`
                       : "Streaming…"
-                    : `Host tool round ${rounds}…`,
+                    : `Tool loop · round ${rounds} · calling model…`,
               });
+              if (rounds > 1) {
+                patchBot(
+                  toolLoopWaitMarkdown(
+                    scrubAssistant(accumulated) || "Working…",
+                    rounds,
+                  ),
+                  { streaming: true },
+                );
+              }
+              (globalThis as unknown as { __ghFirstTok?: boolean }).__ghFirstTok = false;
               let roundText = "";
               const stNow = get();
               const result = await grokChatStream(
@@ -3493,32 +3741,45 @@ export const useGrokHub = create<State>()(
                   signal: abort.signal,
                   onStatus: (st) => {
                     if (gen !== chatGeneration) return;
-                    set({
-                      streamStatus:
-                        st === "streaming"
+                    const label =
+                      st === "streaming"
+                        ? rounds === 1
                           ? "Streaming…"
-                          : st === "fallback"
-                            ? "Responding…"
-                            : st === "connecting"
-                              ? "Connecting…"
-                              : st,
-                    });
+                          : `Streaming · round ${rounds}…`
+                        : st === "fallback"
+                          ? "Responding…"
+                          : st === "connecting"
+                            ? "Connecting to Grok…"
+                            : st || "Working…";
+                    set({ streamStatus: label });
                   },
                   onDelta: (piece) => {
                     if (gen !== chatGeneration) return;
                     roundText += piece;
                     accumulated = roundText;
-                    // Batch UI patches to animation frames (smoother streaming)
                     const scrub = (s: string) => scrubAssistant(s) || "…";
-                    if (!(globalThis as unknown as { __ghRaf?: number }).__ghRaf) {
-                      (globalThis as unknown as { __ghRaf?: number }).__ghRaf =
-                        requestAnimationFrame(() => {
-                          (globalThis as unknown as { __ghRaf?: number }).__ghRaf = 0;
-                          if (gen !== chatGeneration) return;
-                          patchBot(scrub(roundText), { streaming: true });
-                        });
+                    // First token: paint immediately so stream never looks dead
+                    const g = globalThis as unknown as {
+                      __ghRaf?: number;
+                      __ghFirstTok?: boolean;
+                    };
+                    if (!g.__ghFirstTok) {
+                      g.__ghFirstTok = true;
+                      patchBot(scrub(roundText), { streaming: true });
+                      set({
+                        streamStatus:
+                          rounds === 1 ? "Streaming…" : `Streaming · round ${rounds}…`,
+                      });
+                      return;
                     }
-                    void scrub;
+                    // Batch subsequent patches to animation frames
+                    if (!g.__ghRaf) {
+                      g.__ghRaf = requestAnimationFrame(() => {
+                        g.__ghRaf = 0;
+                        if (gen !== chatGeneration) return;
+                        patchBot(scrub(roundText), { streaming: true });
+                      });
+                    }
                   },
                 },
               );
@@ -3643,14 +3904,25 @@ export const useGrokHub = create<State>()(
                       status: "running",
                     });
                     const row = get().connectors.find((c) => c.id === cc.connectorId);
-                    patchBot(
-                      toolRunningMarkdown({
-                        kind: "connector",
-                        command: label,
-                        preface: visible || "Using connected services…",
-                      }),
-                      { streaming: true },
-                    );
+                    let connElapsed = 0;
+                    const paintConn = () => {
+                      set({ streamStatus: `Connector: ${label}… (${connElapsed}s)` });
+                      patchBot(
+                        toolRunningMarkdown({
+                          kind: "connector",
+                          command: label,
+                          preface: visible || "Using connected services…",
+                          elapsedSec: connElapsed,
+                        }),
+                        { streaming: true },
+                      );
+                    };
+                    paintConn();
+                    const connTick = setInterval(() => {
+                      if (gen !== chatGeneration || abort.signal.aborted) return;
+                      connElapsed += 1;
+                      paintConn();
+                    }, 1000);
                     try {
                       const r = await runConnectorTool({
                         connectorId: cc.connectorId,
@@ -3660,6 +3932,7 @@ export const useGrokHub = create<State>()(
                         websiteConnected: row?.status === "connected",
                         accountLabel: row?.accountLabel,
                       });
+                      clearInterval(connTick);
                       outputs.push(
                         [
                           `CONNECTOR ${cc.connectorId} ${cc.tool}`,
@@ -3683,6 +3956,7 @@ export const useGrokHub = create<State>()(
                         }));
                       }
                     } catch (e) {
+                      clearInterval(connTick);
                       outputs.push(
                         `CONNECTOR ${cc.connectorId} ${cc.tool}\n[error] ${
                           e instanceof Error ? e.message : "failed"
@@ -3856,7 +4130,9 @@ if (!cmds.length) {
                 const { boundHostScanCommand, hostTimeoutMs, clipHostOutput } = await import("./host-scan");
                 const outputs: string[] = [];
                 // Allow a few more cmds for multi-step scans; still cap to keep turns sane
-                for (const rawCmd of cmds.slice(0, 5)) {
+                const hostCmdList = cmds.slice(0, 5);
+                for (let hi = 0; hi < hostCmdList.length; hi++) {
+                  const rawCmd = hostCmdList[hi]!;
                   if (abort.signal.aborted || gen !== chatGeneration) {
                     aborted = true;
                     break;
@@ -3870,17 +4146,30 @@ if (!cmds.length) {
                     detail: (bounded.note ? `[${bounded.note}] ` : "") + rawCmd.slice(0, 140),
                     status: "running",
                   });
-                  set({
-                    streamStatus: `Host: ${rawCmd.slice(0, 72)}…`,
-                  });
-                  patchBot(
-                    toolRunningMarkdown({
-                      kind: "host",
-                      command: rawCmd,
-                      preface: visible || "Working on your machine…",
-                    }),
-                    { streaming: true },
-                  );
+                  const stepIdx = hi + 1;
+                  const stepTotal = hostCmdList.length;
+                  let elapsedSec = 0;
+                  const paintHost = () => {
+                    set({
+                      streamStatus: `Host: ${rawCmd.slice(0, 56)}… (${elapsedSec}s)`,
+                    });
+                    patchBot(
+                      toolRunningMarkdown({
+                        kind: "host",
+                        command: rawCmd,
+                        preface: visible || "Working on your machine…",
+                        elapsedSec,
+                        step: { index: stepIdx, total: stepTotal },
+                      }),
+                      { streaming: true },
+                    );
+                  };
+                  paintHost();
+                  const hostTick = setInterval(() => {
+                    if (gen !== chatGeneration || abort.signal.aborted) return;
+                    elapsedSec += 1;
+                    paintHost();
+                  }, 1000);
                   try {
                     // Long scans: do not abort the whole agent turn on timeout —
                     // hostExec returns ok:false with stderr; we feed that back and continue.
@@ -3890,6 +4179,7 @@ if (!cmds.length) {
                     try {
                       r = await hostExec(cmd, undefined, timeoutMs, { jobId });
                     } finally {
+                      clearInterval(hostTick);
                       if (activeHostJobId === jobId) activeHostJobId = null;
                     }
                     const out = clipHostOutput(

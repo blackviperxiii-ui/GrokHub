@@ -1,6 +1,6 @@
 # GrokHub
 
-**v0.8.16** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v0.8.17** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
 Adaptive modes · Imagine · connectors · skills · automations · usage meter · free-Grok fallback · setup sync · unsandboxed desktop host (CLI · files · apps).
 
@@ -157,6 +157,40 @@ rm -rf ~/.local/lib/grokhub
 ---
 
 
+
+
+## File memory (M1)
+
+Long-term agent memory is plain Markdown under your user data folder (not the install tree):
+
+```text
+~/.config/GrokHub/memory/
+  USER.md          # profile / prefs
+  MEMORY.md        # durable facts & decisions
+  daily/YYYY-MM-DD.md
+```
+
+| Action | How |
+|--------|-----|
+| View / edit | Settings → Memory |
+| Chat write | `/memory note` · `/memory user …` · `/memory today …` |
+| Inspect | `/memory show` |
+| Compact flush | Facts written to `MEMORY.md` + daily log |
+| Model pin | Budgeted injection every turn via context manager |
+
+## Context management
+
+GrokHub budgets what is sent to the model (not what you see in the UI):
+
+| Piece | Behavior |
+|-------|----------|
+| **Budget** | ~96k token estimate; headroom for tools + reply |
+| **Pins** | Memory notes, OpenClaw import, connector caps (hard-capped) |
+| **Window** | Recent messages under budget; older tool dumps trimmed |
+| **Compact** | Auto when over ~72% budget, or **`/compact`** / toolbar **Compact** |
+| **Summary** | Stored on the thread; full chat history stays visible |
+| **Flush** | Heuristic facts appended to persistent memory notes |
+| **Inspect** | Toolbar **Context N%** or **`/context`** |
 
 ## Stability notes (Linux)
 

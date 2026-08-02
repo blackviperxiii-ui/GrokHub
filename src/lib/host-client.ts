@@ -211,6 +211,63 @@ export type DesktopBridge = {
     delete: (jobId: string) => Promise<{ ok?: boolean; error?: string }>;
     clear: () => Promise<{ ok?: boolean; error?: string }>;
   };
+  /** M1 file memory under userData/memory (USER.md, MEMORY.md, daily/*) */
+  memory?: {
+    info: () => Promise<{
+      ok: boolean;
+      root?: string;
+      userData?: string;
+      files?: Array<{
+        id: string;
+        name: string;
+        kind: string;
+        bytes: number;
+        updatedAt: number;
+      }>;
+      bytes?: number;
+      today?: string;
+    }>;
+    list: () => Promise<{
+      ok?: boolean;
+      files?: Array<{
+        id: string;
+        name: string;
+        kind: string;
+        bytes: number;
+        updatedAt: number;
+      }>;
+      root?: string;
+    }>;
+    read: (rel: string) => Promise<{
+      ok: boolean;
+      content?: string;
+      id?: string;
+      path?: string;
+      error?: string;
+    }>;
+    write: (
+      rel: string,
+      content: string,
+    ) => Promise<{ ok: boolean; error?: string; path?: string; bytes?: number }>;
+    append: (
+      rel: string,
+      text: string,
+      opts?: { heading?: string },
+    ) => Promise<{ ok: boolean; error?: string; appended?: string }>;
+    appendFacts: (
+      facts: string[],
+      opts?: { target?: string },
+    ) => Promise<{ ok: boolean; added?: number; error?: string }>;
+    pinBundle: (opts?: Record<string, unknown>) => Promise<{
+      ok: boolean;
+      bundle?: string;
+      chars?: number;
+      root?: string;
+      hasUser?: boolean;
+      hasMemory?: boolean;
+      hasToday?: boolean;
+    }>;
+  };
   host?: {
     info: () => Promise<HostInfo>;
     listDir: (p?: string) => Promise<{ path: string; entries: HostFileEntry[] }>;

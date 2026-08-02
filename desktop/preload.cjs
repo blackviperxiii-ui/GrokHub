@@ -98,6 +98,15 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     exportAll: () => ipcRenderer.invoke("state:export"),
     importAll: (payload) => ipcRenderer.invoke("state:import", payload),
   },
+  memory: {
+    info: () => ipcRenderer.invoke("memory:info"),
+    list: () => ipcRenderer.invoke("memory:list"),
+    read: (rel) => ipcRenderer.invoke("memory:read", rel),
+    write: (rel, content) => ipcRenderer.invoke("memory:write", rel, content),
+    append: (rel, text, opts) => ipcRenderer.invoke("memory:append", rel, text, opts),
+    appendFacts: (facts, opts) => ipcRenderer.invoke("memory:appendFacts", facts, opts),
+    pinBundle: (opts) => ipcRenderer.invoke("memory:pinBundle", opts),
+  },
   selfmod: {
     info: () => ipcRenderer.invoke("selfmod:info"),
     list: (rel) => ipcRenderer.invoke("selfmod:list", rel),

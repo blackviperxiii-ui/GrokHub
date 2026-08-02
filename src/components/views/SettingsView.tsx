@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ExternalLink, FolderInput, HardDrive, Moon, RefreshCw, Sun, Monitor } from "lucide-react";
 
 const SETTINGS_SECTIONS = [
@@ -23,6 +23,13 @@ import { friendlyModelName } from "@/lib/models-catalog";
 import { applyUpdate, checkUpdate, applyRollback, postUpdateSelfTest } from "@/lib/grok-client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { exportMemory, importMemory, memoryInfo } from "@/lib/persistent-storage";
+import {
+  memoryFsInfo,
+  memoryList,
+  memoryRead,
+  memoryWrite,
+  type MemoryFileInfo,
+} from "@/lib/file-memory";
 import {
   factoryReinstall,
   selfModInfo,
@@ -1319,17 +1326,21 @@ export function SettingsView() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
             <HardDrive className="h-4 w-4 text-[var(--color-muted)]" />
-            Persistent memory
+            Memory
           </CardTitle>
           <CardDescription>
-            Chat, threads, skills, automations, connectors, usage, and chip habits are saved to disk
-            under your user data folder. App updates replace code only — this memory is not wiped.
-            OAuth tokens use encrypted safe storage in the same folder.
+            File memory (USER.md, MEMORY.md, daily notes) lives under your user data folder and is
+            pinned into every chat under a budget. App state backup is separate. Updates never wipe
+            this folder.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-4">
+          <FileMemoryPanel />
           {memInfo && (
             <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-2 font-mono text-[11px] text-[var(--color-muted)]">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-subtle)]">
+                App state backup
+              </div>
               <div className="truncate">path: {memInfo.path || "—"}</div>
               {memInfo.userData && (
                 <div className="truncate">userData: {memInfo.userData}</div>
@@ -1362,7 +1373,7 @@ export function SettingsView() {
                   a.download = `grokhub-memory-${new Date().toISOString().slice(0, 10)}.json`;
                   a.click();
                   URL.revokeObjectURL(url);
-                  setMemMsg("Memory exported");
+                  setMemMsg("App state exported");
                   void memoryInfo().then(setMemInfo);
                 });
               }}
@@ -1393,7 +1404,6 @@ export function SettingsView() {
                         : r.error || "Import failed",
                     );
                     if (r.ok) {
-                      // force rehydrate
                       void useGrokHub.persist.rehydrate();
                       void memoryInfo().then(setMemInfo);
                     }
@@ -1453,6 +1463,119 @@ export function SettingsView() {
 }
 
 
+function FileMemoryPanel() {
+  const [files, setFiles] = useState<MemoryFileInfo[]>([]);
+  const [root, setRoot] = useState<string>("");
+  const [active, setActive] = useState("MEMORY.md");
+  const [body, setBody] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+
+  const reload = useCallback(() => {
+    void memoryFsInfo().then((info) => {
+      if (info.root) setRoot(info.root);
+    });
+    void memoryList().then((list) => setFiles(list));
+  }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  useEffect(() => {
+    void memoryRead(active).then((r) => {
+      setBody(r.content || "");
+      setDirty(false);
+    });
+  }, [active]);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs font-medium text-[var(--color-fg)]">File memory</div>
+        {root ? (
+          <div className="max-w-[min(100%,20rem)] truncate font-mono text-[10px] text-[var(--color-subtle)]" title={root}>
+            {root}
+          </div>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {(["USER.md", "MEMORY.md", "today"] as const).map((id) => (
+          <button
+            key={id}
+            type="button"
+            className={cn(
+              "rounded-full border px-2.5 py-0.5 text-[11px] font-medium",
+              active === id || (id === "today" && active.startsWith("daily/"))
+                ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]"
+                : "border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-border-strong)]",
+            )}
+            onClick={() => setActive(id === "today" ? "today" : id)}
+          >
+            {id === "today" ? "Today" : id}
+          </button>
+        ))}
+        {files
+          .filter((f) => f.kind === "daily")
+          .slice(0, 5)
+          .map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              className={cn(
+                "rounded-full border px-2 py-0.5 font-mono text-[10px]",
+                active === f.id
+                  ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)]"
+                  : "border-[var(--color-border)] text-[var(--color-subtle)]",
+              )}
+              onClick={() => setActive(f.id)}
+            >
+              {f.name.replace(/\.md$/, "")}
+            </button>
+          ))}
+      </div>
+      <textarea
+        value={body}
+        onChange={(e) => {
+          setBody(e.target.value);
+          setDirty(true);
+        }}
+        rows={10}
+        spellCheck={false}
+        className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] p-2 font-mono text-xs leading-relaxed"
+        placeholder="# Memory…"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          disabled={!dirty}
+          onClick={() => {
+            void memoryWrite(active, body).then((r) => {
+              setStatus(r.ok ? "Saved" : r.error || "Save failed");
+              setDirty(!r.ok);
+              reload();
+            });
+          }}
+        >
+          Save file
+        </Button>
+        <Button size="sm" variant="ghost" onClick={reload}>
+          Reload
+        </Button>
+        {status ? (
+          <span className="text-[11px] text-[var(--color-muted)]">{status}</span>
+        ) : null}
+      </div>
+      <p className="text-[11px] text-[var(--color-muted)]">
+        Chat: <span className="font-mono">/memory note</span> ·{" "}
+        <span className="font-mono">/memory show</span> ·{" "}
+        <span className="font-mono">/memory user …</span> ·{" "}
+        <span className="font-mono">/memory today …</span>
+      </p>
+    </div>
+  );
+}
+
 function AgentPrefsPanel() {
   const agentPrefs = useGrokHub((s) => s.agentPrefs);
   const setAgentPrefs = useGrokHub((s) => s.setAgentPrefs);
@@ -1508,17 +1631,17 @@ function AgentPrefsPanel() {
         />
       </label>
       <label className="block space-y-1.5">
-        <div className="text-sm font-medium">Persistent memory notes</div>
+        <div className="text-sm font-medium">Legacy sticky notes</div>
         <textarea
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           onBlur={() => setAgentPrefs({ memoryNotes: notes })}
-          rows={4}
-          placeholder="Facts the agent should remember across restarts…"
+          rows={3}
+          placeholder="Also mirrored into MEMORY.md on next chat…"
           className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] p-2 text-sm"
         />
         <p className="text-[11px] text-[var(--color-muted)]">
-          Also use <span className="font-mono">/memory your note</span> in chat
+          Prefer Settings → Memory files or <span className="font-mono">/memory</span>
         </p>
       </label>
     </div>

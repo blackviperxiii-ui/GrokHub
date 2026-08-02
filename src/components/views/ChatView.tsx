@@ -11,9 +11,6 @@ import {
   Gauge,
   ShieldAlert,
   X,
-  Cable,
-  Wrench,
-  Monitor,
   Mic,
   MicOff,
   RefreshCw,
@@ -26,8 +23,9 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
 import { tierMeta } from "@/lib/models-catalog";
 import { buildQuickChips, type QuickChip } from "@/lib/quick-assistant";
+import { streamStatusPill } from "@/lib/tool-status";
+import { estimateThreadContextPercent } from "@/lib/context-manager";
 import { useGrokHub } from "@/lib/store";
-import { parseStreamStatus } from "@/lib/tool-status";
 import { cn } from "@/lib/utils";
 import type { ChatMessage, ChatRole } from "@/lib/types";
 import { RelativeTime } from "../RelativeTime";
@@ -41,92 +39,6 @@ function chipIcon(kind: QuickChip["kind"]) {
   if (kind === "nav") return Compass;
   if (kind === "mode") return Gauge;
   return Sparkles;
-}
-
-function ToolActivityBanner({
-  status,
-  fading = false,
-  onDismiss,
-}: {
-  status: string | null;
-  fading?: boolean;
-  onDismiss?: () => void;
-}) {
-  const tool = parseStreamStatus(status);
-  if (!tool) return null;
-  const Icon =
-    tool.kind === "host"
-      ? Monitor
-      : tool.kind === "connector"
-        ? Cable
-        : tool.kind === "selfmod"
-          ? Wrench
-          : tool.kind === "summarize"
-            ? Sparkles
-            : Loader2;
-  const accent =
-    tool.kind === "host"
-      ? "border-[color-mix(in_oklab,var(--color-success)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-success)_10%,var(--color-surface))]"
-      : tool.kind === "connector"
-        ? "border-[color-mix(in_oklab,var(--color-info)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-info)_10%,var(--color-surface))]"
-        : tool.kind === "selfmod"
-          ? "border-[color-mix(in_oklab,var(--color-warn)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-warn)_10%,var(--color-surface))]"
-          : "border-[var(--color-border)] bg-[var(--color-elevated)]";
-  return (
-    <div
-      className={cn(
-        "mx-auto flex w-full max-w-[min(56rem,100%)] items-start gap-3 rounded-[var(--radius-md)] border px-3 py-2.5 3xl:max-w-[min(64rem,100%)]",
-        "transition-opacity duration-700 ease-out",
-        fading ? "pointer-events-none opacity-0" : "opacity-100",
-        accent,
-      )}
-      role="status"
-      aria-live="polite"
-    >
-      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface)]">
-        <Icon
-          className={cn(
-            "h-3.5 w-3.5",
-            !fading &&
-              (tool.kind === "stream" || tool.kind === "summarize") &&
-              "animate-spin text-[var(--color-info)]",
-            tool.kind === "host" && "text-[var(--color-success)]",
-            tool.kind === "connector" && "text-[var(--color-info)]",
-            tool.kind === "selfmod" && "text-[var(--color-warn)]",
-          )}
-        />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold text-[var(--color-fg)]">{tool.title}</span>
-          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] px-1.5 py-px text-[10px] uppercase tracking-wide text-[var(--color-subtle)]">
-            <span
-              className={cn(
-                "inline-block h-1.5 w-1.5 rounded-full",
-                fading ? "bg-[var(--color-subtle)]" : "pulse-live bg-[var(--color-info)]",
-              )}
-            />
-            {fading ? "done" : "live"}
-          </span>
-        </div>
-        <p className="mt-0.5 break-all font-mono text-[11px] leading-snug text-[var(--color-muted)]">
-          {tool.detail}
-        </p>
-      </div>
-      {!fading ? (
-        <Loader2 className="mt-1 h-3.5 w-3.5 shrink-0 animate-spin text-[var(--color-subtle)]" />
-      ) : onDismiss ? (
-        <button
-          type="button"
-          className="mt-1 text-[var(--color-subtle)] hover:text-[var(--color-fg)]"
-          onClick={onDismiss}
-          aria-label="Dismiss"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      ) : null}
-    </div>
-  );
 }
 
 const MAX_ATTACH_BYTES = 1_200_000;
@@ -254,15 +166,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
             </span>
           )}
           {m.streaming && (
-            <span className="inline-flex items-center gap-1 rounded border border-[color-mix(in_oklab,var(--color-info)_40%,transparent)] px-1.5 py-px font-mono normal-case text-[var(--color-info)]">
-              <Loader2 className="h-2.5 w-2.5 animate-spin" />
-              {streamStatus?.startsWith("Host")
-                ? "host"
-                : streamStatus?.startsWith("Connector")
-                  ? "connector"
-                  : streamStatus?.includes("Summariz")
-                    ? "summarizing"
-                    : "streaming"}
+            <span
+              className="inline-flex max-w-[min(100%,18rem)] items-center gap-1 rounded border border-[color-mix(in_oklab,var(--color-info)_40%,transparent)] px-1.5 py-px font-mono normal-case text-[var(--color-info)]"
+              title={streamStatus || "Working…"}
+            >
+              <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin" />
+              <span className="truncate">{streamStatusPill(streamStatus)}</span>
             </span>
           )}
           {m.stopped && (
@@ -297,7 +206,19 @@ const ChatMessageRow = memo(function ChatMessageRow({
               <MarkdownBody content={m.content} />
             </div>
           ) : (
-            <MarkdownBody content={m.content} streaming={Boolean(m.streaming)} />
+            <>
+              <MarkdownBody content={m.content} streaming={Boolean(m.streaming)} />
+              {m.streaming && streamStatus ? (
+                <div
+                  className="mt-2 flex items-center gap-2 border-t border-[var(--color-border)] pt-2 text-[11px] text-[var(--color-muted)]"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[var(--color-info)]" />
+                  <span className="min-w-0 truncate font-mono">{streamStatus}</span>
+                </div>
+              ) : null}
+            </>
           )
         ) : m.streaming ? (
           <span className="inline-flex items-center gap-2 text-sm text-[var(--color-muted)]" role="status" aria-live="polite">
@@ -305,7 +226,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--color-info)] opacity-60" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--color-info)]" />
             </span>
-            Thinking…
+            {streamStatus || "Thinking…"}
           </span>
         ) : (
           ""
@@ -369,6 +290,55 @@ const ChatMessageRow = memo(function ChatMessageRow({
   );
 });
 
+
+function ContextBudgetChip() {
+  const chat = useGrokHub((s) => s.chat);
+  const threads = useGrokHub((s) => s.threads);
+  const activeThreadId = useGrokHub((s) => s.activeThreadId);
+  const memoryNotes = useGrokHub((s) => s.agentPrefs.memoryNotes);
+  const stats = useMemo(() => {
+    const th = threads.find((x) => x.id === activeThreadId);
+    return estimateThreadContextPercent(chat, th || null, memoryNotes);
+  }, [chat, threads, activeThreadId, memoryNotes]);
+  const th = threads.find((x) => x.id === activeThreadId);
+  const tone =
+    stats.percent >= 85
+      ? "text-[var(--color-danger)] border-[color-mix(in_oklab,var(--color-danger)_40%,var(--color-border))]"
+      : stats.percent >= 70
+        ? "text-[var(--color-warn)] border-[color-mix(in_oklab,var(--color-warn)_40%,var(--color-border))]"
+        : "text-[var(--color-muted)] border-[var(--color-border)]";
+  return (
+    <button
+      type="button"
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-medium tabular-nums",
+        tone,
+      )}
+      title={`Context ~${stats.tokensEst.toLocaleString()} / ${stats.budget.toLocaleString()} tokens. Click for /context report.`}
+      onClick={() => {
+        void useGrokHub.getState().sendChat("/context");
+      }}
+    >
+      <span
+        className={cn(
+          "inline-block h-1.5 w-1.5 rounded-full",
+          stats.percent >= 85
+            ? "bg-[var(--color-danger)]"
+            : stats.percent >= 70
+              ? "bg-[var(--color-warn)]"
+              : "bg-[var(--color-success)]",
+        )}
+      />
+      Context {stats.percent}%
+      {th?.summary ? (
+        <span className="rounded bg-[var(--color-elevated)] px-1 font-mono text-[9px] text-[var(--color-subtle)]">
+          compact
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
 export function ChatView() {
   const chat = useGrokHub((s) => s.chat);
   const sendChat = useGrokHub((s) => s.sendChat);
@@ -407,9 +377,6 @@ export function ChatView() {
   const setReplyTo = useGrokHub((s) => s.setReplyTo);
   const [text, setText] = useState("");
   const [localRunning, setLocalRunning] = useState(false);
-  const [toastStatus, setToastStatus] = useState<string | null>(null);
-  const [toastFading, setToastFading] = useState(false);
-  const toastTimers = useRef<{ fade?: ReturnType<typeof setTimeout>; clear?: ReturnType<typeof setTimeout> }>({});
   const [pendingBusy, setPendingBusy] = useState(false);
   const [hostOnline, setHostOnline] = useState<boolean | undefined>(undefined);
   const [historyExtra, setHistoryExtra] = useState(0);
@@ -430,44 +397,6 @@ export function ChatView() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const busy = running || localRunning || pendingBusy;
-
-  useEffect(() => {
-    const active =
-      streamStatus ||
-      (localRunning ? "Host: running…" : null) ||
-      (running ? "Thinking…" : null);
-
-    if (busy && active) {
-      if (toastTimers.current.fade) clearTimeout(toastTimers.current.fade);
-      if (toastTimers.current.clear) clearTimeout(toastTimers.current.clear);
-      toastTimers.current = {};
-      setToastFading(false);
-      setToastStatus(active);
-      return;
-    }
-
-    if (!busy) {
-      setToastStatus((prev) => {
-        if (!prev) return prev;
-        if (!toastTimers.current.fade && !toastTimers.current.clear) {
-          toastTimers.current.fade = setTimeout(() => setToastFading(true), 1400);
-          toastTimers.current.clear = setTimeout(() => {
-            setToastStatus(null);
-            setToastFading(false);
-            toastTimers.current = {};
-          }, 1400 + 800);
-        }
-        return prev;
-      });
-    }
-  }, [busy, streamStatus, localRunning, running]);
-
-  useEffect(() => {
-    return () => {
-      if (toastTimers.current.fade) clearTimeout(toastTimers.current.fade);
-      if (toastTimers.current.clear) clearTimeout(toastTimers.current.clear);
-    };
-  }, []);
 
 
   const WINDOW = 50;
@@ -1027,26 +956,46 @@ export function ChatView() {
   return (
     <div className="chat-stage mx-auto flex h-full min-h-0 w-full flex-col">
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--color-bg)]">
-        {/* Slim toolbar — export only; title lives in stage header */}
-        <div className="flex shrink-0 items-center justify-end gap-2 border-b border-[var(--color-border)] px-4 py-1.5 md:px-6">
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!chat.length}
-            title="Export chat as Markdown"
-            onClick={() => {
-              const md = exportThreadMarkdown();
-              const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
-              const a = document.createElement("a");
-              a.href = URL.createObjectURL(blob);
-              a.download = `grokhub-chat-${Date.now()}.md`;
-              a.click();
-              URL.revokeObjectURL(a.href);
-            }}
-          >
-            <Download className="h-3.5 w-3.5" />
-            Export
-          </Button>
+        {/* Slim toolbar — context budget + export */}
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--color-border)] px-4 py-1.5 md:px-6">
+          <ContextBudgetChip />
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy || chat.length < 12}
+              title="Compact older turns into a summary (frees API window)"
+              onClick={() => {
+                const r = useGrokHub.getState().compactThread();
+                useGrokHub.getState().pushActivity({
+                  kind: "chat",
+                  title: r.ok ? "Compacted" : "Compact skipped",
+                  detail: r.detail.slice(0, 160),
+                  status: r.ok ? "success" : "failed",
+                });
+              }}
+            >
+              Compact
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={!chat.length}
+              title="Export chat as Markdown"
+              onClick={() => {
+                const md = exportThreadMarkdown();
+                const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = `grokhub-chat-${Date.now()}.md`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+              }}
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export
+            </Button>
+          </div>
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="shrink-0 space-y-2 px-4 pt-3 md:px-6 3xl:px-8">
@@ -1498,31 +1447,6 @@ export function ChatView() {
                 <span className="font-mono">/help</span> · <span className="font-mono">Ctrl+K</span> palette ·{" "}
                 <span className="font-mono">Ctrl+N</span> new · <span className="font-mono">Ctrl+L</span> focus · paste
                 images
-              </div>
-            )}
-            {(toastStatus || busy) && (
-              <div className="space-y-1.5">
-                {toastStatus && (
-                  <ToolActivityBanner
-                    status={toastStatus}
-                    fading={toastFading}
-                    onDismiss={() => {
-                      setToastStatus(null);
-                      setToastFading(false);
-                    }}
-                  />
-                )}
-                {busy && (
-                  <div className="mx-auto flex w-full max-w-[min(56rem,100%)] items-center justify-end text-[10px] text-[var(--color-subtle)] 3xl:max-w-[min(64rem,100%)]">
-                    <button
-                      type="button"
-                      className="font-medium text-[var(--color-danger)] hover:underline"
-                      onClick={onStop}
-                    >
-                      Stop generating
-                    </button>
-                  </div>
-                )}
               </div>
             )}
           </div>

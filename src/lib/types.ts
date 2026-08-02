@@ -162,6 +162,16 @@ export type ChatThread = {
    * Auto titles keep refreshing until the first manual rename.
    */
   titleLocked?: boolean;
+  /**
+   * Compacted summary of older turns (API context only; full messages kept).
+   */
+  summary?: string;
+  /** Last message id included in `summary` */
+  summaryUpToId?: string | null;
+  /** When the summary was last built */
+  compactedAt?: number;
+  /** How many messages were folded into the summary */
+  compactedMessageCount?: number;
 };
 
 /** Resume card — only set when a stream was interrupted (Stop / abort). */
