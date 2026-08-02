@@ -162,6 +162,8 @@ import {
   planFreeRoamChores,
   canFreeRoam,
 } from "./proactive";
+import { runHealthPass, formatHealthMarkdown } from "./health-pass";
+import { resolveModeArg, slashHelpMarkdown } from "./slash-commands";
 
 /** In-flight LLM auto-titles (thread id). */
 const autoTitleInflight = new Set<string>();
@@ -308,6 +310,7 @@ type State = {
   streamStatus: string | null;
   /** Id of the assistant message currently streaming */
   streamingMessageId: string | null;
+  proactiveNotice: { message: string; at: number } | null;
   /** Live essential models from xAI */
   modelCatalog: ResolvedCatalog;
   /** User pins for mode → model id; unset modes stay auto-classified */
@@ -481,6 +484,8 @@ type State = {
   approveAgentJob: (id: string, grant: boolean) => void;
   processAgentQueue: () => Promise<void>;
   runProactiveHousekeeping: () => Promise<{ ok: boolean; detail: string; fixed: number }>;
+  dismissProactiveNotice: () => void;
+  runHealthCheck: () => Promise<{ ok: boolean; detail: string }>;
   claimWorkboardJobs: () => number;
   /** Internal: run one job through sendChat */
   _runAgentJob: (job: AgentJob) => Promise<void>;
@@ -1086,6 +1091,7 @@ export const useGrokHub = create<State>()(
       running: false,
       streamStatus: null,
       streamingMessageId: null,
+      proactiveNotice: null,
       pendingHostConfirm: null,
       composerDrafts: {},
       shellHistory: [],
@@ -2657,6 +2663,14 @@ syncWebsiteConnectors: async () => {
           streamingMessageId: null,
         }));
         void get().refreshWelcomeMessage({ force: true });
+        try {
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("grokhub:focus-composer"));
+            window.dispatchEvent(new CustomEvent("grokhub:new-chat"));
+          }
+        } catch {
+          /* ignore */
+        }
       },
 
       selectThread: (id) => {
@@ -4222,23 +4236,7 @@ syncWebsiteConnectors: async () => {
                 {
                   id: uid("msg"),
                   role: "system",
-                  content: [
-                    "**Slash commands**",
-                    "",
-                    "- `/help` — this list",
-                    "- `/new` — new chat",
-                    "- `/clear` — clear current chat",
-                    "- `/imagine [prompt]` — open Imagine",
-                    "- `/export` — download chat as Markdown",
-                    "- `/mode auto|fast|expert|heavy|build`",
-                    "- `/memory [note]` — append to MEMORY.md (+ legacy notes)",
-                    "- `/memory show|user|today` — view file memory",
-                    "- `/context` — show context budget / layers",
-                    "- `/compact` — summarize older turns (frees API window)",
-                    "- `/learn` — show learning stats · `/learn reflect` self-improve",
-                    "- `/learn note …` — save a preference for the agent",
-                    "- `/tools on|off` — host + connector tools",
-                  ].join("\n"),
+                  content: slashHelpMarkdown(),
                   ts: Date.now(),
                 },
               ],
@@ -4277,11 +4275,59 @@ syncWebsiteConnectors: async () => {
             return;
           }
           if (cmd === "mode" && arg) {
-            const id = arg.toLowerCase() as import("./types").GrokModeId;
-            if (["auto", "fast", "balanced", "expert", "heavy", "max", "build"].includes(id)) {
-              get().setMode(id);
+            const resolved = resolveModeArg(arg);
+            if (resolved) {
+              get().setMode(resolved as import("./types").GrokModeId);
+              get().pushActivity({
+                kind: "system",
+                title: `Mode → ${resolved}`,
+                detail: arg !== resolved ? `alias ${arg}` : "slash",
+                status: "success",
+              });
               return;
             }
+          }
+          if (cmd === "health" || cmd === "fix") {
+            const r = await get().runHealthCheck();
+            if (cmd === "fix") {
+              const h = await get().runProactiveHousekeeping();
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: `**Self-heal**\n\n${r.detail}\n\n_Housekeeping: ${h.detail}_`,
+                    ts: Date.now(),
+                  },
+                ],
+                nav: "chat",
+              }));
+            } else {
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: r.detail,
+                    ts: Date.now(),
+                  },
+                ],
+                nav: "chat",
+              }));
+            }
+            return;
+          }
+          if (cmd === "stop") {
+            try {
+              get().stopChat();
+            } catch {
+              /* ignore */
+            }
+            return;
           }
           if (cmd === "memory") {
             const sub = arg.match(/^(show|user|today|list)\s*$/i)
@@ -6320,6 +6366,53 @@ if (!cmds.length) {
       },
 
 
+      dismissProactiveNotice: () => set({ proactiveNotice: null }),
+
+      runHealthCheck: async () => {
+        const st = get();
+        const oauth = st.oauth as { expiresAt?: number } | null;
+        const hostConnected = st.connectors.some(
+          (c) => c.id === "desktop-host" && c.status === "connected",
+        );
+        const result = await runHealthPass({
+          autonomy: st.autonomy,
+          hasOauth: Boolean(st.oauth?.accessToken),
+          oauthExpiresAt: oauth?.expiresAt ?? null,
+          hasApiKey: Boolean(st.apiKey?.trim()),
+          hostConnected,
+          modelsAgeMs: st.lastModelsFetchAt ? Date.now() - st.lastModelsFetchAt : null,
+          streamingStuck: Boolean(st.streamingMessageId) && !st.running,
+          running: st.running,
+        });
+        // Apply safe auto-fixes when proactive allows
+        for (const f of result.autoFixes) {
+          try {
+            if (f.fix === "refresh_oauth") await get().refreshOAuthSession();
+            else if (f.fix === "refresh_models") await get().refreshModels();
+            else if (f.fix === "probe_host") {
+              const { hostInfo } = await import("./host-client");
+              const info = await hostInfo();
+              if (info.unsandboxed && info.bridge !== "none") {
+                set((s) => ({
+                  connectors: s.connectors.map((c) =>
+                    c.id === "desktop-host"
+                      ? { ...c, status: "connected" as const, lastUsed: Date.now() }
+                      : c,
+                  ),
+                }));
+              }
+            } else if (f.fix === "ensure_memory") {
+              await ensureFileMemory();
+            } else if (f.fix === "clear_stream") {
+              finalizeChatStream(set, st.streamingMessageId || "");
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+        return { ok: result.ok, detail: formatHealthMarkdown(result) };
+      },
+
       runProactiveHousekeeping: async () => {
         const st = get();
         if (!proactiveEnabled(st.autonomy)) {
@@ -6424,11 +6517,18 @@ if (!cmds.length) {
           } catch {
             /* ignore */
           }
+          const msg = notes.slice(0, 3).join(" · ");
           get().pushActivity({
             kind: "system",
             title: "Self-check",
-            detail: notes.slice(0, 3).join(" · "),
+            detail: msg,
             status: "success",
+          });
+          set({
+            proactiveNotice: {
+              message: msg,
+              at: Date.now(),
+            },
           });
         }
         return {

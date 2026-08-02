@@ -786,7 +786,7 @@ export function AppShell() {
         {showOffline ? (
           <div className="shrink-0 border-b border-[color-mix(in_oklab,var(--color-warn)_28%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-warn)_14%,var(--color-surface))] px-3 py-1.5 text-center text-[11px] text-[var(--color-fg)]">
             <span className="text-[var(--color-warn)]">Offline</span>
-            <span className="text-[var(--color-muted)]"> — free fallback when possible. </span>
+            <span className="text-[var(--color-muted)]"> — connect OAuth or API key to chat. </span>
             <button
               type="button"
               className="font-medium text-[var(--color-fg)] underline decoration-[var(--color-warn)] underline-offset-2 hover:text-[var(--color-warn)]"
@@ -800,9 +800,10 @@ export function AppShell() {
         <div className="app-frame flex min-h-0 w-full flex-1 overflow-hidden">
           <aside className="sidebar-rail hidden shrink-0 flex-col overflow-hidden md:flex">
             <div className="shrink-0 space-y-2 p-3 pb-1">
-              <Button size="sm" className="w-full" onClick={() => newThread()} title="Ctrl+N">
+              <Button size="sm" className="w-full gap-1.5 font-semibold" onClick={() => newThread()} title="New chat (Ctrl+N)">
                 <MessageSquarePlus className="h-4 w-4" />
                 New chat
+                <kbd className="ml-auto font-mono text-[10px] opacity-60">Ctrl+N</kbd>
               </Button>
               <button
                 type="button"
@@ -908,13 +909,12 @@ export function AppShell() {
               <div className="flex shrink-0 items-center gap-1.5">
                 <Button
                   size="sm"
-                  variant="secondary"
-                  className="hidden sm:inline-flex"
+                  className="hidden gap-1.5 sm:inline-flex"
                   onClick={() => newThread()}
                   title="New chat (Ctrl+N)"
                 >
                   <MessageSquarePlus className="h-3.5 w-3.5" />
-                  New
+                  New chat
                 </Button>
                 <Button
                   size="icon"

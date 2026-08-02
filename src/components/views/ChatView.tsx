@@ -415,6 +415,8 @@ function ContextBudgetChip() {
 export function ChatView() {
   const chat = useGrokHub((s) => s.chat);
   const sendChat = useGrokHub((s) => s.sendChat);
+  const proactiveNotice = useGrokHub((s) => s.proactiveNotice);
+  const dismissProactiveNotice = useGrokHub((s) => s.dismissProactiveNotice);
   const stopChat = useGrokHub((s) => s.stopChat);
   const running = useGrokHub((s) => s.running);
   const streamStatus = useGrokHub((s) => s.streamStatus);
@@ -465,6 +467,28 @@ export function ChatView() {
   const regenerateLast = useGrokHub((s) => s.regenerateLast);
   const [text, setText] = useState("");
   const [slashOpen, setSlashOpen] = useState(false);
+  useEffect(() => {
+    const focus = () => {
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        resizeComposer();
+      });
+    };
+    window.addEventListener("grokhub:focus-composer", focus);
+    window.addEventListener("grokhub:new-chat", focus);
+    return () => {
+      window.removeEventListener("grokhub:focus-composer", focus);
+      window.removeEventListener("grokhub:new-chat", focus);
+    };
+  }, []);
+
+  // Auto-hide proactive banner
+  useEffect(() => {
+    if (!proactiveNotice) return;
+    const t = window.setTimeout(() => dismissProactiveNotice(), 8000);
+    return () => window.clearTimeout(t);
+  }, [proactiveNotice, dismissProactiveNotice]);
+
   const [findOpen, setFindOpen] = useState(false);
   const [findQ, setFindQ] = useState("");
   const [findIdx, setFindIdx] = useState(0);
@@ -1284,6 +1308,21 @@ export function ChatView() {
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="shrink-0 space-y-2 px-4 pt-3 md:px-6 3xl:px-8">
+            {proactiveNotice ? (
+              <div className="flex items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-success)_35%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-success)_10%,var(--color-elevated))] px-3 py-2 text-[12px] text-[var(--color-fg)]">
+                <span className="min-w-0">
+                  <span className="font-medium text-[var(--color-success)]">Self-fixed · </span>
+                  <span className="text-[var(--color-muted)]">{proactiveNotice.message}</span>
+                </span>
+                <button
+                  type="button"
+                  className="shrink-0 text-[11px] text-[var(--color-muted)] underline-offset-2 hover:underline"
+                  onClick={() => dismissProactiveNotice()}
+                >
+                  Dismiss
+                </button>
+              </div>
+            ) : null}
             <HostGatewayBanner variant="compact" />
             {sessionResume?.kind === "interrupted" && !busy && (
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-warn)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-warn)_10%,var(--color-elevated))] px-3 py-2">
@@ -1791,12 +1830,16 @@ export function ChatView() {
                 open={slashOpen && !busy}
                 onClose={() => setSlashOpen(false)}
                 onPick={(s: SlashDef) => {
-                  const ins = s.insert ?? s.cmd + (s.cmd.endsWith(" ") ? "" : " ");
+                  const ins = s.insert ?? (s.runOnPick ? s.cmd : s.cmd + (s.cmd.endsWith(" ") ? "" : " "));
                   setText(ins);
                   setSlashOpen(false);
                   requestAnimationFrame(() => {
                     inputRef.current?.focus();
                     resizeComposer();
+                    if (s.runOnPick) {
+                      void sendChat(ins.trim());
+                      setText("");
+                    }
                   });
                 }}
               />
@@ -1814,7 +1857,7 @@ export function ChatView() {
                 placeholder={
                   busy
                     ? "Agent running — press Stop to interrupt…"
-                    : "Message Grok…  /help · attach · voice · Enter send · $ shell"
+                    : "Message Grok…  type / for commands · Enter send · $ shell"
                 }
                 rows={1}
                 className="max-h-40 min-h-[2.5rem] flex-1 resize-none overflow-hidden leading-5"

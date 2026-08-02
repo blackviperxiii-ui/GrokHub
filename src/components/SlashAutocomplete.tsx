@@ -32,12 +32,9 @@ export function SlashAutocomplete({
         e.stopPropagation();
         setIdx((i) => (i - 1 + items.length) % items.length);
       } else if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
-        // Tab always accepts; Enter only when we intercept (parent may send)
-        if (e.key === "Tab") {
-          e.preventDefault();
-          e.stopPropagation();
-          onPick(items[idx]!);
-        }
+        e.preventDefault();
+        e.stopPropagation();
+        onPick(items[idx]!);
       } else if (e.key === "Escape") {
         e.preventDefault();
         onClose();
@@ -75,7 +72,7 @@ export function SlashAutocomplete({
         </button>
       ))}
       <div className="border-t border-[var(--color-border)] px-3 py-1 text-[10px] text-[var(--color-subtle)]">
-        Tab to accept · ↑↓ move · Esc dismiss
+        Tab / Enter accept · ↑↓ move · Esc dismiss
       </div>
     </div>
   );
