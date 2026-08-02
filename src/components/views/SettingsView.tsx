@@ -3,6 +3,7 @@ import { ExternalLink, FolderInput, HardDrive, Moon, RefreshCw, Sun, Monitor } f
 
 const SETTINGS_SECTIONS = [
   { id: "sec-wizard", label: "First-run" },
+  { id: "sec-autonomy", label: "Autonomy" },
   { id: "sec-appearance", label: "Appearance" },
   { id: "sec-oauth", label: "Grok OAuth" },
   { id: "sec-free", label: "Free Grok" },
@@ -367,6 +368,20 @@ export function SettingsView() {
           </a>
         ))}
       </nav>
+
+      
+      <Card id="sec-autonomy">
+        <CardHeader>
+          <CardTitle className="text-sm">Autonomy & always-on agent</CardTitle>
+          <CardDescription>
+            Levels 2+ queue work when busy. Level 3+ claims workboard. Level 4 auto-resumes goals.
+            Use tray Pause or the Queue tab kill switch anytime.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <AutonomySettingsPanel />
+        </CardContent>
+      </Card>
 
       <Card id="sec-appearance">
         <CardHeader>
@@ -1957,6 +1972,81 @@ function AgentPrefsPanel() {
           Prefer Settings → Memory files or <span className="font-mono">/memory</span>
         </p>
       </label>
+    </div>
+  );
+}
+
+
+function AutonomySettingsPanel() {
+  const autonomy = useGrokHub((s) => s.autonomy);
+  const setAutonomy = useGrokHub((s) => s.setAutonomy);
+  const pauseAutonomy = useGrokHub((s) => s.pauseAutonomy);
+  const stats = useGrokHub((s) => s.agentQueue);
+  const setNav = useGrokHub((s) => s.setNav);
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        {([0, 1, 2, 3, 4] as const).map((lv) => (
+          <button
+            key={lv}
+            type="button"
+            onClick={() => setAutonomy({ level: lv })}
+            className={
+              "rounded-full border px-3 py-1 text-xs font-medium " +
+              (autonomy.level === lv
+                ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)]"
+                : "border-[var(--color-border)] text-[var(--color-muted)]")
+            }
+          >
+            {lv}
+          </button>
+        ))}
+      </div>
+      <label className="flex items-center justify-between gap-3 text-sm">
+        <span>Pause all autonomy</span>
+        <input
+          type="checkbox"
+          checked={autonomy.paused}
+          onChange={(e) => pauseAutonomy(e.target.checked)}
+        />
+      </label>
+      <label className="flex items-center justify-between gap-3 text-sm">
+        <span>Auto-claim workboard (level 3+)</span>
+        <input
+          type="checkbox"
+          checked={autonomy.autoClaimWorkboard}
+          onChange={(e) => setAutonomy({ autoClaimWorkboard: e.target.checked })}
+        />
+      </label>
+      <label className="flex items-center justify-between gap-3 text-sm">
+        <span>Auto goal resume (level 4)</span>
+        <input
+          type="checkbox"
+          checked={autonomy.autoGoalResume}
+          onChange={(e) => setAutonomy({ autoGoalResume: e.target.checked })}
+        />
+      </label>
+      <label className="block space-y-1 text-sm">
+        <span>Daily unit budget (0 = unlimited)</span>
+        <Input
+          type="number"
+          min={0}
+          value={autonomy.dailyUnitBudget}
+          onChange={(e) => setAutonomy({ dailyUnitBudget: Number(e.target.value) || 0 })}
+          className="h-8"
+        />
+      </label>
+      <p className="text-xs text-[var(--color-muted)]">
+        Queue depth {stats.jobs.length} · spent today {autonomy.spentUnitsToday}
+        {autonomy.dailyUnitBudget ? ` / ${autonomy.dailyUnitBudget}` : ""}
+      </p>
+      <Button size="sm" variant="secondary" onClick={() => setNav("queue")}>
+        Open agent queue
+      </Button>
+      <p className="text-[11px] text-[var(--color-subtle)]">
+        Arch always-on: enable packaging/systemd/grokhub-agent.service (user unit) or launch with{" "}
+        <span className="font-mono">grokhub --agent</span>.
+      </p>
     </div>
   );
 }

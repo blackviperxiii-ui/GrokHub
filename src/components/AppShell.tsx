@@ -1,5 +1,5 @@
 import type { ComponentType, CSSProperties } from "react";
-import {
+import { ListTodo,
   Cable,
   ClipboardList,
   ChevronDown,
@@ -82,6 +82,9 @@ const SkillsView = lazy(() =>
 const WorkboardView = lazy(() =>
   import("./views/WorkboardView").then((m) => ({ default: m.WorkboardView })),
 );
+const AgentQueueView = lazy(() =>
+  import("./views/AgentQueueView").then((m) => ({ default: m.AgentQueueView })),
+);
 
 
 
@@ -93,6 +96,7 @@ const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string 
   { id: "imagine", label: "Imagine", icon: ImageIcon },
   { id: "connectors", label: "Connectors", icon: Cable },
   { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "queue", label: "Queue", icon: ListTodo },
   { id: "automations", label: "Automations", icon: TimerReset },
   { id: "agents", label: "Roster", icon: Users },
   { id: "settings", label: "Settings", icon: Settings },
@@ -492,6 +496,38 @@ export function AppShell() {
     setMobileOpen(false);
   }, [nav]);
 
+  // Desktop agent core → UI commands (tray)
+  useEffect(() => {
+    const api = (window as unknown as {
+      grokhubDesktop?: {
+        // ipc on via electron - use custom events from preload if needed
+      };
+    }).grokhubDesktop;
+    const onCmd = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      if (d.type === "open-queue") setNav("queue");
+      if (d.type === "new-chat") useGrokHub.getState().newThread();
+      if (d.type === "set-paused") useGrokHub.getState().pauseAutonomy(Boolean(d.paused));
+    };
+    window.addEventListener("grokhub:agent-command", onCmd as EventListener);
+    // Bridge ipc if exposed
+    try {
+      const { ipcRenderer } = (window as unknown as { require?: (m: string) => { ipcRenderer?: { on: Function } } }).require?.("electron") || {};
+      // sandboxed — use periodic process instead
+    } catch {
+      /* ignore */
+    }
+    return () => window.removeEventListener("grokhub:agent-command", onCmd as EventListener);
+  }, [setNav]);
+
+  // Drain agent queue on heartbeat
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      void useGrokHub.getState().processAgentQueue();
+    }, 20_000);
+    return () => window.clearInterval(t);
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -601,7 +637,7 @@ export function AppShell() {
     ["chat", "history", "command", "workboard", "imagine"].includes(item.id),
   );
   const toolsNav = NAV.filter((item) =>
-    ["connectors", "skills", "automations", "agents", "settings"].includes(item.id),
+    ["queue", "connectors", "skills", "automations", "agents", "settings"].includes(item.id),
   );
 
   const stageTitle =
@@ -964,6 +1000,7 @@ export function AppShell() {
                     {nav === "automations" && <AutomationsView />}
                     {nav === "agents" && <AgentsView />}
                     {nav === "workboard" && <WorkboardView />}
+                    {nav === "queue" && <AgentQueueView />}
                     {nav === "imagine" && <ImagineView />}
                     {nav === "desktop" && <DesktopHostView />}
                     {nav === "settings" && <SettingsView />}

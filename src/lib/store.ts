@@ -116,6 +116,29 @@ import {
   type QuickAssistMemory,
 } from "./quick-assist-memory";
 import type { QuickChip } from "./quick-assistant";
+import {
+  type AgentJob,
+  type AgentQueueState,
+  type AutonomyConfig,
+  type AutonomyLevel,
+  approveJob,
+  defaultAutonomyConfig,
+  emptyAgentQueue,
+  enqueueJob,
+  normalizeAgentQueue,
+  normalizeAutonomy,
+  pickNextJob,
+  rollBudgetDay,
+  shouldAutoClaimWorkboard,
+  shouldAutoGoalResume,
+  shouldQueueWhenBusy,
+  updateJob,
+  queueStats,
+  uidJob,
+} from "./agent-jobs";
+import { formatToolRegistryForPrompt } from "./tool-registry";
+import { buildGoalStepPrompt, parseGoalOutcome } from "./goal-loop";
+import { agentCoreEnqueue, agentCoreSetPaused, agentCoreSync } from "./agent-core-client";
 
 /** Waits for user approval of host commands (agent tool loop). */
 let hostConfirmWaiter: ((allow: boolean) => void) | null = null;
@@ -234,6 +257,10 @@ type State = {
   learning: LearningState;
   workboard: WorkboardState;
   projectWorkspace: ProjectWorkspace | null;
+  /** Always-on autonomy level + budgets */
+  autonomy: AutonomyConfig;
+  /** Durable agent job queue */
+  agentQueue: AgentQueueState;
   usage: UsageSnapshot;
   heartbeatAt: number;
   running: boolean;
@@ -391,6 +418,20 @@ type State = {
   }) => void;
   runSkill: (id: string) => Promise<void>;
   startWorkItem: (id: string) => Promise<void>;
+  setAutonomy: (patch: Partial<AutonomyConfig>) => void;
+  pauseAutonomy: (paused: boolean) => void;
+  enqueueAgentJob: (
+    input: Omit<AgentJob, "id" | "createdAt" | "updatedAt" | "status"> & {
+      id?: string;
+      status?: AgentJob["status"];
+    },
+  ) => string;
+  cancelAgentJob: (id: string) => void;
+  approveAgentJob: (id: string, grant: boolean) => void;
+  processAgentQueue: () => Promise<void>;
+  claimWorkboardJobs: () => number;
+  /** Internal: run one job through sendChat */
+  _runAgentJob: (job: AgentJob) => Promise<void>;
   toggleAutomation: (id: string) => void;
   runAutomation: (id: string) => Promise<void>;
   addAutomation: (input: {
@@ -834,6 +875,8 @@ export const useGrokHub = create<State>()(
       learning: emptyLearning(),
       workboard: emptyWorkboard(),
       projectWorkspace: null,
+      autonomy: defaultAutonomyConfig(),
+      agentQueue: emptyAgentQueue(),
       modelCatalog: emptyCatalog(),
       lastModelsFetchAt: 0,
       apiKey: "",
@@ -3334,16 +3377,6 @@ export const useGrokHub = create<State>()(
       startWorkItem: async (id) => {
         const item = get().workboard.items.find((w) => w.id === id);
         if (!item) return;
-        if (get().running || get().streamingMessageId) {
-          get().pushActivity({
-            kind: "system",
-            title: "Agent busy",
-            detail: "Finish the current turn before starting a workboard task",
-            status: "queued",
-          });
-          return;
-        }
-        get().setWorkItemStatus(id, "in_progress");
         const project = get().projectWorkspace?.path;
         const prompt = [
           `[Workboard task: ${item.title}]`,
@@ -3352,28 +3385,225 @@ export const useGrokHub = create<State>()(
           "",
           "Work this task end-to-end. Prefer HOST_CMD for real files/shell.",
           "When finished, emit WORK_UPDATE: " + item.id + " status=done (or leave staged notes).",
+          "If more work remains, say so clearly. Emit GOAL_COMPLETE when fully done.",
           "Do not invent data — use tools.",
         ]
           .filter(Boolean)
           .join("\n");
+        get().setWorkItemStatus(id, "in_progress");
+        // Always enqueue so busy agent doesn't drop work
+        get().enqueueAgentJob({
+          type: "workboard",
+          priority: 8,
+          title: item.title,
+          prompt,
+          workItemId: id,
+          goalId: id,
+          stepIndex: 0,
+          maxSteps: get().autonomy.maxStepsPerGoal,
+          maxRounds: 8,
+        });
         set({ nav: "chat" });
         get().pushActivity({
           kind: "system",
-          title: `Started: ${item.title}`,
-          detail: "Agent turn from workboard",
-          status: "running",
+          title: `Queued: ${item.title}`,
+          detail: "Workboard → agent queue",
+          status: "queued",
         });
+        void get().processAgentQueue();
+      },
+
+      setAutonomy: (patch) => {
+        set((s) => {
+          let autonomy = rollBudgetDay({ ...s.autonomy, ...patch });
+          return { autonomy };
+        });
+        const a = get().autonomy;
+        void agentCoreSync({ paused: a.paused, level: a.level, jobs: get().agentQueue.jobs });
+        void agentCoreSetPaused(a.paused);
+      },
+
+      pauseAutonomy: (paused) => {
+        get().setAutonomy({ paused });
+        get().pushActivity({
+          kind: "system",
+          title: paused ? "Autonomy paused" : "Autonomy resumed",
+          detail: paused ? "Job queue will not drain" : "Queue can run",
+          status: paused ? "queued" : "success",
+        });
+      },
+
+      enqueueAgentJob: (input) => {
+        const id = input.id || uidJob();
+        const cfg = get().autonomy;
+        set((s) => ({
+          agentQueue: enqueueJob(
+            s.agentQueue,
+            { ...input, id },
+            cfg.maxQueue,
+          ),
+        }));
+        const job = get().agentQueue.jobs.find((j) => j.id === id);
+        if (job) void agentCoreEnqueue(job);
+        return id;
+      },
+
+      cancelAgentJob: (id) => {
+        set((s) => ({
+          agentQueue: updateJob(s.agentQueue, id, { status: "cancelled" }),
+        }));
+        void agentCoreSync({ jobs: get().agentQueue.jobs });
+      },
+
+      approveAgentJob: (id, grant) => {
+        set((s) => ({
+          agentQueue: approveJob(s.agentQueue, id, grant),
+        }));
+        void agentCoreSync({ jobs: get().agentQueue.jobs });
+        if (grant) void get().processAgentQueue();
+      },
+
+      claimWorkboardJobs: () => {
+        const cfg = get().autonomy;
+        if (!shouldAutoClaimWorkboard(cfg)) return 0;
+        const open = get().workboard.items.filter((w) =>
+          ["approved", "staged", "in_progress"].includes(w.status),
+        );
+        let n = 0;
+        for (const item of open.slice(0, 5)) {
+          const already = get().agentQueue.jobs.some(
+            (j) =>
+              j.workItemId === item.id &&
+              ["queued", "running", "waiting_user"].includes(j.status),
+          );
+          if (already) continue;
+          get().enqueueAgentJob({
+            type: "workboard",
+            priority: item.priority === "high" ? 9 : 6,
+            title: item.title,
+            prompt: buildGoalStepPrompt({
+              workItem: item,
+              stepIndex: 0,
+              maxSteps: cfg.maxStepsPerGoal,
+            }),
+            workItemId: item.id,
+            goalId: item.id,
+            stepIndex: 0,
+            maxSteps: cfg.maxStepsPerGoal,
+          });
+          n++;
+        }
+        if (n) void get().processAgentQueue();
+        return n;
+      },
+
+      _runAgentJob: async (job) => {
+        set((s) => ({
+          agentQueue: updateJob(s.agentQueue, job.id, { status: "running" }),
+        }));
         try {
-          await get().sendChat(prompt);
+          if (job.threadId) {
+            try {
+              get().selectThread(job.threadId);
+            } catch {
+              /* ignore */
+            }
+          } else {
+            set({ nav: "chat" });
+          }
+          await get().sendChat(job.prompt);
+          const last = [...get().chat].reverse().find((m) => m.role === "assistant");
+          const text = last?.content || "";
+          const outcome = parseGoalOutcome(text);
+          set((s) => ({
+            agentQueue: updateJob(s.agentQueue, job.id, {
+              status: outcome === "blocked" ? "waiting_user" : "done",
+              resultSummary: text.slice(0, 240),
+              needsApproval: outcome === "blocked",
+              approval: outcome === "blocked" ? "pending" : undefined,
+            }),
+          }));
+          if (job.workItemId) {
+            if (outcome === "complete") {
+              get().setWorkItemStatus(job.workItemId, "done");
+            } else if (outcome === "blocked") {
+              /* leave in progress */
+            }
+          }
+          // Goal resume level 4
+          if (
+            outcome === "continue" &&
+            shouldAutoGoalResume(get().autonomy) &&
+            (job.type === "workboard" || job.type === "goal_step")
+          ) {
+            const step = (job.stepIndex || 0) + 1;
+            const maxSteps = job.maxSteps || get().autonomy.maxStepsPerGoal;
+            if (step < maxSteps) {
+              get().enqueueAgentJob({
+                type: "goal_step",
+                priority: (job.priority || 5) + 1,
+                title: `${job.title} · step ${step + 1}`,
+                prompt: buildGoalStepPrompt({
+                  workItem: job.workItemId
+                    ? get().workboard.items.find((w) => w.id === job.workItemId) || null
+                    : null,
+                  priorSummary: text,
+                  stepIndex: step,
+                  maxSteps,
+                }),
+                workItemId: job.workItemId,
+                goalId: job.goalId || job.workItemId,
+                parentId: job.id,
+                stepIndex: step,
+                maxSteps,
+                threadId: get().activeThreadId,
+              });
+            }
+          }
         } catch (e) {
-          get().pushActivity({
-            kind: "system",
-            title: `Work item stalled: ${item.title}`,
-            detail: e instanceof Error ? e.message : "failed",
-            status: "failed",
+          const msg = e instanceof Error ? e.message : "job failed";
+          const fails = (job.failCount || 0) + 1;
+          const breakCircuit = fails >= get().autonomy.circuitBreakerFails;
+          set((s) => ({
+            agentQueue: updateJob(s.agentQueue, job.id, {
+              status: breakCircuit ? "failed" : "queued",
+              failCount: fails,
+              lastError: msg,
+              notBefore: breakCircuit ? undefined : Date.now() + fails * 30_000,
+            }),
+          }));
+        } finally {
+          set((s) => ({
+            agentQueue: {
+              ...s.agentQueue,
+              runningId: s.agentQueue.runningId === job.id ? null : s.agentQueue.runningId,
+            },
+          }));
+          void agentCoreSync({ jobs: get().agentQueue.jobs });
+        }
+      },
+
+      processAgentQueue: async () => {
+        const cfg0 = rollBudgetDay(get().autonomy);
+        if (cfg0 !== get().autonomy) set({ autonomy: cfg0 });
+        if (get().autonomy.paused) return;
+        if (get().running || get().streamingMessageId) return;
+        if (get().agentQueue.runningId) return;
+        // Level 3+ auto claim
+        if (shouldAutoClaimWorkboard(get().autonomy)) {
+          get().claimWorkboardJobs();
+        }
+        const next = pickNextJob(get().agentQueue, get().autonomy);
+        if (!next) return;
+        await get()._runAgentJob(next);
+        // chain next if idle
+        if (!get().running && !get().autonomy.paused) {
+          queueMicrotask(() => {
+            void get().processAgentQueue();
           });
         }
       },
+
 
       toggleAutomation: (id) => {
         set((s) => ({
@@ -3400,7 +3630,23 @@ export const useGrokHub = create<State>()(
       runAutomation: async (id) => {
         const auto = get().automations.find((a) => a.id === id);
         if (!auto) return;
-        if (get().running) {
+        if (get().running || get().streamingMessageId || get().agentQueue.runningId) {
+          if (shouldQueueWhenBusy(get().autonomy.level)) {
+            get().enqueueAgentJob({
+              type: "automation",
+              priority: 7,
+              title: auto.name,
+              prompt: `[Automation: ${auto.name}]\n${auto.instructions}`,
+              automationId: auto.id,
+            });
+            get().pushActivity({
+              kind: "automation",
+              title: `Queued: ${auto.name}`,
+              detail: "Agent busy — enqueued",
+              status: "queued",
+            });
+            return;
+          }
           get().pushActivity({
             kind: "automation",
             title: `Skipped: ${auto.name}`,
@@ -3510,11 +3756,12 @@ export const useGrokHub = create<State>()(
         const due = opts?.heartbeatOnly
           ? dueHeartbeatAutomations(list, now)
           : dueAutomations(list, now);
-        for (const a of due.slice(0, 2)) {
-          // small batch per tick; avoid pile-up
-          if (get().running) break;
+        for (const a of due.slice(0, 3)) {
+          // enqueue-friendly; processAgentQueue drains
+          if (get().running && !shouldQueueWhenBusy(get().autonomy.level)) break;
           await get().runAutomation(a.id);
         }
+        void get().processAgentQueue();
       },
 
       addAutomation: (input) => {
@@ -4456,6 +4703,11 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx);
               "- Learning is live: turns + 👍/👎 write STATUS.md; Reflect fills LEARNINGS.md.",
               "- Workboard: pin tasks with WORK_PIN: title | detail | priority=high; update WORK_UPDATE: id | status=…",
               "- Bound project: prefer HOST_CMD under the project path when set.",
+              "- Tool registry (live):",
+              formatToolRegistryForPrompt({ includeBlocked: false }),
+              get().autonomy.level >= 3
+                ? "- Autonomy: you may continue multi-step work; emit GOAL_COMPLETE / GOAL_BLOCKED when appropriate."
+                : "- Autonomy: complete the user turn; pin WORK_PIN for later if needed.",
               "- Persistent: chat history, settings, memory notes, Imagine media, connectors.",
               stTurn.agentPrefs?.memoryNotes?.trim()
                 ? `- Memory notes loaded (${stTurn.agentPrefs.memoryNotes.trim().length} chars). Use them.`
@@ -5461,8 +5713,9 @@ if (!cmds.length) {
           get().setAgentStatus("builder", "idle", 0);
           get().setAgentStatus("research", "idle", 0);
           get().setAgentStatus("ops", "idle", 0);
+          void get().processAgentQueue();
         }
-        }
+        } // end finally
       },
 
       setImaginePrompt: (v) => set({ imaginePrompt: v }),
@@ -5737,6 +5990,8 @@ if (!cmds.length) {
           learning: emptyLearning(),
           workboard: emptyWorkboard(),
           projectWorkspace: null,
+          autonomy: defaultAutonomyConfig(),
+          agentQueue: emptyAgentQueue(),
           pendingHostConfirm: null,
         });
       },
@@ -5768,6 +6023,12 @@ if (!cmds.length) {
         learning: s.learning,
         workboard: s.workboard,
         projectWorkspace: s.projectWorkspace,
+        autonomy: s.autonomy,
+        agentQueue: {
+          jobs: (s.agentQueue?.jobs || []).slice(0, 40),
+          runningId: null,
+          lastTickAt: s.agentQueue?.lastTickAt || 0,
+        },
         // Persist imagine metadata + disk paths (bytes live in userData/imagine-media)
         imagineJobs: s.imagineJobs.slice(0, 32).map((j) => {
           const {
@@ -5839,6 +6100,8 @@ if (!cmds.length) {
         }
         s.learning = normalizeLearning((s as { learning?: unknown }).learning);
         s.workboard = normalizeWorkboard((s as { workboard?: unknown }).workboard);
+        s.autonomy = normalizeAutonomy((s as { autonomy?: unknown }).autonomy);
+        s.agentQueue = normalizeAgentQueue((s as { agentQueue?: unknown }).agentQueue);
           if ((s as { projectWorkspace?: unknown }).projectWorkspace && typeof (s as { projectWorkspace?: { path?: string } }).projectWorkspace === "object") {
             /* keep as-is */
           } else {

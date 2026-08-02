@@ -43,12 +43,19 @@ const stateStore = require("./state-store.cjs");
 const imagineStore = require("./imagine-store.cjs");
 const selfMod = require("./self-mod.cjs");
 const memoryStore = require("./memory-store.cjs");
+const agentCore = require("./agent-core.cjs");
 const desktopEntry = require("./desktop-entry.cjs");
 const uiServer = require("./ui-server.cjs");
 const appLog = require("./log.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
+const agentMode =
+  process.env.GROKHUB_AGENT === "1" ||
+  process.argv.includes("--agent") ||
+  process.argv.includes("--headless-agent");
+let agentPaused = false;
+
 
 /** Resolve app icon from desktop/icons or system theme paths. */
 function resolveIconPath(candidates) {
@@ -599,34 +606,78 @@ function createTray() {
     tray = new Tray(icon);
   }
   tray.setToolTip(APP_DISPLAY_NAME);
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      {
-        label: "Show GrokHub",
-        click: () => {
-          if (!mainWindow || mainWindow.isDestroyed()) {
-            createWindow();
-            return;
-          }
-          try {
-            mainWindow.setSkipTaskbar(false);
-          } catch {
-            /* ignore */
-          }
-          mainWindow.show();
-          mainWindow.focus();
+  function rebuildTrayMenu() {
+    const snap = agentCore.snapshot();
+    agentPaused = Boolean(snap.paused);
+    const due = (snap.due || []).length;
+    tray?.setContextMenu(
+      Menu.buildFromTemplate([
+        {
+          label: "Show GrokHub",
+          click: () => {
+            if (!mainWindow || mainWindow.isDestroyed()) {
+              createWindow();
+              return;
+            }
+            try {
+              mainWindow.setSkipTaskbar(false);
+            } catch {
+              /* ignore */
+            }
+            mainWindow.show();
+            mainWindow.focus();
+          },
         },
-      },
-      {
-        label: "Quit",
-        click: () => {
-          tray?.destroy();
-          tray = null;
-          app.exit(0);
+        {
+          label: "New chat",
+          click: () => {
+            if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+            mainWindow?.show();
+            mainWindow?.webContents.send("agent:command", { type: "new-chat" });
+          },
         },
-      },
-    ]),
-  );
+        {
+          label: due ? `Open queue (${due} due)` : "Open agent queue",
+          click: () => {
+            if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+            mainWindow?.show();
+            mainWindow?.webContents.send("agent:command", { type: "open-queue" });
+          },
+        },
+        {
+          label: agentPaused ? "Resume autonomy" : "Pause autonomy",
+          click: () => {
+            agentCore.setPaused(!agentPaused);
+            agentPaused = !agentPaused;
+            rebuildTrayMenu();
+            mainWindow?.webContents.send("agent:command", {
+              type: "set-paused",
+              paused: agentPaused,
+            });
+          },
+        },
+        { type: "separator" },
+        {
+          label: "Quit fully",
+          click: () => {
+            tray?.destroy();
+            tray = null;
+            agentCore.stop();
+            app.exit(0);
+          },
+        },
+      ]),
+    );
+  }
+  rebuildTrayMenu();
+  // refresh tray label occasionally
+  setInterval(() => {
+    try {
+      rebuildTrayMenu();
+    } catch {
+      /* ignore */
+    }
+  }, 30000);
   tray.on("click", () => {
     if (!mainWindow || mainWindow.isDestroyed()) {
       createWindow();
@@ -844,6 +895,18 @@ function registerIpc() {
   safeHandle("state:remove", (_e, name) => stateStore.remove(String(name || "")));
   safeHandle("state:info", () => stateStore.info());
   safeHandle("state:export", () => stateStore.exportAll());
+  
+
+  // Always-on agent core
+  safeHandle("agent:snapshot", () => agentCore.snapshot());
+  safeHandle("agent:enqueue", (_e, job) => agentCore.enqueue(job));
+  safeHandle("agent:setPaused", (_e, v) => {
+    const s = agentCore.setPaused(v);
+    return s;
+  });
+  safeHandle("agent:approve", (_e, id, grant) => agentCore.approve(id, grant));
+  safeHandle("agent:sync", (_e, payload) => agentCore.sync(payload || {}));
+
   safeHandle("state:import", (_e, payload) => stateStore.importAll(payload));
 
   safeHandle("memory:info", () => memoryStore.info());
@@ -1087,8 +1150,34 @@ app.whenReady().then(async () => {
     }
   }
   registerIpc();
+  try {
+    agentCore.start({
+      intervalMs: 15000,
+      onDueJobs: (payload) => {
+        try {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send("agent:due", payload);
+          }
+        } catch {
+          /* ignore */
+        }
+      },
+    });
+  } catch (e) {
+    console.error("[GrokHub] agent-core start failed", e);
+  }
   createWindow();
   createTray();
+  if (agentMode) {
+    // Headless / always-on: keep tray, hide main window after create
+    try {
+      mainWindow?.hide();
+      mainWindow?.setSkipTaskbar(true);
+    } catch {
+      /* ignore */
+    }
+    console.log("[GrokHub] agent mode — window hidden, tray/queue active");
+  }
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
     else mainWindow?.show();

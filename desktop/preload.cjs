@@ -98,6 +98,13 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     exportAll: () => ipcRenderer.invoke("state:export"),
     importAll: (payload) => ipcRenderer.invoke("state:import", payload),
   },
+  agent: {
+    snapshot: () => ipcRenderer.invoke("agent:snapshot"),
+    enqueue: (job) => ipcRenderer.invoke("agent:enqueue", job),
+    setPaused: (v) => ipcRenderer.invoke("agent:setPaused", v),
+    approve: (id, grant) => ipcRenderer.invoke("agent:approve", id, grant),
+    sync: (payload) => ipcRenderer.invoke("agent:sync", payload),
+  },
   memory: {
     info: () => ipcRenderer.invoke("memory:info"),
     list: () => ipcRenderer.invoke("memory:list"),
@@ -132,3 +139,24 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     clear: () => ipcRenderer.invoke("imagine:clear"),
   },
 });
+
+
+// Forward main→renderer agent events into the page
+try {
+  ipcRenderer.on("agent:command", (_e, payload) => {
+    try {
+      window.dispatchEvent(new CustomEvent("grokhub:agent-command", { detail: payload || {} }));
+    } catch {
+      /* ignore */
+    }
+  });
+  ipcRenderer.on("agent:due", (_e, payload) => {
+    try {
+      window.dispatchEvent(new CustomEvent("grokhub:agent-due", { detail: payload || {} }));
+    } catch {
+      /* ignore */
+    }
+  });
+} catch {
+  /* ignore */
+}

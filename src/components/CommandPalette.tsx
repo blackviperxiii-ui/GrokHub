@@ -21,6 +21,7 @@ import {
   Square,
   Keyboard,
   FileDown,
+  ListTodo,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useGrokHub } from "@/lib/store";
@@ -102,6 +103,13 @@ export function CommandPalette({
         group: "Navigate",
         icon: ImageIcon,
         run: () => go("imagine"),
+      },
+      {
+        id: "nav-queue",
+        label: "Agent queue",
+        group: "Navigate",
+        icon: ListTodo,
+        run: () => go("queue"),
       },
       {
         id: "nav-command",
@@ -282,6 +290,17 @@ export function CommandPalette({
       }));
 
     return [
+      {
+        id: "pause-autonomy",
+        label: "Pause / resume autonomy",
+        group: "Actions",
+        icon: Square,
+        run: () => {
+          const a = useGrokHub.getState().autonomy;
+          useGrokHub.getState().pauseAutonomy(!a.paused);
+          onOpenChange(false);
+        },
+      },
       {
         id: "stop",
         label: "Stop agent",

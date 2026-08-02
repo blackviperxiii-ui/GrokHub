@@ -1,0 +1,16 @@
+[Unit]
+Description=GrokHub always-on agent core
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# Prefer user install; fall back to system
+ExecStart=/bin/sh -c 'if [ -x "$HOME/.local/bin/grokhub" ]; then exec "$HOME/.local/bin/grokhub" --agent; elif [ -x /usr/bin/grokhub ]; then exec /usr/bin/grokhub --agent; else exec grokhub --agent; fi'
+Restart=on-failure
+RestartSec=5
+Environment=GROKHUB_AGENT=1
+Environment=GROKHUB_TRAY=1
+
+[Install]
+WantedBy=default.target

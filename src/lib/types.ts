@@ -7,6 +7,7 @@ export type NavId =
   | "automations"
   | "agents"
   | "workboard"
+  | "queue"
   | "imagine"
   | "desktop"
   | "settings";
