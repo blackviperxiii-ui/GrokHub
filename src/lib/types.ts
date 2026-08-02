@@ -137,6 +137,10 @@ export type ChatMessage = {
   streaming?: boolean;
   /** Stopped by user mid-stream */
   stopped?: boolean;
+  /** Reply-to another message in this thread */
+  replyToId?: string;
+  replyToPreview?: string;
+  replyToRole?: ChatRole;
 };
 
 /** Grok-style conversation history entry */

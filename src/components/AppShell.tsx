@@ -363,13 +363,28 @@ export function AppShell() {
     void import("@/lib/smart-poll").then(({ startSmartPoll }) => {
       stop = startSmartPoll({
         intervalMs: 60_000,
-        maxBackoffMs: 10 * 60 * 1000,
+        maxBackoffMs: 5 * 60 * 1000,
         onlyWhenVisible: true,
         tick: async () => {
           const st = useGrokHub.getState();
           try {
             await st.refreshUsage();
-            if (st.ssoCookie) await st.syncWebsiteConnectors();
+            if (st.ssoCookie || useGrokHub.getState().ssoCookie) {
+              try {
+                await useGrokHub.getState().syncWebsiteConnectors();
+              } catch {
+                /* non-fatal */
+              }
+            }
+            const u = useGrokHub.getState().usage;
+            // Back off when SSO is present but website still errors
+            if (
+              (st.ssoCookie || useGrokHub.getState().ssoCookie) &&
+              u.website?.error &&
+              u.source !== "website"
+            ) {
+              return false;
+            }
             return true;
           } catch {
             return false;

@@ -35,15 +35,18 @@ export function UsageMeterChip({ className }: { className?: string }) {
   const setNav = useGrokHub((s) => s.setNav);
   const refreshUsage = useGrokHub((s) => s.refreshUsage);
   const web = usage.website;
-  const pct =
-    web?.creditUsagePercent != null && (usage.source === "website" || web.creditUsagePercent > 0)
+  const hasLive =
+    usage.source === "website" && web && web.error == null;
+  const pct = hasLive
+    ? Number(web.creditUsagePercent) || 0
+    : web?.creditUsagePercent != null && !web.error && web.creditUsagePercent > 0
       ? web.creditUsagePercent
       : usagePercent(usage);
   const tone = usageTone(pct);
   const label = web?.planLabel || PLAN_LIMITS[usage.plan].label;
   const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
   const stale =
-    !usage.lastPolledAt || Date.now() - usage.lastPolledAt > 5 * 60_000;
+    !usage.lastPolledAt || Date.now() - usage.lastPolledAt > 90_000;
   const err = web?.error;
 
   return (
@@ -58,10 +61,10 @@ export function UsageMeterChip({ className }: { className?: string }) {
       }}
       title={
         err
-          ? `Usage error: ${err}`
-          : web && usage.source === "website"
+          ? `Usage: ${err}`
+          : hasLive
             ? `${label}: ${Math.round(pct)}% weekly · resets ${formatResetAt(web.periodEnd)}`
-            : `${label}: ${Math.round(pct)}% (local meter) · link grok.com in Settings for live weekly %`
+            : `${label}: ${Math.round(pct)}% (local) · link grok.com session for live weekly limit`
       }
       className={cn(
         "flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-1 text-left transition-colors hover:border-[var(--color-border-strong)]",
@@ -84,7 +87,7 @@ export function UsageMeterChip({ className }: { className?: string }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[10px] font-medium text-[var(--color-fg)]">
-            {usage.source === "website" ? label : "Usage"}
+            {hasLive ? label : err ? "Usage" : "Usage"}
           </span>
           <span className="tabular text-[10px] text-[var(--color-subtle)]">
             {Math.round(pct)}%
@@ -114,16 +117,23 @@ export function UsageMeterPanel({ compact }: { compact?: boolean }) {
   const [linkDetail, setLinkDetail] = useState<string | null>(null);
 
   const web = usage.website;
-  const pct = web?.creditUsagePercent ?? usagePercent(usage);
+  const hasLive = usage.source === "website" && web && web.error == null;
+  const pct = hasLive
+    ? Number(web.creditUsagePercent) || 0
+    : web?.creditUsagePercent != null && !web.error
+      ? web.creditUsagePercent
+      : usagePercent(usage);
   const tone = usageTone(pct);
   const planTitle =
-    web?.periodType === "weekly"
+    hasLive && web.periodType === "weekly"
       ? `Weekly ${web.planLabel || "SuperGrok"} Limit`
-      : web?.planLabel
+      : hasLive && web.planLabel
         ? `${web.planLabel} usage`
-        : "Subscription usage";
+        : web?.planLabel && !web.error
+          ? `${web.planLabel} usage`
+          : "Subscription usage";
 
-  const products = (web?.productUsage || []).filter((p) => p.usagePercent > 0);
+  const products = (web?.productUsage || []).filter((p) => p.usagePercent > 0.05);
 
   async function onLink() {
     setLinkBusy(true);
@@ -149,14 +159,16 @@ export function UsageMeterPanel({ compact }: { compact?: boolean }) {
           <div className="flex items-center gap-2">
             <Badge
               variant={
-                usage.source === "website"
+                hasLive
                   ? "success"
-                  : tone === "danger"
+                  : web?.error
                     ? "danger"
-                    : "default"
+                    : tone === "danger"
+                      ? "danger"
+                      : "default"
               }
             >
-              {usage.source === "website" ? "grok.com" : usage.source}
+              {hasLive ? "grok.com" : web?.error ? "error" : usage.source}
             </Badge>
             <Button
               size="sm"
@@ -231,7 +243,27 @@ export function UsageMeterPanel({ compact }: { compact?: boolean }) {
               grok.com (Build / App Builder / Chat breakdown).
             </p>
           )}
+          {web && !hasLive && !web.error && (
+            <p className="mt-2 text-xs text-[var(--color-subtle)]">
+              Waiting for first successful poll from grok.com…
+            </p>
+          )}
         </div>
+
+        {/* Local token fallback (always secondary) */}
+        {!compact && (
+          <div className="rounded-[var(--radius-md)] border border-dashed border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-muted)]">
+            <div className="font-medium text-[var(--color-fg)]">Local session meter</div>
+            <div className="mt-0.5 tabular">
+              {formatUnits(usage.usedUnits)} / {formatUnits(PLAN_LIMITS[usage.plan].units)} units
+              {" · "}
+              {usage.totalTokens ? `${usage.totalTokens.toLocaleString()} tokens` : "no token samples yet"}
+            </div>
+            <div className="text-[10px] text-[var(--color-subtle)]">
+              Used when website session isn’t linked. Live SuperGrok weekly % comes from grok.com.
+            </div>
+          </div>
+        )}
 
         {/* Extra credits */}
         <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
@@ -322,7 +354,11 @@ export function UsageMeterPanel({ compact }: { compact?: boolean }) {
         {usage.lastPolledAt > 0 && (
           <div className="text-[10px] text-[var(--color-subtle)]">
             Last poll {new Date(usage.lastPolledAt).toLocaleTimeString()}
-            {usage.source === "website" ? " · source grok.com" : ""}
+            {hasLive
+              ? " · source grok.com · every 1 min"
+              : web?.error
+                ? " · retrying with backoff"
+                : " · local / not linked"}
           </div>
         )}
       </CardContent>

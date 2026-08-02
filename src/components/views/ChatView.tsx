@@ -18,6 +18,10 @@ import {
   Mic,
   MicOff,
   RefreshCw,
+  Copy,
+  Reply,
+  Trash2,
+  Check,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
@@ -172,6 +176,9 @@ export function ChatView() {
   const dismissSessionResume = useGrokHub((s) => s.dismissSessionResume);
   const exportThreadMarkdown = useGrokHub((s) => s.exportThreadMarkdown);
   const editChatMessage = useGrokHub((s) => s.editChatMessage);
+  const deleteChatMessages = useGrokHub((s) => s.deleteChatMessages);
+  const replyTo = useGrokHub((s) => s.replyTo);
+  const setReplyTo = useGrokHub((s) => s.setReplyTo);
   const clearChat = useGrokHub((s) => s.clearChat);
   const [text, setText] = useState("");
   const [localRunning, setLocalRunning] = useState(false);
@@ -183,6 +190,7 @@ export function ChatView() {
   const [hostOnline, setHostOnline] = useState<boolean | undefined>(undefined);
   const [historyExtra, setHistoryExtra] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<{ stop: () => void } | null>(null);
@@ -241,7 +249,12 @@ export function ChatView() {
   }, []);
 
   const plan = PLAN_LIMITS[usage.plan];
-  const pct = Math.round(usagePercent(usage));
+  const webPct = usage.website?.creditUsagePercent;
+  const pct = Math.round(
+    webPct != null && (usage.source === "website" || (webPct > 0 && !usage.website?.error))
+      ? webPct
+      : usagePercent(usage),
+  );
 
   const WINDOW = 40;
   const visibleChat = useMemo(() => {
@@ -627,6 +640,42 @@ export function ChatView() {
     }
   }
 
+  async function copyMessage(id: string, content: string) {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedId(id);
+      window.setTimeout(() => setCopiedId((c) => (c === id ? null : c)), 1600);
+    } catch {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = content;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        setCopiedId(id);
+        window.setTimeout(() => setCopiedId((c) => (c === id ? null : c)), 1600);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  function replyToMessage(m: { id: string; content: string; role: "user" | "assistant" | "system" }) {
+    setReplyTo({ id: m.id, content: m.content, role: m.role });
+    window.setTimeout(() => {
+      inputRef.current?.focus();
+    }, 50);
+  }
+
+  function deleteMessage(id: string) {
+    if (typeof window !== "undefined" && !window.confirm("Delete this message?")) return;
+    deleteChatMessages(id);
+    if (editingId === id) setEditingId(null);
+  }
+
   async function onSend(value?: string) {
 
     if (busy) return;
@@ -716,7 +765,9 @@ export function ChatView() {
                 {grokConnected ? "Grok live" : "Connect in Settings"}
               </Badge>
               <span className="text-[10px] tabular text-[var(--color-subtle)]">
-                {formatUnits(usage.usedUnits)}/{formatUnits(plan.units)} · {pct}%
+                {usage.source === "website" || (usage.website && !usage.website.error)
+                  ? `${pct}% weekly`
+                  : `${formatUnits(usage.usedUnits)}/${formatUnits(plan.units)} · ${pct}%`}
               </span>
             </div>
           </div>
@@ -802,11 +853,14 @@ export function ChatView() {
             {visibleChat.map((m) => (
               <div
                 key={m.id}
-                className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}
+                className={cn(
+                  "group/msg flex",
+                  m.role === "user" ? "justify-end" : "justify-start",
+                )}
               >
                 <div
                   className={cn(
-                    "chat-bubble rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed",
+                    "chat-bubble relative rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed",
                     m.role === "user"
                       ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]"
                       : m.role === "system"
@@ -816,7 +870,32 @@ export function ChatView() {
                       "border-[color-mix(in_oklab,var(--color-info)_35%,var(--color-border))]",
                   )}
                 >
-                  <div className="mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-[var(--color-subtle)]">
+                  {/* Reply quote */}
+                  {m.replyToPreview && (
+                    <button
+                      type="button"
+                      className="mb-2 flex w-full items-start gap-2 rounded-[var(--radius-sm)] border-l-2 border-[var(--color-info)] bg-[color-mix(in_oklab,var(--color-info)_8%,var(--color-surface))] px-2 py-1.5 text-left text-xs text-[var(--color-muted)]"
+                      title="Jump to original"
+                      onClick={() => {
+                        const el = document.getElementById(`msg-${m.replyToId}`);
+                        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                      }}
+                    >
+                      <Reply className="mt-0.5 h-3 w-3 shrink-0 text-[var(--color-info)]" />
+                      <span className="min-w-0">
+                        <span className="font-medium text-[var(--color-fg)]">
+                          {m.replyToRole || "message"}
+                        </span>
+                        <span className="mt-0.5 line-clamp-2 block normal-case tracking-normal">
+                          {m.replyToPreview}
+                        </span>
+                      </span>
+                    </button>
+                  )}
+                  <div
+                    id={`msg-${m.id}`}
+                    className="mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-[var(--color-subtle)]"
+                  >
                     <span>
                       {m.role} · <RelativeTime ts={m.ts} />
                     </span>
@@ -870,60 +949,43 @@ export function ChatView() {
                     )}
                   </div>
                   {m.content ? (
-                    m.role === "user" ? (
-                      editingId === m.id ? (
-                        <div className="space-y-2">
-                          <textarea
-                            value={editDraft}
-                            onChange={(e) => setEditDraft(e.target.value)}
-                            className="min-h-[4rem] w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-2 text-sm"
-                            autoFocus
-                          />
-                          <div className="flex gap-1.5">
-                            <Button
-                              size="sm"
-                              onClick={() => {
-                                void editChatMessage(m.id, editDraft, true);
-                                setEditingId(null);
-                              }}
-                            >
-                              Save & resend
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              onClick={() => {
-                                void editChatMessage(m.id, editDraft, false);
-                                setEditingId(null);
-                              }}
-                            >
-                              Save
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
-                              Cancel
-                            </Button>
-                          </div>
+                    m.role === "user" && editingId === m.id ? (
+                      <div className="space-y-2">
+                        <textarea
+                          value={editDraft}
+                          onChange={(e) => setEditDraft(e.target.value)}
+                          className="min-h-[4rem] w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-2 text-sm"
+                          autoFocus
+                        />
+                        <div className="flex gap-1.5">
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              void editChatMessage(m.id, editDraft, true);
+                              setEditingId(null);
+                            }}
+                          >
+                            Save & resend
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => {
+                              void editChatMessage(m.id, editDraft, false);
+                              setEditingId(null);
+                            }}
+                          >
+                            Save
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
+                            Cancel
+                          </Button>
                         </div>
-                      ) : (
-                        <div className="group/user relative">
-                          <div className="whitespace-pre-wrap">
-                            <MarkdownBody content={m.content} />
-                          </div>
-                          {!busy && (
-                            <button
-                              type="button"
-                              className="absolute -right-1 -top-1 rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-1 opacity-0 transition-opacity group-hover/user:opacity-100"
-                              title="Edit message"
-                              onClick={() => {
-                                setEditingId(m.id);
-                                setEditDraft(m.content);
-                              }}
-                            >
-                              <Pencil className="h-3 w-3" />
-                            </button>
-                          )}
-                        </div>
-                      )
+                      </div>
+                    ) : m.role === "user" ? (
+                      <div className="whitespace-pre-wrap">
+                        <MarkdownBody content={m.content} />
+                      </div>
                     ) : (
                       <MarkdownBody content={m.content} streaming={Boolean(m.streaming)} />
                     )
@@ -934,6 +996,64 @@ export function ChatView() {
                     </span>
                   ) : (
                     ""
+                  )}
+
+                  {/* Message actions: reply / copy / edit / delete */}
+                  {m.content && !m.streaming && (
+                    <div
+                      className={cn(
+                        "mt-2 flex flex-wrap items-center gap-0.5 border-t border-[var(--color-border)] pt-1.5",
+                        "opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover/msg:opacity-100 sm:focus-within:opacity-100",
+                      )}
+                    >
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+                        title="Reply to this message"
+                        onClick={() => replyToMessage(m)}
+                      >
+                        <Reply className="h-3 w-3" />
+                        Reply
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+                        title="Copy message"
+                        onClick={() => void copyMessage(m.id, m.content)}
+                      >
+                        {copiedId === m.id ? (
+                          <Check className="h-3 w-3 text-[var(--color-success)]" />
+                        ) : (
+                          <Copy className="h-3 w-3" />
+                        )}
+                        {copiedId === m.id ? "Copied" : "Copy"}
+                      </button>
+                      {m.role === "user" && !busy && (
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+                          title="Edit message"
+                          onClick={() => {
+                            setEditingId(m.id);
+                            setEditDraft(m.content);
+                          }}
+                        >
+                          <Pencil className="h-3 w-3" />
+                          Edit
+                        </button>
+                      )}
+                      {!busy && (
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[color-mix(in_oklab,var(--color-danger)_12%,transparent)] hover:text-[var(--color-danger)]"
+                          title="Delete message"
+                          onClick={() => deleteMessage(m.id)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          Delete
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -957,6 +1077,26 @@ export function ChatView() {
           </div>
 
           <div className="shrink-0 space-y-2 border-t border-[var(--color-border)] p-3 md:p-4 3xl:px-8 uw:px-12">
+            {replyTo && (
+              <div className="mx-auto mb-2 flex w-full max-w-[min(56rem,100%)] items-start gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-info)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-info)_8%,var(--color-surface))] px-3 py-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]">
+                <Reply className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-info)]" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-info)]">
+                    Replying to {replyTo.role}
+                  </div>
+                  <p className="line-clamp-2 text-xs text-[var(--color-muted)]">{replyTo.preview}</p>
+                </div>
+                <button
+                  type="button"
+                  className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+                  title="Cancel reply"
+                  onClick={() => setReplyTo(null)}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+
             {!busy && (
               <div className="mx-auto w-full max-w-[min(56rem,100%)] 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]">
                 <div className="mb-1.5 flex items-center justify-center gap-2 px-0.5">
@@ -1141,6 +1281,7 @@ export function ChatView() {
               )}
               <Textarea
                 ref={inputRef}
+                data-composer
                 value={text}
                 onChange={(e) => {
                   setText(e.target.value);

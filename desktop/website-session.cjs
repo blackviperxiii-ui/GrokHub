@@ -409,19 +409,24 @@ function parseGrpcWeb(buf) {
     if (i + len > buf.length) break;
     const chunk = buf.subarray(i, i + len);
     i += len;
-    if (flag === 0) messages.push(chunk);
-    else if (flag === 0x80) {
+    if (flag === 0) messages.push(Buffer.from(chunk));
+    else if (flag === 0x80 || flag === 128) {
       const text = chunk.toString("utf8");
       const sm = /grpc-status:\s*(\d+)/i.exec(text);
       const mm = /grpc-message:\s*([^\r\n]+)/i.exec(text);
       if (sm) status = Number(sm[1]);
-      if (mm) message = decodeURIComponent(mm[1].replace(/\+/g, " "));
+      if (mm) {
+        try {
+          message = decodeURIComponent(mm[1].replace(/\+/g, " "));
+        } catch {
+          message = mm[1];
+        }
+      }
     }
   }
   return { status, message, messages };
 }
 
-// Minimal protobuf helpers for credit_usage_percent double at config.field2
 function readVarint(buf, offset) {
   let result = 0;
   let shift = 0;
@@ -436,35 +441,235 @@ function readVarint(buf, offset) {
   return { value: result >>> 0, next: pos };
 }
 
+function readVarintBig(buf, offset) {
+  let result = 0n;
+  let shift = 0n;
+  let pos = offset;
+  while (pos < buf.length) {
+    const b = BigInt(buf[pos++]);
+    result |= (b & 0x7fn) << shift;
+    if ((b & 0x80n) === 0n) break;
+    shift += 7n;
+  }
+  return { value: result, next: pos };
+}
+
+/** Decode protobuf wire → { fieldNumber: values[] } */
 function decodeFields(buf) {
   const out = {};
   let i = 0;
-  while (i < buf.length) {
-    const tag = readVarint(buf, i);
+  const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+  while (i < b.length) {
+    const tag = readVarint(b, i);
     i = tag.next;
     const field = tag.value >>> 3;
     const wire = tag.value & 7;
     if (field === 0) break;
     if (wire === 0) {
-      const v = readVarint(buf, i);
+      const v = readVarintBig(b, i);
       i = v.next;
       (out[field] ||= []).push(v.value);
     } else if (wire === 1) {
-      if (i + 8 > buf.length) break;
-      (out[field] ||= []).push(buf.subarray(i, i + 8));
+      if (i + 8 > b.length) break;
+      (out[field] ||= []).push(b.subarray(i, i + 8));
       i += 8;
     } else if (wire === 2) {
-      const len = readVarint(buf, i);
+      const len = readVarint(b, i);
       i = len.next;
-      (out[field] ||= []).push(buf.subarray(i, i + len.value));
+      (out[field] ||= []).push(b.subarray(i, i + len.value));
       i += len.value;
     } else if (wire === 5) {
-      if (i + 4 > buf.length) break;
-      (out[field] ||= []).push(buf.subarray(i, i + 4));
+      if (i + 4 > b.length) break;
+      (out[field] ||= []).push(b.subarray(i, i + 4));
       i += 4;
     } else break;
   }
   return out;
+}
+
+function asBuf(v) {
+  return Buffer.isBuffer(v) ? v : null;
+}
+
+function asBig(v) {
+  return typeof v === "bigint" ? v : null;
+}
+
+function decodeDouble(bytes) {
+  if (!bytes || bytes.length < 8) return 0;
+  return bytes.readDoubleLE(0);
+}
+
+function decodeFloat(bytes) {
+  if (!bytes || bytes.length < 4) return 0;
+  return bytes.readFloatLE(0);
+}
+
+function decodeTimestamp(bytes) {
+  const f = decodeFields(bytes);
+  const sec = asBig(f[1]?.[0]);
+  const nanos = asBig(f[2]?.[0]);
+  if (sec == null) return null;
+  const ms = Number(sec) * 1000 + (nanos != null ? Number(nanos) / 1e6 : 0);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function decodeCent(bytes) {
+  const f = decodeFields(bytes);
+  const val = asBig(f[1]?.[0]);
+  return val != null ? Number(val) : 0;
+}
+
+const PRODUCT_LABELS = {
+  0: { id: "other", label: "Other" },
+  1: { id: "api", label: "API" },
+  2: { id: "build", label: "Grok Build" },
+  3: { id: "plugins", label: "Plugins" },
+  4: { id: "chat", label: "Chat" },
+  5: { id: "imagine", label: "Imagine" },
+  6: { id: "voice", label: "Voice" },
+  7: { id: "app_builder", label: "App Builder" },
+};
+
+/** Normalize fraction (0–1) or already-percent (0–100+) into 0–100+ display % */
+function normalizePercent(n) {
+  let x = Number(n);
+  if (!Number.isFinite(x) || x < 0) return 0;
+  // Website sometimes returns ratio 0.26 instead of 26
+  if (x > 0 && x <= 1.0001) x = x * 100;
+  return x;
+}
+
+/**
+ * GetGrokCreditsConfigResponse → website usage shape (mirrors src/lib/grok-website-usage.ts)
+ */
+function parseCreditsConfig(msg) {
+  const root = decodeFields(msg);
+  const configBytes = asBuf(root[1]?.[0]);
+  if (!configBytes) {
+    return {
+      creditUsagePercent: 0,
+      periodType: "unknown",
+      periodStart: null,
+      periodEnd: null,
+      productUsage: [],
+      prepaidBalanceCents: 0,
+      onDemandCapCents: 0,
+      onDemandUsedCents: 0,
+    };
+  }
+  const c = decodeFields(configBytes);
+  let periodType = "unknown";
+  let periodStart = null;
+  let periodEnd = null;
+  const periodBytes = asBuf(c[1]?.[0]);
+  if (periodBytes) {
+    const p = decodeFields(periodBytes);
+    const t = asBig(p[1]?.[0]);
+    if (t === 2n) periodType = "weekly";
+    else if (t === 1n) periodType = "monthly";
+    const s = asBuf(p[2]?.[0]);
+    const e = asBuf(p[3]?.[0]);
+    if (s) periodStart = decodeTimestamp(s);
+    if (e) periodEnd = decodeTimestamp(e);
+  }
+
+  let creditUsagePercent = 0;
+  const pctBytes = asBuf(c[2]?.[0]);
+  if (pctBytes && pctBytes.length === 8) creditUsagePercent = decodeDouble(pctBytes);
+  else if (pctBytes && pctBytes.length === 4) creditUsagePercent = decodeFloat(pctBytes);
+  creditUsagePercent = normalizePercent(creditUsagePercent);
+
+  const onDemandCapCents = asBuf(c[3]?.[0]) ? decodeCent(asBuf(c[3][0])) : 0;
+  const onDemandUsedCents = asBuf(c[4]?.[0]) ? decodeCent(asBuf(c[4][0])) : 0;
+
+  const productUsage = [];
+  for (const raw of c[5] || []) {
+    const b = asBuf(raw);
+    if (!b) continue;
+    const pu = decodeFields(b);
+    const prodNum = Number(asBig(pu[1]?.[0]) ?? 0);
+    const meta = PRODUCT_LABELS[prodNum] || PRODUCT_LABELS[0];
+    let usagePercent = 0;
+    const up = asBuf(pu[2]?.[0]);
+    if (up && up.length === 8) usagePercent = decodeDouble(up);
+    else if (up && up.length === 4) usagePercent = decodeFloat(up);
+    usagePercent = normalizePercent(usagePercent);
+    if (usagePercent > 0.05) {
+      productUsage.push({
+        product: meta.id,
+        label: meta.label,
+        usagePercent,
+      });
+    }
+  }
+  productUsage.sort((a, b) => b.usagePercent - a.usagePercent);
+
+  const prepaidBalanceCents = asBuf(c[8]?.[0]) ? decodeCent(asBuf(c[8][0])) : 0;
+  const bStart = asBuf(c[10]?.[0]);
+  const bEnd = asBuf(c[11]?.[0]);
+  if (bStart) periodStart = decodeTimestamp(bStart) ?? periodStart;
+  if (bEnd) periodEnd = decodeTimestamp(bEnd) ?? periodEnd;
+
+  // Fallback: scan nested doubles if primary field empty
+  if (creditUsagePercent === 0) {
+    for (const vals of Object.values(c)) {
+      for (const v of vals) {
+        if (Buffer.isBuffer(v) && v.length === 8) {
+          const d = normalizePercent(decodeDouble(v));
+          if (d > 0 && d <= 150) {
+            creditUsagePercent = d;
+            break;
+          }
+        }
+      }
+      if (creditUsagePercent) break;
+    }
+  }
+
+  return {
+    creditUsagePercent,
+    periodType,
+    periodStart,
+    periodEnd,
+    productUsage,
+    prepaidBalanceCents,
+    onDemandCapCents,
+    onDemandUsedCents,
+  };
+}
+
+function planFromSubscriptions(json) {
+  try {
+    const subs = json?.subscriptions || (Array.isArray(json) ? json : []) || [];
+    const list = Array.isArray(subs) ? subs : [];
+    const active =
+      list.find((s) => {
+        const st = String(s.status || s.state || "").toLowerCase();
+        return !st || st.includes("active") || st.includes("trial");
+      }) || list[0];
+    if (!active) {
+      // flat object shape
+      const tier = String(json?.tier || json?.plan || json?.planName || json?.name || "").toLowerCase();
+      if (tier.includes("heavy") || tier.includes("pro"))
+        return { planLabel: "SuperGrok Heavy", planId: "heavy" };
+      if (tier.includes("plus")) return { planLabel: "SuperGrok Plus", planId: "plus" };
+      if (tier.includes("free")) return { planLabel: "Free", planId: "free" };
+      if (tier) return { planLabel: String(json.tier || json.plan || "SuperGrok"), planId: "super" };
+      return { planLabel: "SuperGrok", planId: "super" };
+    }
+    const tier = String(
+      active.tier || active.plan || active.product || active.name || active.subscriptionTier || "",
+    ).toLowerCase();
+    if (tier.includes("heavy") || tier.includes("pro"))
+      return { planLabel: "SuperGrok Heavy", planId: "heavy" };
+    if (tier.includes("plus")) return { planLabel: "SuperGrok Plus", planId: "plus" };
+    if (tier.includes("lite")) return { planLabel: "SuperGrok Lite", planId: "lite" };
+    if (tier.includes("free")) return { planLabel: "Free", planId: "free" };
+    return { planLabel: "SuperGrok", planId: "super" };
+  } catch {
+    return { planLabel: "SuperGrok", planId: "super" };
+  }
 }
 
 function emptyUsage(error) {
@@ -498,33 +703,42 @@ async function fetchWebsiteUsage(opts = {}) {
 
   try {
     const ses = grokSession();
-    const body = grpcWebFrame(Buffer.from([0x08, 0x01]));
+    const body = grpcWebFrame(Buffer.from([0x08, 0x01])); // exclude_legacy_monthly_usage=true
     const headers = {
       "content-type": "application/grpc-web+proto",
       accept: "application/grpc-web+proto",
       "x-grpc-web": "1",
       "x-user-agent": "grokhub-desktop",
       origin: "https://grok.com",
-      referer: "https://grok.com/",
+      referer: "https://grok.com/settings",
       "user-agent": CHROME_UA,
       cookie: cookieHeader,
     };
 
-    // Prefer session.fetch so partition cookies merge with explicit Cookie header
     let res;
     try {
-      res = await ses.fetch(CREDITS_URL, {
-        method: "POST",
-        headers,
-        body,
-      });
+      res = await ses.fetch(CREDITS_URL, { method: "POST", headers, body });
     } catch {
       res = await fetch(CREDITS_URL, { method: "POST", headers, body });
     }
 
     const ab = Buffer.from(await res.arrayBuffer());
-    if (!res.ok) {
-      // Try subscriptions JSON fallback
+    const headerStatus = res.headers.get("grpc-status");
+    const headerMsg = res.headers.get("grpc-message");
+    const parsed = parseGrpcWeb(ab);
+    const status =
+      parsed.status || (headerStatus != null && headerStatus !== "" ? Number(headerStatus) : 0);
+    let message = parsed.message;
+    if (!message && headerMsg) {
+      try {
+        message = decodeURIComponent(String(headerMsg).replace(/\+/g, " "));
+      } catch {
+        message = String(headerMsg);
+      }
+    }
+
+    if (!res.ok && !parsed.messages[0]) {
+      // Soft-fallback: subscriptions JSON only
       try {
         const subRes = await ses.fetch(SUBSCRIPTIONS_URL, {
           method: "GET",
@@ -532,16 +746,19 @@ async function fetchWebsiteUsage(opts = {}) {
             accept: "application/json",
             cookie: cookieHeader,
             "user-agent": CHROME_UA,
-            referer: "https://grok.com/",
+            referer: "https://grok.com/settings",
+            origin: "https://grok.com",
           },
         });
         if (subRes.ok) {
           const json = await subRes.json();
+          const mapped = planFromSubscriptions(json);
           return {
             ok: true,
-            planLabel: json?.plan || json?.tier || "Grok",
-            planId: "super",
-            creditUsagePercent: Number(json?.usagePercent || json?.percent || 0) || 0,
+            ...mapped,
+            creditUsagePercent: normalizePercent(
+              json?.creditUsagePercent ?? json?.usagePercent ?? json?.percentUsed ?? 0,
+            ),
             periodType: "unknown",
             periodStart: null,
             periodEnd: null,
@@ -549,97 +766,70 @@ async function fetchWebsiteUsage(opts = {}) {
             prepaidBalanceCents: 0,
             onDemandCapCents: 0,
             onDemandUsedCents: 0,
-            raw: "subscriptions",
+            raw: "subscriptions-fallback",
             ssoCookie: cookieHeader,
+            warning: `Credits gRPC HTTP ${res.status}; used subscriptions fallback`,
           };
         }
       } catch {
         /* fall through */
       }
-      return emptyUsage(`Usage API ${res.status} — re-link website session (cookie may be stale)`);
-    }
-
-    const parsed = parseGrpcWeb(ab);
-    if (parsed.status && parsed.status !== 0) {
       return emptyUsage(
-        parsed.message || `grpc-status ${parsed.status} — re-link Grok website session`,
+        message ||
+          `Usage API HTTP ${res.status} — re-link website session (cookie may be stale)`,
       );
     }
 
-    let creditUsagePercent = 0;
-    let planLabel = "Grok";
-    let periodEnd = null;
-    let periodStart = null;
-    let prepaidBalanceCents = 0;
-    let productUsage = [];
-
-    for (const msg of parsed.messages) {
-      const top = decodeFields(msg);
-      // Walk nested messages for doubles / strings (best-effort)
-      for (const [, vals] of Object.entries(top)) {
-        for (const v of vals) {
-          if (Buffer.isBuffer(v) && v.length >= 8) {
-            // try as nested message
-            try {
-              const nested = decodeFields(v);
-              for (const [fk, fvals] of Object.entries(nested)) {
-                for (const fv of fvals) {
-                  if (Buffer.isBuffer(fv) && fv.length === 8) {
-                    const pct = fv.readDoubleLE(0);
-                    if (pct >= 0 && pct <= 100 && creditUsagePercent === 0) {
-                      creditUsagePercent = pct;
-                    }
-                  }
-                }
-              }
-            } catch {
-              /* ignore */
-            }
-          }
-        }
-      }
+    if ((status !== 0 && status !== undefined) || !parsed.messages[0]) {
+      return emptyUsage(
+        message ||
+          (status === 16
+            ? "Website session expired — re-link Grok SSO in Settings."
+            : `Grok usage error (grpc ${status || "?"}) — re-link website session`),
+      );
     }
 
-    // Also try REST rate-limits style endpoints
-    if (!creditUsagePercent) {
-      for (const url of [
-        "https://grok.com/rest/rate-limits",
-        "https://grok.com/rest/subscriptions",
-      ]) {
-        try {
-          const r = await ses.fetch(url, {
-            headers: {
-              accept: "application/json",
-              cookie: cookieHeader,
-              "user-agent": CHROME_UA,
-              referer: "https://grok.com/",
-            },
-          });
-          if (!r.ok) continue;
-          const j = await r.json();
-          const pct =
-            Number(j?.creditUsagePercent ?? j?.usagePercent ?? j?.percentUsed ?? 0) || 0;
-          if (pct > 0) creditUsagePercent = pct;
-          if (j?.plan || j?.planName) planLabel = String(j.plan || j.planName);
-          break;
-        } catch {
-          /* next */
-        }
+    const usage = parseCreditsConfig(parsed.messages[0]);
+
+    let planLabel = "SuperGrok";
+    let planId = "super";
+    try {
+      const subRes = await ses.fetch(SUBSCRIPTIONS_URL, {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          cookie: cookieHeader,
+          "user-agent": CHROME_UA,
+          referer: "https://grok.com/settings",
+          origin: "https://grok.com",
+        },
+      });
+      if (subRes.ok) {
+        const mapped = planFromSubscriptions(await subRes.json());
+        planLabel = mapped.planLabel;
+        planId = mapped.planId;
       }
+    } catch {
+      /* keep defaults */
+    }
+
+    if (usage.periodType === "weekly" && (planId === "heavy" || planId === "pro")) {
+      planLabel = "SuperGrok Heavy";
+      planId = "heavy";
     }
 
     return {
       ok: true,
       planLabel,
-      planId: "super",
-      creditUsagePercent,
-      periodType: "weekly",
-      periodStart,
-      periodEnd,
-      productUsage,
-      prepaidBalanceCents,
-      onDemandCapCents: 0,
-      onDemandUsedCents: 0,
+      planId,
+      creditUsagePercent: usage.creditUsagePercent,
+      periodType: usage.periodType,
+      periodStart: usage.periodStart,
+      periodEnd: usage.periodEnd,
+      productUsage: usage.productUsage,
+      prepaidBalanceCents: usage.prepaidBalanceCents,
+      onDemandCapCents: usage.onDemandCapCents,
+      onDemandUsedCents: usage.onDemandUsedCents,
       ssoCookie: cookieHeader,
     };
   } catch (e) {

@@ -279,6 +279,15 @@ function parseCreditsConfig(msg: Uint8Array): Omit<GrokWebsiteUsage, "ok" | "pla
   if (bStart) periodStart = decodeTimestamp(bStart) ?? periodStart;
   if (bEnd) periodEnd = decodeTimestamp(bEnd) ?? periodEnd;
 
+  // Website may return ratio (0.26) or percent (26)
+  const normalize = (n: number) => {
+    if (!Number.isFinite(n) || n < 0) return 0;
+    if (n > 0 && n <= 1.0001) return n * 100;
+    return n;
+  };
+  creditUsagePercent = normalize(creditUsagePercent);
+  for (const p of productUsage) p.usagePercent = normalize(p.usagePercent);
+
   return {
     creditUsagePercent: Math.max(0, creditUsagePercent),
     periodType,

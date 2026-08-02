@@ -28,6 +28,7 @@ import type {
   SubscriptionPlanId,
   UsageBucket,
   UsageSnapshot,
+  ChatRole,
 } from "./types";
 import {
   costFor,
@@ -223,6 +224,11 @@ type State = {
   continueInterruptedSession: () => Promise<void>;
   setAgentPrefs: (patch: Partial<{ temperature: number; hostToolsEnabled: boolean; connectorToolsEnabled: boolean; memoryNotes: string }>) => void;
   editChatMessage: (id: string, content: string, resend?: boolean) => Promise<void>;
+  /** Delete one or more messages from the active thread */
+  deleteChatMessages: (ids: string | string[]) => void;
+  /** Compose a reply quoting a specific message */
+  replyTo: { id: string; preview: string; role: ChatRole } | null;
+  setReplyTo: (msg: { id: string; content: string; role: ChatRole } | null) => void;
   exportThreadMarkdown: (id?: string) => string;
   clearChat: () => void;
   setPlan: (plan: SubscriptionPlanId) => void;
@@ -579,6 +585,7 @@ export const useGrokHub = create<State>()(
       threads: boot.threads,
       activeThreadId: boot.activeThreadId,
       sessionResume: null,
+      replyTo: null,
       agents: boot.agents,
       profile: boot.profile,
       imagineJobs: [],
@@ -1808,6 +1815,50 @@ export const useGrokHub = create<State>()(
         }
       },
 
+      setReplyTo: (msg) => {
+        if (!msg) {
+          set({ replyTo: null });
+          return;
+        }
+        const preview = String(msg.content || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 160);
+        set({
+          replyTo: {
+            id: msg.id,
+            preview: preview || "(empty)",
+            role: msg.role,
+          },
+          nav: "chat",
+        });
+      },
+
+      deleteChatMessages: (ids) => {
+        const idSet = new Set(Array.isArray(ids) ? ids : [ids]);
+        if (!idSet.size) return;
+        set((s) => {
+          const chat = s.chat.filter((m) => !idSet.has(m.id));
+          // Drop reply target if deleted
+          const replyTo =
+            s.replyTo && idSet.has(s.replyTo.id) ? null : s.replyTo;
+          const tid = s.activeThreadId;
+          return {
+            chat,
+            replyTo,
+            threads: s.threads.map((th) =>
+              th.id === tid ? threadWithMessages(th, chat) : th,
+            ),
+          };
+        });
+        get().pushActivity({
+          kind: "chat",
+          title: "Message deleted",
+          detail: `${idSet.size} message${idSet.size === 1 ? "" : "s"} removed`,
+          status: "success",
+        });
+      },
+
       resumeLastSession: () => {
         const r = get().sessionResume;
         if (!r || r.kind !== "interrupted") {
@@ -2079,6 +2130,11 @@ export const useGrokHub = create<State>()(
               if (r?.cookie) {
                 sso = r.cookie;
                 set({ ssoCookie: sso });
+                try {
+                  void window.grokhubDesktop?.secrets?.set?.("ssoCookie", sso);
+                } catch {
+                  /* ignore */
+                }
               }
             } catch {
               /* ignore */
@@ -2090,7 +2146,10 @@ export const useGrokHub = create<State>()(
             ssoCookie: sso || null,
             bearer: sso ? null : bearer,
           });
+
           if (web.ok) {
+            let pct = Number(web.creditUsagePercent) || 0;
+            if (pct > 0 && pct <= 1.0001) pct *= 100;
             const planMap =
               web.planId === "heavy" || web.planId === "pro"
                 ? ("pro" as const)
@@ -2098,7 +2157,11 @@ export const useGrokHub = create<State>()(
                   ? ("free" as const)
                   : ("super" as const);
             const unitCap = PLAN_LIMITS[planMap].units;
-            const pct = Number(web.creditUsagePercent) || 0;
+            const products = (web.productUsage || []).map((row) => {
+              let up = Number(row.usagePercent) || 0;
+              if (up > 0 && up <= 1.0001) up *= 100;
+              return { ...row, usagePercent: up };
+            });
             usage = {
               ...usage,
               plan: planMap,
@@ -2113,7 +2176,7 @@ export const useGrokHub = create<State>()(
                 periodType: web.periodType || "weekly",
                 periodStart: web.periodStart,
                 periodEnd: web.periodEnd,
-                productUsage: web.productUsage || [],
+                productUsage: products,
                 prepaidBalanceCents: web.prepaidBalanceCents || 0,
                 onDemandCapCents: web.onDemandCapCents || 0,
                 onDemandUsedCents: web.onDemandUsedCents || 0,
@@ -2123,50 +2186,51 @@ export const useGrokHub = create<State>()(
             set({ usage });
             return;
           }
+
+          const prevWeb = usage.website;
           usage = {
             ...usage,
             lastPolledAt: Date.now(),
+            source:
+              prevWeb && prevWeb.error == null && prevWeb.creditUsagePercent != null
+                ? usage.source
+                : "local",
             website: {
-              planLabel: usage.website?.planLabel || PLAN_LIMITS[usage.plan].label,
+              planLabel: prevWeb?.planLabel || PLAN_LIMITS[usage.plan].label,
               creditUsagePercent:
-                usage.website?.creditUsagePercent ??
+                prevWeb?.creditUsagePercent ??
                 Math.round(usagePercent(usage) * 10) / 10,
-              periodType: usage.website?.periodType || "unknown",
-              periodStart: usage.website?.periodStart ?? usage.periodStart,
-              periodEnd: usage.website?.periodEnd ?? usage.periodEnd,
-              productUsage: usage.website?.productUsage || [],
-              prepaidBalanceCents: usage.website?.prepaidBalanceCents ?? 0,
-              onDemandCapCents: usage.website?.onDemandCapCents ?? 0,
-              onDemandUsedCents: usage.website?.onDemandUsedCents ?? 0,
-              error: web.error || "Could not load grok.com usage — link website session in Settings",
+              periodType: prevWeb?.periodType || "unknown",
+              periodStart: prevWeb?.periodStart ?? usage.periodStart,
+              periodEnd: prevWeb?.periodEnd ?? usage.periodEnd,
+              productUsage: prevWeb?.productUsage || [],
+              prepaidBalanceCents: prevWeb?.prepaidBalanceCents ?? 0,
+              onDemandCapCents: prevWeb?.onDemandCapCents ?? 0,
+              onDemandUsedCents: prevWeb?.onDemandUsedCents ?? 0,
+              error:
+                web.error ||
+                "Could not load grok.com usage — link website session in Settings",
             },
           };
         } catch (e) {
+          const prevWeb = usage.website;
           usage = {
             ...usage,
             lastPolledAt: Date.now(),
             website: {
-              planLabel: usage.website?.planLabel || PLAN_LIMITS[usage.plan].label,
+              planLabel: prevWeb?.planLabel || PLAN_LIMITS[usage.plan].label,
               creditUsagePercent:
-                usage.website?.creditUsagePercent ??
+                prevWeb?.creditUsagePercent ??
                 Math.round(usagePercent(usage) * 10) / 10,
-              periodType: usage.website?.periodType || "unknown",
-              periodStart: usage.website?.periodStart ?? usage.periodStart,
-              periodEnd: usage.website?.periodEnd ?? usage.periodEnd,
-              productUsage: usage.website?.productUsage || [],
-              prepaidBalanceCents: usage.website?.prepaidBalanceCents ?? 0,
-              onDemandCapCents: usage.website?.onDemandCapCents ?? 0,
-              onDemandUsedCents: usage.website?.onDemandUsedCents ?? 0,
-              error: e instanceof Error ? e.message : "usage poll failed",
+              periodType: prevWeb?.periodType || "unknown",
+              periodStart: prevWeb?.periodStart ?? usage.periodStart,
+              periodEnd: prevWeb?.periodEnd ?? usage.periodEnd,
+              productUsage: prevWeb?.productUsage || [],
+              prepaidBalanceCents: prevWeb?.prepaidBalanceCents ?? 0,
+              onDemandCapCents: prevWeb?.onDemandCapCents ?? 0,
+              onDemandUsedCents: prevWeb?.onDemandUsedCents ?? 0,
+              error: e instanceof Error ? e.message : "Usage poll failed",
             },
-          };
-        }
-
-        if (usage.source !== "website") {
-          usage = {
-            ...usage,
-            source: usage.totalTokens > 0 ? "live" : usage.source || "estimate",
-            lastPolledAt: Date.now(),
           };
         }
         set({ usage });
@@ -2854,13 +2918,23 @@ export const useGrokHub = create<State>()(
 
         // Instant feedback BEFORE routing / network (kills perceived latency)
         const mode = get().mode;
+        const replyTarget = get().replyTo;
         const userMsg: ChatMessage = {
           id: uid("msg"),
           role: "user",
           content: trimmed,
           ts: Date.now(),
           mode,
+          ...(replyTarget
+            ? {
+                replyToId: replyTarget.id,
+                replyToPreview: replyTarget.preview,
+                replyToRole: replyTarget.role,
+              }
+            : {}),
         };
+        // Clear composer reply chip once we commit the message
+        if (replyTarget) set({ replyTo: null });
         const botId = uid("msg");
         const botPlaceholder: ChatMessage = {
           id: botId,
@@ -3085,11 +3159,29 @@ export const useGrokHub = create<State>()(
               .chat.filter((c) => c.role === "user" || c.role === "assistant")
               .filter((c) => c.id !== botId)
               .slice(-16)
-              .map((c) => ({
-                role: c.role as "user" | "assistant",
-                content:
-                  c.role === "assistant" ? stripAssistantChrome(c.content) : c.content,
-              }))
+              .map((c) => {
+                let content =
+                  c.role === "assistant" ? stripAssistantChrome(c.content) : c.content;
+                if (c.role === "user" && c.replyToPreview) {
+                  const who =
+                    c.replyToRole === "assistant"
+                      ? "assistant"
+                      : c.replyToRole === "user"
+                        ? "user"
+                        : "message";
+                  content =
+                    "[Replying to " +
+                    who +
+                    ']: "' +
+                    c.replyToPreview +
+                    '"\n\n' +
+                    content;
+                }
+                return {
+                  role: c.role as "user" | "assistant",
+                  content,
+                };
+              })
               .filter((c) => c.content.trim().length > 0);
             if (!history.length || history[history.length - 1]?.content !== trimmed) {
               history.push({ role: "user", content: trimmed });
