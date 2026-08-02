@@ -522,7 +522,7 @@ export function SettingsView() {
           <CardTitle className="text-sm">Autonomy & always-on agent</CardTitle>
           <CardDescription>
             Levels 2+ queue work when busy. Level 3+ claims workboard. Level 4 auto-resumes goals.
-            Use tray Pause or the Queue tab kill switch anytime.
+            Use Pause in Settings anytime to stop background autonomy.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -2316,11 +2316,12 @@ function AutonomySettingsPanel() {
         />
       </label>
       <p className="text-xs text-[var(--color-muted)]">
-        Queue depth {stats.jobs.length} · spent today {autonomy.spentUnitsToday}
+        Background jobs {stats.jobs.filter((j) => j.status === "queued" || j.status === "running").length}
+        {" · "}spent today {autonomy.spentUnitsToday}
         {autonomy.dailyUnitBudget ? ` / ${autonomy.dailyUnitBudget}` : ""}
       </p>
-      <Button size="sm" variant="secondary" onClick={() => setNav("queue")}>
-        Open agent queue
+      <Button size="sm" variant="secondary" onClick={() => setNav("workboard")}>
+        Open workboard
       </Button>
       <p className="text-[11px] text-[var(--color-subtle)]">
         Arch always-on: enable packaging/systemd/grokhub-agent.service (user unit) or launch with{" "}

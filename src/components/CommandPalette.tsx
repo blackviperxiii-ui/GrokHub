@@ -103,13 +103,7 @@ export function CommandPalette({
         icon: ImageIcon,
         run: () => go("imagine"),
       },
-      {
-        id: "nav-queue",
-        label: "Agent queue",
-        group: "Navigate",
-        icon: ListTodo,
-        run: () => go("queue"),
-      },
+      
       {
         id: "nav-command",
         label: "Command",

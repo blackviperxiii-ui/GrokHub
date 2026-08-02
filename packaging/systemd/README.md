@@ -1,6 +1,6 @@
 # GrokHub agent (systemd user unit)
 
-Keeps GrokHub’s agent core alive after login (tray + job queue), without a visible window until you open it.
+Keeps GrokHub’s agent core alive after login (tray + background agent), without a visible window until you open it.
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -10,4 +10,4 @@ systemctl --user enable --now grokhub-agent.service
 systemctl --user status grokhub-agent.service
 ```
 
-Pause autonomy anytime from the tray menu or **Settings → Autonomy**.
+Pause autonomy anytime from the tray menu or **Settings → Agent → Autonomy**.

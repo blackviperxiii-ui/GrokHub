@@ -1,6 +1,5 @@
 import type { ComponentType, CSSProperties } from "react";
-import { ListTodo,
-  ClipboardList,
+import { ClipboardList,
   ChevronDown,
   ChevronRight,
   Command,
@@ -75,12 +74,6 @@ const SkillsView = lazy(() =>
 const WorkboardView = lazy(() =>
   import("./views/WorkboardView").then((m) => ({ default: m.WorkboardView })),
 );
-const AgentQueueView = lazy(() =>
-  import("./views/AgentQueueView").then((m) => ({ default: m.AgentQueueView })),
-);
-
-
-
 const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { id: "chat", label: "Agent", icon: MessageSquare },
   { id: "history", label: "History", icon: History },
@@ -88,7 +81,6 @@ const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string 
   { id: "workboard", label: "Workboard", icon: ClipboardList },
   { id: "imagine", label: "Imagine", icon: ImageIcon },
   { id: "skills", label: "Skills", icon: Sparkles },
-  { id: "queue", label: "Queue", icon: ListTodo },
   { id: "automations", label: "Automations", icon: TimerReset },
   { id: "settings", label: "Settings", icon: Settings },
 ];
@@ -302,7 +294,7 @@ export function AppShell() {
     Promise.resolve(p).finally(() => {
       const restored = useGrokHub.getState().nav;
       const safeNav =
-        !restored || restored === "connectors" || restored === "agents" || restored === "desktop"
+        !restored || restored === "connectors" || restored === "agents" || restored === "queue" || restored === "desktop"
           ? "chat"
           : restored;
       useGrokHub.setState({
@@ -518,7 +510,7 @@ export function AppShell() {
     }).grokhubDesktop;
     const onCmd = (e: Event) => {
       const d = (e as CustomEvent).detail || {};
-      if (d.type === "open-queue") setNav("queue");
+      if (d.type === "open-queue") setNav("settings");
       if (d.type === "new-chat") useGrokHub.getState().newThread();
       if (d.type === "set-paused") useGrokHub.getState().pauseAutonomy(Boolean(d.paused));
     };
@@ -650,7 +642,7 @@ export function AppShell() {
     ["chat", "history", "command", "workboard", "imagine"].includes(item.id),
   );
   const toolsNav = NAV.filter((item) =>
-    ["queue", "skills", "automations", "settings"].includes(item.id),
+    ["skills", "automations", "settings"].includes(item.id),
   );
 
   const stageTitle =
@@ -1011,8 +1003,7 @@ export function AppShell() {
                                         {nav === "skills" && <SkillsView />}
                     {nav === "automations" && <AutomationsView />}
                                         {nav === "workboard" && <WorkboardView />}
-                    {nav === "queue" && <AgentQueueView />}
-                    {nav === "imagine" && <ImagineView />}
+                                        {nav === "imagine" && <ImagineView />}
                     {nav === "desktop" && <DesktopHostView />}
                     {nav === "settings" && <SettingsView />}
                   </div>

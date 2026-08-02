@@ -637,7 +637,7 @@ function createTray() {
           },
         },
         {
-          label: due ? `Open queue (${due} due)` : "Open agent queue",
+          label: due ? `Open app (${due} background jobs)` : "Open GrokHub",
           click: () => {
             if (!mainWindow || mainWindow.isDestroyed()) createWindow();
             mainWindow?.show();
