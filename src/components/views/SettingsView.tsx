@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ExternalLink, FolderInput, HardDrive } from "lucide-react";
+import { ExternalLink, FolderInput, HardDrive, RefreshCw } from "lucide-react";
 import { getModesWithCatalog } from "@/lib/modes";
 import { friendlyModelName } from "@/lib/models-catalog";
 import { applyUpdate, checkUpdate } from "@/lib/grok-client";
@@ -68,6 +68,12 @@ export function SettingsView() {
   const importOpenClawWorkspace = useGrokHub((s) => s.importOpenClawWorkspace);
   const clearOpenClawWorkspace = useGrokHub((s) => s.clearOpenClawWorkspace);
   const openClawWorkspace = useGrokHub((s) => s.openClawWorkspace);
+  const setupSyncMeta = useGrokHub((s) => s.setupSyncMeta);
+  const pushSetupSync = useGrokHub((s) => s.pushSetupSync);
+  const pullSetupSync = useGrokHub((s) => s.pullSetupSync);
+  const syncSetupWithGrokAccount = useGrokHub((s) => s.syncSetupWithGrokAccount);
+  const exportSetupPackJson = useGrokHub((s) => s.exportSetupPackJson);
+  const importSetupPackJson = useGrokHub((s) => s.importSetupPackJson);
   const { user } = useCurrentUserState();
 
   const [keyDraft, setKeyDraft] = useState(apiKey);
@@ -81,6 +87,10 @@ export function SettingsView() {
   const [ocPath, setOcPath] = useState("~/.openclaw/workspace");
   const [ocBusy, setOcBusy] = useState(false);
   const [ocDetail, setOcDetail] = useState("");
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [setupMsg, setSetupMsg] = useState("");
+  const [setupPass, setSetupPass] = useState("");
+  const setupImportRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -360,6 +370,211 @@ export function SettingsView() {
             Uses xAI public OAuth client (device code). Tokens stay on this device only and are
             never committed to git.
           </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <RefreshCw className="h-4 w-4 text-[var(--color-muted)]" />
+            Setup sync (Grok account)
+          </CardTitle>
+          <CardDescription>
+            Key setup to your Grok OAuth sign-in. On login we pull profile, models, website
+            connectors, and usage. Optionally push/pull full app setup (skills, automations,
+            desktop prefs, connector layout) — never tokens or API keys.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-2 text-xs text-[var(--color-muted)]">
+            <div>
+              Account:{" "}
+              <span className="font-medium text-[var(--color-fg)]">
+                {oauth?.email || oauth?.name || "Sign in with Grok OAuth"}
+              </span>
+            </div>
+            {setupSyncMeta?.lastDetail && (
+              <div className="mt-1 truncate">Last: {setupSyncMeta.lastDetail}</div>
+            )}
+            {setupSyncMeta?.lastPushAt ? (
+              <div className="mt-0.5">
+                Pushed {new Date(setupSyncMeta.lastPushAt).toLocaleString()}
+              </div>
+            ) : null}
+            {setupSyncMeta?.lastPullAt ? (
+              <div className="mt-0.5">
+                Pulled {new Date(setupSyncMeta.lastPullAt).toLocaleString()}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              disabled={!oauth || setupBusy}
+              onClick={() => {
+                setSetupBusy(true);
+                setSetupMsg("");
+                void syncSetupWithGrokAccount(
+                  setupPass.trim() ? { passphrase: setupPass } : undefined,
+                ).then((r) => {
+                  setSetupBusy(false);
+                  setSetupMsg(r.detail);
+                });
+              }}
+            >
+              Sync from Grok now
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={!oauth || setupBusy}
+              onClick={() => {
+                setSetupBusy(true);
+                void pushSetupSync(
+                  setupPass.trim() ? { passphrase: setupPass } : undefined,
+                ).then((r) => {
+                  setSetupBusy(false);
+                  setSetupMsg(r.detail);
+                });
+              }}
+            >
+              Push setup
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={!oauth || setupBusy}
+              onClick={() => {
+                setSetupBusy(true);
+                void pullSetupSync(
+                  setupPass.trim() ? { passphrase: setupPass } : undefined,
+                ).then((r) => {
+                  setSetupBusy(false);
+                  setSetupMsg(r.detail);
+                });
+              }}
+            >
+              Pull setup
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={setupBusy}
+              onClick={() => {
+                setSetupBusy(true);
+                void exportSetupPackJson(
+                  setupPass.trim() ? { passphrase: setupPass } : undefined,
+                ).then((json) => {
+                  const blob = new Blob([json], { type: "application/json" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `grokhub-setup-${oauth?.email || "local"}-${new Date()
+                    .toISOString()
+                    .slice(0, 10)}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  setSetupMsg(
+                    setupPass.trim()
+                      ? "Encrypted setup pack exported"
+                      : "Setup pack exported (no secrets)",
+                  );
+                  setSetupBusy(false);
+                });
+              }}
+            >
+              Export pack
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={setupBusy}
+              onClick={() => setupImportRef.current?.click()}
+            >
+              Import pack
+            </Button>
+            <input
+              ref={setupImportRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                  void importSetupPackJson(
+                    String(reader.result || ""),
+                    setupPass.trim() ? { passphrase: setupPass } : undefined,
+                  ).then((r) => setSetupMsg(r.detail));
+                };
+                reader.readAsText(file);
+                e.target.value = "";
+              }}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-[var(--color-muted)]">
+              Optional pack passphrase (encrypt push/export · decrypt pull/import)
+            </label>
+            <Input
+              type="password"
+              value={setupPass}
+              onChange={(e) => setSetupPass(e.target.value)}
+              placeholder="Leave empty for plain setup packs"
+              className="font-mono text-xs"
+              autoComplete="new-password"
+            />
+          </div>
+
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
+            <div>
+              <div className="text-sm font-medium">Auto-push setup when things change</div>
+              <div className="text-xs text-[var(--color-muted)]">
+                Debounced push after automations / desktop prefs change (needs OAuth)
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-[var(--color-fg)]"
+              checked={Boolean(setupSyncMeta?.autoPushOnChange)}
+              onChange={(e) =>
+                useGrokHub.getState().setSetupSyncMeta({
+                  autoPushOnChange: e.target.checked,
+                })
+              }
+            />
+          </label>
+
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
+            <div>
+              <div className="text-sm font-medium">Auto-pull setup on OAuth login</div>
+              <div className="text-xs text-[var(--color-muted)]">
+                After Grok sign-in, restore this account’s setup pack if one exists
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-[var(--color-fg)]"
+              checked={setupSyncMeta?.autoPullOnLogin !== false}
+              onChange={(e) =>
+                useGrokHub.getState().setSetupSyncMeta({
+                  autoPullOnLogin: e.target.checked,
+                })
+              }
+            />
+          </label>
+
+          <p className="text-[11px] leading-relaxed text-[var(--color-subtle)]">
+            <strong className="text-[var(--color-muted)]">Cross-device:</strong> add a GitHub
+            token below — Push stores a private Gist keyed to your Grok email. Sign in with the
+            same Grok account on another machine and Pull (or auto-pull on login). Without GitHub,
+            Push still saves an account vault on this PC. Connector <em>OAuth for Gmail/Notion
+            etc.</em> still lives on grok.com — link the website session for those statuses.
+          </p>
+          {setupMsg && <p className="text-xs text-[var(--color-muted)]">{setupMsg}</p>}
         </CardContent>
       </Card>
 
@@ -700,7 +915,7 @@ export function SettingsView() {
                     r?.ok
                       ? `Menu: ${r.menuInstalled ? "yes" : "no"} · Autostart: ${
                           r.autostartInstalled ? "yes" : "no"
-                        }`
+                        } · exec ${r.exec || "?"}`
                       : "Status unavailable outside desktop",
                   );
                 });
@@ -709,6 +924,12 @@ export function SettingsView() {
               Check menu status
             </Button>
           </div>
+          <p className="text-[11px] leading-relaxed text-[var(--color-subtle)]">
+            <strong className="text-[var(--color-muted)]">Taskbar pin:</strong> install the menu
+            entry, then pin <em>GrokHub</em> from the app launcher — not a generic Electron icon.
+            Pins use <span className="font-mono">/usr/bin/grokhub</span> so they still work after
+            you quit. WM class is <span className="font-mono">GrokHub</span>.
+          </p>
         </CardContent>
       </Card>
 

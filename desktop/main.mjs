@@ -88,15 +88,47 @@ let mainWindow = null;
 /** @type {Tray | null} */
 let tray = null;
 
-// Must run before app ready — sets WM_CLASS / taskbar identity on Linux
+// —— Taskbar / pin identity (must run before ready) ——
+// System `electron` otherwise shows as generic Electron when pinned.
 app.setName("GrokHub");
-if (process.platform === "linux") {
-  app.commandLine.appendSwitch("class", "GrokHub");
+try {
+  // Associates this process with grokhub.desktop so GNOME/KDE pin the app, not electron
+  app.setDesktopName("grokhub.desktop");
+} catch {
+  /* older electron */
 }
 try {
   app.setAppUserModelId("com.grokhub.app");
 } catch {
   /* non-windows */
+}
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("class", "GrokHub");
+  app.commandLine.appendSwitch("name", "GrokHub");
+  // Helps some compositors treat us as a distinct app
+  try {
+    process.title = "GrokHub";
+  } catch {
+    /* ignore */
+  }
+}
+
+// Single instance: second pin/launch focuses existing window instead of a bare electron
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.exit(0);
+} else {
+  app.on("second-instance", (_event, _argv) => {
+    const show = () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    };
+    if (app.isReady()) show();
+    else app.whenReady().then(show);
+  });
 }
 
 function windowStatePath() {
@@ -225,6 +257,7 @@ function createWindow() {
     titleBarStyle: "hidden",
     autoHideMenuBar: true,
     useContentSize: false,
+    // Linux: keep a stable title/class for taskbar matching
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -237,6 +270,21 @@ function createWindow() {
   if (!icon.isEmpty()) {
     try {
       mainWindow.setIcon(icon);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Re-assert identity after create (some WMs read class late)
+  try {
+    mainWindow.setTitle("GrokHub");
+  } catch {
+    /* ignore */
+  }
+  if (process.platform === "linux") {
+    try {
+      app.setName("GrokHub");
+      app.setDesktopName("grokhub.desktop");
     } catch {
       /* ignore */
     }
@@ -280,6 +328,11 @@ function createWindow() {
         /* ignore */
       }
     }
+    try {
+      mainWindow?.setTitle("GrokHub");
+    } catch {
+      /* ignore */
+    }
     // Re-apply maximize after show (some WMs ignore pre-show maximize)
     if (saved?.isMaximized || (!saved && process.env.GROKHUB_MAXIMIZE !== "0")) {
       try {
@@ -295,6 +348,16 @@ function createWindow() {
       mainWindow?.focus();
     }
     scheduleSave();
+  });
+
+  // Keep title stable (page title changes can rename the taskbar entry)
+  mainWindow.on("page-title-updated", (e) => {
+    e.preventDefault();
+    try {
+      mainWindow?.setTitle("GrokHub");
+    } catch {
+      /* ignore */
+    }
   });
 
   // If displays change and window is off-screen, nudge it back
@@ -584,6 +647,7 @@ if (process.env.GROKHUB_WAYLAND !== "0") {
 app.commandLine.appendSwitch("no-sandbox");
 
 app.whenReady().then(() => {
+  if (!gotLock) return;
   // Prefer home as process cwd so relative shell paths match a real desktop session
   try {
     const home = process.env.HOME || require("node:os").homedir();
@@ -591,10 +655,11 @@ app.whenReady().then(() => {
   } catch {
     /* ignore */
   }
-  // Dock / taskbar name
+  // Dock / taskbar name + pin identity
   if (process.platform === "linux") {
     try {
       app.setName("GrokHub");
+      app.setDesktopName("grokhub.desktop");
     } catch {
       /* ignore */
     }

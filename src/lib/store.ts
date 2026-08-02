@@ -37,6 +37,15 @@ import {
 import { uid } from "./utils";
 import { computeNextRun } from "./automation-schedule";
 import {
+  accountKey as setupAccountKey,
+  buildSetupPack,
+  mergeSetupPack,
+  parseSetupPack,
+  pullSetupFromGist,
+  pushSetupToGist,
+  type SetupPack,
+} from "./setup-sync";
+import {
   emptyQuickAssistMemory,
   normalizeMemory,
   rememberChipClick,
@@ -154,6 +163,17 @@ type State = {
   setGithubToken: (token: string) => void;
   startGrokOAuth: () => Promise<void>;
   pollGrokOAuth: () => Promise<"pending" | "ready" | "failed">;
+  setupSyncMeta: import("./setup-sync").SetupSyncMeta;
+  setSetupSyncMeta: (patch: Partial<import("./setup-sync").SetupSyncMeta>) => void;
+  scheduleSetupAutoPush: () => void;
+  pushSetupSync: (opts?: { passphrase?: string }) => Promise<{ ok: boolean; detail: string }>;
+  pullSetupSync: (opts?: { passphrase?: string }) => Promise<{ ok: boolean; detail: string }>;
+  syncSetupWithGrokAccount: (opts?: { passphrase?: string }) => Promise<{ ok: boolean; detail: string }>;
+  exportSetupPackJson: (opts?: { passphrase?: string }) => Promise<string>;
+  importSetupPackJson: (
+    json: string,
+    opts?: { passphrase?: string },
+  ) => Promise<{ ok: boolean; detail: string }>;
   clearGrokOAuth: () => void;
   setSsoCookie: (cookie: string) => void;
   linkGrokWebsiteSession: () => Promise<{ ok: boolean; detail: string }>;
@@ -503,6 +523,7 @@ export const useGrokHub = create<State>()(
       ssoCookie: "",
       openClawWorkspace: null,
       oauthPending: null,
+      setupSyncMeta: { autoPullOnLogin: true, autoPushOnChange: false },
       grokConnected: null,
       grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
 
@@ -517,7 +538,10 @@ export const useGrokHub = create<State>()(
         });
       },
       setModeMenuOpen: (open) => set({ modeMenuOpen: open }),
-      setDesktop: (patch) => set((s) => ({ desktop: { ...s.desktop, ...patch } })),
+      setDesktop: (patch) => {
+        set((s) => ({ desktop: { ...s.desktop, ...patch } }));
+        get().scheduleSetupAutoPush();
+      },
 
       resolveHostConfirm: (allow) => {
         const pending = hostConfirmWaiter;
@@ -777,6 +801,7 @@ export const useGrokHub = create<State>()(
             detail: r.tokens.email || r.tokens.name || "Session active",
             status: "success",
           });
+          void get().syncSetupWithGrokAccount();
           return "ready";
         }
         if (r.status === "expired" || r.status === "denied") {
@@ -794,6 +819,334 @@ export const useGrokHub = create<State>()(
           return "failed";
         }
         return "pending";
+      },
+
+
+      setSetupSyncMeta: (patch) => {
+        set((st) => ({
+          setupSyncMeta: { ...st.setupSyncMeta, ...patch },
+        }));
+      },
+
+      scheduleSetupAutoPush: () => {
+        const meta = get().setupSyncMeta;
+        if (!meta?.autoPushOnChange || !get().oauth?.accessToken) return;
+        const w = globalThis as unknown as { __grokhubSetupPushTimer?: number };
+        if (typeof window !== "undefined" && w.__grokhubSetupPushTimer) {
+          window.clearTimeout(w.__grokhubSetupPushTimer);
+        }
+        if (typeof window === "undefined") return;
+        w.__grokhubSetupPushTimer = window.setTimeout(() => {
+          void get().pushSetupSync();
+        }, 12_000);
+      },
+
+      exportSetupPackJson: async (opts) => {
+        const s = get();
+        const pack = buildSetupPack({
+          oauth: s.oauth,
+          mode: s.mode,
+          desktop: s.desktop as unknown as Record<string, unknown>,
+          agents: s.agents,
+          skills: s.skills,
+          automations: s.automations,
+          connectors: s.connectors,
+          openClawWorkspace: s.openClawWorkspace,
+        });
+        const plain = JSON.stringify(pack, null, 2);
+        if (opts?.passphrase?.trim()) {
+          const { encryptSetupJson } = await import("./setup-crypto");
+          return JSON.stringify(await encryptSetupJson(plain, opts.passphrase), null, 2);
+        }
+        return plain;
+      },
+
+      importSetupPackJson: async (json, opts) => {
+        try {
+          const { unwrapSetupPayload } = await import("./setup-crypto");
+          const plain = await unwrapSetupPayload(json, opts?.passphrase);
+          const pack = parseSetupPack(JSON.parse(plain));
+          if (!pack) return { ok: false, detail: "Not a GrokHub setup pack" };
+          const s = get();
+          const merged = mergeSetupPack(pack, {
+            agents: s.agents,
+            skills: s.skills,
+            automations: s.automations,
+            connectors: s.connectors,
+            mode: s.mode,
+            desktop: s.desktop as unknown as Record<string, unknown>,
+          });
+          set((st) => ({
+            mode: (merged.mode as typeof st.mode) || st.mode,
+            desktop: merged.desktop
+              ? { ...st.desktop, ...(merged.desktop as object) }
+              : st.desktop,
+            agents: merged.agents || st.agents,
+            skills: merged.skills || st.skills,
+            automations: merged.automations || st.automations,
+            connectors: merged.connectors || st.connectors,
+            setupSyncMeta: {
+              ...st.setupSyncMeta,
+              lastPullAt: Date.now(),
+              lastDetail: `Imported pack (${merged.applied.join(", ")})`,
+              lastAccount: pack.account.email || pack.account.sub,
+            },
+          }));
+          get().pushActivity({
+            kind: "system",
+            title: "Setup imported",
+            detail: merged.applied.join(", ") || "empty",
+            status: "success",
+          });
+          return { ok: true, detail: `Applied: ${merged.applied.join(", ") || "nothing"}` };
+        } catch (e) {
+          return { ok: false, detail: e instanceof Error ? e.message : "import failed" };
+        }
+      },
+
+      pushSetupSync: async (opts) => {
+        const s = get();
+        if (!s.oauth?.accessToken) {
+          return { ok: false, detail: "Sign in with Grok OAuth first" };
+        }
+        const pack = buildSetupPack({
+          oauth: s.oauth,
+          mode: s.mode,
+          desktop: s.desktop as unknown as Record<string, unknown>,
+          agents: s.agents,
+          skills: s.skills,
+          automations: s.automations,
+          connectors: s.connectors,
+          openClawWorkspace: s.openClawWorkspace,
+        });
+        const plain = JSON.stringify(pack);
+        let storeBody = plain;
+        const effectivePass = opts?.passphrase?.trim() || "";
+        if (effectivePass) {
+          const { encryptSetupJson } = await import("./setup-crypto");
+          storeBody = JSON.stringify(await encryptSetupJson(plain, effectivePass));
+        }
+        try {
+          const key = `setup-pack:${setupAccountKey(s.oauth)}`;
+          if (typeof window !== "undefined" && window.grokhubDesktop?.state?.set) {
+            await window.grokhubDesktop.state.set(key, storeBody);
+          }
+        } catch {
+          /* ignore */
+        }
+        const gh = s.githubToken?.trim();
+        if (!gh) {
+          set((st) => ({
+            setupSyncMeta: {
+              ...st.setupSyncMeta,
+              lastPushAt: Date.now(),
+              lastAccount: setupAccountKey(s.oauth!),
+              lastDetail: effectivePass
+                ? "Saved encrypted local vault (add GitHub token for cloud)"
+                : "Saved local account vault (add GitHub token for cloud sync)",
+            },
+          }));
+          return {
+            ok: true,
+            detail: effectivePass
+              ? "Encrypted setup saved locally. Link a GitHub token for cross-device Gist sync."
+              : "Setup saved for this Grok account locally. Link a GitHub token in Settings to sync across machines via private Gist.",
+          };
+        }
+        const r = await pushSetupToGist(
+          gh,
+          pack,
+          s.setupSyncMeta?.lastGistId,
+          effectivePass ? storeBody : undefined,
+        );
+        set((st) => ({
+          setupSyncMeta: {
+            ...st.setupSyncMeta,
+            lastPushAt: Date.now(),
+            lastGistId: r.gistId || st.setupSyncMeta?.lastGistId,
+            lastAccount: setupAccountKey(s.oauth!),
+            lastDetail: r.ok
+              ? effectivePass
+                ? "Pushed encrypted pack to GitHub Gist"
+                : "Pushed to GitHub Gist"
+              : r.error,
+          },
+        }));
+        get().pushActivity({
+          kind: "auth",
+          title: r.ok ? "Setup synced (push)" : "Setup push failed",
+          detail: r.ok ? r.htmlUrl || r.gistId || "gist" : r.error || "failed",
+          status: r.ok ? "success" : "failed",
+        });
+        return {
+          ok: Boolean(r.ok),
+          detail: r.ok
+            ? `Pushed setup for ${pack.account.email || pack.account.sub}`
+            : r.error || "push failed",
+        };
+      },
+
+      pullSetupSync: async (opts) => {
+        const s = get();
+        if (!s.oauth?.accessToken) {
+          return { ok: false, detail: "Sign in with Grok OAuth first" };
+        }
+        const acct = setupAccountKey(s.oauth);
+        let pack: SetupPack | null = null;
+        let detail = "";
+
+        const gh = s.githubToken?.trim();
+        if (gh) {
+          const r = await pullSetupFromGist(gh, acct, s.setupSyncMeta?.lastGistId);
+          if (r.ok && (r.pack || r.raw)) {
+            if (r.pack) {
+              pack = r.pack;
+            } else if (r.raw) {
+              try {
+                const { unwrapSetupPayload } = await import("./setup-crypto");
+                const plain = await unwrapSetupPayload(r.raw, opts?.passphrase);
+                pack = parseSetupPack(JSON.parse(plain));
+              } catch (e) {
+                detail =
+                  e instanceof Error
+                    ? e.message
+                    : "Could not decrypt Gist pack";
+              }
+            }
+            if (pack) detail = "Pulled from GitHub Gist";
+            if (r.gistId) {
+              set((st) => ({
+                setupSyncMeta: { ...st.setupSyncMeta, lastGistId: r.gistId },
+              }));
+            }
+          } else {
+            detail = r.error || "No gist";
+          }
+        }
+
+        if (!pack && typeof window !== "undefined" && window.grokhubDesktop?.state?.get) {
+          try {
+            const got = await window.grokhubDesktop.state.get(`setup-pack:${acct}`);
+            if (got?.value) {
+              try {
+                const { unwrapSetupPayload } = await import("./setup-crypto");
+                const plain = await unwrapSetupPayload(got.value, opts?.passphrase);
+                pack = parseSetupPack(JSON.parse(plain));
+              } catch (e) {
+                detail =
+                  e instanceof Error
+                    ? e.message
+                    : "Could not open local vault (wrong passphrase?)";
+              }
+              if (pack) {
+                detail = detail ? `${detail}; local vault` : "Loaded local account vault";
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+
+        if (!pack) {
+          return {
+            ok: false,
+            detail:
+              detail ||
+              "No setup found for this Grok account yet. Push from a configured machine, or import a pack file.",
+          };
+        }
+
+        const merged = mergeSetupPack(pack, {
+          agents: s.agents,
+          skills: s.skills,
+          automations: s.automations,
+          connectors: s.connectors,
+          mode: s.mode,
+          desktop: s.desktop as unknown as Record<string, unknown>,
+        });
+        set((st) => ({
+          mode: (merged.mode as typeof st.mode) || st.mode,
+          desktop: merged.desktop
+            ? { ...st.desktop, ...(merged.desktop as object) }
+            : st.desktop,
+          agents: merged.agents || st.agents,
+          skills: merged.skills || st.skills,
+          automations: merged.automations || st.automations,
+          connectors: merged.connectors || st.connectors,
+          setupSyncMeta: {
+            ...st.setupSyncMeta,
+            lastPullAt: Date.now(),
+            lastAccount: acct,
+            lastDetail: `${detail} · ${merged.applied.join(", ")}`,
+          },
+        }));
+        get().pushActivity({
+          kind: "auth",
+          title: "Setup synced (pull)",
+          detail: merged.applied.join(", ") || detail,
+          status: "success",
+        });
+        return {
+          ok: true,
+          detail: `${detail}: ${merged.applied.join(", ") || "ok"}`,
+        };
+      },
+
+      syncSetupWithGrokAccount: async (opts) => {
+        const s = get();
+        if (!s.oauth?.accessToken && !s.apiKey) {
+          return { ok: false, detail: "Connect Grok OAuth first" };
+        }
+        const parts: string[] = [];
+        try {
+          await get().syncFromGrok({
+            displayName: s.oauth?.name ?? null,
+            email: s.oauth?.email ?? null,
+            imageUrl: s.oauth?.picture ?? null,
+          });
+          parts.push("profile/models");
+        } catch {
+          /* ignore */
+        }
+        try {
+          await get().refreshModels();
+          parts.push("models");
+        } catch {
+          /* ignore */
+        }
+        try {
+          const conn = await get().syncWebsiteConnectors();
+          if (conn.ok) parts.push(`${conn.count} connectors`);
+          else parts.push("connectors skipped");
+        } catch {
+          parts.push("connectors failed");
+        }
+        try {
+          await get().refreshUsage();
+          parts.push("usage");
+        } catch {
+          /* ignore */
+        }
+        if (s.setupSyncMeta?.autoPullOnLogin !== false && s.oauth?.accessToken) {
+          const pull = await get().pullSetupSync(opts);
+          parts.push(pull.ok ? `pack: ${pull.detail}` : `pack: ${pull.detail}`);
+        }
+        const detail = parts.join(" · ") || "done";
+        set((st) => ({
+          setupSyncMeta: {
+            ...st.setupSyncMeta,
+            lastPullAt: Date.now(),
+            lastAccount: s.oauth?.email || st.setupSyncMeta?.lastAccount,
+            lastDetail: detail,
+          },
+        }));
+        get().pushActivity({
+          kind: "auth",
+          title: "Grok account setup sync",
+          detail,
+          status: "success",
+        });
+        return { ok: true, detail };
       },
 
       clearGrokOAuth: () => {
@@ -1832,6 +2185,7 @@ export const useGrokHub = create<State>()(
           ),
         };
         set((s) => ({ automations: [auto, ...s.automations] }));
+        get().scheduleSetupAutoPush();
         get().pushActivity({
           kind: "automation",
           title: `Created automation ${auto.name}`,
@@ -2854,6 +3208,7 @@ if (!cmds.length) {
           if (desk.confirmHostCommands === undefined) desk.confirmHostCommands = true;
           if (desk.confirmDestructiveOnly === undefined) desk.confirmDestructiveOnly = true;
           if (desk.selfModifyEnabled === undefined) desk.selfModifyEnabled = false;
+        if (!s.setupSyncMeta) s.setupSyncMeta = { autoPullOnLogin: true, autoPushOnChange: false };
         // normalize automation times / heartbeat fields
         if (Array.isArray(s.automations)) {
           s.automations = (s.automations as import("./types").Automation[]).map((a) => {

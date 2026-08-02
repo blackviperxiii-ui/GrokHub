@@ -13,6 +13,11 @@ PIDFILE="${RUNTIME}/ui.pid"
 export GROKHUB_WAYLAND="${GROKHUB_WAYLAND:-1}"
 export GROKHUB_TRAY="${GROKHUB_TRAY:-1}"
 
+# Help desktop environments map this process to grokhub.desktop (pin / taskbar)
+export ELECTRON_FORCE_WINDOW_MENU_BAR=0
+# Chromium app name hints (used by some shells alongside --class)
+export CHROME_DESKTOP="${CHROME_DESKTOP:-grokhub.desktop}"
+
 mkdir -p "$RUNTIME"
 
 if ! command -v electron >/dev/null 2>&1; then
@@ -80,12 +85,18 @@ start_ui
 
 export GROKHUB_URL="$URL"
 
-# Taskbar / panel icon matching:
-#  - --class=GrokHub matches StartupWMClass in the .desktop file
-#  - --name=GrokHub sets the window title/app id for many WMs
-#  - Electron also loads desktop/icons/icon.png as the window icon
-exec electron \
+# Resolve electron binary (absolute) so pinned launchers don't lose the path
+ELECTRON_BIN="$(command -v electron)"
+
+# Taskbar / panel identity:
+#  - --class / --name match StartupWMClass=GrokHub in grokhub.desktop
+#  - exec -a GrokHub sets argv0 so some panels don't label the pin "Electron"
+#  - CHROME_DESKTOP + app.setDesktopName map the window to grokhub.desktop
+#
+# Flags MUST come before the main script path.
+exec -a GrokHub "$ELECTRON_BIN" \
   --class=GrokHub \
   --name=GrokHub \
+  --enable-features=UseOzonePlatform \
   "$APP_ROOT/desktop/main.mjs" \
   "$@"
