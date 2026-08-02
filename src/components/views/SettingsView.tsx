@@ -1210,7 +1210,7 @@ export function SettingsView() {
         <CardHeader>
           <CardTitle className="text-sm">Model modes</CardTitle>
           <CardDescription>
-            Adaptive scores complexity, code, and intent — then routes ⚡ Fast · ⚖️ Balanced · 🧠 Think · 🔬 Deep · 🛠️ Build · Imagine.
+            Adaptive scores each tier (Fast · Balanced · Think · Build · Deep · Imagine), applies hysteresis so modes don’t flip every turn, and factors usage pressure, host/tool context, and your rating history.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">

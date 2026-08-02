@@ -42,6 +42,14 @@ export type RouteContext = {
 
   /** Soft bias from learning engine: positive = prefer tier */
   learningBias?: Partial<Record<RouteTier, number>>;
+  /** 0–1 weekly usage used (website or local estimate) */
+  usagePressure?: number;
+  /** Prefer cheaper tiers (free Grok fallback) */
+  preferFree?: boolean;
+  /** Previous assistant turn failed / timed out */
+  lastRouteFailed?: boolean;
+  /** Recent turns used Desktop Host tools */
+  usedHostRecently?: boolean;
 };
 
 /** Heuristic preferred API ids per product slot (first match against live list wins). */
@@ -459,22 +467,26 @@ export function parseGrokSlotPlan(
   }
 }
 
-// ─── Adaptive router (stable, judgment-aware) ───────────────────────────────
+// ─── Adaptive router (score-based + hysteresis) ─────────────────────────────
 
 const IMAGE_RE =
-  /\b(imagine|image|picture|photo|draw|render|generate\s+(an?\s+)?(image|pic|art|logo|icon|wallpaper)|illustration|visuali[sz]e)\b/i;
+  /\b(imagine|image|picture|photo|draw|render|generate\s+(an?\s+)?(image|pic|art|logo|icon|wallpaper)|illustration|visuali[sz]e|edit\s+(this\s+)?(image|photo|pic))\b/i;
 
 const CODE_RE =
   /\b(code|coding|implement|refactor|typescript|javascript|python|rust|golang|react|component|function|class|bugfix|compile|lint|docker|kubernetes|pkgbuild|aur|api\s+route|pull\s+request|unit\s+test|css|html|sql|bash|shell\s+script|write\s+(me\s+)?(a\s+)?(script|app|site|page|endpoint)|typecheck|stack.?trace|PR\b|merge\s+conflict)\b/i;
 
 const ARCH_RE =
-  /\b(architect(?:ure)?|system\s+design|design\s+system|trade-?offs?|scalability|data\s+model|schema|migration\s+plan|service\s+boundary|microservice|event-?driven|end-?to-?end|production\s+ready)\b/i;
+  /\b(architect(?:ure)?|system\s+design|design\s+system|trade-?offs?|scalability|data\s+model|schema|migration\s+plan|service\s+boundary|microservice|event-?driven|end-?to-?end|production\s+ready|multi-?region)\b/i;
 
 const SMART_RE =
   /\b(root\s+cause|debug|why\s+is|compare|evaluate|critique|security|threat|prove|theorem|math|optimiz|complex|multi-?step|deep\s+dive|analyze\s+carefully|reason\s+about|pros?\s+and\s+cons?|step\s+by\s+step)\b/i;
 
 const JUDGMENT_RE =
   /\b(what\s+do\s+you\s+think|how\s+do\s+(you\s+)?(feel|see)|feels?\s+off|doesn'?t\s+feel|something'?s\s+off|seems?\s+(off|wrong|weird)|how\s+(can|do)\s+i\s+improve|improve\s+(this|it|the)|make\s+(this|it)\s+better|thoughts\s+on|your\s+(take|opinion)|review\s+(this|my)|is\s+this\s+(good|ok|right|wrong)|what'?s\s+wrong|why\s+is\s+this|honest\s+feedback|feedback\s+on|rate\s+this|look\s+(right|wrong)|still\s+broken|not\s+working\s+right|help\s+me\s+(decide|choose|pick)|should\s+i)\b/i;
+
+/** Light opinion / short feedback — Balanced, not Think */
+const LIGHT_JUDGMENT_RE =
+  /^(what\s+do\s+you\s+think|thoughts(\s+on\s+this)?|your\s+take|feedback\??|how\s+does\s+this\s+look|does\s+this\s+look\s+(ok|good|right)|seems?\s+off|feels?\s+off)[.!?\s]*$/i;
 
 const RESEARCH_RE =
   /\b(research|survey|literature|sources?|citations?|summarize\s+(the\s+)?(paper|article|doc)|investigate|thorough|in[\s-]?depth)\b/i;
@@ -492,16 +504,42 @@ const UX_RE =
   /\b(ux|ui|layout|spacing|sidebar|composer|chips|visual hierarchy|accessibility|dark\s+mode|responsive|design\s+polish|badge|toast|banner)\b/i;
 
 const TOOL_RE =
-  /\b(\$\s|HOST_CMD|shell|cli|run\s+(this\s+)?command|on\s+my\s+(machine|desktop)|list\s+files|read\s+file|edit\s+file)\b/i;
+  /\b(\$\s|HOST_CMD|shell|cli|run\s+(this\s+)?command|on\s+my\s+(machine|desktop|system)|list\s+files|read\s+file|edit\s+file|~\/\.config|\/usr\/lib|journalctl|systemctl)\b/i;
 
 const DEBUG_SESSION_RE =
   /\b(bug|broken|error|crash|fix|debug|stack|trace|failing|regression|doesn'?t\s+work|not\s+working)\b/i;
 
 const FOLLOW_UP_RE =
-  /^(yes|yeah|yep|yup|sure|please|do\s+it|do\s+that|go\s+ahead|continue|proceed|try\s+(it|that|again)|fix\s+it|same|also|and\s+(also|then)|ok\s+(do|go|try|please)|sounds\s+good|that\s+one|this\s+one|again|more|keep\s+going)[.!]*$/i;
+  /^(yes|yeah|yep|yup|sure|please|ok|okay)([,.]?\s+(please|continue|proceed|go\s+(on|ahead)|do\s+(it|that)|try\s+(it|that|again)|fix\s+it))?[.!]*$|^(do\s+it|do\s+that|go\s+ahead|continue|proceed|try\s+(it|that|again)|fix\s+it|same|also|and\s+(also|then)|ok\s+(do|go|try|please)|sounds\s+good|that\s+one|this\s+one|again|more|keep\s+going)[.!]*$/i;
 
 const FOLLOW_UP_SOFT_RE =
   /\b(also|and\s+then|same\s+for|do\s+the\s+same|one\s+more|instead|rather|actually|wait)\b/i;
+
+const HEAVY_CODE_RE =
+  /\b(implement|refactor|rewrite|migrate|scaffold|architect|full\s+app|end-?to-?end|production|add\s+tests?)\b/i;
+
+/** Ordered ladder for hysteresis (imagine handled separately). */
+export const TIER_LADDER: RouteTier[] = [
+  "fast",
+  "balanced",
+  "think",
+  "build",
+  "deep",
+];
+
+const TIER_RANK: Record<RouteTier, number> = {
+  fast: 0,
+  balanced: 1,
+  think: 2,
+  build: 3,
+  deep: 4,
+  imagine: 1,
+};
+
+/** Min score gap to jump more than one ladder step in a single turn */
+const HYSTERESIS_JUMP = 18;
+/** Soft hold toward last tier */
+const STICKY_BONUS = 10;
 
 export function tierMeta(tier: RouteTier): {
   label: string;
@@ -552,7 +590,38 @@ export function tierMeta(tier: RouteTier): {
   };
 }
 
-function scorePrompt(prompt: string, ctx: RouteContext = {}) {
+type PromptSignals = {
+  words: number;
+  complexity: number;
+  analytical: number;
+  code: number;
+  creative: number;
+  simple: number;
+  codeHit: boolean;
+  archHit: boolean;
+  smartHit: boolean;
+  judgmentHit: boolean;
+  lightJudgment: boolean;
+  researchHit: boolean;
+  teamHit: boolean;
+  pureFast: boolean;
+  followUp: boolean;
+  creativeHit: boolean;
+  uxHit: boolean;
+  toolHit: boolean;
+  debugHit: boolean;
+  hasCodeFence: boolean;
+  imageHit: boolean;
+  heavyCode: boolean;
+  stickyThink: boolean;
+  stickyDeep: boolean;
+  longReplyContext: boolean;
+  codingSession: boolean;
+  debugSession: boolean;
+  chatSession: boolean;
+};
+
+function scorePrompt(prompt: string, ctx: RouteContext = {}): PromptSignals {
   const p = prompt.trim();
   const lower = p.toLowerCase();
   const words = lower.split(/\s+/).filter(Boolean).length;
@@ -565,6 +634,7 @@ function scorePrompt(prompt: string, ctx: RouteContext = {}) {
   const archHit = ARCH_RE.test(p) || ARCH_RE.test(recent);
   const smartHit = SMART_RE.test(p);
   const judgmentHit = JUDGMENT_RE.test(p);
+  const lightJudgment = LIGHT_JUDGMENT_RE.test(p.trim()) || (judgmentHit && words <= 8);
   const researchHit = RESEARCH_RE.test(p);
   const teamHit = TEAM_RE.test(p);
   const pureFast = FAST_RE.test(p.trim());
@@ -573,8 +643,13 @@ function scorePrompt(prompt: string, ctx: RouteContext = {}) {
     (words <= 12 && FOLLOW_UP_SOFT_RE.test(p) && Boolean(ctx.lastRouteTier));
   const creativeHit = CREATIVE_RE.test(p);
   const uxHit = UX_RE.test(p);
-  const toolHit = TOOL_RE.test(p) || Boolean(ctx.hasAttachments);
+  const toolHit =
+    TOOL_RE.test(p) ||
+    Boolean(ctx.hasAttachments) ||
+    Boolean(ctx.usedHostRecently) ||
+    TOOL_RE.test(recent);
   const debugHit = DEBUG_SESSION_RE.test(p) || DEBUG_SESSION_RE.test(recent);
+  const heavyCode = HEAVY_CODE_RE.test(p);
   const longReplyContext = (ctx.recentAssistantText || "").length > 800;
   const stickyDeep =
     ctx.lastRouteTier === "deep" ||
@@ -587,6 +662,14 @@ function scorePrompt(prompt: string, ctx: RouteContext = {}) {
     ctx.lastRouteTier === "balanced" ||
     ctx.lastRoutedMode === "expert" ||
     ctx.lastRoutedMode === "balanced";
+
+  // Session roles from recent turns
+  const codingSession =
+    (codeHit && hist >= 2) ||
+    /\b(HOST_CMD|```|typecheck|npm |git )/i.test(recent);
+  const debugSession =
+    debugHit && (hist >= 1 || /error|fail|stack|broken/i.test(recent));
+  const chatSession = !codingSession && !debugSession && hist >= 1;
 
   let complexity = 0;
   if (words <= 5) complexity += 4;
@@ -602,28 +685,30 @@ function scorePrompt(prompt: string, ctx: RouteContext = {}) {
   if (hist >= 4) complexity += 6;
   if (hist >= 10) complexity += 8;
   if (longReplyContext) complexity += 12;
-  if (stickyThink) complexity += 8;
+  if (stickyThink) complexity += 6;
   if (debugHit) complexity += 14;
 
   let analytical = 0;
-  if (judgmentHit) analytical += 42;
+  if (judgmentHit && !lightJudgment) analytical += 36;
+  if (lightJudgment) analytical += 12;
   if (smartHit) analytical += 32;
   if (archHit) analytical += 38;
   if (researchHit) analytical += 36;
-  if (uxHit) analytical += 24;
-  if (debugHit) analytical += 28;
-  if (/\bwhy\b|\bhow\s+should\b|\btrade|\bfeel|\bthink\b/.test(lower)) analytical += 18;
-  if (/\bcompare\b|\bvs\.?\b|\bdifference\b|\bshould\s+i\b/.test(lower)) analytical += 20;
-  if (/\bimprove\b|\bbetter\b|\bpolish\b|\breview\b/.test(lower)) analytical += 22;
-  if (stickyThink && words >= 3 && !pureFast) analytical += 15;
+  if (uxHit) analytical += 18;
+  if (debugHit) analytical += 24;
+  if (/\bwhy\b|\bhow\s+should\b|\btrade|\bfeel|\bthink\b/.test(lower)) analytical += 14;
+  if (/\bcompare\b|\bvs\.?\b|\bdifference\b|\bshould\s+i\b/.test(lower)) analytical += 18;
+  if (/\bimprove\b|\bbetter\b|\bpolish\b|\breview\b/.test(lower)) analytical += 16;
+  if (stickyThink && words >= 3 && !pureFast) analytical += 10;
 
   let code = 0;
   if (codeHit) code += 38;
   if (hasCodeFence) code += 28;
-  if (/\b(implement|scaffold|rewrite|migrate|refactor|full\s+app)\b/i.test(p)) code += 26;
+  if (heavyCode) code += 26;
   if (/\b(one-?liner|snippet|regex|rename\s+var)\b/i.test(p)) code -= 12;
-  if (toolHit && codeHit) code += 10;
+  if (toolHit && codeHit) code += 12;
   if (debugHit && codeHit) code += 12;
+  if (codingSession) code += 14;
 
   let creative = 0;
   if (creativeHit) creative += 40;
@@ -633,9 +718,8 @@ function scorePrompt(prompt: string, ctx: RouteContext = {}) {
   if (pureFast) simple += 70;
   if (words <= 3 && !judgmentHit && !codeHit && !smartHit && !uxHit) simple += 30;
   if (/^(yes|no|ok|thanks|thank you|continue|go on)[.!]?$/i.test(p.trim())) simple += 45;
-  if (judgmentHit) simple = 0;
+  if (judgmentHit && !lightJudgment) simple = 0;
 
-  // Learning bias: nudge complexity/analytical/code/simple from past outcomes
   const bias = ctx.learningBias || {};
   if (bias.fast) simple += bias.fast * 40;
   if (bias.balanced) complexity += (bias.balanced || 0) * 12;
@@ -658,6 +742,7 @@ function scorePrompt(prompt: string, ctx: RouteContext = {}) {
     archHit,
     smartHit,
     judgmentHit,
+    lightJudgment,
     researchHit,
     teamHit,
     pureFast,
@@ -668,20 +753,296 @@ function scorePrompt(prompt: string, ctx: RouteContext = {}) {
     debugHit,
     hasCodeFence,
     imageHit: IMAGE_RE.test(p) && !codeHit,
+    heavyCode,
     stickyThink,
     stickyDeep,
     longReplyContext,
+    codingSession,
+    debugSession,
+    chatSession,
   };
 }
 
-const TIER_RANK: Record<RouteTier, number> = {
-  fast: 0,
-  balanced: 1,
-  think: 2,
-  build: 3,
-  deep: 4,
-  imagine: 1,
-};
+/** Per-tier raw scores before hysteresis / usage pressure. */
+export function scoreTiers(
+  s: PromptSignals,
+  ctx: RouteContext = {},
+): Record<RouteTier, number> {
+  const scores: Record<RouteTier, number> = {
+    fast: 8,
+    balanced: 18,
+    think: 6,
+    build: 4,
+    deep: 2,
+    imagine: 0,
+  };
+
+  // Fast
+  scores.fast += s.simple * 0.9;
+  if (s.pureFast) scores.fast += 40;
+  if (s.words <= 4 && !s.judgmentHit && !s.codeHit) scores.fast += 22;
+  if (s.creativeHit && s.complexity < 30) scores.fast += 18;
+  if (s.words <= 10 && !s.stickyThink && !s.debugHit && !s.judgmentHit) scores.fast += 12;
+  if (s.codeHit && s.words <= 10 && !s.hasCodeFence && !s.heavyCode && !s.debugHit) {
+    scores.fast += 16;
+  }
+
+  // Balanced — everyday default
+  scores.balanced += 22;
+  scores.balanced += Math.min(30, s.complexity * 0.35);
+  if (s.uxHit) scores.balanced += 22;
+  if (s.lightJudgment) scores.balanced += 28;
+  if (s.judgmentHit && !s.lightJudgment && s.words <= 14) scores.balanced += 10;
+  if (s.chatSession) scores.balanced += 10;
+  if (s.words > 8 && s.words <= 40 && !s.heavyCode && !s.archHit) scores.balanced += 14;
+  if (s.creativeHit && s.complexity >= 20) scores.balanced += 8;
+
+  // Think — real reasoning (cap so Deep can win on architecture)
+  scores.think += Math.min(40, s.analytical * 0.45);
+  if (s.smartHit) scores.think += 18;
+  if (s.judgmentHit && !s.lightJudgment) scores.think += 22;
+  if (s.debugHit && !s.codingSession) scores.think += 16;
+  if (s.analytical >= 34 || s.complexity >= 48) scores.think += 12;
+  if (s.archHit && s.words < 12) scores.think += 10; // short arch note → think
+
+  // Build — code / host
+  scores.build += s.code * 0.7;
+  if (s.hasCodeFence) scores.build += 20;
+  if (s.heavyCode) scores.build += 32;
+  if (s.codingSession) scores.build += 16;
+  if (s.toolHit && s.codeHit) scores.build += 18;
+  if (s.toolHit && s.debugHit) scores.build += 12;
+  if (s.codeHit && (s.words > 20 || s.complexity >= 38)) scores.build += 14;
+
+  // Deep — hard / multi-angle / architecture
+  scores.deep += Math.min(48, (s.analytical + s.complexity) * 0.32);
+  if (s.teamHit) scores.deep += 40;
+  if (s.researchHit) scores.deep += 34;
+  if (s.archHit) scores.deep += s.words >= 12 ? 42 : 18;
+  if (s.debugHit && s.complexity >= 32 && s.analytical >= 22) scores.deep += 26;
+  if (s.words > 55 || s.complexity >= 55) scores.deep += 20;
+  if (s.debugSession && s.toolHit) scores.deep += 16;
+  if ((ctx.historyTurns || 0) >= 8 && s.debugHit) scores.deep += 12;
+  // multi-region / trade-off language is a Deep signal even mid-length
+  if (s.archHit && s.analytical >= 30) scores.deep += 16;
+
+  // Imagine
+  if (s.imageHit) scores.imagine += 80;
+  if (ctx.hasAttachments && s.imageHit) scores.imagine += 15;
+  if (ctx.hasAttachments && s.codeHit) scores.build += 10;
+
+  // Learning bias (direct on tiers)
+  const bias = ctx.learningBias || {};
+  for (const tier of Object.keys(scores) as RouteTier[]) {
+    if (bias[tier]) scores[tier] += bias[tier]! * 25;
+  }
+
+  // Last-route failure → demote previous, boost one step down
+  if (ctx.lastRouteFailed && ctx.lastRouteTier && ctx.lastRouteTier !== "imagine") {
+    scores[ctx.lastRouteTier] -= 20;
+    const r = TIER_RANK[ctx.lastRouteTier];
+    if (r > 0) {
+      const lower = TIER_LADDER[r - 1]!;
+      scores[lower] += 14;
+    }
+  }
+
+  // Usage pressure: prefer cheaper tiers when weekly usage high or free-prefer
+  const pressure = Math.max(
+    0,
+    Math.min(1, ctx.usagePressure ?? 0),
+  );
+  if (pressure > 0.55 || ctx.preferFree) {
+    const scale = ctx.preferFree ? 1 : (pressure - 0.55) / 0.45;
+    scores.deep -= 18 * scale + (ctx.preferFree ? 12 : 0);
+    scores.think -= 10 * scale + (ctx.preferFree ? 6 : 0);
+    scores.build -= 6 * scale;
+    scores.balanced += 8 * scale + (ctx.preferFree ? 6 : 0);
+    scores.fast += 10 * scale + (ctx.preferFree ? 8 : 0);
+  }
+
+  // Sticky bonus toward last tier (soft)
+  if (ctx.lastRouteTier && ctx.lastRouteTier !== "imagine") {
+    scores[ctx.lastRouteTier] += STICKY_BONUS;
+  }
+
+  return scores;
+}
+
+// fix PromptSignals - I used s.historyLong which doesn't exist - remove that dead branch in scoreTiers
+
+function pickWinner(
+  scores: Record<RouteTier, number>,
+  s: PromptSignals,
+  ctx: RouteContext,
+): { tier: RouteTier; why: string } {
+  // Hard Imagine gate
+  if (s.imageHit && scores.imagine >= Math.max(scores.build, scores.think, scores.balanced) - 5) {
+    return { tier: "imagine", why: "image/media request" };
+  }
+
+  // Follow-up: hard hold previous (except pure greetings)
+  if (s.followUp && ctx.lastRouteTier && ctx.lastRouteTier !== "imagine" && !s.pureFast) {
+    return {
+      tier: ctx.lastRouteTier,
+      why: "short follow-up — held prior tier",
+    };
+  }
+
+  // Pure fast acks (skip if mid-thread after heavy work unless pure greeting)
+  if (s.pureFast) {
+    return { tier: "fast", why: "greeting/ack — save tokens" };
+  }
+  if (
+    s.simple >= 55 &&
+    s.words <= 4 &&
+    !s.judgmentHit &&
+    !s.debugHit &&
+    !s.stickyDeep &&
+    !(ctx.lastRouteTier && TIER_RANK[ctx.lastRouteTier] >= 2)
+  ) {
+    return { tier: "fast", why: "short casual — save tokens" };
+  }
+
+  // argmax over ladder + imagine only if high
+  let best: RouteTier = "balanced";
+  let bestScore = -1e9;
+  for (const tier of [...TIER_LADDER, "imagine"] as RouteTier[]) {
+    if (tier === "imagine" && scores.imagine < 40) continue;
+    const v = scores[tier];
+    if (v > bestScore) {
+      bestScore = v;
+      best = tier;
+    }
+  }
+
+  // Soft Deep promotion for architecture / research when close
+  if (
+    best === "think" &&
+    (s.archHit || s.researchHit || s.teamHit) &&
+    scores.deep >= scores.think - 12 &&
+    !(s.codeHit && s.heavyCode)
+  ) {
+    best = "deep";
+    bestScore = scores.deep;
+  }
+
+  // Code/implement sessions prefer Build over Deep when both strong
+  if (
+    (best === "deep" || best === "think") &&
+    s.codeHit &&
+    (s.heavyCode || s.hasCodeFence || s.codingSession) &&
+    scores.build >= scores.deep - 15
+  ) {
+    best = "build";
+    bestScore = scores.build;
+  }
+
+  // Hysteresis: max one ladder step unless score gap large
+  const last = ctx.lastRouteTier;
+  if (last && last !== "imagine" && best !== "imagine" && !s.pureFast) {
+    const from = TIER_RANK[last];
+    const to = TIER_RANK[best];
+    const gap = Math.abs(to - from);
+    const lastScore = scores[last] ?? 0;
+    const delta = bestScore - lastScore;
+    // Require larger score gaps to leap multiple ladder steps
+    if (gap > 1 && delta < HYSTERESIS_JUMP * gap) {
+      const step = to > from ? 1 : -1;
+      const mid = TIER_LADDER[from + step];
+      if (mid) {
+        return {
+          tier: mid,
+          why: `hysteresis (was ${tierMeta(last).short} → ${tierMeta(best).short}; stepped to ${tierMeta(mid).short})`,
+        };
+      }
+    }
+    // If winner barely beats last, stay
+    if (best !== last && delta < 6 && gap >= 1 && (s.stickyThink || (ctx.historyTurns || 0) >= 2)) {
+      return {
+        tier: last,
+        why: `held ${tierMeta(last).short} — weak score gap`,
+      };
+    }
+  }
+
+  // Reasons
+  let why = "best overall score";
+  if (best === "deep") {
+    if (s.teamHit) why = "multi-angle / team-style work";
+    else if (s.researchHit) why = "research-style analysis";
+    else if (s.archHit) why = "architecture / system design";
+    else if (s.debugHit) why = "hard multi-step debug";
+    else why = "high complexity";
+  } else if (best === "build") {
+    why = s.toolHit ? "coding + host/tool work" : "coding / implementation";
+  } else if (best === "think") {
+    if (s.judgmentHit && !s.lightJudgment) why = "substantive judgment / analysis";
+    else if (s.debugHit) why = "debugging needs reasoning";
+    else why = "analytical prompt";
+  } else if (best === "balanced") {
+    if (s.lightJudgment) why = "light opinion — everyday model";
+    else if (s.uxHit) why = "UX / product polish";
+    else why = "solid everyday chat";
+  } else if (best === "fast") {
+    why = "short / low-cost turn";
+  }
+
+  if (ctx.preferFree || (ctx.usagePressure ?? 0) > 0.7) {
+    if (best === "fast" || best === "balanced") {
+      why += ctx.preferFree ? " · free-tier bias" : " · usage pressure";
+    }
+  }
+
+  return { tier: best, why };
+}
+
+function tierToRoute(
+  tier: RouteTier,
+  slots: ResolvedCatalog["slots"],
+  s: PromptSignals,
+): {
+  routedMode: AutoRouteResult["routedMode"];
+  modelId: string;
+  intent: RouteIntent;
+} {
+  if (tier === "imagine") {
+    return { routedMode: "imagine", modelId: slots.imagine, intent: "image" };
+  }
+  if (tier === "fast") {
+    return { routedMode: "fast", modelId: slots.fast, intent: "chat_fast" };
+  }
+  if (tier === "balanced") {
+    return {
+      routedMode: "balanced",
+      modelId: slots.balanced,
+      intent: "chat_balanced",
+    };
+  }
+  if (tier === "think") {
+    return {
+      routedMode: "expert",
+      modelId: slots.smart,
+      intent: "chat_smart",
+    };
+  }
+  if (tier === "build") {
+    return { routedMode: "build", modelId: slots.build, intent: "code" };
+  }
+  // deep
+  return {
+    routedMode: "heavy",
+    modelId: slots.heavy,
+    intent: s.researchHit ? "research" : s.teamHit ? "team" : "chat_smart",
+  };
+}
+
+function formatScoreLine(scores: Record<RouteTier, number>): string {
+  const keys: RouteTier[] = ["fast", "balanced", "think", "build", "deep"];
+  return keys
+    .map((k) => `${k[0]!.toUpperCase()}${Math.round(scores[k])}`)
+    .join(" ");
+}
 
 export function routeAuto(
   prompt: string,
@@ -691,290 +1052,43 @@ export function routeAuto(
   const p = prompt.trim();
   const slots = catalog.slots;
   const s = scorePrompt(p, ctx);
-  const scores = {
-    complexity: s.complexity,
-    analytical: s.analytical,
-    code: s.code,
-    creative: s.creative,
-    simple: s.simple,
+  // Fix accidental historyLong reference - scoreTiers rewritten cleanly without it
+
+  const tierScores = scoreTiers(s, ctx);
+  // Soft boost explain/summarize → balanced (can't regex empty string earlier)
+  if (/\b(explain|summarize|checklist|plain\s+english|how\s+do\s+i)\b/i.test(p) && !s.heavyCode) {
+    tierScores.balanced += 12;
+  }
+  if (s.words > 70 || p.length > 650) {
+    tierScores.deep += 20;
+  }
+
+  const { tier, why } = pickWinner(tierScores, s, ctx);
+  const mapped = tierToRoute(tier, slots, s);
+  const tm = tierMeta(tier);
+  const scoreLine = formatScoreLine(tierScores);
+  const detail = `Adaptive chose ${tm.label} — ${why}.`;
+
+  return {
+    routedMode: mapped.routedMode,
+    modelId: mapped.modelId,
+    intent: mapped.intent,
+    tier,
+    tierLabel: tm.label,
+    reason: `${tm.label} · ${friendlyModelName(mapped.modelId)}`,
+    reasonDetail: `${detail} · scores ${scoreLine}`,
+    openImagine: tier === "imagine",
+    scores: {
+      complexity: s.complexity,
+      analytical: s.analytical,
+      code: s.code,
+      creative: s.creative,
+      simple: s.simple,
+      ...Object.fromEntries(
+        Object.entries(tierScores).map(([k, v]) => [`tier_${k}`, Math.round(v)]),
+      ),
+    },
   };
-
-  const finish = (
-    routedMode: AutoRouteResult["routedMode"],
-    modelId: string,
-    intent: RouteIntent,
-    tier: RouteTier,
-    why: string,
-    openImagine?: boolean,
-  ): AutoRouteResult => {
-    let finalTier = tier;
-    let finalMode = routedMode;
-    let finalModel = modelId;
-    let finalWhy = why;
-
-    if (!openImagine && s.followUp && ctx.lastRouteTier && ctx.lastRouteTier !== "imagine") {
-      const prev = ctx.lastRouteTier;
-      if (prev === "deep") {
-        finalTier = "deep";
-        finalMode = "heavy";
-        finalModel = slots.heavy;
-      } else if (prev === "build") {
-        finalTier = "build";
-        finalMode = "build";
-        finalModel = slots.build;
-      } else if (prev === "think") {
-        finalTier = "think";
-        finalMode = "expert";
-        finalModel = slots.smart;
-      } else if (prev === "balanced") {
-        finalTier = "balanced";
-        finalMode = "balanced";
-        finalModel = slots.balanced;
-      } else {
-        finalTier = "fast";
-        finalMode = "fast";
-        finalModel = slots.fast;
-      }
-      finalWhy = `Adaptive held ${tierMeta(finalTier).label} — short follow-up in the same thread.`;
-      const tm0 = tierMeta(finalTier);
-      return {
-        routedMode: finalMode,
-        modelId: finalModel,
-        intent,
-        tier: finalTier,
-        tierLabel: tm0.label,
-        reason: `${tm0.label} · ${friendlyModelName(finalModel)}`,
-        reasonDetail: finalWhy,
-        openImagine,
-        scores,
-      };
-    }
-
-    if (
-      !openImagine &&
-      !s.pureFast &&
-      ctx.lastRouteTier &&
-      TIER_RANK[ctx.lastRouteTier] > TIER_RANK[tier] &&
-      (s.stickyThink || s.debugHit || s.judgmentHit || (ctx.historyTurns || 0) >= 2)
-    ) {
-      if (ctx.lastRouteTier === "deep" && tier === "fast") {
-        finalTier = "balanced";
-        finalMode = "balanced";
-        finalModel = slots.balanced;
-        finalWhy = `${why} · eased to ⚖️ Balanced (was Deep).`;
-      } else if (ctx.lastRouteTier === "deep" && (tier === "think" || tier === "balanced")) {
-        if (s.debugHit && s.analytical >= 28) {
-          finalTier = "deep";
-          finalMode = "heavy";
-          finalModel = slots.heavy;
-          finalWhy = `${why} · stayed 🔬 Deep (active debug).`;
-        } else {
-          finalTier = "think";
-          finalMode = "expert";
-          finalModel = slots.smart;
-          finalWhy = `${why} · eased to 🧠 Think (was Deep).`;
-        }
-      } else if (ctx.lastRouteTier === "build" && tier === "fast") {
-        if (s.codeHit || s.debugHit) {
-          finalTier = "build";
-          finalMode = "build";
-          finalModel = slots.build;
-          finalWhy = `${why} · stayed 🛠️ Build (coding thread).`;
-        } else {
-          finalTier = "balanced";
-          finalMode = "balanced";
-          finalModel = slots.balanced;
-          finalWhy = `${why} · moved to ⚖️ Balanced (no longer pure code).`;
-        }
-      } else if (ctx.lastRouteTier === "think" && tier === "fast" && s.words > 4) {
-        finalTier = "balanced";
-        finalMode = "balanced";
-        finalModel = slots.balanced;
-        finalWhy = `${why} · eased to ⚖️ Balanced (avoid Fast bounce).`;
-      } else if (ctx.lastRouteTier === "balanced" && tier === "fast" && s.words > 4) {
-        finalTier = "balanced";
-        finalMode = "balanced";
-        finalModel = slots.balanced;
-        finalWhy = `${why} · held ⚖️ Balanced (avoid Fast bounce).`;
-      } else if (ctx.lastRouteTier === "build" && (tier === "think" || tier === "balanced") && s.codeHit) {
-        finalTier = "build";
-        finalMode = "build";
-        finalModel = slots.build;
-        finalWhy = `${why} · stayed 🛠️ Build (code still in play).`;
-      }
-    }
-
-    const tm = tierMeta(finalTier);
-    return {
-      routedMode: finalMode,
-      modelId: finalModel,
-      intent,
-      tier: finalTier,
-      tierLabel: tm.label,
-      reason: `${tm.label} · ${friendlyModelName(finalModel)}`,
-      reasonDetail: finalWhy,
-      openImagine,
-      scores,
-    };
-  };
-
-  if (s.imageHit) {
-    return finish(
-      "imagine",
-      slots.imagine,
-      "image",
-      "imagine",
-      "Adaptive chose Imagine — looks like an image/media request.",
-      true,
-    );
-  }
-
-  if (s.pureFast || (s.simple >= 55 && s.words <= 4 && !s.judgmentHit && !s.debugHit && !s.followUp)) {
-    return finish(
-      "fast",
-      slots.fast,
-      "chat_fast",
-      "fast",
-      "Adaptive chose Fast — short greeting/ack; save tokens.",
-    );
-  }
-
-  if (
-    s.teamHit ||
-    (s.analytical >= 40 && s.complexity >= 42) ||
-    (s.archHit && s.words >= 14 && s.complexity >= 30) ||
-    (s.researchHit && s.words > 18) ||
-    s.words > 70 ||
-    p.length > 650 ||
-    (s.debugHit && s.complexity >= 42 && s.analytical >= 30 && s.words >= 16)
-  ) {
-    return finish(
-      "heavy",
-      slots.heavy,
-      s.researchHit ? "research" : s.teamHit ? "team" : "chat_smart",
-      "deep",
-      s.archHit
-        ? "Adaptive chose Deep — architecture / system design."
-        : s.researchHit
-          ? "Adaptive chose Deep — research-style analysis."
-          : s.debugHit
-            ? "Adaptive chose Deep — hard multi-step debug."
-            : "Adaptive chose Deep — high complexity work.",
-    );
-  }
-
-  if (s.code >= 48 || (s.codeHit && (s.hasCodeFence || s.words > 20 || s.complexity >= 38))) {
-    const heavyCodeVerb =
-      /\b(implement|refactor|rewrite|migrate|scaffold|architect|full\s+app|end-?to-?end|production)\b/i.test(
-        p,
-      );
-    if (
-      s.codeHit &&
-      s.words <= 10 &&
-      !s.hasCodeFence &&
-      s.complexity < 25 &&
-      !heavyCodeVerb &&
-      !s.debugHit
-    ) {
-      return finish(
-        "fast",
-        slots.fast,
-        "chat_fast",
-        "fast",
-        "Adaptive chose Fast — tiny code question.",
-      );
-    }
-    return finish(
-      "build",
-      slots.build,
-      "code",
-      "build",
-      "Adaptive chose Build — coding / implementation session.",
-    );
-  }
-
-  if (
-    s.codeHit &&
-    /\b(implement|refactor|rewrite|migrate|scaffold|fix\s+the\s+bug|add\s+tests?)\b/i.test(p)
-  ) {
-    return finish(
-      "build",
-      slots.build,
-      "code",
-      "build",
-      "Adaptive chose Build — implementation / refactor request.",
-    );
-  }
-
-  if (
-    s.judgmentHit ||
-    s.uxHit ||
-    s.smartHit ||
-    s.debugHit ||
-    s.analytical >= 18 ||
-    s.complexity >= 24 ||
-    s.words > 14 ||
-    /\b(plan|explain|help\s+me|walk\s+through|improve|fix|design|review|thoughts|how\s+do\s+i)\b/i.test(
-      p,
-    )
-  ) {
-    const useSmart =
-      s.analytical >= 34 || s.complexity >= 48 || s.archHit || (s.judgmentHit && s.words > 8);
-    if (useSmart) {
-      return finish(
-        "expert",
-        slots.smart,
-        "chat_smart",
-        "think",
-        s.judgmentHit
-          ? "Adaptive chose Think — judgment / feedback needs real reasoning."
-          : s.debugHit
-            ? "Adaptive chose Think — debugging / something’s off."
-            : s.archHit
-              ? "Adaptive chose Think — architecture / analysis."
-              : "Adaptive chose Think — analytical prompt; stronger model.",
-      );
-    }
-    return finish(
-      "balanced",
-      slots.balanced,
-      "chat_balanced",
-      "balanced",
-      s.uxHit
-        ? "Adaptive chose Balanced — UX / product polish (everyday model)."
-        : s.debugHit
-          ? "Adaptive chose Balanced — light debug / check-in."
-          : "Adaptive chose Balanced — solid everyday chat (4.3-class).",
-    );
-  }
-
-  if (s.creativeHit && s.complexity < 35) {
-    return finish(
-      "fast",
-      slots.fast,
-      "chat_fast",
-      "fast",
-      "Adaptive chose Fast — light creative request.",
-    );
-  }
-
-  if (s.words <= 10 && !s.stickyThink) {
-    return finish(
-      "fast",
-      slots.fast,
-      "chat_fast",
-      "fast",
-      "Adaptive chose Fast — short casual prompt.",
-    );
-  }
-
-  return finish(
-    "balanced",
-    slots.balanced,
-    "chat_balanced",
-    "balanced",
-    "Adaptive chose Balanced — default for non-trivial everyday prompts.",
-  );
 }
 
 export function friendlyModelName(id: string): string {

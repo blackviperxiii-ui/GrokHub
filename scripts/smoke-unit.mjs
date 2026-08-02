@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 const require = createRequire(import.meta.url);
 
 const bridge = require("../desktop/grok-bridge.cjs");
@@ -85,3 +86,83 @@ assert.match(memSrc, /USER\.md/);
 assert.ok(fs.existsSync(path.join(process.cwd(), "src/lib/file-memory.ts")));
 assert.ok(fs.existsSync(path.join(process.cwd(), "src/lib/learning.ts")));
 console.log("smoke-unit OK");
+
+
+// Adaptive router golden prompts (esbuild + import)
+{
+  const { spawnSync } = await import("node:child_process");
+  const out = path.join(process.cwd(), ".tmp-router-test.mjs");
+  const r = spawnSync(
+    "npx",
+    ["esbuild", "src/lib/models-catalog.ts", "--bundle", "--platform=node", "--format=esm", `--outfile=${out}`],
+    { encoding: "utf8" },
+  );
+  assert.equal(r.status, 0, "esbuild router: " + (r.stderr || r.stdout || ""));
+  const mod = await import(pathToFileURL(out).href + `?t=${Date.now()}`);
+  const { routeAuto, buildCatalog } = mod;
+  const cat = buildCatalog([
+    "grok-4.20-0309-non-reasoning",
+    "grok-4.20-0309-reasoning",
+    "grok-4.3",
+    "grok-4.5",
+    "grok-build-0.1",
+    "grok-imagine-image",
+  ]);
+  // ensure flagship slots
+  cat.slots.fast = "grok-4.20-0309-non-reasoning";
+  cat.slots.balanced = "grok-4.3";
+  cat.slots.smart = "grok-4.20-0309-reasoning";
+  cat.slots.heavy = "grok-4.5";
+  cat.slots.build = "grok-build-0.1";
+  cat.slots.imagine = "grok-imagine-image";
+
+  const expect = (prompt, tier, ctx = {}) => {
+    const res = routeAuto(prompt, cat, ctx);
+    assert.equal(
+      res.tier,
+      tier,
+      `routeAuto(${JSON.stringify(prompt)}) → ${res.tier} (want ${tier}) · ${res.reasonDetail}`,
+    );
+  };
+
+  expect("hi", "fast");
+  expect("thanks!", "fast");
+  expect("what do you think?", "balanced");
+  expect("explain docker compose in plain english", "balanced");
+  expect("how do I improve this UI spacing a bit", "balanced");
+  expect(
+    "Compare trade-offs of event-driven vs request-response for our multi-region architecture and recommend a path",
+    "deep",
+  );
+  expect(
+    "implement a full refactor of the auth module with unit tests and migration plan",
+    "build",
+  );
+  expect("draw a logo of a red fox astronaut", "imagine");
+  // follow-up hold
+  expect("yes continue", "think", { lastRouteTier: "think", historyTurns: 4 });
+  // hysteresis: don't leap deep→fast
+  const h = routeAuto("ok cool", cat, { lastRouteTier: "deep", historyTurns: 5 });
+  assert.ok(
+    h.tier === "deep" || h.tier === "build" || h.tier === "think" || h.tier === "balanced",
+    "hysteresis should not jump to pure fast from deep: " + h.tier,
+  );
+  // usage pressure pushes cheaper
+  const pressured = routeAuto(
+    "Please review this approach carefully and tell me what you think about the tradeoffs",
+    cat,
+    { usagePressure: 0.9, preferFree: true },
+  );
+  assert.ok(
+    pressured.tier === "fast" || pressured.tier === "balanced" || pressured.tier === "think",
+    "usage pressure should avoid deep for mid prompt: " + pressured.tier,
+  );
+
+  try {
+    fs.unlinkSync(out);
+  } catch {
+    /* ignore */
+  }
+  console.log("routeAuto golden OK");
+}
+

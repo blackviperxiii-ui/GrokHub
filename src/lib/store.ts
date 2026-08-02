@@ -4802,6 +4802,22 @@ if (cmd === "tools") {
         const catalog = get().modelCatalog || emptyCatalog();
         const recentChat = get().chat.filter((c) => c.id !== botId);
         const lastAsst = [...recentChat].reverse().find((c) => c.role === "assistant");
+        const usageSnap = get().usage;
+        const websitePct =
+          usageSnap?.website && typeof usageSnap.website.creditUsagePercent === "number"
+            ? Math.min(1, Math.max(0, usageSnap.website.creditUsagePercent / 100))
+            : 0;
+        const localPct = Math.min(1, Number(usageSnap?.usedUnits || 0) / 400);
+        const usagePressure = Math.max(websitePct, localPct);
+        const recentHost = recentChat
+          .slice(-6)
+          .some((c) =>
+            /HOST_CMD|Desktop host|host ok|host failed|### 🖥️/i.test(c.content || ""),
+          );
+        const lastFailed =
+          /could not reach|connection error|timed out|request failed|multi agent|not allowed on chat/i.test(
+            lastAsst?.content || "",
+          );
         const routeCtx = {
           historyTurns: recentChat.length,
           learningBias: routeLearningBias(get().learning),
@@ -4828,13 +4844,19 @@ if (cmd === "tools") {
               ? lastAsst.mode
               : lastAsst?.routeTier === "fast"
                 ? ("fast" as const)
-                : lastAsst?.routeTier === "build"
-                  ? ("build" as const)
-                  : lastAsst?.routeTier === "deep"
-                    ? ("heavy" as const)
-                    : lastAsst?.routeTier === "think"
-                      ? ("expert" as const)
-                      : undefined,
+                : lastAsst?.routeTier === "balanced"
+                  ? ("balanced" as const)
+                  : lastAsst?.routeTier === "build"
+                    ? ("build" as const)
+                    : lastAsst?.routeTier === "deep"
+                      ? ("heavy" as const)
+                      : lastAsst?.routeTier === "think"
+                        ? ("expert" as const)
+                        : undefined,
+          usagePressure,
+          preferFree: usageSnap?.plan === "free",
+          lastRouteFailed: lastFailed,
+          usedHostRecently: recentHost,
         };
         const overrides = cleanModelOverrides(get().modelOverrides);
         const auto = autoRouteFor(trimmed, catalog, routeCtx, overrides);
