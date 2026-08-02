@@ -50,27 +50,53 @@ More detail: [packaging/aur/README.md](packaging/aur/README.md)
 
 **Requirements:** [Node.js 20+ LTS](https://nodejs.org/) (must be on PATH), PowerShell 5.1+
 
-#### Install (current user) — use `-Build`
+> **Do not run install from `C:\WINDOWS\system32`.**  
+> Open PowerShell in your user folder (e.g. `cd $env:USERPROFILE\Downloads`).
+
+#### Easiest — no Git (recommended if `git clone` fails)
+
+Install **Node.js LTS** first, open a **new** PowerShell, then:
 
 ```powershell
+cd $env:USERPROFILE\Downloads
+irm https://raw.githubusercontent.com/blackviperxiii-ui/Grok-Hub/main/packaging/windows/download-and-install.ps1 -OutFile download-and-install.ps1
+powershell -ExecutionPolicy Bypass -File .\download-and-install.ps1
+```
+
+This downloads the repo as a ZIP (Windows certificates, not Git’s CA bundle), builds, and installs to `%LOCALAPPDATA%\GrokHub`.
+
+#### Or clone with Git (if Git SSL works)
+
+```powershell
+cd $env:USERPROFILE\Downloads
 git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
 cd Grok-Hub
-
-# Important: -Build compiles the UI and installs Electron
 powershell -ExecutionPolicy Bypass -File .\packaging\windows\install.ps1 -Build
 ```
 
-Installs to `%LOCALAPPDATA%\GrokHub`, creates **Start Menu → GrokHub**, sets `GROKHUB_HOME`.
+If you see:
 
-Launch:
+```text
+error adding trust anchors from file: .../ca-bundle.crt
+```
+
+Git’s CA file is broken. Prefer the **ZIP method** above, or fix Git:
+
+```powershell
+# Quick workaround (less secure — prefer ZIP / reinstall Git instead)
+git config --global http.sslBackend schannel
+# or reinstall Git for Windows: https://git-scm.com/download/win
+```
+
+#### Launch
 
 ```text
 %LOCALAPPDATA%\GrokHub\grokhub.cmd
 ```
 
-or **Start Menu → GrokHub** (or **GrokHub (direct)**).
+or **Start Menu → GrokHub**.
 
-If the script is blocked:
+If scripts are blocked:
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
