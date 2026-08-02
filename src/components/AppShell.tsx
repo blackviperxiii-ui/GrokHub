@@ -35,7 +35,6 @@ import { UndoToast } from "./UndoToast";
 import { CommandPalette } from "./CommandPalette";
 import { GrokHubMark } from "./GrokLogo";
 import { ModePicker } from "./ModePicker";
-import { UsageMeterChip } from "./UsageMeter";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import {
@@ -324,8 +323,7 @@ export function AppShell() {
       st.tickHeartbeat();
       void st.hydrateSecrets().then(() => {
         void useGrokHub.getState().probeGrok();
-        void useGrokHub.getState().refreshUsage();
-        // Immediately ensure OAuth is not near expiry after restore
+                // Immediately ensure OAuth is not near expiry after restore
         void useGrokHub.getState().refreshOAuthSession();
       });
       if (st.oauth?.accessToken) {
@@ -425,41 +423,6 @@ export function AppShell() {
     return () => stop();
   }, []);
 
-  useEffect(() => {
-    let stop = () => {};
-    void import("@/lib/smart-poll").then(({ startSmartPoll }) => {
-      stop = startSmartPoll({
-        intervalMs: 60_000,
-        maxBackoffMs: 5 * 60 * 1000,
-        onlyWhenVisible: true,
-        tick: async () => {
-          const st = useGrokHub.getState();
-          try {
-            await st.refreshUsage();
-            if (st.ssoCookie || useGrokHub.getState().ssoCookie) {
-              try {
-                await useGrokHub.getState().syncWebsiteConnectors();
-              } catch {
-                /* non-fatal */
-              }
-            }
-            const u = useGrokHub.getState().usage;
-            if (
-              (st.ssoCookie || useGrokHub.getState().ssoCookie) &&
-              u.website?.error &&
-              u.source !== "website"
-            ) {
-              return false;
-            }
-            return true;
-          } catch {
-            return false;
-          }
-        },
-      });
-    });
-    return () => stop();
-  }, []);
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -737,7 +700,6 @@ export function AppShell() {
               </TooltipTrigger>
               <TooltipContent>Command palette (Ctrl+K)</TooltipContent>
             </Tooltip>
-            <UsageMeterChip className="hidden max-w-[140px] sm:flex" />
             {updateBanner?.available && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -963,15 +925,11 @@ export function AppShell() {
                 >
                   <MessageSquarePlus className="h-4 w-4" />
                 </Button>
-                <UsageMeterChip className="max-w-[120px] sm:hidden" />
               </div>
             </header>
 
             {mobileOpen && (
               <div className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)] p-2 md:hidden">
-                <div className="mb-2 px-1">
-                  <UsageMeterChip className="w-full" />
-                </div>
                 <div className="grid max-h-[min(50dvh,22rem)] grid-cols-2 gap-1 overflow-y-auto scroll-panel">
                   {NAV.map((item) => renderNavButton(item, true))}
                 </div>

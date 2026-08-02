@@ -206,7 +206,6 @@ export type FreeRoamChore = {
   /** store-side action key */
   action:
     | "refresh_oauth"
-    | "refresh_usage"
     | "probe_host"
     | "prune_learning"
     | "flush_memory"
@@ -266,22 +265,12 @@ export function planFreeRoamChores(
   }
   // Quiet background caretaking when nothing is on fire (one at a time)
   if (!out.length) {
-    // alternate via minute parity so we don't only ever prune
-    if (Math.floor(now / CHORE_COOLDOWN_MS) % 2 === 0) {
-      push({
-        id: "prune-learning",
-        title: "Tidy learnings",
-        detail: "Prune stale routing notes and mirror STATUS.md.",
-        action: "prune_learning",
-      });
-    } else {
-      push({
-        id: "usage-refresh",
-        title: "Refresh usage meter",
-        detail: "Quiet usage poll so the meter stays honest.",
-        action: "refresh_usage",
-      });
-    }
+    push({
+      id: "prune-learning",
+      title: "Tidy learnings",
+      detail: "Prune stale routing notes and mirror STATUS.md.",
+      action: "prune_learning",
+    });
   }
 
   // Cap: don't invent a storm

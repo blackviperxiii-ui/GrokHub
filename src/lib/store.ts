@@ -889,8 +889,7 @@ async function autoRenameThreadWithFast(
   if (autoTitleInflight.has(threadId)) return;
 
   const can =
-    Boolean(get().oauth?.accessToken || get().apiKey || get().ssoCookie) ||
-    get().preferFreeGrok !== false;
+    Boolean(get().oauth?.accessToken || get().apiKey || get().ssoCookie);
   if (!can) return;
 
   // User-initiated auto-name unlocks manual freeze
@@ -938,7 +937,7 @@ async function autoRenameThreadWithFast(
       accessToken: get().oauth?.accessToken,
       tokens: get().oauth,
       ssoCookie: get().ssoCookie || undefined,
-      freeTier: !get().oauth?.accessToken && !get().apiKey,
+      freeTier: false,
     });
 
     if (!result.ok || !result.content) return;
@@ -1117,7 +1116,7 @@ export const useGrokHub = create<State>()(
       oauthPending: null,
       setupSyncMeta: { autoPullOnLogin: true, autoPushOnChange: false },
       grokConnected: null,
-      preferFreeGrok: true,
+      preferFreeGrok: false,
       uiTheme: "dark" as const,
       toolsNavCollapsed: false,
       grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
@@ -1611,8 +1610,7 @@ export const useGrokHub = create<State>()(
           return;
         }
         const can =
-          Boolean(s0.oauth?.accessToken || s0.apiKey || s0.ssoCookie) ||
-          s0.preferFreeGrok !== false;
+          Boolean(s0.oauth?.accessToken || s0.apiKey || s0.ssoCookie);
         if (!can) return;
 
         set({ quickAssistLlmBusy: true });
@@ -1636,7 +1634,7 @@ export const useGrokHub = create<State>()(
             accessToken: s0.oauth?.accessToken,
             tokens: s0.oauth,
             ssoCookie: s0.ssoCookie || undefined,
-            freeTier: !s0.oauth?.accessToken && !s0.apiKey,
+            freeTier: false,
           });
           if (!result.ok || !result.content) {
             set({ quickAssistLlmBusy: false });
@@ -1708,8 +1706,7 @@ export const useGrokHub = create<State>()(
         });
 
         const can =
-          Boolean(s0.oauth?.accessToken || s0.apiKey || s0.ssoCookie) ||
-          s0.preferFreeGrok !== false;
+          Boolean(s0.oauth?.accessToken || s0.apiKey || s0.ssoCookie);
         if (!can) {
           set({ welcomeMessage: fallback, welcomeBusy: false });
           return;
@@ -1727,7 +1724,7 @@ export const useGrokHub = create<State>()(
             accessToken: s0.oauth?.accessToken,
             tokens: s0.oauth,
             ssoCookie: s0.ssoCookie || undefined,
-            freeTier: !s0.oauth?.accessToken && !s0.apiKey,
+            freeTier: false,
           });
           if (!result.ok || !result.content) {
             set({ welcomeMessage: fallback, welcomeBusy: false });
@@ -1775,7 +1772,7 @@ syncWebsiteConnectors: async () => {
           grokStatusDetail: normalized
             ? s.oauth || s.apiKey
               ? s.grokStatusDetail
-              : "Free Grok · website session linked"
+              : "Website session linked"
             : s.grokStatusDetail,
           usage:
             normalized && s.usage.plan !== "free" && !s.oauth && !s.apiKey
@@ -3245,8 +3242,8 @@ syncWebsiteConnectors: async () => {
         await get().sendChat(prompt);
       },
 
-      setPreferFreeGrok: (v) => {
-        set({ preferFreeGrok: Boolean(v) });
+      setPreferFreeGrok: (_v) => {
+        set({ preferFreeGrok: false });
         scheduleSettingsPersist();
       },
       setUiTheme: (t) => {
@@ -3277,7 +3274,8 @@ syncWebsiteConnectors: async () => {
         set((s) => {
           const base = ensurePeriod(s.usage);
           const lim = PLAN_LIMITS[base.plan];
-          if (base.usedUnits + cost > lim.units * 1.02) {
+          // Local quota UI removed — never block the agent on synthetic limits
+          if (false && base.usedUnits + cost > lim.units * 1.02) {
             ok = false;
             return { usage: base };
           }
@@ -3316,7 +3314,7 @@ syncWebsiteConnectors: async () => {
         set((s) => {
           const base = ensurePeriod(s.usage);
           const lim = PLAN_LIMITS[base.plan];
-          if (base.usedUnits + cost > lim.units * 1.05) {
+          if (false && base.usedUnits + cost > lim.units * 1.05) {
             ok = false;
             return { usage: base };
           }
@@ -3346,159 +3344,7 @@ syncWebsiteConnectors: async () => {
       },
 
       refreshUsage: async () => {
-        const st = get();
-        let usage = ensurePeriod(st.usage);
-        const inferred = inferPlanFromAuth({
-          hasOauth: Boolean(st.oauth?.accessToken),
-          hasApiKey: Boolean(st.apiKey?.trim()),
-          email: st.oauth?.email || st.profile?.email,
-          name: st.oauth?.name || st.profile?.displayName,
-        });
-        if (usage.plan === "free" && inferred !== "free") {
-          usage = { ...usage, plan: inferred };
-        }
-
-        try {
-          const { fetchGrokWebsiteUsage } = await import("./grok-website-usage");
-          let sso = st.ssoCookie?.trim() || "";
-          // Always try secrets + partition (zustand may be empty after update)
-          if (typeof window !== "undefined") {
-            try {
-              const sec = await window.grokhubDesktop?.secrets?.get?.("ssoCookie");
-              if (sec?.value && String(sec.value).trim()) {
-                sso = String(sec.value).trim();
-                if (sso !== st.ssoCookie) set({ ssoCookie: sso });
-              }
-            } catch {
-              /* ignore */
-            }
-            if (!sso && window.grokhubDesktop?.grok?.getWebsiteSso) {
-              try {
-                const r = await window.grokhubDesktop.grok.getWebsiteSso();
-                if (r?.cookie) {
-                  sso = r.cookie;
-                  set({ ssoCookie: sso });
-                  try {
-                    void window.grokhubDesktop?.secrets?.set?.("ssoCookie", sso);
-                  } catch {
-                    /* ignore */
-                  }
-                }
-              } catch {
-                /* ignore */
-              }
-            }
-          }
-          const bearer =
-            st.oauth?.accessToken?.trim() || st.apiKey?.trim() || null;
-          const web = await fetchGrokWebsiteUsage({
-            ssoCookie: sso || null,
-            // Prefer SSO for website credits; bearer alone can't fill weekly bar
-            bearer: sso ? null : bearer,
-          });
-
-          if (web.ok) {
-            let pct = Number(web.creditUsagePercent) || 0;
-            if (pct > 0 && pct <= 1.0001) pct *= 100;
-            const planMap =
-              web.planId === "heavy" || web.planId === "pro"
-                ? ("pro" as const)
-                : web.planId === "free"
-                  ? ("free" as const)
-                  : ("super" as const);
-            const unitCap = PLAN_LIMITS[planMap].units;
-            const products = (web.productUsage || []).map((row) => {
-              let up = Number(row.usagePercent) || 0;
-              if (up > 0 && up <= 1.0001) up *= 100;
-              return { ...row, usagePercent: up };
-            });
-            // Persist refreshed cookie header from main when returned
-            if ((web as { ssoCookie?: string }).ssoCookie && typeof window !== "undefined") {
-              const c = String((web as { ssoCookie?: string }).ssoCookie);
-              if (c.length > 20 && c !== get().ssoCookie) {
-                set({ ssoCookie: c });
-                try {
-                  void window.grokhubDesktop?.secrets?.set?.("ssoCookie", c);
-                } catch {
-                  /* ignore */
-                }
-              }
-            }
-            const warning = (web as { warning?: string }).warning || null;
-            usage = {
-              ...usage,
-              plan: planMap,
-              periodStart: web.periodStart || usage.periodStart,
-              periodEnd: web.periodEnd || usage.periodEnd,
-              usedUnits: Math.round((pct / 100) * unitCap * 100) / 100,
-              source: "website",
-              lastPolledAt: Date.now(),
-              website: {
-                planLabel: web.planLabel || PLAN_LIMITS[planMap].label,
-                creditUsagePercent: pct,
-                periodType: web.periodType || "weekly",
-                periodStart: web.periodStart,
-                periodEnd: web.periodEnd,
-                productUsage: products,
-                prepaidBalanceCents: web.prepaidBalanceCents || 0,
-                onDemandCapCents: web.onDemandCapCents || 0,
-                onDemandUsedCents: web.onDemandUsedCents || 0,
-                error: warning,
-              },
-            };
-            set({ usage });
-            return;
-          }
-
-          const prevWeb = usage.website;
-          // Don't keep a fake 0% website reading when unauthenticated
-          const authish = /unauthenticated|no-credentials|expired|re-link|no grok website/i.test(
-            String(web.error || ""),
-          );
-          usage = {
-            ...usage,
-            lastPolledAt: Date.now(),
-            source: "local",
-            website: {
-              planLabel: prevWeb?.planLabel || PLAN_LIMITS[usage.plan].label,
-              creditUsagePercent: authish
-                ? 0
-                : prevWeb?.creditUsagePercent ??
-                  Math.round(usagePercent(usage) * 10) / 10,
-              periodType: prevWeb?.periodType || "unknown",
-              periodStart: prevWeb?.periodStart ?? usage.periodStart,
-              periodEnd: prevWeb?.periodEnd ?? usage.periodEnd,
-              productUsage: authish ? [] : prevWeb?.productUsage || [],
-              prepaidBalanceCents: prevWeb?.prepaidBalanceCents ?? 0,
-              onDemandCapCents: prevWeb?.onDemandCapCents ?? 0,
-              onDemandUsedCents: prevWeb?.onDemandUsedCents ?? 0,
-              error:
-                web.error ||
-                "Could not load grok.com usage — link website session in Settings",
-            },
-          };
-        } catch (e) {
-          const prevWeb = usage.website;
-          usage = {
-            ...usage,
-            lastPolledAt: Date.now(),
-            website: {
-              planLabel: prevWeb?.planLabel || PLAN_LIMITS[usage.plan].label,
-              creditUsagePercent:
-                prevWeb?.creditUsagePercent ??
-                Math.round(usagePercent(usage) * 10) / 10,
-              periodType: prevWeb?.periodType || "unknown",
-              periodStart: prevWeb?.periodStart ?? usage.periodStart,
-              periodEnd: prevWeb?.periodEnd ?? usage.periodEnd,
-              productUsage: prevWeb?.productUsage || [],
-              prepaidBalanceCents: prevWeb?.prepaidBalanceCents ?? 0,
-              onDemandCapCents: prevWeb?.onDemandCapCents ?? 0,
-              onDemandUsedCents: prevWeb?.onDemandUsedCents ?? 0,
-              error: e instanceof Error ? e.message : "Usage poll failed",
-            },
-          };
-        }
-        set({ usage });
+        // Usage meter removed from product UI (may return later with a real API).
       },
 
       resetUsagePeriod: () => {
@@ -4126,7 +3972,7 @@ syncWebsiteConnectors: async () => {
             get().oauth?.accessToken ||
               get().apiKey ||
               get().ssoCookie ||
-              get().preferFreeGrok,
+              false, /* free grok off */
           );
           if (canChat) {
             await get().sendChat(
@@ -4867,7 +4713,7 @@ if (cmd === "tools") {
                         ? ("expert" as const)
                         : undefined,
           usagePressure,
-          preferFree: usageSnap?.plan === "free",
+          preferFree: false,
           lastRouteFailed: lastFailed,
           usedHostRecently: recentHost,
         };
@@ -5189,9 +5035,7 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
 
             // Build workspace context once per user turn (budgeted pins + capabilities)
             const stTurn = get();
-            const freeTier =
-              stTurn.usage.plan === "free" ||
-              (!stTurn.oauth?.accessToken && !stTurn.apiKey);
+            const freeTier = false;
             const liveConn = stTurn.connectors.filter(
               (c) => c.status === "connected" && c.liveTools,
             );
@@ -5295,7 +5139,7 @@ while (rounds < maxRounds && !aborted) {
                   tokens: get().oauth,
                   ssoCookie: get().ssoCookie || undefined,
                   freeTier,
-                  allowWebsiteFallback: stNow.preferFreeGrok !== false,
+                  allowWebsiteFallback: false,
                   temperature: stNow.agentPrefs?.temperature ?? 0.7,
                   workspaceContext: turnWorkspaceContext,
                 },
@@ -5367,10 +5211,10 @@ while (rounds < maxRounds && !aborted) {
                     grokConnected: true,
                     grokStatusDetail:
                       (result as { accessPath?: string }).accessPath === "website_free"
-                        ? "Free Grok · website session"
+                        ? "Website session"
                         : (result as { fallbackFrom?: string }).fallbackFrom
-                          ? `Free Grok fallback · ${(result as { model?: string }).model || "mini"}`
-                          : "Free Grok · free-tier models",
+                          ? `Session fallback · ${(result as { model?: string }).model || "model"}`
+                          : "Session fallback",
                     usage:
                       s.oauth || s.apiKey
                         ? s.usage
@@ -6549,8 +6393,6 @@ if (!cmds.length) {
             try {
               if (ch.action === "refresh_oauth") {
                 await get().refreshOAuthSession();
-              } else if (ch.action === "refresh_usage") {
-                await get().refreshUsage();
               } else if (ch.action === "refresh_models") {
                 await get().refreshModels();
               } else if (ch.action === "probe_host") {
@@ -6763,7 +6605,7 @@ if (!cmds.length) {
         quickAssistRotation: s.quickAssistRotation || 0,
         uiTheme: s.uiTheme || "dark",
         toolsNavCollapsed: Boolean(s.toolsNavCollapsed),
-        preferFreeGrok: s.preferFreeGrok !== false,
+        preferFreeGrok: false,
         setupSyncMeta: s.setupSyncMeta || { autoPullOnLogin: true, autoPushOnChange: false },
         // Restore last tab (connectors removed — remapped on hydrate)
         nav:
@@ -6949,7 +6791,7 @@ if (!cmds.length) {
         s.desktop = desk;
 
         if (!s.setupSyncMeta) s.setupSyncMeta = { autoPullOnLogin: true, autoPushOnChange: false };
-        if (s.preferFreeGrok === undefined) s.preferFreeGrok = true;
+        s.preferFreeGrok = false; // free Grok product surface removed
         if (s.uiTheme !== "dark" && s.uiTheme !== "light" && s.uiTheme !== "system") s.uiTheme = "dark";
         if (s.toolsNavCollapsed === undefined) s.toolsNavCollapsed = false;
         // Drop website-only connector catalog (Gmail, Notion, …) — keep core three

@@ -12,7 +12,6 @@ import type { ReactNode } from "react";
 import { getModesWithCatalog } from "@/lib/modes";
 import { useGrokHub } from "@/lib/store";
 import { RelativeTime } from "../RelativeTime";
-import { UsageMeterPanel } from "../UsageMeter";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
@@ -67,8 +66,6 @@ export function CommandView() {
           onClick={() => setNav("workboard")}
         />
       </section>
-
-      <UsageMeterPanel compact />
 
       <section className="grid gap-4 lg:grid-cols-[1.35fr_1fr]">
         <Card>

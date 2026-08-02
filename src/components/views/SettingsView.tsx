@@ -20,7 +20,7 @@ const SETTINGS_CATEGORIES = [
     id: "account",
     label: "Account",
     hint: "Sign-in, usage & keys",
-    sections: ["sec-wizard", "sec-oauth", "sec-free", "sec-usage", "sec-setup", "sec-api"],
+    sections: ["sec-wizard", "sec-oauth", "sec-setup", "sec-api"],
   },
   {
     id: "models",
@@ -51,8 +51,6 @@ const SETTINGS_CATEGORIES = [
 const SECTION_CAT: Record<string, (typeof SETTINGS_CATEGORIES)[number]["id"]> = {
   "sec-wizard": "account",
   "sec-oauth": "account",
-  "sec-free": "account",
-  "sec-usage": "account",
   "sec-setup": "account",
   "sec-api": "account",
   "sec-models": "models",
@@ -74,8 +72,6 @@ const SECTION_CAT: Record<string, (typeof SETTINGS_CATEGORIES)[number]["id"]> = 
 const SECTION_SEARCH: Record<string, string> = {
   "sec-wizard": "first-run connect welcome setup",
   "sec-oauth": "oauth login sign in grok xai super",
-  "sec-free": "free fallback tier",
-  "sec-usage": "usage limits meter subscription credits",
   "sec-setup": "sync pack export import",
   "sec-api": "api key token xai",
   "sec-models": "models catalog poll classify essential",
@@ -120,7 +116,6 @@ import { learningSummaryLine } from "@/lib/learning";
 import { cn } from "@/lib/utils";
 import { ProfileAvatar } from "../ProfileAvatar";
 import { HostGatewayBanner } from "../HostGatewayBanner";
-import { UsageMeterPanel } from "../UsageMeter";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
@@ -171,10 +166,6 @@ export function SettingsView() {
   const startGrokOAuth = useGrokHub((s) => s.startGrokOAuth);
   const pollGrokOAuth = useGrokHub((s) => s.pollGrokOAuth);
   const clearGrokOAuth = useGrokHub((s) => s.clearGrokOAuth);
-  const preferFreeGrok = useGrokHub((s) => s.preferFreeGrok);
-  const setPreferFreeGrok = useGrokHub((s) => s.setPreferFreeGrok);
-  const setPlan = useGrokHub((s) => s.setPlan);
-  const usagePlan = useGrokHub((s) => s.usage.plan);
   const importOpenClawWorkspace = useGrokHub((s) => s.importOpenClawWorkspace);
   const clearOpenClawWorkspace = useGrokHub((s) => s.clearOpenClawWorkspace);
   const openClawWorkspace = useGrokHub((s) => s.openClawWorkspace);
@@ -568,21 +559,18 @@ export function SettingsView() {
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">First-run connect</CardTitle>
           <CardDescription>
-            Recommended order: Grok OAuth (or free website / API key) → optional GitHub PAT → bind a project folder → install menu entry.
+            Recommended order: Grok OAuth (or API key) → optional GitHub PAT → bind a project folder → install menu entry.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2 pt-0">
           <Button size="sm" onClick={() => document.getElementById("sec-oauth")?.scrollIntoView({ behavior: "smooth" })}>
             1. Grok OAuth
           </Button>
-          <Button size="sm" variant="secondary" onClick={() => document.getElementById("sec-free")?.scrollIntoView({ behavior: "smooth" })}>
-            2. Free website
-          </Button>
           <Button size="sm" variant="secondary" onClick={() => document.getElementById("sec-api")?.scrollIntoView({ behavior: "smooth" })}>
-            3. API key
+            2. API key (optional)
           </Button>
           <Button size="sm" variant="secondary" onClick={() => document.getElementById("sec-project")?.scrollIntoView({ behavior: "smooth" })}>
-            4. Project folder
+            3. Project folder
           </Button>
         </CardContent>
       </Card>
@@ -709,50 +697,6 @@ export function SettingsView() {
       </Card>
 
 
-      <Card id="sec-free" data-settings-cat="account" data-hit={sectionHit("sec-free") ? "1" : "0"}>
-        <CardHeader>
-          <CardTitle className="text-sm">Free Grok fallback</CardTitle>
-          <CardDescription>
-            No SuperGrok? GrokHub can use free-tier models (when an API key has trial credits)
-            and/or your free grok.com website session. Paid OAuth/API still falls back to free
-            models if a premium model is denied.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={usagePlan === "free" ? "info" : "default"}>
-              Plan: {usagePlan === "free" ? "Free" : usagePlan === "super" ? "SuperGrok" : "Pro"}
-            </Badge>
-            <Button size="sm" variant="secondary" onClick={() => setPlan("free")}>
-              Use Free plan limits
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => setPlan("super")}>
-              SuperGrok limits
-            </Button>
-          </div>
-          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
-            <div>
-              <div className="text-sm font-medium">Allow free website fallback</div>
-              <div className="text-xs text-[var(--color-muted)]">
-                If API/OAuth fails or is missing, try chat via linked grok.com session
-              </div>
-            </div>
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-[var(--color-fg)]"
-              checked={preferFreeGrok !== false}
-              onChange={(e) => setPreferFreeGrok(e.target.checked)}
-            />
-          </label>
-          <p className="text-[11px] leading-relaxed text-[var(--color-subtle)]">
-            1) <strong className="text-[var(--color-muted)]">Link Grok website</strong> (free account
-            works) for website free chat · 2) optional free{" "}
-            <span className="font-mono">console.x.ai</span> API key with trial credits · 3) SuperGrok
-            OAuth when you upgrade.
-          </p>
-        </CardContent>
-      </Card>
-
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
@@ -760,8 +704,7 @@ export function SettingsView() {
             Setup sync (Grok account)
           </CardTitle>
           <CardDescription>
-            Key setup to your Grok OAuth sign-in. On login we pull profile, models, website
-            connectors, and usage. Optionally push/pull full app setup (skills, automations,
+            Key setup to your Grok OAuth sign-in. On login we pull profile and models. Optionally push/pull full app setup (skills, automations,
             desktop prefs, connector layout) — never tokens or API keys.
           </CardDescription>
         </CardHeader>
@@ -957,12 +900,7 @@ export function SettingsView() {
           {setupMsg && <p className="text-xs text-[var(--color-muted)]">{setupMsg}</p>}
         </CardContent>
       </Card>
-
-      <div id="sec-usage" data-settings-cat="account" data-hit={sectionHit("sec-usage") ? "1" : "0"}>
-      <UsageMeterPanel />
-      </div>
-
-      <Card id="sec-setup" data-settings-cat="account" data-hit={sectionHit("sec-setup") ? "1" : "0"}>
+<Card id="sec-setup" data-settings-cat="account" data-hit={sectionHit("sec-setup") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
             <FolderInput className="h-4 w-4 text-[var(--color-muted)]" />
