@@ -1,28 +1,98 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ExternalLink, FolderInput, HardDrive, Moon, RefreshCw, Sun, Monitor } from "lucide-react";
+import {
+  ExternalLink,
+  FolderInput,
+  HardDrive,
+  Moon,
+  RefreshCw,
+  Sun,
+  Monitor,
+  UserRound,
+  Cpu,
+  Bot,
+  Brain,
+  AppWindow,
+  Search,
+} from "lucide-react";
 
-const SETTINGS_SECTIONS = [
-  { id: "sec-wizard", label: "First-run" },
-  { id: "sec-autonomy", label: "Autonomy" },
-  { id: "sec-appearance", label: "Appearance" },
-  { id: "sec-oauth", label: "Grok OAuth" },
-  { id: "sec-free", label: "Free Grok" },
-  { id: "sec-usage", label: "Usage" },
-  { id: "sec-setup", label: "Setup sync" },
-  { id: "sec-api", label: "API key" },
-  { id: "sec-models", label: "Models" },
-  { id: "sec-model-overrides", label: "Mode pins" },
-  { id: "sec-updates", label: "Updates" },
-  { id: "sec-modes", label: "Modes" },
-  { id: "sec-agent", label: "Agent" },
-  { id: "sec-desktop", label: "Desktop shell" },
-  { id: "sec-selfmod", label: "Self-mod" },
-  { id: "sec-memory", label: "Memory" },
-  { id: "sec-project", label: "Project" },
-  { id: "sec-learning", label: "Learning" },
-  { id: "sec-diagnostics", label: "Diagnostics" },
-  { id: "sec-danger", label: "Danger zone" },
+const SETTINGS_CATEGORIES = [
+  {
+    id: "account",
+    label: "Account",
+    hint: "Sign-in, usage & keys",
+    sections: ["sec-wizard", "sec-oauth", "sec-free", "sec-usage", "sec-setup", "sec-api"],
+  },
+  {
+    id: "models",
+    label: "Models",
+    hint: "Catalog, modes & pins",
+    sections: ["sec-models", "sec-model-overrides", "sec-modes"],
+  },
+  {
+    id: "agent",
+    label: "Agent",
+    hint: "Autonomy, tools & desktop",
+    sections: ["sec-autonomy", "sec-agent", "sec-desktop", "sec-project"],
+  },
+  {
+    id: "memory",
+    label: "Memory",
+    hint: "Learning, files & self-mod",
+    sections: ["sec-memory", "sec-learning", "sec-selfmod"],
+  },
+  {
+    id: "app",
+    label: "App",
+    hint: "Theme, updates & danger",
+    sections: ["sec-appearance", "sec-updates", "sec-diagnostics", "sec-danger"],
+  },
 ] as const;
+
+const SECTION_CAT: Record<string, (typeof SETTINGS_CATEGORIES)[number]["id"]> = {
+  "sec-wizard": "account",
+  "sec-oauth": "account",
+  "sec-free": "account",
+  "sec-usage": "account",
+  "sec-setup": "account",
+  "sec-api": "account",
+  "sec-models": "models",
+  "sec-model-overrides": "models",
+  "sec-modes": "models",
+  "sec-autonomy": "agent",
+  "sec-agent": "agent",
+  "sec-desktop": "agent",
+  "sec-project": "agent",
+  "sec-memory": "memory",
+  "sec-learning": "memory",
+  "sec-selfmod": "memory",
+  "sec-appearance": "app",
+  "sec-updates": "app",
+  "sec-diagnostics": "app",
+  "sec-danger": "app",
+};
+
+const SECTION_SEARCH: Record<string, string> = {
+  "sec-wizard": "first-run connect welcome setup",
+  "sec-oauth": "oauth login sign in grok xai super",
+  "sec-free": "free fallback tier",
+  "sec-usage": "usage limits meter subscription credits",
+  "sec-setup": "sync pack export import",
+  "sec-api": "api key token xai",
+  "sec-models": "models catalog poll classify essential",
+  "sec-model-overrides": "pin override mode model",
+  "sec-modes": "adaptive fast balanced think max build mode",
+  "sec-autonomy": "autonomy always-on queue daemon agent",
+  "sec-agent": "temperature tools host connector agent",
+  "sec-desktop": "desktop shell arch confirm safe",
+  "sec-project": "project workspace openclaw path",
+  "sec-memory": "memory files user.md learnings",
+  "sec-learning": "learning reflect self-improve",
+  "sec-selfmod": "self-mod factory restore",
+  "sec-appearance": "theme dark light appearance",
+  "sec-updates": "update github release install",
+  "sec-diagnostics": "diagnostics debug export",
+  "sec-danger": "danger reset wipe clean",
+};
 
 import { getModesWithCatalog, OVERRIDABLE_MODES, hasModelOverride, type ModelModeOverrides } from "@/lib/modes";
 import { friendlyModelName } from "@/lib/models-catalog";
@@ -338,43 +408,116 @@ export function SettingsView() {
   const setUiTheme = useGrokHub((s) => s.setUiTheme);
   const [settingsQ, setSettingsQ] = useState("");
   const [factoryPhrase, setFactoryPhrase] = useState("");
+  const [settingsCat, setSettingsCat] =
+    useState<(typeof SETTINGS_CATEGORIES)[number]["id"]>("account");
 
-  const sectionVisible = (id: string, labels: string) => {
-    const q = settingsQ.trim().toLowerCase();
-    if (!q) return true;
-    return id.toLowerCase().includes(q) || labels.toLowerCase().includes(q);
+  const qNorm = settingsQ.trim().toLowerCase();
+  const searching = qNorm.length > 0;
+
+  const sectionHit = (id: string) => {
+    // First-run only when not connected (unless searching for it)
+    if (
+      id === "sec-wizard" &&
+      (grokConnected || oauth?.accessToken || apiKey) &&
+      !(searching && qNorm.includes("first"))
+    ) {
+      return false;
+    }
+    if (searching) {
+      const blob = `${id} ${SECTION_SEARCH[id] || ""}`.toLowerCase();
+      return blob.includes(qNorm);
+    }
+    // Category pane: only sections in active category
+    return SECTION_CAT[id] === settingsCat;
+  };
+
+  const catMeta = SETTINGS_CATEGORIES.find((c) => c.id === settingsCat) || SETTINGS_CATEGORIES[0]!;
+  const catIcon = (id: string) => {
+    if (id === "account") return UserRound;
+    if (id === "models") return Cpu;
+    if (id === "agent") return Bot;
+    if (id === "memory") return Brain;
+    return AppWindow;
   };
 
   return (
-    <div className="content-readable mx-auto space-y-5 pb-8">
-      <Input
-        value={settingsQ}
-        onChange={(e) => setSettingsQ(e.target.value)}
-        placeholder="Search settings…"
-        className="h-9"
-        aria-label="Search settings"
-      />
-      <nav
-        aria-label="Settings sections"
-        className="sticky top-0 z-20 -mx-1 mb-1 flex gap-1.5 overflow-x-auto scroll-hide rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-panel)_92%,transparent)] px-2 py-2 backdrop-blur-md"
-      >
-        {SETTINGS_SECTIONS.filter((s) => sectionVisible(s.id, s.label)).map((s) => (
-          <a
-            key={s.id}
-            href={`#${s.id}`}
-            className="shrink-0 rounded-full border border-transparent px-2.5 py-1 text-[11px] font-medium text-[var(--color-muted)] hover:border-[var(--color-border)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
-            onClick={(e) => {
-              e.preventDefault();
-              document.getElementById(s.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-            }}
-          >
-            {s.label}
-          </a>
-        ))}
-      </nav>
+    <div className="content-readable mx-auto pb-10">
+      <header className="mb-4 space-y-1">
+        <h1 className="text-lg font-semibold tracking-tight text-[var(--color-fg)]">Settings</h1>
+        <p className="text-sm text-[var(--color-muted)]">
+          {searching ? `Matches for “${settingsQ.trim()}”` : catMeta.hint}
+        </p>
+      </header>
 
-      
-      <Card id="sec-autonomy">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="relative min-w-0 flex-1">
+          <Search
+            className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-subtle)]"
+            aria-hidden
+          />
+          <Input
+            value={settingsQ}
+            onChange={(e) => setSettingsQ(e.target.value)}
+            placeholder="Search settings…"
+            className="h-10 pl-8"
+            aria-label="Search settings"
+          />
+        </div>
+        {searching ? (
+          <Button size="sm" variant="secondary" onClick={() => setSettingsQ("")}>
+            Clear
+          </Button>
+        ) : null}
+      </div>
+
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+        <nav
+          aria-label="Settings categories"
+          className="flex shrink-0 gap-1.5 overflow-x-auto scroll-hide lg:sticky lg:top-2 lg:w-44 lg:flex-col lg:overflow-visible"
+        >
+          {SETTINGS_CATEGORIES.map((c) => {
+            const Icon = catIcon(c.id);
+            const active = !searching && settingsCat === c.id;
+            const hits = searching
+              ? c.sections.filter((id) => sectionHit(id)).length
+              : 0;
+            if (searching && hits === 0) return null;
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => {
+                  setSettingsCat(c.id);
+                  setSettingsQ("");
+                }}
+                className={cn(
+                  "flex min-h-10 shrink-0 items-center gap-2 rounded-[var(--radius-md)] border px-3 py-2 text-left transition-colors lg:w-full",
+                  active
+                    ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]"
+                    : "border-transparent bg-[var(--color-surface)] text-[var(--color-muted)] hover:border-[var(--color-border)] hover:text-[var(--color-fg)]",
+                )}
+              >
+                <Icon className="h-4 w-4 shrink-0 opacity-80" aria-hidden />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium leading-tight">{c.label}</span>
+                  <span className="hidden text-[10px] leading-snug text-[var(--color-subtle)] lg:block">
+                    {searching ? `${hits} match${hits === 1 ? "" : "es"}` : c.hint}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div
+          className="settings-stack min-w-0 flex-1 space-y-4"
+          data-mode={searching ? "search" : settingsCat}
+        >
+          <style>{`
+            .settings-stack > [data-settings-cat] { display: none; }
+            .settings-stack > [data-settings-cat][data-hit="1"] { display: block; }
+          `}</style>
+      <Card id="sec-autonomy" data-settings-cat="agent" data-hit={sectionHit("sec-autonomy") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Autonomy & always-on agent</CardTitle>
           <CardDescription>
@@ -387,7 +530,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-appearance">
+      <Card id="sec-appearance" data-settings-cat="app" data-hit={sectionHit("sec-appearance") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Appearance</CardTitle>
           <CardDescription>Theme for the GrokHub chrome. Chat content stays high-contrast either way.</CardDescription>
@@ -419,7 +562,7 @@ export function SettingsView() {
       </Card>
 
       
-      <Card id="sec-wizard" className="border-[color-mix(in_oklab,var(--color-info)_30%,var(--color-border))]">
+      <Card id="sec-wizard" data-settings-cat="account" data-hit={sectionHit("sec-wizard") ? "1" : "0"} className="border-[color-mix(in_oklab,var(--color-info)_30%,var(--color-border))]">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">First-run connect</CardTitle>
           <CardDescription>
@@ -443,7 +586,7 @@ export function SettingsView() {
       </Card>
 
 {/* Primary: real xAI Grok OAuth */}
-      <Card id="sec-oauth">
+      <Card id="sec-oauth" data-settings-cat="account" data-hit={sectionHit("sec-oauth") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Connect to Grok (xAI OAuth)</CardTitle>
           <CardDescription>
@@ -564,7 +707,7 @@ export function SettingsView() {
       </Card>
 
 
-      <Card id="sec-free">
+      <Card id="sec-free" data-settings-cat="account" data-hit={sectionHit("sec-free") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Free Grok fallback</CardTitle>
           <CardDescription>
@@ -813,11 +956,11 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <div id="sec-usage">
+      <div id="sec-usage" data-settings-cat="account" data-hit={sectionHit("sec-usage") ? "1" : "0"}>
       <UsageMeterPanel />
       </div>
 
-      <Card id="sec-setup">
+      <Card id="sec-setup" data-settings-cat="account" data-hit={sectionHit("sec-setup") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
             <FolderInput className="h-4 w-4 text-[var(--color-muted)]" />
@@ -884,7 +1027,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-api">
+      <Card id="sec-api" data-settings-cat="account" data-hit={sectionHit("sec-api") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">xAI API key (optional fallback)</CardTitle>
           <CardDescription>
@@ -917,7 +1060,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-models">
+      <Card id="sec-models" data-settings-cat="models" data-hit={sectionHit("sec-models") ? "1" : "0"}>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
@@ -983,7 +1126,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-model-overrides">
+      <Card id="sec-model-overrides" data-settings-cat="models" data-hit={sectionHit("sec-model-overrides") ? "1" : "0"}>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
@@ -1113,7 +1256,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-updates">
+      <Card id="sec-updates" data-settings-cat="app" data-hit={sectionHit("sec-updates") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Updates (GitHub)</CardTitle>
           <CardDescription>Install the latest clean release from the package repo.</CardDescription>
@@ -1206,7 +1349,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-modes">
+      <Card id="sec-modes" data-settings-cat="models" data-hit={sectionHit("sec-modes") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Model modes</CardTitle>
           <CardDescription>
@@ -1244,7 +1387,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-agent">
+      <Card id="sec-agent" data-settings-cat="agent" data-hit={sectionHit("sec-agent") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Agent controls</CardTitle>
           <CardDescription>
@@ -1258,7 +1401,7 @@ export function SettingsView() {
 
       <HostGatewayBanner variant="card" onOpenDesktop={() => setNav("desktop")} />
 
-      <Card id="sec-desktop">
+      <Card id="sec-desktop" data-settings-cat="agent" data-hit={sectionHit("sec-desktop") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Arch Linux shell preferences</CardTitle>
         </CardHeader>
@@ -1358,7 +1501,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-selfmod">
+      <Card id="sec-selfmod" data-settings-cat="memory" data-hit={sectionHit("sec-selfmod") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Self-mod & factory restore</CardTitle>
           <CardDescription>
@@ -1525,7 +1668,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-memory">
+      <Card id="sec-memory" data-settings-cat="memory" data-hit={sectionHit("sec-memory") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
             <HardDrive className="h-4 w-4 text-[var(--color-muted)]" />
@@ -1621,7 +1764,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-project">
+      <Card id="sec-project" data-settings-cat="agent" data-hit={sectionHit("sec-project") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Project workspace</CardTitle>
           <CardDescription>
@@ -1634,7 +1777,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-learning">
+      <Card id="sec-learning" data-settings-cat="memory" data-hit={sectionHit("sec-learning") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Learning & self-improvement</CardTitle>
           <CardDescription>
@@ -1647,7 +1790,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-diagnostics">
+      <Card id="sec-diagnostics" data-settings-cat="app" data-hit={sectionHit("sec-diagnostics") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Diagnostics</CardTitle>
           <CardDescription>
@@ -1659,7 +1802,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-danger">
+      <Card id="sec-danger" data-settings-cat="app" data-hit={sectionHit("sec-danger") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Danger zone</CardTitle>
           <CardDescription>
@@ -1699,6 +1842,8 @@ export function SettingsView() {
           </Button>
         </CardContent>
       </Card>
+        </div>
+      </div>
     </div>
   );
 }
