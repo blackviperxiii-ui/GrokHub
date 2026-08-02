@@ -46,11 +46,21 @@ export const GROK_MODES: GrokMode[] = [
   {
     id: "heavy",
     label: "Heavy",
-    subtitle: "Team of Experts · max brain",
+    subtitle: "Team of Experts · multi-angle",
     model: "Grok 4.5",
     modelId: "grok-4.5",
     icon: "heavy",
     latencyMs: [1400, 2400],
+    depth: "team",
+  },
+  {
+    id: "max",
+    label: "Max",
+    subtitle: "Top-tier flagship · Grok 4.5",
+    model: "Grok 4.5",
+    modelId: "grok-4.5",
+    icon: "max",
+    latencyMs: [1500, 2800],
     depth: "team",
   },
   {
@@ -105,6 +115,16 @@ export function getModesWithCatalog(catalog: ResolvedCatalog = emptyCatalog()): 
         subtitle: `🔬 Deep / team · ${friendlyModelName(s.heavy)}`,
       };
     }
+    if (m.id === "max") {
+      // Always prefer live top-tier (heavy slot = flagship, currently 4.5)
+      const flagship = s.heavy || s.smart || "grok-4.5";
+      return {
+        ...m,
+        modelId: flagship,
+        model: friendlyModelName(flagship),
+        subtitle: `🚀 Max · top-tier ${friendlyModelName(flagship)}`,
+      };
+    }
     if (m.id === "build") {
       return {
         ...m,
@@ -154,6 +174,7 @@ export function modelIdForMode(
   if (id === "fast") return slots.fast;
   if (id === "expert") return slots.smart;
   if (id === "heavy") return slots.heavy;
+  if (id === "max") return slots.heavy || slots.smart || "grok-4.5";
   if (id === "build") return slots.build;
   return slots.balanced;
 }
@@ -171,7 +192,7 @@ export function autoRouteFor(
 export function tierForMode(id: GrokModeId): AutoRouteResult["tier"] {
   if (id === "fast") return "fast";
   if (id === "build") return "build";
-  if (id === "heavy") return "deep";
+  if (id === "heavy" || id === "max") return "deep";
   if (id === "expert") return "think";
   return "think";
 }

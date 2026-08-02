@@ -61,6 +61,7 @@ export const MODE_UNIT_COST: Record<GrokModeId, number> = {
   build: 2,
   expert: 3.5,
   heavy: 7,
+  max: 8,
 };
 
 export const BUCKET_UNIT_COST: Record<UsageBucket, number> = {
@@ -90,7 +91,7 @@ export function createUsage(plan: SubscriptionPlanId = "pro", now = Date.now()):
     imagine: 0,
     automations: 0,
     host: 0,
-    byMode: { auto: 0, fast: 0, expert: 0, heavy: 0, build: 0 },
+    byMode: { auto: 0, fast: 0, expert: 0, heavy: 0, max: 0, build: 0 },
     promptTokens: 0,
     completionTokens: 0,
     totalTokens: 0,

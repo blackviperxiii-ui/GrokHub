@@ -240,6 +240,7 @@ export function CommandPalette({
       mode("fast", "Fast"),
       mode("expert", "Expert"),
       mode("heavy", "Heavy"),
+      mode("max", "Max"),
       mode("build", "Build"),
       {
         id: "theme-dark",

@@ -82,7 +82,9 @@ export function CommandView() {
             {getModesWithCatalog(modelCatalog).map((m) => {
               const selected = m.id === mode;
               const costHint =
-                m.id === "heavy"
+                m.id === "max"
+                  ? "text-amber-400"
+                  : m.id === "heavy"
                   ? "8u"
                   : m.id === "expert"
                     ? "4u"

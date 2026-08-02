@@ -4407,7 +4407,7 @@ syncWebsiteConnectors: async () => {
           }
           if (cmd === "mode" && arg) {
             const id = arg.toLowerCase() as import("./types").GrokModeId;
-            if (["auto", "fast", "expert", "heavy", "build"].includes(id)) {
+            if (["auto", "fast", "expert", "heavy", "max", "build"].includes(id)) {
               get().setMode(id);
               return;
             }
@@ -4809,6 +4809,7 @@ if (cmd === "tools") {
             lastAsst?.mode === "fast" ||
             lastAsst?.mode === "expert" ||
             lastAsst?.mode === "heavy" ||
+            lastAsst?.mode === "max" ||
             lastAsst?.mode === "build"
               ? lastAsst.mode
               : lastAsst?.routeTier === "fast"

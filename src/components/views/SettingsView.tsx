@@ -937,8 +937,8 @@ export function SettingsView() {
               [
                 ["fast", "Fast chat"],
                 ["balanced", "Balanced"],
-                ["smart", "Brains"],
-                ["heavy", "Heavy / team"],
+                ["smart", "Brains / Think"],
+                ["heavy", "Heavy · Max flagship"],
                 ["build", "Build / code"],
                 ["imagine", "Imagine"],
               ] as const

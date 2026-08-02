@@ -38,7 +38,8 @@ export type RouteContext = {
   recentAssistantText?: string;
   hasAttachments?: boolean;
   lastRouteTier?: RouteTier;
-  lastRoutedMode?: "fast" | "expert" | "heavy" | "build" | "imagine";
+  lastRoutedMode?: "fast" | "expert" | "heavy" | "max" | "build" | "imagine";
+
   /** Soft bias from learning engine: positive = prefer tier */
   learningBias?: Partial<Record<RouteTier, number>>;
 };

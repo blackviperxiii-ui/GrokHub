@@ -1,5 +1,6 @@
 import {
   Brain,
+  Crown,
   Hammer,
   Sparkles,
   Users,
@@ -18,6 +19,7 @@ const ICONS: Record<GrokModeId, LucideIcon> = {
   fast: Zap,
   expert: Brain,
   heavy: Users,
+  max: Crown,
   build: Hammer,
 };
 

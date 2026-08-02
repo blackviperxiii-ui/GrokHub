@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.36";
+const APP_VERSION = "0.8.37";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -277,6 +277,9 @@ function modelForMode(mode, prompt = "", opts = {}) {
     case "expert":
       // Think mode → Grok 4.20 reasoning
       return "grok-4.20-reasoning";
+    case "max":
+      // Max → latest top-tier flagship
+      return "grok-4.5";
     case "heavy":
       return "grok-4.5";
     case "build":
@@ -317,6 +320,7 @@ Refuse criminal activity, malware, exploits. Confirm destructive commands. Prefe
   const id = resolveMode(mode, prompt);
   if (id === "fast") return `${base}\nMode: Fast — concise answers, minimal preamble. Still emit HOST_CMD when machine data is required.`;
   if (id === "expert") return `${base}\nMode: Expert — reason carefully, surface tradeoffs. Prefer real HOST_CMD evidence over speculation.`;
+  if (id === "max") return `${base}\nMode: Max — top-tier flagship (Grok 4.5). Maximum capability; be thorough and precise. Prefer real HOST_CMD evidence over speculation.`;
   if (id === "heavy") return `${base}\nMode: Heavy (team of experts) — multi-angle synthesis backed by HOST_CMD when local facts matter.`;
   if (id === "build") return `${base}\nMode: Build — prioritize working code and file paths; use HOST_CMD to inspect the real tree.`;
   return base;

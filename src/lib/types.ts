@@ -13,7 +13,7 @@ export type NavId =
   | "settings";
 
 /** Matches Grok web model modes (Auto / Fast / Expert / Heavy / Build). */
-export type GrokModeId = "auto" | "fast" | "expert" | "heavy" | "build";
+export type GrokModeId = "auto" | "fast" | "expert" | "heavy" | "max" | "build";
 
 export type GrokMode = {
   id: GrokModeId;
@@ -23,7 +23,7 @@ export type GrokMode = {
   model: string;
   /** xAI API model id used for live requests */
   modelId: string;
-  icon: "auto" | "fast" | "expert" | "heavy" | "build";
+  icon: "auto" | "fast" | "expert" | "heavy" | "max" | "build";
   latencyMs: [number, number];
   depth: "light" | "standard" | "deep" | "team" | "code";
 };

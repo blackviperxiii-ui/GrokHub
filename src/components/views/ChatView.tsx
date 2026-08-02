@@ -910,7 +910,7 @@ export function ChatView() {
       return;
     }
     if (chip.kind === "mode" && chip.value.startsWith("__mode:")) {
-      const m = chip.value.slice("__mode:".length) as "auto" | "fast" | "expert" | "heavy" | "build";
+      const m = chip.value.slice("__mode:".length) as "auto" | "fast" | "expert" | "heavy" | "max" | "build";
       setMode(m);
       return;
     }

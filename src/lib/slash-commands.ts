@@ -16,6 +16,7 @@ export const SLASH_COMMANDS: SlashDef[] = [
   { cmd: "/mode adaptive", hint: "Adaptive routing" },
   { cmd: "/mode fast", hint: "Fast replies" },
   { cmd: "/mode think", hint: "Deeper reasoning" },
+  { cmd: "/mode max", hint: "Top-tier Grok 4.5" },
   { cmd: "/mode deep", hint: "Max depth" },
   { cmd: "/mode build", hint: "Coding / build" },
   { cmd: "/imagine", hint: "Jump to Imagine", insert: "/imagine " },
