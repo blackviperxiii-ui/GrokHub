@@ -15,9 +15,9 @@ export function AgentsView() {
             Multi-agent roster
           </CardTitle>
           <CardDescription>
-            Preview roster for named agent roles (primary / ops / builder). Live multi-agent
-            orchestration is not fully wired yet — modes and the main Agent chat drive real work
-            today. Status dots reflect recent Adaptive routing activity only.
+            Roster status is UI-only. Real work runs as a single-agent tool loop in Agent chat
+            (HOST_CMD / CONNECTOR_CMD). xAI multi-agent model IDs are blocked on chat completions —
+            use Max (Grok 4.5) or Adaptive instead.
           </CardDescription>
         </CardHeader>
       </Card>

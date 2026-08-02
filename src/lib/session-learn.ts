@@ -211,9 +211,9 @@ export async function applyTurnLearning(
     threadId: input.threadId,
   });
 
-  // Light reflect every 3 turns (heuristic) so LEARNINGS.md is never forever-empty
+  // Full reflect every turn when we have new insights/events (keeps LEARNINGS.md live)
   let didReflect = false;
-  if (learning.totalTurns > 0 && learning.totalTurns % 3 === 0) {
+  if (learning.totalTurns > 0 && (learning.totalTurns % 2 === 0 || learning.insights.length > 0)) {
     const r = reflectLearning(learning);
     learning = r.state;
     didReflect = true;
@@ -246,17 +246,19 @@ export async function applyTurnLearning(
     }
   }
 
-  // Merge new bullets into MEMORY without wiping user edits
-  if (didReflect) {
-    try {
+  // Always rewrite LEARNINGS.md + STATUS.md every turn so host scans see live state
+  try {
+    if (didReflect) {
       const { markdown } = reflectLearning(learning);
-      // Prefer snapshot that includes insights
       await memoryWrite("LEARNINGS.md", markdown);
-      const tops = learning.insights.slice(0, 5).map((i) => i.text);
+      const tops = learning.insights.slice(0, 8).map((i) => i.text);
       if (tops.length) await memoryAppendFacts(tops, { target: "MEMORY.md" });
-    } catch {
-      /* ignore */
+    } else {
+      // Snapshot path (no full distill) — still updates file mtime + content
+      await memoryWrite("LEARNINGS.md", learningSnapshotMarkdown(learning));
     }
+  } catch {
+    /* ignore */
   }
 
   let diskRoot: string | undefined;
@@ -268,6 +270,7 @@ export async function applyTurnLearning(
         root: info.root,
         userData: info.userData,
       }),
+      // Prefer full reflect markdown when available
       learningsMarkdown: learningSnapshotMarkdown(learning),
     });
   } catch {

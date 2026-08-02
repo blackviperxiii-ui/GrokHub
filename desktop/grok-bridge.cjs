@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.38";
+const APP_VERSION = "0.8.39";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -324,7 +324,8 @@ Do NOT invent filesystem listings, command output, process state, or install pat
 Put host commands on their OWN line, alone:
 HOST_CMD: ls -la "$HOME/Downloads"
 Never glue HOST_CMD onto a prose sentence. Prefer one simple command (ls, head, cat, find, ps, stat).
-For broad scans always bound the work (find -maxdepth 3, head -n 100). Never unbounded find/grep on / or $HOME.
+For broad scans always bound the work (find -maxdepth 5, head -n 2000). Never unbounded find/grep on / or $HOME.
+You are a single agent on chat/completions — emit HOST_CMD lines for tools; do not use multi-agent model APIs.
 
 CRITICAL — no fake progress:
 - NEVER say "I'll check", "I'll probe", "let me investigate", "continuing the deep dive", or "would you like me to start" WITHOUT also emitting HOST_CMD lines in the SAME reply.

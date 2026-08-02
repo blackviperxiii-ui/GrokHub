@@ -5109,7 +5109,15 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx);
               }
             }
             let rounds = 0;
-            const maxRounds = 8;
+            // Max/Heavy/Build get deeper tool loops for real debug/agent work
+            const maxRounds =
+              mode === "max" || routed === "max"
+                ? 14
+                : mode === "heavy" || routed === "heavy"
+                  ? 12
+                  : mode === "build" || routed === "build"
+                    ? 12
+                    : 8;
             let hostNudges = 0;
             let accumulated = "";
 

@@ -60,28 +60,28 @@ export function estimateMessages(
   return n;
 }
 
-export function trimToolHeavyContent(content: string, maxChars = 2_400): string {
+export function trimToolHeavyContent(content: string, maxChars = 8_000): string {
   let s = String(content || "");
   if (s.length <= maxChars) return s;
 
   s = s.replace(/### (?:🖥️|🔌|🛠️)[\s\S]*?---\s*\n/g, (block) => {
-    if (block.length < 400) return block;
-    const first = block.slice(0, 180).replace(/\n+/g, " ");
+    if (block.length < 800) return block;
+    const first = block.slice(0, 320).replace(/\n+/g, " ");
     return `### (tool card trimmed)\n> ${first}…\n\n`;
   });
 
   s = s.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, lang, body) => {
     const b = String(body);
-    if (b.length <= 1_200) return _m;
-    const head = b.slice(0, 500);
-    const tail = b.slice(-300);
+    if (b.length <= 4_000) return _m;
+    const head = b.slice(0, 2_000);
+    const tail = b.slice(-1_000);
     return (
       "```" +
       (lang || "") +
       "\n" +
       head +
       "\n\n… [" +
-      (b.length - 800) +
+      (b.length - 3_000) +
       " chars trimmed] …\n\n" +
       tail +
       "\n```"
@@ -347,9 +347,9 @@ export function buildContext(input: BuildContextInput): ContextBuildResult {
     const isRecentTail = i < RECENT_MIN_MESSAGES;
     let content = m.content;
     if (input.trimTools !== false && !isRecentTail) {
-      content = trimToolHeavyContent(content, 2_000);
-    } else if (input.trimTools !== false && content.length > 12_000) {
-      content = trimToolHeavyContent(content, 8_000);
+      content = trimToolHeavyContent(content, 6_000);
+    } else if (input.trimTools !== false && content.length > 24_000) {
+      content = trimToolHeavyContent(content, 16_000);
     }
     const tok = estimateTokens(content) + 4;
     if (!isRecentTail && used + tok > replyBudget) {

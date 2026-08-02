@@ -73,11 +73,126 @@ function copyPgliteAssets() {
   console.log(`[desktop-build] PGLite assets → .output/server/_libs (${n} files, pglite.data OK)`);
 }
 
+
+/**
+ * Keep only assets referenced by the current HTML/SSR manifest.
+ * Removes stale hashed ChatView-*.js / models-catalog-*.js piles that
+ * confuse host greps and inflate install size.
+ */
+function cleanStaleClientAssets() {
+  const assetDirs = [
+    path.join(root, ".output", "public", "assets"),
+    path.join(root, ".output", "public", "_build", "assets"),
+  ];
+  // Collect referenced basenames from any html/json/mjs under .output
+  const referenced = new Set();
+  function walkRefs(dir, depth = 0) {
+    if (depth > 6 || !fs.existsSync(dir)) return;
+    let names;
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const full = path.join(dir, name);
+      let st;
+      try {
+        st = fs.statSync(full);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        if (name === "node_modules" || name === ".git") continue;
+        walkRefs(full, depth + 1);
+        continue;
+      }
+      if (!/\.(html|mjs|js|json|css|map)$/i.test(name)) continue;
+      // Skip scanning huge binary-ish assets as text sources of truth
+      if (st.size > 8_000_000) continue;
+      if (full.includes(`${path.sep}assets${path.sep}`) && /\.(js|css|map)$/i.test(name)) {
+        // don't use asset files themselves as ref sources for other assets
+        continue;
+      }
+      let text = "";
+      try {
+        text = fs.readFileSync(full, "utf8");
+      } catch {
+        continue;
+      }
+      const re = /(?:assets\/|\/assets\/)([A-Za-z0-9._@{}[\]+-]+\.(?:js|css|mjs|map|woff2?|png|svg|webp))/g;
+      let m;
+      while ((m = re.exec(text))) {
+        referenced.add(m[1]);
+        // also basename without query
+        referenced.add(path.basename(m[1]));
+      }
+      // bare hashed filenames in import maps
+      const re2 = /["']([A-Za-z0-9._-]+-[A-Za-z0-9_-]{6,}\.(?:js|css))["']/g;
+      while ((m = re2.exec(text))) {
+        referenced.add(m[1]);
+      }
+    }
+  }
+  walkRefs(path.join(root, ".output"));
+
+  let removed = 0;
+  let kept = 0;
+  for (const dir of assetDirs) {
+    if (!fs.existsSync(dir)) continue;
+    for (const name of fs.readdirSync(dir)) {
+      const full = path.join(dir, name);
+      try {
+        if (!fs.statSync(full).isFile()) continue;
+      } catch {
+        continue;
+      }
+      // Always keep source maps for kept js if present; decide by basename
+      if (referenced.has(name) || referenced.has(name.replace(/\.map$/, ""))) {
+        kept += 1;
+        continue;
+      }
+      // If nothing referenced (parse miss), keep everything rather than wipe
+      if (referenced.size < 5) {
+        kept += 1;
+        continue;
+      }
+      try {
+        fs.unlinkSync(full);
+        removed += 1;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  // Write stable pointer for debug tools
+  const manifest = {
+    generatedAt: new Date().toISOString(),
+    referencedCount: referenced.size,
+    kept,
+    removed,
+    note: "Active client assets are those referenced by current SSR/HTML entrypoints. Prefer grepping GROKHUB_BUILD.json version + this manifest over scanning all hashes.",
+  };
+  try {
+    fs.writeFileSync(
+      path.join(root, ".output", "ASSETS_MANIFEST.json"),
+      JSON.stringify(manifest, null, 2) + "\n",
+    );
+  } catch {
+    /* ignore */
+  }
+  console.log(
+    `[desktop-build] asset hygiene: kept=${kept} removed=${removed} refs=${referenced.size}`,
+  );
+}
+
+
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 run(npx, ["vite", "build"]);
 run(npm, ["run", "db:migrate"]);
 copyPgliteAssets();
+cleanStaleClientAssets();
 
 // Stamp so install/updater can verify UI matches APP_VERSION
 try {
