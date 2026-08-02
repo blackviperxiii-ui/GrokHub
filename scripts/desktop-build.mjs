@@ -216,4 +216,53 @@ if (!fs.existsSync(serverEntry)) {
   console.error("[desktop-build] ERROR: missing .output/server/index.mjs");
   process.exit(1);
 }
+
+// Pointer for agents/debug: which hashed ChatView/models bundles are live
+try {
+  const pub = path.join(root, ".output", "public", "assets");
+  const htmlCandidates = [
+    path.join(root, ".output", "public", "index.html"),
+    path.join(root, ".output", "server", "index.mjs"),
+  ];
+  let refText = "";
+  for (const f of htmlCandidates) {
+    if (fs.existsSync(f)) {
+      try {
+        refText += fs.readFileSync(f, "utf8").slice(0, 500_000);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  // also scan SSR entry for ChatView / models-catalog hashes
+  const ssrDir = path.join(root, ".output", "server", "_ssr");
+  const active = { version: null, builtAt: new Date().toISOString(), assets: {} };
+  try {
+    active.version = fs.readFileSync(path.join(root, "APP_VERSION"), "utf8").trim();
+  } catch {
+    /* ignore */
+  }
+  if (fs.existsSync(ssrDir)) {
+    for (const name of fs.readdirSync(ssrDir)) {
+      if (/^ChatView-.*\.mjs$/.test(name)) active.assets.chatViewSsr = name;
+      if (/^models-catalog-.*\.mjs$/.test(name)) active.assets.modelsCatalogSsr = name;
+      if (/^SettingsView-.*\.mjs$/.test(name)) active.assets.settingsViewSsr = name;
+    }
+  }
+  if (fs.existsSync(pub)) {
+    for (const name of fs.readdirSync(pub)) {
+      if (/^ChatView-.*\.js$/.test(name)) active.assets.chatView = name;
+      if (/^models-catalog-.*\.js$/.test(name)) active.assets.modelsCatalog = name;
+      if (/^SettingsView-.*\.js$/.test(name)) active.assets.settingsView = name;
+    }
+  }
+  fs.writeFileSync(
+    path.join(root, ".output", "ACTIVE_UI.json"),
+    JSON.stringify(active, null, 2) + "\n",
+  );
+  console.log("[desktop-build] ACTIVE_UI.json", active.assets);
+} catch (e) {
+  console.warn("[desktop-build] ACTIVE_UI.json skip", e);
+}
+
 console.log("desktop:build OK");

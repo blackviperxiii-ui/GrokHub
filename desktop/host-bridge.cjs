@@ -58,7 +58,24 @@ function defaultShell() {
       require("node:path").join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe")
     );
   }
-  return process.env.SHELL || "/bin/bash";
+  // Always prefer bash for -lc POSIX semantics.
+  // User SHELL may be fish/zsh; fish -lc mangles flags like `ls -lt` ("invalid --time").
+  const candidates = ["/bin/bash", "/usr/bin/bash", process.env.SHELL, "/bin/sh"];
+  for (const c of candidates) {
+    if (!c) continue;
+    try {
+      if (require("node:fs").existsSync(c)) return c;
+    } catch {
+      /* ignore */
+    }
+  }
+  return "/bin/bash";
+}
+
+/** True when shell is bash/sh (safe for -lc). */
+function shellSupportsLc(shellPath) {
+  const base = require("node:path").basename(String(shellPath || ""));
+  return base === "bash" || base === "sh" || base === "dash";
 }
 
 function hostEnv() {
@@ -248,8 +265,21 @@ async function runExec(command, cwd, timeoutMs = 30_000, opts = {}) {
           },
         );
       } else {
+        // Always bash -lc for agent HOST_CMD (fish/zsh break flag parsing)
+        const shell = defaultShell();
+        const args = shellSupportsLc(shell) ? ["-lc", cmd] : ["-c", cmd];
+        // Prefer bash even if SHELL was something else
+        const exe =
+          shellSupportsLc(shell) && /bash$/.test(shell)
+            ? shell
+            : require("node:fs").existsSync("/bin/bash")
+              ? "/bin/bash"
+              : shell;
+        const finalArgs = /bash$|sh$|dash$/.test(require("node:path").basename(exe))
+          ? ["-lc", cmd]
+          : args;
         // Detached process group so kill(-pid) can stop the whole tree
-        child = spawn(defaultShell(), ["-lc", cmd], {
+        child = spawn(exe, finalArgs, {
           cwd: workdir,
           env: hostEnv(),
           stdio: ["ignore", "pipe", "pipe"],

@@ -1,6 +1,6 @@
 import type { GrokModeId } from "./types";
 import { modelIdForMode, resolveMode } from "./modes";
-import { isMultiAgentModel, pickFlagshipModel } from "./models-catalog";
+import { isMultiAgentModel, pickFlagshipModel, sanitizeChatModel } from "./models-catalog";
 import { parseRateLimitHeaders } from "./usage";
 
 export const XAI_BASE = "https://api.x.ai/v1";
@@ -202,17 +202,8 @@ function buildBody(req: GrokChatRequest, stream: boolean) {
   const lastUser = [...req.messages].reverse().find((m) => m.role === "user")?.content ?? "";
   const routed = resolveMode(mode, lastUser);
   let model = req.model || modelForMode(mode, lastUser);
-  // xAI rejects multi-agent models on /chat/completions
-  if (isMultiAgentModel(model)) {
-    model =
-      mode === "max" || mode === "heavy"
-        ? pickFlagshipModel([])
-        : modelForMode(mode === "auto" ? "expert" : mode, lastUser);
-    if (isMultiAgentModel(model)) model = "grok-4.5";
-  }
-  if ((mode === "max" || mode === "heavy") && /4[.-]?20/i.test(model)) {
-    model = pickFlagshipModel([]) || "grok-4.5";
-  }
+  // Hard gate: chat/completions never accepts multi-agent models
+  model = sanitizeChatModel(model, mode, []);
   const system =
     systemPromptForMode(mode, lastUser) +
     (req.workspaceContext?.trim()
@@ -286,10 +277,33 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
     const rateLimit = parseRateLimitHeaders(res.headers);
 
     if (!res.ok) {
+      const errMsg =
+        typeof data.error === "string"
+          ? data.error
+          : data.error?.message || `xAI error ${res.status}`;
+      // Multi-agent rejection → hard swap to single-agent flagship/smart and retry once
+      if (
+        /multi\s*agent|not allowed on chat completions/i.test(errMsg) &&
+        !(req as { _multiAgentRetried?: boolean })._multiAgentRetried
+      ) {
+        const m = req.mode ?? "auto";
+        const fallback =
+          m === "max" || m === "heavy" || m === "auto"
+            ? "grok-4.5"
+            : m === "build"
+              ? "grok-build-0.1"
+              : m === "fast"
+                ? "grok-4-1-fast-non-reasoning"
+                : "grok-4.20-reasoning";
+        return callXaiChat({
+          ...req,
+          model: sanitizeChatModel(fallback, m, []),
+          _multiAgentRetried: true,
+        } as GrokChatRequest & { _multiAgentRetried?: boolean });
+      }
       if (
         res.status === 404 ||
-        (typeof data.error === "object" &&
-          /model|not found|invalid/i.test(data.error?.message || ""))
+        /model|not found|invalid/i.test(errMsg)
       ) {
         if (model === "grok-4.5" || model === "grok-4-5") {
           return callXaiChat({ ...req, model: "grok-4.3" });
@@ -304,11 +318,15 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
           return callXaiChat({ ...req, model: "grok-3-mini-fast" });
         }
       }
-      const msg =
-        typeof data.error === "string"
-          ? data.error
-          : data.error?.message || `xAI error ${res.status}`;
-      return { ok: false, status: res.status, error: msg, model, rateLimit };
+      return {
+        ok: false,
+        status: res.status,
+        error: /multi\s*agent/i.test(errMsg)
+          ? `${errMsg} (blocked multi-agent model on chat completions; tried ${model})`
+          : errMsg,
+        model,
+        rateLimit,
+      };
     }
 
     const content = data.choices?.[0]?.message?.content?.trim();
@@ -375,6 +393,29 @@ export async function callXaiChatStream(
     if (!res.ok) {
       // Fall back to non-stream once for model aliases / older accounts
       const errText = await res.text().catch(() => "");
+      if (
+        /multi\s*agent|not allowed on chat completions/i.test(errText) &&
+        !(req as { _multiAgentRetried?: boolean })._multiAgentRetried
+      ) {
+        const m = req.mode ?? "auto";
+        const fallback =
+          m === "max" || m === "heavy" || m === "auto"
+            ? "grok-4.5"
+            : m === "build"
+              ? "grok-build-0.1"
+              : m === "fast"
+                ? "grok-4-1-fast-non-reasoning"
+                : "grok-4.20-reasoning";
+        handlers.onStatus?.("retry-single-agent");
+        return callXaiChatStream(
+          {
+            ...req,
+            model: sanitizeChatModel(fallback, m, []),
+            _multiAgentRetried: true,
+          } as GrokChatRequest & { _multiAgentRetried?: boolean },
+          handlers,
+        );
+      }
       if (res.status === 404 || /model|not found|invalid/i.test(errText)) {
         if (model === "grok-4.5" || model === "grok-4-5") {
           return callXaiChatStream({ ...req, model: "grok-4.3" }, handlers);
@@ -386,9 +427,13 @@ export async function callXaiChatStream(
           return callXaiChatStream({ ...req, model: "grok-3-mini-fast" }, handlers);
         }
       }
-      // Non-stream fallback
+      // Non-stream fallback (also sanitizes + multi-agent retry inside callXaiChat)
       handlers.onStatus?.("fallback");
-      const full = await callXaiChat({ ...req, model, signal });
+      const full = await callXaiChat({
+        ...req,
+        model: sanitizeChatModel(model, req.mode, []),
+        signal,
+      });
       if (full.ok && full.content) handlers.onDelta?.(full.content);
       return full;
     }

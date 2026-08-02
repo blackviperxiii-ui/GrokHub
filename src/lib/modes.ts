@@ -3,6 +3,7 @@ import {
   emptyCatalog,
   friendlyModelName,
   pickFlagshipModel,
+  sanitizeChatModel,
   routeAuto,
   type ResolvedCatalog,
   type RouteContext,
@@ -107,7 +108,7 @@ export const GROK_MODES: GrokMode[] = [
   {
     id: "heavy",
     label: "Heavy",
-    subtitle: "Team of Experts · multi-angle",
+    subtitle: "Deep analysis · single-agent flagship",
     model: "Grok 4.5",
     modelId: "grok-4.5",
     icon: "heavy",
@@ -272,9 +273,17 @@ export function modelIdForMode(
     const r = routeAuto(prompt, catalog, ctx);
     const routed: GrokModeId =
       r.routedMode === "imagine" ? "fast" : (r.routedMode as GrokModeId);
-    return applyModelOverride(routed, r.modelId, ov);
+    return sanitizeChatModel(
+      applyModelOverride(routed, r.modelId, ov),
+      routed,
+      catalog.all || [],
+    );
   }
-  return applyModelOverride(id, autoModelForMode(id, catalog), ov);
+  return sanitizeChatModel(
+    applyModelOverride(id, autoModelForMode(id, catalog), ov),
+    id,
+    catalog.all || [],
+  );
 }
 
 /** Full adaptive route (for UI status + imagine handoff). */
@@ -289,7 +298,11 @@ export function autoRouteFor(
     r.routedMode === "imagine" ? "fast" : r.routedMode;
   return {
     ...r,
-    modelId: applyModelOverride(routed, r.modelId, cleanModelOverrides(overrides)),
+    modelId: sanitizeChatModel(
+      applyModelOverride(routed, r.modelId, cleanModelOverrides(overrides)),
+      routed,
+      catalog.all || [],
+    ),
   };
 }
 

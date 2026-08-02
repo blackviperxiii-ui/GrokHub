@@ -119,7 +119,61 @@ const SKIP_MODEL_RE =
 
 /** Models that only work on multi-agent / responses APIs — never chat/completions. */
 export function isMultiAgentModel(id: string): boolean {
-  return /multi[-_]?agent|multiagent/i.test(id || "");
+  const s = String(id || "").toLowerCase();
+  if (!s) return false;
+  if (/multi[-_]?agents?|multiagents?/.test(s)) return true;
+  if (/agent[-_]?team|team[-_]?agent|swarm|orchestrat/.test(s)) return true;
+  // e.g. grok-4-agents, grok-agents-preview
+  if (/grok/.test(s) && /(?:^|[-_.])agents?(?:$|[-_.])/.test(s)) return true;
+  return false;
+}
+
+/**
+ * Final gate before /chat/completions — never send multi-agent or wrong Max model.
+ */
+export function sanitizeChatModel(
+  model: string,
+  mode?: string,
+  liveIds: string[] = [],
+): string {
+  let m = String(model || "").trim();
+  const modeId = String(mode || "");
+  if (!m) {
+    m =
+      modeId === "max" || modeId === "heavy"
+        ? pickFlagshipModel(liveIds) || "grok-4.5"
+        : modeId === "fast"
+          ? "grok-4-1-fast-non-reasoning"
+          : modeId === "build"
+            ? "grok-build-0.1"
+            : modeId === "balanced"
+              ? "grok-4.3"
+              : "grok-4.20-reasoning";
+  }
+  if (isMultiAgentModel(m)) {
+    m =
+      modeId === "max" || modeId === "heavy"
+        ? pickFlagshipModel(liveIds) || "grok-4.5"
+        : modeId === "fast"
+          ? "grok-4-1-fast-non-reasoning"
+          : modeId === "build"
+            ? "grok-build-0.1"
+            : "grok-4.20-reasoning";
+  }
+  // Max/Heavy must not land on 4.20 reasoning
+  if ((modeId === "max" || modeId === "heavy") && /4[.-]?20/i.test(m)) {
+    m = pickFlagshipModel(liveIds) || "grok-4.5";
+  }
+  if (modeId === "max") {
+    m = pickFlagshipModel(liveIds) || m || "grok-4.5";
+  }
+  if (isMultiAgentModel(m)) m = "grok-4.5";
+  return m;
+}
+
+/** Safe models for chat completions from a live list. */
+export function filterChatCompletionModels(liveIds: string[]): string[] {
+  return (liveIds || []).filter((id) => id && !SKIP_MODEL_RE.test(id) && !isMultiAgentModel(id));
 }
 
 /** True top-tier single-agent flagship (Max / Heavy), not reasoning-4.20 or multi-agent. */
@@ -297,7 +351,10 @@ export function buildCatalog(
   liveIds: string[],
   prior?: Partial<ResolvedCatalog>,
 ): ResolvedCatalog {
-  const all = liveIds.map(normalizeId).filter(Boolean);
+  const all = liveIds
+    .map(normalizeId)
+    .filter(Boolean)
+    .filter((id) => !isMultiAgentModel(id));
   const sig = modelsSignature(all);
   // Reuse Grok classification if signature unchanged
   if (
@@ -306,10 +363,19 @@ export function buildCatalog(
     prior.classifiedBy === "grok" &&
     prior.slots
   ) {
+    const slots = { ...prior.slots } as Record<ModelSlot, string>;
+    for (const k of SLOT_KEYS) {
+      slots[k] = sanitizeChatModel(slots[k], k === "heavy" ? "heavy" : k === "smart" ? "expert" : k, all);
+    }
+    if (/4[.-]?20/i.test(slots.heavy) || isMultiAgentModel(slots.heavy)) {
+      slots.heavy = pickFlagshipModel(all);
+    }
     return {
       all,
-      essential: prior.essential?.length ? prior.essential : filterEssential(all),
-      slots: prior.slots,
+      essential: prior.essential?.length
+        ? prior.essential.filter((id) => !isMultiAgentModel(id))
+        : filterEssential(all),
+      slots,
       fetchedAt: Date.now(),
       source: all.length ? "live" : "fallback",
       classifiedBy: "grok",
@@ -420,7 +486,7 @@ Slots:
 - fast: quick low-token chat (non-reasoning / mini / fast variants)
 - balanced: solid everyday chat (e.g. 4.3-class)
 - smart: hard reasoning / Think mode (prefer grok-4.20-reasoning, then 4.5-class flagship)
-- heavy: multi-angle / max brain (usually same as smart or best available)
+- heavy: top single-agent flagship for Max/Deep (prefer grok-4.5). NEVER multi-agent model ids (chat completions rejects them).
 - build: long coding sessions / agent coding (code or build models)
 - imagine: image generation (if none, use empty string "")
 

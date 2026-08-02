@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.43";
+const APP_VERSION = "0.8.44";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -263,7 +263,12 @@ function isSubscriptionError(status, msg) {
 
 
 function isMultiAgentModel(id) {
-  return /multi[-_]?agent|multiagent/i.test(String(id || ""));
+  const s = String(id || "").toLowerCase();
+  if (!s) return false;
+  if (/multi[-_]?agents?|multiagents?/.test(s)) return true;
+  if (/agent[-_]?team|team[-_]?agent|swarm|orchestrat/.test(s)) return true;
+  if (/grok/.test(s) && /(?:^|[-_.])agents?(?:$|[-_.])/.test(s)) return true;
+  return false;
 }
 function sanitizeChatModel(model, mode) {
   let m = String(model || "");
