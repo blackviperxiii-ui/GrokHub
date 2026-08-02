@@ -3,46 +3,47 @@ productName: GrokHub
 copyright: Copyright © GrokHub contributors
 directories:
   output: dist
-  buildResources: packaging/windows
+  buildResources: packaging/windows/build
 files:
   - desktop/**/*
   - .output/**/*
   - package.json
   - APP_VERSION
-  - packaging/windows/grokhub.cmd
-  - packaging/windows/grokhub.ps1
-  - "!**/{node_modules,.git,src,vendor,screenshots,artifacts}/**"
+  - LICENSE
+  - "!desktop/**/*.{map,ts}"
+  - "!**/{.git,src,vendor,screenshots,artifacts,node_modules}/**"
 extraMetadata:
   main: desktop/main.mjs
+  # packaged app is CommonJS-loaded by Electron from main field
 asar: false
 electronVersion: 35.1.2
 
 win:
-  icon: desktop/icons/icon.png
+  icon: packaging/windows/build/icon.ico
   target:
     - target: nsis
       arch: [x64]
     - target: portable
       arch: [x64]
-  artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+  artifactName: ${productName}-Setup-${version}.${ext}
   executableName: GrokHub
-  # Match AppUserModelId used in desktop/main.mjs
   publisherName: GrokHub
+  signAndEditExecutable: false
 
 nsis:
-  oneClick: false
+  oneClick: true
   perMachine: false
-  allowToChangeInstallationDirectory: true
+  allowToChangeInstallationDirectory: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: GrokHub
   uninstallDisplayName: GrokHub
-  license: LICENSE
   runAfterFinish: true
   deleteAppDataOnUninstall: false
+  artifactName: ${productName}-Setup-${version}.${ext}
 
 portable:
-  artifactName: ${productName}-${version}-portable.${ext}
+  artifactName: ${productName}-Portable-${version}.${ext}
 
 linux:
   icon: packaging/icons
@@ -53,8 +54,3 @@ linux:
   desktop:
     Name: GrokHub
     StartupWMClass: grokhub
-
-# Custom entry: start nitro UI then electron — use our launcher when possible
-# electron-builder uses desktop/main.mjs as main; UI server is started by
-# packaging/windows/grokhub.cmd for portable/source installs. NSIS builds
-# set GROKHUB_HOME to install dir; main.mjs can start embedded UI if present.

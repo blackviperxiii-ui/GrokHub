@@ -1,75 +1,36 @@
 # GrokHub on Windows
 
-## Requirements
+## Recommended: download the `.exe`
 
-- Windows 10/11 **x64**
-- [Node.js 20+ LTS](https://nodejs.org/) (includes npm) — install, then open a **new** PowerShell
-- PowerShell 5.1+ (built-in)
+1. Go to [Releases](https://github.com/blackviperxiii-ui/Grok-Hub/releases)
+2. Download **GrokHub-Setup-*.exe**
+3. Double-click to install
+4. Open **GrokHub** from Start Menu or Desktop
 
-**Work from your user folder** (`Downloads`, `Documents`, etc.) — not `C:\Windows\System32`.
+Portable: **GrokHub-Portable-*.exe** (runs without installing).
 
-## Install without Git (recommended)
+No Node.js or Git required.
 
-If `git clone` fails with `ca-bundle.crt` / trust anchors errors, skip Git entirely:
+SmartScreen warning on unsigned builds → **More info** → **Run anyway**.
 
-```powershell
-cd $env:USERPROFILE\Downloads
-irm https://raw.githubusercontent.com/blackviperxiii-ui/Grok-Hub/main/packaging/windows/download-and-install.ps1 -OutFile download-and-install.ps1
-powershell -ExecutionPolicy Bypass -File .\download-and-install.ps1
-```
+## CI packaging
 
-Uses Windows TLS certificates (not Git’s mingw CA file).
+GitHub Actions: `.github/workflows/release-windows.yml`
 
-## Install with Git
+- Trigger: push tag `v*`, or **Actions → Release Windows → Run workflow**
+- Produces NSIS setup + portable exe and attaches them to a GitHub Release
 
-```powershell
-cd $env:USERPROFILE\Downloads
-git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
-cd Grok-Hub
-powershell -ExecutionPolicy Bypass -File .\packaging\windows\install.ps1 -Build
-```
-
-### Fix: `error adding trust anchors from file: .../ca-bundle.crt`
-
-Git for Windows is using a missing/corrupt CA bundle. Pick one:
-
-1. **Use the ZIP installer** (above) — no Git needed  
-2. Point Git at Windows Schannel:
-   ```powershell
-   git config --global http.sslBackend schannel
-   git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
-   ```
-3. Reinstall [Git for Windows](https://git-scm.com/download/win)  
-4. Manual ZIP from the browser:  
-   https://github.com/blackviperxiii-ui/Grok-Hub/archive/refs/heads/main.zip  
-   Extract, then:
-   ```powershell
-   cd $env:USERPROFILE\Downloads\Grok-Hub-main
-   powershell -ExecutionPolicy Bypass -File .\packaging\windows\install.ps1 -Build
-   ```
-
-## Launch
-
-| Method | How |
-|--------|-----|
-| Start Menu | **GrokHub** or **GrokHub (direct)** |
-| Run dialog | `%LOCALAPPDATA%\GrokHub\grokhub.cmd` |
-
-## If install fails
-
-| Symptom | Fix |
-|---------|-----|
-| `Node.js is required` | Install Node LTS, **close and reopen** PowerShell |
-| `ca-bundle.crt` on clone | Use ZIP / `download-and-install.ps1` |
-| `ExecutionPolicy` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
-| `electron binary missing` | Re-run `install.ps1 -Build` |
-| Blank window | Check `%LOCALAPPDATA%\GrokHub\runtime\ui.log` |
-| Running from System32 | `cd $env:USERPROFILE\Downloads` first |
-
-## Uninstall
+## From source (developers)
 
 ```powershell
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\GrokHub"
-Remove-Item -Force "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\GrokHub.lnk" -ErrorAction SilentlyContinue
-Remove-Item -Force "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\GrokHub (direct).lnk" -ErrorAction SilentlyContinue
+npm install
+npm run desktop:build
+npm install -D electron@35.1.2 electron-builder
+npm run dist:win
 ```
+
+Output: `dist/GrokHub-Setup-*.exe`, `dist/GrokHub-Portable-*.exe`
+
+## Legacy PowerShell install
+
+`install.ps1` / `download-and-install.ps1` still work for source installs, but the **Release .exe** is preferred for end users.

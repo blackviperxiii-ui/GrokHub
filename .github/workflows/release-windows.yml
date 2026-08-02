@@ -1,0 +1,99 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: "Create/update GitHub Release with the .exe assets"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --no-fund --no-audit
+
+      - name: Install Electron + electron-builder
+        run: npm install --save-dev electron@35.1.2 electron-builder@25.1.8 --no-fund --no-audit
+
+      - name: Build desktop UI (.output)
+        env:
+          GROKHUB_DESKTOP: "1"
+          NODE_ENV: production
+        run: npm run desktop:build
+
+      - name: Verify UI build
+        shell: pwsh
+        run: |
+          if (-not (Test-Path ".output/server/index.mjs")) {
+            throw "Missing .output/server/index.mjs after desktop:build"
+          }
+          Write-Host "UI build OK"
+
+      - name: Package Windows (NSIS + portable)
+        env:
+          # skip code signing in CI
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --win --x64 --publish never
+
+      - name: List dist
+        shell: pwsh
+        run: Get-ChildItem dist -Recurse | Select-Object FullName, Length
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: grokhub-windows
+          path: |
+            dist/*.exe
+            dist/*.yml
+          if-no-files-found: error
+
+      - name: Version for release
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Get-Content package.json | ConvertFrom-Json).version
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+          echo "tag=v$v" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.ver.outputs.version) }}
+          name: GrokHub ${{ steps.ver.outputs.version }} (Windows)
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## Windows install
+
+            1. Download **GrokHub-Setup-${{ steps.ver.outputs.version }}.exe**
+            2. Run it (SmartScreen may warn — **More info → Run anyway** on unsigned builds)
+            3. Launch **GrokHub** from the Start Menu or Desktop shortcut
+
+            Portable option: **GrokHub-Portable-${{ steps.ver.outputs.version }}.exe** (no installer).
+
+            No Node.js or Git required for the packaged app.
+          files: |
+            dist/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

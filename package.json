@@ -1,6 +1,6 @@
 {
   "name": "grokhub",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -23,9 +23,11 @@
     "aur:release": "bash scripts/make-aur-release.sh",
     "desktop:win": "electron desktop/main.mjs",
     "desktop:win:prod": "electron desktop/main.mjs",
-    "dist:win": "electron-builder --win --x64",
+    "dist:win": "electron-builder --win --x64 --publish never",
     "dist:linux": "electron-builder --linux AppImage",
-    "install:win": "echo \"Run: powershell -ExecutionPolicy Bypass -File packaging/windows/install.ps1 -Build\""
+    "install:win": "echo \"Run: powershell -ExecutionPolicy Bypass -File packaging/windows/install.ps1 -Build\"",
+    "dist:win:dir": "electron-builder --win --x64 --dir",
+    "release:win": "echo \"Tag v$(node -p require(\\\"./package.json\\\").version) and push, or run workflow_dispatch Release Windows\""
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.3",
@@ -102,5 +104,56 @@
     "typescript-eslint": "^8.56.1",
     "vite": "^8.1.0"
   },
-  "main": "desktop/main.mjs"
+  "main": "desktop/main.mjs",
+  "build": {
+    "appId": "com.grokhub.app",
+    "productName": "GrokHub",
+    "directories": {
+      "output": "dist",
+      "buildResources": "packaging/windows/build"
+    },
+    "files": [
+      "desktop/**/*",
+      ".output/**/*",
+      "package.json",
+      "APP_VERSION",
+      "LICENSE"
+    ],
+    "extraMetadata": {
+      "main": "desktop/main.mjs"
+    },
+    "asar": false,
+    "win": {
+      "icon": "packaging/windows/build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "executableName": "GrokHub",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "GrokHub",
+      "runAfterFinish": true,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}.${ext}"
+    }
+  }
 }

@@ -1,7 +1,7 @@
 /**
- * Start / wait for the GrokHub Nitro UI (.output/server) next to desktop/.
- * Used on Windows and Linux so Electron always has a URL even if the shell
- * launcher failed to start the server.
+ * Start / wait for the GrokHub Nitro UI (.output/server).
+ * Works for source installs AND packaged Electron (NSIS/portable) via
+ * ELECTRON_RUN_AS_NODE so no system Node.js is required.
  */
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -10,11 +10,33 @@ const path = require("node:path");
 const os = require("node:os");
 
 function appRootFrom(desktopDir) {
-  if (process.env.GROKHUB_HOME && fs.existsSync(process.env.GROKHUB_HOME)) {
-    return path.resolve(process.env.GROKHUB_HOME);
+  // 1) Explicit install home
+  if (process.env.GROKHUB_HOME) {
+    const h = path.resolve(process.env.GROKHUB_HOME);
+    if (fs.existsSync(path.join(h, ".output", "server", "index.mjs"))) return h;
   }
-  // desktop/ is inside app root
-  return path.resolve(desktopDir, "..");
+  // 2) Packaged Electron — resources/app (or app.asar.unpacked parent)
+  try {
+    const { app } = require("electron");
+    if (app?.isPackaged) {
+      const p = app.getAppPath();
+      if (fs.existsSync(path.join(p, ".output", "server", "index.mjs"))) return p;
+      // some layouts put .output under resources/
+      if (process.resourcesPath) {
+        const r = process.resourcesPath;
+        if (fs.existsSync(path.join(r, ".output", "server", "index.mjs"))) return r;
+        if (fs.existsSync(path.join(r, "app", ".output", "server", "index.mjs")))
+          return path.join(r, "app");
+      }
+      return p;
+    }
+  } catch {
+    /* not in electron yet */
+  }
+  // 3) desktop/ sibling of .output
+  const sibling = path.resolve(desktopDir, "..");
+  if (fs.existsSync(path.join(sibling, ".output", "server", "index.mjs"))) return sibling;
+  return sibling;
 }
 
 function serverEntry(root) {
@@ -56,8 +78,27 @@ function runtimeDir() {
 }
 
 /**
+ * Prefer Electron-as-Node so packaged apps need no system Node install.
+ */
+function nodeSpawnSpec(entry) {
+  const hasElectron =
+    Boolean(process.versions.electron) ||
+    /electron|grokhub/i.test(process.execPath);
+  if (hasElectron) {
+    return {
+      bin: process.execPath,
+      args: [entry],
+      envExtra: { ELECTRON_RUN_AS_NODE: "1" },
+    };
+  }
+  if (process.platform === "win32") {
+    return { bin: "node.exe", args: [entry], envExtra: {}, shell: true };
+  }
+  return { bin: process.execPath, args: [entry], envExtra: {} };
+}
+
+/**
  * @param {string} desktopDir absolute path to desktop/ (usually __dirname)
- * @returns {Promise<{ url: string, started: boolean, root: string, error?: string }>}
  */
 async function ensureUiServer(desktopDir) {
   const root = appRootFrom(desktopDir);
@@ -67,7 +108,6 @@ async function ensureUiServer(desktopDir) {
     "",
   );
 
-  // Explicit URL already up?
   if (await probe(url + "/")) {
     process.env.GROKHUB_URL = url;
     return { url, started: false, root };
@@ -79,7 +119,7 @@ async function ensureUiServer(desktopDir) {
       url,
       started: false,
       root,
-      error: `UI build missing: ${entry}. Run npm run desktop:build or reinstall.`,
+      error: `UI build missing: ${entry}`,
     };
   }
 
@@ -97,8 +137,10 @@ async function ensureUiServer(desktopDir) {
     logFd = "ignore";
   }
 
+  const spec = nodeSpawnSpec(entry);
   const env = {
     ...process.env,
+    ...spec.envExtra,
     PORT: String(port),
     NITRO_PORT: String(port),
     HOST: "127.0.0.1",
@@ -106,21 +148,22 @@ async function ensureUiServer(desktopDir) {
     GROKHUB_HOME: root,
   };
 
-  // Always use `node` for Nitro (never electron.exe)
-  const nodeBin =
-    process.platform === "win32"
-      ? "node.exe"
-      : process.execPath.toLowerCase().includes("electron")
-        ? "node"
-        : process.execPath;
+  try {
+    fs.appendFileSync(
+      logPath,
+      `\n[ui-server] spawn ${spec.bin} ${spec.args.join(" ")} cwd=${root}\n`,
+    );
+  } catch {
+    /* ignore */
+  }
 
-  const child = spawn(nodeBin, [entry], {
+  const child = spawn(spec.bin, spec.args, {
     cwd: root,
     env,
     detached: true,
     stdio: logFd === "ignore" ? "ignore" : ["ignore", logFd, logFd],
     windowsHide: true,
-    shell: process.platform === "win32", // resolve node.exe on PATH
+    shell: Boolean(spec.shell),
   });
   child.unref();
   child.on("error", (err) => {
@@ -134,7 +177,7 @@ async function ensureUiServer(desktopDir) {
     }
   });
 
-  const deadline = Date.now() + 25_000;
+  const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (await probe(`http://127.0.0.1:${port}/`)) {
       const finalUrl = `http://127.0.0.1:${port}`;
@@ -152,9 +195,6 @@ async function ensureUiServer(desktopDir) {
   };
 }
 
-/**
- * Resolve which URL the BrowserWindow should load.
- */
 async function resolveStartUrl(desktopDir) {
   if (process.env.GROKHUB_URL) {
     const u = process.env.GROKHUB_URL.replace(/\/$/, "");
@@ -166,7 +206,6 @@ async function resolveStartUrl(desktopDir) {
     return { url: ensured.url, ok: true, started: ensured.started };
   }
 
-  // Dev fallback
   if (await probe("http://127.0.0.1:8080/")) {
     return { url: "http://127.0.0.1:8080", ok: true };
   }
