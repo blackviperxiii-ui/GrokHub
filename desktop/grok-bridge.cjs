@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.7.0";
+const APP_VERSION = "0.7.1";
 
 function shaMatch(a, b) {
   if (!a || !b) return false;
@@ -23,37 +23,148 @@ function shaMatch(a, b) {
   return x.slice(0, n) === y.slice(0, n);
 }
 
+function sleepMs(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Stop the Nitro UI server so we can swap install files without crashing.
+ */
+async function stopUiServer(steps) {
+  const port = process.env.GROKHUB_PORT || process.env.PORT || "18765";
+  const runtime = process.env.XDG_RUNTIME_DIR || "/tmp";
+  const dir = path.join(runtime, "grokhub");
+  const pidfile = path.join(dir, "ui.pid");
+  const lockfile = path.join(dir, "ui.lock");
+  let stopped = false;
+  for (const file of [pidfile, lockfile]) {
+    try {
+      const raw = await fs.readFile(file, "utf8");
+      const pid = Number(String(raw).trim());
+      if (pid && Number.isFinite(pid) && pid > 1) {
+        try {
+          process.kill(pid, "SIGTERM");
+          steps.push(`Stopped UI pid ${pid}`);
+          stopped = true;
+        } catch {
+          /* already dead */
+        }
+      }
+    } catch {
+      /* no pid file */
+    }
+  }
+  // Free the port gently (do not kill Electron — only listeners on the UI port)
+  try {
+    await execAsync(
+      `bash -lc 'if command -v fuser >/dev/null; then fuser -k ${port}/tcp >/dev/null 2>&1 || true; fi'`,
+      { timeout: 4000, shell: "/bin/bash" },
+    );
+  } catch {
+    /* ignore */
+  }
+  await fs.unlink(pidfile).catch(() => {});
+  await fs.unlink(lockfile).catch(() => {});
+  // Wait until port is free (max ~3s)
+  for (let i = 0; i < 15; i++) {
+    try {
+      await new Promise((resolve, reject) => {
+        const net = require("node:net");
+        const s = net.createConnection({ host: "127.0.0.1", port: Number(port) }, () => {
+          s.destroy();
+          reject(new Error("busy"));
+        });
+        s.on("error", () => resolve());
+        s.setTimeout(200, () => {
+          s.destroy();
+          resolve();
+        });
+      });
+      if (stopped) steps.push(`UI port ${port} free`);
+      return;
+    } catch {
+      await sleepMs(200);
+    }
+  }
+}
+
+/**
+ * Relaunch after a clean exit. Never mutates files here — only starts a fresh process
+ * once the old Electron has quit.
+ */
 function scheduleAppRestart(appRoot) {
   const { spawn } = require("node:child_process");
   const port = process.env.GROKHUB_PORT || "18765";
   const root = appRoot || process.env.GROKHUB_HOME || process.cwd();
   const runtime = process.env.XDG_RUNTIME_DIR || "/tmp";
-  const pidfile = `${runtime}/grokhub/ui.pid`;
+  const pidfile = path.join(runtime, "grokhub", "ui.pid");
+  const log = path.join(runtime, "grokhub", "restart.log");
   const script = `
 set +e
-sleep 1.2
+mkdir -p "${runtime}/grokhub"
+exec >>"${log}" 2>&1
+echo "[restart] $(date -Iseconds) root=${root}"
+# Wait for previous Electron to exit and release files
+sleep 2.8
+# Old process should be dead — free previous tree inodes
+rm -rf "${root}.prev" 2>/dev/null || true
+rm -rf "${root}.new" 2>/dev/null || true
 if [ -f "${pidfile}" ]; then
-  kill "$(cat "${pidfile}")" 2>/dev/null || true
+  kill "$(cat "${pidfile}" 2>/dev/null)" 2>/dev/null || true
   rm -f "${pidfile}"
 fi
-fuser -k ${port}/tcp >/dev/null 2>&1 || true
-if command -v grokhub >/dev/null 2>&1; then
+# Ensure UI port free
+if command -v fuser >/dev/null 2>&1; then
+  fuser -k ${port}/tcp >/dev/null 2>&1 || true
+fi
+sleep 0.4
+export GROKHUB_HOME="${root}"
+export GROKHUB_PORT="${port}"
+export GROKHUB_URL="http://127.0.0.1:${port}"
+# Prefer system launcher when install is system; otherwise use GROKHUB_HOME
+if [ "${root}" = "/usr/lib/grokhub" ] && command -v grokhub >/dev/null 2>&1; then
+  echo "[restart] exec system grokhub"
   nohup grokhub >/dev/null 2>&1 &
   exit 0
 fi
-export GROKHUB_HOME="${root}"
-export GROKHUB_PORT="${port}"
 if [ -x "${root}/packaging/aur/grokhub.sh" ]; then
+  echo "[restart] exec packaging/aur/grokhub.sh"
   nohup bash "${root}/packaging/aur/grokhub.sh" >/dev/null 2>&1 &
-elif [ -f "${root}/desktop/main.mjs" ] && command -v electron >/dev/null 2>&1; then
-  if [ -f "${root}/.output/server/index.mjs" ]; then
-    ( cd "${root}" && export PORT="${port}" NITRO_PORT="${port}" HOST=127.0.0.1 NITRO_HOST=127.0.0.1 && nohup node .output/server/index.mjs >/tmp/grokhub-ui-restart.log 2>&1 & echo $! > "${pidfile}" )
-    sleep 0.8
-  fi
-  nohup electron --class=GrokHub --name=GrokHub "${root}/desktop/main.mjs" >/dev/null 2>&1 &
+  exit 0
 fi
+if command -v grokhub >/dev/null 2>&1; then
+  echo "[restart] exec grokhub with GROKHUB_HOME"
+  nohup env GROKHUB_HOME="${root}" grokhub >/dev/null 2>&1 &
+  exit 0
+fi
+if [ -f "${root}/desktop/main.mjs" ] && command -v electron >/dev/null 2>&1; then
+  if [ -f "${root}/.output/server/index.mjs" ]; then
+    (
+      cd "${root}"
+      export PORT="${port}" NITRO_PORT="${port}" HOST=127.0.0.1 NITRO_HOST=127.0.0.1
+      nohup node .output/server/index.mjs >>"${runtime}/grokhub/ui.log" 2>&1 &
+      echo $! > "${pidfile}"
+    )
+    # Wait for UI health before Electron (avoids blank window)
+    for i in $(seq 1 40); do
+      if curl -sf -o /dev/null --max-time 1 "http://127.0.0.1:${port}/"; then
+        break
+      fi
+      sleep 0.2
+    done
+  fi
+  echo "[restart] exec electron"
+  nohup electron --class=grokhub --name=grokhub "${root}/desktop/main.mjs" >/dev/null 2>&1 &
+  exit 0
+fi
+echo "[restart] no launcher found"
+exit 1
 `.trim();
-  const child = spawn("bash", ["-c", script], { detached: true, stdio: "ignore", env: process.env });
+  const child = spawn("bash", ["-c", script], {
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, GROKHUB_HOME: root },
+  });
   child.unref();
 }
 
@@ -519,108 +630,122 @@ async function checkForUpdate(opts = {}) {
 
 
 /**
- * Install staged files into dest. Elevates with pkexec/sudo when needed (Arch /usr install).
+ * Atomic-ish install: build DEST.new from current + stage overlay, then swap.
+ * Avoids half-written trees and mid-run file nukes that crash Electron/Nitro.
  */
 async function installStagedTree(stageRoot, destRoot, steps) {
-  if (await pathWritable(destRoot)) {
-    const names = await fs.readdir(stageRoot);
-    for (const name of names) {
-      const src = path.join(stageRoot, name);
-      const dest = path.join(destRoot, name);
-      const bak = `${dest}.bak-${Date.now()}`;
-      let had = false;
-      try {
-        await fs.stat(dest);
-        had = true;
-        await fs.rename(dest, bak);
-      } catch {
-        /* new path */
-      }
-      try {
-        await fs.mkdir(path.dirname(dest), { recursive: true });
-        await execAsync(`cp -a ${JSON.stringify(src)} ${JSON.stringify(dest)}`, {
-          timeout: 180000,
-          shell: "/bin/bash",
-        });
-        if (had) await fs.rm(bak, { recursive: true, force: true }).catch(() => {});
-        steps.push(`Updated ${name}`);
-      } catch (e) {
-        if (had) {
-          await fs.rm(dest, { recursive: true, force: true }).catch(() => {});
-          await fs.rename(bak, dest).catch(() => {});
-        }
-        throw e;
-      }
-    }
-    return { ok: true, elevated: false };
-  }
-
-  if (process.platform !== "linux") {
-    throw new Error(
-      `Cannot write to ${destRoot} (permission denied). Reinstall to a user path or run the installer as admin.`,
-    );
-  }
-
-  steps.push(`Need admin to write ${destRoot}`);
-  const shPath = path.join(os.tmpdir(), `grokhub-elevate-${process.pid}.sh`);
-  const sh = `#!/bin/bash
+  const shBody = `#!/bin/bash
 set -euo pipefail
 STAGE=${JSON.stringify(stageRoot)}
 DEST=${JSON.stringify(destRoot)}
-mkdir -p "$DEST"
-for item in "$STAGE"/*; do
-  [ -e "$item" ] || continue
-  name=$(basename "$item")
-  rm -rf "$DEST/$name"
-  cp -a "$item" "$DEST/$name"
-  echo "Installed $name"
-done
+NEW="$DEST.new"
+PREV="$DEST.prev"
+rm -rf "$NEW"
+mkdir -p "$NEW"
+# 1) Seed from live install (preserves .output and anything not in the stage)
+if [ -d "$DEST" ]; then
+  cp -a "$DEST"/. "$NEW"/ 2>/dev/null || true
+fi
+# 2) Overlay staged files (complete packages only — never partial renames of live dirs)
+cp -a "$STAGE"/. "$NEW"/
+# 3) Guarantee a bootable UI
+if [ ! -f "$NEW/.output/server/index.mjs" ]; then
+  if [ -f "$DEST/.output/server/index.mjs" ]; then
+    rm -rf "$NEW/.output"
+    cp -a "$DEST/.output" "$NEW/.output"
+    echo "Preserved .output from live install"
+  elif [ -f "/usr/lib/grokhub/.output/server/index.mjs" ]; then
+    rm -rf "$NEW/.output"
+    cp -a /usr/lib/grokhub/.output "$NEW/.output"
+    echo "Preserved .output from system install"
+  else
+    echo "WARNING: no .output — UI may fail until repair-install" >&2
+  fi
+fi
+# 4) Require desktop shell
+if [ ! -f "$NEW/desktop/main.mjs" ]; then
+  echo "ERROR: stage missing desktop/main.mjs" >&2
+  exit 2
+fi
+# 5) Swap trees (running processes keep old inodes; new launch uses DEST)
+rm -rf "$PREV"
+if [ -d "$DEST" ]; then
+  mv "$DEST" "$PREV"
+fi
+mv "$NEW" "$DEST"
+# 6) Permissions for system tree
 if [[ "$DEST" == /usr/lib/grokhub || "$DEST" == /usr/lib/grokhub/* ]]; then
   chown -R root:root "$DEST" 2>/dev/null || true
   find "$DEST" -type d -exec chmod 755 {} + 2>/dev/null || true
   find "$DEST" -type f -exec chmod 644 {} + 2>/dev/null || true
   [ -f "$DEST/desktop/main.mjs" ] && chmod 755 "$DEST/desktop/main.mjs" || true
+  [ -f "$DEST/packaging/aur/grokhub.sh" ] && chmod 755 "$DEST/packaging/aur/grokhub.sh" || true
 fi
+# 7) Keep PREV until the old process exits (deleting it now crashes running Electron)
+# Restart script removes DEST.prev after relaunch delay.
+echo "Previous tree kept at $PREV until restart"
 echo OK
-`;
-  await fs.writeFile(shPath, sh, { mode: 0o755 });
+`
 
-  const elevators = [];
-  // Graphical polkit first
-  elevators.push(["pkexec", ["bash", shPath]]);
-  // Fallback sudo (may prompt in terminal only)
-  elevators.push(["sudo", ["-n", "bash", shPath]]); // non-interactive first
-  elevators.push(["sudo", ["bash", shPath]]);
-
-  let lastErr = "elevation failed";
-  for (const [bin, args] of elevators) {
+  async function runScript(elevated) {
+    const shPath = path.join(os.tmpdir(), `grokhub-install-${process.pid}-${Date.now()}.sh`);
+    await fs.writeFile(shPath, shBody, { mode: 0o755 });
     try {
-      await execAsync(`command -v ${bin}`, { timeout: 3000, shell: "/bin/bash" });
-    } catch {
-      continue;
-    }
-    try {
-      steps.push(`Elevating via ${bin}…`);
-      const { stdout, stderr } = await execAsync(`${bin} ${args.map((a) => JSON.stringify(a)).join(" ")}`, {
-        timeout: 300000,
-        maxBuffer: 5 * 1024 * 1024,
-        shell: "/bin/bash",
-      });
-      if (stdout) steps.push(...String(stdout).trim().split("\n").filter(Boolean).slice(0, 20));
-      if (stderr && /error|denied|fail/i.test(stderr)) steps.push(stderr.slice(0, 200));
+      if (!elevated) {
+        const { stdout, stderr } = await execAsync(`bash ${JSON.stringify(shPath)}`, {
+          timeout: 300000,
+          maxBuffer: 8 * 1024 * 1024,
+          shell: "/bin/bash",
+        });
+        if (stdout) steps.push(...String(stdout).trim().split("\n").filter(Boolean).slice(0, 30));
+        if (stderr && /error|WARNING|fail/i.test(stderr)) steps.push(stderr.trim().slice(0, 300));
+        return { ok: true, elevated: false };
+      }
+      const elevators = [
+        ["pkexec", ["bash", shPath]],
+        ["sudo", ["-n", "bash", shPath]],
+        ["sudo", ["bash", shPath]],
+      ];
+      let lastErr = "elevation failed";
+      for (const [bin, args] of elevators) {
+        try {
+          await execAsync(`command -v ${bin}`, { timeout: 3000, shell: "/bin/bash" });
+        } catch {
+          continue;
+        }
+        try {
+          steps.push(`Elevating via ${bin}…`);
+          const { stdout, stderr } = await execAsync(
+            `${bin} ${args.map((a) => JSON.stringify(a)).join(" ")}`,
+            { timeout: 300000, maxBuffer: 8 * 1024 * 1024, shell: "/bin/bash" },
+          );
+          if (stdout) steps.push(...String(stdout).trim().split("\n").filter(Boolean).slice(0, 30));
+          if (stderr && /error|denied|fail|WARNING/i.test(stderr)) steps.push(stderr.slice(0, 300));
+          return { ok: true, elevated: true, via: bin };
+        } catch (e) {
+          lastErr = e instanceof Error ? e.message : String(e);
+          steps.push(`${bin}: ${lastErr.slice(0, 160)}`);
+        }
+      }
+      throw new Error(
+        `Permission denied writing ${destRoot}. Approve pkexec/sudo, or run: sudo bash ${shPath}. Last: ${lastErr.slice(0, 200)}`,
+      );
+    } finally {
       await fs.unlink(shPath).catch(() => {});
-      return { ok: true, elevated: true, via: bin };
-    } catch (e) {
-      lastErr = e instanceof Error ? e.message : String(e);
-      steps.push(`${bin}: ${lastErr.slice(0, 160)}`);
     }
   }
-  await fs.unlink(shPath).catch(() => {});
-  throw new Error(
-    `Permission denied writing ${destRoot}. ` +
-      `Approve the admin prompt (pkexec), or run: sudo cp -a <stage>/* ${destRoot}/ ` +
-      `or reinstall with user prefix. Last error: ${lastErr.slice(0, 200)}`,
-  );
+
+  if (await pathWritable(destRoot)) {
+    steps.push("Atomic install (user-writable)");
+    return runScript(false);
+  }
+  if (process.platform !== "linux") {
+    throw new Error(
+      `Cannot write to ${destRoot} (permission denied). Reinstall to a user path or run the installer as admin.`,
+    );
+  }
+  steps.push(`Need admin to write ${destRoot}`);
+  return runScript(true);
 }
 
 async function applyUpdate(opts = {}) {
@@ -876,7 +1001,11 @@ async function applyUpdate(opts = {}) {
     await fs.writeFile(path.join(stageRoot, "APP_VERSION"), newVersion + "\n");
     steps.push(`APP_VERSION → ${newVersion}`);
 
-    // Install stage → target (elevates for /usr/lib/grokhub)
+    // Stop Nitro UI before swapping files (prevents crashes / partial reads)
+    steps.push("Stopping UI server for safe install…");
+    await stopUiServer(steps);
+
+    // Install stage → target (atomic swap; elevates for /usr/lib/grokhub)
     let installResult;
     try {
       installResult = await installStagedTree(stageRoot, targetRoot, steps);
@@ -929,16 +1058,8 @@ async function applyUpdate(opts = {}) {
       steps.push("Warning: .output/server/index.mjs missing after update");
     }
 
-    try {
-      if (typeof process.getuid === "function" && process.getuid() === 0) {
-        const script = path.join(targetRoot, "scripts", "install-arch.sh");
-        await fs.stat(script);
-        steps.push("Running install-arch.sh");
-        await execAsync(`bash ${JSON.stringify(script)}`, { cwd: targetRoot, timeout: 180000, shell: "/bin/bash" });
-      }
-    } catch {
-      steps.push("System reinstall script skipped");
-    }
+    // Never run install-arch.sh mid-session — it reinstalls packages while UI is half-down.
+    steps.push("Skipped install-arch.sh (use repair-install offline if needed)");
 
     let status;
     try {
@@ -988,7 +1109,7 @@ const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const XAI_UA = "GrokHub/0.7.0 (xAI OAuth; Electron)";
+const XAI_UA = "GrokHub/0.7.1 (xAI OAuth; Electron)";
 
 async function xaiDiscovery() {
   const res = await fetch(XAI_OAUTH_DISCOVERY, {

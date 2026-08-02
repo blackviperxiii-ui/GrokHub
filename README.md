@@ -1,6 +1,6 @@
 # GrokHub
 
-**v0.7.0** — Grok-native agent control plane for **Windows** and **Arch Linux / CachyOS**.
+**v0.7.1** — Grok-native agent control plane for **Windows** and **Arch Linux / CachyOS**.
 
 Modes (Auto / Fast / Expert / Heavy / Build) · Imagine · connectors · skills · automations · usage meter · free-Grok fallback · setup sync · unsandboxed host (CLI · files · apps).
 

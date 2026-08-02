@@ -645,14 +645,23 @@ function registerIpc() {
   safeHandle("update:apply", async (_e, opts) => {
     const r = await grokBridge.applyUpdate({ ...(opts || {}), restart: true });
     if (r?.ok && r?.restarting) {
+      // Give IPC time to return result to renderer; restart script waits ~2.8s after exit
       setTimeout(() => {
         try {
           tray?.destroy();
         } catch {
           /* ignore */
         }
+        try {
+          // Hide window so user doesn't see a half-dead shell while files swap finishes
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.hide();
+          }
+        } catch {
+          /* ignore */
+        }
         app.exit(0);
-      }, 900);
+      }, 1600);
     }
     return r;
   });

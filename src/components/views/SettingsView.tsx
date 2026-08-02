@@ -238,12 +238,14 @@ export function SettingsView() {
         ...(r.steps || []),
       ].filter(Boolean);
       if (r.ok && r.restarting) {
-        lines.push("", "Restarting GrokHub…");
+        lines.push("", "Restarting GrokHub… window will close and reopen.");
         setUpdateLog(lines.join("\n"));
-        // Desktop shell exits; in browser preview just refresh state
-        setTimeout(() => {
-          window.location.reload();
-        }, 1500);
+        // Desktop shell exits and relaunches — do NOT reload mid-exit (causes instability)
+        if (!window.grokhubDesktop) {
+          setTimeout(() => {
+            window.location.reload();
+          }, 1500);
+        }
         return;
       }
       setUpdateLog(lines.join("\n"));
