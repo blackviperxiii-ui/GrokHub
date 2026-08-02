@@ -1315,7 +1315,18 @@ async function applyUpdate(opts = {}) {
     if (doRestart) {
       steps.push("Restarting GrokHub…");
       process.env.GROKHUB_HOME = targetRoot;
-      scheduleAppRestart(targetRoot);
+      try {
+        scheduleAppRestart(targetRoot);
+        steps.push("Restart scheduled");
+      } catch (re) {
+        // Install already succeeded — never fail the whole update on relaunch glitches
+        steps.push(
+          `Restart helper error (app is updated; relaunch manually): ${
+            re instanceof Error ? re.message : re
+          }`,
+        );
+        steps.push(`Manual: GROKHUB_HOME=${targetRoot} ${targetRoot}/packaging/aur/grokhub.sh`);
+      }
     } else {
       steps.push("Done — relaunch GrokHub to load the new build");
     }
