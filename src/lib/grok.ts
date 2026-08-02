@@ -70,6 +70,7 @@ CRITICAL — no fake progress / no stalling:
 - If the user asks about their system, install, processes, logs, files, or bugs needing local data: emit HOST_CMD immediately (short preface OK).
 - Do not ask permission for safe read-only diagnostics — just run them.
 - Do not end a turn with only a plan. Commands first, then summarize after HOST_RESULT.
+- The app may auto-nudge you to finish if you stall — treat that as mandatory continuation until the user goal is done or GOAL_BLOCKED.
 
 ## Connectors
 Only use tools listed as LIVE in the connector context below. Do not invent mail, calendar, or Notion results.
@@ -553,18 +554,21 @@ export function stripHostCommands(text: string): string {
  * e.g. "I'll probe processes…" / "Would you like me to start the investigation?"
  */
 export function looksLikeDeferredHostWork(text: string): boolean {
+  // Shared with agent-finish planning stall (keep in sync conceptually)
   const s = text || "";
-  if (/HOST_CMD\s*:/i.test(s)) return false;
+  if (/HOST_CMD\s*:/i.test(s) || /CONNECTOR_CMD\s*:/i.test(s)) return false;
   const plan =
-    /\b(i('ll| will)|let me|i can|i should|i'm going to|going to)\b.{0,40}\b(check|probe|inspect|investigate|scan|look|run|start|continue|dig|examine|verify)\b/i.test(
+    /\b(i('ll| will)|let me|i can|i should|i'm going to|i am going to|going to)\b.{0,50}\b(check|probe|inspect|investigate|scan|look|run|start|continue|dig|examine|verify|read|list|fetch)\b/i.test(
       s,
     ) ||
     /\b(continuing|continue)\b.{0,30}\b(deep dive|investigation|scan|probe)\b/i.test(s) ||
-    /\b(would you like me to|shall i|want me to)\b.{0,40}\b(start|run|check|investigate|probe)\b/i.test(
+    /\b(would you like me to|shall i|want me to|should i)\b.{0,50}\b(start|run|check|investigate|probe|continue)\b/i.test(
       s,
     ) ||
     /\binstead of actually running\b/i.test(s) ||
-    /\bnever output any real\b.{0,20}\bHOST_CMD\b/i.test(s);
+    /\bnever output any real\b.{0,20}\bHOST_CMD\b/i.test(s) ||
+    /\b(give me a (moment|sec)|one (sec|second|moment)|hang on|working on it)\b/i.test(s) ||
+    /\b(let me|i'll|i will)\b[^.!?]{0,80}$/i.test(s.trim());
   return plan;
 }
 

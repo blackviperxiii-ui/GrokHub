@@ -415,6 +415,8 @@ type State = {
   resumeLastSession: () => void;
   /** After an interrupt: drop partial assistant reply and re-run last user prompt */
   continueInterruptedSession: () => Promise<void>;
+  /** Resume a stalled/incomplete agent reply without waiting for interrupt banner */
+  keepGoingChat: () => Promise<void>;
   setAgentPrefs: (patch: Partial<{ temperature: number; hostToolsEnabled: boolean; connectorToolsEnabled: boolean; memoryNotes: string }>) => void;
   /** Compact older turns into a summary (API window); full chat kept */
   compactThread: (threadId?: string | null) => { ok: boolean; detail: string };
@@ -3244,6 +3246,29 @@ syncWebsiteConnectors: async () => {
 
         await get().sendChat(prompt);
       },
+      keepGoingChat: async () => {
+        if (get().running) return;
+        const chat = get().chat;
+        const lastAsst = [...chat].reverse().find((m) => m.role === "assistant");
+        const lastUser = [...chat].reverse().find((m) => m.role === "user");
+        const { looksLikeIncompleteAgentTurn, buildKeepGoingUserPrompt } = await import(
+          "./agent-finish"
+        );
+        const incomplete = looksLikeIncompleteAgentTurn(lastAsst?.content || "", {
+          userPrompt: lastUser?.content,
+        });
+        // Always allow keep-going after any assistant reply; soft nudge if looks complete
+        const prompt = buildKeepGoingUserPrompt(lastUser?.content);
+        get().pushActivity({
+          kind: "chat",
+          title: incomplete ? "Keep going" : "Continue anyway",
+          detail: incomplete
+            ? "Finishing stalled agent turn"
+            : "User asked to continue",
+          status: "running",
+        });
+        await get().sendChat(prompt);
+      },
 
       setPreferFreeGrok: (v) => set({ preferFreeGrok: Boolean(v) }),
       setUiTheme: (t) => set({ uiTheme: t }),
@@ -5026,6 +5051,12 @@ if (cmd === "tools") {
           userWantsHostInvestigation,
         } = await import("./grok");
         const {
+          looksLikeIncompleteAgentTurn,
+          looksLikePlanningStall,
+          buildAutoFinishNudge,
+          buildKeepGoingUserPrompt,
+        } = await import("./agent-finish");
+        const {
           extractConnectorCommands,
           stripConnectorCommands,
           runConnectorTool,
@@ -5158,6 +5189,14 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
                     ? 12
                     : 8;
             let hostNudges = 0;
+            let finishNudges = 0;
+            const maxFinishNudges =
+              mode === "max" || routed === "max" || mode === "heavy" || routed === "heavy"
+                ? 4
+                : mode === "build" || routed === "build" || mode === "auto"
+                  ? 3
+                  : 2;
+            let usedAnyTools = false;
             let accumulated = "";
 
             // Build workspace context once per user turn (budgeted pins + capabilities)
@@ -5425,8 +5464,9 @@ while (rounds < maxRounds && !aborted) {
                   !cmds.length &&
                   !connCmds.length &&
                   get().agentPrefs.hostToolsEnabled &&
-                  hostNudges < 2 &&
+                  hostNudges < 4 &&
                   (looksLikeDeferredHostWork(full) ||
+                    looksLikePlanningStall(full) ||
                     (rounds === 1 && userWantsHostInvestigation(trimmed)))
                 ) {
                   hostNudges += 1;
@@ -5460,9 +5500,49 @@ while (rounds < maxRounds && !aborted) {
                   }
                 }
                 if (!cmds.length && !connCmds.length) {
-                  finalAnswer = visible || full;
+                  const candidate = visible || full;
+                  const incomplete = looksLikeIncompleteAgentTurn(candidate, {
+                    hadTools: usedAnyTools,
+                    userPrompt: trimmed,
+                  });
+                  if (
+                    incomplete &&
+                    finishNudges < maxFinishNudges &&
+                    !abort.signal.aborted &&
+                    gen === chatGeneration
+                  ) {
+                    finishNudges += 1;
+                    history.push({ role: "assistant", content: full });
+                    history.push({
+                      role: "user",
+                      content: buildAutoFinishNudge({
+                        round: finishNudges,
+                        maxRounds: maxFinishNudges,
+                        userPrompt: trimmed,
+                        lastAssistant: candidate,
+                        hostAvailable: Boolean(get().agentPrefs.hostToolsEnabled),
+                      }),
+                    });
+                    set({
+                      streamStatus: `Auto-finish ${finishNudges}/${maxFinishNudges} — completing goal…`,
+                    });
+                    patchBot(
+                      (candidate || "Working…") +
+                        `\n\n_Continuing automatically (${finishNudges}/${maxFinishNudges})…_`,
+                      { streaming: true },
+                    );
+                    get().pushActivity({
+                      kind: "system",
+                      title: "Auto-finish nudge",
+                      detail: `Round ${finishNudges}/${maxFinishNudges} — agent stalled on plan-only reply`,
+                      status: "running",
+                    });
+                    continue;
+                  }
+                  finalAnswer = candidate;
                   break;
                 }
+                usedAnyTools = true;
 
                 // Connector tools (GitHub live; website connectors status-aware)
                 if (connCmds.length) {

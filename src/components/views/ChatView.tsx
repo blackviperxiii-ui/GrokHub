@@ -41,6 +41,7 @@ import type { SlashDef } from "@/lib/slash-commands";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { MarkdownBody } from "@/lib/markdown";
+import { looksLikeIncompleteAgentTurn } from "@/lib/agent-finish";
 
 function chipIcon(kind: QuickChip["kind"]) {
   if (kind === "shell") return Terminal;
@@ -445,6 +446,7 @@ export function ChatView() {
   const sessionResume = useGrokHub((s) => s.sessionResume);
   const resumeLastSession = useGrokHub((s) => s.resumeLastSession);
   const continueInterruptedSession = useGrokHub((s) => s.continueInterruptedSession);
+  const keepGoingChat = useGrokHub((s) => s.keepGoingChat);
   const dismissSessionResume = useGrokHub((s) => s.dismissSessionResume);
   const exportThreadMarkdown = useGrokHub((s) => s.exportThreadMarkdown);
   const editChatMessage = useGrokHub((s) => s.editChatMessage);
@@ -1338,6 +1340,59 @@ export function ChatView() {
                 </div>
               </div>
             )}
+            {!busy &&
+              sessionResume?.kind !== "interrupted" &&
+              (() => {
+                const lastAsst = [...chat]
+                  .reverse()
+                  .find((m) => m.role === "assistant" && !m.streaming);
+                const lastUser = [...chat].reverse().find((m) => m.role === "user");
+                if (!lastAsst) return null;
+                if (
+                  !looksLikeIncompleteAgentTurn(lastAsst.content || "", {
+                    userPrompt: lastUser?.content,
+                  })
+                ) {
+                  return null;
+                }
+                return (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-info)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-info)_10%,var(--color-elevated))] px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-[var(--color-info)]">
+                        Agent may have stopped early
+                      </div>
+                      <div className="truncate text-[11px] text-[var(--color-muted)]">
+                        Planning-only or unfinished reply — keep going until the goal is done
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-1.5">
+                      <Button
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => {
+                          void (async () => {
+                            setPendingBusy(true);
+                            try {
+                              await keepGoingChat();
+                            } finally {
+                              setPendingBusy(false);
+                            }
+                            requestAnimationFrame(() => {
+                              stickToBottomRef.current = true;
+                              endRef.current?.scrollIntoView({
+                                behavior: "smooth",
+                                block: "end",
+                              });
+                            });
+                          })();
+                        }}
+                      >
+                        Keep going
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })()}
           </div>
           <div
             ref={listRef}
