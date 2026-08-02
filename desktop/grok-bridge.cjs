@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.14";
+const APP_VERSION = "0.8.15";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -266,15 +266,33 @@ Help with coding, ops, research, and local machine tasks.
 Be direct and practical. Prefer short structured answers with bullets when listing steps.
 Do not prefix replies with mode labels like [Fast] or [Auto → …]. Just answer.
 
-When you need real filesystem / shell data, output:
-HOST_CMD: <shell command>
-On Linux the host runs bash; on Windows it runs PowerShell. Prefer portable commands when possible (or platform-appropriate paths).
-Do not invent file listings — wait for HOST_RESULT.`;
+## Desktop host (unsandboxed) — tool-first
+When Desktop Host is LIVE you can act on the real machine (files, shell, apps).
+Do NOT invent filesystem listings, command output, process state, or install paths.
+Put host commands on their OWN line, alone:
+HOST_CMD: ls -la "$HOME/Downloads"
+Never glue HOST_CMD onto a prose sentence. Prefer one simple command (ls, head, cat, find, ps, stat).
+For broad scans always bound the work (find -maxdepth 3, head -n 100). Never unbounded find/grep on / or $HOME.
+
+CRITICAL — no fake progress:
+- NEVER say "I'll check", "I'll probe", "let me investigate", "continuing the deep dive", or "would you like me to start" WITHOUT also emitting HOST_CMD lines in the SAME reply.
+- If the user asks about their system, install, processes, logs, files, or a bug that needs local data: emit HOST_CMD immediately. Short preface is fine; commands must follow in the same message.
+- Do not ask permission to run safe read-only diagnostics (ps, ls, find, journalctl --user -n, uname, which). Just run them.
+- After HOST_RESULT arrives, summarize. Use more HOST_CMD rounds only when needed.
+- Skip host tools only for pure chat, writing, or code that does not need live machine data.
+
+## Connectors
+Only use LIVE connector tools. Own line:
+CONNECTOR_CMD: github user
+Wait for CONNECTOR_RESULT; do not invent data.
+
+## Safety
+Refuse criminal activity, malware, exploits. Confirm destructive commands. Prefer non-interactive shell.`;
   const id = resolveMode(mode, prompt);
-  if (id === "fast") return `${base}\nMode: Fast — concise answers, minimal preamble.`;
-  if (id === "expert") return `${base}\nMode: Expert — reason carefully, surface tradeoffs.`;
-  if (id === "heavy") return `${base}\nMode: Heavy (team of experts) — multi-angle synthesis.`;
-  if (id === "build") return `${base}\nMode: Build — prioritize working code and file paths.`;
+  if (id === "fast") return `${base}\nMode: Fast — concise answers, minimal preamble. Still emit HOST_CMD when machine data is required.`;
+  if (id === "expert") return `${base}\nMode: Expert — reason carefully, surface tradeoffs. Prefer real HOST_CMD evidence over speculation.`;
+  if (id === "heavy") return `${base}\nMode: Heavy (team of experts) — multi-angle synthesis backed by HOST_CMD when local facts matter.`;
+  if (id === "build") return `${base}\nMode: Build — prioritize working code and file paths; use HOST_CMD to inspect the real tree.`;
   return base;
 }
 
@@ -2076,8 +2094,9 @@ async function callXaiChatStream(req = {}, handlers = {}) {
     { role: "system", content: sys },
     ...(req.messages || []).filter((m) => m.role !== "system"),
   ];
-  const temperature = 0.6;
-  const max_tokens = freeTier ? 1536 : 3072;
+  const temperature = typeof req.temperature === "number" ? req.temperature : 0.6;
+  // Higher caps so long tool-using turns don't get cut mid-stream
+  const max_tokens = freeTier ? 2048 : 8192;
   const signal = handlers.signal;
 
   async function nonStreamFallback(reason) {

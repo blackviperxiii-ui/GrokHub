@@ -37,6 +37,12 @@ You may use multiple HOST_CMD rounds if needed. If a scan times out, narrow scop
 Be tool-first for real system questions: call HOST_CMD rather than guessing. Skip host tools for pure chat, writing, or code that does not need live machine data.
 Do not run destructive commands (rm -rf, disk wipe, credential theft) unless the user clearly requests them; the app may confirm risky commands.
 
+CRITICAL — no fake progress / no stalling:
+- NEVER say "I'll check", "I'll probe", "let me investigate", "continuing the deep dive", or "would you like me to start" without also emitting HOST_CMD lines in the SAME reply.
+- If the user asks about their system, install, processes, logs, files, or bugs needing local data: emit HOST_CMD immediately (short preface OK).
+- Do not ask permission for safe read-only diagnostics — just run them.
+- Do not end a turn with only a plan. Commands first, then summarize after HOST_RESULT.
+
 ## Connectors
 Only use tools listed as LIVE in the connector context below. Do not invent mail, calendar, or Notion results.
 For live cloud tools, put a command on its OWN line:
@@ -177,7 +183,7 @@ function buildBody(req: GrokChatRequest, stream: boolean) {
     (routed === "fast" ? 0.5 : routed === "build" ? 0.4 : routed === "heavy" ? 0.8 : 0.7);
   const max_tokens =
     req.maxTokens ??
-    (routed === "heavy" ? 4096 : routed === "build" ? 8192 : routed === "expert" ? 3072 : 2048);
+    (routed === "heavy" ? 8192 : routed === "build" ? 8192 : routed === "expert" ? 6144 : 4096);
   return {
     model,
     body: {
@@ -427,7 +433,7 @@ export async function callXaiChatStream(
 /** Parse HOST_CMD commands the model emits for desktop execution (own line or inline). */
 export function extractHostCommands(text: string): string[] {
   const cmds: string[] = [];
-  // Own-line form
+  // Own-line form (preferred)
   for (const line of text.split("\n")) {
     const m = line.match(/^\s*HOST_CMD:\s*(.+?)\s*$/i);
     if (m?.[1]) cmds.push(m[1].trim());
@@ -438,12 +444,19 @@ export function extractHostCommands(text: string): string[] {
     const cmd = (m[1] || "").trim();
     if (cmd && !cmds.includes(cmd)) cmds.push(cmd);
   }
-  // Fenced form: ```host\nls\n```
+  // Fenced host/bash — only short shell one-liners (not multi-line code samples)
   const fenced = [...text.matchAll(/```(?:host|bash|sh)\s*\n([\s\S]*?)```/gi)];
   for (const m of fenced) {
-    for (const line of (m[1] || "").split("\n")) {
-      const cmd = line.trim();
-      if (cmd && !cmd.startsWith("#") && !cmds.includes(cmd)) cmds.push(cmd);
+    const body = (m[1] || "").trim();
+    const lines = body
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("#"));
+    // Skip large code dumps — those are examples, not host actions
+    if (lines.length > 6 || body.length > 600) continue;
+    for (const cmd of lines) {
+      if (/^(import |export |function |const |let |var |class |def |package )/i.test(cmd)) continue;
+      if (cmd && !cmds.includes(cmd)) cmds.push(cmd);
     }
   }
   return cmds.filter(Boolean);
@@ -452,28 +465,65 @@ export function extractHostCommands(text: string): string[] {
 /** Remove HOST_CMD markers from text shown to the user. */
 export function stripHostCommands(text: string): string {
   let out = text;
-  // Drop own-line HOST_CMD
   out = out
     .split("\n")
     .filter((line) => !/^\s*HOST_CMD:\s*/i.test(line))
     .join("\n");
-  // Drop inline HOST_CMD: ... to end of line
   out = out.replace(/\s*HOST_CMD:\s*.+$/gim, "");
-  // Drop host fences
-  out = out.replace(/```(?:host|bash|sh)\s*\n[\s\S]*?```/gi, "");
+  // Drop short host fences only (keep large code samples for display)
+  out = out.replace(/```(?:host|bash|sh)\s*\n([\s\S]*?)```/gi, (block, body: string) => {
+    const lines = String(body || "")
+      .trim()
+      .split("\n")
+      .filter((l) => l.trim() && !l.trim().startsWith("#"));
+    if (lines.length <= 6 && String(body || "").length <= 600) return "";
+    return block;
+  });
   return out.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /**
+ * Model promised host work but emitted no HOST_CMD (classic stall).
+ * e.g. "I'll probe processes…" / "Would you like me to start the investigation?"
+ */
+export function looksLikeDeferredHostWork(text: string): boolean {
+  const s = text || "";
+  if (/HOST_CMD\s*:/i.test(s)) return false;
+  const plan =
+    /\b(i('ll| will)|let me|i can|i should|i'm going to|going to)\b.{0,40}\b(check|probe|inspect|investigate|scan|look|run|start|continue|dig|examine|verify)\b/i.test(
+      s,
+    ) ||
+    /\b(continuing|continue)\b.{0,30}\b(deep dive|investigation|scan|probe)\b/i.test(s) ||
+    /\b(would you like me to|shall i|want me to)\b.{0,40}\b(start|run|check|investigate|probe)\b/i.test(
+      s,
+    ) ||
+    /\binstead of actually running\b/i.test(s) ||
+    /\bnever output any real\b.{0,20}\bHOST_CMD\b/i.test(s);
+  return plan;
+}
+
+/** User wants local investigation / diagnostics. */
+export function userWantsHostInvestigation(prompt: string): boolean {
+  const pr = prompt || "";
+  return (
+    /\b(deep dive|investigate|diagnos|why.*(stop|stall|break|fail)|what.*(wrong|broken)|check (my |the )?(system|install|process|log)|on my (machine|desktop|pc|linux)|host (cmd|tool)|run (commands?|diagnostics?)|look at (my |the )?(system|files?|install))\b/i.test(
+      pr,
+    ) ||
+    /\b(streaming stops?|agent (stall|stuck|not working)|host.?cmd|desktop host)\b/i.test(pr) ||
+    /\b(ps aux|journalctl|find \/|list (files|processes)|read (the )?log)\b/i.test(pr)
+  );
+}
+
+/**
  * If the user clearly asks about local files/folders and the model forgot HOST_CMD,
- * invent a safe listing command.
+ * invent a safe listing / diagnostics command.
  */
 export function inferHostCommandsFromUser(prompt: string): string[] {
   const p = prompt.toLowerCase();
   const wantsList =
     /\b(list|show|what('|’)?s|whats|what do i have|contents?|files?|inside|in my)\b/.test(p) ||
     /\b(check|look at|open)\b/.test(p);
-  if (!wantsList && !/\b(download|downloads|desktop|documents|home|folder|directory)\b/.test(p)) {
+  if (!wantsList && !/\b(download|downloads|desktop|documents|home|folder|directory)\b/.test(p) && !userWantsHostInvestigation(prompt)) {
     return [];
   }
 
@@ -487,13 +537,18 @@ export function inferHostCommandsFromUser(prompt: string): string[] {
       'ls -la "${HOME}/Documents" 2>/dev/null || ls -la ~/Documents 2>/dev/null || echo "Documents folder not found"',
     ];
   }
-  if (/\bdesktop\b/.test(p)) {
+  if (/\bdesktop\b/.test(p) && !/\bdesktop host\b/i.test(prompt)) {
     return [
       'ls -la "${HOME}/Desktop" 2>/dev/null || ls -la ~/Desktop 2>/dev/null || echo "Desktop folder not found"',
     ];
   }
   if (/\bhome\b/.test(p) && wantsList) {
     return ['ls -la "$HOME" | head -80'];
+  }
+  if (userWantsHostInvestigation(prompt)) {
+    return [
+      'uname -a; echo "---"; whoami; echo "---"; pwd; echo "---"; ls -la "${HOME}/.local/lib/grokhub" 2>/dev/null | head -30; ls -la /usr/lib/grokhub 2>/dev/null | head -20; echo "---"; ps -eo pid,cmd --sort=-pid 2>/dev/null | grep -iE "grokhub|electron" | grep -v grep | head -20 || true',
+    ];
   }
   return [];
 }

@@ -17,6 +17,10 @@ export type QuickAssistHit = {
   lastUsedAt: number;
   /** Rolling hour-of-day affinity (0–23) for mild time-of-day boost */
   hourHits: number[];
+  /** Successful follow-through after this chip (completed chat, no crash) */
+  successes?: number;
+  /** Failed / aborted turns after this chip */
+  failures?: number;
 };
 
 export type QuickAssistMemory = {
@@ -66,6 +70,8 @@ export function normalizeMemory(raw: unknown): QuickAssistMemory {
         hourHits: Array.isArray(h.hourHits)
           ? h.hourHits.slice(0, 24).map((n) => Math.max(0, Number(n) || 0))
           : [],
+        successes: Math.max(0, Number(h.successes) || 0),
+        failures: Math.max(0, Number(h.failures) || 0),
       })),
     transitions:
       m.transitions && typeof m.transitions === "object" ? m.transitions : {},
@@ -131,6 +137,8 @@ function upsertHit(
         typedUses: hit.typedDelta ?? 0,
         lastUsedAt: Date.now(),
         hourHits: bumpHour([], hour),
+        successes: 0,
+        failures: 0,
       },
       ...memory.hits,
     ];
@@ -272,6 +280,15 @@ export function memoryBoostForChip(
     // Frequency (log scale)
     boost += Math.min(48, Math.log2(1 + hit.uses) * 12);
     boost += Math.min(12, hit.typedUses * 1.5);
+    // Success-weighted: prefer chips that lead to good turns
+    const ok = hit.successes || 0;
+    const bad = hit.failures || 0;
+    if (ok + bad > 0) {
+      const rate = ok / (ok + bad);
+      boost += (rate - 0.5) * 24; // -12 .. +12
+      boost += Math.min(16, ok * 2);
+      boost -= Math.min(18, bad * 3);
+    }
     // Recency: half-life ~5 days
     const ageMs = Math.max(0, now - hit.lastUsedAt);
     const days = ageMs / (86400_000);
@@ -355,4 +372,25 @@ export function applyMemoryToChips(
     if (!prev || c.score > prev.score) byVal.set(k, c);
   }
   return Array.from(byVal.values());
+}
+
+
+/** Record whether the turn after a chip went well (completed) or poorly (abort/error). */
+export function rememberChipOutcome(
+  memory: QuickAssistMemory,
+  outcome: "success" | "failure",
+  chipKey?: string | null,
+): QuickAssistMemory {
+  const key = chipKey || memory.lastChipKey;
+  if (!key) return memory;
+  const hits = memory.hits.map((h) => {
+    if (h.key !== key) return h;
+    if (outcome === "success") {
+      return { ...h, successes: (h.successes || 0) + 1, lastUsedAt: Date.now() };
+    }
+    return { ...h, failures: (h.failures || 0) + 1, lastUsedAt: Date.now() };
+  });
+  // If key missing (shouldn't), no-op
+  if (!hits.some((h) => h.key === key)) return memory;
+  return { ...memory, hits, updatedAt: Date.now() };
 }

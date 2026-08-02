@@ -385,6 +385,7 @@ export function ChatView() {
   const newThread = useGrokHub((s) => s.newThread);
   const activity = useGrokHub((s) => s.activity);
   const threads = useGrokHub((s) => s.threads);
+  const activeThreadId = useGrokHub((s) => s.activeThreadId);
   const connectors = useGrokHub((s) => s.connectors);
   const pendingHostConfirm = useGrokHub((s) => s.pendingHostConfirm);
   const resolveHostConfirm = useGrokHub((s) => s.resolveHostConfirm);
@@ -515,9 +516,29 @@ export function ChatView() {
         dismissed: quickAssistDismissed,
         rotation: quickAssistRotation,
         max: 4,
+        threadTitle: threads.find((th) => th.id === activeThreadId)?.title || null,
       }),
-    [chat, activity, threads, connectors, mode, grokConnected, usage, text, hostOnline, quickAssistMemory, quickAssistDismissed, quickAssistRotation],
+    [
+      chat,
+      activity,
+      threads,
+      connectors,
+      mode,
+      grokConnected,
+      usage,
+      text,
+      hostOnline,
+      quickAssistMemory,
+      quickAssistDismissed,
+      quickAssistRotation,
+      activeThreadId,
+    ],
   );
+
+  // Open suggestions for empty chats so the primary chip is obvious
+  useEffect(() => {
+    if (chat.length === 0) setChipsOpen(true);
+  }, [chat.length, activeThreadId]);
 
   const onListScroll = useCallback(() => {
     const el = listRef.current;
@@ -1203,30 +1224,49 @@ export function ChatView() {
                     role="listbox"
                     aria-label="Quick assistant suggestions"
                   >
-                    {chips.map((c) => {
+                    {chips.map((c, idx) => {
                       const Icon = chipIcon(c.kind);
+                      const isPrimary = Boolean(c.primary) || idx === 0;
+                      const tip = c.hint
+                        ? `${c.hint}${c.value.startsWith("__") ? "" : `\n\nSends: ${c.value.slice(0, 180)}`}`
+                        : c.value.startsWith("__")
+                          ? c.label
+                          : c.value;
                       return (
                         <div
                           key={c.id + String(quickAssistRotation)}
                           className={cn(
-                            "group relative inline-flex max-w-[min(100%,20rem)] items-start gap-1 rounded-2xl border pl-3 pr-1 py-1 text-left text-xs transition-colors",
-                            "border-[var(--color-border)] text-[var(--color-muted)]",
-                            "hover:border-[var(--color-border-strong)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]",
+                            "group relative inline-flex max-w-[min(100%,22rem)] items-start gap-1 rounded-2xl border pl-3 pr-1 py-1 text-left text-xs transition-colors",
+                            isPrimary
+                              ? "border-[color-mix(in_oklab,var(--color-accent)_45%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-accent)_10%,var(--color-surface))] text-[var(--color-fg)] shadow-sm"
+                              : "border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-border-strong)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]",
                             c.kind === "shell" && "font-mono",
-                            c.hint === "recent" &&
-                              "border-[color-mix(in_oklab,var(--color-info)_25%,var(--color-border))]",
                           )}
                         >
                           <button
                             type="button"
                             role="option"
                             disabled={busy}
-                            title={c.value.startsWith("__") ? c.label : c.value}
+                            title={tip}
                             onClick={() => void onChip(c)}
                             className="flex min-w-0 flex-1 items-start gap-1.5 py-0.5 text-left disabled:opacity-50"
                           >
-                            <Icon className="mt-0.5 h-3 w-3 shrink-0 opacity-70" />
-                            <span className="whitespace-normal break-words leading-snug">{c.label}</span>
+                            <Icon
+                              className={cn(
+                                "mt-0.5 h-3 w-3 shrink-0",
+                                isPrimary ? "text-[var(--color-accent)] opacity-100" : "opacity-70",
+                              )}
+                            />
+                            <span className="flex min-w-0 flex-col gap-0.5">
+                              <span className="whitespace-normal break-words leading-snug font-medium">
+                                {c.label}
+                              </span>
+                              {isPrimary && c.hint ? (
+                                <span className="line-clamp-1 text-[10px] font-normal text-[var(--color-subtle)]">
+                                  {c.hint}
+                                </span>
+                              ) : null}
+                            </span>
                           </button>
                           <button
                             type="button"

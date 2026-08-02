@@ -55,6 +55,7 @@ import {
   normalizeMemory,
   rememberChipClick,
   rememberTypedPrompt,
+  rememberChipOutcome,
   type QuickAssistMemory,
 } from "./quick-assist-memory";
 import type { QuickChip } from "./quick-assistant";
@@ -183,6 +184,7 @@ type State = {
   hydrateSecrets: () => Promise<void>;
   recordQuickAssistChip: (chip: QuickChip) => void;
   recordQuickAssistTyped: (text: string) => void;
+  recordQuickAssistOutcome: (outcome: "success" | "failure") => void;
   clearQuickAssistMemory: () => void;
   dismissQuickAssistChip: (chip: QuickChip) => void;
   rotateQuickAssist: () => void;
@@ -508,39 +510,183 @@ function emptyProfile(): GrokProfile {
 }
 
 function titleFromMessages(messages: ChatMessage[]): string {
+  const clean = (raw: string) =>
+    raw
+      .replace(/\[attachment:[^\]]+\]/gi, " ")
+      .replace(/\[Replying to[^\]]*\]:\s*"[^"]*"\s*/gi, " ")
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`[^`]+`/g, " ")
+      .replace(/https?:\/\/\S+/gi, " ")
+      .replace(/^\/[a-z]+\s*/i, "")
+      .replace(/\bHOST_CMD:\s*/gi, " ")
+      .replace(/\bCONNECTOR_CMD:\s*/gi, " ")
+      .replace(/^\$\s*/gm, " ")
+      .replace(/[_*#>|[\](){}]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const isThin = (s: string) =>
+    !s ||
+    s.length < 8 ||
+    /^(hi|hello|hey|ok|okay|thanks|thank you|yo|sup|continue|go on|yes|no|sure|please|help|test|hmm+|uh+|um+)[.!?]*$/i.test(
+      s,
+    );
+
   const users = messages
     .filter((m) => m.role === "user")
-    .map((m) =>
-      m.content
-        .replace(/\[attachment:[^\]]+\]/gi, " ")
-        .replace(/```[\s\S]*?```/g, " ")
-        .replace(/\s+/g, " ")
-        .trim(),
-    )
-    .filter(Boolean);
+    .map((m) => clean(m.content))
+    .filter((s) => s && !isThin(s));
+
   if (!users.length) return "New chat";
 
-  // First real prompt is the identity; if it's tiny (hi/ok) use the next richer one
-  let base = users[0]!;
-  const isThin = (s: string) =>
-    s.length < 14 ||
-    /^(hi|hello|hey|ok|okay|thanks|thank you|yo|sup|continue|go on)[.!?]*$/i.test(s);
-  if (isThin(base) && users.length >= 2 && !isThin(users[1]!)) {
-    base = users[1]!;
+  // First substantive user message is usually the thread topic
+  return summarizeChatTitle(users[0]!, users.slice(1, 4));
+}
+
+/** Super-short topic label for the sidebar (≈2–5 words). */
+function summarizeChatTitle(primary: string, extras: string[] = []): string {
+  let s = primary
+    .replace(
+      /^(can you|could you|would you|please|hey|hi|hello|ok so|so+|um+|uh+|lets|let'?s)\s+/i,
+      "",
+    )
+    .replace(
+      /^(i (want|need|would like) (you )?to|help me|please)\s+/i,
+      "",
+    )
+    .replace(/\b(please|thanks|thank you)\b/gi, " ")
+    .replace(/\?+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Pattern → short labels (prefer start-of-prompt intents)
+  const patterns: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
+    [
+      /^(fix|debug|repair)\s+(?:the\s+)?(.+?)(?:\s+(?:bug|issue|error|problem))?$/i,
+      (m) => `Fix ${clipTitleWords(m[2]!, 3)}`,
+    ],
+    [
+      /^(build|create|make|add)\s+(?:a\s+|an\s+|the\s+)?(.+)$/i,
+      (m) => `${softTitleCase(m[1]!)} ${clipTitleWords(m[2]!, 3)}`,
+    ],
+    [
+      /^(?:deep dive|investigate|diagnos\w*)\s+(?:into\s+|on\s+|for\s+)?(?:the\s+)?(.+)$/i,
+      (m) => `${clipTitleWords(m[1]!, 3)} dive`,
+    ],
+    [
+      /^how (?:do|to|can) (?:i|we|you)\s+(.+)$/i,
+      (m) => `How: ${clipTitleWords(m[1]!, 3)}`,
+    ],
+    [/^why\s+(?:does\s+|is\s+|do\s+)?(.+)$/i, (m) => `Why ${clipTitleWords(m[1]!, 3)}`],
+    [
+      /\b(push|publish)\b.*\b(github|release|update)\b/i,
+      () => "GitHub push",
+    ],
+    [
+      /\b(auto.?renam\w*|chat title|sidebar title)\b/i,
+      () => "Chat titles",
+    ],
+    [
+      /\b(usage meter|imagine tab|oauth|connectors?|automations?|adaptive mode|voice chat|taskbar|streaming|install|readme)\b/i,
+      (m) => softTitleCase(m[1]!),
+    ],
+  ];
+  for (const [re, fn] of patterns) {
+    const m = s.match(re);
+    if (m) {
+      const label = stripTitleTrail(fn(m).replace(/\s+/g, " ").trim());
+      if (label.length >= 3) return finalizeChatTitle(label);
+    }
   }
 
-  // Clean slash commands / HOST noise for sidebar
-  base = base
-    .replace(/^\/[a-z]+\s*/i, "")
-    .replace(/^HOST_CMD:\s*/i, "")
-    .replace(/^\$\s*/, "")
+  // Keyword bag from primary + later user msgs
+  const bag = [s, ...extras].join(" ");
+  const stop = new Set(
+    (
+      "a an the and or but if then so to of in on for with from at by as is are was were be been being " +
+      "i me my we you your it its this that these those do does did can could would should will just " +
+      "like also very really about into over out up down not no yes please help me my our their what " +
+      "when where who how why which than now still something anything everything nothing more most " +
+      "some any all get got need want try make sure also asked agent why off onto upon via per"
+    ).split(" "),
+  );
+  const tokens = bag
+    .toLowerCase()
+    .replace(/[^a-z0-9.\-_\s]/gi, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 1 && !stop.has(w) && !/^\d+$/.test(w));
+
+  const seen = new Set<string>();
+  const picked: string[] = [];
+  for (const w of tokens) {
+    if (seen.has(w)) continue;
+    seen.add(w);
+    picked.push(w);
+    if (picked.length >= 4) break;
+  }
+
+  if (!picked.length) {
+    return finalizeChatTitle(clipTitleWords(s, 4) || "Chat");
+  }
+  return finalizeChatTitle(
+    stripTitleTrail(picked.map((w) => softTitleCase(w)).join(" ")),
+  );
+}
+
+function clipTitleWords(s: string, n: number): string {
+  const stopEnd = new Set(
+    "a an the and or for with from to of in on at by as is are was be my your our their please".split(
+      " ",
+    ),
+  );
+  const parts = s
+    .replace(/[^a-z0-9.\-_\s]/gi, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  const out = parts.slice(0, n);
+  while (out.length > 1 && stopEnd.has(out[out.length - 1]!.toLowerCase())) {
+    out.pop();
+  }
+  return out.join(" ");
+}
+
+function stripTitleTrail(s: string): string {
+  return s
+    .replace(
+      /\b(and|or|for|with|from|to|of|in|on|at|by|the|a|an|please|my|your)\s*$/i,
+      "",
+    )
     .trim();
-  if (!base) return "New chat";
-  if (base.length <= 52) return base;
-  // Break on word when possible
-  const cut = base.slice(0, 52);
-  const sp = cut.lastIndexOf(" ");
-  return (sp > 28 ? cut.slice(0, sp) : cut).trimEnd() + "…";
+}
+
+function softTitleCase(w: string): string {
+  const x = w.trim();
+  if (!x) return x;
+  if (/^(api|ui|ux|cli|cpu|gpu|ssh|oauth|http|https|json|css|html|sql|aur)$/i.test(x)) {
+    return x.toUpperCase();
+  }
+  if (/^[A-Z0-9.\-_]+$/.test(x) && x.length <= 6) return x;
+  // multi-word soft title
+  if (/\s/.test(x)) {
+    return x
+      .split(/\s+/)
+      .map((p) => softTitleCase(p))
+      .join(" ");
+  }
+  return x.charAt(0).toUpperCase() + x.slice(1).toLowerCase();
+}
+
+function finalizeChatTitle(label: string): string {
+  let title = stripTitleTrail(label.replace(/\s+/g, " ").trim());
+  // hard cap ~28 chars — super short sidebar label
+  if (title.length > 28) {
+    const cut = title.slice(0, 28);
+    const sp = cut.lastIndexOf(" ");
+    title = stripTitleTrail((sp > 10 ? cut.slice(0, sp) : cut).trimEnd());
+  }
+  title = title.replace(/[,:;.\-–—]+$/g, "").trim();
+  if (title.length < 2) return "Chat";
+  return title;
 }
 
 /** Update thread messages (+ auto title unless user locked it). */
@@ -726,6 +872,12 @@ export const useGrokHub = create<State>()(
         if (!trimmed) return;
         set((s) => ({
           quickAssistMemory: rememberTypedPrompt(s.quickAssistMemory, trimmed),
+        }));
+      },
+
+      recordQuickAssistOutcome: (outcome) => {
+        set((s) => ({
+          quickAssistMemory: rememberChipOutcome(s.quickAssistMemory, outcome),
         }));
       },
 
@@ -3179,6 +3331,8 @@ export const useGrokHub = create<State>()(
           extractHostCommands,
           stripHostCommands,
           inferHostCommandsFromUser,
+          looksLikeDeferredHostWork,
+          userWantsHostInvestigation,
         } = await import("./grok");
         const {
           extractConnectorCommands,
@@ -3263,7 +3417,8 @@ export const useGrokHub = create<State>()(
               }
             }
             let rounds = 0;
-            const maxRounds = 6;
+            const maxRounds = 8;
+            let hostNudges = 0;
             let accumulated = "";
 
             // Build workspace context once per user turn (not every tool round)
@@ -3425,6 +3580,45 @@ export const useGrokHub = create<State>()(
                 // First round: if user asked about local files and model forgot HOST_CMD, infer
                 if (!cmds.length && rounds === 1 && get().agentPrefs.hostToolsEnabled) {
                   cmds = inferHostCommandsFromUser(trimmed);
+                }
+                // Model planned host work but never emitted HOST_CMD — force a tool turn
+                if (
+                  !cmds.length &&
+                  !connCmds.length &&
+                  get().agentPrefs.hostToolsEnabled &&
+                  hostNudges < 2 &&
+                  (looksLikeDeferredHostWork(full) ||
+                    (rounds === 1 && userWantsHostInvestigation(trimmed)))
+                ) {
+                  hostNudges += 1;
+                  const inferred = inferHostCommandsFromUser(trimmed);
+                  if (inferred.length) {
+                    cmds = inferred;
+                    set({ streamStatus: "Starting host investigation…" });
+                    get().pushActivity({
+                      kind: "desktop",
+                      title: "Auto host nudge",
+                      detail: "Model deferred tools — running safe diagnostics",
+                      status: "running",
+                    });
+                  } else {
+                    history.push({ role: "assistant", content: full });
+                    history.push({
+                      role: "user",
+                      content: [
+                        "SYSTEM: You described planned host work but did not emit HOST_CMD.",
+                        "Do not ask permission. Immediately output one or more HOST_CMD lines",
+                        "for safe read-only diagnostics (ps, ls, uname, find -maxdepth, journalctl --user -n).",
+                        "No preamble-only replies.",
+                      ].join(" "),
+                    });
+                    set({ streamStatus: "Nudging agent to use host tools…" });
+                    patchBot(
+                      (visible || full) + "\n\n_Switching to host tools…_",
+                      { streaming: true },
+                    );
+                    continue;
+                  }
                 }
                 if (!cmds.length && !connCmds.length) {
                   finalAnswer = visible || full;
@@ -3862,6 +4056,11 @@ if (!cmds.length) {
               };
             });
           }
+          try {
+            get().recordQuickAssistOutcome("failure");
+          } catch {
+            /* ignore */
+          }
         } else {
           const answer = stripHostCommands(stripAssistantChrome(finalAnswer || ""));
           set((s) => {
@@ -3899,6 +4098,11 @@ if (!cmds.length) {
             detail: `${trimmed.slice(0, 80)} · ${bill.cost}u`,
             status: usedLive ? "success" : "failed",
           });
+          try {
+            get().recordQuickAssistOutcome(usedLive ? "success" : "failure");
+          } catch {
+            /* ignore */
+          }
         }
 
         if (activeChatAbort === abort) activeChatAbort = null;
