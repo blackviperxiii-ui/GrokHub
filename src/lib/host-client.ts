@@ -177,6 +177,26 @@ export type DesktopBridge = {
     install: (opts?: { exec?: string }) => Promise<{ ok: boolean; path?: string; detail?: string; error?: string }>;
     autostart: (enabled: boolean) => Promise<{ ok: boolean; path?: string; detail?: string; error?: string }>;
   };
+  /** Persist Imagine gallery media under userData (survives updates) */
+  imagineMedia?: {
+    save: (
+      jobId: string,
+      dataUrl: string,
+      kind?: "image" | "video",
+    ) => Promise<{
+      ok?: boolean;
+      relPath?: string;
+      url?: string;
+      mime?: string;
+      bytes?: number;
+      error?: string;
+    }>;
+    load: (
+      relPath: string,
+    ) => Promise<{ ok?: boolean; dataUrl?: string; isRemote?: boolean; error?: string }>;
+    delete: (jobId: string) => Promise<{ ok?: boolean; error?: string }>;
+    clear: () => Promise<{ ok?: boolean; error?: string }>;
+  };
   host?: {
     info: () => Promise<HostInfo>;
     listDir: (p?: string) => Promise<{ path: string; entries: HostFileEntry[] }>;

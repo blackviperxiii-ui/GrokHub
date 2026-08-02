@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
       return ipcRenderer.invoke("grok:chatStream", payload);
     },
     imagine: (payload) => ipcRenderer.invoke("grok:imagine", payload),
+    transcribe: (payload) => ipcRenderer.invoke("grok:transcribe", payload),
     probe: (apiKey, accessToken) => ipcRenderer.invoke("grok:probe", apiKey, accessToken),
     oauthStart: () => ipcRenderer.invoke("grok:oauthStart"),
     oauthPoll: (deviceCode) => ipcRenderer.invoke("grok:oauthPoll", deviceCode),
@@ -74,5 +75,11 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     status: () => ipcRenderer.invoke("desktopEntry:status"),
     install: (opts) => ipcRenderer.invoke("desktopEntry:install", opts),
     autostart: (enabled) => ipcRenderer.invoke("desktopEntry:autostart", enabled),
+  },
+  imagineMedia: {
+    save: (jobId, dataUrl, kind) => ipcRenderer.invoke("imagine:save", jobId, dataUrl, kind),
+    load: (relPath) => ipcRenderer.invoke("imagine:load", relPath),
+    delete: (jobId) => ipcRenderer.invoke("imagine:delete", jobId),
+    clear: () => ipcRenderer.invoke("imagine:clear"),
   },
 });

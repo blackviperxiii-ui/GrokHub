@@ -261,6 +261,23 @@ export async function grokImagine(opts: {
   return rpc("/api/grok", "imagine", opts as unknown as Record<string, unknown>);
 }
 
+/** Speech-to-text via Grok STT (desktop bridge or /api/grok). */
+export async function grokTranscribe(opts: {
+  audioBase64: string;
+  mimeType?: string;
+  language?: string;
+  fileName?: string;
+  apiKey?: string;
+  accessToken?: string;
+  tokens?: XaiOAuthTokens | null;
+}): Promise<{ ok: boolean; text?: string; error?: string }> {
+  const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
+  if (desktop && typeof (desktop as { transcribe?: unknown }).transcribe === "function") {
+    return (desktop as { transcribe: (o: typeof opts) => Promise<{ ok: boolean; text?: string; error?: string }> }).transcribe(opts);
+  }
+  return rpc("/api/grok", "stt", opts as unknown as Record<string, unknown>);
+}
+
 export async function checkUpdate(token?: string) {
   const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
   if (desktop?.checkUpdate) {

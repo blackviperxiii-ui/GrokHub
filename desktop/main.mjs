@@ -40,6 +40,7 @@ try {
 const websiteSession = require("./website-session.cjs");
 const secretsStore = require("./secrets-store.cjs");
 const stateStore = require("./state-store.cjs");
+const imagineStore = require("./imagine-store.cjs");
 const selfMod = require("./self-mod.cjs");
 const desktopEntry = require("./desktop-entry.cjs");
 const uiServer = require("./ui-server.cjs");
@@ -376,6 +377,25 @@ function createWindow() {
     },
   });
 
+
+  // Mic / media for voice chat (Grok STT)
+  try {
+    const ses = mainWindow.webContents.session;
+    ses.setPermissionRequestHandler((_wc, permission, callback) => {
+      if (permission === "media" || permission === "microphone" || permission === "mediaKeySystem") {
+        callback(true);
+        return;
+      }
+      callback(false);
+    });
+    ses.setPermissionCheckHandler((_wc, permission) => {
+      if (permission === "media" || permission === "microphone") return true;
+      return false;
+    });
+  } catch {
+    /* ignore */
+  }
+
   if (!icon.isEmpty()) {
     try {
       mainWindow.setIcon(icon);
@@ -697,6 +717,13 @@ function registerIpc() {
 
   safeHandle("grok:chat", (_e, payload) => grokBridge.callXaiChat(payload || {}));
   safeHandle("grok:imagine", (_e, payload) => grokBridge.callXaiImagine(payload || {}));
+  safeHandle("grok:transcribe", (_e, payload) => grokBridge.callXaiStt(payload || {}));
+  safeHandle("imagine:save", (_e, jobId, dataUrl, kind) =>
+    imagineStore.saveMedia(jobId, dataUrl, kind || "image"),
+  );
+  safeHandle("imagine:load", (_e, relPath) => imagineStore.loadMedia(relPath));
+  safeHandle("imagine:delete", (_e, jobId) => imagineStore.deleteJobMedia(jobId));
+  safeHandle("imagine:clear", () => imagineStore.clearAll());
   safeHandle("grok:probe", async (_e, apiKey, accessToken) => {
     const bearer =
       (accessToken && String(accessToken)) ||

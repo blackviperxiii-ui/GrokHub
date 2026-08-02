@@ -151,15 +151,28 @@ export type ChatThread = {
   pinned?: boolean;
   /** Optional folder label (e.g. Work, Personal) */
   folder?: string | null;
+  /**
+   * When true, user renamed this chat — stop auto title updates.
+   * Auto titles keep refreshing until the first manual rename.
+   */
+  titleLocked?: boolean;
 };
 
-/** Lightweight resume card after restart */
+/** Resume card — only set when a stream was interrupted (Stop / abort). */
 export type SessionResume = {
   threadId: string;
   title: string;
   preview: string;
   mode?: GrokModeId;
   ts: number;
+  /** Always interrupted — success completions do not create a card */
+  kind: "interrupted";
+  /** Last user prompt to regenerate / continue from */
+  pendingPrompt?: string;
+  /** Partial assistant text when stopped */
+  partialContent?: string;
+  /** Assistant message id that was stopped (if still in thread) */
+  stoppedMessageId?: string;
 };
 
 export type ImagineAspect = "auto" | "1:1" | "16:9" | "9:16" | "4:3" | "3:2" | "2:3";
@@ -179,6 +192,12 @@ export type ImagineJob = {
   imageDataUrl?: string;
   /** video object URL / data url when available */
   videoDataUrl?: string;
+  /**
+   * Disk-relative path under userData/imagine-media (survives updates).
+   * Loaded back into imageDataUrl/videoDataUrl on app start.
+   */
+  imageRelPath?: string;
+  videoRelPath?: string;
   mediaKind?: ImagineMediaKind;
   quality?: ImagineQuality;
   model?: string;

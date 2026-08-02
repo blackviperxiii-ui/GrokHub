@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.10";
+const APP_VERSION = "0.8.11";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -1987,6 +1987,58 @@ async function callXaiImagine(req = {}) {
 }
 
 
+async function callXaiStt(req = {}) {
+  const apiKey =
+    (req.accessToken && String(req.accessToken).trim()) ||
+    (req.apiKey && String(req.apiKey).trim()) ||
+    process.env.XAI_API_KEY ||
+    process.env.GROK_API_KEY ||
+    "";
+  if (!apiKey) {
+    return { ok: false, error: "Not connected — sign in to Grok for voice transcription" };
+  }
+  const b64 = String(req.audioBase64 || req.audio || "").replace(/^data:[^;]+;base64,/, "");
+  if (!b64) return { ok: false, error: "empty audio" };
+  const buf = Buffer.from(b64, "base64");
+  if (!buf.length) return { ok: false, error: "empty audio buffer" };
+  const mime = req.mimeType || "audio/webm";
+  const name =
+    req.fileName ||
+    (mime.includes("wav")
+      ? "speech.wav"
+      : mime.includes("ogg")
+        ? "speech.ogg"
+        : mime.includes("mp4") || mime.includes("m4a")
+          ? "speech.m4a"
+          : "speech.webm");
+  try {
+    const form = new FormData();
+    form.append("format", "true");
+    form.append("language", req.language || "en");
+    form.append("file", new Blob([new Uint8Array(buf)], { type: mime }), name);
+    const res = await fetch(`${XAI_BASE}/stt`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}` },
+      body: form,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        ok: false,
+        error:
+          (typeof data.error === "string" && data.error) ||
+          data.error?.message ||
+          `STT ${res.status}`,
+      };
+    }
+    const text = String(data.text || data.transcript || data.result || "").trim();
+    if (!text) return { ok: false, error: "empty transcript" };
+    return { ok: true, text };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "STT network error" };
+  }
+}
+
 async function callXaiChatStream(req = {}, handlers = {}) {
   // Prefer live stream when we have a token; on free-tier / errors fall back to
   // callXaiChat (which already cascades free models + website free session).
@@ -2160,6 +2212,7 @@ module.exports = {
   callXaiChat: callXaiChatWithOAuth,
   callXaiChatStream,
   callXaiImagine,
+  callXaiStt,
   probeXaiKey,
   checkForUpdate,
   applyUpdate,

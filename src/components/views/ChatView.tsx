@@ -168,6 +168,7 @@ export function ChatView() {
   const rotateQuickAssist = useGrokHub((s) => s.rotateQuickAssist);
   const sessionResume = useGrokHub((s) => s.sessionResume);
   const resumeLastSession = useGrokHub((s) => s.resumeLastSession);
+  const continueInterruptedSession = useGrokHub((s) => s.continueInterruptedSession);
   const dismissSessionResume = useGrokHub((s) => s.dismissSessionResume);
   const exportThreadMarkdown = useGrokHub((s) => s.exportThreadMarkdown);
   const editChatMessage = useGrokHub((s) => s.editChatMessage);
@@ -185,6 +186,8 @@ export function ChatView() {
   const [editDraft, setEditDraft] = useState("");
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<{ stop: () => void } | null>(null);
+  const voiceRef = useRef<import("@/lib/voice-input").VoiceSession | null>(null);
+  const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Array<{ name: string; dataUrl: string; kind: string }>>([]);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -296,16 +299,25 @@ export function ChatView() {
   }, [chat, busy, streamStatus]);
 
   useEffect(() => {
-    const onResume = () => {
-      // Jump to latest message + focus composer after Resume
+    const onResume = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail as {
+        pendingPrompt?: string;
+        focusOnly?: boolean;
+      } | null;
       requestAnimationFrame(() => {
         endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+        if (detail?.pendingPrompt && !detail.focusOnly) {
+          setText(detail.pendingPrompt);
+        } else if (detail?.pendingPrompt) {
+          // Show what will re-run in the composer (editable) without auto-sending
+          setText(detail.pendingPrompt);
+        }
         inputRef.current?.focus();
         resizeComposer();
       });
     };
-    window.addEventListener("grokhub:resume-session", onResume);
-    return () => window.removeEventListener("grokhub:resume-session", onResume);
+    window.addEventListener("grokhub:resume-session", onResume as EventListener);
+    return () => window.removeEventListener("grokhub:resume-session", onResume as EventListener);
   }, []);
 
   useEffect(() => {
@@ -473,71 +485,145 @@ export function ChatView() {
       /* ignore */
     }
     recognitionRef.current = null;
+    if (voiceRef.current) {
+      void voiceRef.current.cancel();
+      voiceRef.current = null;
+    }
     setListening(false);
+    setVoiceStatus(null);
   }
 
-  function toggleVoice() {
-    type Rec = {
-      continuous: boolean;
-      interimResults: boolean;
-      lang: string;
-      onresult: ((ev: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal?: boolean }> }) => void) | null;
-      onerror: (() => void) | null;
-      onend: (() => void) | null;
-      start: () => void;
-      stop: () => void;
-    };
-    const w = window as unknown as {
-      SpeechRecognition?: new () => Rec;
-      webkitSpeechRecognition?: new () => Rec;
-    };
-    const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
-    if (!SR) {
-      pushActivity({
-        kind: "system",
-        title: "Voice not available",
-        detail: "Speech recognition is not supported in this shell. Type or paste instead.",
-        status: "failed",
-      });
-      return;
-    }
-    if (listening) {
-      stopVoice();
-      return;
-    }
-    try {
-      const rec = new SR();
-      rec.continuous = true;
-      rec.interimResults = true;
-      rec.lang = navigator.language || "en-US";
-      rec.onresult = (ev) => {
-        let chunk = "";
-        for (let i = ev.resultIndex; i < ev.results.length; i++) {
-          const r = ev.results[i];
-          if (r && r[0]) chunk += r[0].transcript;
-        }
-        if (chunk) {
-          setText((prev) => {
-            const base = prev.trim();
-            const next = base ? `${base} ${chunk.trim()}` : chunk.trim();
-            return next;
-          });
-          requestAnimationFrame(() => resizeComposer());
-        }
-      };
-      rec.onerror = () => stopVoice();
-      rec.onend = () => setListening(false);
-      recognitionRef.current = rec;
-      rec.start();
-      setListening(true);
-    } catch (e) {
-      pushActivity({
-        kind: "system",
-        title: "Mic failed",
-        detail: e instanceof Error ? e.message : "Could not start voice",
-        status: "failed",
-      });
+  async function toggleVoice() {
+    const { toggleVoiceSession } = await import("@/lib/voice-input");
+    const oauth = useGrokHub.getState().oauth;
+    const apiKey = useGrokHub.getState().apiKey;
+    if (listening && voiceRef.current) {
+      setVoiceStatus("Transcribing…");
+      const text = await voiceRef.current.stopAndTranscribe();
+      voiceRef.current = null;
       setListening(false);
+      if (text) {
+        setText((prev) => {
+          const base = prev.trim();
+          return base ? `${base} ${text}` : text;
+        });
+        setVoiceStatus(null);
+        requestAnimationFrame(() => {
+          resizeComposer();
+          inputRef.current?.focus();
+        });
+        pushActivity({
+          kind: "system",
+          title: "Voice transcribed",
+          detail: text.slice(0, 120),
+          status: "success",
+        });
+      } else {
+        setVoiceStatus(null);
+      }
+      return;
+    }
+
+    // Prefer MediaRecorder + Grok STT (works in Electron)
+    const result = await toggleVoiceSession(
+      voiceRef,
+      {
+        onListeningChange: (v) => setListening(v),
+        onStatus: (s) => setVoiceStatus(s),
+        onError: (message) => {
+          setVoiceStatus(null);
+          setListening(false);
+          pushActivity({
+            kind: "system",
+            title: "Voice failed",
+            detail: message,
+            status: "failed",
+          });
+        },
+        onFinal: () => setVoiceStatus(null),
+      },
+      {
+        apiKey: apiKey || undefined,
+        accessToken: oauth?.accessToken,
+        tokens: oauth,
+      },
+    );
+
+    if (result === "started") {
+      pushActivity({
+        kind: "system",
+        title: "Listening",
+        detail: "Speak, then click the mic again to stop and transcribe with Grok.",
+        status: "running",
+      });
+      return;
+    }
+
+    // Fallback: Web Speech API (Chromium) if MediaRecorder path failed to start
+    if (result === "error" && !voiceRef.current?.isListening()) {
+      type Rec = {
+        continuous: boolean;
+        interimResults: boolean;
+        lang: string;
+        onresult: ((ev: {
+          resultIndex: number;
+          results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal?: boolean }>;
+        }) => void) | null;
+        onerror: ((ev?: { error?: string }) => void) | null;
+        onend: (() => void) | null;
+        start: () => void;
+        stop: () => void;
+      };
+      const w = window as unknown as {
+        SpeechRecognition?: new () => Rec;
+        webkitSpeechRecognition?: new () => Rec;
+      };
+      const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
+      if (!SR) {
+        // error already pushed from VoiceSession
+        return;
+      }
+      try {
+        const rec = new SR();
+        rec.continuous = true;
+        rec.interimResults = false;
+        rec.lang = navigator.language || "en-US";
+        rec.onresult = (ev) => {
+          let chunk = "";
+          for (let i = ev.resultIndex; i < ev.results.length; i++) {
+            const r = ev.results[i];
+            if (r && r[0]) chunk += r[0].transcript;
+          }
+          if (chunk.trim()) {
+            setText((prev) => {
+              const base = prev.trim();
+              return base ? `${base} ${chunk.trim()}` : chunk.trim();
+            });
+            requestAnimationFrame(() => resizeComposer());
+          }
+        };
+        rec.onerror = (ev) => {
+          stopVoice();
+          pushActivity({
+            kind: "system",
+            title: "Voice error",
+            detail: ev?.error || "Speech recognition error",
+            status: "failed",
+          });
+        };
+        rec.onend = () => setListening(false);
+        recognitionRef.current = rec;
+        rec.start();
+        setListening(true);
+        setVoiceStatus("Listening (browser speech)…");
+      } catch (e) {
+        pushActivity({
+          kind: "system",
+          title: "Mic failed",
+          detail: e instanceof Error ? e.message : "Could not start voice",
+          status: "failed",
+        });
+      }
     }
   }
 
@@ -624,7 +710,7 @@ export function ChatView() {
                   <Download className="h-3.5 w-3.5" />
                   Export
                 </Button>
-                <Badge className="font-mono">{modeMeta.label}</Badge>
+                <Badge className="font-mono text-[11px]">{modeMeta.label}</Badge>
               </div>
               <Badge variant={grokConnected ? "success" : "default"} className="text-[10px]">
                 {grokConnected ? "Grok live" : "Connect in Settings"}
@@ -638,29 +724,52 @@ export function ChatView() {
         <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-0">
           <div className="shrink-0 space-y-2 px-4 pt-3 md:px-6 3xl:px-8">
             <HostGatewayBanner variant="compact" />
-            {sessionResume && !busy && (
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-info)_30%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-info)_8%,var(--color-elevated))] px-3 py-2">
+            {sessionResume?.kind === "interrupted" && !busy && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-warn)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-warn)_10%,var(--color-elevated))] px-3 py-2">
                 <div className="min-w-0">
-                  <div className="text-xs font-medium">Continue where you left off</div>
+                  <div className="text-xs font-semibold text-[var(--color-warn)]">
+                    Stream interrupted
+                  </div>
                   <div className="truncate text-[11px] text-[var(--color-muted)]">
                     {sessionResume.title}
                     {sessionResume.preview ? ` — ${sessionResume.preview}` : ""}
                   </div>
                 </div>
-                <div className="flex shrink-0 gap-1.5">
+                <div className="flex shrink-0 flex-wrap gap-1.5">
                   <Button
                     size="sm"
+                    disabled={busy}
+                    onClick={() => {
+                      void (async () => {
+                        setPendingBusy(true);
+                        try {
+                          await continueInterruptedSession();
+                        } finally {
+                          setPendingBusy(false);
+                        }
+                        requestAnimationFrame(() => {
+                          endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+                          inputRef.current?.focus();
+                        });
+                      })();
+                    }}
+                  >
+                    Continue
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
                     onClick={() => {
                       resumeLastSession();
-                      // Ensure scroll/focus even if already on this thread
                       requestAnimationFrame(() => {
                         endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+                        if (sessionResume.pendingPrompt) setText(sessionResume.pendingPrompt);
                         inputRef.current?.focus();
                         resizeComposer();
                       });
                     }}
                   >
-                    Resume
+                    Open chat
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => dismissSessionResume()}>
                     Dismiss
@@ -711,22 +820,27 @@ export function ChatView() {
                     <span>
                       {m.role} · <RelativeTime ts={m.ts} />
                     </span>
-                    {m.mode && (
+                    {(m.routeTier || m.mode) && (
                       <span
-                        className="rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case"
+                        className={cn(
+                          "rounded-full border px-2 py-0.5 text-[10px] font-semibold normal-case tracking-wide shadow-sm",
+                          m.routeTier
+                            ? tierMeta(m.routeTier).tone
+                            : "border-[var(--color-border)] bg-[var(--color-elevated)] text-[var(--color-muted)]",
+                        )}
                         title={
                           m.routeReason
                             ? m.routeReason
                             : m.mode === "auto"
                               ? "Adaptive router"
-                              : getMode(m.mode).label
+                              : getMode(m.mode || "auto").label
                         }
                       >
                         {m.routeTier
                           ? tierMeta(m.routeTier).label
                           : m.mode === "auto"
                             ? "Adaptive"
-                            : getMode(m.mode).label}
+                            : getMode(m.mode!).label}
                       </span>
                     )}
                     {m.routeModel && m.role === "assistant" && (
@@ -824,6 +938,12 @@ export function ChatView() {
                 </div>
               </div>
             ))}
+            {busy && streamStatus?.startsWith("Adaptive") && (
+              <div className="mx-auto flex w-full max-w-[min(56rem,100%)] items-center gap-2 rounded-full border border-[color-mix(in_oklab,var(--color-info)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-info)_10%,var(--color-surface))] px-3 py-1.5 text-xs font-medium text-[var(--color-info)] 3xl:max-w-[min(64rem,100%)]">
+                <span className="pulse-live inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-info)]" />
+                <span className="truncate">{streamStatus}</span>
+              </div>
+            )}
             {busy && (
               <div className="flex items-center gap-2 text-xs text-[var(--color-subtle)]">
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-info)]" />
@@ -1004,14 +1124,21 @@ export function ChatView() {
                   size="icon"
                   variant={listening ? "default" : "secondary"}
                   disabled={busy}
-                  title={listening ? "Stop voice" : "Voice input"}
+                  title={
+                    listening
+                      ? "Stop & transcribe with Grok"
+                      : "Voice input — click to talk, click again to stop"
+                  }
                   aria-label="Voice mode"
-                  onClick={() => toggleVoice()}
+                  onClick={() => void toggleVoice()}
                   className={listening ? "border border-[color-mix(in_oklab,var(--color-info)_45%,transparent)]" : undefined}
                 >
                   {listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                 </Button>
               </div>
+              {voiceStatus && (
+                <div className="px-1 text-[10px] text-[var(--color-info)]">{voiceStatus}</div>
+              )}
               <Textarea
                 ref={inputRef}
                 value={text}

@@ -219,6 +219,8 @@ type State = {
   setThreadFolder: (id: string, folder: string | null) => void;
   dismissSessionResume: () => void;
   resumeLastSession: () => void;
+  /** After an interrupt: drop partial assistant reply and re-run last user prompt */
+  continueInterruptedSession: () => Promise<void>;
   setAgentPrefs: (patch: Partial<{ temperature: number; hostToolsEnabled: boolean; connectorToolsEnabled: boolean; memoryNotes: string }>) => void;
   editChatMessage: (id: string, content: string, resend?: boolean) => Promise<void>;
   exportThreadMarkdown: (id?: string) => string;
@@ -265,6 +267,10 @@ type State = {
   setImagineQuality: (v: ImagineQuality) => void;
   setImagineReference: (v: string | null) => void;
   runImagine: (prompt?: string) => Promise<void>;
+  /** Remove one generated image/video from the Imagine gallery */
+  removeImagineJob: (id: string) => void;
+  /** Clear all Imagine gallery items */
+  clearImagineJobs: () => void;
   pushActivity: (item: Omit<ActivityItem, "id" | "ts"> & { ts?: number }) => void;
   tickHeartbeat: () => void;
   setAgentStatus: (id: string, status: Agent["status"], tasks?: number) => void;
@@ -488,10 +494,57 @@ function emptyProfile(): GrokProfile {
 }
 
 function titleFromMessages(messages: ChatMessage[]): string {
-  const first = messages.find((m) => m.role === "user");
-  if (!first) return "New chat";
-  const t = first.content.replace(/\s+/g, " ").trim();
-  return t.length > 48 ? t.slice(0, 48) + "…" : t || "New chat";
+  const users = messages
+    .filter((m) => m.role === "user")
+    .map((m) =>
+      m.content
+        .replace(/\[attachment:[^\]]+\]/gi, " ")
+        .replace(/```[\s\S]*?```/g, " ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .filter(Boolean);
+  if (!users.length) return "New chat";
+
+  // First real prompt is the identity; if it's tiny (hi/ok) use the next richer one
+  let base = users[0]!;
+  const isThin = (s: string) =>
+    s.length < 14 ||
+    /^(hi|hello|hey|ok|okay|thanks|thank you|yo|sup|continue|go on)[.!?]*$/i.test(s);
+  if (isThin(base) && users.length >= 2 && !isThin(users[1]!)) {
+    base = users[1]!;
+  }
+
+  // Clean slash commands / HOST noise for sidebar
+  base = base
+    .replace(/^\/[a-z]+\s*/i, "")
+    .replace(/^HOST_CMD:\s*/i, "")
+    .replace(/^\$\s*/, "")
+    .trim();
+  if (!base) return "New chat";
+  if (base.length <= 52) return base;
+  // Break on word when possible
+  const cut = base.slice(0, 52);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > 28 ? cut.slice(0, sp) : cut).trimEnd() + "…";
+}
+
+/** Update thread messages (+ auto title unless user locked it). */
+function threadWithMessages(
+  th: ChatThread,
+  messages: ChatMessage[],
+  extra: Partial<ChatThread> = {},
+): ChatThread {
+  const next: ChatThread = {
+    ...th,
+    ...extra,
+    messages,
+    updatedAt: Date.now(),
+  };
+  if (!th.titleLocked) {
+    next.title = titleFromMessages(messages);
+  }
+  return next;
 }
 
 function initialFromSeeds() {
@@ -1635,7 +1688,14 @@ export const useGrokHub = create<State>()(
         if (!next) return;
         set((s) => ({
           threads: s.threads.map((t) =>
-            t.id === id ? { ...t, title: next, updatedAt: Date.now() } : t,
+            t.id === id
+              ? {
+                  ...t,
+                  title: next,
+                  titleLocked: true, // manual rename freezes auto titles
+                  updatedAt: Date.now(),
+                }
+              : t,
           ),
         }));
       },
@@ -1679,7 +1739,16 @@ export const useGrokHub = create<State>()(
         set((s) => ({
           chat: [],
           threads: s.threads.map((th) =>
-            th.id === tid ? { ...th, messages: [], title: "New chat", updatedAt: Date.now() } : th,
+            th.id === tid
+              ? {
+                  ...th,
+                  messages: [],
+                  // Empty thread: unlock auto title again
+                  title: "New chat",
+                  titleLocked: false,
+                  updatedAt: Date.now(),
+                }
+              : th,
           ),
           running: false,
           streamStatus: null,
@@ -1720,7 +1789,7 @@ export const useGrokHub = create<State>()(
           return {
             chat,
             threads: s.threads.map((th) =>
-              th.id === tid ? { ...th, messages: chat, updatedAt: Date.now() } : th,
+              th.id === tid ? threadWithMessages(th, chat) : th,
             ),
           };
         });
@@ -1741,17 +1810,16 @@ export const useGrokHub = create<State>()(
 
       resumeLastSession: () => {
         const r = get().sessionResume;
-        if (!r) {
-          set({ nav: "chat" });
+        if (!r || r.kind !== "interrupted") {
+          // Drop legacy non-interrupt cards
+          set({ sessionResume: null, nav: "chat" });
           return;
         }
 
         const threads = get().threads;
         let t =
-          (r.threadId && threads.find((x) => x.id === r.threadId)) ||
-          null;
+          (r.threadId && threads.find((x) => x.id === r.threadId)) || null;
 
-        // Fallbacks when id drifted after update / rehydrate
         if (!t && r.title) {
           const title = r.title.trim().toLowerCase();
           t =
@@ -1770,58 +1838,47 @@ export const useGrokHub = create<State>()(
               .sort((a, b) => b.updatedAt - a.updatedAt)[0] || null;
         }
 
-        if (t) {
-          // Prefer the longer of thread history vs live chat when same thread
-          let messages = Array.isArray(t.messages) ? t.messages : [];
-          if (
-            get().activeThreadId === t.id &&
-            get().chat.length > messages.length
-          ) {
-            messages = get().chat;
-          }
-          // Also prefer live chat if thread messages empty but chat has content
-          if (!messages.length && get().chat.length && get().activeThreadId === t.id) {
-            messages = get().chat;
-          }
-
-          set((s) => ({
-            activeThreadId: t!.id,
-            chat: messages,
-            nav: "chat" as const,
-            mode: r.mode || t!.mode || s.mode,
-            threads: s.threads.map((th) =>
-              th.id === t!.id
-                ? {
-                    ...th,
-                    messages,
-                    mode: r.mode || th.mode,
-                    updatedAt: Date.now(),
-                  }
-                : th,
-            ),
-            running: false,
-            streamStatus: null,
-            streamingMessageId: null,
-            sessionResume: null,
-          }));
-        } else {
-          // Last resort: open chat and keep context in a soft note
-          set({
-            nav: "chat",
-            sessionResume: null,
-          });
+        if (!t) {
+          set({ nav: "chat" });
           get().pushActivity({
             kind: "system",
             title: "Resume unavailable",
-            detail: "Could not find that chat — start a new one or pick from History.",
+            detail: "Could not find the interrupted chat.",
             status: "failed",
           });
           return;
         }
 
+        // Prefer longer of persisted thread vs live chat
+        let messages = Array.isArray(t.messages) ? [...t.messages] : [];
+        if (get().activeThreadId === t.id && get().chat.length > messages.length) {
+          messages = [...get().chat];
+        }
+
+        set((s) => ({
+          activeThreadId: t!.id,
+          chat: messages,
+          nav: "chat" as const,
+          // Prefer thread's saved user mode; never force a one-shot routed mode
+          mode: t!.mode || s.mode,
+          threads: s.threads.map((th) =>
+            th.id === t!.id
+              ? {
+                  ...th,
+                  messages,
+                  updatedAt: Date.now(),
+                }
+              : th,
+          ),
+          running: false,
+          streamStatus: null,
+          streamingMessageId: null,
+          // Keep banner until Continue succeeds or user Dismisses
+        }));
+
         get().pushActivity({
           kind: "system",
-          title: "Resumed chat",
+          title: "Opened interrupted chat",
           detail: r.title || "Previous session",
           status: "success",
         });
@@ -1834,6 +1891,8 @@ export const useGrokHub = create<State>()(
                   threadId: t.id,
                   title: r.title,
                   preview: r.preview,
+                  pendingPrompt: r.pendingPrompt || "",
+                  focusOnly: true,
                 },
               }),
             );
@@ -1841,6 +1900,74 @@ export const useGrokHub = create<State>()(
             /* ignore */
           }
         }
+      },
+
+      continueInterruptedSession: async () => {
+        const r = get().sessionResume;
+        if (!r || r.kind !== "interrupted") {
+          set({ sessionResume: null });
+          return;
+        }
+
+        // Ensure we're on the right thread first
+        get().resumeLastSession();
+        const prompt =
+          r.pendingPrompt ||
+          [...get().chat].reverse().find((m) => m.role === "user")?.content ||
+          "";
+        if (!prompt.trim()) {
+          get().pushActivity({
+            kind: "system",
+            title: "Nothing to continue",
+            detail: "No user prompt found for this interrupt.",
+            status: "failed",
+          });
+          set({ sessionResume: null });
+          return;
+        }
+
+        // Drop trailing stopped/incomplete assistant turn so resend is clean
+        set((s) => {
+          let chat = [...s.chat];
+          // Remove stopped assistant at end
+          while (chat.length) {
+            const last = chat[chat.length - 1]!;
+            if (
+              last.role === "assistant" &&
+              (last.stopped ||
+                last.streaming ||
+                /_Stopped\._\s*$/m.test(last.content || "") ||
+                (r.stoppedMessageId && last.id === r.stoppedMessageId))
+            ) {
+              chat.pop();
+              continue;
+            }
+            break;
+          }
+          // Also drop last user — sendChat will re-add it
+          if (chat.length && chat[chat.length - 1]!.role === "user") {
+            const lastU = chat[chat.length - 1]!;
+            if (
+              lastU.content.trim() === prompt.trim() ||
+              (r.pendingPrompt && lastU.content.trim() === r.pendingPrompt.trim())
+            ) {
+              chat.pop();
+            }
+          }
+          const tid = s.activeThreadId;
+          return {
+            chat,
+            threads: s.threads.map((th) =>
+              th.id === tid ? threadWithMessages(th, chat) : th,
+            ),
+            sessionResume: null,
+            running: false,
+            streamStatus: null,
+            streamingMessageId: null,
+          };
+        });
+
+        await get().sendChat(prompt);
       },
 
       setPreferFreeGrok: (v) => set({ preferFreeGrok: Boolean(v) }),
@@ -2530,8 +2657,11 @@ export const useGrokHub = create<State>()(
           /* ignore */
         }
         activeChatAbort = null;
+        const sid = get().streamingMessageId;
+        const tid = get().activeThreadId;
+        let partial = "";
+        let pendingPrompt = "";
         set((s) => {
-          const sid = s.streamingMessageId;
           const chat = s.chat.map((m) =>
             m.id === sid
               ? {
@@ -2544,11 +2674,35 @@ export const useGrokHub = create<State>()(
                 }
               : m,
           );
+          const stopped = chat.find((m) => m.id === sid);
+          partial = (stopped?.content || "").replace(/\n*_Stopped\._\s*$/m, "").trim();
+          const lastUser = [...chat].reverse().find((m) => m.role === "user");
+          pendingPrompt = lastUser?.content || "";
+          const threads = s.threads.map((th) =>
+            th.id === tid ? threadWithMessages(th, chat) : th,
+          );
+          const th = threads.find((x) => x.id === tid);
           return {
             chat,
+            threads,
             running: false,
             streamStatus: null,
             streamingMessageId: null,
+            // Only interrupt creates the continue banner
+            sessionResume:
+              tid && pendingPrompt
+                ? {
+                    kind: "interrupted" as const,
+                    threadId: tid,
+                    title: th?.title || "Interrupted chat",
+                    preview: (partial || pendingPrompt).slice(0, 160),
+                    mode: s.mode,
+                    ts: Date.now(),
+                    pendingPrompt,
+                    partialContent: partial || undefined,
+                    stoppedMessageId: sid || undefined,
+                  }
+                : s.sessionResume,
           };
         });
         get().setAgentStatus("primary", "idle", 0);
@@ -2557,8 +2711,10 @@ export const useGrokHub = create<State>()(
         get().setAgentStatus("ops", "idle", 0);
         get().pushActivity({
           kind: "chat",
-          title: "Stopped",
-          detail: "User interrupted the agent",
+          title: "Stopped — continue when ready",
+          detail: pendingPrompt
+            ? pendingPrompt.slice(0, 100)
+            : "User interrupted the agent",
           status: "failed",
         });
         void gen;
@@ -2723,13 +2879,20 @@ export const useGrokHub = create<State>()(
         activeChatAbort = abort;
         const gen = ++chatGeneration;
 
-        set((s) => ({
-          chat: [...s.chat, userMsg, botPlaceholder],
-          running: true,
-          streamStatus: "Thinking…",
-          streamingMessageId: botId,
-          nav: "chat",
-        }));
+        set((s) => {
+          const chat = [...s.chat, userMsg, botPlaceholder];
+          const tid = s.activeThreadId;
+          return {
+            chat,
+            running: true,
+            streamStatus: "Thinking…",
+            streamingMessageId: botId,
+            nav: "chat" as const,
+            threads: s.threads.map((th) =>
+              th.id === tid ? threadWithMessages(th, chat, { mode: s.mode }) : th,
+            ),
+          };
+        });
         // Yield a frame so the indicator paints before heavier work
         await new Promise<void>((r) => {
           if (typeof requestAnimationFrame === "function") {
@@ -2741,6 +2904,7 @@ export const useGrokHub = create<State>()(
 
         const catalog = get().modelCatalog || emptyCatalog();
         const recentChat = get().chat.filter((c) => c.id !== botId);
+        const lastAsst = [...recentChat].reverse().find((c) => c.role === "assistant");
         const routeCtx = {
           historyTurns: recentChat.length,
           recentUserText: recentChat
@@ -2755,6 +2919,22 @@ export const useGrokHub = create<State>()(
             .join("\n")
             .slice(0, 4000),
           hasAttachments: /\[attachment:|data:image\//i.test(trimmed),
+          lastRouteTier: lastAsst?.routeTier,
+          lastRoutedMode:
+            lastAsst?.mode === "fast" ||
+            lastAsst?.mode === "expert" ||
+            lastAsst?.mode === "heavy" ||
+            lastAsst?.mode === "build"
+              ? lastAsst.mode
+              : lastAsst?.routeTier === "fast"
+                ? ("fast" as const)
+                : lastAsst?.routeTier === "build"
+                  ? ("build" as const)
+                  : lastAsst?.routeTier === "deep"
+                    ? ("heavy" as const)
+                    : lastAsst?.routeTier === "think"
+                      ? ("expert" as const)
+                      : undefined,
         };
         const auto = autoRouteFor(trimmed, catalog, routeCtx);
         if (mode === "auto" && auto.openImagine) {
@@ -2916,15 +3096,21 @@ export const useGrokHub = create<State>()(
             }
 
             const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx);
-            // Surface Auto routing decision while streaming
+            // Hold Adaptive decision so it feels intentional (not a flash)
             if (mode === "auto") {
-              set({ streamStatus: `Adaptive → ${auto.tierLabel} · ${auto.reasonDetail}` });
+              set({
+                streamStatus: `Adaptive → ${auto.tierLabel} · ${auto.reasonDetail}`,
+              });
+              await wait(1100);
+              if (abort.signal.aborted || gen !== chatGeneration) {
+                aborted = true;
+              }
             }
             let rounds = 0;
             const maxRounds = 6;
             let accumulated = "";
 
-            while (rounds < maxRounds) {
+            while (rounds < maxRounds && !aborted) {
               rounds += 1;
               if (abort.signal.aborted || gen !== chatGeneration) {
                 aborted = true;
@@ -2932,7 +3118,11 @@ export const useGrokHub = create<State>()(
               }
               set({
                 streamStatus:
-                  rounds === 1 ? "Streaming…" : `Host tool round ${rounds}…`,
+                  rounds === 1
+                    ? mode === "auto"
+                      ? `Streaming · ${auto.tierLabel}`
+                      : "Streaming…"
+                    : `Host tool round ${rounds}…`,
               });
               let roundText = "";
               const oc = get().openClawWorkspace;
@@ -3437,13 +3627,20 @@ if (!cmds.length) {
         if (gen !== chatGeneration) return;
 
         if (aborted) {
-          // stopChat already cleaned UI
-          if (get().running) {
-            set((s) => ({
-              running: false,
-              streamStatus: null,
-              streamingMessageId: null,
-              chat: s.chat.map((row) =>
+          // stopChat may already have set resume; if abort came from elsewhere, mark it
+          const st = get();
+          if (st.running) {
+            const tid = st.activeThreadId;
+            const lastUser = [...st.chat].reverse().find((m) => m.role === "user");
+            const partial = (
+              st.chat.find((m) => m.id === botId)?.content ||
+              finalAnswer ||
+              ""
+            )
+              .replace(/\n*_Stopped\._\s*$/m, "")
+              .trim();
+            set((s) => {
+              const chat = s.chat.map((row) =>
                 row.id === botId
                   ? {
                       ...row,
@@ -3454,8 +3651,33 @@ if (!cmds.length) {
                         : "_Stopped._",
                     }
                   : row,
-              ),
-            }));
+              );
+              const threads = s.threads.map((th) =>
+                th.id === tid ? threadWithMessages(th, chat) : th,
+              );
+              const th = threads.find((x) => x.id === tid);
+              return {
+                chat,
+                threads,
+                running: false,
+                streamStatus: null,
+                streamingMessageId: null,
+                sessionResume:
+                  tid && lastUser?.content
+                    ? {
+                        kind: "interrupted" as const,
+                        threadId: tid,
+                        title: th?.title || "Interrupted chat",
+                        preview: (partial || lastUser.content).slice(0, 160),
+                        mode: s.mode,
+                        ts: Date.now(),
+                        pendingPrompt: lastUser.content,
+                        partialContent: partial || undefined,
+                        stoppedMessageId: botId,
+                      }
+                    : s.sessionResume,
+              };
+            });
           }
         } else {
           const answer = stripHostCommands(stripAssistantChrome(finalAnswer || ""));
@@ -3475,13 +3697,7 @@ if (!cmds.length) {
             const tid = s.activeThreadId;
             const threads = s.threads.map((th) =>
               th.id === tid
-                ? {
-                    ...th,
-                    messages: chat,
-                    updatedAt: Date.now(),
-                    title: titleFromMessages(chat),
-                    mode: routed,
-                  }
+                ? threadWithMessages(th, chat, { mode: s.mode })
                 : th,
             );
             return {
@@ -3490,6 +3706,8 @@ if (!cmds.length) {
               running: false,
               streamStatus: null,
               streamingMessageId: null,
+              // Successful finish — clear any interrupt banner
+              sessionResume: null,
             };
           });
           get().pushActivity({
@@ -3497,18 +3715,6 @@ if (!cmds.length) {
             title: usedLive ? `Grok · ${m.label}` : `Agent reply · ${m.label}`,
             detail: `${trimmed.slice(0, 80)} · ${bill.cost}u`,
             status: usedLive ? "success" : "failed",
-          });
-          // Persist resume card for next launch
-          const st = get();
-          const th = st.threads.find((x) => x.id === st.activeThreadId);
-          set({
-            sessionResume: {
-              threadId: st.activeThreadId || "",
-              title: th?.title || "Recent chat",
-              preview: (answer || trimmed).slice(0, 160),
-              mode: routed,
-              ts: Date.now(),
-            },
           });
         }
 
@@ -3524,6 +3730,42 @@ if (!cmds.length) {
       setImagineMediaKind: (v) => set({ imagineMediaKind: v }),
       setImagineQuality: (v) => set({ imagineQuality: v }),
       setImagineReference: (v) => set({ imagineReference: v }),
+
+      removeImagineJob: (id) => {
+        const job = get().imagineJobs.find((j) => j.id === id);
+        set((s) => ({
+          imagineJobs: s.imagineJobs.filter((j) => j.id !== id),
+          imagineReference:
+            s.imagineReference &&
+            job &&
+            (s.imagineReference === job.imageDataUrl ||
+              s.imagineReference === job.videoDataUrl)
+              ? null
+              : s.imagineReference,
+        }));
+        void import("./imagine-media").then(({ deleteImagineMedia }) =>
+          deleteImagineMedia(id),
+        );
+        get().pushActivity({
+          kind: "imagine",
+          title: "Deleted Imagine item",
+          detail: job?.prompt?.slice(0, 80) || id,
+          status: "success",
+        });
+      },
+
+      clearImagineJobs: () => {
+        const n = get().imagineJobs.length;
+        if (!n) return;
+        set({ imagineJobs: [], imagineError: null, imagineReference: null });
+        void import("./imagine-media").then(({ clearImagineMedia }) => clearImagineMedia());
+        get().pushActivity({
+          kind: "imagine",
+          title: "Cleared Imagine gallery",
+          detail: `${n} item${n === 1 ? "" : "s"} removed`,
+          status: "success",
+        });
+      },
 
       runImagine: async (prompt) => {
         const p = (prompt ?? get().imaginePrompt).trim();
@@ -3612,6 +3854,25 @@ if (!cmds.length) {
           outKind = "image";
         }
 
+        // Persist bytes to userData so media survives restarts/updates
+        let imageRelPath: string | undefined;
+        let videoRelPath: string | undefined;
+        try {
+          const { persistImagineMedia } = await import("./imagine-media");
+          if (imageDataUrl) {
+            const saved = await persistImagineMedia(id, imageDataUrl, "image");
+            if (saved?.relPath) imageRelPath = saved.relPath;
+            if (saved?.dataUrl) imageDataUrl = saved.dataUrl;
+          }
+          if (videoDataUrl) {
+            const saved = await persistImagineMedia(id, videoDataUrl, "video");
+            if (saved?.relPath) videoRelPath = saved.relPath;
+            if (saved?.dataUrl) videoDataUrl = saved.dataUrl;
+          }
+        } catch {
+          /* still show in-session */
+        }
+
         set((s) => ({
           imagineBusy: false,
           imagineError: source === "local" && err ? err : err && source === "xai" ? err : null,
@@ -3622,6 +3883,8 @@ if (!cmds.length) {
                   status: "ready" as const,
                   imageDataUrl,
                   videoDataUrl,
+                  imageRelPath,
+                  videoRelPath,
                   mediaKind: outKind,
                   quality,
                   model,
@@ -3749,17 +4012,31 @@ if (!cmds.length) {
         desktop: s.desktop,
         agentPrefs: s.agentPrefs,
         usage: s.usage,
-        // Persist imagine job metadata; drop huge payloads (userData has more room than localStorage but still cap)
-        imagineJobs: s.imagineJobs.slice(0, 16).map((j) => {
-          const { imageDataUrl, videoDataUrl, referenceDataUrl, ...rest } = j;
-          // keep tiny svg previews only
+        // Persist imagine metadata + disk paths (bytes live in userData/imagine-media)
+        imagineJobs: s.imagineJobs.slice(0, 32).map((j) => {
+          const {
+            imageDataUrl,
+            videoDataUrl,
+            referenceDataUrl,
+            imageRelPath,
+            videoRelPath,
+            ...rest
+          } = j;
+          // Keep tiny local SVG previews inline when no disk path
           const keepImg =
+            !imageRelPath &&
             imageDataUrl &&
             imageDataUrl.startsWith("data:image/svg") &&
             imageDataUrl.length < 80_000
               ? imageDataUrl
               : undefined;
-          return { ...rest, imageDataUrl: keepImg };
+          return {
+            ...rest,
+            imageRelPath,
+            videoRelPath,
+            imageDataUrl: keepImg,
+            // never persist huge base64 / remote refs in JSON
+          };
         }),
         imagineAspect: s.imagineAspect,
         imagineMediaKind: s.imagineMediaKind,
@@ -3829,6 +4106,15 @@ if (!cmds.length) {
         s.streamStatus = null;
         s.streamingMessageId = null;
         s.pendingHostConfirm = null;
+        // Resume card only for real interrupts (drop legacy "last chat" cards)
+        try {
+          const r = s.sessionResume as Record<string, unknown> | null;
+          if (!r || r.kind !== "interrupted" || !r.threadId || !r.pendingPrompt) {
+            s.sessionResume = null;
+          }
+        } catch {
+          s.sessionResume = null;
+        }
         // Context continuity: re-bind chat from active thread when messages drifted
         try {
           const threads = Array.isArray(s.threads) ? (s.threads as import("./types").ChatThread[]) : [];
@@ -3840,7 +4126,11 @@ if (!cmds.length) {
             if (!chat.length || chat.length < (active.messages?.length || 0)) {
               s.chat = active.messages || [];
             }
-            if (active.mode) s.mode = active.mode;
+            if (active.mode && ["auto", "fast", "expert", "heavy", "build"].includes(String(active.mode))) {
+              // Do not force routed modes onto global selector on boot —
+              // prefer the persisted global mode (partialize). Only fill if missing.
+              if (!s.mode) s.mode = active.mode;
+            }
           }
         } catch {
           /* ignore */
@@ -3912,6 +4202,18 @@ if (!cmds.length) {
         return s as typeof s;
       },
       skipHydration: true,
+      onRehydrateStorage: () => (state, err) => {
+        if (err || !state) return;
+        // Reload Imagine media from disk after update/restart
+        void import("./imagine-media").then(async ({ rehydrateImagineJobs }) => {
+          try {
+            const jobs = await rehydrateImagineJobs(state.imagineJobs || []);
+            useGrokHub.setState({ imagineJobs: jobs });
+          } catch {
+            /* ignore */
+          }
+        });
+      },
     },
   ),
 );

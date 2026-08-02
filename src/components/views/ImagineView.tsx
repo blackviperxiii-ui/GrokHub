@@ -8,6 +8,7 @@ import {
   Plus,
   Ratio,
   Sparkles,
+  Trash2,
   Video,
   X,
 } from "lucide-react";
@@ -80,8 +81,12 @@ export function ImagineView() {
   const setImagineQuality = useGrokHub((s) => s.setImagineQuality);
   const setImagineReference = useGrokHub((s) => s.setImagineReference);
   const runImagine = useGrokHub((s) => s.runImagine);
+  const removeImagineJob = useGrokHub((s) => s.removeImagineJob);
+  const clearImagineJobs = useGrokHub((s) => s.clearImagineJobs);
 
   const [listening, setListening] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
+  const voiceRef = useRef<import("@/lib/voice-input").VoiceSession | null>(null);
   const [aspectOpen, setAspectOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -119,38 +124,41 @@ export function ImagineView() {
   }
 
   function toggleMic() {
-    const W = window as unknown as {
-      SpeechRecognition?: new () => SpeechRecognition;
-      webkitSpeechRecognition?: new () => SpeechRecognition;
-    };
-    const Ctor = W.SpeechRecognition || W.webkitSpeechRecognition;
-    if (!Ctor) {
-      setImaginePrompt(
-        (prompt ? prompt + " " : "") + "(Voice input not supported in this environment)",
+    void (async () => {
+      const { toggleVoiceSession } = await import("@/lib/voice-input");
+      const st = useGrokHub.getState();
+      if (listening && voiceRef.current) {
+        setVoiceStatus("Transcribing…");
+        const text = await voiceRef.current.stopAndTranscribe();
+        voiceRef.current = null;
+        setListening(false);
+        if (text) {
+          setImaginePrompt((prompt ? prompt.replace(/\s+$/, "") + " " : "") + text);
+          setVoiceStatus(null);
+          taRef.current?.focus();
+        } else {
+          setVoiceStatus(null);
+        }
+        return;
+      }
+      await toggleVoiceSession(
+        voiceRef,
+        {
+          onListeningChange: setListening,
+          onStatus: setVoiceStatus,
+          onError: (message) => {
+            setListening(false);
+            setVoiceStatus(message);
+          },
+          onFinal: () => setVoiceStatus(null),
+        },
+        {
+          apiKey: st.apiKey || undefined,
+          accessToken: st.oauth?.accessToken,
+          tokens: st.oauth,
+        },
       );
-      return;
-    }
-    if (listening) {
-      setListening(false);
-      return;
-    }
-    const rec = new Ctor();
-    rec.lang = "en-US";
-    rec.interimResults = true;
-    rec.continuous = false;
-    rec.onresult = (ev: SpeechRecognitionEvent) => {
-      let text = "";
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        text += ev.results[i]![0]!.transcript;
-      }
-      if (text.trim()) {
-        setImaginePrompt((prompt ? prompt.replace(/\s+$/, "") + " " : "") + text.trim());
-      }
-    };
-    rec.onerror = () => setListening(false);
-    rec.onend = () => setListening(false);
-    setListening(true);
-    rec.start();
+    })();
   }
 
   async function onSubmit() {
@@ -171,6 +179,26 @@ export function ImagineView() {
           </p>
         </div>
         <div className="flex gap-1.5">
+          {jobs.length > 0 && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-[var(--color-muted)] hover:text-[var(--color-danger)]"
+              title="Delete all generated images and videos"
+              onClick={() => {
+                if (
+                  typeof window !== "undefined" &&
+                  !window.confirm(`Delete all ${jobs.length} Imagine items?`)
+                ) {
+                  return;
+                }
+                clearImagineJobs();
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Clear all
+            </Button>
+          )}
           <Badge variant={grokConnected ? "success" : "default"}>
             {grokConnected ? "Grok live" : "Local preview"}
           </Badge>
@@ -213,6 +241,16 @@ export function ImagineView() {
                     Save
                   </a>
                 )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-[var(--color-muted)] hover:text-[var(--color-danger)]"
+                  title="Delete this generation"
+                  onClick={() => removeImagineJob(latest.id)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete
+                </Button>
               </div>
             </CardHeader>
             <CardContent>
@@ -252,7 +290,33 @@ export function ImagineView() {
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {jobs.map((job) => (
-            <Card key={job.id} className="overflow-hidden">
+            <Card key={job.id} className="group relative overflow-hidden">
+              <div className="absolute right-2 top-2 z-20 flex gap-1">
+                {(job.imageDataUrl || job.videoDataUrl) && (
+                  <a
+                    href={job.videoDataUrl || job.imageDataUrl}
+                    download={`grokhub-${job.id}.${job.videoDataUrl ? "mp4" : "png"}`}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-surface)_92%,transparent)] text-[var(--color-muted)] shadow-sm backdrop-blur hover:text-[var(--color-fg)]"
+                    title="Save"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                  </a>
+                )}
+                <button
+                  type="button"
+                  title="Delete"
+                  aria-label="Delete Imagine item"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[color-mix(in_oklab,var(--color-danger)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-surface)_92%,transparent)] text-[var(--color-danger)] shadow-sm backdrop-blur hover:bg-[color-mix(in_oklab,var(--color-danger)_12%,var(--color-surface))]"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    removeImagineJob(job.id);
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
               <div className="aspect-video bg-[var(--color-surface)]">
                 {job.videoDataUrl ? (
                   <video src={job.videoDataUrl} className="h-full w-full object-cover" muted />
@@ -263,14 +327,16 @@ export function ImagineView() {
                     className="h-full w-full object-cover"
                   />
                 ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-[var(--color-subtle)]">
+                  <div className="flex h-full flex-col items-center justify-center gap-1 px-3 text-center text-xs text-[var(--color-subtle)]">
                     {job.status === "rendering" ? (
                       <span className="inline-flex items-center gap-2">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         Rendering…
                       </span>
+                    ) : job.imageRelPath || job.videoRelPath ? (
+                      <span>Media on disk — reloading…</span>
                     ) : (
-                      "Queued"
+                      "No media"
                     )}
                   </div>
                 )}
@@ -287,20 +353,29 @@ export function ImagineView() {
                   {job.aspect} · {job.quality || "speed"}
                   {job.model ? ` · ${job.model}` : ""}
                 </p>
-                {job.imageDataUrl && job.status === "ready" && (
+                <div className="flex flex-wrap items-center gap-3 pt-0.5">
+                  {job.status === "ready" && (job.imageDataUrl || job.videoDataUrl) && (
+                    <button
+                      type="button"
+                      className="text-[10px] text-[var(--color-info)] hover:underline"
+                      onClick={() => {
+                        setImaginePrompt(job.prompt);
+                        setImagineAspect(job.aspect);
+                        if (job.quality) setImagineQuality(job.quality);
+                        if (job.mediaKind) setImagineMediaKind(job.mediaKind);
+                      }}
+                    >
+                      Reuse settings
+                    </button>
+                  )}
                   <button
                     type="button"
-                    className="text-[10px] text-[var(--color-info)] hover:underline"
-                    onClick={() => {
-                      setImaginePrompt(job.prompt);
-                      setImagineAspect(job.aspect);
-                      if (job.quality) setImagineQuality(job.quality);
-                      if (job.mediaKind) setImagineMediaKind(job.mediaKind);
-                    }}
+                    className="text-[10px] font-medium text-[var(--color-danger)] hover:underline"
+                    onClick={() => removeImagineJob(job.id)}
                   >
-                    Reuse settings
+                    Delete
                   </button>
-                )}
+                </div>
               </CardContent>
             </Card>
           ))}
@@ -439,10 +514,15 @@ export function ImagineView() {
               active={listening}
               onClick={toggleMic}
               disabled={busy}
-              title="Voice prompt"
+              title={listening ? "Stop & transcribe" : "Voice prompt"}
             >
               {listening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
             </Pill>
+            {voiceStatus && (
+              <span className="max-w-[10rem] truncate text-[10px] text-[var(--color-info)]">
+                {voiceStatus}
+              </span>
+            )}
             <button
               type="button"
               disabled={busy || !prompt.trim()}

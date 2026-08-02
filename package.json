@@ -1,8 +1,8 @@
 {
   "name": "grokhub",
-  "version": "0.8.10",
+  "version": "0.8.11",
   "private": true,
-  "description": "GrokHub \u2014 Grok-native agent control plane (Windows, Linux)",
+  "description": "GrokHub — Grok-native agent control plane (Windows, Linux)",
   "author": "ViperXIII",
   "license": "MIT",
   "homepage": "https://github.com/blackviperxiii-ui/Grok-Hub",
@@ -119,7 +119,7 @@
   "build": {
     "appId": "com.grokhub.app",
     "productName": "GrokHub",
-    "copyright": "Copyright \u00a9 2026 ViperXIII",
+    "copyright": "Copyright © 2026 ViperXIII",
     "directories": {
       "output": "dist-desktop",
       "buildResources": "packaging/windows"

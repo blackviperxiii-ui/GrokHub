@@ -5,6 +5,7 @@ import {
   callXaiChat,
   callXaiChatStream,
   callXaiImagine,
+  callXaiStt,
   probeXaiBearer,
   XAI_BASE,
   type GrokChatMessage,
@@ -304,6 +305,27 @@ export async function dispatchApi(
         mediaKind: body.mediaKind === "video" ? "video" : "image",
         n: typeof body.n === "number" ? body.n : undefined,
         referenceDataUrl: body.referenceDataUrl ? String(body.referenceDataUrl) : undefined,
+      });
+    }
+
+    if (action === "stt" || action === "transcribe") {
+      let accessToken = body.accessToken ? String(body.accessToken) : undefined;
+      const apiKey = body.apiKey ? String(body.apiKey) : undefined;
+      if (body.tokens && typeof body.tokens === "object") {
+        try {
+          const ensured = await ensureAccessToken(body.tokens as XaiOAuthTokens);
+          accessToken = ensured.accessToken;
+        } catch {
+          /* use raw */
+        }
+      }
+      return callXaiStt({
+        accessToken,
+        apiKey,
+        audioBase64: String(body.audioBase64 || body.audio || ""),
+        mimeType: body.mimeType ? String(body.mimeType) : undefined,
+        language: body.language ? String(body.language) : undefined,
+        fileName: body.fileName ? String(body.fileName) : undefined,
       });
     }
 

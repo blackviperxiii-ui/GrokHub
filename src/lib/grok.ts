@@ -851,3 +851,83 @@ export async function callXaiImagine(req: {
   }
   return { ok: false, error: lastErr, mediaKind: "image" };
 }
+
+
+/** Grok Speech-to-Text (batch). audioBase64 = raw file bytes as base64, with mime. */
+export async function callXaiStt(req: {
+  accessToken?: string;
+  apiKey?: string;
+  /** base64 of audio file (webm/wav/ogg/mp3) */
+  audioBase64: string;
+  mimeType?: string;
+  language?: string;
+  fileName?: string;
+}): Promise<{ ok: boolean; text?: string; error?: string }> {
+  const auth = resolveBearer({
+    accessToken: req.accessToken,
+    apiKey: req.apiKey,
+    messages: [],
+  });
+  if (!auth) {
+    return { ok: false, error: "Not connected — sign in to Grok for voice transcription" };
+  }
+  const b64 = String(req.audioBase64 || "").replace(/^data:[^;]+;base64,/, "");
+  if (!b64) return { ok: false, error: "empty audio" };
+  let bytes: Uint8Array;
+  try {
+    if (typeof Buffer !== "undefined") {
+      bytes = Buffer.from(b64, "base64");
+    } else {
+      const bin = atob(b64);
+      bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    }
+  } catch {
+    return { ok: false, error: "invalid audio base64" };
+  }
+  const mime = req.mimeType || "audio/webm";
+  const name =
+    req.fileName ||
+    (mime.includes("wav")
+      ? "speech.wav"
+      : mime.includes("ogg")
+        ? "speech.ogg"
+        : mime.includes("mp4") || mime.includes("m4a")
+          ? "speech.m4a"
+          : "speech.webm");
+  const form = new FormData();
+  form.append("format", "true");
+  form.append("language", req.language || "en");
+  // Node 18+ / browsers: File or Blob
+  const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const file =
+    typeof File !== "undefined"
+      ? new File([ab], name, { type: mime })
+      : new Blob([ab], { type: mime });
+  form.append("file", file, name);
+  try {
+    const res = await fetch(`${XAI_BASE}/stt`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${auth.bearer}` },
+      body: form,
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: { message?: string } | string;
+      text?: string;
+      transcript?: string;
+      result?: string;
+    };
+    if (!res.ok) {
+      const err =
+        typeof data.error === "string"
+          ? data.error
+          : data.error?.message || `STT ${res.status}`;
+      return { ok: false, error: err };
+    }
+    const text = (data.text || data.transcript || data.result || "").trim();
+    if (!text) return { ok: false, error: "empty transcript" };
+    return { ok: true, text };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "STT network error" };
+  }
+}

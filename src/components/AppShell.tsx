@@ -123,7 +123,8 @@ function RecentThreadRow({
 
   function commitRename() {
     const next = draft.trim();
-    if (next && next !== title) renameThread(id, next);
+    // Any explicit rename commit locks the title (even if text unchanged)
+    if (next) renameThread(id, next);
     else setDraft(title);
     setRenaming(false);
   }
@@ -260,6 +261,17 @@ export function AppShell() {
         streamStatus: null,
         streamingMessageId: null,
         pendingHostConfirm: null,
+      });
+      // Re-load Imagine media from disk (paths only in JSON after update)
+      void import("@/lib/imagine-media").then(async ({ rehydrateImagineJobs }) => {
+        const jobs = useGrokHub.getState().imagineJobs || [];
+        if (!jobs.length) return;
+        try {
+          const next = await rehydrateImagineJobs(jobs);
+          useGrokHub.setState({ imagineJobs: next });
+        } catch {
+          /* ignore */
+        }
       });
       const st = useGrokHub.getState();
       st.refreshStaleTimes();
