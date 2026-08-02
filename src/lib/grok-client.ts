@@ -71,6 +71,7 @@ export async function grokChatStream(
     ssoCookie?: string;
     freeTier?: boolean;
     allowWebsiteFallback?: boolean;
+    temperature?: number;
   },
   handlers: StreamHandlers,
 ): Promise<

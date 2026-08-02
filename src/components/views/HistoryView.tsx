@@ -1,10 +1,11 @@
-import { History, MessageSquarePlus, Pencil, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Folder, History, MessageSquarePlus, Pencil, Pin, PinOff, Search, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useGrokHub } from "@/lib/store";
 import { RelativeTime } from "../RelativeTime";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
+import { Input } from "../ui/input";
 import { cn } from "@/lib/utils";
 
 export function HistoryView() {
@@ -13,12 +14,43 @@ export function HistoryView() {
   const selectThread = useGrokHub((s) => s.selectThread);
   const deleteThread = useGrokHub((s) => s.deleteThread);
   const renameThread = useGrokHub((s) => s.renameThread);
+  const pinThread = useGrokHub((s) => s.pinThread);
+  const setThreadFolder = useGrokHub((s) => s.setThreadFolder);
   const newThread = useGrokHub((s) => s.newThread);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [q, setQ] = useState("");
+  const [folderFilter, setFolderFilter] = useState<string | "all" | "pinned">("all");
+  const [folderDraftId, setFolderDraftId] = useState<string | null>(null);
+  const [folderDraft, setFolderDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const sorted = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
+  const folders = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of threads) {
+      if (t.folder) set.add(t.folder);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [threads]);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    let list = [...threads];
+    if (folderFilter === "pinned") list = list.filter((t) => t.pinned);
+    else if (folderFilter !== "all") list = list.filter((t) => t.folder === folderFilter);
+    if (needle) {
+      list = list.filter((t) => {
+        if (t.title.toLowerCase().includes(needle)) return true;
+        if (t.folder?.toLowerCase().includes(needle)) return true;
+        return t.messages.some((m) => m.content.toLowerCase().includes(needle));
+      });
+    }
+    list.sort((a, b) => {
+      if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+      return b.updatedAt - a.updatedAt;
+    });
+    return list;
+  }, [threads, q, folderFilter]);
 
   useEffect(() => {
     if (renamingId) {
@@ -42,14 +74,14 @@ export function HistoryView() {
   return (
     <div className="content-readable mx-auto space-y-4">
       <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-3">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <CardTitle className="flex items-center gap-2 text-sm">
               <History className="h-4 w-4" />
               History
             </CardTitle>
             <CardDescription>
-              Past chats — select to resume, rename, or delete.
+              Search, pin, and folder chats. Select to resume exactly where you left off.
             </CardDescription>
           </div>
           <Button size="sm" onClick={() => newThread()}>
@@ -57,13 +89,46 @@ export function HistoryView() {
             New chat
           </Button>
         </CardHeader>
-        <CardContent className="space-y-1.5 p-3 pt-0">
-          {sorted.length === 0 && (
+        <CardContent className="space-y-3 p-3 pt-0">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-subtle)]" />
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search title or message text…"
+              className="pl-8"
+            />
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {(
+              [
+                ["all", "All"],
+                ["pinned", "Pinned"],
+                ...folders.map((f) => [f, f] as const),
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setFolderFilter(id)}
+                className={cn(
+                  "rounded-full border px-2.5 py-0.5 text-[11px] transition-colors",
+                  folderFilter === id
+                    ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]"
+                    : "border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-border-strong)]",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {filtered.length === 0 && (
             <p className="px-2 py-8 text-center text-sm text-[var(--color-muted)]">
-              No chats yet. Start one from Agent.
+              {threads.length === 0 ? "No chats yet. Start one from Agent." : "No matches."}
             </p>
           )}
-          {sorted.map((t) => {
+          {filtered.map((t) => {
             const active = t.id === activeThreadId;
             const preview =
               [...t.messages].reverse().find((m) => m.role === "user" || m.role === "assistant")
@@ -79,68 +144,121 @@ export function HistoryView() {
                     : "border-[var(--color-border)] hover:border-[var(--color-border-strong)]",
                 )}
               >
-                {isRenaming ? (
-                  <div className="min-w-0 flex-1">
-                    <input
-                      ref={inputRef}
-                      value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
-                      onBlur={commitRename}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          commitRename();
-                        }
-                        if (e.key === "Escape") setRenamingId(null);
-                      }}
-                      className="w-full rounded-[var(--radius-sm)] border border-[var(--color-border-strong)] bg-[var(--color-bg)] px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
-                      aria-label="Rename chat"
-                    />
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 text-left"
-                    onClick={() => selectThread(t.id)}
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 text-left"
+                  onClick={() => selectThread(t.id)}
+                >
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {t.pinned && <Pin className="h-3 w-3 text-[var(--color-info)]" />}
+                    {isRenaming ? (
+                      <input
+                        ref={inputRef}
+                        value={draft}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onBlur={commitRename}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commitRename();
+                          if (e.key === "Escape") setRenamingId(null);
+                        }}
+                        className="w-full max-w-xs rounded border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-2 py-0.5 text-sm"
+                      />
+                    ) : (
                       <span className="truncate text-sm font-medium">{t.title}</span>
-                      {active && (
-                        <Badge className="text-[10px]" variant="info">
-                          Open
-                        </Badge>
-                      )}
-                    </div>
-                    <p className="mt-0.5 line-clamp-2 text-xs text-[var(--color-muted)]">
-                      {preview.replace(/\s+/g, " ").slice(0, 140)}
-                    </p>
-                    <div className="mt-1 text-[10px] text-[var(--color-subtle)]">
-                      <RelativeTime ts={t.updatedAt} />
-                      {t.mode ? ` · ${t.mode}` : ""}
-                    </div>
-                  </button>
-                )}
-                <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                  <button
-                    type="button"
-                    className="rounded p-1.5 text-[var(--color-subtle)] hover:bg-[var(--color-surface)] hover:text-[var(--color-fg)]"
-                    aria-label="Rename chat"
+                    )}
+                    {t.folder && (
+                      <Badge className="text-[10px]">
+                        <Folder className="mr-0.5 h-2.5 w-2.5" />
+                        {t.folder}
+                      </Badge>
+                    )}
+                    {t.mode && <Badge className="font-mono text-[10px]">{t.mode}</Badge>}
+                  </div>
+                  <p className="mt-0.5 line-clamp-2 text-xs text-[var(--color-muted)]">{preview}</p>
+                  <div className="mt-1 text-[10px] text-[var(--color-subtle)]">
+                    <RelativeTime ts={t.updatedAt} /> · {t.messages.length} messages
+                  </div>
+                </button>
+                <div className="flex shrink-0 flex-col gap-0.5 opacity-70 group-hover:opacity-100">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    title={t.pinned ? "Unpin" : "Pin"}
+                    onClick={() => pinThread(t.id)}
+                  >
+                    {t.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    title="Rename"
                     onClick={() => startRename(t.id, t.title)}
                   >
                     <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded p-1.5 text-[var(--color-subtle)] hover:bg-[var(--color-surface)] hover:text-[var(--color-danger)]"
-                    aria-label="Delete chat"
-                    onClick={() => deleteThread(t.id)}
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    title="Folder"
+                    onClick={() => {
+                      setFolderDraftId(t.id);
+                      setFolderDraft(t.folder || "");
+                    }}
+                  >
+                    <Folder className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 text-[var(--color-danger)]"
+                    title="Delete"
+                    onClick={() => {
+                      if (window.confirm("Delete this chat?")) deleteThread(t.id);
+                    }}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  </Button>
                 </div>
               </div>
             );
           })}
+
+          {folderDraftId && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+              <Card className="w-full max-w-sm">
+                <CardHeader>
+                  <CardTitle className="text-sm">Set folder</CardTitle>
+                  <CardDescription>Group chats (e.g. Work, Arch, Imagine).</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Input
+                    value={folderDraft}
+                    onChange={(e) => setFolderDraft(e.target.value)}
+                    placeholder="Folder name (empty to clear)"
+                    autoFocus
+                  />
+                  <div className="flex justify-end gap-2">
+                    <Button size="sm" variant="secondary" onClick={() => setFolderDraftId(null)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setThreadFolder(folderDraftId, folderDraft.trim() || null);
+                        setFolderDraftId(null);
+                      }}
+                    >
+                      Save
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

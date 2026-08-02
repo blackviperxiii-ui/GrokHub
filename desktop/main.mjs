@@ -173,6 +173,14 @@ if (process.platform === "linux") {
   }
 }
 
+// Keep main process alive logs for stability diagnosis (never crash on stray rejections)
+process.on("uncaughtException", (err) => {
+  console.error("[GrokHub] uncaughtException", err);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("[GrokHub] unhandledRejection", err);
+});
+
 // Single instance: pin click while running focuses the existing window (no 2nd icon)
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {

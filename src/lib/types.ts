@@ -141,6 +141,19 @@ export type ChatThread = {
   updatedAt: number;
   messages: ChatMessage[];
   mode?: GrokModeId;
+  /** Pin to top of history / sidebar */
+  pinned?: boolean;
+  /** Optional folder label (e.g. Work, Personal) */
+  folder?: string | null;
+};
+
+/** Lightweight resume card after restart */
+export type SessionResume = {
+  threadId: string;
+  title: string;
+  preview: string;
+  mode?: GrokModeId;
+  ts: number;
 };
 
 export type ImagineAspect = "auto" | "1:1" | "16:9" | "9:16" | "4:3" | "3:2" | "2:3";

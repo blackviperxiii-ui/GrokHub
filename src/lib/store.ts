@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { persistentStorage } from "./persistent-storage";
 import { redactSecrets } from "./redact";
+import { friendlyAssistantError, formatUserError } from "./format-error";
+import { toolResultMarkdown, toolRunningMarkdown } from "./tool-status";
 import { renderImaginePreview } from "./imagine";
 import { getMode, resolveMode, resolveModeWithCatalog, stripAssistantChrome, modelIdForMode, autoRouteFor } from "./modes";
 import { buildCatalog, emptyCatalog, applyGrokPlan, needsGrokClassification, type ResolvedCatalog, type GrokSlotPlan } from "./models-catalog";
@@ -13,6 +15,7 @@ import type {
   AutomationSchedule,
   ChatMessage,
   ChatThread,
+  SessionResume,
   Connector,
   GrokModeId,
   GrokProfile,
@@ -84,6 +87,8 @@ type State = {
   chat: ChatMessage[];
   threads: ChatThread[];
   activeThreadId: string | null;
+  /** Last meaningful work for resume banner */
+  sessionResume: SessionResume | null;
   agents: Agent[];
   profile: GrokProfile;
   imagineJobs: ImagineJob[];
@@ -107,6 +112,17 @@ type State = {
     selfModifyEnabled: boolean;
     /** Block dangerous host shell patterns (rm -rf, sudo, pipe-to-shell, …) */
     hostSafeMode: boolean;
+  };
+  /** Agent generation / tool preferences */
+  agentPrefs: {
+    /** 0–1 sampling temperature for chat */
+    temperature: number;
+    /** Allow HOST_CMD execution from model replies */
+    hostToolsEnabled: boolean;
+    /** Allow CONNECTOR_CMD execution */
+    connectorToolsEnabled: boolean;
+    /** User freeform memory notes (persist across restarts) */
+    memoryNotes: string;
   };
   /** Host commands awaiting user approval */
   pendingHostConfirm: {
@@ -193,6 +209,14 @@ type State = {
   selectThread: (id: string) => void;
   deleteThread: (id: string) => void;
   renameThread: (id: string, title: string) => void;
+  pinThread: (id: string, pinned?: boolean) => void;
+  setThreadFolder: (id: string, folder: string | null) => void;
+  dismissSessionResume: () => void;
+  resumeLastSession: () => void;
+  setAgentPrefs: (patch: Partial<{ temperature: number; hostToolsEnabled: boolean; connectorToolsEnabled: boolean; memoryNotes: string }>) => void;
+  editChatMessage: (id: string, content: string, resend?: boolean) => Promise<void>;
+  exportThreadMarkdown: (id?: string) => string;
+  clearChat: () => void;
   setPlan: (plan: SubscriptionPlanId) => void;
   /** When true, allow free website session + free-model cascade if paid access fails */
   preferFreeGrok: boolean;
@@ -495,6 +519,7 @@ export const useGrokHub = create<State>()(
       chat: boot.chat,
       threads: boot.threads,
       activeThreadId: boot.activeThreadId,
+      sessionResume: null,
       agents: boot.agents,
       profile: boot.profile,
       imagineJobs: [],
@@ -514,6 +539,12 @@ export const useGrokHub = create<State>()(
         confirmDestructiveOnly: true,
         selfModifyEnabled: false,
         hostSafeMode: false,
+      },
+      agentPrefs: {
+        temperature: 0.7,
+        hostToolsEnabled: true,
+        connectorToolsEnabled: true,
+        memoryNotes: "",
       },
       usage: createUsage("pro"),
       heartbeatAt: boot.heartbeatAt,
@@ -1519,25 +1550,22 @@ export const useGrokHub = create<State>()(
 
       newThread: () => {
         const now = Date.now();
+        // Empty thread — no repeating welcome spam on every New chat / restart
         const thread: ChatThread = {
           id: uid("thread"),
           title: "New chat",
           createdAt: now,
           updatedAt: now,
-          messages: [
-            {
-              id: uid("msg"),
-              role: "system",
-              content: "New chat. Ask Grok anything — modes apply from the picker.",
-              ts: now,
-            },
-          ],
+          messages: [],
         };
         set((s) => ({
           threads: [thread, ...s.threads],
           activeThreadId: thread.id,
-          chat: thread.messages,
+          chat: [],
           nav: "chat",
+          running: false,
+          streamStatus: null,
+          streamingMessageId: null,
         }));
       },
 
@@ -1577,6 +1605,117 @@ export const useGrokHub = create<State>()(
             t.id === id ? { ...t, title: next, updatedAt: Date.now() } : t,
           ),
         }));
+      },
+
+      pinThread: (id, pinned) => {
+        set((s) => ({
+          threads: s.threads.map((t) =>
+            t.id === id
+              ? { ...t, pinned: typeof pinned === "boolean" ? pinned : !t.pinned, updatedAt: Date.now() }
+              : t,
+          ),
+        }));
+      },
+
+      setThreadFolder: (id, folder) => {
+        const f = folder?.trim() ? folder.trim().slice(0, 40) : null;
+        set((s) => ({
+          threads: s.threads.map((t) =>
+            t.id === id ? { ...t, folder: f, updatedAt: Date.now() } : t,
+          ),
+        }));
+      },
+
+      dismissSessionResume: () => set({ sessionResume: null }),
+
+      setAgentPrefs: (patch) => {
+        set((s) => ({
+          agentPrefs: {
+            ...s.agentPrefs,
+            ...patch,
+            temperature: Math.min(
+              1,
+              Math.max(0, Number(patch.temperature ?? s.agentPrefs.temperature) || 0.7),
+            ),
+          },
+        }));
+      },
+
+      clearChat: () => {
+        const tid = get().activeThreadId;
+        set((s) => ({
+          chat: [],
+          threads: s.threads.map((th) =>
+            th.id === tid ? { ...th, messages: [], title: "New chat", updatedAt: Date.now() } : th,
+          ),
+          running: false,
+          streamStatus: null,
+          streamingMessageId: null,
+        }));
+      },
+
+      exportThreadMarkdown: (id) => {
+        const tid = id || get().activeThreadId;
+        const th = get().threads.find((x) => x.id === tid);
+        const messages = th?.messages || get().chat;
+        const title = th?.title || "GrokHub chat";
+        const lines = [
+          `# ${title}`,
+          "",
+          `_Exported from GrokHub · ${new Date().toISOString()}_`,
+          "",
+        ];
+        for (const m of messages) {
+          const who = m.role === "user" ? "You" : m.role === "assistant" ? "Grok" : "System";
+          lines.push(`## ${who}`, "", m.content || "", "");
+        }
+        return lines.join("\n");
+      },
+
+      editChatMessage: async (id, content, resend) => {
+        const next = content.trim();
+        if (!next) return;
+        const idx = get().chat.findIndex((m) => m.id === id);
+        if (idx < 0) return;
+        const msg = get().chat[idx]!;
+        if (msg.role !== "user") return;
+        set((s) => {
+          const chat = s.chat.slice(0, idx + 1).map((m) =>
+            m.id === id ? { ...m, content: next, ts: Date.now() } : m,
+          );
+          const tid = s.activeThreadId;
+          return {
+            chat,
+            threads: s.threads.map((th) =>
+              th.id === tid ? { ...th, messages: chat, updatedAt: Date.now() } : th,
+            ),
+          };
+        });
+        if (resend) {
+          set((s) => {
+            const chat = s.chat.slice(0, idx);
+            const tid = s.activeThreadId;
+            return {
+              chat,
+              threads: s.threads.map((th) =>
+                th.id === tid ? { ...th, messages: chat, updatedAt: Date.now() } : th,
+              ),
+            };
+          });
+          await get().sendChat(next);
+        }
+      },
+
+      resumeLastSession: () => {
+        const r = get().sessionResume;
+        if (!r?.threadId) return;
+        const t = get().threads.find((x) => x.id === r.threadId);
+        if (t) {
+          get().selectThread(t.id);
+        } else {
+          set({ nav: "chat" });
+        }
+        set({ sessionResume: null });
       },
 
       setPreferFreeGrok: (v) => set({ preferFreeGrok: Boolean(v) }),
@@ -2282,34 +2421,122 @@ export const useGrokHub = create<State>()(
           return;
         }
 
-        const mode = get().mode;
-        const catalog = get().modelCatalog || emptyCatalog();
-        const auto = autoRouteFor(trimmed, catalog);
-        if (mode === "auto" && auto.openImagine) {
-          set({ nav: "imagine", imaginePrompt: trimmed });
-          return;
-        }
-        const routed = resolveModeWithCatalog(mode, trimmed, catalog);
-        const m = getMode(routed);
-        // Soft quota check (real token units settled after live reply)
-        {
-          const u = ensurePeriod(get().usage);
-          const est = costFor("message", routed);
-          if (u.usedUnits + est > PLAN_LIMITS[u.plan].units * 1.02) {
+        // Slash commands (local, instant)
+        const slash = trimmed.match(/^\/([a-zA-Z_-]+)(?:\s+([\s\S]*))?$/);
+        if (slash) {
+          const cmd = slash[1]!.toLowerCase();
+          const arg = (slash[2] || "").trim();
+          if (cmd === "help") {
             set((s) => ({
               chat: [
                 ...s.chat,
-                {
-                  id: uid("msg"),
-                  role: "user",
-                  content: trimmed,
-                  ts: Date.now(),
-                  mode,
-                },
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
                 {
                   id: uid("msg"),
                   role: "system",
-                  content: `Quota exceeded on ${PLAN_LIMITS[u.plan].label}. Wait for period reset or switch plan in Settings.`,
+                  content: [
+                    "**Slash commands**",
+                    "",
+                    "- `/help` — this list",
+                    "- `/new` — new chat",
+                    "- `/clear` — clear current chat",
+                    "- `/imagine [prompt]` — open Imagine",
+                    "- `/export` — download chat as Markdown",
+                    "- `/mode auto|fast|expert|heavy|build`",
+                    "- `/memory [note]` — append persistent memory note",
+                    "- `/tools on|off` — host + connector tools",
+                  ].join("\n"),
+                  ts: Date.now(),
+                },
+              ],
+              nav: "chat",
+            }));
+            return;
+          }
+          if (cmd === "new") {
+            get().newThread();
+            return;
+          }
+          if (cmd === "clear") {
+            get().clearChat();
+            return;
+          }
+          if (cmd === "imagine") {
+            set({ nav: "imagine", imaginePrompt: arg || get().imaginePrompt || "" });
+            return;
+          }
+          if (cmd === "export") {
+            const md = get().exportThreadMarkdown();
+            if (typeof window !== "undefined") {
+              const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+              const a = document.createElement("a");
+              a.href = URL.createObjectURL(blob);
+              a.download = `grokhub-chat-${Date.now()}.md`;
+              a.click();
+              URL.revokeObjectURL(a.href);
+            }
+            get().pushActivity({
+              kind: "chat",
+              title: "Exported Markdown",
+              detail: "Downloaded current chat",
+              status: "success",
+            });
+            return;
+          }
+          if (cmd === "mode" && arg) {
+            const id = arg.toLowerCase() as import("./types").GrokModeId;
+            if (["auto", "fast", "expert", "heavy", "build"].includes(id)) {
+              get().setMode(id);
+              return;
+            }
+          }
+          if (cmd === "memory") {
+            if (arg) {
+              const prev = get().agentPrefs.memoryNotes || "";
+              const line = `- ${new Date().toISOString().slice(0, 10)}: ${arg}`;
+              get().setAgentPrefs({
+                memoryNotes: prev ? `${prev}\n${line}` : line,
+              });
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: `Saved to persistent memory:\n${line}`,
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+            } else {
+              const notes = get().agentPrefs.memoryNotes || "_Empty — use `/memory your note`_";
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: `**Persistent memory**\n\n${notes}`,
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+            }
+            return;
+          }
+          if (cmd === "tools") {
+            const on = !/off|false|0|no/i.test(arg || "on");
+            get().setAgentPrefs({ hostToolsEnabled: on, connectorToolsEnabled: on });
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                {
+                  id: uid("msg"),
+                  role: "system",
+                  content: `Agent tools ${on ? "**enabled**" : "**disabled**"} (host + connectors).`,
                   ts: Date.now(),
                 },
               ],
@@ -2317,8 +2544,9 @@ export const useGrokHub = create<State>()(
             return;
           }
         }
-        let bill = { ok: true, cost: costFor("message", routed) };
 
+        // Instant feedback BEFORE routing / network (kills perceived latency)
+        const mode = get().mode;
         const userMsg: ChatMessage = {
           id: uid("msg"),
           role: "user",
@@ -2332,11 +2560,9 @@ export const useGrokHub = create<State>()(
           role: "assistant",
           content: "",
           ts: Date.now(),
-          mode: routed,
+          mode,
           streaming: true,
         };
-
-        // Abort any previous stream
         try {
           activeChatAbort?.abort();
         } catch {
@@ -2349,15 +2575,70 @@ export const useGrokHub = create<State>()(
         set((s) => ({
           chat: [...s.chat, userMsg, botPlaceholder],
           running: true,
-          streamStatus:
-            mode === "auto"
-              ? `Auto → ${auto.reason}`
-              : `Thinking · ${m.label}…`,
+          streamStatus: "Thinking…",
           streamingMessageId: botId,
+          nav: "chat",
+        }));
+        // Yield a frame so the indicator paints before heavier work
+        await new Promise<void>((r) => {
+          if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(() => r());
+          } else {
+            setTimeout(() => r(), 0);
+          }
+        });
+
+        const catalog = get().modelCatalog || emptyCatalog();
+        const auto = autoRouteFor(trimmed, catalog);
+        if (mode === "auto" && auto.openImagine) {
+          set((s) => ({
+            chat: s.chat.filter((m) => m.id !== botId && m.id !== userMsg.id),
+            running: false,
+            streamStatus: null,
+            streamingMessageId: null,
+            nav: "imagine",
+            imaginePrompt: trimmed,
+          }));
+          return;
+        }
+        const routed = resolveModeWithCatalog(mode, trimmed, catalog);
+        const m = getMode(routed);
+        // Soft quota check (real token units settled after live reply)
+        {
+          const u = ensurePeriod(get().usage);
+          const est = costFor("message", routed);
+          if (u.usedUnits + est > PLAN_LIMITS[u.plan].units * 1.02) {
+            set((s) => ({
+              chat: s.chat.map((row) =>
+                row.id === botId
+                  ? {
+                      ...row,
+                      streaming: false,
+                      role: "system" as const,
+                      content: `Quota exceeded on ${PLAN_LIMITS[u.plan].label}. Wait for period reset or switch plan in Settings.`,
+                    }
+                  : row,
+              ),
+              running: false,
+              streamStatus: null,
+              streamingMessageId: null,
+            }));
+            return;
+          }
+        }
+        let bill = { ok: true, cost: costFor("message", routed) };
+
+        set((s) => ({
+          chat: s.chat.map((row) =>
+            row.id === botId ? { ...row, mode: routed } : row.id === userMsg.id ? { ...row, mode } : row,
+          ),
+          streamStatus:
+            mode === "auto" ? `Auto → ${auto.reason}` : `Thinking · ${m.label}…`,
         }));
 
         if (get().agents.length === 0) {
-          await get().syncFromGrok();
+          // Non-blocking profile sync — don't delay first token
+          void get().syncFromGrok();
         }
         get().setAgentStatus(
           routed === "build" ? "builder" : routed === "heavy" ? "research" : "primary",
@@ -2477,9 +2758,19 @@ export const useGrokHub = create<State>()(
                   ssoCookie: get().ssoCookie || undefined,
                   freeTier,
                   allowWebsiteFallback: stNow.preferFreeGrok !== false,
+                  temperature: stNow.agentPrefs?.temperature ?? 0.7,
                   workspaceContext: [
                     oc?.contextBundle || "",
                     (await import("./grok")).connectorContextBlock(get().connectors),
+                    stNow.agentPrefs?.memoryNotes
+                      ? `## User persistent memory notes\n${stNow.agentPrefs.memoryNotes}`
+                      : "",
+                    !stNow.agentPrefs?.hostToolsEnabled
+                      ? "NOTE: Host shell tools are DISABLED by user settings. Do not emit HOST_CMD."
+                      : "",
+                    !stNow.agentPrefs?.connectorToolsEnabled
+                      ? "NOTE: Connector tools are DISABLED by user settings. Do not emit CONNECTOR_CMD."
+                      : "",
                   ]
                     .filter(Boolean)
                     .join("\n")
@@ -2570,8 +2861,11 @@ export const useGrokHub = create<State>()(
 
                 let cmds = extractHostCommands(full);
                 let connCmds = extractConnectorCommands(full);
+                // Respect tool toggles
+                if (!get().agentPrefs.hostToolsEnabled) cmds = [];
+                if (!get().agentPrefs.connectorToolsEnabled) connCmds = [];
                 // First round: if user asked about local files and model forgot HOST_CMD, infer
-                if (!cmds.length && rounds === 1) {
+                if (!cmds.length && rounds === 1 && get().agentPrefs.hostToolsEnabled) {
                   cmds = inferHostCommandsFromUser(trimmed);
                 }
                 if (!cmds.length && !connCmds.length) {
@@ -2588,10 +2882,21 @@ export const useGrokHub = create<State>()(
                       aborted = true;
                       break;
                     }
-                    set({ streamStatus: `Connector: ${cc.connectorId} ${cc.tool}…` });
+                    const label = `${cc.connectorId} ${cc.tool}${cc.args ? " " + cc.args : ""}`;
+                    set({ streamStatus: `Connector: ${label}…` });
+                    get().pushActivity({
+                      kind: "connector",
+                      title: `Running ${cc.connectorId}:${cc.tool}`,
+                      detail: label.slice(0, 160),
+                      status: "running",
+                    });
                     const row = get().connectors.find((c) => c.id === cc.connectorId);
                     patchBot(
-                      `${visible || "Using connector…"}\n\n_Running_\n\`CONNECTOR_CMD: ${cc.connectorId} ${cc.tool}\``,
+                      toolRunningMarkdown({
+                        kind: "connector",
+                        command: label,
+                        preface: visible || "Using connected services…",
+                      }),
                       { streaming: true },
                     );
                     try {
@@ -2642,16 +2947,14 @@ export const useGrokHub = create<State>()(
                   ].join("\n");
                   history.push({ role: "assistant", content: full });
                   history.push({ role: "user", content: toolBlock });
+                  set({ streamStatus: "Summarizing connector results…" });
                   patchBot(
-                    [
-                      visible || "Checked connectors.",
-                      "",
-                      "```",
-                      outputs.join("\n\n"),
-                      "```",
-                      "",
-                      "_Summarizing…_",
-                    ].join("\n"),
+                    toolResultMarkdown({
+                      kind: "connector",
+                      preface: visible || "Checked connectors.",
+                      outputs,
+                      summarizing: true,
+                    }),
                     { streaming: true },
                   );
                   // If also host cmds, continue to host below after connector round
@@ -2810,9 +3113,13 @@ if (!cmds.length) {
                     aborted = true;
                     break;
                   }
-                  set({ streamStatus: `Host: ${cmd.slice(0, 56)}…` });
+                  set({ streamStatus: `Host: ${cmd.slice(0, 72)}…` });
                   patchBot(
-                    `${visible || "Checking your machine…"}\n\n_Running_\n\`$ ${cmd}\``,
+                    toolRunningMarkdown({
+                      kind: "host",
+                      command: cmd,
+                      preface: visible || "Working on your machine…",
+                    }),
                     { streaming: true },
                   );
                   try {
@@ -2827,10 +3134,22 @@ if (!cmds.length) {
                         .filter(Boolean)
                         .join("\n"),
                     );
+                    get().pushActivity({
+                      kind: "desktop",
+                      title: r.ok ? "Host ok" : "Host failed",
+                      detail: cmd.slice(0, 120),
+                      status: r.ok ? "success" : "failed",
+                    });
                   } catch (e) {
                     outputs.push(
                       `$ ${cmd}\n[host error] ${e instanceof Error ? e.message : "failed"}`,
                     );
+                    get().pushActivity({
+                      kind: "desktop",
+                      title: "Host error",
+                      detail: e instanceof Error ? e.message : "failed",
+                      status: "failed",
+                    });
                   }
                 }
                 if (aborted) break;
@@ -2844,16 +3163,14 @@ if (!cmds.length) {
 
                 history.push({ role: "assistant", content: full });
                 history.push({ role: "user", content: toolBlock });
+                set({ streamStatus: "Summarizing host results…" });
                 // Show intermediate host output (sanitized) while model continues
-                const mid = [
-                  visible || "Checked your machine.",
-                  "",
-                  "```",
-                  outputs.join("\n\n"),
-                  "```",
-                  "",
-                  "_Summarizing…_",
-                ].join("\n");
+                const mid = toolResultMarkdown({
+                  kind: "host",
+                  preface: visible || "Checked your machine.",
+                  outputs,
+                  summarizing: true,
+                });
                 patchBot(mid, { streaming: true });
                 accumulated = mid;
                 // continue loop for next model turn
@@ -2864,9 +3181,7 @@ if (!cmds.length) {
               const hasOauth = Boolean(get().oauth?.accessToken);
               const err = result.error || "Unknown error";
               finalAnswer = [
-                "**Could not reach Grok.**",
-                "",
-                err,
+                friendlyAssistantError(err),
                 "",
                 hasOauth
                   ? "Your OAuth session is saved. Try reconnecting OAuth, paste an xAI API key, or Link Grok website for free-tier chat."
@@ -2895,11 +3210,7 @@ if (!cmds.length) {
             aborted = true;
           } else {
             const msg = e instanceof Error ? e.message : "request failed";
-            finalAnswer = [
-              `Grok connection error: ${msg}`,
-              "",
-              replyFor(trimmed, get(), routed),
-            ].join("\n");
+            finalAnswer = friendlyAssistantError(msg);
             set({ grokConnected: false, grokStatusDetail: msg });
             patchBot(finalAnswer, { streaming: false });
           }
@@ -2968,6 +3279,18 @@ if (!cmds.length) {
             title: usedLive ? `Grok · ${m.label}` : `Agent reply · ${m.label}`,
             detail: `${trimmed.slice(0, 80)} · ${bill.cost}u`,
             status: usedLive ? "success" : "failed",
+          });
+          // Persist resume card for next launch
+          const st = get();
+          const th = st.threads.find((x) => x.id === st.activeThreadId);
+          set({
+            sessionResume: {
+              threadId: st.activeThreadId || "",
+              title: th?.title || "Recent chat",
+              preview: (answer || trimmed).slice(0, 160),
+              mode: routed,
+              ts: Date.now(),
+            },
           });
         }
 
@@ -3198,9 +3521,11 @@ if (!cmds.length) {
           messages: (t.messages || []).slice(-120),
         })),
         activeThreadId: s.activeThreadId,
+        sessionResume: s.sessionResume,
         agents: s.agents,
         mode: s.mode,
         desktop: s.desktop,
+        agentPrefs: s.agentPrefs,
         usage: s.usage,
         // Persist imagine job metadata; drop huge payloads (userData has more room than localStorage but still cap)
         imagineJobs: s.imagineJobs.slice(0, 16).map((j) => {
@@ -3272,6 +3597,27 @@ if (!cmds.length) {
         if (s.imagineQuality !== "speed" && s.imagineQuality !== "quality") s.imagineQuality = "speed";
         if (!s.imagineAspect) s.imagineAspect = "auto";
         if (!Array.isArray(s.imagineJobs)) s.imagineJobs = [];
+        // Never restore ephemeral run state (crashed mid-stream left sticky UI)
+        s.running = false;
+        s.streamStatus = null;
+        s.streamingMessageId = null;
+        s.pendingHostConfirm = null;
+        // Context continuity: re-bind chat from active thread when messages drifted
+        try {
+          const threads = Array.isArray(s.threads) ? (s.threads as import("./types").ChatThread[]) : [];
+          const aid = s.activeThreadId as string | null;
+          const active = threads.find((th) => th.id === aid) || threads[0];
+          if (active) {
+            s.activeThreadId = active.id;
+            const chat = Array.isArray(s.chat) ? (s.chat as import("./types").ChatMessage[]) : [];
+            if (!chat.length || chat.length < (active.messages?.length || 0)) {
+              s.chat = active.messages || [];
+            }
+            if (active.mode) s.mode = active.mode;
+          }
+        } catch {
+          /* ignore */
+        }
         // desktop defaults
         try {
           const d = (s.desktop || {}) as Record<string, unknown>;
@@ -3280,6 +3626,22 @@ if (!cmds.length) {
           s.desktop = d;
         } catch {
           /* ignore */
+        }
+        try {
+          const ap = (s.agentPrefs || {}) as Record<string, unknown>;
+          s.agentPrefs = {
+            temperature: typeof ap.temperature === "number" ? ap.temperature : 0.7,
+            hostToolsEnabled: ap.hostToolsEnabled !== false,
+            connectorToolsEnabled: ap.connectorToolsEnabled !== false,
+            memoryNotes: typeof ap.memoryNotes === "string" ? ap.memoryNotes : "",
+          };
+        } catch {
+          s.agentPrefs = {
+            temperature: 0.7,
+            hostToolsEnabled: true,
+            connectorToolsEnabled: true,
+            memoryNotes: "",
+          };
         }
         // Host safety defaults for upgrades
         const desk = s.desktop as Record<string, unknown> | undefined;

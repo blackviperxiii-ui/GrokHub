@@ -4,18 +4,19 @@ import {
   Command,
   History,
   ImageIcon,
+  Menu,
   MessageSquare,
   MessageSquarePlus,
   Minus,
   MoreHorizontal,
   Pencil,
+  Pin,
   Settings,
   Sparkles,
   Square,
   TimerReset,
   Trash2,
   Users,
-  Menu,
   X,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
@@ -80,15 +81,20 @@ function RecentThreadRow({
   id,
   title,
   active,
+  pinned,
+  folder,
   onSelect,
 }: {
   id: string;
   title: string;
   active: boolean;
+  pinned?: boolean;
+  folder?: string | null;
   onSelect: () => void;
 }) {
   const renameThread = useGrokHub((s) => s.renameThread);
   const deleteThread = useGrokHub((s) => s.deleteThread);
+  const pinThread = useGrokHub((s) => s.pinThread);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(title);
@@ -247,9 +253,14 @@ export function AppShell() {
   useEffect(() => {
     const p = useGrokHub.persist.rehydrate();
     Promise.resolve(p).finally(() => {
-      // Always land on Agent for a clean session entry (never Desktop tab)
-      const cur = useGrokHub.getState().nav;
-      useGrokHub.setState({ nav: cur === "desktop" ? "chat" : "chat" });
+      // Always land on Agent; clear sticky run/stream flags from a crashed session
+      useGrokHub.setState({
+        nav: "chat",
+        running: false,
+        streamStatus: null,
+        streamingMessageId: null,
+        pendingHostConfirm: null,
+      });
       const st = useGrokHub.getState();
       st.refreshStaleTimes();
       st.tickHeartbeat();
@@ -399,9 +410,42 @@ export function AppShell() {
     setMobileOpen(false);
   }, [nav]);
 
+  // Global shortcuts: Ctrl/Cmd+N new chat, Ctrl/Cmd+L or / focus composer
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      const tag = (e.target as HTMLElement | null)?.tagName || "";
+      const typing =
+        tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable;
+      if (mod && (e.key === "n" || e.key === "N")) {
+        e.preventDefault();
+        newThread();
+        return;
+      }
+      if (mod && (e.key === "l" || e.key === "L")) {
+        e.preventDefault();
+        setNav("chat");
+        window.dispatchEvent(new CustomEvent("grokhub:focus-chat-input"));
+        return;
+      }
+      if (!typing && e.key === "/" && !mod) {
+        e.preventDefault();
+        setNav("chat");
+        window.dispatchEvent(new CustomEvent("grokhub:focus-chat-input"));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [newThread, setNav]);
+
   const drag = { WebkitAppRegion: "drag" } as CSSProperties;
   const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
-  const recent = [...threads].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6);
+  const recent = [...threads]
+    .sort((a, b) => {
+      if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+      return b.updatedAt - a.updatedAt;
+    })
+    .slice(0, 8);
   const showOffline =
     grokConnected === false && !oauth?.accessToken && !apiKey;
 
@@ -508,13 +552,18 @@ export function AppShell() {
       <div className="app-frame flex min-h-0 w-full flex-1 overflow-hidden">
         <aside className="sidebar-rail hidden shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-surface)] md:flex">
           <div className="shrink-0 p-3 pb-1">
-            <Button size="sm" className="w-full" variant="secondary" onClick={() => newThread()}>
+            <Button size="sm" className="w-full" onClick={() => newThread()} title="Ctrl+N">
               <MessageSquarePlus className="h-4 w-4" />
               New chat
             </Button>
           </div>
           <nav className="scroll-panel flex flex-1 flex-col gap-1 p-3 pt-1">
-            {NAV.map((item) => {
+            <div className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wide text-[var(--color-subtle)]">
+              Workspace
+            </div>
+            {NAV.filter((item) =>
+              ["chat", "history", "imagine", "command"].includes(item.id),
+            ).map((item) => {
               const Icon = item.icon;
               const active = nav === item.id;
               return (
@@ -523,13 +572,38 @@ export function AppShell() {
                   type="button"
                   onClick={() => setNav(item.id)}
                   className={cn(
-                    "flex h-10 shrink-0 items-center gap-2.5 rounded-[var(--radius-sm)] px-3 text-sm transition-colors",
+                    "flex h-9 shrink-0 items-center gap-2.5 rounded-[var(--radius-sm)] px-3 text-sm transition-colors",
                     active
-                      ? "bg-[var(--color-elevated)] text-[var(--color-fg)]"
+                      ? "bg-[var(--color-elevated)] text-[var(--color-fg)] font-medium"
                       : "text-[var(--color-muted)] hover:bg-[var(--color-elevated)]/60 hover:text-[var(--color-fg)]",
                   )}
                 >
-                  <Icon className="h-4 w-4 shrink-0" />
+                  <Icon className="h-4 w-4 shrink-0 opacity-80" />
+                  {item.label}
+                </button>
+              );
+            })}
+            <div className="mb-1 mt-3 px-1 text-[10px] font-medium uppercase tracking-wide text-[var(--color-subtle)]">
+              Tools
+            </div>
+            {NAV.filter((item) =>
+              ["connectors", "skills", "automations", "agents", "settings"].includes(item.id),
+            ).map((item) => {
+              const Icon = item.icon;
+              const active = nav === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setNav(item.id)}
+                  className={cn(
+                    "flex h-9 shrink-0 items-center gap-2.5 rounded-[var(--radius-sm)] px-3 text-sm transition-colors",
+                    active
+                      ? "bg-[var(--color-elevated)] text-[var(--color-fg)] font-medium"
+                      : "text-[var(--color-muted)] hover:bg-[var(--color-elevated)]/60 hover:text-[var(--color-fg)]",
+                  )}
+                >
+                  <Icon className="h-4 w-4 shrink-0 opacity-80" />
                   {item.label}
                 </button>
               );
@@ -544,6 +618,8 @@ export function AppShell() {
                   key={t.id}
                   id={t.id}
                   title={t.title}
+                  pinned={t.pinned}
+                  folder={t.folder}
                   active={t.id === activeThreadId}
                   onSelect={() => selectThread(t.id)}
                 />
@@ -591,11 +667,31 @@ export function AppShell() {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                className="hidden sm:inline-flex"
+                onClick={() => newThread()}
+                title="New chat (Ctrl+N)"
+              >
+                <MessageSquarePlus className="h-3.5 w-3.5" />
+                New chat
+              </Button>
+              <Button
+                size="icon"
+                variant="secondary"
+                className="sm:hidden"
+                onClick={() => newThread()}
+                aria-label="New chat"
+                title="New chat (Ctrl+N)"
+              >
+                <MessageSquarePlus className="h-4 w-4" />
+              </Button>
               <UsageMeterChip className="max-w-[140px] sm:hidden" />
               {running ? (
-                <Badge variant="info">Working</Badge>
+                <Badge variant="info">Working…</Badge>
               ) : (
-                <Badge variant="success">Online</Badge>
+                <Badge variant="success">Ready</Badge>
               )}
               <Badge className="hidden font-mono sm:inline-flex">
                 {modeMeta.label} · {modeMeta.model}

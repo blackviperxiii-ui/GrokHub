@@ -971,6 +971,18 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Agent controls</CardTitle>
+          <CardDescription>
+            Temperature, tools, and persistent memory notes (survive restarts).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <AgentPrefsPanel />
+        </CardContent>
+      </Card>
+
       <HostGatewayBanner variant="card" onOpenDesktop={() => setNav("desktop")} />
 
       <Card>
@@ -1363,6 +1375,79 @@ export function SettingsView() {
           </Button>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+
+function AgentPrefsPanel() {
+  const agentPrefs = useGrokHub((s) => s.agentPrefs);
+  const setAgentPrefs = useGrokHub((s) => s.setAgentPrefs);
+  const [notes, setNotes] = useState(agentPrefs.memoryNotes || "");
+  return (
+    <div className="space-y-4">
+      <label className="block space-y-1.5">
+        <div className="flex items-center justify-between text-sm">
+          <span>Temperature</span>
+          <span className="font-mono text-xs text-[var(--color-subtle)]">
+            {agentPrefs.temperature.toFixed(2)}
+          </span>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={agentPrefs.temperature}
+          onChange={(e) => setAgentPrefs({ temperature: Number(e.target.value) })}
+          className="w-full accent-[var(--color-info)]"
+        />
+        <p className="text-[11px] text-[var(--color-muted)]">
+          Lower = focused · Higher = creative
+        </p>
+      </label>
+      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-3">
+        <div>
+          <div className="text-sm font-medium">Host tools (HOST_CMD)</div>
+          <div className="text-xs text-[var(--color-muted)]">
+            Let the agent run shell on this machine
+          </div>
+        </div>
+        <input
+          type="checkbox"
+          className="h-4 w-4 accent-[var(--color-fg)]"
+          checked={agentPrefs.hostToolsEnabled}
+          onChange={(e) => setAgentPrefs({ hostToolsEnabled: e.target.checked })}
+        />
+      </label>
+      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-3">
+        <div>
+          <div className="text-sm font-medium">Connector tools</div>
+          <div className="text-xs text-[var(--color-muted)]">
+            GitHub and website connector commands
+          </div>
+        </div>
+        <input
+          type="checkbox"
+          className="h-4 w-4 accent-[var(--color-fg)]"
+          checked={agentPrefs.connectorToolsEnabled}
+          onChange={(e) => setAgentPrefs({ connectorToolsEnabled: e.target.checked })}
+        />
+      </label>
+      <label className="block space-y-1.5">
+        <div className="text-sm font-medium">Persistent memory notes</div>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          onBlur={() => setAgentPrefs({ memoryNotes: notes })}
+          rows={4}
+          placeholder="Facts the agent should remember across restarts…"
+          className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] p-2 text-sm"
+        />
+        <p className="text-[11px] text-[var(--color-muted)]">
+          Also use <span className="font-mono">/memory your note</span> in chat
+        </p>
+      </label>
     </div>
   );
 }

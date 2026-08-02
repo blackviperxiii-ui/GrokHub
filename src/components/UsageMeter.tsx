@@ -52,8 +52,8 @@ export function UsageMeterChip({ className }: { className?: string }) {
       }}
       title={
         web
-          ? `${label}: ${Math.round(pct)}% weekly · resets ${formatResetAt(web.periodEnd)}`
-          : `${label}: ${formatUnits(usage.usedUnits)} units · open Settings`
+          ? `Usage: ${Math.round(pct)}% of weekly limit · resets ${formatResetAt(web.periodEnd)} · open Settings`
+          : `Usage on ${label}: ${Math.round(pct)}% · open Settings`
       }
       className={cn(
         "flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-1 text-left transition-colors hover:border-[var(--color-border-strong)]",
@@ -73,7 +73,7 @@ export function UsageMeterChip({ className }: { className?: string }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[10px] font-medium text-[var(--color-fg)]">
-            {label}
+            Usage
           </span>
           <span className="tabular text-[10px] text-[var(--color-subtle)]">
             {Math.round(pct)}%

@@ -187,14 +187,17 @@ async function ensureUiServer(desktopDir) {
       if (prev && !Number.isNaN(prev)) {
         try {
           process.kill(prev, 0);
-          // another UI server claims to be alive — wait for probe only
-          const waitUntil = Date.now() + 8_000;
+          // Another UI server is alive — wait for it to become healthy, don't double-spawn
+          const waitUntil = Date.now() + 10_000;
           while (Date.now() < waitUntil) {
-            // fall through to probe loop via re-check below
-            break;
+            if (await probe(url + "/")) {
+              process.env.GROKHUB_URL = url;
+              return { url, started: false, root, reused: true };
+            }
+            await new Promise((r) => setTimeout(r, 250));
           }
         } catch {
-          /* stale lock */
+          /* stale lock — fall through and spawn */
         }
       }
     }

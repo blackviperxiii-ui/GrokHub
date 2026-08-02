@@ -231,15 +231,14 @@ function emptyThread(now: number): ChatThread {
   const id = `thread_${now}`;
   return {
     id,
-    title: "New chat",
+    title: "Welcome",
     createdAt: now,
     updatedAt: now,
     messages: [
       {
         id: `sys_${now}`,
         role: "system",
-        content:
-          "Welcome to GrokHub. Sign in with Grok (Settings or Sign in), add your xAI API key if needed, then start chatting. History appears in the sidebar as you go.",
+        content: "Welcome — connect Grok in Settings when ready. Try /help for commands.",
         ts: now,
       },
     ],

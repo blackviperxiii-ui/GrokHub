@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.1";
+const APP_VERSION = "0.8.3";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -123,19 +123,25 @@ sleep 0.4
 export GROKHUB_HOME="${root}"
 export GROKHUB_PORT="${port}"
 export GROKHUB_URL="http://127.0.0.1:${port}"
-# Prefer system launcher when install is system; otherwise use GROKHUB_HOME
-if [ "${root}" = "/usr/lib/grokhub" ] && command -v grokhub >/dev/null 2>&1; then
-  echo "[restart] exec system grokhub"
-  nohup grokhub >/dev/null 2>&1 &
+# Always relaunch the tree we just installed (never bare PATH grokhub without HOME —
+# dual /usr + ~/.local installs would jump back to a broken system package).
+if [ -x "${root}/packaging/aur/grokhub.sh" ]; then
+  echo "[restart] exec ${root}/packaging/aur/grokhub.sh"
+  nohup env GROKHUB_HOME="${root}" bash "${root}/packaging/aur/grokhub.sh" >/dev/null 2>&1 &
   exit 0
 fi
-if [ -x "${root}/packaging/aur/grokhub.sh" ]; then
-  echo "[restart] exec packaging/aur/grokhub.sh"
-  nohup bash "${root}/packaging/aur/grokhub.sh" >/dev/null 2>&1 &
+if [ -x "${HOME}/.local/bin/grokhub" ]; then
+  echo "[restart] exec user bin with GROKHUB_HOME"
+  nohup env GROKHUB_HOME="${root}" "${HOME}/.local/bin/grokhub" >/dev/null 2>&1 &
+  exit 0
+fi
+if [ "${root}" = "/usr/lib/grokhub" ] && [ -x /usr/bin/grokhub ]; then
+  echo "[restart] exec system /usr/bin/grokhub"
+  nohup env GROKHUB_HOME="${root}" /usr/bin/grokhub >/dev/null 2>&1 &
   exit 0
 fi
 if command -v grokhub >/dev/null 2>&1; then
-  echo "[restart] exec grokhub with GROKHUB_HOME"
+  echo "[restart] exec grokhub with GROKHUB_HOME=${root}"
   nohup env GROKHUB_HOME="${root}" grokhub >/dev/null 2>&1 &
   exit 0
 fi
@@ -805,22 +811,28 @@ async function applyUpdate(opts = {}) {
     }
   }
 
-  // Prefer currently running install (GROKHUB_HOME), then system, then user local
+  // Prefer currently running install (GROKHUB_HOME), then user trees, then system
   const candidates = [
     process.env.GROKHUB_HOME,
     path.join(os.homedir(), ".local/lib/grokhub"),
-    path.join(os.homedir(), ".local/lib/grokhub"),
+    path.join(os.homedir(), ".local/share/grokhub"),
     "/usr/lib/grokhub",
     process.cwd(),
   ].filter(Boolean);
 
   let root = null;
+  // Prefer writable install when several match (avoids pkexec/update crash on dual install)
+  const matches = [];
   for (const c of candidates) {
-    if (await isAppRoot(c)) {
+    if (await isAppRoot(c)) matches.push(c);
+  }
+  for (const c of matches) {
+    if (await pathWritable(c)) {
       root = c;
       break;
     }
   }
+  if (!root && matches.length) root = matches[0];
   if (!root) {
     root = path.join(os.homedir(), ".local/lib/grokhub");
     await fs.mkdir(root, { recursive: true });
@@ -1320,7 +1332,7 @@ const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const XAI_UA = "GrokHub/0.8.1 (xAI OAuth; Electron)";
+const XAI_UA = "GrokHub/0.8.3 (xAI OAuth; Electron)";
 
 async function xaiDiscovery() {
   const res = await fetch(XAI_OAUTH_DISCOVERY, {
