@@ -32,6 +32,8 @@ import { cn } from "@/lib/utils";
 import { APP_VERSION } from "@/lib/version";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { UserButton } from "@/lib/auth/gates";
+import { ShortcutsDialog } from "./ShortcutsDialog";
+import { UndoToast } from "./UndoToast";
 import { CommandPalette } from "./CommandPalette";
 import { GrokHubMark } from "./GrokLogo";
 import { ModePicker } from "./ModePicker";
@@ -206,7 +208,14 @@ function RecentThreadRow({
             {pinned ? "Unpin" : "Pin"}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem danger onClick={() => deleteThread(id)}>
+          <DropdownMenuItem
+            danger
+            onClick={() => {
+              if (window.confirm("Delete this chat? You can Undo for a few seconds.")) {
+                deleteThread(id);
+              }
+            }}
+          >
             <Trash2 className="h-3 w-3" />
             Delete
           </DropdownMenuItem>
@@ -243,6 +252,8 @@ export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [sidebarQ, setSidebarQ] = useState("");
   const modeMeta = getMode(mode);
 
   const activeThread = useMemo(
@@ -503,6 +514,38 @@ export function AppShell() {
         window.dispatchEvent(new CustomEvent("grokhub:focus-chat-input"));
         return;
       }
+      if (mod && (e.key === "/" || e.key === "?")) {
+        e.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+      // Ctrl+1…5 nav jumps
+      if (mod && !e.shiftKey && e.key >= "1" && e.key <= "5") {
+        const map: NavId[] = ["chat", "history", "command", "workboard", "imagine"];
+        const n = map[Number(e.key) - 1];
+        if (n) {
+          e.preventDefault();
+          setNav(n);
+        }
+        return;
+      }
+      // Ctrl+[ / ] cycle threads
+      if (mod && (e.key === "[" || e.key === "]") && !typing) {
+        e.preventDefault();
+        const list = [...useGrokHub.getState().threads].sort((a, b) => {
+          if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+          return b.updatedAt - a.updatedAt;
+        });
+        if (!list.length) return;
+        const cur = useGrokHub.getState().activeThreadId;
+        const idx = Math.max(0, list.findIndex((t) => t.id === cur));
+        const next =
+          e.key === "]"
+            ? list[(idx + 1) % list.length]!
+            : list[(idx - 1 + list.length) % list.length]!;
+        useGrokHub.getState().selectThread(next.id);
+        return;
+      }
       if (!typing && e.key === "/" && !mod) {
         e.preventDefault();
         setNav("chat");
@@ -513,6 +556,30 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [newThread, setNav]);
 
+  useEffect(() => {
+    const open = () => setShortcutsOpen(true);
+    window.addEventListener("grokhub:open-shortcuts", open);
+    return () => window.removeEventListener("grokhub:open-shortcuts", open);
+  }, []);
+
+  // Settings deep-link: #sec-oauth etc. or ?settings=
+  useEffect(() => {
+    const apply = () => {
+      const hash = window.location.hash.replace(/^#/, "");
+      const params = new URLSearchParams(window.location.search);
+      const sec = params.get("settings") || (hash.startsWith("sec-") ? hash : "");
+      if (sec) {
+        setNav("settings");
+        requestAnimationFrame(() => {
+          document.getElementById(sec)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      }
+    };
+    apply();
+    window.addEventListener("hashchange", apply);
+    return () => window.removeEventListener("hashchange", apply);
+  }, [setNav]);
+
   const drag = { WebkitAppRegion: "drag" } as CSSProperties;
   const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
   const recent = [...threads]
@@ -520,7 +587,14 @@ export function AppShell() {
       if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
       return b.updatedAt - a.updatedAt;
     })
-    .slice(0, 10);
+    .filter((t) => {
+      const q = sidebarQ.trim().toLowerCase();
+      if (!q) return true;
+      if (t.title.toLowerCase().includes(q)) return true;
+      if (t.folder?.toLowerCase().includes(q)) return true;
+      return (t.messages || []).some((m) => (m.content || "").toLowerCase().includes(q));
+    })
+    .slice(0, sidebarQ.trim() ? 20 : 10);
   const showOffline = grokConnected === false && !oauth?.accessToken && !apiKey;
 
   const primaryNav = NAV.filter((item) =>
@@ -770,6 +844,13 @@ export function AppShell() {
                     All
                   </button>
                 </div>
+                <input
+                  value={sidebarQ}
+                  onChange={(e) => setSidebarQ(e.target.value)}
+                  placeholder="Filter chats…"
+                  className="mb-1.5 w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[11px] text-[var(--color-fg)] outline-none placeholder:text-[var(--color-subtle)] focus:ring-1 focus:ring-[var(--color-ring)]"
+                  aria-label="Filter recent chats"
+                />
                 {recent.map((t) => (
                   <RecentThreadRow
                     key={t.id}
@@ -894,6 +975,8 @@ export function AppShell() {
         </div>
 
         <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+        <UndoToast />
       </div>
     </TooltipProvider>
   );

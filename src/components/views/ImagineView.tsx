@@ -435,6 +435,31 @@ export function ImagineView() {
                   )}
                   <button
                     type="button"
+                    className="text-[10px] text-[var(--color-info)] hover:underline"
+                    onClick={() => {
+                      setImaginePrompt(job.prompt);
+                      setImagineAspect(job.aspect);
+                      if (job.quality) setImagineQuality(job.quality);
+                      if (job.mediaKind) setImagineMediaKind(job.mediaKind);
+                      void runImagine();
+                    }}
+                  >
+                    Re-run
+                  </button>
+                  <button
+                    type="button"
+                    className="text-[10px] text-[var(--color-info)] hover:underline"
+                    onClick={() => {
+                      useGrokHub.getState().setNav("chat");
+                      useGrokHub.getState().sendChat(
+                        `Discuss this Imagine generation and suggest improvements:\n\nPrompt: ${job.prompt}\nAspect: ${job.aspect}\nQuality: ${job.quality || "speed"}\nKind: ${job.mediaKind || "image"}`,
+                      );
+                    }}
+                  >
+                    Open in Agent
+                  </button>
+                  <button
+                    type="button"
                     className="text-[10px] font-medium text-[var(--color-danger)] hover:underline"
                     onClick={() => removeImagineJob(job.id)}
                   >

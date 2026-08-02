@@ -36,12 +36,50 @@ export function HistoryView() {
   const [folderFilter, setFolderFilter] = useState<string | "all" | "pinned">("all");
   const [folderDraftId, setFolderDraftId] = useState<string | null>(null);
   const [folderDraft, setFolderDraft] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   // Stable "now" only after mount — avoids SSR/client Today/Yesterday mismatches
   const [nowMs, setNowMs] = useState(0);
   useEffect(() => {
     setNowMs(Date.now());
   }, []);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  function toggleSel(id: string) {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  }
+
+  function bulkDelete() {
+    if (!selected.size) return;
+    if (!window.confirm(`Delete ${selected.size} chat(s)? Undo available briefly.`)) return;
+    for (const id of selected) deleteThread(id);
+    setSelected(new Set());
+  }
+
+  function bulkExport() {
+    const list = threads.filter((th) => selected.has(th.id));
+    if (!list.length) return;
+    const lines: string[] = ["# GrokHub bulk export", ""];
+    for (const th of list) {
+      lines.push(`## ${th.title || "Untitled"}`, "");
+      for (const m of th.messages || []) {
+        const who = m.role === "user" ? "You" : m.role === "assistant" ? "Grok" : "System";
+        lines.push(`### ${who}`, "", m.content || "", "");
+      }
+      lines.push("---", "");
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `grokhub-selected-${Date.now()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   function exportAll() {
     const lines: string[] = ["# GrokHub history export", ""];
@@ -156,6 +194,16 @@ export function HistoryView() {
             <Button size="sm" variant="secondary" onClick={exportAll}>
               Export all
             </Button>
+            {selected.size > 0 && (
+              <>
+                <Button size="sm" variant="secondary" onClick={bulkExport}>
+                  Export {selected.size}
+                </Button>
+                <Button size="sm" variant="danger" onClick={bulkDelete}>
+                  Delete {selected.size}
+                </Button>
+              </>
+            )}
             <Button size="sm" onClick={() => newThread()}>
               <MessageSquarePlus className="h-4 w-4" />
               New chat
@@ -222,6 +270,14 @@ export function HistoryView() {
                     : "border-[var(--color-border)] hover:border-[var(--color-border-strong)]",
                 )}
               >
+                <input
+                  type="checkbox"
+                  className="mt-1.5 shrink-0"
+                  checked={selected.has(t.id)}
+                  onChange={() => toggleSel(t.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label={`Select ${t.title}`}
+                />
                 <button
                   type="button"
                   className="min-w-0 flex-1 text-left"

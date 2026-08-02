@@ -117,3 +117,18 @@ export function riskLabel(risk: HostRisk): string {
   if (risk === "moderate") return "writes / side effects";
   return "read-only";
 }
+
+
+/** True if command matches a user "always allow" prefix or exact entry. */
+export function isHostAllowlisted(cmd: string, allowlist: string[] | undefined | null): boolean {
+  if (!allowlist?.length) return false;
+  const c = cmd.trim().replace(/^\$\s*/, "");
+  if (!c) return false;
+  const lower = c.toLowerCase();
+  for (const raw of allowlist) {
+    const a = String(raw || "").trim().toLowerCase();
+    if (!a) continue;
+    if (lower === a || lower.startsWith(a + " ") || lower.startsWith(a)) return true;
+  }
+  return false;
+}

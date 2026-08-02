@@ -331,14 +331,29 @@ export function SettingsView() {
 
   const uiTheme = useGrokHub((s) => s.uiTheme);
   const setUiTheme = useGrokHub((s) => s.setUiTheme);
+  const [settingsQ, setSettingsQ] = useState("");
+  const [factoryPhrase, setFactoryPhrase] = useState("");
+
+  const sectionVisible = (id: string, labels: string) => {
+    const q = settingsQ.trim().toLowerCase();
+    if (!q) return true;
+    return id.toLowerCase().includes(q) || labels.toLowerCase().includes(q);
+  };
 
   return (
     <div className="content-readable mx-auto space-y-5 pb-8">
+      <Input
+        value={settingsQ}
+        onChange={(e) => setSettingsQ(e.target.value)}
+        placeholder="Search settings…"
+        className="h-9"
+        aria-label="Search settings"
+      />
       <nav
         aria-label="Settings sections"
         className="sticky top-0 z-20 -mx-1 mb-1 flex gap-1.5 overflow-x-auto scroll-hide rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-panel)_92%,transparent)] px-2 py-2 backdrop-blur-md"
       >
-        {SETTINGS_SECTIONS.map((s) => (
+        {SETTINGS_SECTIONS.filter((s) => sectionVisible(s.id, s.label)).map((s) => (
           <a
             key={s.id}
             href={`#${s.id}`}
@@ -1289,36 +1304,46 @@ export function SettingsView() {
             >
               Factory reinstall (keep memory)
             </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={selfBusy}
-              onClick={() => {
-                if (
-                  !window.confirm(
-                    "FULL factory reset: reinstall from GitHub AND wipe chats, secrets, and local memory?",
+            <div className="w-full space-y-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-danger)_35%,var(--color-border))] p-2">
+              <p className="text-[11px] text-[var(--color-muted)]">
+                Type <span className="font-mono text-[var(--color-danger)]">WIPE MEMORY</span> to enable full factory reset.
+              </p>
+              <Input
+                value={factoryPhrase}
+                onChange={(e) => setFactoryPhrase(e.target.value)}
+                placeholder="WIPE MEMORY"
+                className="h-8 font-mono text-xs"
+              />
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={selfBusy || factoryPhrase.trim() !== "WIPE MEMORY"}
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      "FULL factory reset: reinstall from GitHub AND wipe chats, secrets, and local memory?",
+                    )
                   )
-                )
-                  return;
-                if (!window.confirm("Last chance — this erases local GrokHub memory on this machine."))
-                  return;
-                setSelfBusy(true);
-                setSelfMsg("Full factory wipe…");
-                void factoryReinstall({ wipeMemory: true, clearSelfMod: true }).then((r) => {
-                  setSelfBusy(false);
-                  setSelfMsg(
-                    (r as { ok?: boolean }).ok !== false
-                      ? "Full factory reset done"
-                      : (r as { error?: string }).error || "Failed",
-                  );
-                  if ((r as { ok?: boolean }).ok !== false) {
-                    resetDemo();
-                  }
-                });
-              }}
-            >
-              Factory + wipe memory
-            </Button>
+                    return;
+                  setSelfBusy(true);
+                  setSelfMsg("Full factory wipe…");
+                  void factoryReinstall({ wipeMemory: true, clearSelfMod: true }).then((r) => {
+                    setSelfBusy(false);
+                    setSelfMsg(
+                      (r as { ok?: boolean }).ok !== false
+                        ? "Full factory reset done"
+                        : (r as { error?: string }).error || "Failed",
+                    );
+                    if ((r as { ok?: boolean }).ok !== false) {
+                      resetDemo();
+                    }
+                    setFactoryPhrase("");
+                  });
+                }}
+              >
+                Factory + wipe memory
+              </Button>
+            </div>
           </div>
           {selfMsg && <p className="text-xs text-[var(--color-muted)]">{selfMsg}</p>}
           {(selfInfo?.snapshots || []).slice(0, 5).map((s) => (
@@ -1821,7 +1846,11 @@ function FileMemoryPanel() {
 function AgentPrefsPanel() {
   const agentPrefs = useGrokHub((s) => s.agentPrefs);
   const setAgentPrefs = useGrokHub((s) => s.setAgentPrefs);
+  const hostAllowlist = useGrokHub((s) => s.hostAllowlist);
+  const removeHostAllow = useGrokHub((s) => s.removeHostAllow);
+  const addHostAllow = useGrokHub((s) => s.addHostAllow);
   const [notes, setNotes] = useState(agentPrefs.memoryNotes || "");
+  const [allowDraft, setAllowDraft] = useState("");
   return (
     <div className="space-y-4">
       <label className="block space-y-1.5">
@@ -1858,6 +1887,48 @@ function AgentPrefsPanel() {
           onChange={(e) => setAgentPrefs({ hostToolsEnabled: e.target.checked })}
         />
       </label>
+      <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] p-3 space-y-2">
+        <div className="text-sm font-medium">Always-allow host prefixes</div>
+        <p className="text-xs text-[var(--color-muted)]">
+          Matching commands skip the approval prompt (still blocked by safe mode).
+        </p>
+        <div className="flex flex-wrap gap-1">
+          {(hostAllowlist || []).map((p) => (
+            <button
+              key={p}
+              type="button"
+              className="rounded-full border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-0.5 font-mono text-[10px] hover:border-[var(--color-danger)]"
+              title="Remove"
+              onClick={() => removeHostAllow(p)}
+            >
+              {p} ×
+            </button>
+          ))}
+          {!hostAllowlist?.length && (
+            <span className="text-[11px] text-[var(--color-subtle)]">None yet</span>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Input
+            value={allowDraft}
+            onChange={(e) => setAllowDraft(e.target.value)}
+            placeholder="e.g. ls or git status"
+            className="h-8 font-mono text-xs"
+          />
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => {
+              if (allowDraft.trim()) {
+                addHostAllow(allowDraft.trim());
+                setAllowDraft("");
+              }
+            }}
+          >
+            Add
+          </Button>
+        </div>
+      </div>
       <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-3">
         <div>
           <div className="text-sm font-medium">Connector tools</div>

@@ -20,6 +20,8 @@ import {
   Check,
   ThumbsUp,
   ThumbsDown,
+  Search,
+  RotateCcw,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
@@ -33,6 +35,8 @@ import type { ChatMessage, ChatRole } from "@/lib/types";
 import { RelativeTime } from "../RelativeTime";
 import { HostGatewayBanner } from "../HostGatewayBanner";
 import { EmojiPicker } from "../EmojiPicker";
+import { SlashAutocomplete } from "../SlashAutocomplete";
+import type { SlashDef } from "@/lib/slash-commands";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { MarkdownBody } from "@/lib/markdown";
@@ -63,6 +67,8 @@ type MessageRowProps = {
   editingId: string | null;
   editDraft: string;
   copiedId: string | null;
+  findHit?: boolean;
+  isLastAssistant?: boolean;
   onJumpReply: (id: string | undefined) => void;
   onReply: (m: { id: string; content: string; role: ChatRole }) => void;
   onCopy: (id: string, content: string) => void;
@@ -72,6 +78,7 @@ type MessageRowProps = {
   onCancelEdit: () => void;
   onDelete: (id: string) => void;
   onRate?: (id: string, positive: boolean) => void;
+  onRegenerate?: () => void;
 };
 
 const ChatMessageRow = memo(function ChatMessageRow({
@@ -79,6 +86,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
   busy,
   streamStatus,
   streamingMessageId,
+  findHit,
+  isLastAssistant,
+  onRegenerate,
   editingId,
   editDraft,
   copiedId,
@@ -101,9 +111,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
     m.id === streamingMessageId;
   return (
     <div
+      id={`msg-${m.id}`}
       className={cn(
         "group/msg msg-enter flex",
         m.role === "user" ? "justify-end" : "justify-start",
+        findHit && "ring-2 ring-[var(--color-info)] ring-offset-2 ring-offset-[var(--color-bg)] rounded-[var(--radius-lg)]",
       )}
     >
       <div
@@ -307,6 +319,18 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 </button>
               </>
             )}
+
+            {m.role === "assistant" && isLastAssistant && !busy && onRegenerate && (
+              <button
+                type="button"
+                className="focus-ring inline-flex items-center gap-1 rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+                title="Regenerate response"
+                onClick={() => onRegenerate()}
+              >
+                <RotateCcw className="h-3 w-3" />
+                Regen
+              </button>
+            )}
             {m.role === "user" && !busy && (
               <button
                 type="button"
@@ -424,7 +448,20 @@ export function ChatView() {
   const rateMessage = useGrokHub((s) => s.rateMessage);
   const replyTo = useGrokHub((s) => s.replyTo);
   const setReplyTo = useGrokHub((s) => s.setReplyTo);
+  const composerDrafts = useGrokHub((s) => s.composerDrafts);
+  const setComposerDraft = useGrokHub((s) => s.setComposerDraft);
+  const shellHistory = useGrokHub((s) => s.shellHistory);
+  const pushShellHistory = useGrokHub((s) => s.pushShellHistory);
+  const addHostAllow = useGrokHub((s) => s.addHostAllow);
+  const regenerateLast = useGrokHub((s) => s.regenerateLast);
   const [text, setText] = useState("");
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQ, setFindQ] = useState("");
+  const [findIdx, setFindIdx] = useState(0);
+  const [shellHistIdx, setShellHistIdx] = useState(-1);
+  const [alwaysAllowHost, setAlwaysAllowHost] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
   const [localRunning, setLocalRunning] = useState(false);
   const localHostJobRef = useRef<string | null>(null);
   const [pendingBusy, setPendingBusy] = useState(false);
@@ -449,6 +486,33 @@ export function ChatView() {
   const fileRef = useRef<HTMLInputElement>(null);
   const busy = running || localRunning || pendingBusy;
 
+  // Load draft when thread changes
+  useEffect(() => {
+    const d = (activeThreadId && composerDrafts?.[activeThreadId]) || "";
+    setText(d);
+    setShellHistIdx(-1);
+    setSlashOpen(false);
+    requestAnimationFrame(() => resizeComposer());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeThreadId]);
+
+  // Persist draft (debounced lightly via rAF)
+  useEffect(() => {
+    if (!activeThreadId) return;
+    const id = window.setTimeout(() => {
+      setComposerDraft(activeThreadId, text);
+    }, 200);
+    return () => window.clearTimeout(id);
+  }, [text, activeThreadId, setComposerDraft]);
+
+
+
+  const lastAssistantId = useMemo(() => {
+    for (let i = chat.length - 1; i >= 0; i--) {
+      if (chat[i]?.role === "assistant") return chat[i]!.id;
+    }
+    return null;
+  }, [chat]);
 
   const WINDOW = 50;
   const visibleChat = useMemo(() => {
@@ -519,6 +583,39 @@ export function ChatView() {
   useEffect(() => {
     if (chat.length === 0) setChipsOpen(true);
   }, [chat.length, activeThreadId]);
+
+  const findMatches = useMemo(() => {
+    const q = findQ.trim().toLowerCase();
+    if (!q) return [] as string[];
+    return chat
+      .filter((m) => (m.content || "").toLowerCase().includes(q))
+      .map((m) => m.id);
+  }, [chat, findQ]);
+
+  useEffect(() => {
+    setFindIdx(0);
+  }, [findQ, activeThreadId]);
+
+  useEffect(() => {
+    if (!findOpen || !findMatches.length) return;
+    const id = findMatches[Math.min(findIdx, findMatches.length - 1)];
+    if (!id) return;
+    document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [findOpen, findIdx, findMatches]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === "f") {
+        const tag = (e.target as HTMLElement)?.tagName;
+        // always scope find in chat view
+        e.preventDefault();
+        setFindOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const onListScroll = useCallback(() => {
     const el = listRef.current;
@@ -662,10 +759,11 @@ export function ChatView() {
     const next: typeof attachments = [];
     for (const f of list) {
       if (f.size > MAX_ATTACH_BYTES) {
+        setAttachError(`${f.name} is too large (max ~1.2 MB)`);
         pushActivity({
           kind: "system",
           title: "Attachment too large",
-          detail: `${f.name} — keep under ~1MB`,
+          detail: `${f.name} — keep under ~1.2MB`,
           status: "failed",
         });
         continue;
@@ -1041,6 +1139,10 @@ export function ChatView() {
     }
     setText("");
     setAttachments([]);
+    setComposerDraft(activeThreadId, "");
+    if (payload.startsWith("$") || payload.startsWith("/sh")) {
+      pushShellHistory(payload);
+    }
     if (payload.startsWith("$") || payload.startsWith("/sh ")) {
       await runShell(payload);
       return;
@@ -1072,6 +1174,44 @@ export function ChatView() {
     <div className="chat-stage mx-auto flex h-full min-h-0 w-full flex-col">
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--color-bg)]">
         {/* Slim toolbar — context budget + export */}
+        {findOpen && (
+          <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-panel)] px-4 py-1.5 md:px-6">
+            <Search className="h-3.5 w-3.5 text-[var(--color-subtle)]" />
+            <input
+              autoFocus
+              value={findQ}
+              onChange={(e) => setFindQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setFindOpen(false);
+                  setFindQ("");
+                }
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (!findMatches.length) return;
+                  setFindIdx((i) =>
+                    e.shiftKey
+                      ? (i - 1 + findMatches.length) % findMatches.length
+                      : (i + 1) % findMatches.length,
+                  );
+                }
+              }}
+              placeholder="Find in chat…"
+              className="min-w-0 flex-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-[var(--color-ring)]"
+              aria-label="Find in chat"
+            />
+            <span className="shrink-0 text-[10px] tabular text-[var(--color-subtle)]">
+              {findQ.trim()
+                ? findMatches.length
+                  ? `${findIdx + 1}/${findMatches.length}`
+                  : "0"
+                : "—"}
+            </span>
+            <Button size="sm" variant="ghost" onClick={() => { setFindOpen(false); setFindQ(""); }}>
+              Close
+            </Button>
+          </div>
+        )}
         <div className="chat-meta-bar flex shrink-0 items-center justify-between gap-2 px-4 py-1 md:px-6">
           <ContextBudgetChip />
           <div className="flex items-center gap-1">
@@ -1214,6 +1354,9 @@ export function ChatView() {
                 busy={busy}
                 streamStatus={streamStatus}
                 streamingMessageId={streamingMessageId}
+                findHit={findOpen && findMatches.includes(m.id)}
+                isLastAssistant={m.id === lastAssistantId}
+                onRegenerate={() => void regenerateLast()}
                 editingId={editingId}
                 editDraft={editDraft}
                 copiedId={copiedId}
@@ -1391,11 +1534,40 @@ export function ChatView() {
                     </li>
                   ))}
                 </ul>
+                <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-[var(--color-muted)]">
+                  <input
+                    type="checkbox"
+                    checked={alwaysAllowHost}
+                    onChange={(e) => setAlwaysAllowHost(e.target.checked)}
+                    className="rounded border-[var(--color-border)]"
+                  />
+                  Always allow these command prefixes
+                </label>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button size="sm" autoFocus onClick={() => resolveHostConfirm(true)}>
+                  <Button
+                    size="sm"
+                    autoFocus
+                    onClick={() => {
+                      if (alwaysAllowHost && pendingHostConfirm) {
+                        for (const c of pendingHostConfirm.cmds) {
+                          const pref = c.trim().split(/\s+/)[0];
+                          if (pref) addHostAllow(pref);
+                        }
+                      }
+                      resolveHostConfirm(true);
+                      setAlwaysAllowHost(false);
+                    }}
+                  >
                     Run on this machine
                   </Button>
-                  <Button size="sm" variant="secondary" onClick={() => resolveHostConfirm(false)}>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      resolveHostConfirm(false);
+                      setAlwaysAllowHost(false);
+                    }}
+                  >
                     Cancel
                   </Button>
                   <span className="text-[10px] text-[var(--color-subtle)]">
@@ -1405,6 +1577,11 @@ export function ChatView() {
               </div>
             )}
 
+            {attachError && (
+              <div className="mx-auto w-full max-w-[min(56rem,100%)] text-xs text-[var(--color-danger)]">
+                {attachError} · images & text files under ~1.2 MB
+              </div>
+            )}
             {attachments.length > 0 && (
               <div className="mx-auto flex w-full max-w-[min(56rem,100%)] flex-wrap gap-2">
                 {attachments.map((a, i) => (
@@ -1509,12 +1686,30 @@ export function ChatView() {
                   {listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                 </Button>
               </div>
+              <div className="relative min-w-0 flex-1">
+              <SlashAutocomplete
+                draft={text}
+                open={slashOpen && !busy}
+                onClose={() => setSlashOpen(false)}
+                onPick={(s: SlashDef) => {
+                  const ins = s.insert ?? s.cmd + (s.cmd.endsWith(" ") ? "" : " ");
+                  setText(ins);
+                  setSlashOpen(false);
+                  requestAnimationFrame(() => {
+                    inputRef.current?.focus();
+                    resizeComposer();
+                  });
+                }}
+              />
               <Textarea
                 ref={inputRef}
                 data-composer
                 value={text}
                 onChange={(e) => {
-                  setText(e.target.value);
+                  const v = e.target.value;
+                  setText(v);
+                  setSlashOpen(v.trimStart().startsWith("/") || v.trimStart() === "$");
+                  setShellHistIdx(-1);
                   resizeComposer(e.target);
                 }}
                 placeholder={
@@ -1548,12 +1743,44 @@ export function ChatView() {
                     onStop();
                     return;
                   }
+                  if (e.key === "Escape" && slashOpen) {
+                    e.preventDefault();
+                    setSlashOpen(false);
+                    return;
+                  }
+                  // Shell history when empty or starts with $
+                  if (
+                    (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+                    shellHistory.length &&
+                    (text === "" || text.startsWith("$") || text.startsWith("/sh"))
+                  ) {
+                    e.preventDefault();
+                    const next =
+                      e.key === "ArrowUp"
+                        ? Math.min(shellHistIdx + 1, shellHistory.length - 1)
+                        : Math.max(shellHistIdx - 1, -1);
+                    setShellHistIdx(next);
+                    if (next < 0) setText("");
+                    else {
+                      const cmd = shellHistory[next] || "";
+                      setText(cmd.startsWith("$") || cmd.startsWith("/") ? cmd : `$ ${cmd}`);
+                    }
+                    return;
+                  }
+                  if (e.key === "Tab" && slashOpen) {
+                    // handled by SlashAutocomplete capture
+                    return;
+                  }
                   if (e.key === "Enter" && !e.shiftKey && !busy) {
+                    if (slashOpen) {
+                      // let Tab accept; Enter still sends unless autocomplete steals Tab only
+                    }
                     e.preventDefault();
                     void onSend();
                   }
                 }}
               />
+              </div>
               {busy ? (
                 <Button
                   type="button"

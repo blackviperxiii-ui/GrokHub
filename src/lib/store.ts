@@ -198,6 +198,32 @@ type State = {
     risks: string[];
     botId: string;
   } | null;
+  /** Per-thread composer drafts (survive chat switch + restart) */
+  composerDrafts: Record<string, string>;
+  setComposerDraft: (threadId: string | null, draft: string) => void;
+  /** Host shell history for ↑/↓ recall */
+  shellHistory: string[];
+  pushShellHistory: (cmd: string) => void;
+  /** Always-allow host command prefixes (skip confirm) */
+  hostAllowlist: string[];
+  addHostAllow: (prefix: string) => void;
+  removeHostAllow: (prefix: string) => void;
+  /** Soft-delete undo (threads / messages) */
+  undoBuffer: {
+    kind: "thread" | "messages";
+    label: string;
+    expiresAt: number;
+    thread?: ChatThread;
+    messages?: ChatMessage[];
+    threadId?: string;
+    wasActive?: boolean;
+    prevActiveId?: string | null;
+    prevChat?: ChatMessage[];
+  } | null;
+  clearUndoBuffer: () => void;
+  undoLastDelete: () => boolean;
+  /** Re-run last user turn */
+  regenerateLast: () => Promise<void>;
   /** Adaptive quick-assist chip habits */
   quickAssistMemory: QuickAssistMemory;
   /** Chip values/ids the user dismissed */
@@ -798,6 +824,10 @@ export const useGrokHub = create<State>()(
       streamStatus: null,
       streamingMessageId: null,
       pendingHostConfirm: null,
+      composerDrafts: {},
+      shellHistory: [],
+      hostAllowlist: [],
+      undoBuffer: null,
       quickAssistMemory: emptyQuickAssistMemory(),
       quickAssistDismissed: [],
       quickAssistRotation: 0,
@@ -847,6 +877,138 @@ export const useGrokHub = create<State>()(
         hostConfirmWaiter = null;
         set({ pendingHostConfirm: null });
         pending?.(allow);
+      },
+
+      setComposerDraft: (threadId, draft) => {
+        const id = threadId || get().activeThreadId;
+        if (!id) return;
+        set((s) => {
+          const next = { ...s.composerDrafts };
+          if (!draft) delete next[id];
+          else next[id] = draft.slice(0, 50_000);
+          // cap keys
+          const keys = Object.keys(next);
+          if (keys.length > 60) {
+            for (const k of keys.slice(0, keys.length - 60)) delete next[k];
+          }
+          return { composerDrafts: next };
+        });
+      },
+
+      pushShellHistory: (cmd) => {
+        const c = cmd.trim();
+        if (!c) return;
+        set((s) => {
+          const prev = (s.shellHistory || []).filter((x) => x !== c);
+          return { shellHistory: [c, ...prev].slice(0, 80) };
+        });
+      },
+
+      addHostAllow: (prefix) => {
+        const p = prefix.trim();
+        if (!p) return;
+        set((s) => {
+          if (s.hostAllowlist.includes(p)) return s;
+          return { hostAllowlist: [...s.hostAllowlist, p].slice(0, 40) };
+        });
+      },
+
+      removeHostAllow: (prefix) => {
+        set((s) => ({
+          hostAllowlist: s.hostAllowlist.filter((x) => x !== prefix),
+        }));
+      },
+
+      clearUndoBuffer: () => set({ undoBuffer: null }),
+
+      undoLastDelete: () => {
+        const u = get().undoBuffer;
+        if (!u || u.expiresAt < Date.now()) {
+          set({ undoBuffer: null });
+          return false;
+        }
+        if (u.kind === "thread" && u.thread) {
+          set((s) => ({
+            threads: [u.thread!, ...s.threads.filter((t) => t.id !== u.thread!.id)],
+            activeThreadId: u.wasActive ? u.thread!.id : s.activeThreadId,
+            chat: u.wasActive ? u.thread!.messages || [] : s.chat,
+            undoBuffer: null,
+          }));
+          get().pushActivity({
+            kind: "system",
+            title: "Restored chat",
+            detail: u.thread.title,
+            status: "success",
+          });
+          return true;
+        }
+        if (u.kind === "messages" && u.messages?.length && u.threadId) {
+          set((s) => {
+            const tid = u.threadId!;
+            const restore = u.messages!;
+            const chat =
+              s.activeThreadId === tid
+                ? (() => {
+                    const byId = new Map(s.chat.map((m) => [m.id, m]));
+                    for (const m of restore) byId.set(m.id, m);
+                    // stable-ish order by createdAt
+                    return [...byId.values()].sort(
+                      (a, b) => (a.ts || 0) - (b.ts || 0),
+                    );
+                  })()
+                : s.chat;
+            return {
+              chat,
+              threads: s.threads.map((th) => {
+                if (th.id !== tid) return th;
+                const byId = new Map((th.messages || []).map((m) => [m.id, m]));
+                for (const m of restore) byId.set(m.id, m);
+                return {
+                  ...th,
+                  messages: [...byId.values()].sort(
+                    (a, b) => (a.ts || 0) - (b.ts || 0),
+                  ),
+                  updatedAt: Date.now(),
+                };
+              }),
+              undoBuffer: null,
+            };
+          });
+          get().pushActivity({
+            kind: "chat",
+            title: "Messages restored",
+            detail: `${u.messages.length} message(s)`,
+            status: "success",
+          });
+          return true;
+        }
+        set({ undoBuffer: null });
+        return false;
+      },
+
+      regenerateLast: async () => {
+        if (get().running) return;
+        const chat = get().chat;
+        let userIdx = -1;
+        for (let i = chat.length - 1; i >= 0; i--) {
+          if (chat[i]?.role === "user") {
+            userIdx = i;
+            break;
+          }
+        }
+        if (userIdx < 0) return;
+        const content = String(chat[userIdx]!.content || "");
+        if (!content.trim()) return;
+        // Drop the user turn + everything after so sendChat re-adds a clean user message
+        const kept = chat.slice(0, userIdx);
+        set((s) => ({
+          chat: kept,
+          threads: s.threads.map((th) =>
+            th.id === s.activeThreadId ? threadWithMessages(th, kept) : th,
+          ),
+          replyTo: null,
+        }));
+        await get().sendChat(content);
       },
 
       hydrateSecrets: async () => {
@@ -2149,19 +2311,42 @@ export const useGrokHub = create<State>()(
         if (get().activeThreadId === id && (get().running || get().streamingMessageId)) {
           try { get().stopChat(); } catch { /* ignore */ }
         }
+        const victim = get().threads.find((t) => t.id === id);
         const remaining = get().threads.filter((t) => t.id !== id);
         if (remaining.length === 0) {
+          if (victim) {
+            set({
+              undoBuffer: {
+                kind: "thread",
+                label: `Deleted “${victim.title || "chat"}”`,
+                expiresAt: Date.now() + 12_000,
+                thread: victim,
+                wasActive: true,
+              },
+            });
+          }
           get().newThread();
+          // newThread replaces threads — re-apply undo without the deleted one already gone
           return;
         }
+        const wasActive = get().activeThreadId === id;
         const nextActive =
-          get().activeThreadId === id
+          wasActive
             ? remaining[0]!
             : remaining.find((t) => t.id === get().activeThreadId) || remaining[0]!;
         set({
           threads: remaining,
           activeThreadId: nextActive.id,
           chat: nextActive.messages,
+          undoBuffer: victim
+            ? {
+                kind: "thread",
+                label: `Deleted “${victim.title || "chat"}”`,
+                expiresAt: Date.now() + 12_000,
+                thread: victim,
+                wasActive,
+              }
+            : get().undoBuffer,
         });
       },
 
@@ -2425,24 +2610,31 @@ export const useGrokHub = create<State>()(
       deleteChatMessages: (ids) => {
         const idSet = new Set(Array.isArray(ids) ? ids : [ids]);
         if (!idSet.size) return;
+        const removed = get().chat.filter((m) => idSet.has(m.id));
+        const tid = get().activeThreadId;
         set((s) => {
           const chat = s.chat.filter((m) => !idSet.has(m.id));
-          // Drop reply target if deleted
           const replyTo =
             s.replyTo && idSet.has(s.replyTo.id) ? null : s.replyTo;
-          const tid = s.activeThreadId;
           return {
             chat,
             replyTo,
             threads: s.threads.map((th) =>
               th.id === tid ? threadWithMessages(th, chat) : th,
             ),
+            undoBuffer: {
+              kind: "messages" as const,
+              label: `Deleted ${idSet.size} message${idSet.size === 1 ? "" : "s"}`,
+              expiresAt: Date.now() + 12_000,
+              messages: removed,
+              threadId: tid || undefined,
+            },
           };
         });
         get().pushActivity({
           kind: "chat",
           title: "Message deleted",
-          detail: `${idSet.size} message${idSet.size === 1 ? "" : "s"} removed`,
+          detail: `${idSet.size} message${idSet.size === 1 ? "" : "s"} removed — Undo available`,
           status: "success",
         });
       },
@@ -4783,15 +4975,19 @@ if (!cmds.length) {
                 const { classifyHostCommand, needsHostConfirm, riskLabel } = await import("./host-safety");
                 const riskList = cmds.slice(0, 5).map((c) => riskLabel(classifyHostCommand(c)));
                 const desk = get().desktop;
-                if (
-                  needsHostConfirm(cmds.slice(0, 5), {
+                const hostSlice = cmds.slice(0, 5);
+                const allowlist = get().hostAllowlist || [];
+                const { isHostAllowlisted } = await import("./host-safety");
+                const needsAnyConfirm =
+                  needsHostConfirm(hostSlice, {
                     confirmAll: Boolean(desk.confirmHostCommands) && !desk.confirmDestructiveOnly,
                     confirmDestructive: Boolean(desk.confirmHostCommands),
-                  })
-                ) {
+                  }) &&
+                  hostSlice.some((c) => !isHostAllowlisted(c, allowlist));
+                if (needsAnyConfirm) {
                   const allowed = await requestHostConfirm(
                     set,
-                    cmds.slice(0, 5),
+                    hostSlice,
                     riskList,
                     botId,
                   );
@@ -5563,6 +5759,11 @@ if (!cmds.length) {
         mode: s.mode,
         desktop: s.desktop,
         agentPrefs: s.agentPrefs,
+        composerDrafts: Object.fromEntries(
+          Object.entries(s.composerDrafts || {}).slice(-40),
+        ),
+        shellHistory: (s.shellHistory || []).slice(0, 80),
+        hostAllowlist: (s.hostAllowlist || []).slice(0, 40),
         usage: s.usage,
         learning: s.learning,
         workboard: s.workboard,
@@ -5668,6 +5869,10 @@ if (!cmds.length) {
         s.streamingMessageId = null;
         s.running = false;
         s.pendingHostConfirm = null;
+        if (!s.composerDrafts || typeof s.composerDrafts !== "object") s.composerDrafts = {};
+        if (!Array.isArray(s.shellHistory)) s.shellHistory = [];
+        if (!Array.isArray(s.hostAllowlist)) s.hostAllowlist = [];
+        s.undoBuffer = null;
         // Never rehydrate mid-stream chrome
         try {
           if (Array.isArray(s.chat)) {

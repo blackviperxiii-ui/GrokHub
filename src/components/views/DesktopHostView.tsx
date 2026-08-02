@@ -32,6 +32,7 @@ const QUICK_CMDS = [
 
 export function DesktopHostView() {
   const recordUsage = useGrokHub((s) => s.recordUsage);
+  const pushShellHistory = useGrokHub((s) => s.pushShellHistory);
   const [api, setApi] = useState<HostApi | null>(null);
   const [tab, setTab] = useState<Tab>("cli");
   const [info, setInfo] = useState<HostInfo | null>(null);
@@ -43,6 +44,7 @@ export function DesktopHostView() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<HostExecResult | null>(null);
   const [history, setHistory] = useState<string[]>([]);
+  const [histIdx, setHistIdx] = useState(-1);
 
   const [dirPath, setDirPath] = useState("");
   const [entries, setEntries] = useState<HostFileEntry[]>([]);
@@ -304,6 +306,22 @@ export function DesktopHostView() {
             >
               <Input
                 value={cmd}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowUp" && history.length) {
+                e.preventDefault();
+                const next = Math.min(histIdx + 1, history.length - 1);
+                setHistIdx(next);
+                setCmd(history[next] || cmd);
+              } else if (e.key === "ArrowDown" && history.length) {
+                e.preventDefault();
+                const next = Math.max(histIdx - 1, -1);
+                setHistIdx(next);
+                setCmd(next < 0 ? "" : history[next] || "");
+              } else if (e.key === "Enter" && !busy) {
+                e.preventDefault();
+                void runCmd();
+              }
+            }}
                 onChange={(e) => setCmd(e.target.value)}
                 placeholder="e.g. systemctl --user status · pacman -Q electron"
                 className="font-mono text-xs"

@@ -18,6 +18,9 @@ import {
   TimerReset,
   Users,
   Wand2,
+  Square,
+  Keyboard,
+  FileDown,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useGrokHub } from "@/lib/store";
@@ -52,6 +55,10 @@ export function CommandPalette({
   const runAutomation = useGrokHub((s) => s.runAutomation);
   const automations = useGrokHub((s) => s.automations);
   const pinWorkItem = useGrokHub((s) => s.pinWorkItem);
+  const stopChat = useGrokHub((s) => s.stopChat);
+  const exportThreadMarkdown = useGrokHub((s) => s.exportThreadMarkdown);
+  const running = useGrokHub((s) => s.running);
+  const getContextStats = useGrokHub((s) => s.getContextStats);
   const [q, setQ] = useState("");
 
   useEffect(() => {
@@ -274,7 +281,62 @@ export function CommandPalette({
         },
       }));
 
-    return [...navItems, ...recent];
+    return [
+      {
+        id: "stop",
+        label: "Stop agent",
+        hint: "Esc",
+        group: "Actions",
+        icon: Square,
+        run: () => {
+          stopChat();
+          onOpenChange(false);
+        },
+      },
+      {
+        id: "export-thread",
+        label: "Export current chat",
+        group: "Actions",
+        icon: FileDown,
+        run: () => {
+          const md = exportThreadMarkdown();
+          const blob = new Blob([md], { type: "text/markdown" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = `grokhub-chat-${Date.now()}.md`;
+          a.click();
+          URL.revokeObjectURL(a.href);
+          onOpenChange(false);
+        },
+      },
+      {
+        id: "context-stats",
+        label: "Context budget",
+        group: "Actions",
+        icon: Search,
+        run: () => {
+          const r = getContextStats();
+          useGrokHub.getState().pushActivity({
+            kind: "system",
+            title: "Context",
+            detail: r.report.slice(0, 200),
+            status: "success",
+          });
+          onOpenChange(false);
+        },
+      },
+      {
+        id: "shortcuts",
+        label: "Keyboard shortcuts",
+        hint: "Ctrl+/",
+        group: "Actions",
+        icon: Keyboard,
+        run: () => {
+          window.dispatchEvent(new CustomEvent("grokhub:open-shortcuts"));
+          onOpenChange(false);
+        },
+      },
+...navItems, ...recent];
   }, [
     threads,
     setNav,
@@ -285,6 +347,9 @@ export function CommandPalette({
     onOpenChange,
     automations,
     compactThread,
+    stopChat,
+    exportThreadMarkdown,
+    getContextStats,
     checkUpdateQuiet,
     runAutomation,
     pinWorkItem,

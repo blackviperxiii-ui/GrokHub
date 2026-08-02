@@ -1,8 +1,9 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Check,
   ClipboardList,
   Layers,
+  Pencil,
   Play,
   Plus,
   ThumbsUp,
@@ -43,6 +44,7 @@ export function WorkboardView() {
   const setStatus = useGrokHub((s) => s.setWorkItemStatus);
   const pin = useGrokHub((s) => s.pinWorkItem);
   const remove = useGrokHub((s) => s.removeWorkItem);
+  const updateWorkItem = useGrokHub((s) => s.updateWorkItem);
   const startWorkItem = useGrokHub((s) => s.startWorkItem);
   const setNav = useGrokHub((s) => s.setNav);
   const selectThread = useGrokHub((s) => s.selectThread);
@@ -52,11 +54,40 @@ export function WorkboardView() {
   const [priority, setPriority] = useState<WorkPriority>("normal");
   const [filter, setFilter] = useState<"open" | "all">("open");
   const [dragId, setDragId] = useState<string | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDetail, setEditDetail] = useState("");
+  const [focusId, setFocusId] = useState<string | null>(null);
 
   const visible = useMemo(() => {
     if (filter === "all") return items;
     return items.filter((i) => !["done", "dismissed"].includes(i.status));
   }, [items, filter]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName || "";
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const id = focusId;
+      if (!id) return;
+      const k = e.key.toLowerCase();
+      if (k === "a") {
+        e.preventDefault();
+        setStatus(id, "approved");
+      } else if (k === "s") {
+        e.preventDefault();
+        setStatus(id, "staged");
+      } else if (k === "d") {
+        e.preventDefault();
+        setStatus(id, "dismissed");
+      } else if (k === "enter" && !running) {
+        e.preventDefault();
+        void startWorkItem(id);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [focusId, setStatus, startWorkItem, running]);
 
   const byCol = useMemo(() => {
     const m = Object.fromEntries(COLUMNS.map((c) => [c, [] as typeof items])) as Record<
@@ -76,8 +107,9 @@ export function WorkboardView() {
             Workboard
           </h1>
           <p className="mt-1 max-w-xl text-sm text-[var(--color-muted)]">
-            Agent-pinned tasks you can approve, stage, track, or dismiss. The agent can also pin
-            with <span className="font-mono text-xs">WORK_PIN:</span> lines.
+            Agent-pinned tasks you can approve, stage, track, or dismiss. Click a card then press{" "}
+            <span className="font-mono text-xs">A</span>/<span className="font-mono text-xs">S</span>/
+            <span className="font-mono text-xs">D</span> to approve/stage/dismiss.
           </p>
         </div>
         <div className="flex gap-2">
@@ -181,7 +213,8 @@ export function WorkboardView() {
                 byCol[col].map((item) => (
                   <div
                     key={item.id}
-                    draggable
+                    draggable={editId !== item.id}
+                    onClick={() => setFocusId(item.id)}
                     onDragStart={(e) => {
                       setDragId(item.id);
                       e.dataTransfer.setData("text/work-id", item.id);
@@ -193,8 +226,43 @@ export function WorkboardView() {
                       item.priority === "high" &&
                         "border-[color-mix(in_oklab,var(--color-danger)_35%,var(--color-border))]",
                       dragId === item.id && "opacity-60",
+                      focusId === item.id && "ring-2 ring-[var(--color-info)]",
                     )}
                   >
+                    {editId === item.id ? (
+                      <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-1 text-xs"
+                          autoFocus
+                        />
+                        <textarea
+                          value={editDetail}
+                          onChange={(e) => setEditDetail(e.target.value)}
+                          className="w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-1 text-[11px]"
+                          rows={2}
+                        />
+                        <div className="flex gap-1">
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              updateWorkItem(item.id, {
+                                title: editTitle.trim() || item.title,
+                                detail: editDetail,
+                              });
+                              setEditId(null);
+                            }}
+                          >
+                            Save
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setEditId(null)}>
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
                     <div className="text-xs font-medium leading-snug text-[var(--color-fg)]">
                       {item.title}
                     </div>
@@ -210,6 +278,16 @@ export function WorkboardView() {
                       <span>{item.source}</span>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1">
+                      <IconBtn
+                        title="Edit"
+                        onClick={() => {
+                          setEditId(item.id);
+                          setEditTitle(item.title);
+                          setEditDetail(item.detail || "");
+                        }}
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </IconBtn>
                       {col === "proposed" && (
                         <IconBtn
                           title="Approve"
@@ -259,6 +337,8 @@ export function WorkboardView() {
                         <Trash2 className="h-3 w-3" />
                       </IconBtn>
                     </div>
+                      </>
+                    )}
                   </div>
                 ))
               )}
