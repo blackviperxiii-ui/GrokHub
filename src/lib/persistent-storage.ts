@@ -2,6 +2,7 @@
  * Zustand storage that prefers Electron userData (survives updates),
  * and mirrors to localStorage for browser preview.
  * Writes are debounced to avoid thrashing disk on every keystroke/heartbeat.
+ * While streaming, writes are paused and flushed when the turn ends.
  */
 import type { StateStorage } from "zustand/middleware";
 
@@ -9,9 +10,28 @@ const MIRROR_PREFIX = "grokhub.persist.";
 const DEBOUNCE_MS = 400;
 const pending = new Map<string, { value: string; timer: ReturnType<typeof setTimeout> }>();
 const lastWritten = new Map<string, string>();
+/** When true, setItem only parks values; flush on resume */
+let persistPaused = false;
+const parked = new Map<string, string>();
 
 function electronState() {
   return typeof window !== "undefined" ? window.grokhubDesktop?.state : undefined;
+}
+
+/** Pause disk writes during streaming; call false at end of turn to flush. */
+export function setPersistPaused(paused: boolean): void {
+  persistPaused = paused;
+  if (!paused && parked.size) {
+    const entries = [...parked.entries()];
+    parked.clear();
+    for (const [name, value] of entries) {
+      void persistentStorage.setItem(name, value);
+    }
+  }
+}
+
+export function isPersistPaused(): boolean {
+  return persistPaused;
 }
 
 async function flushWrite(name: string, value: string): Promise<void> {
@@ -35,6 +55,15 @@ async function flushWrite(name: string, value: string): Promise<void> {
 
 /** Force-flush all pending debounced writes (call on beforeunload). */
 export async function flushPersistentStorage(): Promise<void> {
+  if (persistPaused) {
+    // Promote parked into pending so we flush latest
+    for (const [name, value] of parked) {
+      const prev = pending.get(name);
+      if (prev) clearTimeout(prev.timer);
+      pending.set(name, { value, timer: setTimeout(() => {}, 0) });
+    }
+    parked.clear();
+  }
   const jobs: Promise<void>[] = [];
   for (const [name, row] of pending) {
     clearTimeout(row.timer);
@@ -92,6 +121,10 @@ export const persistentStorage: StateStorage = {
 
   setItem: async (name: string, value: string): Promise<void> => {
     if (lastWritten.get(name) === value) return;
+    if (persistPaused) {
+      parked.set(name, value);
+      return;
+    }
     const prev = pending.get(name);
     if (prev) clearTimeout(prev.timer);
     const timer = setTimeout(() => {
@@ -107,6 +140,7 @@ export const persistentStorage: StateStorage = {
       clearTimeout(prev.timer);
       pending.delete(name);
     }
+    parked.delete(name);
     lastWritten.delete(name);
     try {
       localStorage.removeItem(MIRROR_PREFIX + name);

@@ -1,5 +1,23 @@
 import { useEffect, useRef, useState } from "react";
-import { ExternalLink, FolderInput, HardDrive, RefreshCw } from "lucide-react";
+import { ExternalLink, FolderInput, HardDrive, Moon, RefreshCw, Sun, Monitor } from "lucide-react";
+
+const SETTINGS_SECTIONS = [
+  { id: "sec-appearance", label: "Appearance" },
+  { id: "sec-oauth", label: "Grok OAuth" },
+  { id: "sec-free", label: "Free Grok" },
+  { id: "sec-usage", label: "Usage" },
+  { id: "sec-setup", label: "Setup sync" },
+  { id: "sec-api", label: "API key" },
+  { id: "sec-models", label: "Models" },
+  { id: "sec-updates", label: "Updates" },
+  { id: "sec-modes", label: "Modes" },
+  { id: "sec-agent", label: "Agent" },
+  { id: "sec-desktop", label: "Desktop shell" },
+  { id: "sec-selfmod", label: "Self-mod" },
+  { id: "sec-memory", label: "Memory" },
+  { id: "sec-danger", label: "Danger zone" },
+] as const;
+
 import { getModesWithCatalog } from "@/lib/modes";
 import { friendlyModelName } from "@/lib/models-catalog";
 import { applyUpdate, checkUpdate, applyRollback, postUpdateSelfTest } from "@/lib/grok-client";
@@ -299,10 +317,63 @@ export function SettingsView() {
     }
   }
 
+  const uiTheme = useGrokHub((s) => s.uiTheme);
+  const setUiTheme = useGrokHub((s) => s.setUiTheme);
+
   return (
     <div className="content-readable mx-auto space-y-5 pb-8">
+      <nav
+        aria-label="Settings sections"
+        className="sticky top-0 z-20 -mx-1 mb-1 flex gap-1.5 overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-panel)_92%,transparent)] px-2 py-2 backdrop-blur-md"
+      >
+        {SETTINGS_SECTIONS.map((s) => (
+          <a
+            key={s.id}
+            href={`#${s.id}`}
+            className="shrink-0 rounded-full border border-transparent px-2.5 py-1 text-[11px] font-medium text-[var(--color-muted)] hover:border-[var(--color-border)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+            onClick={(e) => {
+              e.preventDefault();
+              document.getElementById(s.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}
+          >
+            {s.label}
+          </a>
+        ))}
+      </nav>
+
+      <Card id="sec-appearance">
+        <CardHeader>
+          <CardTitle className="text-sm">Appearance</CardTitle>
+          <CardDescription>Theme for the GrokHub chrome. Chat content stays high-contrast either way.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          {(
+            [
+              ["dark", "Dark", Moon],
+              ["light", "Light", Sun],
+              ["system", "System", Monitor],
+            ] as const
+          ).map(([id, label, Icon]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setUiTheme(id)}
+              className={cn(
+                "inline-flex h-9 items-center gap-2 rounded-[var(--radius-sm)] border px-3 text-xs font-medium transition-colors",
+                uiTheme === id
+                  ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]"
+                  : "border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-border-strong)]",
+              )}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </button>
+          ))}
+        </CardContent>
+      </Card>
+
       {/* Primary: real xAI Grok OAuth */}
-      <Card>
+      <Card id="sec-oauth">
         <CardHeader>
           <CardTitle className="text-sm">Connect to Grok (xAI OAuth)</CardTitle>
           <CardDescription>
@@ -423,7 +494,7 @@ export function SettingsView() {
       </Card>
 
 
-      <Card>
+      <Card id="sec-free">
         <CardHeader>
           <CardTitle className="text-sm">Free Grok fallback</CardTitle>
           <CardDescription>
@@ -672,9 +743,11 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
+      <div id="sec-usage">
       <UsageMeterPanel />
+      </div>
 
-      <Card>
+      <Card id="sec-setup">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
             <FolderInput className="h-4 w-4 text-[var(--color-muted)]" />
@@ -741,7 +814,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="sec-api">
         <CardHeader>
           <CardTitle className="text-sm">xAI API key (optional fallback)</CardTitle>
           <CardDescription>
@@ -774,7 +847,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="sec-models">
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
@@ -840,7 +913,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="sec-updates">
         <CardHeader>
           <CardTitle className="text-sm">Updates (GitHub)</CardTitle>
           <CardDescription>Install the latest clean release from the package repo.</CardDescription>
@@ -933,7 +1006,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="sec-modes">
         <CardHeader>
           <CardTitle className="text-sm">Model modes</CardTitle>
           <CardDescription>
@@ -971,7 +1044,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="sec-agent">
         <CardHeader>
           <CardTitle className="text-sm">Agent controls</CardTitle>
           <CardDescription>
@@ -985,7 +1058,7 @@ export function SettingsView() {
 
       <HostGatewayBanner variant="card" onOpenDesktop={() => setNav("desktop")} />
 
-      <Card>
+      <Card id="sec-desktop">
         <CardHeader>
           <CardTitle className="text-sm">Arch Linux shell preferences</CardTitle>
         </CardHeader>
@@ -1085,7 +1158,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="sec-selfmod">
         <CardHeader>
           <CardTitle className="text-sm">Self-mod & factory restore</CardTitle>
           <CardDescription>
@@ -1242,7 +1315,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="sec-memory">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
             <HardDrive className="h-4 w-4 text-[var(--color-muted)]" />
@@ -1335,7 +1408,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="sec-danger">
         <CardHeader>
           <CardTitle className="text-sm">Danger zone</CardTitle>
           <CardDescription>

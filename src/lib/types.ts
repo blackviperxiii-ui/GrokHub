@@ -141,6 +141,8 @@ export type ChatMessage = {
   replyToId?: string;
   replyToPreview?: string;
   replyToRole?: ChatRole;
+  /** User edited this message after send */
+  edited?: boolean;
 };
 
 /** Grok-style conversation history entry */

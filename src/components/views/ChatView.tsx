@@ -1,6 +1,5 @@
 import {
   Loader2,
-  MessageSquarePlus,
   Download,
   Pencil,
   Paperclip,
@@ -23,19 +22,17 @@ import {
   Trash2,
   Check,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
 import { tierMeta } from "@/lib/models-catalog";
 import { buildQuickChips, type QuickChip } from "@/lib/quick-assistant";
 import { useGrokHub } from "@/lib/store";
 import { parseStreamStatus } from "@/lib/tool-status";
-import { formatUnits, PLAN_LIMITS, usagePercent } from "@/lib/usage";
 import { cn } from "@/lib/utils";
+import type { ChatMessage, ChatRole } from "@/lib/types";
 import { RelativeTime } from "../RelativeTime";
 import { HostGatewayBanner } from "../HostGatewayBanner";
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Textarea } from "../ui/textarea";
 import { MarkdownBody } from "@/lib/markdown";
 
@@ -52,7 +49,6 @@ function ToolActivityBanner({
   onDismiss,
 }: {
   status: string | null;
-  /** Opacity fade when tool just finished */
   fading?: boolean;
   onDismiss?: () => void;
 }) {
@@ -133,7 +129,7 @@ function ToolActivityBanner({
   );
 }
 
-const MAX_ATTACH_BYTES = 1_200_000; // ~1.2MB data url budget each
+const MAX_ATTACH_BYTES = 1_200_000;
 
 async function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -143,6 +139,235 @@ async function fileToDataUrl(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
+type MessageRowProps = {
+  m: ChatMessage;
+  busy: boolean;
+  streamStatus: string | null;
+  editingId: string | null;
+  editDraft: string;
+  copiedId: string | null;
+  onJumpReply: (id: string | undefined) => void;
+  onReply: (m: { id: string; content: string; role: ChatRole }) => void;
+  onCopy: (id: string, content: string) => void;
+  onStartEdit: (id: string, content: string) => void;
+  onEditDraft: (v: string) => void;
+  onSaveEdit: (id: string, resend: boolean) => void;
+  onCancelEdit: () => void;
+  onDelete: (id: string) => void;
+};
+
+const ChatMessageRow = memo(function ChatMessageRow({
+  m,
+  busy,
+  streamStatus,
+  editingId,
+  editDraft,
+  copiedId,
+  onJumpReply,
+  onReply,
+  onCopy,
+  onStartEdit,
+  onEditDraft,
+  onSaveEdit,
+  onCancelEdit,
+  onDelete,
+}: MessageRowProps) {
+  return (
+    <div
+      className={cn(
+        "group/msg msg-enter flex",
+        m.role === "user" ? "justify-end" : "justify-start",
+      )}
+    >
+      <div
+        className={cn(
+          "chat-bubble relative rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed shadow-sm",
+          m.role === "user"
+            ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]"
+            : m.role === "system"
+              ? "border-[var(--color-border)] bg-[var(--color-panel)] text-[var(--color-muted)]"
+              : "border-[var(--color-border)] bg-[var(--color-panel)] text-[var(--color-fg)]",
+          m.streaming &&
+            "border-[color-mix(in_oklab,var(--color-info)_45%,var(--color-border))] shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-info)_20%,transparent)]",
+        )}
+      >
+        {m.replyToPreview && (
+          <button
+            type="button"
+            className="mb-2 flex w-full items-start gap-2 rounded-[var(--radius-sm)] border-l-2 border-[var(--color-info)] bg-[color-mix(in_oklab,var(--color-info)_8%,var(--color-surface))] px-2 py-1.5 text-left text-xs text-[var(--color-muted)]"
+            title="Jump to original"
+            onClick={() => onJumpReply(m.replyToId)}
+          >
+            <Reply className="mt-0.5 h-3 w-3 shrink-0 text-[var(--color-info)]" />
+            <span className="min-w-0">
+              <span className="font-medium text-[var(--color-fg)]">
+                {m.replyToRole || "message"}
+              </span>
+              <span className="mt-0.5 line-clamp-2 block normal-case tracking-normal">
+                {m.replyToPreview}
+              </span>
+            </span>
+          </button>
+        )}
+        <div
+          id={`msg-${m.id}`}
+          className="mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-[var(--color-subtle)]"
+        >
+          <span>
+            {m.role} · <RelativeTime ts={m.ts} />
+          </span>
+          {(m.routeTier || m.mode) && m.role === "assistant" && (
+            <span
+              className={cn(
+                "adaptive-pill inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-bold normal-case tracking-wide shadow-sm",
+                m.routeTier
+                  ? tierMeta(m.routeTier).tone
+                  : "border-[var(--color-border)] bg-[var(--color-elevated)] text-[var(--color-muted)]",
+              )}
+              title={
+                m.routeReason
+                  ? m.routeReason
+                  : m.mode === "auto"
+                    ? "Adaptive router"
+                    : getMode(m.mode || "auto").label
+              }
+            >
+              {m.routeTier
+                ? tierMeta(m.routeTier).label
+                : m.mode === "auto"
+                  ? "Adaptive"
+                  : getMode(m.mode!).label}
+            </span>
+          )}
+          {m.edited && (
+            <span className="rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case text-[var(--color-subtle)]">
+              edited
+            </span>
+          )}
+          {m.routeModel && m.role === "assistant" && (
+            <span
+              className="hidden max-w-[10rem] truncate rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case text-[var(--color-subtle)] sm:inline"
+              title={m.routeReason || m.routeModel}
+            >
+              {m.routeModel.replace(/^grok-/, "")}
+            </span>
+          )}
+          {m.streaming && (
+            <span className="inline-flex items-center gap-1 rounded border border-[color-mix(in_oklab,var(--color-info)_40%,transparent)] px-1.5 py-px font-mono normal-case text-[var(--color-info)]">
+              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+              {streamStatus?.startsWith("Host")
+                ? "host"
+                : streamStatus?.startsWith("Connector")
+                  ? "connector"
+                  : streamStatus?.includes("Summariz")
+                    ? "summarizing"
+                    : "streaming"}
+            </span>
+          )}
+          {m.stopped && (
+            <span className="rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case text-[var(--color-warn)]">
+              stopped
+            </span>
+          )}
+        </div>
+        {m.content ? (
+          m.role === "user" && editingId === m.id ? (
+            <div className="space-y-2">
+              <textarea
+                value={editDraft}
+                onChange={(e) => onEditDraft(e.target.value)}
+                className="min-h-[4rem] w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-2 text-sm"
+                autoFocus
+              />
+              <div className="flex gap-1.5">
+                <Button size="sm" onClick={() => onSaveEdit(m.id, true)}>
+                  Save & resend
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => onSaveEdit(m.id, false)}>
+                  Save
+                </Button>
+                <Button size="sm" variant="ghost" onClick={onCancelEdit}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : m.role === "user" ? (
+            <div className="whitespace-pre-wrap">
+              <MarkdownBody content={m.content} />
+            </div>
+          ) : (
+            <MarkdownBody content={m.content} streaming={Boolean(m.streaming)} />
+          )
+        ) : m.streaming ? (
+          <span className="inline-flex items-center gap-2 text-sm text-[var(--color-muted)]" role="status" aria-live="polite">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--color-info)] opacity-60" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--color-info)]" />
+            </span>
+            Thinking…
+          </span>
+        ) : (
+          ""
+        )}
+
+        {m.content && !m.streaming && (
+          <div
+            className={cn(
+              "mt-2 flex flex-wrap items-center gap-0.5 border-t border-[var(--color-border)] pt-1.5",
+              "opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover/msg:opacity-100 sm:focus-within:opacity-100",
+            )}
+          >
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+              title="Reply to this message"
+              onClick={() => onReply({ id: m.id, content: m.content, role: m.role })}
+            >
+              <Reply className="h-3 w-3" />
+              Reply
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+              title="Copy message"
+              onClick={() => void onCopy(m.id, m.content)}
+            >
+              {copiedId === m.id ? (
+                <Check className="h-3 w-3 text-[var(--color-success)]" />
+              ) : (
+                <Copy className="h-3 w-3" />
+              )}
+              {copiedId === m.id ? "Copied" : "Copy"}
+            </button>
+            {m.role === "user" && !busy && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
+                title="Edit message"
+                onClick={() => onStartEdit(m.id, m.content)}
+              >
+                <Pencil className="h-3 w-3" />
+                Edit
+              </button>
+            )}
+            {!busy && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[color-mix(in_oklab,var(--color-danger)_12%,transparent)] hover:text-[var(--color-danger)]"
+                title="Delete message"
+                onClick={() => onDelete(m.id)}
+              >
+                <Trash2 className="h-3 w-3" />
+                Delete
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
 
 export function ChatView() {
   const chat = useGrokHub((s) => s.chat);
@@ -179,10 +404,8 @@ export function ChatView() {
   const deleteChatMessages = useGrokHub((s) => s.deleteChatMessages);
   const replyTo = useGrokHub((s) => s.replyTo);
   const setReplyTo = useGrokHub((s) => s.setReplyTo);
-  const clearChat = useGrokHub((s) => s.clearChat);
   const [text, setText] = useState("");
   const [localRunning, setLocalRunning] = useState(false);
-  /** Single toast for tool/host activity (avoids duplicate banners) */
   const [toastStatus, setToastStatus] = useState<string | null>(null);
   const [toastFading, setToastFading] = useState(false);
   const toastTimers = useRef<{ fade?: ReturnType<typeof setTimeout>; clear?: ReturnType<typeof setTimeout> }>({});
@@ -196,14 +419,17 @@ export function ChatView() {
   const recognitionRef = useRef<{ stop: () => void } | null>(null);
   const voiceRef = useRef<import("@/lib/voice-input").VoiceSession | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
+  const [chipsOpen, setChipsOpen] = useState(false);
   const [attachments, setAttachments] = useState<Array<{ name: string; dataUrl: string; kind: string }>>([]);
   const endRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const [showJumpLatest, setShowJumpLatest] = useState(false);
+  const pendingJumpId = useRef<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const modeMeta = getMode(mode);
   const busy = running || localRunning || pendingBusy;
 
-  // One tool toast: show while busy; hold then fade after idle (no double banners)
   useEffect(() => {
     const active =
       streamStatus ||
@@ -211,7 +437,6 @@ export function ChatView() {
       (running ? "Thinking…" : null);
 
     if (busy && active) {
-      // Cancel any in-flight fade when work resumes
       if (toastTimers.current.fade) clearTimeout(toastTimers.current.fade);
       if (toastTimers.current.clear) clearTimeout(toastTimers.current.clear);
       toastTimers.current = {};
@@ -221,7 +446,6 @@ export function ChatView() {
     }
 
     if (!busy) {
-      // Schedule fade once when we have something to show
       setToastStatus((prev) => {
         if (!prev) return prev;
         if (!toastTimers.current.fade && !toastTimers.current.clear) {
@@ -235,10 +459,6 @@ export function ChatView() {
         return prev;
       });
     }
-
-    return () => {
-      /* timers owned across busy→idle; only clear on unmount */
-    };
   }, [busy, streamStatus, localRunning, running]);
 
   useEffect(() => {
@@ -248,15 +468,8 @@ export function ChatView() {
     };
   }, []);
 
-  const plan = PLAN_LIMITS[usage.plan];
-  const webPct = usage.website?.creditUsagePercent;
-  const pct = Math.round(
-    webPct != null && (usage.source === "website" || (webPct > 0 && !usage.website?.error))
-      ? webPct
-      : usagePercent(usage),
-  );
 
-  const WINDOW = 40;
+  const WINDOW = 50;
   const visibleChat = useMemo(() => {
     const take = WINDOW + historyExtra;
     if (chat.length <= take) return chat;
@@ -282,7 +495,6 @@ export function ChatView() {
     };
   }, []);
 
-  // Clear pending busy once store running takes over
   useEffect(() => {
     if (running) setPendingBusy(false);
   }, [running]);
@@ -302,14 +514,54 @@ export function ChatView() {
         memory: quickAssistMemory,
         dismissed: quickAssistDismissed,
         rotation: quickAssistRotation,
-        max: text.trim().length > 0 ? 10 : Math.min(10, Math.max(5, 5 + Math.min(chat.length, 3))),
+        max: 4,
       }),
     [chat, activity, threads, connectors, mode, grokConnected, usage, text, hostOnline, quickAssistMemory, quickAssistDismissed, quickAssistRotation],
   );
 
+  const onListScroll = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const nearBottom = dist < 96;
+    stickToBottomRef.current = nearBottom;
+    setShowJumpLatest(!nearBottom && chat.length > 0);
+  }, [chat.length]);
+
   useEffect(() => {
+    if (!stickToBottomRef.current) {
+      setShowJumpLatest(true);
+      return;
+    }
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat, busy, streamStatus]);
+
+  useEffect(() => {
+    const id = pendingJumpId.current;
+    if (!id) return;
+    const el = document.getElementById(`msg-${id}`);
+    if (el) {
+      pendingJumpId.current = null;
+      requestAnimationFrame(() => {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    }
+  }, [visibleChat, historyExtra]);
+
+  useEffect(() => {
+    if (!pendingHostConfirm) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        resolveHostConfirm(false);
+      } else if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        resolveHostConfirm(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pendingHostConfirm, resolveHostConfirm]);
 
   useEffect(() => {
     const onResume = (ev: Event) => {
@@ -318,11 +570,9 @@ export function ChatView() {
         focusOnly?: boolean;
       } | null;
       requestAnimationFrame(() => {
+        stickToBottomRef.current = true;
         endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-        if (detail?.pendingPrompt && !detail.focusOnly) {
-          setText(detail.pendingPrompt);
-        } else if (detail?.pendingPrompt) {
-          // Show what will re-run in the composer (editable) without auto-sending
+        if (detail?.pendingPrompt) {
           setText(detail.pendingPrompt);
         }
         inputRef.current?.focus();
@@ -342,13 +592,12 @@ export function ChatView() {
     return () => window.removeEventListener("grokhub:focus-chat-input", focus);
   }, []);
 
-  /** Grow/shrink the composer with content (single line → multi-line). */
   function resizeComposer(el?: HTMLTextAreaElement | null) {
     const ta = el ?? inputRef.current;
     if (!ta) return;
     ta.style.height = "0px";
-    const min = 40; // ~2.5rem single line
-    const max = 160; // ~max-h-40
+    const min = 40;
+    const max = 160;
     const next = Math.min(max, Math.max(min, ta.scrollHeight));
     ta.style.height = `${next}px`;
     ta.style.overflowY = ta.scrollHeight > max ? "auto" : "hidden";
@@ -398,7 +647,7 @@ export function ChatView() {
     setLocalRunning(true);
     const userLine = command.startsWith("$") ? command : `$ ${command}`;
     useGrokHub.setState((s) => {
-      const chat = [
+      const nextChat = [
         ...s.chat,
         {
           id: `u_${Date.now()}`,
@@ -408,12 +657,12 @@ export function ChatView() {
           mode,
         },
       ];
-      const threads = s.threads.map((t) =>
+      const nextThreads = s.threads.map((t) =>
         t.id === s.activeThreadId
-          ? { ...t, messages: chat, updatedAt: Date.now() }
+          ? { ...t, messages: nextChat, updatedAt: Date.now() }
           : t,
       );
-      return { chat, threads, running: true, streamStatus: "Host running…" };
+      return { chat: nextChat, threads: nextThreads, running: true, streamStatus: "Host running…" };
     });
     try {
       const bill = recordUsage("host");
@@ -434,7 +683,7 @@ export function ChatView() {
         .filter(Boolean)
         .join("\n");
       useGrokHub.setState((s) => {
-        const chat = [
+        const nextChat = [
           ...s.chat,
           {
             id: `a_${Date.now()}`,
@@ -444,10 +693,10 @@ export function ChatView() {
             mode,
           },
         ];
-        const threads = s.threads.map((t) =>
-          t.id === s.activeThreadId ? { ...t, messages: chat, updatedAt: Date.now() } : t,
+        const nextThreads = s.threads.map((t) =>
+          t.id === s.activeThreadId ? { ...t, messages: nextChat, updatedAt: Date.now() } : t,
         );
-        return { chat, threads, running: false, streamStatus: null };
+        return { chat: nextChat, threads: nextThreads, running: false, streamStatus: null };
       });
     } catch (e) {
       useGrokHub.setState((s) => ({
@@ -490,7 +739,6 @@ export function ChatView() {
     setPendingBusy(false);
   }
 
-
   function stopVoice() {
     try {
       recognitionRef.current?.stop();
@@ -512,13 +760,13 @@ export function ChatView() {
     const apiKey = useGrokHub.getState().apiKey;
     if (listening && voiceRef.current) {
       setVoiceStatus("Transcribing…");
-      const text = await voiceRef.current.stopAndTranscribe();
+      const spoken = await voiceRef.current.stopAndTranscribe();
       voiceRef.current = null;
       setListening(false);
-      if (text) {
+      if (spoken) {
         setText((prev) => {
           const base = prev.trim();
-          return base ? `${base} ${text}` : text;
+          return base ? `${base} ${spoken}` : spoken;
         });
         setVoiceStatus(null);
         requestAnimationFrame(() => {
@@ -528,7 +776,7 @@ export function ChatView() {
         pushActivity({
           kind: "system",
           title: "Voice transcribed",
-          detail: text.slice(0, 120),
+          detail: spoken.slice(0, 120),
           status: "success",
         });
       } else {
@@ -537,7 +785,6 @@ export function ChatView() {
       return;
     }
 
-    // Prefer MediaRecorder + Grok STT (works in Electron)
     const result = await toggleVoiceSession(
       voiceRef,
       {
@@ -572,7 +819,6 @@ export function ChatView() {
       return;
     }
 
-    // Fallback: Web Speech API (Chromium) if MediaRecorder path failed to start
     if (result === "error" && !voiceRef.current?.isListening()) {
       type Rec = {
         continuous: boolean;
@@ -592,10 +838,7 @@ export function ChatView() {
         webkitSpeechRecognition?: new () => Rec;
       };
       const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
-      if (!SR) {
-        // error already pushed from VoiceSession
-        return;
-      }
+      if (!SR) return;
       try {
         const rec = new SR();
         rec.continuous = true;
@@ -640,7 +883,7 @@ export function ChatView() {
     }
   }
 
-  async function copyMessage(id: string, content: string) {
+  const copyMessage = useCallback(async (id: string, content: string) => {
     try {
       await navigator.clipboard.writeText(content);
       setCopiedId(id);
@@ -661,24 +904,62 @@ export function ChatView() {
         /* ignore */
       }
     }
-  }
+  }, []);
 
-  function replyToMessage(m: { id: string; content: string; role: "user" | "assistant" | "system" }) {
-    setReplyTo({ id: m.id, content: m.content, role: m.role });
-    window.setTimeout(() => {
-      inputRef.current?.focus();
-    }, 50);
-  }
+  const replyToMessage = useCallback(
+    (m: { id: string; content: string; role: ChatRole }) => {
+      setReplyTo({ id: m.id, content: m.content, role: m.role });
+      window.setTimeout(() => {
+        inputRef.current?.focus();
+      }, 50);
+    },
+    [setReplyTo],
+  );
 
-  function deleteMessage(id: string) {
-    if (typeof window !== "undefined" && !window.confirm("Delete this message?")) return;
-    deleteChatMessages(id);
-    if (editingId === id) setEditingId(null);
-  }
+  const deleteMessage = useCallback(
+    (id: string) => {
+      if (typeof window !== "undefined" && !window.confirm("Delete this message?")) return;
+      deleteChatMessages(id);
+      if (editingId === id) setEditingId(null);
+    },
+    [deleteChatMessages, editingId],
+  );
+
+  const jumpToReply = useCallback(
+    (id: string | undefined) => {
+      if (!id) return;
+      const el = document.getElementById(`msg-${id}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+      const idx = chat.findIndex((m) => m.id === id);
+      if (idx < 0) return;
+      const fromEnd = chat.length - idx;
+      const need = Math.max(0, fromEnd - WINDOW);
+      pendingJumpId.current = id;
+      setHistoryExtra((n) => Math.max(n, need + WINDOW));
+    },
+    [chat],
+  );
+
+  const onStartEdit = useCallback((id: string, content: string) => {
+    setEditingId(id);
+    setEditDraft(content);
+  }, []);
+
+  const onSaveEdit = useCallback(
+    (id: string, resend: boolean) => {
+      void editChatMessage(id, editDraft, resend);
+      setEditingId(null);
+    },
+    [editChatMessage, editDraft],
+  );
 
   async function onSend(value?: string) {
-
     if (busy) return;
+    stickToBottomRef.current = true;
+    setShowJumpLatest(false);
     let payload = (value ?? text).trim();
     if (attachments.length) {
       const blocks = attachments.map((a) => {
@@ -704,7 +985,6 @@ export function ChatView() {
       await runShell(payload);
       return;
     }
-    // Instant local busy so Stop / spinner show before store rehydrate lag
     setPendingBusy(true);
     try {
       await sendChat(payload);
@@ -724,55 +1004,30 @@ export function ChatView() {
   }
 
   return (
-    <div className="chat-stage mx-auto flex h-full min-h-0 w-full flex-col gap-3">
-      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardHeader className="shrink-0 border-b border-[var(--color-border)] px-4 py-3 md:px-6 3xl:px-8">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <CardTitle className="text-sm">Agent</CardTitle>
-              <CardDescription>
-                Live Grok · <span className="font-mono">$</span> host shell · attach files · History in the
-                sidebar
-              </CardDescription>
-            </div>
-            <div className="flex flex-col items-end gap-1">
-              <div className="flex gap-1">
-                <Button size="sm" variant="secondary" onClick={() => newThread()} disabled={busy} title="Ctrl+N">
-                  <MessageSquarePlus className="h-3.5 w-3.5" />
-                  New
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={!chat.length}
-                  title="Export chat as Markdown"
-                  onClick={() => {
-                    const md = exportThreadMarkdown();
-                    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
-                    const a = document.createElement("a");
-                    a.href = URL.createObjectURL(blob);
-                    a.download = `grokhub-chat-${Date.now()}.md`;
-                    a.click();
-                    URL.revokeObjectURL(a.href);
-                  }}
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Export
-                </Button>
-                <Badge className="font-mono text-[11px]">{modeMeta.label}</Badge>
-              </div>
-              <Badge variant={grokConnected ? "success" : "default"} className="text-[10px]">
-                {grokConnected ? "Grok live" : "Connect in Settings"}
-              </Badge>
-              <span className="text-[10px] tabular text-[var(--color-subtle)]">
-                {usage.source === "website" || (usage.website && !usage.website.error)
-                  ? `${pct}% weekly`
-                  : `${formatUnits(usage.usedUnits)}/${formatUnits(plan.units)} · ${pct}%`}
-              </span>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-0">
+    <div className="chat-stage mx-auto flex h-full min-h-0 w-full flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--color-bg)]">
+        {/* Slim toolbar — export only; title lives in stage header */}
+        <div className="flex shrink-0 items-center justify-end gap-2 border-b border-[var(--color-border)] px-4 py-1.5 md:px-6">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!chat.length}
+            title="Export chat as Markdown"
+            onClick={() => {
+              const md = exportThreadMarkdown();
+              const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+              const a = document.createElement("a");
+              a.href = URL.createObjectURL(blob);
+              a.download = `grokhub-chat-${Date.now()}.md`;
+              a.click();
+              URL.revokeObjectURL(a.href);
+            }}
+          >
+            <Download className="h-3.5 w-3.5" />
+            Export
+          </Button>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="shrink-0 space-y-2 px-4 pt-3 md:px-6 3xl:px-8">
             <HostGatewayBanner variant="compact" />
             {sessionResume?.kind === "interrupted" && !busy && (
@@ -799,6 +1054,7 @@ export function ChatView() {
                           setPendingBusy(false);
                         }
                         requestAnimationFrame(() => {
+                          stickToBottomRef.current = true;
                           endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
                           inputRef.current?.focus();
                         });
@@ -813,6 +1069,7 @@ export function ChatView() {
                     onClick={() => {
                       resumeLastSession();
                       requestAnimationFrame(() => {
+                        stickToBottomRef.current = true;
                         endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
                         if (sessionResume.pendingPrompt) setText(sessionResume.pendingPrompt);
                         inputRef.current?.focus();
@@ -829,7 +1086,11 @@ export function ChatView() {
               </div>
             )}
           </div>
-          <div className="scroll-panel min-h-0 flex-1 space-y-3 px-4 py-4 md:px-6 3xl:px-10 uw:px-16">
+          <div
+            ref={listRef}
+            onScroll={onListScroll}
+            className="scroll-panel min-h-0 flex-1 space-y-3 px-4 py-4 md:px-6 3xl:px-10 uw:px-16"
+          >
             {chat.length === 0 && !busy && (
               <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
                 <p className="text-sm font-medium text-[var(--color-fg)]">Start a conversation</p>
@@ -851,232 +1112,43 @@ export function ChatView() {
               </div>
             )}
             {visibleChat.map((m) => (
-              <div
+              <ChatMessageRow
                 key={m.id}
-                className={cn(
-                  "group/msg flex",
-                  m.role === "user" ? "justify-end" : "justify-start",
-                )}
-              >
-                <div
-                  className={cn(
-                    "chat-bubble relative rounded-[var(--radius-lg)] border px-3.5 py-2.5 text-sm leading-relaxed",
-                    m.role === "user"
-                      ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]"
-                      : m.role === "system"
-                        ? "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted)]"
-                        : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-fg)]",
-                    m.streaming &&
-                      "border-[color-mix(in_oklab,var(--color-info)_35%,var(--color-border))]",
-                  )}
-                >
-                  {/* Reply quote */}
-                  {m.replyToPreview && (
-                    <button
-                      type="button"
-                      className="mb-2 flex w-full items-start gap-2 rounded-[var(--radius-sm)] border-l-2 border-[var(--color-info)] bg-[color-mix(in_oklab,var(--color-info)_8%,var(--color-surface))] px-2 py-1.5 text-left text-xs text-[var(--color-muted)]"
-                      title="Jump to original"
-                      onClick={() => {
-                        const el = document.getElementById(`msg-${m.replyToId}`);
-                        el?.scrollIntoView({ behavior: "smooth", block: "center" });
-                      }}
-                    >
-                      <Reply className="mt-0.5 h-3 w-3 shrink-0 text-[var(--color-info)]" />
-                      <span className="min-w-0">
-                        <span className="font-medium text-[var(--color-fg)]">
-                          {m.replyToRole || "message"}
-                        </span>
-                        <span className="mt-0.5 line-clamp-2 block normal-case tracking-normal">
-                          {m.replyToPreview}
-                        </span>
-                      </span>
-                    </button>
-                  )}
-                  <div
-                    id={`msg-${m.id}`}
-                    className="mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-[var(--color-subtle)]"
-                  >
-                    <span>
-                      {m.role} · <RelativeTime ts={m.ts} />
-                    </span>
-                    {(m.routeTier || m.mode) && (
-                      <span
-                        className={cn(
-                          "rounded-full border px-2 py-0.5 text-[10px] font-semibold normal-case tracking-wide shadow-sm",
-                          m.routeTier
-                            ? tierMeta(m.routeTier).tone
-                            : "border-[var(--color-border)] bg-[var(--color-elevated)] text-[var(--color-muted)]",
-                        )}
-                        title={
-                          m.routeReason
-                            ? m.routeReason
-                            : m.mode === "auto"
-                              ? "Adaptive router"
-                              : getMode(m.mode || "auto").label
-                        }
-                      >
-                        {m.routeTier
-                          ? tierMeta(m.routeTier).label
-                          : m.mode === "auto"
-                            ? "Adaptive"
-                            : getMode(m.mode!).label}
-                      </span>
-                    )}
-                    {m.routeModel && m.role === "assistant" && (
-                      <span
-                        className="hidden max-w-[10rem] truncate rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case text-[var(--color-subtle)] sm:inline"
-                        title={m.routeReason || m.routeModel}
-                      >
-                        {m.routeModel.replace(/^grok-/, "")}
-                      </span>
-                    )}
-                    {m.streaming && (
-                      <span className="inline-flex items-center gap-1 rounded border border-[color-mix(in_oklab,var(--color-info)_40%,transparent)] px-1.5 py-px font-mono normal-case text-[var(--color-info)]">
-                        <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                        {streamStatus?.startsWith("Host")
-                          ? "host"
-                          : streamStatus?.startsWith("Connector")
-                            ? "connector"
-                            : streamStatus?.includes("Summariz")
-                              ? "summarizing"
-                              : "streaming"}
-                      </span>
-                    )}
-                    {m.stopped && (
-                      <span className="rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case text-[var(--color-warn)]">
-                        stopped
-                      </span>
-                    )}
-                  </div>
-                  {m.content ? (
-                    m.role === "user" && editingId === m.id ? (
-                      <div className="space-y-2">
-                        <textarea
-                          value={editDraft}
-                          onChange={(e) => setEditDraft(e.target.value)}
-                          className="min-h-[4rem] w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-2 text-sm"
-                          autoFocus
-                        />
-                        <div className="flex gap-1.5">
-                          <Button
-                            size="sm"
-                            onClick={() => {
-                              void editChatMessage(m.id, editDraft, true);
-                              setEditingId(null);
-                            }}
-                          >
-                            Save & resend
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => {
-                              void editChatMessage(m.id, editDraft, false);
-                              setEditingId(null);
-                            }}
-                          >
-                            Save
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
-                            Cancel
-                          </Button>
-                        </div>
-                      </div>
-                    ) : m.role === "user" ? (
-                      <div className="whitespace-pre-wrap">
-                        <MarkdownBody content={m.content} />
-                      </div>
-                    ) : (
-                      <MarkdownBody content={m.content} streaming={Boolean(m.streaming)} />
-                    )
-                  ) : m.streaming ? (
-                    <span className="inline-flex items-center gap-1.5 text-[var(--color-subtle)]">
-                      <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-info)]" />
-                      Thinking…
-                    </span>
-                  ) : (
-                    ""
-                  )}
-
-                  {/* Message actions: reply / copy / edit / delete */}
-                  {m.content && !m.streaming && (
-                    <div
-                      className={cn(
-                        "mt-2 flex flex-wrap items-center gap-0.5 border-t border-[var(--color-border)] pt-1.5",
-                        "opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover/msg:opacity-100 sm:focus-within:opacity-100",
-                      )}
-                    >
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
-                        title="Reply to this message"
-                        onClick={() => replyToMessage(m)}
-                      >
-                        <Reply className="h-3 w-3" />
-                        Reply
-                      </button>
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
-                        title="Copy message"
-                        onClick={() => void copyMessage(m.id, m.content)}
-                      >
-                        {copiedId === m.id ? (
-                          <Check className="h-3 w-3 text-[var(--color-success)]" />
-                        ) : (
-                          <Copy className="h-3 w-3" />
-                        )}
-                        {copiedId === m.id ? "Copied" : "Copy"}
-                      </button>
-                      {m.role === "user" && !busy && (
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]"
-                          title="Edit message"
-                          onClick={() => {
-                            setEditingId(m.id);
-                            setEditDraft(m.content);
-                          }}
-                        >
-                          <Pencil className="h-3 w-3" />
-                          Edit
-                        </button>
-                      )}
-                      {!busy && (
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[color-mix(in_oklab,var(--color-danger)_12%,transparent)] hover:text-[var(--color-danger)]"
-                          title="Delete message"
-                          onClick={() => deleteMessage(m.id)}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                          Delete
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
+                m={m}
+                busy={busy}
+                streamStatus={streamStatus}
+                editingId={editingId}
+                editDraft={editDraft}
+                copiedId={copiedId}
+                onJumpReply={jumpToReply}
+                onReply={replyToMessage}
+                onCopy={copyMessage}
+                onStartEdit={onStartEdit}
+                onEditDraft={setEditDraft}
+                onSaveEdit={onSaveEdit}
+                onCancelEdit={() => setEditingId(null)}
+                onDelete={deleteMessage}
+              />
             ))}
-            {busy && streamStatus?.startsWith("Adaptive") && (
-              <div className="mx-auto flex w-full max-w-[min(56rem,100%)] items-center gap-2 rounded-full border border-[color-mix(in_oklab,var(--color-info)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-info)_10%,var(--color-surface))] px-3 py-1.5 text-xs font-medium text-[var(--color-info)] 3xl:max-w-[min(64rem,100%)]">
-                <span className="pulse-live inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-info)]" />
-                <span className="truncate">{streamStatus}</span>
-              </div>
-            )}
-            {busy && (
-              <div className="flex items-center gap-2 text-xs text-[var(--color-subtle)]">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-info)]" />
-                <span className="shimmer rounded px-1">
-                  {streamStatus ||
-                    (localRunning ? "Host running…" : `${modeMeta.label} · working…`)}
-                </span>
+            {showJumpLatest && (
+              <div className="sticky bottom-2 z-10 flex justify-center">
+                <button
+                  type="button"
+                  className="rounded-full border border-[var(--color-border)] bg-[var(--color-panel)] px-3 py-1 text-xs font-medium shadow-sm hover:border-[var(--color-border-strong)]"
+                  onClick={() => {
+                    stickToBottomRef.current = true;
+                    setShowJumpLatest(false);
+                    endRef.current?.scrollIntoView({ behavior: "smooth" });
+                  }}
+                >
+                  Jump to latest
+                </button>
               </div>
             )}
             <div ref={endRef} />
           </div>
 
-          <div className="shrink-0 space-y-2 border-t border-[var(--color-border)] p-3 md:p-4 3xl:px-8 uw:px-12">
+          <div className="composer-dock shrink-0 space-y-2 p-3 md:p-4 3xl:px-8 uw:px-12">
             {replyTo && (
               <div className="mx-auto mb-2 flex w-full max-w-[min(56rem,100%)] items-start gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-info)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-info)_8%,var(--color-surface))] px-3 py-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]">
                 <Reply className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-info)]" />
@@ -1099,21 +1171,33 @@ export function ChatView() {
 
             {!busy && (
               <div className="mx-auto w-full max-w-[min(56rem,100%)] 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]">
-                <div className="mb-1.5 flex items-center justify-center gap-2 px-0.5">
-                  <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--color-subtle)]">
-                    Quick assist
-                  </span>
+                <div className="mb-1 flex items-center justify-center gap-2">
                   <button
                     type="button"
-                    onClick={() => rotateQuickAssist()}
-                    className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]"
-                    title="Generate new suggestions from this chat"
+                    onClick={() => setChipsOpen((v) => !v)}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] text-[var(--color-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]"
                   >
-                    <RefreshCw className="h-2.5 w-2.5" />
-                    Suggest chips
+                    <Sparkles className="h-3 w-3" />
+                    {chipsOpen ? "Hide suggestions" : "Suggestions"}
+                    {chips.length > 0 ? (
+                      <span className="rounded-full bg-[var(--color-elevated)] px-1.5 font-mono text-[10px]">
+                        {chips.length}
+                      </span>
+                    ) : null}
                   </button>
+                  {chipsOpen && (
+                    <button
+                      type="button"
+                      onClick={() => rotateQuickAssist()}
+                      className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+                      title="Generate new suggestions"
+                    >
+                      <RefreshCw className="h-2.5 w-2.5" />
+                      Refresh
+                    </button>
+                  )}
                 </div>
-                {chips.length > 0 && (
+                {chipsOpen && chips.length > 0 && (
                   <div
                     className="flex flex-wrap items-stretch justify-center gap-2"
                     role="listbox"
@@ -1125,11 +1209,12 @@ export function ChatView() {
                         <div
                           key={c.id + String(quickAssistRotation)}
                           className={cn(
-                            "group relative inline-flex max-w-[min(100%,22rem)] items-start gap-1 rounded-2xl border pl-3 pr-1 py-1 text-left text-xs transition-colors",
+                            "group relative inline-flex max-w-[min(100%,20rem)] items-start gap-1 rounded-2xl border pl-3 pr-1 py-1 text-left text-xs transition-colors",
                             "border-[var(--color-border)] text-[var(--color-muted)]",
                             "hover:border-[var(--color-border-strong)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]",
                             c.kind === "shell" && "font-mono",
-                            c.hint === "recent" && "border-[color-mix(in_oklab,var(--color-info)_25%,var(--color-border))]",
+                            c.hint === "recent" &&
+                              "border-[color-mix(in_oklab,var(--color-info)_25%,var(--color-border))]",
                           )}
                         >
                           <button
@@ -1146,7 +1231,7 @@ export function ChatView() {
                           <button
                             type="button"
                             className="mt-0.5 shrink-0 rounded p-0.5 text-[var(--color-subtle)] opacity-60 hover:bg-[var(--color-surface)] hover:text-[var(--color-fg)] hover:opacity-100"
-                            title="Dismiss this suggestion"
+                            title="Dismiss"
                             aria-label={`Dismiss ${c.label}`}
                             onClick={(e) => {
                               e.preventDefault();
@@ -1165,12 +1250,21 @@ export function ChatView() {
             )}
 
             {pendingHostConfirm && (
-              <div className="mx-auto w-full max-w-[min(56rem,100%)] rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-warn)_45%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-warn)_10%,var(--color-surface))] p-3 3xl:max-w-[min(64rem,100%)]">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-[var(--color-fg)]">
+              <div
+                role="alertdialog"
+                aria-modal="true"
+                aria-labelledby="host-confirm-title"
+                aria-live="assertive"
+                className="mx-auto w-full max-w-[min(56rem,100%)] rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-warn)_45%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-warn)_10%,var(--color-surface))] p-3 shadow-md 3xl:max-w-[min(64rem,100%)]"
+              >
+                <div
+                  id="host-confirm-title"
+                  className="mb-2 flex items-center gap-2 text-sm font-medium text-[var(--color-fg)]"
+                >
                   <ShieldAlert className="h-4 w-4 text-[var(--color-warn)]" />
                   Allow host commands?
                 </div>
-                <ul className="mb-3 space-y-1 font-mono text-xs text-[var(--color-muted)]">
+                <ul className="mb-3 max-h-28 space-y-1 overflow-y-auto font-mono text-xs text-[var(--color-muted)]">
                   {pendingHostConfirm.cmds.map((c, i) => (
                     <li key={c + i} className="break-all">
                       <span className="text-[var(--color-subtle)]">
@@ -1180,13 +1274,16 @@ export function ChatView() {
                     </li>
                   ))}
                 </ul>
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={() => resolveHostConfirm(true)}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" autoFocus onClick={() => resolveHostConfirm(true)}>
                     Run on this machine
                   </Button>
                   <Button size="sm" variant="secondary" onClick={() => resolveHostConfirm(false)}>
                     Cancel
                   </Button>
+                  <span className="text-[10px] text-[var(--color-subtle)]">
+                    Enter to run · Esc to cancel
+                  </span>
                 </div>
               </div>
             )}
@@ -1199,6 +1296,7 @@ export function ChatView() {
                     className="relative flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-1.5"
                   >
                     {a.kind.startsWith("image/") ? (
+                      // eslint-disable-next-line @next/next/no-img-element
                       <img src={a.dataUrl} alt="" className="h-10 w-10 rounded object-cover" />
                     ) : (
                       <span className="font-mono text-[10px]">{a.kind}</span>
@@ -1216,6 +1314,12 @@ export function ChatView() {
               </div>
             )}
 
+            {voiceStatus && (
+              <div className="mx-auto w-full max-w-[min(56rem,100%)] px-1 text-[10px] text-[var(--color-info)] 3xl:max-w-[min(64rem,100%)]">
+                {voiceStatus}
+              </div>
+            )}
+
             <form
               className="mx-auto flex w-full max-w-[min(56rem,100%)] gap-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]"
               onDragOver={(e) => {
@@ -1229,6 +1333,7 @@ export function ChatView() {
               }}
               onSubmit={(e) => {
                 e.preventDefault();
+                if (pendingHostConfirm) return;
                 if (busy) {
                   onStop();
                   return;
@@ -1247,12 +1352,12 @@ export function ChatView() {
                   e.target.value = "";
                 }}
               />
-              <div className="flex shrink-0 flex-col gap-1 sm:flex-row">
+              <div className="flex shrink-0 gap-1">
                 <Button
                   type="button"
                   size="icon"
                   variant="secondary"
-                  disabled={busy}
+                  disabled={busy || Boolean(pendingHostConfirm)}
                   title="Attach image or file"
                   aria-label="Attach file"
                   onClick={() => fileRef.current?.click()}
@@ -1263,7 +1368,7 @@ export function ChatView() {
                   type="button"
                   size="icon"
                   variant={listening ? "default" : "secondary"}
-                  disabled={busy}
+                  disabled={busy || Boolean(pendingHostConfirm)}
                   title={
                     listening
                       ? "Stop & transcribe with Grok"
@@ -1271,14 +1376,15 @@ export function ChatView() {
                   }
                   aria-label="Voice mode"
                   onClick={() => void toggleVoice()}
-                  className={listening ? "border border-[color-mix(in_oklab,var(--color-info)_45%,transparent)]" : undefined}
+                  className={
+                    listening
+                      ? "recording-pulse border border-[color-mix(in_oklab,var(--color-danger)_45%,transparent)] text-[var(--color-danger)]"
+                      : undefined
+                  }
                 >
                   {listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                 </Button>
               </div>
-              {voiceStatus && (
-                <div className="px-1 text-[10px] text-[var(--color-info)]">{voiceStatus}</div>
-              )}
               <Textarea
                 ref={inputRef}
                 data-composer
@@ -1290,7 +1396,7 @@ export function ChatView() {
                 placeholder={
                   busy
                     ? "Agent running — press Stop to interrupt…"
-                    : "Message Grok…  /help · 📎 attach · 🎤 voice · Enter send · $ shell"
+                    : "Message Grok…  /help · attach · voice · Enter send · $ shell"
                 }
                 rows={1}
                 className="max-h-40 min-h-[2.5rem] flex-1 resize-none overflow-hidden leading-5"
@@ -1309,7 +1415,6 @@ export function ChatView() {
                     e.preventDefault();
                     void addFiles(files);
                   }
-                  // text paste still fires onChange; resize after paint
                   requestAnimationFrame(() => resizeComposer());
                 }}
                 onInput={(e) => resizeComposer(e.currentTarget)}
@@ -1350,8 +1455,9 @@ export function ChatView() {
             </form>
             {!busy && (
               <div className="mx-auto w-full max-w-[min(56rem,100%)] text-center text-[10px] text-[var(--color-subtle)]">
-                <span className="font-mono">/help</span> commands · <span className="font-mono">Ctrl+N</span> new ·{" "}
-                <span className="font-mono">Ctrl+L</span> focus · 📎 attach · 🎤 voice · paste images
+                <span className="font-mono">/help</span> · <span className="font-mono">Ctrl+K</span> palette ·{" "}
+                <span className="font-mono">Ctrl+N</span> new · <span className="font-mono">Ctrl+L</span> focus · paste
+                images
               </div>
             )}
             {(toastStatus || busy) && (
@@ -1380,8 +1486,8 @@ export function ChatView() {
               </div>
             )}
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

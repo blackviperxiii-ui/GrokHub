@@ -335,10 +335,25 @@ export async function hostWriteFile(p: string, content: string) {
   return rpc<{ path: string; bytes: number }>("writeFile", { path: p, content });
 }
 
-export async function hostExec(command: string, cwd?: string, timeoutMs?: number) {
+export async function hostExec(
+  command: string,
+  cwd?: string,
+  timeoutMs?: number,
+  opts?: { jobId?: string },
+) {
   const e = electronHost();
-  if (e?.exec) return e.exec(command, cwd, timeoutMs);
-  return rpc<HostExecResult>("exec", { command, cwd, timeoutMs });
+  if (e?.exec) return e.exec(command, cwd, timeoutMs, opts);
+  return rpc<HostExecResult>("exec", { command, cwd, timeoutMs, jobId: opts?.jobId });
+}
+
+export async function hostKillExec(jobId: string) {
+  const e = electronHost();
+  if (e?.killExec) return e.killExec(jobId);
+  try {
+    return await rpc<{ ok: boolean; error?: string }>("killExec", { jobId });
+  } catch {
+    return { ok: false, error: "kill not available" };
+  }
 }
 
 export async function hostListApps() {

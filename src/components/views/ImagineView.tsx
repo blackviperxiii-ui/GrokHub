@@ -1,5 +1,6 @@
 import {
   ArrowUp,
+  CheckSquare,
   Download,
   ImageIcon,
   Loader2,
@@ -8,6 +9,7 @@ import {
   Plus,
   Ratio,
   Sparkles,
+  Square,
   Trash2,
   Video,
   X,
@@ -104,6 +106,9 @@ export function ImagineView() {
       }
     };
   }, []);
+
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [lightboxId, setLightboxId] = useState<string | null>(null);
 
   function applyPreset(prefix: string) {
     const body = prompt.trim();
@@ -288,9 +293,59 @@ export function ImagineView() {
           ))}
         </div>
 
+        {selected.size > 0 && (
+          <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2">
+            <span className="text-xs text-[var(--color-muted)]">{selected.size} selected</span>
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={() => {
+                const ids = [...selected];
+                for (const id of ids) removeImagineJob(id);
+                setSelected(new Set());
+                if (lightboxId && ids.includes(lightboxId)) setLightboxId(null);
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete selected
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+              Clear selection
+            </Button>
+          </div>
+        )}
+
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {jobs.map((job) => (
             <Card key={job.id} className="group relative overflow-hidden">
+              <div className="absolute left-2 top-2 z-20">
+                <button
+                  type="button"
+                  className={cn(
+                    "inline-flex h-8 w-8 items-center justify-center rounded-full border shadow-sm backdrop-blur",
+                    selected.has(job.id)
+                      ? "border-[var(--color-info)] bg-[color-mix(in_oklab,var(--color-info)_20%,var(--color-surface))] text-[var(--color-info)]"
+                      : "border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-surface)_92%,transparent)] text-[var(--color-muted)] opacity-0 group-hover:opacity-100",
+                  )}
+                  title={selected.has(job.id) ? "Deselect" : "Select"}
+                  aria-label={selected.has(job.id) ? "Deselect" : "Select"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelected((prev) => {
+                      const n = new Set(prev);
+                      if (n.has(job.id)) n.delete(job.id);
+                      else n.add(job.id);
+                      return n;
+                    });
+                  }}
+                >
+                  {selected.has(job.id) ? (
+                    <CheckSquare className="h-3.5 w-3.5" />
+                  ) : (
+                    <Square className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
               <div className="absolute right-2 top-2 z-20 flex gap-1">
                 {(job.imageDataUrl || job.videoDataUrl) && (
                   <a
@@ -317,7 +372,17 @@ export function ImagineView() {
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <div className="aspect-video bg-[var(--color-surface)]">
+              <div
+                className="aspect-video cursor-pointer bg-[var(--color-surface)]"
+                onClick={() => {
+                  if (job.imageDataUrl || job.videoDataUrl) setLightboxId(job.id);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (job.imageDataUrl || job.videoDataUrl)) setLightboxId(job.id);
+                }}
+                role="button"
+                tabIndex={0}
+              >
                 {job.videoDataUrl ? (
                   <video src={job.videoDataUrl} className="h-full w-full object-cover" muted />
                 ) : job.imageDataUrl ? (
@@ -390,7 +455,61 @@ export function ImagineView() {
         )}
       </div>
 
+
+      {lightboxId && (() => {
+        const job = jobs.find((j) => j.id === lightboxId);
+        if (!job || !(job.imageDataUrl || job.videoDataUrl)) return null;
+        return (
+          <div
+            className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Imagine preview"
+            onClick={() => setLightboxId(null)}
+          >
+            <button
+              type="button"
+              className="absolute right-4 top-4 rounded-full border border-white/20 bg-black/40 p-2 text-white hover:bg-black/60"
+              aria-label="Close"
+              onClick={() => setLightboxId(null)}
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <div
+              className="max-h-[90vh] max-w-[min(96vw,960px)] overflow-hidden rounded-[var(--radius-lg)] border border-white/10 bg-black shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {job.videoDataUrl ? (
+                <video src={job.videoDataUrl} controls autoPlay className="max-h-[80vh] w-full" />
+              ) : (
+                <img src={job.imageDataUrl} alt={job.prompt} className="max-h-[80vh] w-full object-contain" />
+              )}
+              <div className="flex items-center justify-between gap-3 border-t border-white/10 px-3 py-2 text-xs text-white/80">
+                <p className="line-clamp-2 min-w-0 flex-1">{job.prompt}</p>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  onClick={() => {
+                    removeImagineJob(job.id);
+                    setLightboxId(null);
+                    setSelected((s) => {
+                      const n = new Set(s);
+                      n.delete(job.id);
+                      return n;
+                    });
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete
+                </Button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Website-style bottom composer */}
+
       <div className="shrink-0 rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3 shadow-[0_8px_40px_rgba(0,0,0,0.35)]">
         {reference && (
           <div className="mb-2 flex items-center gap-2">

@@ -8,6 +8,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui
 import { Input } from "../ui/input";
 import { cn } from "@/lib/utils";
 
+function dateBucket(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startYesterday = startToday - 86400000;
+  if (ts >= startToday) return "Today";
+  if (ts >= startYesterday) return "Yesterday";
+  const weekAgo = startToday - 6 * 86400000;
+  if (ts >= weekAgo) return "This week";
+  return d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+}
+
 export function HistoryView() {
   const threads = useGrokHub((s) => s.threads);
   const activeThreadId = useGrokHub((s) => s.activeThreadId);
@@ -51,6 +63,25 @@ export function HistoryView() {
     });
     return list;
   }, [threads, q, folderFilter]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, typeof filtered>();
+    for (const t of filtered) {
+      const key = t.pinned ? "Pinned" : dateBucket(t.updatedAt);
+      const list = map.get(key) || [];
+      list.push(t);
+      map.set(key, list);
+    }
+    // Pinned first, then Today, Yesterday, This week, then months
+    const order = ["Pinned", "Today", "Yesterday", "This week"];
+    const keys = [...map.keys()].sort((a, b) => {
+      const ia = order.indexOf(a);
+      const ib = order.indexOf(b);
+      if (ia >= 0 || ib >= 0) return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+      return a.localeCompare(b);
+    });
+    return keys.map((k) => [k, map.get(k)!] as const);
+  }, [filtered]);
 
   useEffect(() => {
     if (renamingId) {
@@ -128,7 +159,12 @@ export function HistoryView() {
               {threads.length === 0 ? "No chats yet. Start one from Agent." : "No matches."}
             </p>
           )}
-          {filtered.map((t) => {
+          {grouped.map(([group, list]) => (
+            <div key={group} className="space-y-2">
+              <div className="px-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-subtle)]">
+                {group}
+              </div>
+              {list.map((t) => {
             const active = t.id === activeThreadId;
             const preview =
               [...t.messages].reverse().find((m) => m.role === "user" || m.role === "assistant")
@@ -226,6 +262,8 @@ export function HistoryView() {
               </div>
             );
           })}
+            </div>
+          ))}
 
           {folderDraftId && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">

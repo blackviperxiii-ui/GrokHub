@@ -66,7 +66,32 @@ export function ModePicker() {
       setModeMenuOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setModeMenuOpen(false);
+      if (e.key === "Escape") {
+        setModeMenuOpen(false);
+        btnRef.current?.focus();
+        return;
+      }
+      const ids = modes.map((m) => m.id);
+      const cur = Math.max(0, ids.indexOf(mode));
+      if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+        e.preventDefault();
+        const next = ids[(cur + 1) % ids.length]!;
+        setMode(next);
+      } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+        e.preventDefault();
+        const next = ids[(cur - 1 + ids.length) % ids.length]!;
+        setMode(next);
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        setMode(ids[0]!);
+      } else if (e.key === "End") {
+        e.preventDefault();
+        setMode(ids[ids.length - 1]!);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        setModeMenuOpen(false);
+        btnRef.current?.focus();
+      }
     };
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
@@ -74,7 +99,7 @@ export function ModePicker() {
       document.removeEventListener("mousedown", onDoc);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open, setModeMenuOpen]);
+  }, [open, setModeMenuOpen, modes, mode, setMode]);
 
   const menu =
     open &&

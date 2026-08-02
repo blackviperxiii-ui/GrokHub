@@ -862,16 +862,69 @@ function registerIpc() {
     desktopEntry.installAutostart(Boolean(enabled)),
   );
 
-  // Non-stream chat already registered; expose stream buffer helper if bridge supports it
+  // Non-stream chat already registered; true streaming with abort
   if (typeof grokBridge.callXaiChatStream === "function") {
-    safeHandle("grok:chatStream", async (_e, payload) => {
-      let content = "";
-      const result = await grokBridge.callXaiChatStream(payload || {}, {
-        onDelta: (d) => {
-          content += d;
-        },
-      });
-      return { ...result, content: result.content || content };
+    /** @type {Map<string, AbortController>} */
+    const streamAborts = new Map();
+
+    safeHandle("grok:chatStreamAbort", (_e, streamId) => {
+      const id = streamId != null ? String(streamId) : "";
+      if (id && streamAborts.has(id)) {
+        try {
+          streamAborts.get(id).abort();
+        } catch {
+          /* ignore */
+        }
+        streamAborts.delete(id);
+        return { ok: true, streamId: id };
+      }
+      // Abort all in-flight streams
+      for (const [sid, ac] of streamAborts) {
+        try {
+          ac.abort();
+        } catch {
+          /* ignore */
+        }
+        streamAborts.delete(sid);
+      }
+      return { ok: true, all: true };
+    });
+
+    safeHandle("grok:chatStream", async (e, payload) => {
+      const streamId =
+        String(payload?.streamId || "") ||
+        `s-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const ac = new AbortController();
+      streamAborts.set(streamId, ac);
+      const sender = e.sender;
+      const sendDelta = (d) => {
+        try {
+          if (!sender.isDestroyed()) {
+            sender.send("grok:chatStream:delta", { streamId, delta: d });
+          }
+        } catch {
+          /* ignore */
+        }
+      };
+      const sendStatus = (st) => {
+        try {
+          if (!sender.isDestroyed()) {
+            sender.send("grok:chatStream:status", { streamId, status: st });
+          }
+        } catch {
+          /* ignore */
+        }
+      };
+      try {
+        const result = await grokBridge.callXaiChatStream(payload || {}, {
+          signal: ac.signal,
+          onDelta: (d) => sendDelta(d),
+          onStatus: (st) => sendStatus(st),
+        });
+        return { ...result, streamId, content: result.content || "" };
+      } finally {
+        streamAborts.delete(streamId);
+      }
     });
   }
 }

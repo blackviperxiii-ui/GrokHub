@@ -29,11 +29,47 @@
   --radius-xl: 24px;
 
   --shadow-soft: 0 8px 30px rgba(0, 0, 0, 0.35);
+  --shadow-composer: 0 -8px 32px rgba(0, 0, 0, 0.28);
+
+  /* Motion tokens */
+  --motion-stagger: 40ms;
+  --motion-micro: 80ms;
+  --motion-quick: 150ms;
+  --motion-fast: 250ms;
+  --motion-medium: 350ms;
+  --motion-slow: 400ms;
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: ease-in-out;
+  --motion-y-micro: 4px;
+  --motion-scale-menu: 0.97;
 
   /* Ultrawide-friendly breakpoints */
   --breakpoint-3xl: 1920px;
   --breakpoint-uw: 2560px;
   --breakpoint-uwx: 3440px;
+}
+
+/* Light theme overrides */
+html[data-theme="light"] {
+  --color-bg: #f4f4f5;
+  --color-surface: #ffffff;
+  --color-elevated: #ececee;
+  --color-panel: #fafafa;
+  --color-fg: #18181b;
+  --color-muted: #52525b;
+  --color-subtle: #71717a;
+  --color-border: #d4d4d8;
+  --color-border-strong: #a1a1aa;
+  --color-accent: #18181b;
+  --color-accent-fg: #fafafa;
+  --color-success: #059669;
+  --color-warn: #d97706;
+  --color-danger: #dc2626;
+  --color-info: #2563eb;
+  --color-ring: #71717a;
+  --shadow-soft: 0 8px 30px rgba(0, 0, 0, 0.1);
+  --shadow-composer: 0 -6px 24px rgba(0, 0, 0, 0.06);
 }
 
 @layer base {
@@ -71,7 +107,7 @@
     background: color-mix(in oklab, var(--color-fg) 22%, transparent);
   }
 
-  /* Visible dark scrollbars */
+  /* Visible scrollbars on both themes */
   * {
     scrollbar-width: thin;
     scrollbar-color: color-mix(in oklab, var(--color-fg) 38%, transparent)
@@ -104,6 +140,11 @@
   *::-webkit-scrollbar-corner {
     background: transparent;
   }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
 }
 
 @layer utilities {
@@ -118,14 +159,12 @@
     -webkit-overflow-scrolling: touch;
   }
 
-  /* Full-bleed app shell — no side letterboxing */
   .app-frame {
     width: 100%;
     height: 100%;
     max-width: none;
   }
 
-  /* Main content stage: fills remaining width after sidebar */
   .app-stage {
     width: 100%;
     min-width: 0;
@@ -133,13 +172,9 @@
     flex: 1 1 auto;
   }
 
-  /*
-   * Readable content width that grows on ultrawide.
-   * Use for Settings/History/forms — not for Agent chat (chat fills stage).
-   */
   .content-readable {
     width: 100%;
-    max-width: 48rem; /* ~3xl */
+    max-width: 48rem;
   }
   @media (min-width: 1280px) {
     .content-readable {
@@ -162,7 +197,6 @@
     }
   }
 
-  /* Agent chat: use full stage; messages stay readable */
   .chat-stage {
     width: 100%;
     height: 100%;
@@ -195,7 +229,9 @@
   }
 
   .sidebar-rail {
-    width: 15rem; /* 240px */
+    width: 15rem;
+    background: var(--color-surface);
+    box-shadow: inset -1px 0 0 var(--color-border);
   }
   @media (min-width: 1920px) {
     .sidebar-rail {
@@ -211,6 +247,41 @@
     .sidebar-rail {
       width: 20rem;
     }
+  }
+
+  /* Active nav rail accent */
+  .nav-item-active {
+    position: relative;
+    background: var(--color-elevated);
+    color: var(--color-fg);
+    font-weight: 500;
+  }
+  .nav-item-active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    border-radius: 999px;
+    background: var(--color-accent);
+  }
+
+  /* Floating composer dock */
+  .composer-dock {
+    border-top: 1px solid var(--color-border);
+    background: color-mix(in oklab, var(--color-panel) 94%, transparent);
+    box-shadow: var(--shadow-composer);
+    backdrop-filter: blur(10px);
+  }
+
+  /* Message enter */
+  .msg-enter {
+    animation: msg-enter var(--motion-fast) var(--ease-smooth-out) both;
+  }
+
+  .adaptive-pill {
+    animation: adaptive-settle var(--motion-emphasis, 500ms) var(--ease-smooth-out) both;
   }
 
   .shimmer {
@@ -233,6 +304,32 @@
     }
   }
 
+  @keyframes msg-enter {
+    from {
+      opacity: 0;
+      transform: translateY(var(--motion-y-micro));
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes adaptive-settle {
+    0% {
+      opacity: 0.55;
+      transform: scale(0.96);
+    }
+    40% {
+      opacity: 1;
+      transform: scale(1.03);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
   .pulse-live {
     animation: pulse-live 2.2s ease-in-out infinite;
   }
@@ -248,10 +345,56 @@
       transform: scale(0.92);
     }
   }
+
+  .recording-pulse {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-danger) 45%, transparent);
+    animation: recording-pulse 1.4s ease-out infinite;
+  }
+
+  @keyframes recording-pulse {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-danger) 45%, transparent);
+    }
+    70% {
+      box-shadow: 0 0 0 8px transparent;
+    }
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
 }
 
+/* Prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 
-/* Code highlight tokens (lightweight, no Shiki) */
+  .shimmer {
+    animation: none !important;
+    background: transparent !important;
+  }
+
+  .pulse-live,
+  .recording-pulse,
+  .msg-enter,
+  .adaptive-pill {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .markdown-streaming span {
+    animation: none !important;
+  }
+}
+
+/* Code highlight tokens */
 .markdown-body .tok-kw { color: color-mix(in oklab, var(--color-info) 85%, var(--color-fg)); font-weight: 500; }
 .markdown-body .tok-str { color: color-mix(in oklab, var(--color-success) 75%, var(--color-fg)); }
 .markdown-body .tok-cmt { color: var(--color-subtle); font-style: italic; }
@@ -261,17 +404,18 @@
 .code-block .tok-cmt { color: var(--color-subtle); font-style: italic; }
 .code-block .tok-num { color: color-mix(in oklab, var(--color-warn) 70%, var(--color-fg)); }
 
-
-/* Assistant markdown hierarchy */
 .markdown-body {
   font-size: 0.9375rem;
-  line-height: 1.55;
+  line-height: 1.6;
 }
 .markdown-body > :first-child {
   margin-top: 0;
 }
 .markdown-body strong {
   letter-spacing: 0.01em;
+}
+.markdown-body table {
+  font-size: 0.875rem;
 }
 .markdown-streaming {
   opacity: 0.98;

@@ -199,62 +199,124 @@ async function runExec(command, cwd, timeoutMs = 30_000, opts = {}) {
   }
   const started = Date.now();
   const timeout = Math.min(Math.max(timeoutMs || 30_000, 1_000), MAX_TIMEOUT);
-  let execCmd = cmd;
-  let shellBin = process.env.SHELL || "/bin/bash";
-  if (isWin) {
-    shellBin = "powershell.exe";
-    execCmd = [
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      cmd,
-    ].join(" ");
-  }
-  try {
-    const { stdout, stderr } = await execAsync(execCmd, {
-      cwd: workdir,
-      timeout,
-      maxBuffer: MAX_STDOUT,
-      shell: shellBin,
-      windowsHide: true,
-      env: hostEnv(),
+  const jobId =
+    (opts && opts.jobId && String(opts.jobId)) ||
+    `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      runningJobs.delete(jobId);
+      resolve(result);
+    };
+
+    let child;
+    try {
+      if (isWin) {
+        child = spawn(
+          "powershell.exe",
+          ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", cmd],
+          {
+            cwd: workdir,
+            windowsHide: true,
+            env: hostEnv(),
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+      } else {
+        // Detached process group so kill(-pid) can stop the whole tree
+        child = spawn(defaultShell(), ["-lc", cmd], {
+          cwd: workdir,
+          env: hostEnv(),
+          stdio: ["ignore", "pipe", "pipe"],
+          detached: true,
+        });
+      }
+    } catch (err) {
+      finish({
+        ok: false,
+        code: 1,
+        stdout: "",
+        stderr: String(err && err.message ? err.message : err || "spawn failed"),
+        cwd: workdir,
+        command: cmd,
+        ms: Date.now() - started,
+        jobId,
+      });
+      return;
+    }
+
+    runningJobs.set(jobId, child);
+
+    const onChunk = (buf, which) => {
+      const s = String(buf || "");
+      if (which === "out") {
+        stdout += s;
+        if (stdout.length > MAX_STDOUT) stdout = stdout.slice(0, MAX_STDOUT);
+      } else {
+        stderr += s;
+        if (stderr.length > MAX_STDOUT) stderr = stderr.slice(0, MAX_STDOUT);
+      }
+    };
+    child.stdout?.on("data", (d) => onChunk(d, "out"));
+    child.stderr?.on("data", (d) => onChunk(d, "err"));
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        if (!isWin && child.pid) {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch {
+            child.kill("SIGKILL");
+          }
+        } else {
+          child.kill();
+        }
+      } catch {
+        /* ignore */
+      }
+    }, timeout);
+
+    child.on("error", (err) => {
+      finish({
+        ok: false,
+        code: 1,
+        stdout: clip(stdout),
+        stderr: clip(String(err && err.message ? err.message : err || "exec error")),
+        cwd: workdir,
+        command: cmd,
+        ms: Date.now() - started,
+        jobId,
+      });
     });
-    return {
-      ok: true,
-      code: 0,
-      stdout: clip(String(stdout || "")),
-      stderr: clip(String(stderr || "")),
-      cwd: workdir,
-      command: cmd,
-      ms: Date.now() - started,
-    };
-  } catch (err) {
-    const msg = String(err && err.message ? err.message : err || "exec failed");
-    const maxBuf = /maxBuffer|ERR_CHILD_PROCESS_STDIO_MAXBUFFER/i.test(msg);
-    const timedOut = Boolean(err && err.killed) || /timed out/i.test(msg);
-    return {
-      ok: false,
-      code: typeof err.code === "number" ? err.code : timedOut ? 124 : 1,
-      // node often still has partial stdout/stderr on maxBuffer / timeout
-      stdout: clip(String((err && err.stdout) || "")),
-      stderr: clip(
-        String(
-          (err && err.stderr) ||
-            (timedOut
-              ? `command timed out after ${timeout}ms`
-              : maxBuf
-                ? `output exceeded buffer — partial stdout returned (${MAX_STDOUT} bytes cap)`
-                : msg),
+
+    child.on("close", (code) => {
+      const maxBuf = stdout.length >= MAX_STDOUT || stderr.length >= MAX_STDOUT;
+      finish({
+        ok: !timedOut && code === 0,
+        code: timedOut ? 124 : typeof code === "number" ? code : 1,
+        stdout: clip(stdout),
+        stderr: clip(
+          timedOut
+            ? (stderr ? stderr + "\n" : "") + `command timed out after ${timeout}ms`
+            : stderr || (maxBuf ? `output exceeded buffer — partial returned` : ""),
         ),
-      ),
-      cwd: workdir,
-      command: cmd,
-      ms: Date.now() - started,
-      partial: maxBuf || timedOut,
-    };
-  }
+        cwd: workdir,
+        command: cmd,
+        ms: Date.now() - started,
+        partial: maxBuf || timedOut,
+        jobId,
+      });
+    });
+  });
 }
 
 async function listAppsWindows() {

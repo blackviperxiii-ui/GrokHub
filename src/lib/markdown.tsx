@@ -1,8 +1,53 @@
 import type { Components } from "react-markdown";
+import { memo, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CodeBlock } from "./code-highlight";
+import { isMediaRef, resolveMediaSrc } from "./chat-media";
 import { cn } from "./utils";
+
+function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
+  const [resolved, setResolved] = useState<string | undefined>(() =>
+    src && !isMediaRef(src) ? src : undefined,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!src) {
+      setResolved(undefined);
+      return;
+    }
+    if (!isMediaRef(src)) {
+      setResolved(src);
+      return;
+    }
+    void resolveMediaSrc(src).then((u) => {
+      if (!cancelled) setResolved(u);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [src]);
+
+  if (!resolved) {
+    return (
+      <span className="my-2 inline-block rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-6 text-xs text-[var(--color-subtle)]">
+        Loading image…
+      </span>
+    );
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={resolved}
+      alt={alt || ""}
+      className="my-2 max-h-72 max-w-full rounded-[var(--radius-md)] border border-[var(--color-border)] object-contain"
+      loading="lazy"
+      decoding="async"
+    />
+  );
+}
 
 const components: Components = {
   a: ({ href, children }) => (
@@ -76,7 +121,7 @@ const components: Components = {
   ),
   table: ({ children }) => (
     <div className="my-2.5 overflow-x-auto rounded-[var(--radius-sm)] border border-[var(--color-border)]">
-      <table className="w-full border-collapse text-xs">{children}</table>
+      <table className="w-full border-collapse text-sm">{children}</table>
     </div>
   ),
   th: ({ children }) => (
@@ -92,18 +137,25 @@ const components: Components = {
   hr: () => (
     <hr className="my-3 border-0 border-t border-[var(--color-border-strong)] opacity-70" />
   ),
-  img: ({ src, alt }) => (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src}
-      alt={alt || ""}
-      className="my-2 max-h-72 max-w-full rounded-[var(--radius-md)] border border-[var(--color-border)] object-contain"
-    />
-  ),
+  img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
 };
 
+/** Throttle markdown re-renders while streaming to cut layout thrash. */
+function useThrottledContent(content: string, streaming?: boolean, ms = 100) {
+  const [shown, setShown] = useState(content);
+  useEffect(() => {
+    if (!streaming) {
+      setShown(content);
+      return;
+    }
+    const id = window.setTimeout(() => setShown(content), ms);
+    return () => window.clearTimeout(id);
+  }, [content, streaming, ms]);
+  return streaming ? shown : content;
+}
+
 /** Render assistant/system markdown safely (no raw HTML except controlled code spans). */
-export function MarkdownBody({
+export const MarkdownBody = memo(function MarkdownBody({
   content,
   className,
   streaming,
@@ -113,7 +165,8 @@ export function MarkdownBody({
   /** While streaming, still render markdown so hierarchy stays visible */
   streaming?: boolean;
 }) {
-  if (!content) return null;
+  const body = useThrottledContent(content, streaming, 100);
+  if (!body && !content) return null;
   return (
     <div
       className={cn(
@@ -123,11 +176,11 @@ export function MarkdownBody({
       )}
     >
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {content}
+        {body || content}
       </ReactMarkdown>
       {streaming ? (
         <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-[var(--color-fg)] align-middle opacity-70" />
       ) : null}
     </div>
   );
-}
+});

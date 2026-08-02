@@ -33,7 +33,6 @@ const PRODUCT_COLORS = [
 export function UsageMeterChip({ className }: { className?: string }) {
   const usage = useGrokHub((s) => s.usage);
   const setNav = useGrokHub((s) => s.setNav);
-  const refreshUsage = useGrokHub((s) => s.refreshUsage);
   const web = usage.website;
   const hasLive =
     usage.source === "website" && web && web.error == null;
@@ -56,15 +55,19 @@ export function UsageMeterChip({ className }: { className?: string }) {
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        void refreshUsage();
         setNav("settings");
       }}
+      aria-label={
+        err
+          ? `Usage error: ${err}`
+          : `${label} usage ${Math.round(pct)} percent${stale ? ", may be stale" : ""}`
+      }
       title={
         err
           ? `Usage: ${err}`
           : hasLive
-            ? `${label}: ${Math.round(pct)}% weekly · resets ${formatResetAt(web.periodEnd)}`
-            : `${label}: ${Math.round(pct)}% (local) · link grok.com session for live weekly limit`
+            ? `${label}: ${Math.round(pct)}% weekly · resets ${formatResetAt(web.periodEnd)} · open Settings`
+            : `${label}: ${Math.round(pct)}% (local) · open Settings to link grok.com`
       }
       className={cn(
         "flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-1 text-left transition-colors hover:border-[var(--color-border-strong)]",
@@ -87,11 +90,11 @@ export function UsageMeterChip({ className }: { className?: string }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[10px] font-medium text-[var(--color-fg)]">
-            {hasLive ? label : err ? "Usage" : "Usage"}
+            {hasLive ? label : "Usage"}
           </span>
           <span className="tabular text-[10px] text-[var(--color-subtle)]">
             {Math.round(pct)}%
-            {stale ? " ·" : ""}
+            {stale ? " stale" : ""}
           </span>
         </div>
         <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-[var(--color-border)]">

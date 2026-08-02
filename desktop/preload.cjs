@@ -25,10 +25,61 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
   },
   grok: {
     chat: (payload) => ipcRenderer.invoke("grok:chat", payload),
+    /**
+     * True streaming: deltas arrive via IPC events while invoke is in flight.
+     * Pass handlers.onDelta / onStatus / signal (AbortSignal) from the renderer.
+     */
     chatStream: (payload, handlers) => {
-      // Streaming via main is event-based; handlers optional for future
-      return ipcRenderer.invoke("grok:chatStream", payload);
+      const streamId =
+        (payload && payload.streamId) ||
+        `s-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const onDelta = (_e, msg) => {
+        if (!msg || msg.streamId !== streamId) return;
+        if (msg.delta != null && handlers && typeof handlers.onDelta === "function") {
+          try {
+            handlers.onDelta(String(msg.delta));
+          } catch {
+            /* ignore */
+          }
+        }
+      };
+      const onStatus = (_e, msg) => {
+        if (!msg || msg.streamId !== streamId) return;
+        if (msg.status != null && handlers && typeof handlers.onStatus === "function") {
+          try {
+            handlers.onStatus(String(msg.status));
+          } catch {
+            /* ignore */
+          }
+        }
+      };
+      ipcRenderer.on("grok:chatStream:delta", onDelta);
+      ipcRenderer.on("grok:chatStream:status", onStatus);
+
+      const onAbort = () => {
+        void ipcRenderer.invoke("grok:chatStreamAbort", streamId);
+      };
+      const signal = handlers && handlers.signal;
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
+
+      return ipcRenderer
+        .invoke("grok:chatStream", { ...(payload || {}), streamId })
+        .finally(() => {
+          ipcRenderer.removeListener("grok:chatStream:delta", onDelta);
+          ipcRenderer.removeListener("grok:chatStream:status", onStatus);
+          if (signal) {
+            try {
+              signal.removeEventListener("abort", onAbort);
+            } catch {
+              /* ignore */
+            }
+          }
+        });
     },
+    stopChatStream: (streamId) => ipcRenderer.invoke("grok:chatStreamAbort", streamId || null),
     imagine: (payload) => ipcRenderer.invoke("grok:imagine", payload),
     transcribe: (payload) => ipcRenderer.invoke("grok:transcribe", payload),
     probe: (apiKey, accessToken) => ipcRenderer.invoke("grok:probe", apiKey, accessToken),

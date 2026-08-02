@@ -61,6 +61,8 @@ import type { QuickChip } from "./quick-assistant";
 
 /** Waits for user approval of host commands (agent tool loop). */
 let hostConfirmWaiter: ((allow: boolean) => void) | null = null;
+/** In-flight host exec job id (for Stop → killExec). */
+let activeHostJobId: string | null = null;
 
 function requestHostConfirm(
   set: (partial: Partial<State> | ((s: State) => Partial<State>)) => void,
@@ -235,6 +237,12 @@ type State = {
   /** When true, allow free website session + free-model cascade if paid access fails */
   preferFreeGrok: boolean;
   setPreferFreeGrok: (v: boolean) => void;
+  /** App chrome theme */
+  uiTheme: "dark" | "light" | "system";
+  setUiTheme: (t: "dark" | "light" | "system") => void;
+  /** Collapse Tools section in sidebar */
+  toolsNavCollapsed: boolean;
+  setToolsNavCollapsed: (v: boolean) => void;
 
   recordUsage: (bucket: UsageBucket, mode?: GrokModeId) => { ok: boolean; cost: number };
   recordTokenUsage: (
@@ -632,6 +640,8 @@ export const useGrokHub = create<State>()(
       setupSyncMeta: { autoPullOnLogin: true, autoPushOnChange: false },
       grokConnected: null,
       preferFreeGrok: true,
+      uiTheme: "dark" as const,
+      toolsNavCollapsed: false,
       grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
 
       setNav: (nav) => set({ nav, modeMenuOpen: false }),
@@ -1790,7 +1800,7 @@ export const useGrokHub = create<State>()(
         if (msg.role !== "user") return;
         set((s) => {
           const chat = s.chat.slice(0, idx + 1).map((m) =>
-            m.id === id ? { ...m, content: next, ts: Date.now() } : m,
+            m.id === id ? { ...m, content: next, ts: Date.now(), edited: true } : m,
           );
           const tid = s.activeThreadId;
           return {
@@ -2022,6 +2032,8 @@ export const useGrokHub = create<State>()(
       },
 
       setPreferFreeGrok: (v) => set({ preferFreeGrok: Boolean(v) }),
+      setUiTheme: (t) => set({ uiTheme: t }),
+      setToolsNavCollapsed: (v) => set({ toolsNavCollapsed: Boolean(v) }),
 
       setPlan: (plan) => {
         const prev = get().usage;
@@ -2716,11 +2728,30 @@ export const useGrokHub = create<State>()(
       stopChat: () => {
         const gen = ++chatGeneration;
         try {
+          if (hostConfirmWaiter) {
+            hostConfirmWaiter(false);
+            hostConfirmWaiter = null;
+          }
+        } catch {
+          /* ignore */
+        }
+        try {
           activeChatAbort?.abort();
         } catch {
           /* ignore */
         }
         activeChatAbort = null;
+        const killId = activeHostJobId;
+        activeHostJobId = null;
+        if (killId) {
+          void import("./host-client").then(({ hostKillExec }) => hostKillExec(killId)).catch(() => {});
+        }
+        try {
+          void window.grokhubDesktop?.grok?.stopChatStream?.();
+        } catch {
+          /* ignore */
+        }
+        void import("./persistent-storage").then(({ setPersistPaused }) => setPersistPaused(false));
         const sid = get().streamingMessageId;
         const tid = get().activeThreadId;
         let partial = "";
@@ -2752,6 +2783,7 @@ export const useGrokHub = create<State>()(
             running: false,
             streamStatus: null,
             streamingMessageId: null,
+            pendingHostConfirm: null,
             // Only interrupt creates the continue banner
             sessionResume:
               tid && pendingPrompt
@@ -2953,6 +2985,7 @@ export const useGrokHub = create<State>()(
         activeChatAbort = abort;
         const gen = ++chatGeneration;
 
+        void import("./persistent-storage").then(({ setPersistPaused }) => setPersistPaused(true));
         set((s) => {
           const chat = [...s.chat, userMsg, botPlaceholder];
           const tid = s.activeThreadId;
@@ -2967,6 +3000,30 @@ export const useGrokHub = create<State>()(
             ),
           };
         });
+        // Offload large embedded images from stored user message (desktop)
+        if (trimmed.length > 32_000 && /data:image\//.test(trimmed)) {
+          void import("./chat-media").then(async ({ compactMessageMedia }) => {
+            try {
+              const compact = await compactMessageMedia(trimmed);
+              if (compact !== trimmed) {
+                set((s) => {
+                  const chat = s.chat.map((m) =>
+                    m.id === userMsg.id ? { ...m, content: compact } : m,
+                  );
+                  const tid = s.activeThreadId;
+                  return {
+                    chat,
+                    threads: s.threads.map((th) =>
+                      th.id === tid ? threadWithMessages(th, chat) : th,
+                    ),
+                  };
+                });
+              }
+            } catch {
+              /* ignore */
+            }
+          });
+        }
         // Yield a frame so the indicator paints before heavier work
         await new Promise<void>((r) => {
           if (typeof requestAnimationFrame === "function") {
@@ -3155,36 +3212,43 @@ export const useGrokHub = create<State>()(
             const { grokChatStream } = await import("./grok-client");
 
             // Multi-turn host tool loop (model can emit HOST_CMD: lines)
-            const history: Array<{ role: "user" | "assistant"; content: string }> = get()
+            const { expandMessageMedia } = await import("./chat-media");
+            const rawHistory = get()
               .chat.filter((c) => c.role === "user" || c.role === "assistant")
               .filter((c) => c.id !== botId)
-              .slice(-16)
-              .map((c) => {
-                let content =
-                  c.role === "assistant" ? stripAssistantChrome(c.content) : c.content;
-                if (c.role === "user" && c.replyToPreview) {
-                  const who =
-                    c.replyToRole === "assistant"
-                      ? "assistant"
-                      : c.replyToRole === "user"
-                        ? "user"
-                        : "message";
-                  content =
-                    "[Replying to " +
-                    who +
-                    ']: "' +
-                    c.replyToPreview +
-                    '"\n\n' +
-                    content;
-                }
-                return {
+              .slice(-24);
+            const history: Array<{ role: "user" | "assistant"; content: string }> = [];
+            for (const c of rawHistory) {
+              let content =
+                c.role === "assistant" ? stripAssistantChrome(c.content) : c.content;
+              if (c.role === "user") {
+                content = await expandMessageMedia(content);
+              }
+              if (c.role === "user" && c.replyToPreview) {
+                const who =
+                  c.replyToRole === "assistant"
+                    ? "assistant"
+                    : c.replyToRole === "user"
+                      ? "user"
+                      : "message";
+                content =
+                  "[Replying to " +
+                  who +
+                  ']: "' +
+                  c.replyToPreview +
+                  '"\n\n' +
+                  content;
+              }
+              if (content.trim().length > 0) {
+                history.push({
                   role: c.role as "user" | "assistant",
                   content,
-                };
-              })
-              .filter((c) => c.content.trim().length > 0);
-            if (!history.length || history[history.length - 1]?.content !== trimmed) {
-              history.push({ role: "user", content: trimmed });
+                });
+              }
+            }
+            const expandedTrimmed = await expandMessageMedia(trimmed);
+            if (!history.length || history[history.length - 1]?.content !== expandedTrimmed) {
+              history.push({ role: "user", content: expandedTrimmed });
             }
 
             const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx);
@@ -3193,7 +3257,7 @@ export const useGrokHub = create<State>()(
               set({
                 streamStatus: `Adaptive → ${auto.tierLabel} · ${auto.reasonDetail}`,
               });
-              await wait(1100);
+              await wait(280);
               if (abort.signal.aborted || gen !== chatGeneration) {
                 aborted = true;
               }
@@ -3201,6 +3265,44 @@ export const useGrokHub = create<State>()(
             let rounds = 0;
             const maxRounds = 6;
             let accumulated = "";
+
+            // Build workspace context once per user turn (not every tool round)
+            const stTurn = get();
+            const ocTurn = stTurn.openClawWorkspace;
+            const freeTier =
+              stTurn.usage.plan === "free" ||
+              (!stTurn.oauth?.accessToken && !stTurn.apiKey);
+            const turnWorkspaceContext = [
+              ocTurn?.contextBundle || "",
+              (await import("./grok")).connectorContextBlock(get().connectors),
+              [
+                "## GrokHub session capabilities",
+                "- Persistent: chat history, settings, memory notes, Imagine media, connectors (survive restarts/updates).",
+                stTurn.agentPrefs?.memoryNotes?.trim()
+                  ? `- Memory notes loaded (${stTurn.agentPrefs.memoryNotes.trim().length} chars). Use them.`
+                  : "- No custom memory notes yet (user can set via Settings or /memory).",
+                `- Threads in app: ${get().threads.length}; messages this chat: ${history.length}.`,
+                stTurn.agentPrefs?.hostToolsEnabled === false
+                  ? "- Host shell tools: DISABLED."
+                  : "- Host shell tools: available when Desktop Host is LIVE (use HOST_CMD).",
+                stTurn.agentPrefs?.connectorToolsEnabled === false
+                  ? "- Connector tools: DISABLED."
+                  : "- Connector tools: use only LIVE tools via CONNECTOR_CMD.",
+              ].join("\n"),
+              stTurn.agentPrefs?.memoryNotes
+                ? "## User persistent memory notes\n" + stTurn.agentPrefs.memoryNotes
+                : "",
+              !stTurn.agentPrefs?.hostToolsEnabled
+                ? "NOTE: Host shell tools are DISABLED by user settings. Do not emit HOST_CMD."
+                : "",
+              !stTurn.agentPrefs?.connectorToolsEnabled
+                ? "NOTE: Connector tools are DISABLED by user settings. Do not emit CONNECTOR_CMD."
+                : "",
+            ]
+              .filter(Boolean)
+              .join("\n")
+              .slice(0, 28_000) || undefined;
+
 
             while (rounds < maxRounds && !aborted) {
               rounds += 1;
@@ -3217,13 +3319,7 @@ export const useGrokHub = create<State>()(
                     : `Host tool round ${rounds}…`,
               });
               let roundText = "";
-              const oc = get().openClawWorkspace;
               const stNow = get();
-              // Prefer free models when no paid credentials, or plan is free.
-              // Paid OAuth/API still cascade to free models on subscription errors in the bridge.
-              const freeTier =
-                stNow.usage.plan === "free" ||
-                (!stNow.oauth?.accessToken && !stNow.apiKey);
               const result = await grokChatStream(
                 {
                   messages: history,
@@ -3236,22 +3332,7 @@ export const useGrokHub = create<State>()(
                   freeTier,
                   allowWebsiteFallback: stNow.preferFreeGrok !== false,
                   temperature: stNow.agentPrefs?.temperature ?? 0.7,
-                  workspaceContext: [
-                    oc?.contextBundle || "",
-                    (await import("./grok")).connectorContextBlock(get().connectors),
-                    stNow.agentPrefs?.memoryNotes
-                      ? `## User persistent memory notes\n${stNow.agentPrefs.memoryNotes}`
-                      : "",
-                    !stNow.agentPrefs?.hostToolsEnabled
-                      ? "NOTE: Host shell tools are DISABLED by user settings. Do not emit HOST_CMD."
-                      : "",
-                    !stNow.agentPrefs?.connectorToolsEnabled
-                      ? "NOTE: Connector tools are DISABLED by user settings. Do not emit CONNECTOR_CMD."
-                      : "",
-                  ]
-                    .filter(Boolean)
-                    .join("\n")
-                    .slice(0, 28_000) || undefined,
+                  workspaceContext: turnWorkspaceContext,
                 },
                 {
                   signal: abort.signal,
@@ -3609,7 +3690,14 @@ if (!cmds.length) {
                   try {
                     // Long scans: do not abort the whole agent turn on timeout —
                     // hostExec returns ok:false with stderr; we feed that back and continue.
-                    const r = await hostExec(cmd, undefined, timeoutMs);
+                    const jobId = `host-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                    activeHostJobId = jobId;
+                    let r;
+                    try {
+                      r = await hostExec(cmd, undefined, timeoutMs, { jobId });
+                    } finally {
+                      if (activeHostJobId === jobId) activeHostJobId = null;
+                    }
                     const out = clipHostOutput(
                       [
                         `$ ${rawCmd}`,
@@ -3716,7 +3804,10 @@ if (!cmds.length) {
           }
         }
 
-        if (gen !== chatGeneration) return;
+        if (gen !== chatGeneration) {
+          endChatTurnPersist();
+          return;
+        }
 
         if (aborted) {
           // stopChat may already have set resume; if abort came from elsewhere, mark it
@@ -3811,6 +3902,7 @@ if (!cmds.length) {
         }
 
         if (activeChatAbort === abort) activeChatAbort = null;
+        endChatTurnPersist();
         get().setAgentStatus("primary", "idle", 0);
         get().setAgentStatus("builder", "idle", 0);
         get().setAgentStatus("research", "idle", 0);
@@ -4142,11 +4234,7 @@ if (!cmds.length) {
         profile: s.profile,
         modelCatalog: s.modelCatalog,
         lastModelsFetchAt: s.lastModelsFetchAt,
-        chat: s.chat.slice(-200).map((m) => ({
-          ...m,
-          streaming: false,
-          // don't persist ephemeral stop flags forever
-        })),
+        // chat is derived from active thread on hydrate — avoid dual storage bloat
         activity: s.activity.slice(0, 40).map((a) => ({
           ...a,
           title: redactSecrets(a.title),
@@ -4156,6 +4244,9 @@ if (!cmds.length) {
         quickAssistDismissed: (s.quickAssistDismissed || []).slice(-40),
         // rotation is session-ish but persist lightly so reopen still varies
         quickAssistRotation: s.quickAssistRotation || 0,
+        uiTheme: s.uiTheme || "dark",
+        toolsNavCollapsed: Boolean(s.toolsNavCollapsed),
+        preferFreeGrok: s.preferFreeGrok !== false,
         // nav not forced — restore last view except desktop
         // Secrets stay in safeStorage (userData), not here
       }),
@@ -4260,6 +4351,8 @@ if (!cmds.length) {
           if (desk.selfModifyEnabled === undefined) desk.selfModifyEnabled = false;
         if (!s.setupSyncMeta) s.setupSyncMeta = { autoPullOnLogin: true, autoPushOnChange: false };
         if (s.preferFreeGrok === undefined) s.preferFreeGrok = true;
+        if (s.uiTheme !== "dark" && s.uiTheme !== "light" && s.uiTheme !== "system") s.uiTheme = "dark";
+        if (s.toolsNavCollapsed === undefined) s.toolsNavCollapsed = false;
         // normalize automation times / heartbeat fields
         if (Array.isArray(s.automations)) {
           s.automations = (s.automations as import("./types").Automation[]).map((a) => {
@@ -4312,6 +4405,11 @@ if (!cmds.length) {
 
 function wait(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function endChatTurnPersist() {
+  void import("./persistent-storage").then(({ setPersistPaused }) => setPersistPaused(false));
+  activeHostJobId = null;
 }
 
 /** Active chat stream abort (module-level so Stop works across re-renders) */
