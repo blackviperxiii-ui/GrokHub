@@ -170,7 +170,11 @@ export function getModesWithCatalog(
       };
     }
     const autoId = autoModelForMode(m.id, catalog);
-    const modelId = applyModelOverride(m.id, autoId, ov);
+    const modelId = sanitizeChatModel(
+      applyModelOverride(m.id, autoId, ov),
+      m.id,
+      catalog.all || [],
+    );
     const pinned = hasModelOverride(ov, m.id);
     const name = friendlyModelName(modelId);
     if (m.id === "fast") {

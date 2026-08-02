@@ -30,6 +30,7 @@ import {
   reflectLearning,
   learningPinBundle,
   routeLearningBias,
+  pruneStaleRoutingInsights,
   learningSummaryLine,
   learningStatusMarkdown,
   learningSnapshotMarkdown,
@@ -1427,6 +1428,12 @@ export const useGrokHub = create<State>()(
 
       flushLearningToDisk: async () => {
         try {
+          try {
+            const pruned = pruneStaleRoutingInsights(get().learning);
+            if (pruned !== get().learning) set({ learning: pruned });
+          } catch {
+            /* ignore */
+          }
           await ensureFileMemory();
           let root: string | undefined;
           let userData: string | undefined;

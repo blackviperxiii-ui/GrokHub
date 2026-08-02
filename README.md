@@ -1,6 +1,6 @@
 # GrokHub
 
-**v0.8.46** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v0.8.47** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
 Adaptive modes · Imagine · connectors · skills · automations · usage meter · free-Grok fallback · setup sync · unsandboxed desktop host (CLI · files · apps).
 

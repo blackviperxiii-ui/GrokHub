@@ -42,6 +42,45 @@ function clip(s, max = MAX_STDOUT) {
   return `${s.slice(0, max)}\n… [truncated ${s.length - max} chars]`;
 }
 
+/**
+ * Normalize agent shell commands that commonly break under bash.
+ * - Move find -maxdepth/-mindepth next to starting points (GNU find path/expression order)
+ * - Strip accidental HOST_CMD: prefix
+ */
+function normalizeHostCommand(raw) {
+  let cmd = String(raw || "").trim();
+  if (!cmd) return cmd;
+  cmd = cmd.replace(/^HOST_CMD:\s*/i, "");
+
+  if (/^find\b/i.test(cmd)) {
+    const depths = [];
+    cmd = cmd.replace(/\s+-(max|min)depth\s+(\d+)/gi, (_, which, n) => {
+      depths.push(`-${String(which).toLowerCase()}depth ${n}`);
+      return " ";
+    });
+    cmd = cmd.replace(/\s+/g, " ").trim();
+    if (depths.length) {
+      // find [global -H/-L/-P] start… expression
+      const m = cmd.match(/^(find(?:\s+-[HLP])*)((?:\s+(?!-)[^\s]+)*)(\s+.*)?$/i);
+      if (m) {
+        const head = m[1];
+        const starts = (m[2] || "").trim();
+        const rest = (m[3] || "").trim();
+        const startPart = starts || ".";
+        cmd = `${head} ${startPart} ${depths.join(" ")}${rest ? ` ${rest}` : ""}`
+          .replace(/\s+/g, " ")
+          .trim();
+      } else {
+        cmd = `find . ${depths.join(" ")} ${cmd.replace(/^find\s+/i, "")}`
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+    }
+  }
+  return cmd;
+}
+
+
 function defaultCwd() {
   try {
     return os.homedir() || process.cwd();
@@ -201,7 +240,7 @@ async function writeFile(filePath, content) {
 }
 
 async function runExec(command, cwd, timeoutMs = 30_000, opts = {}) {
-  const cmd = String(command || "").trim();
+  const cmd = normalizeHostCommand(String(command || "").trim());
   if (!cmd) {
     return {
       ok: false,
@@ -660,6 +699,7 @@ function killExec(jobId) {
 }
 
 module.exports = {
+  normalizeHostCommand,
   info,
   listDir,
   readFile,

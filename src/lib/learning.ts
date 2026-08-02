@@ -626,3 +626,25 @@ export function learningSnapshotMarkdown(state: LearningState): string {
     "",
   ].join("\n");
 }
+
+
+/** Drop outdated Max/4.20 confusion after flagship routing shipped. */
+export function pruneStaleRoutingInsights(state: LearningState): LearningState {
+  if (!state?.insights?.length && !state?.events?.length) return state;
+  const drop = (text: string) =>
+    /max\s*mode.*4\.20|4\.20.*max|current max mode shows|wants? grok 4\.5 set as max/i.test(
+      text || "",
+    );
+  const insights = (state.insights || []).filter((i) => !drop(i.text || i.key || ""));
+  // Keep events; just add a corrective insight if we pruned something about max
+  let next: LearningState = { ...state, insights };
+  if (insights.length !== (state.insights || []).length) {
+    next = upsertInsight(next, {
+      key: "route-max-flagship",
+      text: "Max mode uses top single-agent flagship (Grok 4.5 class), not 4.20-reasoning. Think/Expert uses 4.20-reasoning.",
+      confidence: 0.9,
+      source: "route",
+    });
+  }
+  return next;
+}

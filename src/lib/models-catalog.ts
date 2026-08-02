@@ -1179,6 +1179,9 @@ export function friendlyModelName(id: string): string {
   if (!id) return "—";
   if (/4\.5|4-5/i.test(id)) return "Grok 4.5";
   if (/4\.3/i.test(id)) return "Grok 4.3";
+  if (/4[.-]?20/i.test(id) && /reason/i.test(id)) return "Grok 4.20 Reasoning";
+  if (/4[.-]?20/i.test(id) && /non[-_]?reason/i.test(id)) return "Grok 4.20 Fast";
+  if (/4[.-]?20/i.test(id)) return "Grok 4.20";
   if (/4-1-fast|4\.1.?fast|4-fast/i.test(id)) return "Grok 4.1 Fast";
   if (/build-0\.1|grok-build/i.test(id)) return "Grok Build 0.1";
   if (/code/i.test(id)) return "Grok Code";
