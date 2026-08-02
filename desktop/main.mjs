@@ -11,6 +11,7 @@ const websiteSession = require("./website-session.cjs");
 const secretsStore = require("./secrets-store.cjs");
 const stateStore = require("./state-store.cjs");
 const selfMod = require("./self-mod.cjs");
+const desktopEntry = require("./desktop-entry.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -555,6 +556,12 @@ function registerIpc() {
     return r;
   });
 
+  safeHandle("desktopEntry:status", () => desktopEntry.status());
+  safeHandle("desktopEntry:install", (_e, opts) => desktopEntry.installMenuEntry(opts || {}));
+  safeHandle("desktopEntry:autostart", (_e, enabled) =>
+    desktopEntry.installAutostart(Boolean(enabled)),
+  );
+
   // Non-stream chat already registered; expose stream buffer helper if bridge supports it
   if (typeof grokBridge.callXaiChatStream === "function") {
     safeHandle("grok:chatStream", async (_e, payload) => {
@@ -588,6 +595,12 @@ app.whenReady().then(() => {
   if (process.platform === "linux") {
     try {
       app.setName("GrokHub");
+    } catch {
+      /* ignore */
+    }
+    // Best-effort user menu entry so Arch/start menus see GrokHub without sudo
+    try {
+      desktopEntry.installMenuEntry();
     } catch {
       /* ignore */
     }

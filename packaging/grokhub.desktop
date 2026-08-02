@@ -7,9 +7,21 @@ Comment=Grok-native agent desktop — modes, Imagine, Connectors, Skills, Automa
 Exec=grokhub %U
 Icon=grokhub
 Terminal=false
-Categories=Utility;Development;Office;Network;
-Keywords=grok;ai;agent;xai;hub;electron;
+Categories=Utility;Development;Office;Network;AI;
+Keywords=grok;ai;agent;xai;hub;electron;automation;chat;
 StartupNotify=true
 StartupWMClass=GrokHub
-# System electron often reports class "electron" unless launcher sets --class
 X-GNOME-UsesNotifications=true
+Actions=NewChat;Settings;Automations;
+
+[Desktop Action NewChat]
+Name=New chat
+Exec=grokhub --new-chat
+
+[Desktop Action Settings]
+Name=Open settings
+Exec=grokhub --settings
+
+[Desktop Action Automations]
+Name=Automations
+Exec=grokhub --automations

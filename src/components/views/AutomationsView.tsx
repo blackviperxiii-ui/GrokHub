@@ -1,5 +1,6 @@
-import { Play, Plus, TimerReset } from "lucide-react";
-import { useState } from "react";
+import { HeartPulse, Play, Plus, TimerReset, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { automationTimes } from "@/lib/automation-schedule";
 import { useGrokHub } from "@/lib/store";
 import type { AutomationSchedule } from "@/lib/types";
 import { RelativeTime } from "../RelativeTime";
@@ -15,7 +16,15 @@ const SCHEDULES: AutomationSchedule[] = [
   "weekdays",
   "weekly",
   "monthly",
+  "heartbeat",
 ];
+
+function parseTimesInput(raw: string): string[] {
+  return raw
+    .split(/[,\s]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
 
 export function AutomationsView() {
   const automations = useGrokHub((s) => s.automations);
@@ -24,83 +33,157 @@ export function AutomationsView() {
   const runAutomation = useGrokHub((s) => s.runAutomation);
   const addAutomation = useGrokHub((s) => s.addAutomation);
   const running = useGrokHub((s) => s.running);
+  const heartbeatAt = useGrokHub((s) => s.heartbeatAt);
 
   const [name, setName] = useState("");
   const [instructions, setInstructions] = useState("");
   const [schedule, setSchedule] = useState<AutomationSchedule>("daily");
-  const [time, setTime] = useState("09:00");
+  const [times, setTimes] = useState<string[]>(["09:00"]);
+  const [timeDraft, setTimeDraft] = useState("");
+  const [heartbeatEveryMin, setHeartbeatEveryMin] = useState(5);
+
+  const isHeartbeat = schedule === "heartbeat";
+
+  function addTimeSlot() {
+    const parsed = parseTimesInput(timeDraft);
+    if (!parsed.length) return;
+    setTimes((prev) => Array.from(new Set([...prev, ...parsed])).sort());
+    setTimeDraft("");
+  }
 
   function onCreate() {
     if (!name.trim() || !instructions.trim()) return;
+    const slots = times.length ? times : ["09:00"];
     addAutomation({
       name: name.trim(),
       instructions: instructions.trim(),
       schedule,
-      time: time.trim() || "09:00",
+      time: slots[0]!,
+      times: slots,
+      heartbeatEveryMin: isHeartbeat ? heartbeatEveryMin : undefined,
     });
     setName("");
     setInstructions("");
     setSchedule("daily");
-    setTime("09:00");
+    setTimes(["09:00"]);
+    setHeartbeatEveryMin(5);
   }
+
+  const sorted = useMemo(
+    () =>
+      [...automations].sort((a, b) => {
+        if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+        return (a.nextRun || 0) - (b.nextRun || 0);
+      }),
+    [automations],
+  );
 
   return (
     <div className="space-y-5">
-      <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
+      <Card>
+        <CardContent className="flex flex-wrap items-center gap-3 py-3 text-xs text-[var(--color-muted)]">
+          <HeartPulse className="h-4 w-4 text-[var(--color-info)]" />
+          <span>
+            Heartbeat <RelativeTime ts={heartbeatAt} /> · runs{" "}
+            <span className="font-medium text-[var(--color-fg)]">heartbeat</span> automations
+            and the clock scheduler (every 30s while open).
+          </span>
+          <Badge variant="info">
+            {automations.filter((a) => a.enabled && a.schedule === "heartbeat").length} on heartbeat
+          </Badge>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
         <div className="space-y-3">
-          {automations.map((a) => (
-            <Card key={a.id}>
-              <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                  <CardTitle className="flex flex-wrap items-center gap-2 text-sm">
-                    <TimerReset className="h-4 w-4 text-[var(--color-muted)]" />
-                    {a.name}
-                    <Badge variant={a.enabled ? "success" : "default"}>
-                      {a.enabled ? "enabled" : "paused"}
-                    </Badge>
-                  </CardTitle>
-                  <CardDescription className="mt-1">
-                    {a.schedule} · {a.time} · {a.runCount} runs
-                    {a.lastRun ? (
-                      <>
-                        {" "}
-                        · last <RelativeTime ts={a.lastRun} />
-                      </>
-                    ) : null}
-                  </CardDescription>
-                </div>
-                <div className="flex shrink-0 gap-2">
-                  <Button size="sm" variant="secondary" onClick={() => toggleAutomation(a.id)}>
-                    {a.enabled ? "Pause" : "Enable"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={!a.enabled || running}
-                    onClick={() => void runAutomation(a.id)}
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                    Run now
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <p className="text-sm text-[var(--color-muted)]">{a.instructions}</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {a.connectorIds.map((id) => {
-                    const c = connectors.find((x) => x.id === id);
-                    return (
-                      <Badge key={id} variant={c?.status === "connected" ? "info" : "default"}>
-                        {c?.name ?? id}
+          {sorted.map((a) => {
+            const slots = automationTimes(a);
+            return (
+              <Card key={a.id}>
+                <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <CardTitle className="flex flex-wrap items-center gap-2 text-sm">
+                      {a.schedule === "heartbeat" ? (
+                        <HeartPulse className="h-4 w-4 text-[var(--color-info)]" />
+                      ) : (
+                        <TimerReset className="h-4 w-4 text-[var(--color-muted)]" />
+                      )}
+                      {a.name}
+                      <Badge variant={a.enabled ? "success" : "default"}>
+                        {a.enabled ? "enabled" : "paused"}
                       </Badge>
-                    );
-                  })}
-                  {a.skillIds.map((id) => (
-                    <Badge key={id}>{id}</Badge>
-                  ))}
-                </div>
+                      {a.schedule === "heartbeat" && <Badge variant="info">heartbeat</Badge>}
+                    </CardTitle>
+                    <CardDescription className="mt-1">
+                      {a.schedule === "heartbeat" ? (
+                        <>
+                          every {a.heartbeatEveryMin || 5}m on heartbeat · {a.runCount} runs
+                        </>
+                      ) : (
+                        <>
+                          {a.schedule} · {slots.join(", ")} · {a.runCount} runs
+                        </>
+                      )}
+                      {a.lastRun ? (
+                        <>
+                          {" "}
+                          · last <RelativeTime ts={a.lastRun} />
+                        </>
+                      ) : null}
+                      {a.nextRun && a.enabled ? (
+                        <>
+                          {" "}
+                          · next <RelativeTime ts={a.nextRun} />
+                        </>
+                      ) : null}
+                    </CardDescription>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <Button size="sm" variant="secondary" onClick={() => toggleAutomation(a.id)}>
+                      {a.enabled ? "Pause" : "Enable"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={!a.enabled || running}
+                      onClick={() => void runAutomation(a.id)}
+                    >
+                      <Play className="h-3.5 w-3.5" />
+                      Run now
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <p className="text-sm text-[var(--color-muted)]">{a.instructions}</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {a.connectorIds.map((id) => {
+                      const c = connectors.find((x) => x.id === id);
+                      return (
+                        <Badge key={id} variant={c?.status === "connected" ? "info" : "default"}>
+                          {c?.name ?? id}
+                        </Badge>
+                      );
+                    })}
+                    {a.skillIds.map((id) => (
+                      <Badge key={id}>{id}</Badge>
+                    ))}
+                    {a.schedule !== "heartbeat" &&
+                      slots.map((t) => (
+                        <Badge key={t} className="font-mono">
+                          {t}
+                        </Badge>
+                      ))}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+          {sorted.length === 0 && (
+            <Card>
+              <CardContent className="py-10 text-center text-sm text-[var(--color-muted)]">
+                No automations yet. Create one with multiple times or attach it to the heartbeat.
               </CardContent>
             </Card>
-          ))}
+          )}
         </div>
 
         <Card className="h-fit lg:sticky lg:top-20">
@@ -110,35 +193,89 @@ export function AutomationsView() {
               New automation
             </CardTitle>
             <CardDescription>
-              Local scheduler (every 30s while the app is open). Due jobs run through the agent
-              with live Grok when connected.
+              Clock schedules support several HH:mm times. Heartbeat runs with the app pulse
+              (configurable interval).
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-[var(--color-muted)]">Name</label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Evening cash check" />
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Evening cash check"
+              />
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-[var(--color-muted)]">Schedule</label>
+              <select
+                value={schedule}
+                onChange={(e) => setSchedule(e.target.value as AutomationSchedule)}
+                className="flex h-10 w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-fg)]"
+              >
+                {SCHEDULES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {isHeartbeat ? (
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-[var(--color-muted)]">Schedule</label>
-                <select
-                  value={schedule}
-                  onChange={(e) => setSchedule(e.target.value as AutomationSchedule)}
-                  className="flex h-10 w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-fg)]"
-                >
-                  {SCHEDULES.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
+                <label className="text-xs font-medium text-[var(--color-muted)]">
+                  Min minutes between heartbeat runs
+                </label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={heartbeatEveryMin}
+                  onChange={(e) => setHeartbeatEveryMin(Number(e.target.value) || 5)}
+                />
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-[var(--color-muted)]">
+                  Run times (multiple)
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {times.map((t) => (
+                    <span
+                      key={t}
+                      className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-0.5 font-mono text-xs"
+                    >
+                      {t}
+                      <button
+                        type="button"
+                        className="text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+                        onClick={() => setTimes((prev) => prev.filter((x) => x !== t))}
+                        aria-label={`Remove ${t}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
                   ))}
-                </select>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    value={timeDraft}
+                    onChange={(e) => setTimeDraft(e.target.value)}
+                    placeholder="09:00 or 09:00, 12:30, 18:00"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addTimeSlot();
+                      }
+                    }}
+                  />
+                  <Button type="button" variant="secondary" onClick={addTimeSlot}>
+                    Add
+                  </Button>
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-[var(--color-muted)]">Time</label>
-                <Input value={time} onChange={(e) => setTime(e.target.value)} placeholder="18:00" />
-              </div>
-            </div>
+            )}
+
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-[var(--color-muted)]">Instructions</label>
               <Textarea
@@ -150,7 +287,7 @@ export function AutomationsView() {
             <Button
               className="w-full"
               onClick={onCreate}
-              disabled={!name.trim() || !instructions.trim()}
+              disabled={!name.trim() || !instructions.trim() || (!isHeartbeat && !times.length)}
             >
               Create automation
             </Button>

@@ -60,14 +60,24 @@ export type AutomationSchedule =
   | "daily"
   | "weekdays"
   | "weekly"
-  | "monthly";
+  | "monthly"
+  /** Fire on each app heartbeat tick while enabled */
+  | "heartbeat";
 
 export type Automation = {
   id: string;
   name: string;
   instructions: string;
   schedule: AutomationSchedule;
+  /**
+   * Primary time (HH:mm) — kept for backwards compatibility.
+   * Prefer `times` when multiple slots are set.
+   */
   time: string;
+  /** One or more daily/weekly clock times (HH:mm local). */
+  times?: string[];
+  /** When schedule is heartbeat, min minutes between runs (default 5). */
+  heartbeatEveryMin?: number;
   enabled: boolean;
   connectorIds: string[];
   skillIds: string[];

@@ -64,4 +64,9 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     restore: (id) => ipcRenderer.invoke("selfmod:restore", id),
     journal: (limit) => ipcRenderer.invoke("selfmod:journal", limit),
   },
+  desktopEntry: {
+    status: () => ipcRenderer.invoke("desktopEntry:status"),
+    install: (opts) => ipcRenderer.invoke("desktopEntry:install", opts),
+    autostart: (enabled) => ipcRenderer.invoke("desktopEntry:autostart", enabled),
+  },
 });

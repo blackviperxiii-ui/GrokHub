@@ -634,7 +634,7 @@ export function SettingsView() {
             [
               ["wayland", "Prefer Wayland", "Ozone flags"],
               ["tray", "System tray", "Minimize to tray"],
-              ["launchOnLogin", "Launch on login", "Autostart"],
+              ["launchOnLogin", "Launch on login", "Writes ~/.config/autostart/grokhub.desktop"],
               ["startMinimized", "Start minimized", "Tray only"],
               [
                 "confirmHostCommands",
@@ -665,10 +665,50 @@ export function SettingsView() {
                 type="checkbox"
                 className="h-4 w-4 accent-[var(--color-fg)]"
                 checked={Boolean(desktop[key])}
-                onChange={(e) => setDesktop({ [key]: e.target.checked })}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  setDesktop({ [key]: on });
+                  if (key === "launchOnLogin") {
+                    void window.grokhubDesktop?.desktopEntry?.autostart(on);
+                  }
+                }}
               />
             </label>
           ))}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                void window.grokhubDesktop?.desktopEntry?.install().then((r) => {
+                  setSelfMsg(
+                    r?.ok
+                      ? r.detail || `Menu entry installed: ${r.path}`
+                      : r?.error || "Menu install needs the desktop app",
+                  );
+                });
+              }}
+            >
+              Install app menu entry
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                void window.grokhubDesktop?.desktopEntry?.status().then((r) => {
+                  setSelfMsg(
+                    r?.ok
+                      ? `Menu: ${r.menuInstalled ? "yes" : "no"} · Autostart: ${
+                          r.autostartInstalled ? "yes" : "no"
+                        }`
+                      : "Status unavailable outside desktop",
+                  );
+                });
+              }}
+            >
+              Check menu status
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

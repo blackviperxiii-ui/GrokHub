@@ -144,7 +144,7 @@ type State = {
   setModeMenuOpen: (open: boolean) => void;
   setDesktop: (patch: Partial<State["desktop"]>) => void;
   resolveHostConfirm: (allow: boolean) => void;
-  tickAutomations: () => Promise<void>;
+  tickAutomations: (opts?: { heartbeatOnly?: boolean }) => Promise<void>;
   hydrateSecrets: () => Promise<void>;
   recordQuickAssistChip: (chip: QuickChip) => void;
   recordQuickAssistTyped: (text: string) => void;
@@ -197,6 +197,8 @@ type State = {
     instructions: string;
     schedule: AutomationSchedule;
     time: string;
+    times?: string[];
+    heartbeatEveryMin?: number;
   }) => void;
   sendChat: (text: string) => Promise<void>;
   stopChat: () => void;
@@ -1667,9 +1669,23 @@ export const useGrokHub = create<State>()(
 
       toggleAutomation: (id) => {
         set((s) => ({
-          automations: s.automations.map((a) =>
-            a.id === id ? { ...a, enabled: !a.enabled } : a,
-          ),
+          automations: s.automations.map((a) => {
+            if (a.id !== id) return a;
+            const enabled = !a.enabled;
+            if (!enabled) return { ...a, enabled, nextRun: undefined };
+            return {
+              ...a,
+              enabled,
+              nextRun: computeNextRun(
+                a.schedule,
+                a.time,
+                Date.now(),
+                a.lastRun,
+                a.times,
+                a.heartbeatEveryMin,
+              ),
+            };
+          }),
         }));
       },
 
@@ -1736,7 +1752,14 @@ export const useGrokHub = create<State>()(
                   nextRun:
                     a.schedule === "once"
                       ? undefined
-                      : computeNextRun(a.schedule, a.time, Date.now(), Date.now()),
+                      : computeNextRun(
+                          a.schedule,
+                          a.time,
+                          Date.now(),
+                          Date.now(),
+                          a.times,
+                          a.heartbeatEveryMin,
+                        ),
                   enabled: a.schedule === "once" ? false : a.enabled,
                 }
               : a,
@@ -1753,28 +1776,45 @@ export const useGrokHub = create<State>()(
         });
       },
 
-      tickAutomations: async () => {
-        const { dueAutomations, ensureAutomationSchedule } = await import(
-          "./automation-schedule"
-        );
+      tickAutomations: async (opts) => {
+        const {
+          dueAutomations,
+          dueHeartbeatAutomations,
+          ensureAutomationSchedule,
+        } = await import("./automation-schedule");
         const now = Date.now();
         set((s) => ({
           automations: s.automations.map((a) => ensureAutomationSchedule(a, now)),
+          heartbeatAt: opts?.heartbeatOnly ? s.heartbeatAt : s.heartbeatAt,
         }));
-        const due = dueAutomations(get().automations, now);
-        for (const a of due.slice(0, 1)) {
-          // one per tick to avoid pile-up
+        const list = get().automations;
+        const due = opts?.heartbeatOnly
+          ? dueHeartbeatAutomations(list, now)
+          : dueAutomations(list, now);
+        for (const a of due.slice(0, 2)) {
+          // small batch per tick; avoid pile-up
+          if (get().running) break;
           await get().runAutomation(a.id);
         }
       },
 
       addAutomation: (input) => {
+        const times = (input.times && input.times.length
+          ? input.times
+          : [input.time || "09:00"]
+        )
+          .map((x) => String(x).trim())
+          .filter(Boolean);
+        const unique = Array.from(new Set(times));
+        const primary = unique[0] || "09:00";
         const auto: Automation = {
           id: uid("auto"),
           name: input.name,
           instructions: input.instructions,
           schedule: input.schedule,
-          time: input.time,
+          time: primary,
+          times: unique,
+          heartbeatEveryMin: input.heartbeatEveryMin ?? 5,
           enabled: true,
           connectorIds: get()
             .connectors.filter((c) => c.status === "connected")
@@ -1782,13 +1822,23 @@ export const useGrokHub = create<State>()(
             .map((c) => c.id),
           skillIds: [],
           runCount: 0,
-          nextRun: computeNextRun(input.schedule, input.time, Date.now()),
+          nextRun: computeNextRun(
+            input.schedule,
+            primary,
+            Date.now(),
+            undefined,
+            unique,
+            input.heartbeatEveryMin ?? 5,
+          ),
         };
         set((s) => ({ automations: [auto, ...s.automations] }));
         get().pushActivity({
           kind: "automation",
           title: `Created automation ${auto.name}`,
-          detail: `${auto.schedule} @ ${auto.time}`,
+          detail:
+            auto.schedule === "heartbeat"
+              ? `heartbeat every ${auto.heartbeatEveryMin || 5}m`
+              : `${auto.schedule} @ ${unique.join(", ")}`,
           status: "success",
         });
       },
@@ -2652,11 +2702,14 @@ if (!cmds.length) {
         set((s) => ({ activity: [row, ...s.activity].slice(0, 80) }));
       },
 
-      tickHeartbeat: () =>
+      tickHeartbeat: () => {
         set((s) => ({
           heartbeatAt: Date.now(),
           usage: ensurePeriod(s.usage),
-        })),
+        }));
+        // Heartbeat-driven automations
+        void get().tickAutomations({ heartbeatOnly: true });
+      },
 
       setAgentStatus: (id, status, tasks) => {
         set((s) => ({
@@ -2801,6 +2854,23 @@ if (!cmds.length) {
           if (desk.confirmHostCommands === undefined) desk.confirmHostCommands = true;
           if (desk.confirmDestructiveOnly === undefined) desk.confirmDestructiveOnly = true;
           if (desk.selfModifyEnabled === undefined) desk.selfModifyEnabled = false;
+        // normalize automation times / heartbeat fields
+        if (Array.isArray(s.automations)) {
+          s.automations = (s.automations as import("./types").Automation[]).map((a) => {
+            const times =
+              Array.isArray(a.times) && a.times.length
+                ? a.times
+                : a.time
+                  ? [a.time]
+                  : ["09:00"];
+            return {
+              ...a,
+              times,
+              time: times[0] || a.time || "09:00",
+              heartbeatEveryMin: a.heartbeatEveryMin || 5,
+            };
+          });
+        }
           s.desktop = desk;
         }
         // Drop old demo-seeded usage (842 units SuperGrok Pro) so meter shows real usage

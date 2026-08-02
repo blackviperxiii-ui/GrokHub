@@ -151,6 +151,18 @@ export type DesktopBridge = {
     restore: (id: string) => Promise<{ ok: boolean; error?: string }>;
     journal: (limit?: number) => Promise<{ ok: boolean; entries?: unknown[] }>;
   };
+  desktopEntry?: {
+    status: () => Promise<{
+      ok: boolean;
+      menuInstalled?: boolean;
+      menuPath?: string;
+      autostartInstalled?: boolean;
+      autostartPath?: string;
+      exec?: string;
+    }>;
+    install: (opts?: { exec?: string }) => Promise<{ ok: boolean; path?: string; detail?: string; error?: string }>;
+    autostart: (enabled: boolean) => Promise<{ ok: boolean; path?: string; detail?: string; error?: string }>;
+  };
   host?: {
     info: () => Promise<HostInfo>;
     listDir: (p?: string) => Promise<{ path: string; entries: HostFileEntry[] }>;
