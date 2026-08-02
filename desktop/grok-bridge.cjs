@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.34";
+const APP_VERSION = "0.8.35";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -275,9 +275,8 @@ function modelForMode(mode, prompt = "", opts = {}) {
     case "fast":
       return "grok-4-1-fast-non-reasoning";
     case "expert":
-      return (p.length > 400 || /\b(architect|research|prove|complex|deep dive)\b/i.test(p))
-        ? "grok-4.5"
-        : "grok-4.3";
+      // Think mode → Grok 4.20 reasoning
+      return "grok-4.20-reasoning";
     case "heavy":
       return "grok-4.5";
     case "build":

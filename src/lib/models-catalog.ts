@@ -54,10 +54,13 @@ export const SLOT_CANDIDATES: Record<ModelSlot, string[]> = {
   ],
   balanced: ["grok-4.3", "grok-4", "grok-3", "grok-2"],
   smart: [
+    "grok-4.20-reasoning",
+    "grok-4-20-reasoning",
+    "grok-4.20",
+    "grok-4-20",
     "grok-4.5",
     "grok-4-5",
     "grok-4.5-latest",
-    "grok-4.20",
     "grok-4.3",
     "grok-4",
   ],
@@ -86,6 +89,8 @@ export const SLOT_CANDIDATES: Record<ModelSlot, string[]> = {
 
 /** Models we consider product-essential (shown in Settings). */
 export const ESSENTIAL_NAME_HINTS = [
+  /grok-4\.20/i,
+  /grok-4-20/i,
   /grok-4\.5/i,
   /grok-4-5/i,
   /grok-4\.3/i,
@@ -127,7 +132,7 @@ export type GrokSlotPlan = {
 const FALLBACK_SLOTS: Record<ModelSlot, string> = {
   fast: "grok-4-1-fast-non-reasoning",
   balanced: "grok-4.3",
-  smart: "grok-4.5",
+  smart: "grok-4.20-reasoning",
   heavy: "grok-4.5",
   build: "grok-build-0.1",
   imagine: "grok-2-image",
@@ -337,7 +342,7 @@ Assign the best model for each product slot. Prefer newest generation in that cl
 Slots:
 - fast: quick low-token chat (non-reasoning / mini / fast variants)
 - balanced: solid everyday chat (e.g. 4.3-class)
-- smart: hard reasoning / expert (e.g. 4.5-class flagship)
+- smart: hard reasoning / Think mode (prefer grok-4.20-reasoning, then 4.5-class flagship)
 - heavy: multi-angle / max brain (usually same as smart or best available)
 - build: long coding sessions / agent coding (code or build models)
 - imagine: image generation (if none, use empty string "")
