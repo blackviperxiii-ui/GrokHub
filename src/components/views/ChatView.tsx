@@ -586,15 +586,16 @@ export function ChatView() {
     ],
   );
 
-  // Debounced Fast-mode chip refresh when conversation context changes
+  // Fast-mode chip refresh only while suggestions are expanded
   useEffect(() => {
+    if (!chipsOpen) return;
     if (busy) return;
     if (chat.length === 0) return;
     const t = window.setTimeout(() => {
       void refreshQuickAssistLlm();
     }, 900);
     return () => window.clearTimeout(t);
-  }, [chat.length, activeThreadId, busy, refreshQuickAssistLlm]);
+  }, [chipsOpen, chat.length, activeThreadId, busy, refreshQuickAssistLlm]);
 
 
   // Open suggestions for empty chats so the primary chip is obvious

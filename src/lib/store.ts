@@ -5947,8 +5947,7 @@ if (!cmds.length) {
           if (!aborted) {
             const tid = get().activeThreadId;
             void autoRenameThreadWithFast(get, set, tid);
-            // Refresh context-aware quick chips via Fast mode
-            void get().refreshQuickAssistLlm({ force: true });
+            // LLM chip refresh runs only when suggestions are open (ChatView)
           }
           void get().processAgentQueue();
         }
