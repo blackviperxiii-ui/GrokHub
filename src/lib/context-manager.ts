@@ -219,6 +219,10 @@ export type BuildContextInput = {
   thread?: Pick<ChatThread, "title" | "summary" | "summaryUpToId" | "compactedAt"> | null;
   memoryNotes?: string;
   fileMemoryBundle?: string;
+  /** Distilled learning / self-improve insights */
+  learningBundle?: string;
+  projectBundle?: string;
+  workboardBundle?: string;
   openClawBundle?: string;
   connectorBlock?: string;
   capabilityBlock?: string;
@@ -263,6 +267,26 @@ export function buildContext(input: BuildContextInput): ContextBuildResult {
       ? `## File memory (USER / MEMORY / daily)\n${input.fileMemoryBundle}`
       : "",
     6_000,
+  );
+  pushPin(
+    "learning",
+    "Learnings",
+    input.learningBundle
+      ? input.learningBundle
+      : "",
+    2_000,
+  );
+  pushPin(
+    "project",
+    "Project",
+    input.projectBundle || "",
+    3_500,
+  );
+  pushPin(
+    "workboard",
+    "Workboard",
+    input.workboardBundle || "",
+    1_500,
   );
   pushPin(
     "memory",

@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { Command } from "cmdk";
 import {
   Cable,
+  ClipboardList,
   Command as CommandIcon,
   History,
   ImageIcon,
@@ -94,6 +95,14 @@ export function CommandPalette({
         group: "Navigate",
         icon: Terminal,
         run: () => go("command"),
+      },
+      {
+        id: "nav-workboard",
+        label: "Workboard",
+        hint: "Tasks",
+        group: "Navigate",
+        icon: ClipboardList,
+        run: () => go("workboard"),
       },
       {
         id: "nav-connectors",

@@ -1,6 +1,6 @@
 # GrokHub
 
-**v0.8.17** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v0.8.18** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
 Adaptive modes · Imagine · connectors · skills · automations · usage meter · free-Grok fallback · setup sync · unsandboxed desktop host (CLI · files · apps).
 
@@ -158,6 +158,35 @@ rm -rf ~/.local/lib/grokhub
 
 
 
+
+## Workboard
+
+Kanban-style task board the agent and you share:
+
+| | |
+|--|--|
+| Agent pins | `WORK_PIN: title \| detail \| priority=high` |
+| Agent updates | `WORK_UPDATE: id-or-title \| status=in_progress` |
+| You | Approve · Stage · Start · Done · Dismiss |
+| Slash | `/board` · `/board add Fix the meter` |
+
+Statuses: **proposed → approved → staged → in progress → done** (or dismiss).
+
+## Project workspace
+
+Settings → Project: bind a folder. Agent context gets a tree + README/package summary; host tools prefer that tree.
+
+## Learning & self-improvement
+
+GrokHub learns from turn outcomes, 👍/👎 on replies, and explicit prefs:
+
+| | |
+|--|--|
+| **Signals** | Success/fail turns, host/tool use, user prefs in chat, thumbs |
+| **Insights** | Distilled bullets pinned into context |
+| **Adaptive bias** | Soft weight on Fast/Think/Deep/Build from track record |
+| **Reflect** | `/learn reflect` or Settings → Learning → writes `LEARNINGS.md` |
+| **Manual** | `/learn note …` · rate assistant messages |
 
 ## File memory (M1)
 

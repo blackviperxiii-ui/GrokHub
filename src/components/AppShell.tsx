@@ -1,6 +1,7 @@
 import type { ComponentType, CSSProperties } from "react";
 import {
   Cable,
+  ClipboardList,
   ChevronDown,
   ChevronRight,
   Command,
@@ -75,6 +76,9 @@ const SettingsView = lazy(() =>
 const SkillsView = lazy(() =>
   import("./views/SkillsView").then((m) => ({ default: m.SkillsView })),
 );
+const WorkboardView = lazy(() =>
+  import("./views/WorkboardView").then((m) => ({ default: m.WorkboardView })),
+);
 
 
 
@@ -82,6 +86,7 @@ const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string 
   { id: "chat", label: "Agent", icon: MessageSquare },
   { id: "history", label: "History", icon: History },
   { id: "command", label: "Command", icon: Command },
+  { id: "workboard", label: "Workboard", icon: ClipboardList },
   { id: "imagine", label: "Imagine", icon: ImageIcon },
   { id: "connectors", label: "Connectors", icon: Cable },
   { id: "skills", label: "Skills", icon: Sparkles },
@@ -814,6 +819,7 @@ export function AppShell() {
                     {nav === "skills" && <SkillsView />}
                     {nav === "automations" && <AutomationsView />}
                     {nav === "agents" && <AgentsView />}
+                    {nav === "workboard" && <WorkboardView />}
                     {nav === "imagine" && <ImagineView />}
                     {nav === "desktop" && <DesktopHostView />}
                     {nav === "settings" && <SettingsView />}

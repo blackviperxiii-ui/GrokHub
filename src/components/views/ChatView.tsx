@@ -18,6 +18,8 @@ import {
   Reply,
   Trash2,
   Check,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
@@ -67,6 +69,7 @@ type MessageRowProps = {
   onSaveEdit: (id: string, resend: boolean) => void;
   onCancelEdit: () => void;
   onDelete: (id: string) => void;
+  onRate?: (id: string, positive: boolean) => void;
 };
 
 const ChatMessageRow = memo(function ChatMessageRow({
@@ -84,6 +87,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onSaveEdit,
   onCancelEdit,
   onDelete,
+  onRate,
 }: MessageRowProps) {
   return (
     <div
@@ -261,6 +265,26 @@ const ChatMessageRow = memo(function ChatMessageRow({
               )}
               {copiedId === m.id ? "Copied" : "Copy"}
             </button>
+            {m.role === "assistant" && !busy && onRate && (
+              <>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[color-mix(in_oklab,var(--color-success)_12%,transparent)] hover:text-[var(--color-success)]"
+                  title="Helpful — teach GrokHub"
+                  onClick={() => onRate(m.id, true)}
+                >
+                  <ThumbsUp className="h-3 w-3" />
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)] hover:bg-[color-mix(in_oklab,var(--color-danger)_12%,transparent)] hover:text-[var(--color-danger)]"
+                  title="Not helpful — teach GrokHub"
+                  onClick={() => onRate(m.id, false)}
+                >
+                  <ThumbsDown className="h-3 w-3" />
+                </button>
+              </>
+            )}
             {m.role === "user" && !busy && (
               <button
                 type="button"
@@ -373,6 +397,7 @@ export function ChatView() {
   const exportThreadMarkdown = useGrokHub((s) => s.exportThreadMarkdown);
   const editChatMessage = useGrokHub((s) => s.editChatMessage);
   const deleteChatMessages = useGrokHub((s) => s.deleteChatMessages);
+  const rateMessage = useGrokHub((s) => s.rateMessage);
   const replyTo = useGrokHub((s) => s.replyTo);
   const setReplyTo = useGrokHub((s) => s.setReplyTo);
   const [text, setText] = useState("");
@@ -1098,6 +1123,7 @@ export function ChatView() {
                 onSaveEdit={onSaveEdit}
                 onCancelEdit={() => setEditingId(null)}
                 onDelete={deleteMessage}
+                onRate={(id, positive) => rateMessage(id, positive)}
               />
             ))}
             {showJumpLatest && (

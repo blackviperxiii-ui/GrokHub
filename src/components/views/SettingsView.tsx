@@ -15,6 +15,9 @@ const SETTINGS_SECTIONS = [
   { id: "sec-desktop", label: "Desktop shell" },
   { id: "sec-selfmod", label: "Self-mod" },
   { id: "sec-memory", label: "Memory" },
+  { id: "sec-project", label: "Project" },
+  { id: "sec-learning", label: "Learning" },
+  { id: "sec-diagnostics", label: "Diagnostics" },
   { id: "sec-danger", label: "Danger zone" },
 ] as const;
 
@@ -39,6 +42,7 @@ import {
 import { useGrokHub } from "@/lib/store";
 import type { GrokModeId } from "@/lib/types";
 import type { UpdateStatus } from "@/lib/update";
+import { learningSummaryLine } from "@/lib/learning";
 import { cn } from "@/lib/utils";
 import { ProfileAvatar } from "../ProfileAvatar";
 import { HostGatewayBanner } from "../HostGatewayBanner";
@@ -1418,6 +1422,44 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
+      <Card id="sec-project">
+        <CardHeader>
+          <CardTitle className="text-sm">Project workspace</CardTitle>
+          <CardDescription>
+            Bind a local folder so the agent prefers HOST_CMD and file work under that tree.
+            Summary is refreshed on bind (README, package.json, AGENTS.md when present).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ProjectWorkspacePanel />
+        </CardContent>
+      </Card>
+
+      <Card id="sec-learning">
+        <CardHeader>
+          <CardTitle className="text-sm">Learning & self-improvement</CardTitle>
+          <CardDescription>
+            GrokHub learns from successful turns, your 👍/👎 on replies, and explicit prefs. Insights
+            pin into chat context and gently bias Adaptive routing. Reflect writes LEARNINGS.md.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <LearningPanel />
+        </CardContent>
+      </Card>
+
+      <Card id="sec-diagnostics">
+        <CardHeader>
+          <CardTitle className="text-sm">Diagnostics</CardTitle>
+          <CardDescription>
+            Copy a support bundle (version, host, learning/workboard counts) for crash reports.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DiagnosticsPanel />
+        </CardContent>
+      </Card>
+
       <Card id="sec-danger">
         <CardHeader>
           <CardTitle className="text-sm">Danger zone</CardTitle>
@@ -1462,6 +1504,164 @@ export function SettingsView() {
   );
 }
 
+
+function ProjectWorkspacePanel() {
+  const project = useGrokHub((s) => s.projectWorkspace);
+  const bind = useGrokHub((s) => s.bindProjectWorkspace);
+  const clear = useGrokHub((s) => s.clearProjectWorkspace);
+  const [path, setPath] = useState(project?.path || "");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="space-y-2">
+      {project ? (
+        <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-2 text-xs">
+          <div className="font-medium text-[var(--color-fg)]">{project.name}</div>
+          <div className="truncate font-mono text-[10px] text-[var(--color-muted)]">{project.path}</div>
+          <div className="mt-1 text-[10px] text-[var(--color-subtle)]">
+            Bound {new Date(project.boundAt).toLocaleString()}
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-[var(--color-muted)]">No project bound.</p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <input
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+          placeholder="/home/you/projects/app"
+          className="min-w-[16rem] flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-1.5 font-mono text-xs"
+        />
+        <Button
+          size="sm"
+          disabled={busy || !path.trim()}
+          onClick={() => {
+            setBusy(true);
+            void bind(path.trim())
+              .then((r) => setMsg(r.detail))
+              .finally(() => setBusy(false));
+          }}
+        >
+          {busy ? "Binding…" : "Bind"}
+        </Button>
+        {project ? (
+          <Button size="sm" variant="ghost" onClick={() => clear()}>
+            Clear
+          </Button>
+        ) : null}
+      </div>
+      {msg ? <p className="text-[11px] text-[var(--color-muted)]">{msg}</p> : null}
+    </div>
+  );
+}
+
+function DiagnosticsPanel() {
+  const exportDiagnostics = useGrokHub((s) => s.exportDiagnostics);
+  const [msg, setMsg] = useState<string | null>(null);
+  return (
+    <div className="space-y-2">
+      <Button
+        size="sm"
+        variant="secondary"
+        onClick={() => {
+          void exportDiagnostics().then((r) => {
+            setMsg(r.ok ? "Copied diagnostics JSON to clipboard" : r.error || "Failed");
+          });
+        }}
+      >
+        Copy diagnostics
+      </Button>
+      {msg ? <p className="text-[11px] text-[var(--color-muted)]">{msg}</p> : null}
+    </div>
+  );
+}
+
+function LearningPanel() {
+  const learning = useGrokHub((s) => s.learning);
+  const runSelfImprove = useGrokHub((s) => s.runSelfImprove);
+  const clearLearning = useGrokHub((s) => s.clearLearning);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const top = [...(learning?.insights || [])]
+    .sort((a, b) => b.confidence * b.hits - a.confidence * a.hits)
+    .slice(0, 8);
+  const routes = Object.entries(learning?.routeStats || {});
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-2 text-xs text-[var(--color-muted)]">
+        {learningSummaryLine(learning || { insights: [], totalTurns: 0, totalFeedback: 0 } as never)}
+        {learning?.lastReflectionAt ? (
+          <div className="mt-1 text-[10px] text-[var(--color-subtle)]">
+            Last reflect · {new Date(learning.lastReflectionAt).toLocaleString()}
+          </div>
+        ) : null}
+      </div>
+      {routes.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {routes.map(([tier, st]) =>
+            st ? (
+              <span
+                key={tier}
+                className="rounded-full border border-[var(--color-border)] px-2 py-0.5 font-mono text-[10px] text-[var(--color-muted)]"
+              >
+                {tier} {st.success}↑ {st.fail}↓
+              </span>
+            ) : null,
+          )}
+        </div>
+      )}
+      {top.length > 0 ? (
+        <ul className="space-y-1 text-xs text-[var(--color-fg)]">
+          {top.map((i) => (
+            <li key={i.id} className="flex gap-2">
+              <span className="shrink-0 font-mono text-[10px] text-[var(--color-subtle)]">
+                {Math.round(i.confidence * 100)}%
+              </span>
+              <span className="text-[var(--color-muted)]">{i.text}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-[var(--color-muted)]">
+          No insights yet. Chat normally, rate replies, or run Reflect.
+        </p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            void runSelfImprove()
+              .then((r) => setMsg(r.detail))
+              .finally(() => setBusy(false));
+          }}
+        >
+          {busy ? "Reflecting…" : "Reflect & improve"}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            if (typeof window !== "undefined" && window.confirm("Clear all learning history?")) {
+              clearLearning();
+              setMsg("Learning cleared");
+            }
+          }}
+        >
+          Clear learning
+        </Button>
+      </div>
+      {msg ? <p className="text-[11px] text-[var(--color-muted)]">{msg}</p> : null}
+      <p className="text-[11px] text-[var(--color-subtle)]">
+        Chat: <span className="font-mono">/learn</span> ·{" "}
+        <span className="font-mono">/learn reflect</span> ·{" "}
+        <span className="font-mono">/learn note …</span>
+      </p>
+    </div>
+  );
+}
 
 function FileMemoryPanel() {
   const [files, setFiles] = useState<MemoryFileInfo[]>([]);

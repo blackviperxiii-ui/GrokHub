@@ -83,4 +83,5 @@ const memSrc = fs.readFileSync(path.join(process.cwd(), "desktop/memory-store.cj
 assert.match(memSrc, /MEMORY\.md/);
 assert.match(memSrc, /USER\.md/);
 assert.ok(fs.existsSync(path.join(process.cwd(), "src/lib/file-memory.ts")));
+assert.ok(fs.existsSync(path.join(process.cwd(), "src/lib/learning.ts")));
 console.log("smoke-unit OK");

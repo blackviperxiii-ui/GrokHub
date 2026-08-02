@@ -11,7 +11,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const MAX_FILE_BYTES = 512 * 1024; // 512KB per file safety
-const ALLOWED = new Set(["MEMORY.md", "USER.md"]);
+const ALLOWED = new Set(["MEMORY.md", "USER.md", "LEARNINGS.md"]);
 
 function userDataDir() {
   try {
@@ -67,6 +67,19 @@ function ensureLayout() {
       "utf8",
     );
   }
+  const learn = path.join(memoryRoot(), "LEARNINGS.md");
+  if (!fs.existsSync(learn)) {
+    fs.writeFileSync(
+      learn,
+      [
+        "# GrokHub learnings",
+        "",
+        "Distilled self-improvement insights. Updated by Reflect / compact.",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+  }
 }
 
 function todaySlug() {
@@ -116,7 +129,7 @@ function writeFileSafe(abs, content) {
 function listFiles() {
   ensureLayout();
   const out = [];
-  for (const name of ["USER.md", "MEMORY.md"]) {
+  for (const name of ["USER.md", "MEMORY.md", "LEARNINGS.md"]) {
     const abs = path.join(memoryRoot(), name);
     let bytes = 0;
     let updatedAt = 0;

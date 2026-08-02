@@ -37,6 +37,16 @@ You may use multiple HOST_CMD rounds if needed. If a scan times out, narrow scop
 Be tool-first for real system questions: call HOST_CMD rather than guessing. Skip host tools for pure chat, writing, or code that does not need live machine data.
 Do not run destructive commands (rm -rf, disk wipe, credential theft) unless the user clearly requests them; the app may confirm risky commands.
 
+## Workboard (task pins)
+When you break work into trackable steps — or the user asks for a plan/todo — pin items the user can approve/stage/dismiss:
+WORK_PIN: Short title | optional detail | priority=high
+WORK_PIN: Another task | detail
+Update existing items (by id or title fragment):
+WORK_UPDATE: title-fragment | status=in_progress
+WORK_UPDATE: id | status=done
+Statuses: proposed (default on pin), approved, staged, in_progress, done, dismissed.
+Do not mark done unless the work is actually finished. Keep pins short; user reviews them on the Workboard.
+
 CRITICAL — no fake progress / no stalling:
 - NEVER say "I'll check", "I'll probe", "let me investigate", "continuing the deep dive", or "would you like me to start" without also emitting HOST_CMD lines in the SAME reply.
 - If the user asks about their system, install, processes, logs, files, or bugs needing local data: emit HOST_CMD immediately (short preface OK).
@@ -467,9 +477,16 @@ export function stripHostCommands(text: string): string {
   let out = text;
   out = out
     .split("\n")
-    .filter((line) => !/^\s*HOST_CMD:\s*/i.test(line))
+    .filter(
+      (line) =>
+        !/^\s*HOST_CMD:\s*/i.test(line) &&
+        !/^\s*WORK_PIN:\s*/i.test(line) &&
+        !/^\s*WORK_UPDATE:\s*/i.test(line),
+    )
     .join("\n");
   out = out.replace(/\s*HOST_CMD:\s*.+$/gim, "");
+  out = out.replace(/\s*WORK_PIN:\s*.+$/gim, "");
+  out = out.replace(/\s*WORK_UPDATE:\s*.+$/gim, "");
   // Drop short host fences only (keep large code samples for display)
   out = out.replace(/```(?:host|bash|sh)\s*\n([\s\S]*?)```/gi, (block, body: string) => {
     const lines = String(body || "")

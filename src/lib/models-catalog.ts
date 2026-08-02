@@ -39,6 +39,8 @@ export type RouteContext = {
   hasAttachments?: boolean;
   lastRouteTier?: RouteTier;
   lastRoutedMode?: "fast" | "expert" | "heavy" | "build" | "imagine";
+  /** Soft bias from learning engine: positive = prefer tier */
+  learningBias?: Partial<Record<RouteTier, number>>;
 };
 
 /** Heuristic preferred API ids per product slot (first match against live list wins). */
@@ -547,6 +549,16 @@ function scorePrompt(prompt: string, ctx: RouteContext = {}) {
   if (words <= 3 && !judgmentHit && !codeHit && !smartHit && !uxHit) simple += 30;
   if (/^(yes|no|ok|thanks|thank you|continue|go on)[.!]?$/i.test(p.trim())) simple += 45;
   if (judgmentHit) simple = 0;
+
+  // Learning bias: nudge complexity/analytical/code/simple from past outcomes
+  const bias = ctx.learningBias || {};
+  if (bias.fast) simple += bias.fast * 40;
+  if (bias.think) analytical += (bias.think || 0) * 35;
+  if (bias.deep) {
+    analytical += bias.deep * 25;
+    complexity += bias.deep * 20;
+  }
+  if (bias.build) code += bias.build * 40;
 
   const clamp = (n: number) => Math.max(0, Math.min(100, n));
   return {

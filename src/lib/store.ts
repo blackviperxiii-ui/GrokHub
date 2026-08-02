@@ -17,8 +17,41 @@ import {
   memoryAppend,
   memoryAppendFacts,
   memoryRead,
+  memoryWrite,
   migrateNotesToFileMemory,
 } from "./file-memory";
+import {
+  emptyLearning,
+  normalizeLearning,
+  learnFromTurn,
+  learnFromFeedback,
+  reflectLearning,
+  learningPinBundle,
+  routeLearningBias,
+  learningSummaryLine,
+  pushLearningEvent,
+  type LearningState,
+} from "./learning";
+import {
+  emptyWorkboard,
+  normalizeWorkboard,
+  pinWorkItem as pinWorkItemHelper,
+  setWorkItemStatus as setWorkStatusHelper,
+  updateWorkItem as updateWorkItemHelper,
+  removeWorkItem as removeWorkItemHelper,
+  extractWorkCommands,
+  workboardContextBlock,
+  type WorkboardState,
+  type WorkItemStatus,
+  type WorkPriority,
+} from "./workboard";
+import {
+  buildProjectSummary,
+  projectContextBlock,
+  projectNameFromPath,
+  type ProjectWorkspace,
+} from "./project-workspace";
+import { compactMessagesSmart, reflectLearningSmart } from "./smart-compact";
 import { renderImaginePreview } from "./imagine";
 import { getMode, resolveMode, resolveModeWithCatalog, stripAssistantChrome, modelIdForMode, autoRouteFor } from "./modes";
 import { buildCatalog, emptyCatalog, applyGrokPlan, needsGrokClassification, type ResolvedCatalog, type GrokSlotPlan } from "./models-catalog";
@@ -155,6 +188,10 @@ type State = {
   quickAssistDismissed: string[];
   /** Bumps to rotate alternate chip packs */
   quickAssistRotation: number;
+  /** Self-improvement: outcomes, feedback, distilled insights */
+  learning: LearningState;
+  workboard: WorkboardState;
+  projectWorkspace: ProjectWorkspace | null;
   usage: UsageSnapshot;
   heartbeatAt: number;
   running: boolean;
@@ -201,6 +238,24 @@ type State = {
   recordQuickAssistTyped: (text: string) => void;
   recordQuickAssistOutcome: (outcome: "success" | "failure") => void;
   clearQuickAssistMemory: () => void;
+  rateMessage: (messageId: string, positive: boolean) => void;
+  runSelfImprove: () => Promise<{ ok: boolean; detail: string }>;
+  clearLearning: () => void;
+  pinWorkItem: (input: {
+    title: string;
+    detail?: string;
+    priority?: WorkPriority;
+    source?: "agent" | "user";
+  }) => void;
+  setWorkItemStatus: (idOrTitle: string, status: WorkItemStatus) => void;
+  removeWorkItem: (id: string) => void;
+  updateWorkItem: (
+    id: string,
+    patch: Partial<{ title: string; detail: string; priority: WorkPriority; status: WorkItemStatus }>,
+  ) => void;
+  bindProjectWorkspace: (path: string) => Promise<{ ok: boolean; detail: string }>;
+  clearProjectWorkspace: () => void;
+  exportDiagnostics: () => Promise<{ ok: boolean; text?: string; error?: string }>;
   dismissQuickAssistChip: (chip: QuickChip) => void;
   rotateQuickAssist: () => void;
   syncWebsiteConnectors: () => Promise<{ ok: boolean; detail: string; count: number }>;
@@ -794,6 +849,9 @@ export const useGrokHub = create<State>()(
       quickAssistMemory: emptyQuickAssistMemory(),
       quickAssistDismissed: [],
       quickAssistRotation: 0,
+      learning: emptyLearning(),
+      workboard: emptyWorkboard(),
+      projectWorkspace: null,
       modelCatalog: emptyCatalog(),
       lastModelsFetchAt: 0,
       apiKey: "",
@@ -905,6 +963,130 @@ export const useGrokHub = create<State>()(
           quickAssistMemory: emptyQuickAssistMemory(),
           quickAssistDismissed: [],
           quickAssistRotation: 0,
+        });
+      },
+
+      rateMessage: (messageId, positive) => {
+        const s = get();
+        const msg = s.chat.find((m) => m.id === messageId);
+        if (!msg || msg.role !== "assistant") return;
+        set({
+          learning: learnFromFeedback(s.learning, {
+            positive,
+            messagePreview: msg.content || "",
+            routeTier: msg.routeTier,
+            mode: msg.mode,
+            threadId: s.activeThreadId || undefined,
+          }),
+        });
+        get().pushActivity({
+          kind: "chat",
+          title: positive ? "Marked helpful" : "Marked unhelpful",
+          detail: (msg.content || "").slice(0, 80),
+          status: "success",
+        });
+      },
+
+      runSelfImprove: async () => {
+        const s = get();
+        const online = Boolean(s.oauth?.accessToken || s.apiKey);
+        const { state, markdown } = await reflectLearningSmart(s.learning, {
+          online,
+          bearer: s.oauth?.accessToken,
+          apiKey: s.apiKey,
+        });
+        set({ learning: state });
+        try {
+          await memoryWrite("LEARNINGS.md", markdown);
+          const tops = state.insights.slice(0, 5).map((i) => i.text);
+          if (tops.length) await memoryAppendFacts(tops, { target: "MEMORY.md" });
+        } catch {
+          /* browser ok */
+        }
+        get().pushActivity({
+          kind: "chat",
+          title: "Self-improve complete",
+          detail: learningSummaryLine(state),
+          status: "success",
+        });
+        return {
+          ok: true,
+          detail: `Reflected into LEARNINGS.md · ${learningSummaryLine(state)}`,
+        };
+      },
+
+      clearLearning: () => {
+        set({ learning: emptyLearning() });
+      },
+
+      pinWorkItem: (input) => {
+        const s = get();
+        const { state, item } = pinWorkItemHelper(s.workboard, {
+          ...input,
+          threadId: s.activeThreadId,
+          projectPath: s.projectWorkspace?.path || null,
+        });
+        set({ workboard: state });
+        get().pushActivity({
+          kind: "agent",
+          title: "Workboard pin",
+          detail: item.title,
+          status: "success",
+        });
+      },
+
+      setWorkItemStatus: (idOrTitle, status) => {
+        set({ workboard: setWorkStatusHelper(get().workboard, idOrTitle, status) });
+      },
+
+      updateWorkItem: (id, patch) => {
+        set({ workboard: updateWorkItemHelper(get().workboard, id, patch) });
+      },
+
+      removeWorkItem: (id) => {
+        set({ workboard: removeWorkItemHelper(get().workboard, id) });
+      },
+
+      bindProjectWorkspace: async (path) => {
+        const root = String(path || "").trim();
+        if (!root) return { ok: false, detail: "Path required" };
+        try {
+          const summary = await buildProjectSummary(root);
+          const ws = {
+            path: root,
+            name: projectNameFromPath(root),
+            summary,
+            boundAt: Date.now(),
+            threadId: get().activeThreadId,
+          };
+          set({ projectWorkspace: ws });
+          get().pushActivity({
+            kind: "desktop",
+            title: "Project bound",
+            detail: root,
+            status: "success",
+          });
+          return { ok: true, detail: `Bound ${ws.name}` };
+        } catch (e) {
+          return {
+            ok: false,
+            detail: e instanceof Error ? e.message : "bind failed",
+          };
+        }
+      },
+
+      clearProjectWorkspace: () => set({ projectWorkspace: null }),
+
+      exportDiagnostics: async () => {
+        const { copyDiagnostics } = await import("./diagnostics");
+        const { learningSummaryLine } = await import("./learning");
+        const { workboardCounts } = await import("./workboard");
+        const counts = workboardCounts(get().workboard);
+        const open =
+          counts.proposed + counts.approved + counts.staged + counts.in_progress;
+        return copyDiagnostics({
+          learningLine: learningSummaryLine(get().learning),
+          workboardOpen: open,
         });
       },
 
@@ -3100,6 +3282,8 @@ export const useGrokHub = create<State>()(
                     "- `/memory show|user|today` — view file memory",
                     "- `/context` — show context budget / layers",
                     "- `/compact` — summarize older turns (frees API window)",
+                    "- `/learn` — show learning stats · `/learn reflect` self-improve",
+                    "- `/learn note …` — save a preference for the agent",
                     "- `/tools on|off` — host + connector tools",
                   ].join("\n"),
                   ts: Date.now(),
@@ -3262,8 +3446,154 @@ if (cmd === "context") {
             }));
             return;
           }
+          if (cmd === "learn") {
+            const sub = (arg || "").trim();
+            if (/^reflect$/i.test(sub) || /^improve$/i.test(sub)) {
+              const r = await get().runSelfImprove();
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: `**Self-improve**\n\n${r.detail}`,
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+              return;
+            }
+            if (/^clear$/i.test(sub)) {
+              get().clearLearning();
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: "Learning history cleared.",
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+              return;
+            }
+            if (/^(note|pref)\s+/i.test(sub) || (sub && !/^(show|stats)?$/i.test(sub))) {
+              const note = sub.replace(/^(note|pref)\s+/i, "").trim() || sub;
+              set({
+                learning: pushLearningEvent(get().learning, {
+                  kind: "pref",
+                  summary: note,
+                  polarity: 1,
+                  tags: ["manual"],
+                }),
+              });
+              await memoryAppend("memory", note);
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: `Learned preference:\n- ${note}`,
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+              return;
+            }
+            const L = get().learning;
+            const lines = [
+              "**Learning & self-improvement**",
+              "",
+              learningSummaryLine(L),
+              L.lastReflectionAt
+                ? `Last reflect: ${new Date(L.lastReflectionAt).toLocaleString()}`
+                : "No reflection yet — run `/learn reflect`",
+              "",
+              "### Top insights",
+              ...(L.insights.slice(0, 8).map((i) => `- (${Math.round(i.confidence * 100)}%) ${i.text}`) ||
+                ["_None yet_"]),
+              "",
+              "### Recent events",
+              ...L.events.slice(-6).reverse().map((e) => `- ${e.summary}`),
+              "",
+              "_`/learn reflect` · `/learn note …` · `/learn clear` · rate replies with 👍/👎_",
+            ];
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                {
+                  id: uid("msg"),
+                  role: "system",
+                  content: lines.join("\n"),
+                  ts: Date.now(),
+                },
+              ],
+            }));
+            return;
+          }
 
-          if (cmd === "tools") {
+          
+          if (cmd === "board" || cmd === "work" || cmd === "workboard") {
+            const sub = (arg || "").trim();
+            if (/^add\s+/i.test(sub) || (!sub.startsWith("list") && sub.includes("|")) || (/^[^+]/.test(sub) && sub && !/^(list|open)?$/i.test(sub) && !/^dismiss/i.test(sub))) {
+              const body = sub.replace(/^add\s+/i, "");
+              const parts = body.split("|").map((s) => s.trim());
+              get().pinWorkItem({
+                title: parts[0] || body,
+                detail: parts[1] || "",
+                priority: /high/i.test(parts[2] || "") ? "high" : "normal",
+                source: "user",
+              });
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: `Pinned to workboard: **${parts[0] || body}**`,
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+              return;
+            }
+            set({ nav: "workboard" });
+            const open = get().workboard.items.filter((i) =>
+              ["proposed", "approved", "staged", "in_progress"].includes(i.status),
+            );
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                {
+                  id: uid("msg"),
+                  role: "system",
+                  content: [
+                    "**Workboard**",
+                    "",
+                    open.length
+                      ? open
+                          .slice(0, 12)
+                          .map((i) => `- [${i.status}] ${i.title}`)
+                          .join("\n")
+                      : "_No open items — agent can WORK_PIN: tasks or use /board add …_",
+                    "",
+                    "Opened Workboard view.",
+                  ].join("\n"),
+                  ts: Date.now(),
+                },
+              ],
+            }));
+            return;
+          }
+if (cmd === "tools") {
             const on = !/off|false|0|no/i.test(arg || "on");
             get().setAgentPrefs({ hostToolsEnabled: on, connectorToolsEnabled: on });
             set((s) => ({
@@ -3372,6 +3702,7 @@ if (cmd === "context") {
         const lastAsst = [...recentChat].reverse().find((c) => c.role === "assistant");
         const routeCtx = {
           historyTurns: recentChat.length,
+          learningBias: routeLearningBias(get().learning),
           recentUserText: recentChat
             .filter((c) => c.role === "user")
             .slice(-3)
@@ -3624,6 +3955,9 @@ if (cmd === "context") {
               thread: thCtx || null,
               memoryNotes: notes,
               fileMemoryBundle: fileMem.bundle || "",
+              learningBundle: learningPinBundle(get().learning),
+              projectBundle: projectContextBlock(get().projectWorkspace),
+              workboardBundle: workboardContextBlock(get().workboard),
               openClawBundle: get().openClawWorkspace?.contextBundle,
               connectorBlock: (await import("./grok")).connectorContextBlock(
                 get().connectors,
@@ -3659,6 +3993,8 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx);
               "## GrokHub session capabilities",
               "- Context manager: budgeted history + optional thread summary (see /context).",
               "- File memory: USER.md, MEMORY.md, daily notes (see /memory show).",
+              "- Workboard: pin tasks with WORK_PIN: title | detail | priority=high; update WORK_UPDATE: id | status=…",
+              "- Bound project: prefer HOST_CMD under the project path when set.",
               "- Persistent: chat history, settings, memory notes, Imagine media, connectors.",
               stTurn.agentPrefs?.memoryNotes?.trim()
                 ? `- Memory notes loaded (${stTurn.agentPrefs.memoryNotes.trim().length} chars). Use them.`
@@ -3820,7 +4156,40 @@ while (rounds < maxRounds && !aborted) {
                   // No token payload — fall back to mode estimate once
                   bill = get().recordUsage("message", routed);
                 }
-                const full = stripAssistantChrome(result.content || roundText);
+                const fullRaw = stripAssistantChrome(result.content || roundText);
+                // Workboard pins/updates from model
+                try {
+                  const wc = extractWorkCommands(fullRaw);
+                  if (wc.pins.length || wc.updates.length) {
+                    let wb = get().workboard;
+                    for (const pin of wc.pins) {
+                      const r = pinWorkItemHelper(wb, {
+                        title: pin.title,
+                        detail: pin.detail,
+                        priority: pin.priority,
+                        source: "agent",
+                        threadId: get().activeThreadId,
+                        projectPath: get().projectWorkspace?.path || null,
+                      });
+                      wb = r.state;
+                    }
+                    for (const up of wc.updates) {
+                      wb = setWorkStatusHelper(wb, up.ref, up.status);
+                    }
+                    set({ workboard: wb });
+                    if (wc.pins.length) {
+                      get().pushActivity({
+                        kind: "agent",
+                        title: `Workboard +${wc.pins.length}`,
+                        detail: wc.pins.map((p) => p.title).join(", ").slice(0, 120),
+                        status: "success",
+                      });
+                    }
+                  }
+                } catch {
+                  /* ignore */
+                }
+                const full = fullRaw;
                 const visible = scrubAssistant(full);
                 accumulated = full;
                 // Never show raw HOST_CMD lines to the user
@@ -4131,11 +4500,19 @@ if (!cmds.length) {
                 const outputs: string[] = [];
                 // Allow a few more cmds for multi-step scans; still cap to keep turns sane
                 const hostCmdList = cmds.slice(0, 5);
-                for (let hi = 0; hi < hostCmdList.length; hi++) {
-                  const rawCmd = hostCmdList[hi]!;
+                const isReadOnlyCmd = (c: string) =>
+                  /^(ls|ll|pwd|whoami|uname|cat |head |tail |wc |file |stat |find |rg |grep |ps |df |du |free |id |env |printenv |hostname |date |which |type |realpath |readlink |test |\[|echo |journalctl |systemctl --user status|ip |ss |uptime)/i.test(
+                    c.trim(),
+                  ) &&
+                  !/\b(rm|mv|cp|chmod|chown|mkfs|dd|sudo|tee|install|pacman|npm i|pip install|>|>>)\b/i.test(
+                    c,
+                  );
+                const canParallel =
+                  hostCmdList.length > 1 && hostCmdList.every((c) => isReadOnlyCmd(c));
+
+                const runOneHost = async (rawCmd: string, stepIdx: number, stepTotal: number) => {
                   if (abort.signal.aborted || gen !== chatGeneration) {
-                    aborted = true;
-                    break;
+                    return { aborted: true as const, out: "" };
                   }
                   const bounded = boundHostScanCommand(rawCmd);
                   const cmd = bounded.command;
@@ -4146,23 +4523,25 @@ if (!cmds.length) {
                     detail: (bounded.note ? `[${bounded.note}] ` : "") + rawCmd.slice(0, 140),
                     status: "running",
                   });
-                  const stepIdx = hi + 1;
-                  const stepTotal = hostCmdList.length;
                   let elapsedSec = 0;
                   const paintHost = () => {
                     set({
-                      streamStatus: `Host: ${rawCmd.slice(0, 56)}… (${elapsedSec}s)`,
+                      streamStatus: canParallel
+                        ? `Host parallel ${stepIdx}/${stepTotal}: ${rawCmd.slice(0, 40)}…`
+                        : `Host: ${rawCmd.slice(0, 56)}… (${elapsedSec}s)`,
                     });
-                    patchBot(
-                      toolRunningMarkdown({
-                        kind: "host",
-                        command: rawCmd,
-                        preface: visible || "Working on your machine…",
-                        elapsedSec,
-                        step: { index: stepIdx, total: stepTotal },
-                      }),
-                      { streaming: true },
-                    );
+                    if (!canParallel) {
+                      patchBot(
+                        toolRunningMarkdown({
+                          kind: "host",
+                          command: rawCmd,
+                          preface: visible || "Working on your machine…",
+                          elapsedSec,
+                          step: { index: stepIdx, total: stepTotal },
+                        }),
+                        { streaming: true },
+                      );
+                    }
                   };
                   paintHost();
                   const hostTick = setInterval(() => {
@@ -4171,8 +4550,6 @@ if (!cmds.length) {
                     paintHost();
                   }, 1000);
                   try {
-                    // Long scans: do not abort the whole agent turn on timeout —
-                    // hostExec returns ok:false with stderr; we feed that back and continue.
                     const jobId = `host-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
                     activeHostJobId = jobId;
                     let r;
@@ -4200,26 +4577,62 @@ if (!cmds.length) {
                         .filter(Boolean)
                         .join("\n"),
                     );
-                    outputs.push(out);
                     get().pushActivity({
                       kind: "desktop",
-                      title: r.ok ? "Host ok" : /timed out/i.test(r.stderr || "") ? "Host timeout" : "Host failed",
+                      title: r.ok
+                        ? "Host ok"
+                        : /timed out/i.test(r.stderr || "")
+                          ? "Host timeout"
+                          : "Host failed",
                       detail: rawCmd.slice(0, 120),
                       status: r.ok ? "success" : "failed",
                     });
+                    return { aborted: false as const, out };
                   } catch (e) {
-                    // Soft-fail: keep the tool loop alive so the model can summarize
-                    outputs.push(
-                      clipHostOutput(
-                        `$ ${rawCmd}\n[host error] ${e instanceof Error ? e.message : "failed"}\n(continuing agent turn)`,
-                      ),
-                    );
+                    clearInterval(hostTick);
                     get().pushActivity({
                       kind: "desktop",
                       title: "Host error",
                       detail: e instanceof Error ? e.message : "failed",
                       status: "failed",
                     });
+                    return {
+                      aborted: false as const,
+                      out: clipHostOutput(
+                        `$ ${rawCmd}\n[host error] ${e instanceof Error ? e.message : "failed"}\n(continuing agent turn)`,
+                      ),
+                    };
+                  }
+                };
+
+                if (canParallel) {
+                  set({
+                    streamStatus: `Host: running ${hostCmdList.length} read-only cmds in parallel…`,
+                  });
+                  patchBot(
+                    (visible || "Working on your machine…") +
+                      `\n\n_Running ${hostCmdList.length} safe host commands in parallel…_`,
+                    { streaming: true },
+                  );
+                  const results = await Promise.all(
+                    hostCmdList.map((c, i) => runOneHost(c, i + 1, hostCmdList.length)),
+                  );
+                  if (results.some((r) => r.aborted)) aborted = true;
+                  for (const r of results) {
+                    if (r.out) outputs.push(r.out);
+                  }
+                } else {
+                  for (let hi = 0; hi < hostCmdList.length; hi++) {
+                    const r = await runOneHost(
+                      hostCmdList[hi]!,
+                      hi + 1,
+                      hostCmdList.length,
+                    );
+                    if (r.aborted) {
+                      aborted = true;
+                      break;
+                    }
+                    if (r.out) outputs.push(r.out);
                   }
                 }
                 if (aborted) break;
@@ -4351,6 +4764,20 @@ if (!cmds.length) {
           } catch {
             /* ignore */
           }
+          try {
+            set({
+              learning: learnFromTurn(get().learning, {
+                ok: false,
+                mode: routed,
+                routeTier: auto?.tier,
+                userText: trimmed,
+                assistantText: finalAnswer || "",
+                threadId: get().activeThreadId || undefined,
+              }),
+            });
+          } catch {
+            /* ignore */
+          }
         } else {
           const answer = stripHostCommands(stripAssistantChrome(finalAnswer || ""));
           set((s) => {
@@ -4390,6 +4817,28 @@ if (!cmds.length) {
           });
           try {
             get().recordQuickAssistOutcome(usedLive ? "success" : "failure");
+          } catch {
+            /* ignore */
+          }
+          try {
+            const botRow = get().chat.find((m) => m.id === botId);
+            set({
+              learning: learnFromTurn(get().learning, {
+                ok: Boolean(usedLive) || Boolean(answer?.trim()),
+                mode: routed,
+                routeTier: botRow?.routeTier || auto?.tier,
+                modelId: botRow?.routeModel || auto?.modelId,
+                userText: trimmed,
+                assistantText: answer || "",
+                threadId: get().activeThreadId || undefined,
+                usedHostTools: /host|HOST_CMD|Desktop host/i.test(answer || ""),
+                usedConnectors: /connector|CONNECTOR_CMD/i.test(answer || ""),
+              }),
+            });
+            const L = get().learning;
+            if (L.totalTurns > 0 && L.totalTurns % 12 === 0) {
+              void get().runSelfImprove();
+            }
           } catch {
             /* ignore */
           }
@@ -4667,6 +5116,9 @@ if (!cmds.length) {
           quickAssistMemory: emptyQuickAssistMemory(),
       quickAssistDismissed: [],
       quickAssistRotation: 0,
+          learning: emptyLearning(),
+          workboard: emptyWorkboard(),
+          projectWorkspace: null,
           pendingHostConfirm: null,
         });
       },
@@ -4690,6 +5142,9 @@ if (!cmds.length) {
         desktop: s.desktop,
         agentPrefs: s.agentPrefs,
         usage: s.usage,
+        learning: s.learning,
+        workboard: s.workboard,
+        projectWorkspace: s.projectWorkspace,
         // Persist imagine metadata + disk paths (bytes live in userData/imagine-media)
         imagineJobs: s.imagineJobs.slice(0, 32).map((j) => {
           const {
@@ -4759,7 +5214,14 @@ if (!cmds.length) {
             signature: cat.signature || "",
           };
         }
-        s.quickAssistMemory = normalizeMemory(s.quickAssistMemory);
+        s.learning = normalizeLearning((s as { learning?: unknown }).learning);
+          s.workboard = normalizeWorkboard((s as { workboard?: unknown }).workboard);
+          if ((s as { projectWorkspace?: unknown }).projectWorkspace && typeof (s as { projectWorkspace?: { path?: string } }).projectWorkspace === "object") {
+            /* keep as-is */
+          } else {
+            (s as { projectWorkspace: null }).projectWorkspace = null;
+          }
+          s.quickAssistMemory = normalizeMemory(s.quickAssistMemory);
         if (!Array.isArray(s.quickAssistDismissed)) s.quickAssistDismissed = [];
         if (typeof s.quickAssistRotation !== "number") s.quickAssistRotation = 0;
         // merge catalog connectors (new website ids without wiping status)

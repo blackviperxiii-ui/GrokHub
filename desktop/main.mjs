@@ -378,7 +378,8 @@ function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // UI renderer stays sandboxed; host-bridge runs as a separate privileged path
+      sandbox: true,
       webSecurity: true,
     },
   });
