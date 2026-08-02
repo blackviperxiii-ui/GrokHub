@@ -1,6 +1,6 @@
 # GrokHub
 
-**v0.5.0** — Grok-native agent desktop (OpenClaw-style) for **Arch Linux** and **Windows**.
+**v0.5.1** — Grok-native agent desktop (OpenClaw-style) for **Arch Linux** and **Windows**.
 
 Modes (Auto / Fast / Expert / Heavy / Build) · Imagine · connectors · skills · automations · usage meter · free-Grok fallback · setup sync · unsandboxed host (CLI · files · apps).
 
@@ -51,7 +51,7 @@ More detail: [packaging/aur/README.md](packaging/aur/README.md)
 #### Download the installer (recommended)
 
 1. Open **[Releases](https://github.com/blackviperxiii-ui/Grok-Hub/releases)**
-2. Download **`GrokHub-Setup-0.5.0.exe`** (or the latest `GrokHub-Setup-*.exe`)
+2. Download **`GrokHub-Setup-0.5.1.exe`** (or the latest `GrokHub-Setup-*.exe`)
 3. Run the installer → Start Menu / Desktop **GrokHub**
 
 Portable (no install): **`GrokHub-Portable-*.exe`** from the same release.

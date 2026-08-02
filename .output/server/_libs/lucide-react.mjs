@@ -438,6 +438,19 @@ var HardDrive = createLucideIcon("hard-drive", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var HeartPulse = createLucideIcon("heart-pulse", [["path", {
+	d: "M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z",
+	key: "c3ymky"
+}], ["path", {
+	d: "M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27",
+	key: "1uw2ng"
+}]]);
+/**
+* @license lucide-react v0.510.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var History = createLucideIcon("history", [
 	["path", {
 		d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
@@ -1012,4 +1025,4 @@ var Zap = createLucideIcon("zap", [["path", {
 	key: "1xq2db"
 }]]);
 //#endregion
-export { History as A, Compass as B, MessageSquare as C, Link2 as D, LoaderCircle as E, FolderOpen as F, Brain as G, ChevronRight as H, FolderInput as I, AppWindow as J, ArrowUp as K, ExternalLink as L, Hammer as M, Gauge as N, Link2Off as O, Folder as P, Ellipsis as R, MicOff as S, Menu as T, Check as U, Command as V, Cable as W, Activity as Y, Plus as _, Trash2 as a, Minus as b, Square as c, ShieldAlert as d, Settings as f, Plug as g, Ratio as h, Users as i, HardDrive as j, Image as k, Sparkles as l, RefreshCw as m, X as n, TimerReset as o, Send as p, ArrowRight as q, Video as r, Terminal as s, Zap as t, ShieldCheck as u, Play as v, MessageSquarePlus as w, Mic as x, Pencil as y, Download as z };
+export { History as A, Download as B, MessageSquare as C, Link2 as D, LoaderCircle as E, Folder as F, Cable as G, Command as H, FolderOpen as I, ArrowRight as J, Brain as K, FolderInput as L, HardDrive as M, Hammer as N, Link2Off as O, Gauge as P, ExternalLink as R, MicOff as S, Menu as T, ChevronRight as U, Compass as V, Check as W, Activity as X, AppWindow as Y, Plus as _, Trash2 as a, Minus as b, Square as c, ShieldAlert as d, Settings as f, Plug as g, Ratio as h, Users as i, HeartPulse as j, Image as k, Sparkles as l, RefreshCw as m, X as n, TimerReset as o, Send as p, ArrowUp as q, Video as r, Terminal as s, Zap as t, ShieldCheck as u, Play as v, MessageSquarePlus as w, Mic as x, Pencil as y, Ellipsis as z };

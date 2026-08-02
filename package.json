@@ -1,6 +1,6 @@
 {
   "name": "grokhub",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -19,7 +19,7 @@
     "desktop": "electron desktop/main.mjs",
     "desktop:dev": "GROKHUB_URL=http://127.0.0.1:8080 electron desktop/main.mjs",
     "desktop:arch": "bash scripts/arch-launch.sh",
-    "desktop:build": "GROKHUB_DESKTOP=1 vite build && npm run db:migrate",
+    "desktop:build": "node scripts/desktop-build.mjs",
     "aur:release": "bash scripts/make-aur-release.sh",
     "desktop:win": "electron desktop/main.mjs",
     "desktop:win:prod": "electron desktop/main.mjs",
