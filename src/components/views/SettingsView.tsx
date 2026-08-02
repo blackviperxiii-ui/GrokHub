@@ -65,6 +65,10 @@ export function SettingsView() {
   const startGrokOAuth = useGrokHub((s) => s.startGrokOAuth);
   const pollGrokOAuth = useGrokHub((s) => s.pollGrokOAuth);
   const clearGrokOAuth = useGrokHub((s) => s.clearGrokOAuth);
+  const preferFreeGrok = useGrokHub((s) => s.preferFreeGrok);
+  const setPreferFreeGrok = useGrokHub((s) => s.setPreferFreeGrok);
+  const setPlan = useGrokHub((s) => s.setPlan);
+  const usagePlan = useGrokHub((s) => s.usage.plan);
   const importOpenClawWorkspace = useGrokHub((s) => s.importOpenClawWorkspace);
   const clearOpenClawWorkspace = useGrokHub((s) => s.clearOpenClawWorkspace);
   const openClawWorkspace = useGrokHub((s) => s.openClawWorkspace);
@@ -369,6 +373,51 @@ export function SettingsView() {
           <p className="text-xs text-[var(--color-subtle)]">
             Uses xAI public OAuth client (device code). Tokens stay on this device only and are
             never committed to git.
+          </p>
+        </CardContent>
+      </Card>
+
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Free Grok fallback</CardTitle>
+          <CardDescription>
+            No SuperGrok? GrokHub can use free-tier models (when an API key has trial credits)
+            and/or your free grok.com website session. Paid OAuth/API still falls back to free
+            models if a premium model is denied.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={usagePlan === "free" ? "info" : "default"}>
+              Plan: {usagePlan === "free" ? "Free" : usagePlan === "super" ? "SuperGrok" : "Pro"}
+            </Badge>
+            <Button size="sm" variant="secondary" onClick={() => setPlan("free")}>
+              Use Free plan limits
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => setPlan("super")}>
+              SuperGrok limits
+            </Button>
+          </div>
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
+            <div>
+              <div className="text-sm font-medium">Allow free website fallback</div>
+              <div className="text-xs text-[var(--color-muted)]">
+                If API/OAuth fails or is missing, try chat via linked grok.com session
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-[var(--color-fg)]"
+              checked={preferFreeGrok !== false}
+              onChange={(e) => setPreferFreeGrok(e.target.checked)}
+            />
+          </label>
+          <p className="text-[11px] leading-relaxed text-[var(--color-subtle)]">
+            1) <strong className="text-[var(--color-muted)]">Link Grok website</strong> (free account
+            works) for website free chat · 2) optional free{" "}
+            <span className="font-mono">console.x.ai</span> API key with trial credits · 3) SuperGrok
+            OAuth when you upgrade.
           </p>
         </CardContent>
       </Card>
@@ -927,7 +976,7 @@ export function SettingsView() {
           <p className="text-[11px] leading-relaxed text-[var(--color-subtle)]">
             <strong className="text-[var(--color-muted)]">Taskbar pin:</strong> install the menu
             entry, then pin <em>GrokHub</em> from the app launcher — not a generic Electron icon.
-            Pins use <span className="font-mono">/usr/bin/grokhub</span> so they still work after
+            Pins use <span className="font-mono">/usr/bin/grokhub</span> (Linux) or Start Menu / <span className="font-mono">%LOCALAPPDATA%\GrokHub\grokhub.cmd</span> (Windows) so they still work after
             you quit. Window class / app id is <span className="font-mono">grokhub</span> (must
             match the desktop file). After updating, unpin + re-pin once if you still see a second
             icon.

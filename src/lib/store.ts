@@ -191,6 +191,9 @@ type State = {
   deleteThread: (id: string) => void;
   renameThread: (id: string, title: string) => void;
   setPlan: (plan: SubscriptionPlanId) => void;
+  /** When true, allow free website session + free-model cascade if paid access fails */
+  preferFreeGrok: boolean;
+  setPreferFreeGrok: (v: boolean) => void;
 
   recordUsage: (bucket: UsageBucket, mode?: GrokModeId) => { ok: boolean; cost: number };
   recordTokenUsage: (
@@ -525,6 +528,7 @@ export const useGrokHub = create<State>()(
       oauthPending: null,
       setupSyncMeta: { autoPullOnLogin: true, autoPushOnChange: false },
       grokConnected: null,
+      preferFreeGrok: true,
       grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
 
       setNav: (nav) => set({ nav, modeMenuOpen: false }),
@@ -705,11 +709,29 @@ export const useGrokHub = create<State>()(
         // Normalize bare tokens
         const normalized =
           raw && !raw.includes("=") ? `sso=${raw}` : raw;
-        set({ ssoCookie: normalized });
+        set((s) => ({
+          ssoCookie: normalized,
+          // Website session alone enables free Grok path
+          grokConnected: normalized
+            ? s.grokConnected === true
+              ? true
+              : s.oauth || s.apiKey
+                ? s.grokConnected
+                : true
+            : s.grokConnected,
+          grokStatusDetail: normalized
+            ? s.oauth || s.apiKey
+              ? s.grokStatusDetail
+              : "Free Grok · website session linked"
+            : s.grokStatusDetail,
+          usage:
+            normalized && s.usage.plan !== "free" && !s.oauth && !s.apiKey
+              ? { ...s.usage, plan: "free" as const }
+              : s.usage,
+        }));
         void import("./secrets-client").then((m) =>
           m.secretsSet("ssoCookie", normalized),
         );
-        // Inject into Electron partition so session.fetch works
         if (typeof window !== "undefined" && window.grokhubDesktop?.grok?.injectWebsiteCookie) {
           void window.grokhubDesktop.grok.injectWebsiteCookie(normalized);
         }
@@ -1545,6 +1567,8 @@ export const useGrokHub = create<State>()(
           ),
         }));
       },
+
+      setPreferFreeGrok: (v) => set({ preferFreeGrok: Boolean(v) }),
 
       setPlan: (plan) => {
         const prev = get().usage;
@@ -2425,14 +2449,23 @@ export const useGrokHub = create<State>()(
               });
               let roundText = "";
               const oc = get().openClawWorkspace;
+              const stNow = get();
+              // Prefer free models when no paid credentials, or plan is free.
+              // Paid OAuth/API still cascade to free models on subscription errors in the bridge.
+              const freeTier =
+                stNow.usage.plan === "free" ||
+                (!stNow.oauth?.accessToken && !stNow.apiKey);
               const result = await grokChatStream(
                 {
                   messages: history,
                   mode: routed,
-                  model: modelId,
+                  model: freeTier ? undefined : modelId,
                   apiKey: get().apiKey || undefined,
                   accessToken: get().oauth?.accessToken,
                   tokens: get().oauth,
+                  ssoCookie: get().ssoCookie || undefined,
+                  freeTier,
+                  allowWebsiteFallback: stNow.preferFreeGrok !== false,
                   workspaceContext: [
                     oc?.contextBundle || "",
                     (await import("./grok")).connectorContextBlock(get().connectors),
@@ -2483,6 +2516,24 @@ export const useGrokHub = create<State>()(
 
               if (result.ok && (result.content || roundText)) {
                 usedLive = true;
+                if (
+                  (result as { freeTier?: boolean }).freeTier ||
+                  String((result as { accessPath?: string }).accessPath || "").includes("free")
+                ) {
+                  set((s) => ({
+                    grokConnected: true,
+                    grokStatusDetail:
+                      (result as { accessPath?: string }).accessPath === "website_free"
+                        ? "Free Grok · website session"
+                        : (result as { fallbackFrom?: string }).fallbackFrom
+                          ? `Free Grok fallback · ${(result as { model?: string }).model || "mini"}`
+                          : "Free Grok · free-tier models",
+                    usage:
+                      s.oauth || s.apiKey
+                        ? s.usage
+                        : { ...s.usage, plan: "free" as const },
+                  }));
+                }
                 if (result.usage) {
                   bill = get().recordTokenUsage(
                     result.usage,
@@ -2807,8 +2858,8 @@ if (!cmds.length) {
                 err,
                 "",
                 hasOauth
-                  ? "Your OAuth session is saved. Try: Settings → Disconnect → Connect with Grok OAuth again, or paste an xAI API key as fallback."
-                  : "Fix: Settings → Connect with Grok OAuth (SuperGrok / X Premium) or paste an xAI API key.",
+                  ? "Your OAuth session is saved. Try reconnecting OAuth, paste an xAI API key, or Link Grok website for free-tier chat."
+                  : "Fix: Link Grok website (free), Connect with Grok OAuth, or paste an xAI API key (console.x.ai free credits).",
               ].join("\n");
               set({
                 grokConnected: false,
@@ -3209,6 +3260,7 @@ if (!cmds.length) {
           if (desk.confirmDestructiveOnly === undefined) desk.confirmDestructiveOnly = true;
           if (desk.selfModifyEnabled === undefined) desk.selfModifyEnabled = false;
         if (!s.setupSyncMeta) s.setupSyncMeta = { autoPullOnLogin: true, autoPushOnChange: false };
+        if (s.preferFreeGrok === undefined) s.preferFreeGrok = true;
         // normalize automation times / heartbeat fields
         if (Array.isArray(s.automations)) {
           s.automations = (s.automations as import("./types").Automation[]).map((a) => {

@@ -118,6 +118,146 @@ Exec=${exec} --automations
 `;
 }
 
+
+function isWin() {
+  return process.platform === "win32";
+}
+
+function windowsStartMenuDir() {
+  return path.join(
+    process.env.APPDATA || path.join(home(), "AppData", "Roaming"),
+    "Microsoft",
+    "Windows",
+    "Start Menu",
+    "Programs",
+  );
+}
+
+function windowsStartupDir() {
+  return path.join(
+    process.env.APPDATA || path.join(home(), "AppData", "Roaming"),
+    "Microsoft",
+    "Windows",
+    "Start Menu",
+    "Programs",
+    "Startup",
+  );
+}
+
+function resolveWindowsExec() {
+  if (process.env.GROKHUB_EXEC && fs.existsSync(process.env.GROKHUB_EXEC)) {
+    return process.env.GROKHUB_EXEC;
+  }
+  const local = path.join(
+    process.env.LOCALAPPDATA || path.join(home(), "AppData", "Local"),
+    "GrokHub",
+    "grokhub.cmd",
+  );
+  if (fs.existsSync(local)) return local;
+  const ps1 = path.join(
+    process.env.LOCALAPPDATA || path.join(home(), "AppData", "Local"),
+    "GrokHub",
+    "grokhub.ps1",
+  );
+  if (fs.existsSync(ps1)) return `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${ps1}"`;
+  return "grokhub";
+}
+
+function createWindowsShortcut(lnkPath, target, opts = {}) {
+  const workDir = opts.cwd || path.dirname(target);
+  const icon = opts.icon || "";
+  const args = opts.args || "";
+  // PowerShell COM shortcut (no extra deps)
+  const ps = `
+$ErrorActionPreference = 'Stop'
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut(${JSON.stringify(lnkPath)})
+$Shortcut.TargetPath = ${JSON.stringify(target)}
+$Shortcut.WorkingDirectory = ${JSON.stringify(workDir)}
+$Shortcut.WindowStyle = 1
+$Shortcut.Description = 'GrokHub — Grok agent desktop'
+${args ? `$Shortcut.Arguments = ${JSON.stringify(args)}` : ""}
+${icon ? `$Shortcut.IconLocation = ${JSON.stringify(icon)}` : ""}
+$Shortcut.Save()
+`.trim();
+  execFileSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps],
+    { windowsHide: true, stdio: "ignore" },
+  );
+}
+
+function installWindowsStartMenu(opts = {}) {
+  try {
+    const dir = windowsStartMenuDir();
+    ensureDir(dir);
+    const lnk = path.join(dir, "GrokHub.lnk");
+    let target = opts.exec || resolveWindowsExec();
+    let args = "";
+    // If target is "powershell.exe -File …" split
+    if (/powershell\.exe/i.test(target) && target.includes(" -File ")) {
+      const m = target.match(/-File\s+"([^"]+)"|-File\s+(\S+)/i);
+      args = m ? `-NoProfile -ExecutionPolicy Bypass -File "${m[1] || m[2]}"` : "";
+      target = "powershell.exe";
+    }
+    let icon = "";
+    const iconCandidates = [
+      path.join(process.env.LOCALAPPDATA || "", "GrokHub", "icons", "icon.png"),
+      path.join(process.env.GROKHUB_HOME || "", "desktop", "icons", "icon.png"),
+      path.join(process.env.GROKHUB_HOME || "", "desktop", "icons", "grokhub-256.png"),
+    ];
+    for (const c of iconCandidates) {
+      if (c && fs.existsSync(c)) {
+        icon = c;
+        break;
+      }
+    }
+    createWindowsShortcut(lnk, target, {
+      cwd: process.env.GROKHUB_HOME || path.dirname(target),
+      icon: icon ? `${icon},0` : undefined,
+      args,
+    });
+    return {
+      ok: true,
+      path: lnk,
+      exec: opts.exec || resolveWindowsExec(),
+      detail: `Start Menu shortcut installed: ${lnk}`,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "Windows Start Menu install failed",
+    };
+  }
+}
+
+function installWindowsAutostart(enabled) {
+  try {
+    const dest = path.join(windowsStartupDir(), "GrokHub.lnk");
+    if (!enabled) {
+      try {
+        fs.unlinkSync(dest);
+      } catch {
+        /* ignore */
+      }
+      return { ok: true, path: dest, detail: "Autostart disabled" };
+    }
+    ensureDir(windowsStartupDir());
+    const r = installWindowsStartMenu({ exec: resolveWindowsExec() });
+    if (!r.ok) return r;
+    // Copy/create into Startup
+    const startMenu = path.join(windowsStartMenuDir(), "GrokHub.lnk");
+    if (fs.existsSync(startMenu)) {
+      fs.copyFileSync(startMenu, dest);
+    } else {
+      createWindowsShortcut(dest, resolveWindowsExec(), {});
+    }
+    return { ok: true, path: dest, detail: "Autostart enabled (Startup folder)" };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "autostart failed" };
+  }
+}
+
 function ensureDir(d) {
   fs.mkdirSync(d, { recursive: true });
 }
@@ -140,6 +280,7 @@ function refreshCaches() {
 }
 
 function installMenuEntry(opts = {}) {
+  if (isWin()) return installWindowsStartMenu(opts);
   try {
     ensureDir(applicationsDir());
     const dest = path.join(applicationsDir(), "grokhub.desktop");
@@ -193,6 +334,7 @@ function installMenuEntry(opts = {}) {
 }
 
 function installAutostart(enabled) {
+  if (isWin()) return installWindowsAutostart(enabled);
   try {
     ensureDir(autostartDir());
     const dest = path.join(autostartDir(), "grokhub.desktop");
@@ -213,6 +355,21 @@ function installAutostart(enabled) {
 }
 
 function status() {
+  if (isWin()) {
+    const menu = path.join(windowsStartMenuDir(), "GrokHub.lnk");
+    const auto = path.join(windowsStartupDir(), "GrokHub.lnk");
+    return {
+      ok: true,
+      menuInstalled: fs.existsSync(menu),
+      menuPath: menu,
+      autostartInstalled: fs.existsSync(auto),
+      autostartPath: auto,
+      exec: resolveWindowsExec(),
+      desktopName: "GrokHub.lnk",
+      startupWmClass: "GrokHub",
+      platform: "win32",
+    };
+  }
   const menu = path.join(applicationsDir(), "grokhub.desktop");
   const auto = path.join(autostartDir(), "grokhub.desktop");
   return {
@@ -224,6 +381,7 @@ function status() {
     exec: resolveExec(),
     desktopName: "grokhub.desktop",
     startupWmClass: "grokhub",
+    platform: process.platform,
   };
 }
 

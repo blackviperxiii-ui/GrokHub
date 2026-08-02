@@ -29,8 +29,17 @@ export async function grokChat(opts: {
   apiKey?: string;
   accessToken?: string;
   tokens?: XaiOAuthTokens | null;
+  ssoCookie?: string;
+  freeTier?: boolean;
   signal?: AbortSignal;
-}): Promise<GrokChatResult & { tokens?: XaiOAuthTokens; refreshed?: boolean }> {
+}): Promise<
+  GrokChatResult & {
+    tokens?: XaiOAuthTokens;
+    refreshed?: boolean;
+    freeTier?: boolean;
+    accessPath?: string;
+  }
+> {
   const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
   if (desktop?.chat) {
     return desktop.chat(opts);
@@ -59,9 +68,19 @@ export async function grokChatStream(
     accessToken?: string;
     tokens?: XaiOAuthTokens | null;
     workspaceContext?: string;
+    ssoCookie?: string;
+    freeTier?: boolean;
+    allowWebsiteFallback?: boolean;
   },
   handlers: StreamHandlers,
-): Promise<GrokChatResult & { tokens?: XaiOAuthTokens; refreshed?: boolean }> {
+): Promise<
+  GrokChatResult & {
+    tokens?: XaiOAuthTokens;
+    refreshed?: boolean;
+    freeTier?: boolean;
+    accessPath?: string;
+  }
+> {
   const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
   if (desktop?.chatStream) {
     return desktop.chatStream(opts, handlers);

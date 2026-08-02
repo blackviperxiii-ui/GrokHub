@@ -72,8 +72,35 @@ function resolveMode(mode, prompt = "") {
   return "fast";
 }
 
-function modelForMode(mode, prompt = "") {
-  const id = resolveMode(mode, prompt);
+/** Models that often work without SuperGrok / paid API tiers (ordered preference). */
+const FREE_FALLBACK_MODELS = [
+  "grok-3-mini-fast",
+  "grok-3-mini",
+  "grok-3",
+  "grok-2-latest",
+  "grok-2",
+  "grok-beta",
+  "grok-4-1-fast-non-reasoning",
+  "grok-4-fast",
+];
+
+function isSubscriptionError(status, msg) {
+  const m = String(msg || "").toLowerCase();
+  if (status === 402 || status === 403) return true;
+  return /subscription|super\s*grok|premium|upgrade|not (entitled|authorized)|permission|quota|billing|payment|insufficient|plan required|access denied|does not have access/i.test(
+    m,
+  );
+}
+
+function modelForMode(mode, prompt = "", opts = {}) {
+  const free = Boolean(opts.freeTier);
+  const id = free ? (resolveMode(mode, prompt) === "build" ? "fast" : resolveMode(mode, prompt) === "heavy" ? "expert" : resolveMode(mode, prompt)) : resolveMode(mode, prompt);
+  // Free tier: never route to 4.5 / heavy / build-only models first
+  if (free) {
+    if (id === "build") return "grok-3-mini-fast";
+    if (id === "expert" || id === "heavy") return "grok-3-mini";
+    return "grok-3-mini-fast";
+  }
   const p = String(prompt || "");
   switch (id) {
     case "fast":
@@ -98,7 +125,8 @@ Be direct and practical. Prefer short structured answers with bullets when listi
 Do not prefix replies with mode labels like [Fast] or [Auto → …]. Just answer.
 
 When you need real filesystem / shell data, output:
-HOST_CMD: <bash command>
+HOST_CMD: <shell command>
+On Linux the host runs bash; on Windows it runs PowerShell. Prefer portable commands when possible (or platform-appropriate paths).
 Do not invent file listings — wait for HOST_RESULT.`;
   const id = resolveMode(mode, prompt);
   if (id === "fast") return `${base}\nMode: Fast — concise answers, minimal preamble.`;
@@ -108,6 +136,40 @@ Do not invent file listings — wait for HOST_RESULT.`;
   return base;
 }
 
+async function callXaiChatOnce(apiKey, model, messages, temperature, max_tokens) {
+  const res = await fetch(`${XAI_BASE}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature,
+      max_tokens,
+      stream: false,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  const msg =
+    typeof data.error === "string"
+      ? data.error
+      : data.error?.message || (res.ok ? "" : `xAI error ${res.status}`);
+  if (!res.ok) {
+    return { ok: false, status: res.status, error: msg, model };
+  }
+  const content = data.choices?.[0]?.message?.content?.trim();
+  if (!content) return { ok: false, error: "Empty response from Grok", model, status: res.status };
+  return {
+    ok: true,
+    content,
+    model: data.model || model,
+    usage: data.usage,
+    status: res.status,
+  };
+}
+
 async function callXaiChat(req = {}) {
   const apiKey =
     (req.accessToken && String(req.accessToken).trim()) ||
@@ -115,22 +177,25 @@ async function callXaiChat(req = {}) {
     process.env.XAI_API_KEY ||
     process.env.GROK_API_KEY ||
     "";
-  if (!apiKey) {
-    return {
-      ok: false,
-      status: 401,
-      error:
-        "Not connected to Grok. Use Grok OAuth (SuperGrok / X Premium) or an xAI API key.",
-    };
-  }
+  const freeTier = Boolean(req.freeTier);
   const mode = req.mode || "auto";
   const lastUser = [...(req.messages || [])]
     .reverse()
     .find((m) => m.role === "user")?.content;
-  const routed = resolveMode(mode, lastUser || "");
-  const model = req.model || modelForMode(mode, lastUser || "");
+  const routed = freeTier
+    ? (() => {
+        const r = resolveMode(mode, lastUser || "");
+        if (r === "heavy" || r === "build") return r === "build" ? "fast" : "expert";
+        return r;
+      })()
+    : resolveMode(mode, lastUser || "");
+  const primaryModel =
+    req.model || modelForMode(mode, lastUser || "", { freeTier });
   const sys =
     systemPrompt(mode, lastUser || "") +
+    (freeTier
+      ? "\n\nNote: user is on Free Grok fallback — keep answers concise; heavy/build features may be limited."
+      : "") +
     (req.workspaceContext && String(req.workspaceContext).trim()
       ? `\n\n## Imported OpenClaw workspace context\n${String(req.workspaceContext).trim().slice(0, 24000)}`
       : "");
@@ -140,43 +205,142 @@ async function callXaiChat(req = {}) {
   ];
   const temperature =
     routed === "fast" ? 0.5 : routed === "build" ? 0.4 : routed === "heavy" ? 0.8 : 0.7;
-  const max_tokens =
-    routed === "heavy" ? 4096 : routed === "build" ? 8192 : routed === "expert" ? 3072 : 2048;
-  try {
-    const res = await fetch(`${XAI_BASE}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature,
-        max_tokens,
-        stream: false,
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      // fallback aliases if account lacks a model id
-      if (res.status === 404 || /model|not found|invalid/i.test(String(data.error?.message || data.error || ""))) {
-        if (model === "grok-4.3") {
-          return callXaiChat({ ...req, model: "grok-4" });
+  const max_tokens = freeTier
+    ? 1536
+    : routed === "heavy"
+      ? 4096
+      : routed === "build"
+        ? 8192
+        : routed === "expert"
+          ? 3072
+          : 2048;
+
+  // No API/OAuth token → try website free session if cookie provided
+  if (!apiKey) {
+    if (req.ssoCookie || req.allowWebsiteFallback !== false) {
+      try {
+        const websiteSession = require("./website-session.cjs");
+        if (typeof websiteSession.chatWithWebsiteSession === "function") {
+          const wr = await websiteSession.chatWithWebsiteSession({
+            ssoCookie: req.ssoCookie,
+            messages: req.messages || [],
+            prompt: lastUser || "",
+          });
+          if (wr?.ok) {
+            return {
+              ...wr,
+              freeTier: true,
+              accessPath: "website_free",
+              detail: wr.detail || "Free Grok via website session",
+            };
+          }
+          if (!apiKey) {
+            return {
+              ok: false,
+              status: 401,
+              error:
+                wr?.error ||
+                "Not connected. Sign in with free Grok on the website (Link Grok website), use Grok OAuth, or an xAI API key.",
+              accessPath: "none",
+            };
+          }
         }
-        if (model === "grok-4-1-fast-non-reasoning") {
-          return callXaiChat({ ...req, model: "grok-3-mini-fast" });
+      } catch (e) {
+        if (!apiKey) {
+          return {
+            ok: false,
+            status: 401,
+            error:
+              e instanceof Error
+                ? e.message
+                : "Not connected to Grok. Link free website session, OAuth, or API key.",
+          };
         }
       }
-      const msg =
-        typeof data.error === "string"
-          ? data.error
-          : data.error?.message || `xAI error ${res.status}`;
-      return { ok: false, status: res.status, error: msg, model };
     }
-    const content = data.choices?.[0]?.message?.content?.trim();
-    if (!content) return { ok: false, error: "Empty response from Grok", model };
-    return { ok: true, content, model: data.model || model, usage: data.usage, status: res.status };
+    return {
+      ok: false,
+      status: 401,
+      error:
+        "Not connected to Grok. Link free website session, Grok OAuth, or an xAI API key.",
+    };
+  }
+
+  const tried = new Set();
+  const queue = [primaryModel];
+  // Always have free models ready as fallback
+  for (const m of FREE_FALLBACK_MODELS) {
+    if (!queue.includes(m)) queue.push(m);
+  }
+  // Alias retries
+  if (!queue.includes("grok-4")) queue.push("grok-4");
+
+  let lastErr = null;
+  let usedFreeFallback = freeTier;
+  try {
+    for (const model of queue) {
+      if (!model || tried.has(model)) continue;
+      tried.add(model);
+      const r = await callXaiChatOnce(apiKey, model, messages, temperature, max_tokens);
+      if (r.ok) {
+        const isFreeModel = FREE_FALLBACK_MODELS.includes(model) || freeTier;
+        return {
+          ...r,
+          freeTier: isFreeModel || usedFreeFallback,
+          accessPath: isFreeModel ? "api_free" : "api",
+          fallbackFrom: model !== primaryModel ? primaryModel : undefined,
+        };
+      }
+      lastErr = r;
+      const msg = r.error || "";
+      // Subscription / entitlement → keep trying free models
+      if (isSubscriptionError(r.status, msg) || r.status === 404 || /model|not found|invalid/i.test(msg)) {
+        usedFreeFallback = true;
+        continue;
+      }
+      // Hard auth failure — don't spin models
+      if (r.status === 401) break;
+      // Other errors: still try free cascade once
+      if (!freeTier && tried.size < 3) {
+        usedFreeFallback = true;
+        continue;
+      }
+      break;
+    }
+
+    // API exhausted → website free session
+    if (req.ssoCookie && req.allowWebsiteFallback !== false) {
+      try {
+        const websiteSession = require("./website-session.cjs");
+        if (typeof websiteSession.chatWithWebsiteSession === "function") {
+          const wr = await websiteSession.chatWithWebsiteSession({
+            ssoCookie: req.ssoCookie,
+            messages: req.messages || [],
+            prompt: lastUser || "",
+          });
+          if (wr?.ok) {
+            return {
+              ...wr,
+              freeTier: true,
+              accessPath: "website_free",
+              detail: "Fell back to free Grok website session",
+            };
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return {
+      ok: false,
+      status: lastErr?.status,
+      error:
+        lastErr?.error ||
+        "Grok request failed. Free-tier models and website fallback unavailable — link website session or upgrade.",
+      model: lastErr?.model,
+      freeTier: usedFreeFallback,
+    };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Network error" };
   }
@@ -745,6 +909,9 @@ async function callXaiChatWithOAuth(req = {}) {
     ...req,
     accessToken: accessToken || undefined,
     apiKey: req.apiKey,
+    freeTier: req.freeTier,
+    ssoCookie: req.ssoCookie,
+    allowWebsiteFallback: req.allowWebsiteFallback !== false,
   });
   return {
     ...r,
@@ -903,7 +1070,10 @@ async function callXaiImagine(req = {}) {
 
 
 async function callXaiChatStream(req = {}, handlers = {}) {
-  // OAuth refresh then stream via callXaiChatWithOAuth path tokens
+  // Prefer live stream when we have a token; on free-tier / errors fall back to
+  // callXaiChat (which already cascades free models + website free session).
+  const onDelta = handlers.onDelta || (() => {});
+  const onStatus = handlers.onStatus || (() => {});
   let accessToken =
     (req.accessToken && String(req.accessToken).trim()) ||
     (req.tokens && req.tokens.accessToken && String(req.tokens.accessToken).trim()) ||
@@ -922,24 +1092,51 @@ async function callXaiChatStream(req = {}, handlers = {}) {
     process.env.XAI_API_KEY ||
     process.env.GROK_API_KEY ||
     "";
-  if (!apiKey) {
-    return { ok: false, status: 401, error: "Not connected to Grok." };
-  }
+  const freeTier = Boolean(req.freeTier);
   const mode = req.mode || "auto";
-  const lastUser = [...(req.messages || [])].reverse().find((m) => m.role === "user")?.content || "";
-  const routed = resolveMode(mode, lastUser);
-  const model = req.model || modelForMode(mode, lastUser);
+  const lastUser =
+    [...(req.messages || [])].reverse().find((m) => m.role === "user")?.content || "";
+  const model = req.model || modelForMode(mode, lastUser, { freeTier });
+  const sys =
+    systemPrompt(mode, lastUser) +
+    (req.workspaceContext && String(req.workspaceContext).trim()
+      ? `\n\n## Imported OpenClaw workspace context\n${String(req.workspaceContext).trim().slice(0, 24000)}`
+      : "");
   const messages = [
-    { role: "system", content: systemPrompt(mode, lastUser) },
+    { role: "system", content: sys },
     ...(req.messages || []).filter((m) => m.role !== "system"),
   ];
-  const temperature =
-    routed === "fast" ? 0.5 : routed === "build" ? 0.4 : routed === "heavy" ? 0.8 : 0.7;
-  const max_tokens =
-    routed === "heavy" ? 4096 : routed === "build" ? 8192 : routed === "expert" ? 3072 : 2048;
+  const temperature = 0.6;
+  const max_tokens = freeTier ? 1536 : 3072;
   const signal = handlers.signal;
+
+  async function nonStreamFallback(reason) {
+    onStatus("fallback");
+    const r = await callXaiChatWithOAuth({
+      ...req,
+      accessToken: accessToken || undefined,
+      apiKey: req.apiKey,
+      freeTier,
+      ssoCookie: req.ssoCookie,
+      model: freeTier ? model : req.model,
+    });
+    if (r.ok && r.content) {
+      onDelta(r.content);
+    }
+    return {
+      ...r,
+      ...(tokensOut ? { tokens: tokensOut } : {}),
+      streamed: false,
+      fallbackReason: reason,
+    };
+  }
+
+  if (!apiKey) {
+    return nonStreamFallback("no-api-key");
+  }
+
   try {
-    handlers.onStatus && handlers.onStatus("connecting");
+    onStatus("connecting");
     const res = await fetch(`${XAI_BASE}/chat/completions`, {
       method: "POST",
       headers: {
@@ -956,110 +1153,88 @@ async function callXaiChatStream(req = {}, handlers = {}) {
       }),
       signal,
     });
-    if (!res.ok || !res.body) {
-      // non-stream fallback
-      handlers.onStatus && handlers.onStatus("fallback");
-      const r = await callXaiChat({ ...req, accessToken, apiKey: req.apiKey, model });
-      if (r.ok && r.content && handlers.onDelta) handlers.onDelta(r.content);
-      return { ...r, ...(tokensOut ? { tokens: tokensOut } : {}) };
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      if (
+        isSubscriptionError(res.status, text) ||
+        res.status === 404 ||
+        freeTier ||
+        res.status === 401 ||
+        res.status === 403
+      ) {
+        return nonStreamFallback(`stream ${res.status}`);
+      }
+      return {
+        ok: false,
+        status: res.status,
+        error: text.slice(0, 240) || `xAI stream ${res.status}`,
+        ...(tokensOut ? { tokens: tokensOut } : {}),
+      };
     }
-    handlers.onStatus && handlers.onStatus("streaming");
-    const reader = res.body.getReader();
+    onStatus("streaming");
+    const reader = res.body?.getReader?.();
+    if (!reader) {
+      return nonStreamFallback("no-reader");
+    }
     const decoder = new TextDecoder();
     let buffer = "";
     let content = "";
-    let usedModel = model;
+    let usage = undefined;
     while (true) {
-      if (signal && signal.aborted) {
-        try { await reader.cancel(); } catch {}
-        return { ok: false, aborted: true, error: "Stopped", content, model: usedModel, tokens: tokensOut };
+      if (signal?.aborted) {
+        try {
+          await reader.cancel();
+        } catch {}
+        return {
+          ok: false,
+          aborted: true,
+          error: "Stopped",
+          content,
+          model,
+          ...(tokensOut ? { tokens: tokensOut } : {}),
+        };
       }
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const raw of lines) {
+      const parts = buffer.split("\n");
+      buffer = parts.pop() || "";
+      for (const raw of parts) {
         const line = raw.trim();
-        if (!line.startsWith("data:")) continue;
-        const data = line.slice(5).trim();
-        if (data === "[DONE]") continue;
+        if (!line || line.startsWith(":")) continue;
+        let payload = line.startsWith("data:") ? line.slice(5).trim() : line;
+        if (payload === "[DONE]") continue;
         try {
-          const json = JSON.parse(data);
-          if (json.model) usedModel = json.model;
-          const piece = (json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content) || "";
-          if (piece) {
-            content += piece;
-            if (handlers.onDelta) handlers.onDelta(piece);
+          const evt = JSON.parse(payload);
+          const delta = evt.choices?.[0]?.delta?.content || evt.choices?.[0]?.message?.content || "";
+          if (delta) {
+            content += delta;
+            onDelta(delta);
           }
-        } catch {}
+          if (evt.usage) usage = evt.usage;
+        } catch {
+          /* ignore */
+        }
       }
     }
-    if (!content.trim()) return { ok: false, error: "Empty stream", model: usedModel };
-    handlers.onStatus && handlers.onStatus("done");
-    return { ok: true, content, model: usedModel, ...(tokensOut ? { tokens: tokensOut } : {}) };
+    if (!content.trim()) {
+      return nonStreamFallback("empty-stream");
+    }
+    return {
+      ok: true,
+      content,
+      model,
+      usage,
+      freeTier,
+      streamed: true,
+      ...(tokensOut ? { tokens: tokensOut } : {}),
+    };
   } catch (e) {
-    if (signal && signal.aborted) return { ok: false, aborted: true, error: "Stopped" };
-    handlers.onStatus && handlers.onStatus("fallback");
-    const r = await callXaiChat({ ...req, accessToken, apiKey: req.apiKey, model });
-    if (r.ok && r.content && handlers.onDelta) handlers.onDelta(r.content);
-    return { ...r, ...(tokensOut ? { tokens: tokensOut } : {}) };
-  }
-}
-
-
-/**
- * Factory reinstall: force full pull from GitHub and optionally wipe local self-mod journal.
- * Memory (userData) is kept unless wipeMemory is true.
- */
-async function factoryReinstall(opts = {}) {
-  const steps = [];
-  steps.push("Factory reinstall from GitHub…");
-  const result = await applyUpdate({
-    ...opts,
-    factory: true,
-    force: true,
-    restart: opts.restart !== false,
-  });
-  steps.push(...(result.steps || []));
-
-  // Clear local self-mod journal/snapshots of install tree (not user memory unless asked)
-  if (opts.clearSelfMod !== false) {
-    try {
-      const selfMod = require("./self-mod.cjs");
-      const dir = selfMod.selfModDir();
-      await fs.rm(dir, { recursive: true, force: true });
-      steps.push("Cleared local self-mod snapshots/journal");
-    } catch (e) {
-      steps.push("Self-mod cleanup skipped: " + (e instanceof Error ? e.message : String(e)));
+    if (signal?.aborted) {
+      return { ok: false, aborted: true, error: "Stopped", ...(tokensOut ? { tokens: tokensOut } : {}) };
     }
+    return nonStreamFallback(e instanceof Error ? e.message : "stream error");
   }
-
-  if (opts.wipeMemory) {
-    try {
-      const { app } = require("electron");
-      const ud = app.getPath("userData");
-      for (const name of ["grokhub-memory.json", "grokhub-memory.backup.json", "grokhub-secrets.json"]) {
-        try {
-          await fs.rm(path.join(ud, name), { force: true });
-          steps.push("Removed " + name);
-        } catch {}
-      }
-      steps.push("User memory wipe requested — secrets/memory cleared");
-    } catch (e) {
-      steps.push("Memory wipe skipped: " + (e instanceof Error ? e.message : String(e)));
-    }
-  } else {
-    steps.push("User memory retained (chats/settings/secrets)");
-  }
-
-  return {
-    ...result,
-    ok: result.ok !== false,
-    factory: true,
-    steps,
-    detail: result.detail || "Factory reinstall complete",
-  };
 }
 
 

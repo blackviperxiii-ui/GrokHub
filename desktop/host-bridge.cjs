@@ -1,6 +1,7 @@
 /**
  * Unsandboxed host operations for Electron main process.
  * Runs as the desktop user — full filesystem, shell, and app launch.
+ * Supports Linux and Windows (PowerShell / cmd).
  */
 const { exec, spawn } = require("node:child_process");
 const { promisify } = require("node:util");
@@ -8,6 +9,8 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { shell } = require("electron");
+
+const isWin = process.platform === "win32";
 
 const execAsync = promisify(exec);
 const MAX_STDOUT = 200_000;
@@ -27,31 +30,57 @@ function defaultCwd() {
   }
 }
 
+function defaultShell() {
+  if (isWin) {
+    return (
+      process.env.ComSpec ||
+      process.env.COMSPEC ||
+      require("node:path").join(process.env.SystemRoot || "C:\Windows", "System32", "cmd.exe")
+    );
+  }
+  return process.env.SHELL || "/bin/bash";
+}
+
 function hostEnv() {
-  return {
+  const home = process.env.HOME || process.env.USERPROFILE || os.homedir();
+  const base = {
     ...process.env,
     GROKHUB_HOST: "1",
-    PATH:
-      process.env.PATH ||
-      "/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-    HOME: process.env.HOME || os.homedir(),
-    USER: process.env.USER || (() => {
-      try {
-        return os.userInfo().username;
-      } catch {
-        return "user";
-      }
-    })(),
-    SHELL: process.env.SHELL || "/bin/bash",
+    HOME: home,
+    USERPROFILE: process.env.USERPROFILE || home,
+    USER:
+      process.env.USER ||
+      process.env.USERNAME ||
+      (() => {
+        try {
+          return os.userInfo().username;
+        } catch {
+          return "user";
+        }
+      })(),
+    USERNAME: process.env.USERNAME || process.env.USER || "user",
+    SHELL: defaultShell(),
     LANG: process.env.LANG || "en_US.UTF-8",
-    DISPLAY: process.env.DISPLAY || ":0",
-    WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY || "",
-    XDG_RUNTIME_DIR:
-      process.env.XDG_RUNTIME_DIR ||
-      `/run/user/${typeof process.getuid === "function" ? process.getuid() : 1000}`,
-    DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS || "",
   };
+  if (isWin) {
+    base.PATH =
+      process.env.PATH ||
+      process.env.Path ||
+      "C:\Windows\System32;C:\Windows;C:\Windows\System32\WindowsPowerShell\v1.0";
+    return base;
+  }
+  base.PATH =
+    process.env.PATH ||
+    "/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+  base.DISPLAY = process.env.DISPLAY || ":0";
+  base.WAYLAND_DISPLAY = process.env.WAYLAND_DISPLAY || "";
+  base.XDG_RUNTIME_DIR =
+    process.env.XDG_RUNTIME_DIR ||
+    `/run/user/${typeof process.getuid === "function" ? process.getuid() : 1000}`;
+  base.DBUS_SESSION_BUS_ADDRESS = process.env.DBUS_SESSION_BUS_ADDRESS || "";
+  return base;
 }
+
 
 async function info() {
   return {
@@ -66,7 +95,8 @@ async function info() {
         return process.env.USER || "user";
       }
     })(),
-    shell: process.env.SHELL || "/bin/bash",
+    shell: defaultShell(),
+    windows: isWin,
     hostname: os.hostname(),
     bridge: "electron",
     unsandboxed: true,
@@ -138,13 +168,26 @@ async function runExec(command, cwd, timeoutMs = 30_000) {
   }
   const started = Date.now();
   const timeout = Math.min(Math.max(timeoutMs || 30_000, 1_000), MAX_TIMEOUT);
-  const shellBin = process.env.SHELL || "/bin/bash";
+  let execCmd = cmd;
+  let shellBin = process.env.SHELL || "/bin/bash";
+  if (isWin) {
+    shellBin = "powershell.exe";
+    execCmd = [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      cmd,
+    ].join(" ");
+  }
   try {
-    const { stdout, stderr } = await execAsync(cmd, {
+    const { stdout, stderr } = await execAsync(execCmd, {
       cwd: workdir,
       timeout,
       maxBuffer: MAX_STDOUT,
       shell: shellBin,
+      windowsHide: true,
       env: hostEnv(),
     });
     return {
@@ -174,7 +217,48 @@ async function runExec(command, cwd, timeoutMs = 30_000) {
   }
 }
 
+async function listAppsWindows() {
+  const apps = [];
+  const roots = [
+    path.join(process.env.ProgramData || "C:\\ProgramData", "Microsoft", "Windows", "Start Menu", "Programs"),
+    path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Microsoft", "Windows", "Start Menu", "Programs"),
+  ];
+  async function walk(dir, depth) {
+    if (depth > 4) return;
+    let names = [];
+    try { names = await fs.readdir(dir); } catch { return; }
+    for (const name of names.slice(0, 400)) {
+      const full = path.join(dir, name);
+      try {
+        const st = await fs.stat(full);
+        if (st.isDirectory()) { await walk(full, depth + 1); continue; }
+        if (!/\.(lnk|exe)$/i.test(name)) continue;
+        apps.push({
+          id: full,
+          name: name.replace(/\.(lnk|exe)$/i, ""),
+          exec: full,
+          desktopFile: full,
+          terminal: false,
+        });
+      } catch { /* skip */ }
+    }
+  }
+  for (const r of roots) await walk(r, 0);
+  return apps;
+}
+
 async function listApps() {
+  if (isWin) {
+    const apps = await listAppsWindows();
+    apps.sort((a, b) => a.name.localeCompare(b.name));
+    const seen = new Set();
+    return apps.filter((a) => {
+      const k = a.name.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    }).slice(0, 500);
+  }
   const dirs = [
     "/usr/share/applications",
     "/usr/local/share/applications",
@@ -228,25 +312,34 @@ async function openApp(opts = {}) {
     if (opts.path) {
       const err = await shell.openPath(opts.path);
       if (err) {
-        spawn("xdg-open", [opts.path], {
-          detached: true,
-          stdio: "ignore",
-          env: hostEnv(),
-        }).unref();
+        if (isWin) {
+          spawn("cmd.exe", ["/c", "start", "", opts.path], {
+            detached: true, stdio: "ignore", windowsHide: true, env: hostEnv(),
+          }).unref();
+        } else {
+          spawn("xdg-open", [opts.path], {
+            detached: true, stdio: "ignore", env: hostEnv(),
+          }).unref();
+        }
       }
       return { ok: true, detail: `opened path ${opts.path}` };
     }
     if (opts.desktopFile) {
+      if (isWin) {
+        const err = await shell.openPath(opts.desktopFile);
+        if (err) {
+          spawn("cmd.exe", ["/c", "start", "", opts.desktopFile], {
+            detached: true, stdio: "ignore", windowsHide: true, env: hostEnv(),
+          }).unref();
+        }
+        return { ok: true, detail: `launched ${opts.desktopFile}` };
+      }
       const base = path.basename(opts.desktopFile, ".desktop");
       spawn("gtk-launch", [base], {
-        detached: true,
-        stdio: "ignore",
-        env: hostEnv(),
+        detached: true, stdio: "ignore", env: hostEnv(),
       }).unref();
       spawn("xdg-open", [opts.desktopFile], {
-        detached: true,
-        stdio: "ignore",
-        env: hostEnv(),
+        detached: true, stdio: "ignore", env: hostEnv(),
       }).unref();
       return { ok: true, detail: `launched ${opts.desktopFile}` };
     }
@@ -255,6 +348,7 @@ async function openApp(opts = {}) {
         shell: true,
         detached: true,
         stdio: "ignore",
+        windowsHide: true,
         env: hostEnv(),
       }).unref();
       return { ok: true, detail: `exec ${opts.exec}` };

@@ -1,6 +1,6 @@
 {
   "name": "grokhub",
-  "version": "0.3.9",
+  "version": "0.4.1",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -20,7 +20,12 @@
     "desktop:dev": "GROKHUB_URL=http://127.0.0.1:8080 electron desktop/main.mjs",
     "desktop:arch": "bash scripts/arch-launch.sh",
     "desktop:build": "GROKHUB_DESKTOP=1 vite build && npm run db:migrate",
-    "aur:release": "bash scripts/make-aur-release.sh"
+    "aur:release": "bash scripts/make-aur-release.sh",
+    "desktop:win": "electron desktop/main.mjs",
+    "desktop:win:prod": "electron desktop/main.mjs",
+    "dist:win": "electron-builder --win --x64",
+    "dist:linux": "electron-builder --linux AppImage",
+    "install:win": "echo \"Run: powershell -ExecutionPolicy Bypass -File packaging/windows/install.ps1 -Build\""
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.3",

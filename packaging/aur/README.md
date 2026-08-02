@@ -1,8 +1,6 @@
-# GrokHub Arch packages (v0.1)
+# GrokHub — Arch Linux packaging
 
-**GitHub:** https://github.com/blackviperxiii-ui/Grok-Hub
-
-## Install
+## System install (from clone)
 
 ```bash
 sudo pacman -S --needed git electron nodejs npm curl base-devel
@@ -16,8 +14,20 @@ grokhub
 
 ```bash
 cd packaging/aur
-cp PKGBUILD-bin PKGBUILD   # prebuilt
+# Binary-style (expects .output already built in repo root):
+cp PKGBUILD-bin PKGBUILD
+# Or source PKGBUILD for full rebuild
 makepkg -si
 ```
 
-Binary: `grokhub` · Icon: Grok mark · Version: **0.1**
+## Layout
+
+| Path | Role |
+|------|------|
+| `/usr/bin/grokhub` | Launcher (`packaging/aur/grokhub.sh`) |
+| `/usr/lib/grokhub` | `.output` + `desktop/` |
+| `/usr/share/applications/grokhub.desktop` | Menu entry (`StartupWMClass=grokhub`) |
+
+## Windows
+
+See [../windows/README.md](../windows/README.md) and the root [README.md](../../README.md).

@@ -825,11 +825,209 @@ async function fetchWebsiteConnectors(opts = {}) {
   };
 }
 
+
+/**
+ * Best-effort free Grok chat via consumer website session (SSO cookie).
+ * Free grok.com accounts work here with rate limits; no SuperGrok required.
+ */
+async function chatWithWebsiteSession(opts = {}) {
+  const cookieHeader = await readSessionCookieHeader(opts.ssoCookie);
+  if (!cookieHeader) {
+    return {
+      ok: false,
+      error: "No website session. Link free Grok at grok.com (Settings → Link Grok website).",
+    };
+  }
+  const ses = grokSession();
+  const userMsgs = Array.isArray(opts.messages) ? opts.messages : [];
+  const lastUser =
+    String(opts.prompt || "").trim() ||
+    [...userMsgs].reverse().find((m) => m && m.role === "user")?.content ||
+    "";
+  if (!lastUser.trim()) return { ok: false, error: "empty prompt" };
+
+  // Build a compact transcript for endpoints that take a single message
+  const history = userMsgs
+    .filter((m) => m && (m.role === "user" || m.role === "assistant"))
+    .slice(-12)
+    .map((m) => `${m.role === "user" ? "User" : "Grok"}: ${String(m.content || "").slice(0, 4000)}`)
+    .join("\n");
+  const message = history
+    ? `${history}\nUser: ${lastUser.trim()}`
+    : lastUser.trim();
+
+  const headersBase = {
+    accept: "application/json, text/plain, */*",
+    "content-type": "application/json",
+    "user-agent": CHROME_UA,
+    origin: "https://grok.com",
+    referer: "https://grok.com/",
+    cookie: cookieHeader,
+  };
+
+  const attempts = [
+    {
+      url: "https://grok.com/rest/app-chat/conversations/new",
+      body: {
+        temporary: true,
+        model: "grok-3",
+        message: lastUser.trim(),
+        fileAttachments: [],
+        toolOverrides: {},
+      },
+    },
+    {
+      url: "https://grok.com/rest/app-chat/conversations",
+      body: {
+        message: lastUser.trim(),
+        modelName: "grok-3",
+        temporary: true,
+      },
+    },
+    {
+      url: "https://grok.com/rest/chat",
+      body: { message: lastUser.trim(), model: "grok-3" },
+    },
+  ];
+
+  let lastErr = "Website free chat unavailable";
+  for (const a of attempts) {
+    try {
+      let res;
+      try {
+        res = await ses.fetch(a.url, {
+          method: "POST",
+          headers: headersBase,
+          body: JSON.stringify(a.body),
+        });
+      } catch {
+        res = await fetch(a.url, {
+          method: "POST",
+          headers: headersBase,
+          body: JSON.stringify(a.body),
+        });
+      }
+      const ct = res.headers.get("content-type") || "";
+      const text = await res.text();
+      if (!res.ok) {
+        lastErr = `Website chat ${res.status}: ${text.slice(0, 160)}`;
+        continue;
+      }
+      // JSON
+      if (ct.includes("json") || text.trim().startsWith("{") || text.trim().startsWith("[")) {
+        try {
+          const j = JSON.parse(text);
+          const content =
+            j?.message ||
+            j?.response ||
+            j?.result?.message ||
+            j?.result?.response ||
+            j?.choices?.[0]?.message?.content ||
+            j?.data?.message ||
+            extractTextDeep(j);
+          if (content && String(content).trim()) {
+            return {
+              ok: true,
+              content: String(content).trim(),
+              model: j?.model || "grok-free-web",
+              freeTier: true,
+              accessPath: "website_free",
+              detail: "Free Grok (website session)",
+            };
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+      // NDJSON / SSE-ish lines
+      const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+      let acc = "";
+      for (const line of lines) {
+        const payload = line.startsWith("data:") ? line.slice(5).trim() : line;
+        try {
+          const j = JSON.parse(payload);
+          const piece =
+            j?.token ||
+            j?.result?.token ||
+            j?.message ||
+            j?.result?.message ||
+            j?.choices?.[0]?.delta?.content ||
+            "";
+          if (piece) acc += piece;
+        } catch {
+          /* ignore */
+        }
+      }
+      if (acc.trim()) {
+        return {
+          ok: true,
+          content: acc.trim(),
+          model: "grok-free-web",
+          freeTier: true,
+          accessPath: "website_free",
+          detail: "Free Grok (website session stream)",
+        };
+      }
+      // Plain text body
+      if (text.trim().length > 8 && text.trim().length < 20000 && !text.trim().startsWith("<!")) {
+        return {
+          ok: true,
+          content: text.trim(),
+          model: "grok-free-web",
+          freeTier: true,
+          accessPath: "website_free",
+        };
+      }
+      lastErr = "Website returned no chat content";
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : "website chat failed";
+    }
+  }
+
+  // Soft offline free helper so the app still answers when only free web is linked
+  // but consumer REST shape changed — keep messaging honest.
+  return {
+    ok: false,
+    error:
+      lastErr +
+      " · Free path: keep website linked; if this keeps failing, add a free xAI API key from console.x.ai ($0 trial credits) or SuperGrok OAuth.",
+  };
+}
+
+function extractTextDeep(node, depth = 0) {
+  if (depth > 6 || node == null) return "";
+  if (typeof node === "string" && node.length > 20 && node.length < 12000) {
+    // Prefer longer prose-like strings
+    if (/[.!?]\s|\n/.test(node) || node.length > 80) return node;
+  }
+  if (Array.isArray(node)) {
+    for (const x of node) {
+      const t = extractTextDeep(x, depth + 1);
+      if (t) return t;
+    }
+    return "";
+  }
+  if (typeof node === "object") {
+    for (const k of ["message", "response", "text", "content", "answer", "output"]) {
+      if (k in node) {
+        const t = extractTextDeep(node[k], depth + 1);
+        if (t) return t;
+      }
+    }
+    for (const v of Object.values(node)) {
+      const t = extractTextDeep(v, depth + 1);
+      if (t) return t;
+    }
+  }
+  return "";
+}
+
 module.exports = {
   PARTITION,
   linkWebsiteSession,
   fetchWebsiteUsage,
   fetchWebsiteConnectors,
+  chatWithWebsiteSession,
   getStoredSso,
   collectSessionCookies,
   injectCookieHeader,

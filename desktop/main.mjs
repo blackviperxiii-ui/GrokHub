@@ -717,31 +717,48 @@ function registerIpc() {
   }
 }
 
-if (process.env.GROKHUB_WAYLAND !== "0") {
+if (process.platform === "linux" && process.env.GROKHUB_WAYLAND !== "0") {
   app.commandLine.appendSwitch("enable-features", "UseOzonePlatform,WaylandWindowDecorations");
   app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 }
 
-app.commandLine.appendSwitch("no-sandbox");
+// Linux system electron often needs this; Windows packaged Electron does not.
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("no-sandbox");
+}
 
 app.whenReady().then(() => {
   if (!gotLock) return;
   // Prefer home as process cwd so relative shell paths match a real desktop session
   try {
-    const home = process.env.HOME || require("node:os").homedir();
+    const home =
+      process.env.HOME || process.env.USERPROFILE || require("node:os").homedir();
     if (home) process.chdir(home);
   } catch {
     /* ignore */
   }
   // Dock / taskbar name + pin identity
+  try {
+    app.setName(APP_DISPLAY_NAME);
+  } catch {
+    /* ignore */
+  }
   if (process.platform === "linux") {
     try {
-      app.setName(APP_DISPLAY_NAME);
       app.setDesktopName(APP_DESKTOP_FILE);
     } catch {
       /* ignore */
     }
-    // Best-effort user menu entry so Arch/start menus see GrokHub without sudo
+  }
+  if (process.platform === "win32") {
+    try {
+      app.setAppUserModelId("com.grokhub.app");
+    } catch {
+      /* ignore */
+    }
+  }
+  // Best-effort Start Menu / app menu entry (Linux .desktop or Windows .lnk)
+  if (process.platform === "linux" || process.platform === "win32") {
     try {
       desktopEntry.installMenuEntry();
     } catch {
