@@ -1,7 +1,7 @@
 # Maintainer: GrokHub contributors
 # Source package — builds the Arch runtime from the GitHub tree
 pkgname=grokhub
-pkgver=0.8.56
+pkgver=0.8.57
 pkgrel=1
 pkgdesc="Grok-native agent control plane (modes, Imagine, connectors, unsandboxed desktop host)"
 arch=('x86_64')

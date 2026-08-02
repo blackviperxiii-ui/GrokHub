@@ -151,7 +151,25 @@ function nodeSpawnSpec(entry) {
  * @param {string} desktopDir absolute path to desktop/ (usually __dirname)
  */
 async function ensureUiServer(desktopDir) {
-  const root = appRootFrom(desktopDir);
+  let root = appRootFrom(desktopDir);
+  // Guard: never treat $HOME as install root (relative .output → ~/ .output bug)
+  try {
+    const home = path.resolve(os.homedir());
+    if (path.resolve(root) === home || !fs.existsSync(path.join(root, ".output", "server", "index.mjs"))) {
+      for (const cand of [
+        path.join(home, ".local/lib/grokhub"),
+        path.join(home, ".local/share/grokhub"),
+        "/usr/lib/grokhub",
+      ]) {
+        if (fs.existsSync(path.join(cand, ".output", "server", "index.mjs"))) {
+          root = cand;
+          break;
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
   const port = pickPort();
   const url = (process.env.GROKHUB_URL || `http://127.0.0.1:${port}`).replace(
     /\/$/,
@@ -163,7 +181,7 @@ async function ensureUiServer(desktopDir) {
     return { url, started: false, root };
   }
 
-  const entry = serverEntry(root);
+  const entry = path.resolve(serverEntry(root));
   if (!fs.existsSync(entry)) {
     return {
       url,
@@ -224,10 +242,13 @@ async function ensureUiServer(desktopDir) {
   };
 
   try {
-    fs.appendFileSync(
-      logPath,
-      `\n[ui-server] spawn ${spec.bin} ${spec.args.join(" ")} cwd=${root}\n`,
-    );
+    const line = `\n[ui-server] spawn ${spec.bin} ${spec.args.join(" ")} cwd=${root} entry=${entry}\n`;
+    fs.appendFileSync(logPath, line);
+    try {
+      fs.appendFileSync("/tmp/grokhub-ui-restart.log", line);
+    } catch {
+      /* ignore */
+    }
   } catch {
     /* ignore */
   }

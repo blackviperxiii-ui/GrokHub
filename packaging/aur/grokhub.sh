@@ -157,18 +157,27 @@ start_ui() {
     exit 1
   fi
 
-  log "Starting UI on ${URL} from $APP_ROOT"
+  UI_ENTRY="$APP_ROOT/.output/server/index.mjs"
+  if [[ ! -f "$UI_ENTRY" ]]; then
+    echo "error: missing UI build at $UI_ENTRY" >&2
+    exit 1
+  fi
+  log "Starting UI on ${URL} from $APP_ROOT entry=$UI_ENTRY"
   echo "Starting GrokHub UI on ${URL} …"
+  # Absolute path + cd — never resolve .output from \$HOME (field bug)
   (
-    cd "$APP_ROOT"
+    cd "$APP_ROOT" || exit 1
     export PORT="$PORT"
     export NITRO_PORT="$PORT"
     export HOST="127.0.0.1"
     export NITRO_HOST="127.0.0.1"
-    exec node .output/server/index.mjs
+    export GROKHUB_HOME="$APP_ROOT"
+    exec node "$UI_ENTRY"
   ) >>"$LOG" 2>&1 &
   echo $! >"$PIDFILE"
   echo $! >"$LOCKFILE"
+  # Diagnostic mirror
+  echo "[ui] $(date -Iseconds) pid=$(cat "$PIDFILE" 2>/dev/null) root=$APP_ROOT entry=$UI_ENTRY" >>/tmp/grokhub-ui-restart.log 2>/dev/null || true
 
   for _ in $(seq 1 100); do
     if ui_healthy; then

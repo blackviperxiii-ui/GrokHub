@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.56";
+const APP_VERSION = "0.8.57";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -126,7 +126,26 @@ async function stopUiServer(steps) {
 function scheduleAppRestart(appRoot) {
   const { spawn } = require("node:child_process");
   const port = process.env.GROKHUB_PORT || "18765";
-  const root = appRoot || process.env.GROKHUB_HOME || process.cwd();
+  let root = path.resolve(appRoot || process.env.GROKHUB_HOME || process.cwd());
+  // Never treat bare $HOME as install root (classic bug: node .output from ~)
+  if (
+    root === path.resolve(os.homedir() || "") ||
+    !require("node:fs").existsSync(path.join(root, ".output", "server", "index.mjs"))
+  ) {
+    const homeGuess = process.env.HOME || os.homedir() || "";
+    for (const cand of [
+      process.env.GROKHUB_HOME,
+      homeGuess && path.join(homeGuess, ".local/lib/grokhub"),
+      homeGuess && path.join(homeGuess, ".local/share/grokhub"),
+      "/usr/lib/grokhub",
+    ].filter(Boolean)) {
+      const r = path.resolve(cand);
+      if (require("node:fs").existsSync(path.join(r, ".output", "server", "index.mjs"))) {
+        root = r;
+        break;
+      }
+    }
+  }
   let home = process.env.HOME || process.env.USERPROFILE || "";
   try {
     if (!home) home = os.homedir() || "";
@@ -143,15 +162,23 @@ function scheduleAppRestart(appRoot) {
   const runtime = process.env.XDG_RUNTIME_DIR || (home ? path.join(home, ".cache") : "/tmp");
   const pidfile = path.join(runtime, "grokhub", "ui.pid");
   const log = path.join(runtime, "grokhub", "restart.log");
+  const diagLog = "/tmp/grokhub-ui-restart.log";
+  const uiEntry = path.join(root, ".output", "server", "index.mjs");
   const userBin = home ? path.join(home, ".local", "bin", "grokhub") : "";
   // IMPORTANT: this is a JS template literal — use \${...} for shell vars, ${jsVar} for Node.
+  // ALWAYS use absolute paths for node entry — relative .output from $HOME was a field bug.
   const script = `
 set +e
 export HOME="${home || "/tmp"}"
 export USER="\${USER:-$(id -un 2>/dev/null || echo user)}"
 mkdir -p "${runtime}/grokhub"
+touch "${diagLog}" 2>/dev/null || true
 exec >>"${log}" 2>&1
-echo "[restart] $(date -Iseconds) root=${root} HOME=\$HOME"
+echo "[restart] $(date -Iseconds) root=${root} HOME=\$HOME cwd=\$(pwd) entry=${uiEntry}" | tee -a "${diagLog}"
+if [ ! -f "${uiEntry}" ]; then
+  echo "[restart] FATAL: UI entry missing: ${uiEntry}"
+  exit 1
+fi
 # Wait for previous Electron to exit and release files
 sleep 2.8
 # Free incomplete .new only; KEEP .prev for one-shot rollback from Settings
@@ -167,6 +194,8 @@ sleep 0.4
 export GROKHUB_HOME="${root}"
 export GROKHUB_PORT="${port}"
 export GROKHUB_URL="http://127.0.0.1:${port}"
+cd "${root}" || { echo "[restart] FATAL: cannot cd to ${root}"; exit 1; }
+echo "[restart] cwd now \$(pwd)"
 # Always relaunch the tree we just installed (never bare PATH grokhub without HOME —
 # dual /usr + ~/.local installs would jump back to a broken system package).
 if [ -x "${root}/packaging/aur/grokhub.sh" ]; then
@@ -190,12 +219,14 @@ if command -v grokhub >/dev/null 2>&1; then
   exit 0
 fi
 if [ -f "${root}/desktop/main.mjs" ] && command -v electron >/dev/null 2>&1; then
-  if [ -f "${root}/.output/server/index.mjs" ]; then
+  if [ -f "${uiEntry}" ]; then
     (
-      cd "${root}"
-      export PORT="${port}" NITRO_PORT="${port}" HOST=127.0.0.1 NITRO_HOST=127.0.0.1
-      nohup node .output/server/index.mjs >>"${runtime}/grokhub/ui.log" 2>&1 &
+      cd "${root}" || exit 1
+      export PORT="${port}" NITRO_PORT="${port}" HOST=127.0.0.1 NITRO_HOST=127.0.0.1 GROKHUB_HOME="${root}"
+      # Absolute entry — never "node .output/..." from wrong cwd
+      nohup node "${uiEntry}" >>"${runtime}/grokhub/ui.log" 2>&1 &
       echo $! > "${pidfile}"
+      echo "[restart] spawned UI pid \$! entry=${uiEntry} cwd=\$(pwd)"
     )
     # Wait for UI health before Electron (avoids blank window)
     for i in $(seq 1 40); do
@@ -215,6 +246,7 @@ exit 1
   const child = spawn("bash", ["-c", script], {
     detached: true,
     stdio: "ignore",
+    cwd: root, // never inherit Electron cwd ($HOME) for relative paths
     env: {
       ...process.env,
       HOME: home || process.env.HOME || "/tmp",
