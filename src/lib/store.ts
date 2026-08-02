@@ -154,6 +154,12 @@ import {
 import { formatToolRegistryForPrompt } from "./tool-registry";
 import { buildGoalStepPrompt, parseGoalOutcome } from "./goal-loop";
 import { agentCoreEnqueue, agentCoreSetPaused, agentCoreSync } from "./agent-core-client";
+import {
+  scanProactiveIssues,
+  markAutoContinue,
+  proactiveSystemAddon,
+  proactiveEnabled,
+} from "./proactive";
 
 /** In-flight LLM auto-titles (thread id). */
 const autoTitleInflight = new Set<string>();
@@ -472,6 +478,7 @@ type State = {
   cancelAgentJob: (id: string) => void;
   approveAgentJob: (id: string, grant: boolean) => void;
   processAgentQueue: () => Promise<void>;
+  runProactiveHousekeeping: () => Promise<{ ok: boolean; detail: string; fixed: number }>;
   claimWorkboardJobs: () => number;
   /** Internal: run one job through sendChat */
   _runAgentJob: (job: AgentJob) => Promise<void>;
@@ -4744,6 +4751,7 @@ if (cmd === "tools") {
         const pendingMemoryNotes: string[] = [];
 
         void import("./persistent-storage").then(({ setPersistPaused }) => setPersistPaused(true));
+        streamStartedAt = Date.now();
         set((s) => {
           const chat = [
             ...s.chat.map((m) =>
@@ -5193,8 +5201,10 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
               "- Tool registry (live):",
               formatToolRegistryForPrompt({ includeBlocked: false }),
               get().autonomy.level >= 3
-                ? "- Autonomy: you may continue multi-step work; emit GOAL_COMPLETE / GOAL_BLOCKED when appropriate."
-                : "- Autonomy: complete the user turn; pin WORK_PIN for later if needed.",
+                ? "- Autonomy (proactive): notice small problems and fix them without waiting; emit GOAL_COMPLETE / GOAL_BLOCKED when appropriate."
+                : get().autonomy.level >= 2
+                  ? "- Autonomy (helpful): if your last reply was incomplete, continue/fix without waiting for “please continue”."
+                  : "- Autonomy: complete the user turn; wait for new asks before starting new work.",
               "- Persistent: chat history, settings, memory notes, Imagine media, connectors.",
               stTurn.agentPrefs?.memoryNotes?.trim()
                 ? `- Memory notes loaded (${stTurn.agentPrefs.memoryNotes.trim().length} chars). Use them.`
@@ -5217,10 +5227,12 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
                 : "- No website-only connectors connected.",
               "- Never invent Gmail/Drive/Calendar/Notion/Linear contents. If a connector is not LIVE, say so and stop.",
             ].join("\n");
+            const proactiveBlock = proactiveSystemAddon(get().autonomy);
             const turnWorkspaceContext =
               [
                 ctxBuilt.workspaceContext,
                 capabilityBlock,
+                proactiveBlock,
                 !stTurn.agentPrefs?.hostToolsEnabled
                   ? "NOTE: Host shell tools are DISABLED by user settings. Do not emit HOST_CMD."
                   : "",
@@ -6456,6 +6468,83 @@ if (!cmds.length) {
         set((s) => ({ activity: [row, ...s.activity].slice(0, 80) }));
       },
 
+
+      runProactiveHousekeeping: async () => {
+        const st = get();
+        if (!proactiveEnabled(st.autonomy)) {
+          return { ok: true, detail: "Proactive mode off or paused", fixed: 0 };
+        }
+        const actions = scanProactiveIssues({
+          autonomy: st.autonomy,
+          running: st.running,
+          streamingMessageId: st.streamingMessageId,
+          streamStatus: st.streamStatus,
+          chat: st.chat,
+          threads: st.threads,
+          activeThreadId: st.activeThreadId,
+          streamStartedAt,
+        });
+        if (!actions.length) {
+          return { ok: true, detail: "Nothing to fix", fixed: 0 };
+        }
+        let fixed = 0;
+        const notes: string[] = [];
+        for (const a of actions) {
+          if (!a.auto) continue;
+          if (a.kind === "clear_orphan_stream" || a.kind === "finalize_stuck_stream") {
+            const mid = a.messageId || st.streamingMessageId || "";
+            if (mid) finalizeChatStream(set, mid);
+            streamStartedAt = null;
+            fixed += 1;
+            notes.push(a.title);
+          } else if (a.kind === "clear_empty_assistant" && a.messageId) {
+            set((s) => {
+              const chat = s.chat.filter((m) => m.id !== a.messageId);
+              const threads = s.threads.map((th) =>
+                th.id === s.activeThreadId
+                  ? { ...th, messages: chat, updatedAt: Date.now() }
+                  : th,
+              );
+              return { chat, threads };
+            });
+            fixed += 1;
+            notes.push(a.title);
+          } else if (a.kind === "auto_continue") {
+            markAutoContinue(st.activeThreadId);
+            fixed += 1;
+            notes.push(a.title);
+            get().pushActivity({
+              kind: "agent",
+              title: "Proactive continue",
+              detail: a.detail,
+              status: "success",
+            });
+            void get().keepGoingChat();
+            break;
+          }
+        }
+        if (fixed) {
+          try {
+            scheduleSettingsPersist();
+          } catch {
+            /* ignore */
+          }
+          get().pushActivity({
+            kind: "system",
+            title: "Self-check",
+            detail: notes.slice(0, 3).join(" · "),
+            status: "success",
+          });
+        }
+        return {
+          ok: true,
+          detail: fixed
+            ? `Fixed ${fixed}: ${notes.slice(0, 2).join(", ")}`
+            : "Nothing auto-applied",
+          fixed,
+        };
+      },
+
       tickHeartbeat: () => {
         set((s) => ({
           heartbeatAt: Date.now(),
@@ -6463,6 +6552,12 @@ if (!cmds.length) {
         }));
         // Heartbeat-driven automations
         void get().tickAutomations({ heartbeatOnly: true });
+        // Proactive self-heal ~every 18s
+        const now = Date.now();
+        if (now - lastProactiveAt > 18_000) {
+          lastProactiveAt = now;
+          void get().runProactiveHousekeeping();
+        }
       },
 
       setAgentStatus: (id, status, tasks) => {
@@ -6884,6 +6979,7 @@ function finalizeChatStream(
   botId: string,
   opts?: { content?: string; markStopped?: boolean },
 ) {
+  streamStartedAt = null;
   set((s) => {
     const owns =
       s.streamingMessageId === botId ||
@@ -6935,3 +7031,5 @@ function endChatTurnPersist() {
 /** Active chat stream abort (module-level so Stop works across re-renders) */
 let activeChatAbort: AbortController | null = null;
 let chatGeneration = 0;
+let streamStartedAt: number | null = null;
+let lastProactiveAt = 0;

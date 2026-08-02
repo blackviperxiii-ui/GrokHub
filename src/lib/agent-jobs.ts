@@ -5,19 +5,19 @@
 export type AutonomyLevel = 0 | 1 | 2 | 3 | 4;
 
 export const AUTONOMY_LABEL: Record<AutonomyLevel, string> = {
-  0: "Assist",
-  1: "Supervised",
-  2: "Semi-auto",
-  3: "Always-on",
-  4: "Goal mode",
+  0: "On request",
+  1: "Aware",
+  2: "Helpful",
+  3: "Proactive",
+  4: "Hands-on",
 };
 
 export const AUTONOMY_HINT: Record<AutonomyLevel, string> = {
-  0: "Chat only — tools when you ask",
-  1: "Tools with confirm (default)",
-  2: "Queue while busy; read-only host freer",
-  3: "Background agent; safe jobs auto; tray for risk",
-  4: "Multi-step goals auto-resume with budgets",
+  0: "Only acts when you ask — no self-heal",
+  1: "Notices stuck UI/stream glitches and cleans them up",
+  2: "Auto-continues incomplete answers; light self-correction",
+  3: "Handles small unsolicited fixes (retries, empty replies, chat errors)",
+  4: "Also resumes multi-step goals / workboard when safe",
 };
 
 export type AgentJobType =
@@ -86,7 +86,7 @@ export type AgentQueueState = {
 
 export function defaultAutonomyConfig(): AutonomyConfig {
   return {
-    level: 1,
+    level: 2,
     paused: false,
     dailyUnitBudget: 0,
     spentUnitsToday: 0,

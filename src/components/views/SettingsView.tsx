@@ -31,7 +31,7 @@ const SETTINGS_CATEGORIES = [
   {
     id: "agent",
     label: "Agent",
-    hint: "Autonomy, tools & desktop",
+    hint: "Proactive behavior, tools & desktop",
     sections: ["sec-autonomy", "sec-agent", "sec-desktop", "sec-project"],
   },
   {
@@ -112,6 +112,7 @@ import {
   selfModRestore,
   selfModSnapshot,
 } from "@/lib/self-mod-client";
+import { AUTONOMY_HINT, AUTONOMY_LABEL } from "@/lib/agent-jobs";
 import { useGrokHub } from "@/lib/store";
 import type { GrokModeId } from "@/lib/types";
 import type { UpdateStatus } from "@/lib/update";
@@ -519,10 +520,10 @@ export function SettingsView() {
           `}</style>
       <Card id="sec-autonomy" data-settings-cat="agent" data-hit={sectionHit("sec-autonomy") ? "1" : "0"}>
         <CardHeader>
-          <CardTitle className="text-sm">Autonomy & always-on agent</CardTitle>
+          <CardTitle className="text-sm">Proactive behavior</CardTitle>
           <CardDescription>
-            Levels 2+ queue work when busy. Level 3+ claims workboard. Level 4 auto-resumes goals.
-            Use Pause in Settings anytime to stop background autonomy.
+            How self-aware the agent is — stuck streams, incomplete answers, small corrections —
+            not a list of running tools. Pause anytime to go fully manual.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -2260,29 +2261,42 @@ function AutonomySettingsPanel() {
   const autonomy = useGrokHub((s) => s.autonomy);
   const setAutonomy = useGrokHub((s) => s.setAutonomy);
   const pauseAutonomy = useGrokHub((s) => s.pauseAutonomy);
-  const stats = useGrokHub((s) => s.agentQueue);
-  const setNav = useGrokHub((s) => s.setNav);
+  const runProactiveHousekeeping = useGrokHub((s) => s.runProactiveHousekeeping);
+  const [lastRun, setLastRun] = useState<string>("");
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-2">
-        {([0, 1, 2, 3, 4] as const).map((lv) => (
-          <button
-            key={lv}
-            type="button"
-            onClick={() => setAutonomy({ level: lv })}
-            className={
-              "rounded-full border px-3 py-1 text-xs font-medium " +
-              (autonomy.level === lv
-                ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)]"
-                : "border-[var(--color-border)] text-[var(--color-muted)]")
-            }
-          >
-            {lv}
-          </button>
-        ))}
+      <div className="grid gap-2 sm:grid-cols-1">
+        {([0, 1, 2, 3, 4] as const).map((lv) => {
+          const active = autonomy.level === lv;
+          return (
+            <button
+              key={lv}
+              type="button"
+              onClick={() => setAutonomy({ level: lv })}
+              className={
+                "rounded-[var(--radius-md)] border px-3 py-2 text-left transition-colors " +
+                (active
+                  ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)]"
+                  : "border-[var(--color-border)] hover:bg-[var(--color-elevated)]/50")
+              }
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-[var(--color-fg)]">
+                  {lv} · {AUTONOMY_LABEL[lv]}
+                </span>
+                {active ? (
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-primary)]">
+                    Active
+                  </span>
+                ) : null}
+              </div>
+              <p className="mt-0.5 text-xs text-[var(--color-muted)]">{AUTONOMY_HINT[lv]}</p>
+            </button>
+          );
+        })}
       </div>
       <label className="flex items-center justify-between gap-3 text-sm">
-        <span>Pause all autonomy</span>
+        <span>Pause proactive behavior</span>
         <input
           type="checkbox"
           checked={autonomy.paused}
@@ -2290,7 +2304,7 @@ function AutonomySettingsPanel() {
         />
       </label>
       <label className="flex items-center justify-between gap-3 text-sm">
-        <span>Auto-claim workboard (level 3+)</span>
+        <span>Pin workboard tasks may auto-start (level 4)</span>
         <input
           type="checkbox"
           checked={autonomy.autoClaimWorkboard}
@@ -2298,34 +2312,32 @@ function AutonomySettingsPanel() {
         />
       </label>
       <label className="flex items-center justify-between gap-3 text-sm">
-        <span>Auto goal resume (level 4)</span>
+        <span>Resume multi-step goals (level 4)</span>
         <input
           type="checkbox"
           checked={autonomy.autoGoalResume}
           onChange={(e) => setAutonomy({ autoGoalResume: e.target.checked })}
         />
       </label>
-      <label className="block space-y-1 text-sm">
-        <span>Daily unit budget (0 = unlimited)</span>
-        <Input
-          type="number"
-          min={0}
-          value={autonomy.dailyUnitBudget}
-          onChange={(e) => setAutonomy({ dailyUnitBudget: Number(e.target.value) || 0 })}
-          className="h-8"
-        />
-      </label>
-      <p className="text-xs text-[var(--color-muted)]">
-        Background jobs {stats.jobs.filter((j) => j.status === "queued" || j.status === "running").length}
-        {" · "}spent today {autonomy.spentUnitsToday}
-        {autonomy.dailyUnitBudget ? ` / ${autonomy.dailyUnitBudget}` : ""}
-      </p>
-      <Button size="sm" variant="secondary" onClick={() => setNav("workboard")}>
-        Open workboard
-      </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => {
+            void runProactiveHousekeeping().then((r) => {
+              setLastRun(r.detail || (r.ok ? "OK" : "Nothing to do"));
+            });
+          }}
+        >
+          Run self-check now
+        </Button>
+        {lastRun ? (
+          <span className="text-[11px] text-[var(--color-muted)]">{lastRun}</span>
+        ) : null}
+      </div>
       <p className="text-[11px] text-[var(--color-subtle)]">
-        Arch always-on: enable packaging/systemd/grokhub-agent.service (user unit) or launch with{" "}
-        <span className="font-mono">grokhub --agent</span>.
+        Examples: unstick streaming bubbles, continue “let me check…” replies, clear empty errors.
+        Large or destructive work still waits for you.
       </p>
     </div>
   );
