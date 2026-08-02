@@ -305,6 +305,8 @@ export function AppShell() {
       void st.hydrateSecrets().then(() => {
         void useGrokHub.getState().probeGrok();
         void useGrokHub.getState().refreshUsage();
+        // Immediately ensure OAuth is not near expiry after restore
+        void useGrokHub.getState().refreshOAuthSession();
       });
       if (st.oauth?.accessToken) {
         useGrokHub.setState({
@@ -359,6 +361,30 @@ export function AppShell() {
       window.removeEventListener("beforeunload", flush);
       document.removeEventListener("visibilitychange", onVis);
     };
+  }, []);
+
+  useEffect(() => {
+    let stop = () => {};
+    void import("@/lib/smart-poll").then(({ startSmartPoll }) => {
+      stop = startSmartPoll({
+        // Keep OAuth alive through the ~6h access-token window (refresh ~30m early)
+        intervalMs: 10 * 60 * 1000,
+        maxBackoffMs: 30 * 60 * 1000,
+        // Run even in background so overnight/idle sessions stay signed in
+        onlyWhenVisible: false,
+        tick: async () => {
+          const st = useGrokHub.getState();
+          if (!st.oauth?.accessToken || !st.oauth?.refreshToken) return true;
+          try {
+            const r = await st.refreshOAuthSession();
+            return r.ok;
+          } catch {
+            return false;
+          }
+        },
+      });
+    });
+    return () => stop();
   }, []);
 
   useEffect(() => {

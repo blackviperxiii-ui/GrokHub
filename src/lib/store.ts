@@ -302,6 +302,12 @@ type State = {
   }>;
   clearOpenClawWorkspace: () => void;
   probeGrok: () => Promise<boolean>;
+  /** Proactive OAuth refresh (~30m before 6h expiry); persists tokens to secrets. */
+  refreshOAuthSession: (opts?: { force?: boolean }) => Promise<{
+    ok: boolean;
+    refreshed: boolean;
+    detail: string;
+  }>;
   syncFromGrok: (opts?: { displayName?: string | null; email?: string | null; imageUrl?: string | null }) => Promise<void>;
   newThread: () => void;
   selectThread: (id: string) => void;
@@ -1817,7 +1823,14 @@ export const useGrokHub = create<State>()(
           if (get().oauth) {
             try {
               const ensured = await oauthEnsure(get().oauth!);
-              if (ensured.tokens) set({ oauth: ensured.tokens });
+              if (ensured.tokens) {
+                set({ oauth: ensured.tokens });
+                if (ensured.refreshed) {
+                  void import("./secrets-client").then((m) =>
+                    m.secretsSet("oauth", JSON.stringify(ensured.tokens)),
+                  );
+                }
+              }
               accessToken = ensured.tokens?.accessToken || accessToken;
               if (ensured.ok) {
                 set({
@@ -1856,6 +1869,76 @@ export const useGrokHub = create<State>()(
           const msg = e instanceof Error ? e.message : "probe failed";
           set({ grokConnected: false, grokStatusDetail: msg });
           return false;
+        }
+      },
+
+      refreshOAuthSession: async (opts) => {
+        const cur = get().oauth;
+        if (!cur?.accessToken) {
+          return { ok: false, refreshed: false, detail: "No OAuth session" };
+        }
+        try {
+          const { tokenNeedsRefresh } = await import("./xai-oauth");
+          if (!opts?.force && !tokenNeedsRefresh(cur)) {
+            return {
+              ok: true,
+              refreshed: false,
+              detail: "OAuth token still valid",
+            };
+          }
+          if (!cur.refreshToken) {
+            set({
+              grokConnected: false,
+              grokStatusDetail: "Grok OAuth expired — sign in again",
+            });
+            return {
+              ok: false,
+              refreshed: false,
+              detail: "No refresh token — reconnect OAuth",
+            };
+          }
+          const { oauthEnsure } = await import("./grok-client");
+          const ensured = await oauthEnsure(cur);
+          if (ensured.tokens) {
+            set({
+              oauth: ensured.tokens,
+              grokConnected: ensured.ok !== false,
+              grokStatusDetail: ensured.refreshed
+                ? "Grok OAuth refreshed"
+                : ensured.detail || "Grok OAuth live",
+            });
+            if (ensured.refreshed || opts?.force) {
+              void import("./secrets-client").then((m) =>
+                m.secretsSet("oauth", JSON.stringify(ensured.tokens)),
+              );
+            }
+          }
+          if (ensured.ok === false && ensured.refreshed === false) {
+            return {
+              ok: false,
+              refreshed: false,
+              detail: ensured.detail || "OAuth probe failed",
+            };
+          }
+          return {
+            ok: true,
+            refreshed: Boolean(ensured.refreshed),
+            detail: ensured.refreshed
+              ? "Access token refreshed"
+              : ensured.detail || "ok",
+          };
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "OAuth refresh failed";
+          // Invalid grant / hard fail — clear so UI prompts reconnect
+          if (/invalid_grant|expired|revoked|sign in again/i.test(msg)) {
+            set({
+              grokConnected: false,
+              grokStatusDetail: msg,
+            });
+          } else {
+            set({ grokStatusDetail: msg });
+          }
+          return { ok: false, refreshed: false, detail: msg };
         }
       },
 
@@ -3956,6 +4039,14 @@ if (cmd === "tools") {
           // Non-blocking profile sync — don't delay first token
           void get().syncFromGrok();
         }
+        // Keep OAuth access token fresh (proactive ~30m before 6h expiry)
+        if (get().oauth?.refreshToken) {
+          try {
+            await get().refreshOAuthSession();
+          } catch {
+            /* non-fatal — chat may still use current token / free fallback */
+          }
+        }
         get().setAgentStatus(
           routed === "build" ? "builder" : routed === "heavy" ? "research" : "primary",
           "working",
@@ -4305,7 +4396,12 @@ while (rounds < maxRounds && !aborted) {
                 },
               );
 
-              if (result.tokens) set({ oauth: result.tokens });
+              if (result.tokens) {
+                set({ oauth: result.tokens });
+                void import("./secrets-client").then((m) =>
+                  m.secretsSet("oauth", JSON.stringify(result.tokens)),
+                );
+              }
               if (result.aborted || abort.signal.aborted || gen !== chatGeneration) {
                 aborted = true;
                 break;
@@ -5286,7 +5382,12 @@ if (!cmds.length) {
               outKind = live.mediaKind;
             }
             if (live.error) err = live.error;
-            if (live.tokens) set({ oauth: live.tokens });
+            if (live.tokens) {
+              set({ oauth: live.tokens });
+              void import("./secrets-client").then((m) =>
+                m.secretsSet("oauth", JSON.stringify(live.tokens)),
+              );
+            }
           } else {
             err = live.error || "live Imagine unavailable";
           }

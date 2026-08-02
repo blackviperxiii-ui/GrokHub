@@ -13,6 +13,11 @@ export const XAI_DEVICE_CODE_GRANT =
   "urn:ietf:params:oauth:grant-type:device_code";
 export const XAI_UA = "GrokHub/0.2.10 (xAI OAuth; Linux)";
 
+/** Refresh access token this long before expiresAt (xAI tokens ~6h). */
+export const TOKEN_REFRESH_SKEW_MS = 30 * 60 * 1000;
+/** If expiresAt is missing, refresh after this many ms since connectedAt. */
+export const TOKEN_MAX_AGE_WITHOUT_EXP_MS = 5 * 60 * 60 * 1000;
+
 export type XaiOAuthTokens = {
   accessToken: string;
   refreshToken?: string;
@@ -56,7 +61,18 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
   try {
     const part = token.split(".")[1];
     if (!part) return {};
-    const json = Buffer.from(part, "base64url").toString("utf8");
+    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    let json: string;
+    if (typeof Buffer !== "undefined") {
+      json = Buffer.from(part, "base64url").toString("utf8");
+    } else if (typeof atob === "function") {
+      json = decodeURIComponent(
+        Array.from(atob(pad), (c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join(""),
+      );
+    } else {
+      return {};
+    }
     return JSON.parse(json) as Record<string, unknown>;
   } catch {
     return {};
@@ -114,7 +130,40 @@ function parseTokens(json: Record<string, unknown>): Omit<XaiOAuthTokens, "conne
   } else if (typeof json.expires_in === "string" && /^\d+$/.test(json.expires_in)) {
     expiresAt = Date.now() + Number(json.expires_in) * 1000;
   }
+  // Prefer JWT exp when present (authoritative clock for the access token)
+  if (accessToken.includes(".")) {
+    const payload = decodeJwtPayload(accessToken);
+    const exp = payload.exp;
+    if (typeof exp === "number" && exp > 0) {
+      const jwtExp = exp * 1000;
+      if (!expiresAt || jwtExp < expiresAt) expiresAt = jwtExp;
+    }
+  }
+  if (!expiresAt && idToken && idToken.includes(".")) {
+    const payload = decodeJwtPayload(idToken);
+    const exp = payload.exp;
+    if (typeof exp === "number" && exp > 0) expiresAt = exp * 1000;
+  }
   return { accessToken, refreshToken, idToken, expiresAt };
+}
+
+/** True when access token should be refreshed now (proactive, before hard expiry). */
+export function tokenNeedsRefresh(tokens: XaiOAuthTokens | null | undefined): boolean {
+  if (!tokens?.accessToken) return false;
+  if (!tokens.refreshToken) return false;
+  const now = Date.now();
+  let exp = typeof tokens.expiresAt === "number" ? tokens.expiresAt : undefined;
+  if (exp == null && tokens.accessToken.includes(".")) {
+    const payload = decodeJwtPayload(tokens.accessToken);
+    if (typeof payload.exp === "number" && payload.exp > 0) exp = payload.exp * 1000;
+  }
+  if (typeof exp === "number") {
+    return exp - TOKEN_REFRESH_SKEW_MS < now;
+  }
+  // No expiry metadata — refresh if session is older than ~5h (tokens are ~6h)
+  const connected = tokens.connectedAt || 0;
+  if (connected > 0 && now - connected >= TOKEN_MAX_AGE_WITHOUT_EXP_MS) return true;
+  return false;
 }
 
 export async function startXaiDeviceCode(): Promise<DeviceCodeStart> {
@@ -302,22 +351,28 @@ export async function ensureAccessToken(tokens: XaiOAuthTokens): Promise<{
   if (!tokens?.accessToken) {
     throw new Error("No OAuth access token — connect Grok OAuth in Settings");
   }
-  const skew = 60_000;
-  const expired =
-    typeof tokens.expiresAt === "number" && tokens.expiresAt - skew < Date.now();
-  if (!expired) {
-    return { accessToken: tokens.accessToken, tokens, refreshed: false };
+  // Normalize expiresAt from JWT if store is missing it
+  let working: XaiOAuthTokens = tokens;
+  if (typeof working.expiresAt !== "number" && working.accessToken.includes(".")) {
+    const payload = decodeJwtPayload(working.accessToken);
+    if (typeof payload.exp === "number" && payload.exp > 0) {
+      working = { ...working, expiresAt: payload.exp * 1000 };
+    }
   }
-  if (!tokens.refreshToken) {
+  if (!tokenNeedsRefresh(working)) {
+    return { accessToken: working.accessToken, tokens: working, refreshed: false };
+  }
+  if (!working.refreshToken) {
     throw new Error("Grok OAuth session expired — sign in again");
   }
-  const next = await refreshXaiOAuth(tokens.refreshToken);
+  const next = await refreshXaiOAuth(working.refreshToken);
   const merged: XaiOAuthTokens = {
-    ...tokens,
+    ...working,
     accessToken: next.accessToken,
-    refreshToken: next.refreshToken || tokens.refreshToken,
+    refreshToken: next.refreshToken || working.refreshToken,
     expiresAt: next.expiresAt,
-    idToken: next.idToken || tokens.idToken,
+    idToken: next.idToken || working.idToken,
+    // keep connectedAt; refresh is same session
   };
   return { accessToken: merged.accessToken, tokens: merged, refreshed: true };
 }

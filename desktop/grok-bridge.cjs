@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.25";
+const APP_VERSION = "0.8.26";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -1718,6 +1718,19 @@ async function oauthPoll(deviceCode) {
   return { status: "pending", error: j.error_description || err };
 }
 
+function jwtExpMs(accessToken) {
+  try {
+    const part = String(accessToken || "").split(".")[1];
+    if (!part) return null;
+    const json = Buffer.from(part, "base64url").toString("utf8");
+    const payload = JSON.parse(json);
+    if (typeof payload.exp === "number" && payload.exp > 0) return payload.exp * 1000;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 async function oauthEnsure(tokens) {
   if (!tokens || !tokens.accessToken) {
     throw new Error("No OAuth access token");
@@ -1725,11 +1738,21 @@ async function oauthEnsure(tokens) {
   let access = String(tokens.accessToken);
   let next = { ...tokens };
   let refreshed = false;
-  const skew = 60_000;
-  const expired =
-    typeof tokens.expiresAt === "number" && tokens.expiresAt - skew < Date.now();
+  // Proactive refresh ~30 min before hard expiry (access tokens ~6h)
+  const skew = 30 * 60 * 1000;
+  let exp =
+    typeof tokens.expiresAt === "number" ? tokens.expiresAt : jwtExpMs(tokens.accessToken);
+  if (exp != null && typeof next.expiresAt !== "number") {
+    next = { ...next, expiresAt: exp };
+  }
+  const needsRefresh =
+    (typeof exp === "number" && exp - skew < Date.now()) ||
+    (exp == null &&
+      tokens.refreshToken &&
+      tokens.connectedAt &&
+      Date.now() - Number(tokens.connectedAt) >= 5 * 60 * 60 * 1000);
 
-  if (expired && tokens.refreshToken) {
+  if (needsRefresh && tokens.refreshToken) {
     const d = await xaiDiscovery();
     const res = await fetch(d.token_endpoint, {
       method: "POST",
@@ -1757,11 +1780,14 @@ async function oauthEnsure(tokens) {
       }
       throw new Error(j.error_description || j.error || `refresh failed (${res.status})`);
     }
+    let expiresAt = j.expires_in ? Date.now() + Number(j.expires_in) * 1000 : tokens.expiresAt;
+    const jwtE = jwtExpMs(j.access_token);
+    if (jwtE && (!expiresAt || jwtE < expiresAt)) expiresAt = jwtE;
     next = {
       ...tokens,
       accessToken: j.access_token,
       refreshToken: j.refresh_token || tokens.refreshToken,
-      expiresAt: j.expires_in ? Date.now() + j.expires_in * 1000 : tokens.expiresAt,
+      expiresAt,
       idToken: j.id_token || tokens.idToken,
     };
     access = next.accessToken;
