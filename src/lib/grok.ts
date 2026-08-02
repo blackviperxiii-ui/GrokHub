@@ -513,37 +513,104 @@ export type GrokImagineResult = {
   mediaKind?: "image" | "video";
 };
 
-function sizeForAspect(aspect?: string): string | undefined {
-  switch (aspect) {
-    case "16:9":
-      return "1792x1024";
-    case "9:16":
-      return "1024x1792";
-    case "3:2":
-      return "1536x1024";
-    case "2:3":
-      return "1024x1536";
-    case "4:3":
-      return "1536x1152";
-    case "1:1":
-      return "1024x1024";
-    default:
-      return undefined; // auto
+/** Map UI aspect → xAI image aspect_ratio (no OpenAI-style `size`). */
+function imageAspectRatio(aspect?: string): string | undefined {
+  if (!aspect || aspect === "auto") return "auto";
+  const allowed = new Set([
+    "1:1",
+    "16:9",
+    "9:16",
+    "4:3",
+    "3:4",
+    "3:2",
+    "2:3",
+    "2:1",
+    "1:2",
+    "19.5:9",
+    "9:19.5",
+    "20:9",
+    "9:20",
+  ]);
+  if (allowed.has(aspect)) return aspect;
+  // legacy aliases
+  if (aspect === "4:5") return "2:3";
+  return "auto";
+}
+
+/** Video API is pickier — landscape / portrait / square. */
+function videoAspectRatio(aspect?: string): string {
+  if (aspect === "9:16" || aspect === "2:3" || aspect === "3:4" || aspect === "1:2") {
+    return "9:16";
   }
+  if (aspect === "1:1") return "1:1";
+  return "16:9";
 }
 
 function qualityHint(quality?: string, kind?: string): string {
   if (kind === "video") {
     return quality === "quality"
-      ? "cinematic motion, high detail, smooth camera, 720p look"
-      : "fast motion sketch, simple scene";
+      ? "cinematic motion, high detail, smooth camera"
+      : "clear motion, simple scene";
   }
   return quality === "quality"
     ? "ultra detailed, sharp focus, professional lighting, high fidelity"
     : "clean composition, efficient render";
 }
 
-/** Live Grok / xAI image (and best-effort video) generation. */
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function pollVideoJob(
+  requestId: string,
+  bearer: string,
+  maxMs = 180_000,
+): Promise<{ url?: string; error?: string }> {
+  const started = Date.now();
+  let delay = 1500;
+  while (Date.now() - started < maxMs) {
+    const res = await fetch(`${XAI_BASE}/videos/${encodeURIComponent(requestId)}`, {
+      headers: { authorization: `Bearer ${bearer}`, accept: "application/json" },
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      status?: string;
+      error?: { message?: string } | string;
+      video?: { url?: string };
+      url?: string;
+      video_url?: string;
+    };
+    if (!res.ok) {
+      const msg =
+        typeof data.error === "string"
+          ? data.error
+          : data.error?.message || `poll ${res.status}`;
+      // 404 may mean not ready on some deployments — keep waiting a bit
+      if (res.status === 404 && Date.now() - started < 15_000) {
+        await sleep(delay);
+        continue;
+      }
+      return { error: msg };
+    }
+    const status = String(data.status || "").toLowerCase();
+    if (status === "done" || status === "completed" || status === "succeeded" || status === "success") {
+      const url = data.video?.url || data.video_url || data.url;
+      if (url) return { url };
+      return { error: "video done but no URL" };
+    }
+    if (status === "failed" || status === "expired" || status === "error" || status === "cancelled") {
+      const msg =
+        typeof data.error === "string"
+          ? data.error
+          : data.error?.message || `video ${status}`;
+      return { error: msg };
+    }
+    await sleep(delay);
+    delay = Math.min(5000, Math.floor(delay * 1.25));
+  }
+  return { error: "video generation timed out — try a shorter clip or Image mode" };
+}
+
+/** Live Grok / xAI Imagine (image + async video). Never sends unsupported `size`. */
 export async function callXaiImagine(req: {
   prompt: string;
   accessToken?: string;
@@ -553,7 +620,8 @@ export async function callXaiImagine(req: {
   quality?: "speed" | "quality";
   mediaKind?: "image" | "video";
   n?: number;
-  /** data URL or https URL for reference / img2img style guidance */
+  duration?: number;
+  /** data URL or https URL for reference / img2img / image-to-video */
   referenceDataUrl?: string;
 }): Promise<GrokImagineResult> {
   const auth = resolveBearer({
@@ -573,108 +641,141 @@ export async function callXaiImagine(req: {
   const mediaKind = req.mediaKind || "image";
   const qHint = qualityHint(req.quality, mediaKind);
   const fullPrompt = `${prompt}\n\n[${qHint}]`.trim();
-  const size = sizeForAspect(req.aspect);
   const n = Math.min(4, Math.max(1, req.n || 1));
+  const headers = {
+    "content-type": "application/json",
+    authorization: `Bearer ${auth.bearer}`,
+    accept: "application/json",
+  };
 
   if (mediaKind === "video") {
-    // Best-effort video endpoints — xAI surface evolves; try known patterns
     const videoModels = [
       req.model,
-      "grok-imagine-video",
       "grok-imagine-video-1.5",
-      "grok-2-video",
+      "grok-imagine-video",
     ].filter(Boolean) as string[];
-    const endpoints = [
-      `${XAI_BASE}/videos/generations`,
-      `${XAI_BASE}/video/generations`,
-      `${XAI_BASE}/images/generations`,
-    ];
-    let lastErr = "video generation unavailable on this API path";
+    const aspect = videoAspectRatio(req.aspect);
+    const resolution =
+      req.quality === "quality" ? "1080p" : "720p";
+    const duration = Math.min(15, Math.max(5, Number(req.duration) || (req.quality === "quality" ? 10 : 6)));
+    let lastErr = "video generation unavailable";
+
     for (const model of videoModels) {
-      for (const url of endpoints) {
-        try {
-          const body: Record<string, unknown> = {
-            model,
-            prompt: fullPrompt,
-            n: 1,
-          };
-          if (size) body.size = size;
-          if (req.aspect && req.aspect !== "auto") body.aspect_ratio = req.aspect;
-          if (req.referenceDataUrl) {
-            body.image = req.referenceDataUrl.startsWith("data:")
-              ? req.referenceDataUrl
-              : req.referenceDataUrl;
-            body.image_url = req.referenceDataUrl;
-          }
-          const res = await fetch(url, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              authorization: `Bearer ${auth.bearer}`,
-            },
-            body: JSON.stringify(body),
-          });
-          const data = (await res.json().catch(() => ({}))) as {
-            error?: { message?: string } | string;
-            data?: Array<{
-              b64_json?: string;
-              url?: string;
-              video_url?: string;
-              video?: string;
-            }>;
-            model?: string;
-          };
-          if (!res.ok) {
-            lastErr =
-              typeof data.error === "string"
-                ? data.error
-                : data.error?.message || `xAI video ${res.status} (${model})`;
+      try {
+        const body: Record<string, unknown> = {
+          model,
+          prompt: fullPrompt,
+          duration,
+          aspect_ratio: aspect,
+          resolution,
+        };
+        // Image-to-video when a reference is set
+        if (req.referenceDataUrl) {
+          body.image = { url: req.referenceDataUrl };
+        }
+        const res = await fetch(`${XAI_BASE}/videos/generations`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: { message?: string } | string;
+          request_id?: string;
+          id?: string;
+          data?: Array<{ video_url?: string; url?: string; b64_json?: string }>;
+          video?: { url?: string };
+          url?: string;
+          model?: string;
+          status?: string;
+        };
+        if (!res.ok) {
+          lastErr =
+            typeof data.error === "string"
+              ? data.error
+              : data.error?.message || `xAI video ${res.status} (${model})`;
+          // If aspect rejected, retry once with 16:9
+          if (/aspect/i.test(lastErr) && aspect !== "16:9") {
+            try {
+              const retry = await fetch(`${XAI_BASE}/videos/generations`, {
+                method: "POST",
+                headers,
+                body: JSON.stringify({
+                  ...body,
+                  aspect_ratio: "16:9",
+                  resolution: "720p",
+                }),
+              });
+              const rd = (await retry.json().catch(() => ({}))) as typeof data;
+              if (retry.ok) {
+                Object.assign(data, rd);
+              } else {
+                continue;
+              }
+            } catch {
+              continue;
+            }
+          } else {
             continue;
           }
-          const row = data.data?.[0];
-          const vid = row?.video_url || row?.video || row?.url || "";
-          if (vid) {
+        }
+
+        // Sync URL if API ever returns immediately
+        const immediate =
+          data.video?.url ||
+          data.url ||
+          data.data?.[0]?.video_url ||
+          data.data?.[0]?.url;
+        if (immediate) {
+          return {
+            ok: true,
+            videoDataUrl: immediate,
+            model: data.model || model,
+            source: "xai",
+            mediaKind: "video",
+          };
+        }
+
+        const requestId = data.request_id || data.id;
+        if (requestId) {
+          const polled = await pollVideoJob(requestId, auth.bearer);
+          if (polled.url) {
             return {
               ok: true,
-              videoDataUrl: vid,
+              videoDataUrl: polled.url,
               model: data.model || model,
               source: "xai",
               mediaKind: "video",
             };
           }
-          // Some responses return image frames only
-          const b64 = row?.b64_json || "";
-          if (b64) {
-            return {
-              ok: true,
-              imageDataUrl: b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`,
-              model: data.model || model,
-              source: "xai",
-              mediaKind: "image",
-              error: "API returned an image frame instead of video for this model",
-            };
-          }
-        } catch (e) {
-          lastErr = e instanceof Error ? e.message : "network error";
+          lastErr = polled.error || lastErr;
+          continue;
         }
+
+        lastErr = "video response missing request_id";
+      } catch (e) {
+        lastErr = e instanceof Error ? e.message : "network error";
       }
     }
     return {
       ok: false,
-      error: `${lastErr}. Video may require SuperGrok + website Imagine; try Image mode or Grok web.`,
+      error: `${lastErr}. Video needs SuperGrok + xAI video API access; try Image mode if this keeps failing.`,
       mediaKind: "video",
     };
   }
 
+  // ── Images: aspect_ratio + resolution (1k/2k). Never send `size`. ──
   const models = [
     req.model,
-    req.quality === "quality" ? "grok-imagine-image" : "grok-2-image",
+    req.quality === "quality" ? "grok-imagine-image-quality" : "grok-imagine-image",
+    "grok-imagine-image-quality",
+    "grok-imagine-image",
     "grok-2-image",
     "grok-2-image-1212",
-    "grok-imagine-image",
   ].filter(Boolean) as string[];
-
+  const aspect = imageAspectRatio(req.aspect);
+  const resolution = req.quality === "quality" ? "2k" : "1k";
   let lastErr = "image generation failed";
+
   for (const model of models) {
     try {
       const body: Record<string, unknown> = {
@@ -682,21 +783,16 @@ export async function callXaiImagine(req: {
         prompt: fullPrompt,
         n,
         response_format: "b64_json",
+        resolution,
       };
-      if (size) body.size = size;
-      if (req.aspect && req.aspect !== "auto") {
-        body.aspect_ratio = req.aspect;
-      }
-      // Reference image for edit / restyle style flows when API accepts it
+      if (aspect) body.aspect_ratio = aspect;
+      // Reference / edit when API accepts image url
       if (req.referenceDataUrl) {
-        body.image = req.referenceDataUrl;
+        body.image = { url: req.referenceDataUrl };
       }
       const res = await fetch(`${XAI_BASE}/images/generations`, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${auth.bearer}`,
-        },
+        headers,
         body: JSON.stringify(body),
       });
       const data = (await res.json().catch(() => ({}))) as {
@@ -709,7 +805,24 @@ export async function callXaiImagine(req: {
           typeof data.error === "string"
             ? data.error
             : data.error?.message || `xAI image ${res.status} (${model})`;
-        continue;
+        // Retry without resolution if unknown field
+        if (/resolution|argument not supported/i.test(lastErr)) {
+          const body2 = { ...body };
+          delete body2.resolution;
+          const res2 = await fetch(`${XAI_BASE}/images/generations`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body2),
+          });
+          const data2 = (await res2.json().catch(() => ({}))) as typeof data;
+          if (res2.ok) {
+            Object.assign(data, data2);
+          } else {
+            continue;
+          }
+        } else {
+          continue;
+        }
       }
       const row = data.data?.[0];
       const b64 = row?.b64_json || row?.b64 || row?.image || "";

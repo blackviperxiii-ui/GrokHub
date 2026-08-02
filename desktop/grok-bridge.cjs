@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.9";
+const APP_VERSION = "0.8.10";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -1539,7 +1539,7 @@ const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const XAI_UA = "GrokHub/0.8.9 (xAI OAuth; Electron)";
+const XAI_UA = "GrokHub/0.8.10 (xAI OAuth; Electron)";
 
 async function xaiDiscovery() {
   const res = await fetch(XAI_OAUTH_DISCOVERY, {
@@ -1763,80 +1763,157 @@ async function callXaiImagine(req = {}) {
   if (!prompt) return { ok: false, error: "empty prompt" };
   const mediaKind = req.mediaKind === "video" ? "video" : "image";
   const quality = req.quality === "quality" ? "quality" : "speed";
-  const aspect = req.aspect || "auto";
+  const aspectIn = req.aspect || "auto";
   const qHint =
     quality === "quality"
       ? mediaKind === "video"
         ? "cinematic motion, high detail, smooth camera"
         : "ultra detailed, sharp focus, professional lighting"
       : mediaKind === "video"
-        ? "fast motion sketch"
+        ? "clear motion, simple scene"
         : "clean composition, efficient render";
   const fullPrompt = `${prompt}\n\n[${qHint}]`;
-  const sizeMap = {
-    "16:9": "1792x1024",
-    "9:16": "1024x1792",
-    "3:2": "1536x1024",
-    "2:3": "1024x1536",
-    "4:3": "1536x1152",
-    "1:1": "1024x1024",
+  const headers = {
+    "content-type": "application/json",
+    authorization: `Bearer ${apiKey}`,
+    accept: "application/json",
   };
-  const size = sizeMap[aspect];
 
-  if (mediaKind === "video") {
-    const videoModels = [req.model, "grok-imagine-video", "grok-imagine-video-1.5"].filter(Boolean);
-    let lastErr = "video generation unavailable";
-    for (const model of videoModels) {
-      for (const url of [`${XAI_BASE}/videos/generations`, `${XAI_BASE}/images/generations`]) {
-        try {
-          const body = { model, prompt: fullPrompt, n: 1 };
-          if (size) body.size = size;
-          if (aspect && aspect !== "auto") body.aspect_ratio = aspect;
-          if (req.referenceDataUrl) body.image = req.referenceDataUrl;
-          const res = await fetch(url, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify(body),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            lastErr = data.error?.message || data.error || `xAI ${res.status}`;
-            continue;
-          }
-          const row = data.data?.[0] || {};
-          const vid = row.video_url || row.video || row.url || "";
-          if (vid) {
-            return { ok: true, videoDataUrl: vid, model: data.model || model, source: "xai", mediaKind: "video" };
-          }
-          const b64 = row.b64_json || row.b64 || "";
-          if (b64) {
-            return {
-              ok: true,
-              imageDataUrl: `data:image/png;base64,${b64}`,
-              model: data.model || model,
-              source: "xai",
-              mediaKind: "image",
-              error: "API returned image for video request",
-            };
-          }
-        } catch (e) {
-          lastErr = e instanceof Error ? e.message : "network error";
+  function videoAspect(a) {
+    if (a === "9:16" || a === "2:3" || a === "3:4" || a === "1:2") return "9:16";
+    if (a === "1:1") return "1:1";
+    return "16:9";
+  }
+  function imageAspect(a) {
+    if (!a || a === "auto") return "auto";
+    const allowed = new Set([
+      "1:1","16:9","9:16","4:3","3:4","3:2","2:3","2:1","1:2",
+      "19.5:9","9:19.5","20:9","9:20","auto",
+    ]);
+    return allowed.has(a) ? a : "auto";
+  }
+  async function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+  async function pollVideo(requestId, maxMs = 180000) {
+    const started = Date.now();
+    let delay = 1500;
+    while (Date.now() - started < maxMs) {
+      const res = await fetch(`${XAI_BASE}/videos/${encodeURIComponent(requestId)}`, {
+        headers: { authorization: `Bearer ${apiKey}`, accept: "application/json" },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 404 && Date.now() - started < 15000) {
+          await sleep(delay);
+          continue;
         }
+        return {
+          error:
+            (typeof data.error === "string" && data.error) ||
+            data.error?.message ||
+            `poll ${res.status}`,
+        };
       }
+      const status = String(data.status || "").toLowerCase();
+      if (["done", "completed", "succeeded", "success"].includes(status)) {
+        const url = data.video?.url || data.video_url || data.url;
+        if (url) return { url };
+        return { error: "video done but no URL" };
+      }
+      if (["failed", "expired", "error", "cancelled"].includes(status)) {
+        return {
+          error:
+            (typeof data.error === "string" && data.error) ||
+            data.error?.message ||
+            `video ${status}`,
+        };
+      }
+      await sleep(delay);
+      delay = Math.min(5000, Math.floor(delay * 1.25));
     }
-    return { ok: false, error: lastErr + " — try Image mode or Grok website video", mediaKind: "video" };
+    return { error: "video generation timed out" };
   }
 
+  if (mediaKind === "video") {
+    // xAI video API: NO `size` — use aspect_ratio + resolution + duration, poll request_id
+    const videoModels = [req.model, "grok-imagine-video-1.5", "grok-imagine-video"].filter(Boolean);
+    const aspect = videoAspect(aspectIn);
+    const resolution = quality === "quality" ? "1080p" : "720p";
+    const duration = Math.min(15, Math.max(5, Number(req.duration) || (quality === "quality" ? 10 : 6)));
+    let lastErr = "video generation unavailable";
+    for (const model of videoModels) {
+      try {
+        const body = {
+          model,
+          prompt: fullPrompt,
+          duration,
+          aspect_ratio: aspect,
+          resolution,
+        };
+        if (req.referenceDataUrl) body.image = { url: req.referenceDataUrl };
+        const res = await fetch(`${XAI_BASE}/videos/generations`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          lastErr =
+            (typeof data.error === "string" && data.error) ||
+            data.error?.message ||
+            `xAI ${res.status}`;
+          continue;
+        }
+        const immediate =
+          data.video?.url || data.url || data.data?.[0]?.video_url || data.data?.[0]?.url;
+        if (immediate) {
+          return {
+            ok: true,
+            videoDataUrl: immediate,
+            model: data.model || model,
+            source: "xai",
+            mediaKind: "video",
+          };
+        }
+        const requestId = data.request_id || data.id;
+        if (requestId) {
+          const polled = await pollVideo(requestId);
+          if (polled.url) {
+            return {
+              ok: true,
+              videoDataUrl: polled.url,
+              model: data.model || model,
+              source: "xai",
+              mediaKind: "video",
+            };
+          }
+          lastErr = polled.error || lastErr;
+          continue;
+        }
+        lastErr = "video response missing request_id";
+      } catch (e) {
+        lastErr = e instanceof Error ? e.message : "network error";
+      }
+    }
+    return {
+      ok: false,
+      error: lastErr + " — try Image mode or check SuperGrok video access",
+      mediaKind: "video",
+    };
+  }
+
+  // Images: aspect_ratio + resolution (1k/2k). Never send OpenAI-style `size`.
   const models = [
     req.model,
-    quality === "quality" ? "grok-imagine-image" : "grok-2-image",
+    quality === "quality" ? "grok-imagine-image-quality" : "grok-imagine-image",
+    "grok-imagine-image-quality",
+    "grok-imagine-image",
     "grok-2-image",
     "grok-2-image-1212",
-    "grok-imagine-image",
   ].filter(Boolean);
+  const aspect = imageAspect(aspectIn);
+  const resolution = quality === "quality" ? "2k" : "1k";
   let lastErr = "image generation failed";
   for (const model of models) {
     try {
@@ -1845,43 +1922,61 @@ async function callXaiImagine(req = {}) {
         prompt: fullPrompt,
         n: Math.min(4, Math.max(1, Number(req.n) || 1)),
         response_format: "b64_json",
+        resolution,
       };
-      if (size) body.size = size;
-      if (aspect && aspect !== "auto") body.aspect_ratio = aspect;
-      if (req.referenceDataUrl) body.image = req.referenceDataUrl;
+      if (aspect) body.aspect_ratio = aspect;
+      if (req.referenceDataUrl) body.image = { url: req.referenceDataUrl };
       const res = await fetch(`${XAI_BASE}/images/generations`, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${apiKey}`,
-        },
+        headers,
         body: JSON.stringify(body),
       });
-      const data = await res.json().catch(() => ({}));
+      let data = await res.json().catch(() => ({}));
       if (!res.ok) {
         lastErr =
-          typeof data.error === "string"
-            ? data.error
-            : data.error?.message || `xAI image ${res.status} (${model})`;
-        continue;
+          (typeof data.error === "string" && data.error) ||
+          data.error?.message ||
+          `xAI image ${res.status} (${model})`;
+        // strip resolution if rejected
+        if (/resolution|argument not supported|size/i.test(String(lastErr))) {
+          const body2 = { ...body };
+          delete body2.resolution;
+          const res2 = await fetch(`${XAI_BASE}/images/generations`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body2),
+          });
+          data = await res2.json().catch(() => ({}));
+          if (!res2.ok) {
+            lastErr =
+              (typeof data.error === "string" && data.error) ||
+              data.error?.message ||
+              lastErr;
+            continue;
+          }
+        } else {
+          continue;
+        }
       }
-      const b64 =
-        data.data?.[0]?.b64_json ||
-        data.data?.[0]?.b64 ||
-        data.data?.[0]?.image ||
-        "";
+      const b64 = data.data?.[0]?.b64_json || data.data?.[0]?.b64 || data.data?.[0]?.image || "";
       const url = data.data?.[0]?.url || "";
       if (b64) {
         return {
           ok: true,
-          imageDataUrl: `data:image/png;base64,${b64}`,
+          imageDataUrl: String(b64).startsWith("data:") ? b64 : `data:image/png;base64,${b64}`,
           model: data.model || model,
           source: "xai",
           mediaKind: "image",
         };
       }
       if (url) {
-        return { ok: true, imageDataUrl: url, model: data.model || model, source: "xai", mediaKind: "image" };
+        return {
+          ok: true,
+          imageDataUrl: url,
+          model: data.model || model,
+          source: "xai",
+          mediaKind: "image",
+        };
       }
       lastErr = "empty image response";
     } catch (e) {

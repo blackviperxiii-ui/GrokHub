@@ -3638,12 +3638,14 @@ if (!cmds.length) {
               ? outKind === "video"
                 ? "Imagine video ready (Grok)"
                 : "Imagine ready (Grok)"
-              : "Imagine ready (local preview)",
+              : err
+                ? "Imagine local preview (live failed)"
+                : "Imagine ready (local preview)",
           detail:
             source === "xai"
               ? `${p.slice(0, 80)} · ${model || "xAI"} · ${aspect}/${quality}`
               : `${p.slice(0, 80)}${err ? ` · live failed: ${err}` : " · offline SVG"}`,
-          status: "success",
+          status: source === "xai" ? "success" : err ? "failed" : "success",
         });
       },
 
