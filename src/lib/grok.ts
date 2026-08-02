@@ -1,6 +1,6 @@
 import type { GrokModeId } from "./types";
 import { modelIdForMode, resolveMode } from "./modes";
-import { isMultiAgentModel, pickFlagshipModel, sanitizeChatModel } from "./models-catalog";
+import { sanitizeChatModel } from "./models-catalog";
 import { parseRateLimitHeaders } from "./usage";
 
 export const XAI_BASE = "https://api.x.ai/v1";

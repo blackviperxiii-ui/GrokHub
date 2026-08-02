@@ -514,8 +514,8 @@ export function SettingsView() {
           data-mode={searching ? "search" : settingsCat}
         >
           <style>{`
-            .settings-stack > [data-settings-cat] { display: none; }
-            .settings-stack > [data-settings-cat][data-hit="1"] { display: block; }
+            .settings-stack > [data-settings-cat] { display: none !important; }
+            .settings-stack > [data-settings-cat][data-hit="1"] { display: flex !important; flex-direction: column; }
           `}</style>
       <Card id="sec-autonomy" data-settings-cat="agent" data-hit={sectionHit("sec-autonomy") ? "1" : "0"}>
         <CardHeader>

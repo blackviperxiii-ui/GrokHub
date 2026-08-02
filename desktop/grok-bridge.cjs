@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.45";
+const APP_VERSION = "0.8.46";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -357,8 +357,8 @@ Refuse criminal activity, malware, exploits. Confirm destructive commands. Prefe
   return base;
 }
 
-async function callXaiChatOnce(apiKey, model, messages, temperature, max_tokens) {
-  model = sanitizeChatModel(model, "");
+async function callXaiChatOnce(apiKey, model, messages, temperature, max_tokens, mode) {
+  model = sanitizeChatModel(model, mode || "");
   const res = await fetch(`${XAI_BASE}/chat/completions`, {
     method: "POST",
     headers: {
@@ -411,8 +411,10 @@ async function callXaiChat(req = {}) {
         return r;
       })()
     : resolveMode(mode, lastUser || "");
-  const primaryModel =
-    req.model || modelForMode(mode, lastUser || "", { freeTier });
+  const primaryModel = sanitizeChatModel(
+    req.model || modelForMode(mode, lastUser || "", { freeTier }),
+    mode,
+  );
   const sys =
     systemPrompt(mode, lastUser || "") +
     (freeTier
@@ -503,7 +505,7 @@ async function callXaiChat(req = {}) {
     for (const model of queue) {
       if (!model || tried.has(model)) continue;
       tried.add(model);
-      const r = await callXaiChatOnce(apiKey, model, messages, temperature, max_tokens);
+      const r = await callXaiChatOnce(apiKey, model, messages, temperature, max_tokens, mode);
       if (r.ok) {
         const isFreeModel = FREE_FALLBACK_MODELS.includes(model) || freeTier;
         return {
@@ -515,6 +517,15 @@ async function callXaiChat(req = {}) {
       }
       lastErr = r;
       const msg = r.error || "";
+      // Multi-agent models rejected on chat/completions → force single-agent and retry
+      if (/multi\s*agent|not allowed on chat completions/i.test(msg)) {
+        const fallback = sanitizeChatModel(
+          mode === "max" || mode === "heavy" ? "grok-4.5" : "grok-4.20-reasoning",
+          mode,
+        );
+        if (!tried.has(fallback)) queue.unshift(fallback);
+        continue;
+      }
       // Subscription / entitlement → keep trying free models
       if (isSubscriptionError(r.status, msg) || r.status === 404 || /model|not found|invalid/i.test(msg)) {
         usedFreeFallback = true;
@@ -2203,7 +2214,10 @@ async function callXaiChatStream(req = {}, handlers = {}) {
   const mode = req.mode || "auto";
   const lastUser =
     [...(req.messages || [])].reverse().find((m) => m.role === "user")?.content || "";
-  const model = req.model || modelForMode(mode, lastUser, { freeTier });
+  const model = sanitizeChatModel(
+    req.model || modelForMode(mode, lastUser, { freeTier }),
+    mode,
+  );
   const sys =
     systemPrompt(mode, lastUser) +
     (req.workspaceContext && String(req.workspaceContext).trim()
@@ -2226,7 +2240,7 @@ async function callXaiChatStream(req = {}, handlers = {}) {
       apiKey: req.apiKey,
       freeTier,
       ssoCookie: req.ssoCookie,
-      model: freeTier ? model : req.model,
+      model: sanitizeChatModel(freeTier ? model : req.model || model, mode),
     });
     if (r.ok && r.content) {
       onDelta(r.content);
@@ -2263,6 +2277,21 @@ async function callXaiChatStream(req = {}, handlers = {}) {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      if (/multi\s*agent|not allowed on chat completions/i.test(text) && !req._multiAgentRetried) {
+        const fallback =
+          mode === "max" || mode === "heavy" || mode === "auto"
+            ? "grok-4.5"
+            : mode === "build"
+              ? "grok-build-0.1"
+              : mode === "fast"
+                ? "grok-4-1-fast-non-reasoning"
+                : "grok-4.20-reasoning";
+        onStatus("retry-single-agent");
+        return callXaiChatStream(
+          { ...req, model: sanitizeChatModel(fallback, mode), _multiAgentRetried: true },
+          handlers,
+        );
+      }
       if (
         isSubscriptionError(res.status, text) ||
         res.status === 404 ||

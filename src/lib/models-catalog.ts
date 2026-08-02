@@ -267,7 +267,7 @@ export function modelsSignature(ids: string[]): string {
     .join("|");
 }
 
-function scoreMatch(live: string, candidate: string): number {
+export function scoreMatch(live: string, candidate: string): number {
   const a = live.toLowerCase();
   const b = candidate.toLowerCase();
   if (a === b) return 100;
@@ -275,6 +275,9 @@ function scoreMatch(live: string, candidate: string): number {
   const a2 = a.replace(/[._]/g, "-");
   const b2 = b.replace(/[._]/g, "-");
   if (a2 === b2) return 95;
+  // Dated variants: grok-4.20-0309-reasoning ≈ grok-4.20-reasoning
+  const stripDate = (s: string) => s.replace(/-\d{4}(?=-|$)/g, "");
+  if (stripDate(a2) === stripDate(b2)) return 92;
   const prefixOk = (longer: string, shorter: string) => {
     if (!longer.startsWith(shorter)) return false;
     if (longer.length === shorter.length) return true;
@@ -297,19 +300,34 @@ export function pickSlotModel(slot: ModelSlot, liveIds: string[]): string {
   if (slot === "heavy") {
     return pickFlagshipModel(usable.length ? usable : liveIds);
   }
-  let best = FALLBACK_SLOTS[slot];
-  let bestScore = 0;
+  // Walk candidates in priority order; take best live match for that candidate
+  // (avoids grok-4.5 winning the smart/think slot over 4.20-reasoning via raw score).
   for (const cand of candidates) {
+    let bestLive = "";
+    let bestScore = 0;
     for (const live of usable) {
       const s = scoreMatch(live, cand);
       if (s > bestScore) {
         bestScore = s;
-        best = live;
+        bestLive = live;
+      }
+    }
+    if (bestScore >= 70 && bestLive) return bestLive;
+  }
+  // Soft fallback: any match ≥ 55
+  let soft = FALLBACK_SLOTS[slot];
+  let softScore = 0;
+  for (const cand of candidates) {
+    for (const live of usable) {
+      const s = scoreMatch(live, cand);
+      if (s > softScore) {
+        softScore = s;
+        soft = live;
       }
     }
   }
-  if (bestScore === 0) return FALLBACK_SLOTS[slot];
-  return best;
+  if (softScore >= 55) return soft;
+  return FALLBACK_SLOTS[slot];
 }
 
 export function filterEssential(liveIds: string[]): string[] {
