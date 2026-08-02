@@ -77,11 +77,11 @@ const WorkboardView = lazy(() =>
 const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { id: "chat", label: "Agent", icon: MessageSquare },
   { id: "history", label: "History", icon: History },
-  { id: "command", label: "Command", icon: Command },
-  { id: "workboard", label: "Workboard", icon: ClipboardList },
   { id: "imagine", label: "Imagine", icon: ImageIcon },
+  { id: "workboard", label: "Workboard", icon: ClipboardList },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "automations", label: "Automations", icon: TimerReset },
+  { id: "command", label: "Command", icon: Command },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
@@ -639,10 +639,10 @@ export function AppShell() {
   const showOffline = grokConnected === false && !oauth?.accessToken && !apiKey;
 
   const primaryNav = NAV.filter((item) =>
-    ["chat", "history", "command", "workboard", "imagine"].includes(item.id),
+    ["chat", "history", "imagine", "workboard"].includes(item.id),
   );
   const toolsNav = NAV.filter((item) =>
-    ["skills", "automations", "settings"].includes(item.id),
+    ["skills", "automations", "command", "settings"].includes(item.id),
   );
 
   const stageTitle =

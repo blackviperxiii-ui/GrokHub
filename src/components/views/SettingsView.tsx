@@ -522,8 +522,9 @@ export function SettingsView() {
         <CardHeader>
           <CardTitle className="text-sm">Proactive behavior</CardTitle>
           <CardDescription>
-            How self-aware the agent is — stuck streams, incomplete answers, small corrections —
-            not a list of running tools. Pause anytime to go fully manual.
+            Self-awareness and unsolicited caretaking: stuck streams, incomplete answers,
+            session/host refresh, tidy memory. Level 3+ invents small safe chores on its own.
+            Pause anytime for fully manual.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -2336,8 +2337,8 @@ function AutonomySettingsPanel() {
         ) : null}
       </div>
       <p className="text-[11px] text-[var(--color-subtle)]">
-        Examples: unstick streaming bubbles, continue “let me check…” replies, clear empty errors.
-        Large or destructive work still waits for you.
+        Level 3–4 also free-roams: refresh OAuth before expiry, re-probe desktop host, usage meter,
+        prune stale learnings. Large or destructive work still waits for you.
       </p>
     </div>
   );

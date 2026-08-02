@@ -159,6 +159,8 @@ import {
   markAutoContinue,
   proactiveSystemAddon,
   proactiveEnabled,
+  planFreeRoamChores,
+  canFreeRoam,
 } from "./proactive";
 
 /** In-flight LLM auto-titles (thread id). */
@@ -6474,6 +6476,7 @@ if (!cmds.length) {
         if (!proactiveEnabled(st.autonomy)) {
           return { ok: true, detail: "Proactive mode off or paused", fixed: 0 };
         }
+        // Don't interrupt an active turn with auto-continue
         const actions = scanProactiveIssues({
           autonomy: st.autonomy,
           running: st.running,
@@ -6484,9 +6487,6 @@ if (!cmds.length) {
           activeThreadId: st.activeThreadId,
           streamStartedAt,
         });
-        if (!actions.length) {
-          return { ok: true, detail: "Nothing to fix", fixed: 0 };
-        }
         let fixed = 0;
         const notes: string[] = [];
         for (const a of actions) {
@@ -6509,7 +6509,7 @@ if (!cmds.length) {
             });
             fixed += 1;
             notes.push(a.title);
-          } else if (a.kind === "auto_continue") {
+          } else if (a.kind === "auto_continue" && !st.running) {
             markAutoContinue(st.activeThreadId);
             fixed += 1;
             notes.push(a.title);
@@ -6523,6 +6523,54 @@ if (!cmds.length) {
             break;
           }
         }
+
+        // Free-roaming safe chores (level 3+) — invent small maintenance without being asked
+        if (canFreeRoam(st.autonomy) && !st.running) {
+          const oauth = st.oauth as { expiresAt?: number } | null;
+          const expiring =
+            Boolean(oauth?.expiresAt) &&
+            Number(oauth?.expiresAt) - Date.now() < 45 * 60 * 1000;
+          const hostDown = !st.connectors.some(
+            (c) => c.id === "desktop-host" && c.status === "connected",
+          );
+          const modelsStale =
+            !st.lastModelsFetchAt || Date.now() - st.lastModelsFetchAt > 6 * 60 * 60 * 1000;
+          const chores = planFreeRoamChores(st.autonomy, {
+            oauthExpiring: expiring,
+            hostLikelyDown: hostDown,
+            modelsStale,
+          });
+          for (const ch of chores) {
+            try {
+              if (ch.action === "refresh_oauth") {
+                await get().refreshOAuthSession();
+              } else if (ch.action === "refresh_usage") {
+                await get().refreshUsage();
+              } else if (ch.action === "refresh_models") {
+                await get().refreshModels();
+              } else if (ch.action === "probe_host") {
+                const { hostInfo } = await import("./host-client");
+                const info = await hostInfo();
+                if (info.unsandboxed && info.bridge !== "none") {
+                  set((s) => ({
+                    connectors: s.connectors.map((c) =>
+                      c.id === "desktop-host"
+                        ? { ...c, status: "connected" as const, lastUsed: Date.now() }
+                        : c,
+                    ),
+                  }));
+                }
+              } else if (ch.action === "prune_learning" || ch.action === "flush_memory") {
+                await get().flushLearningToDisk();
+              }
+              fixed += 1;
+              notes.push(ch.title);
+            } catch {
+              /* ignore single chore failures */
+            }
+          }
+        }
+
         if (fixed) {
           try {
             scheduleSettingsPersist();

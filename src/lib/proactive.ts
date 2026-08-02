@@ -13,6 +13,7 @@ export type ProactiveAction = {
     | "finalize_stuck_stream"
     | "auto_continue"
     | "clear_empty_assistant"
+    | "free_roam"
     | "note";
   title: string;
   detail: string;
@@ -166,13 +167,14 @@ export function proactiveSystemAddon(cfg: AutonomyConfig): string {
   if (!proactiveEnabled(cfg)) return "";
   if (cfg.level >= 3) {
     return `
-## Proactive mode (on)
-You notice problems and act without waiting to be asked for tiny fixes:
-- If a prior turn stalled (“let me check…”) or a chat/UI glitch is obvious, finish or correct it.
-- Prefer real HOST_CMD for local bugs over describing plans.
-- For small clear corrections (typos in files you just wrote, failed command retry once, stuck state), just do them and say what you fixed in one short line.
-- Do not start large new projects unprompted. Stay on the user's current goals.
-- If something needs a destructive or irreversible action, ask first.
+## Proactive mode (free-roaming caretaking)
+You may act without being asked for *small* caretaking on the user's current work and this app:
+- Stuck/incomplete replies, failed tool retries (once), obvious chat/UI errors — fix them.
+- Prefer real HOST_CMD for local evidence; never invent results.
+- Between turns the app also runs safe background chores (session refresh, host probe, tidy memory).
+- You may mention briefly: “I fixed … while you were away.”
+- Do NOT invent large new projects, mass deletes, or system-wide refactors unprompted.
+- Destructive or irreversible actions still need a clear ask.
 `;
   }
   if (cfg.level >= 2) {
@@ -187,3 +189,96 @@ Call out brief self-corrections. Don't invent new multi-step projects unprompted
 If the UI or your last reply is stuck/empty, prefer finishing cleanly over meta apologies. Still wait for the user for new work.
 `;
 }
+
+/** Level 3+ free-roaming: invent small safe maintenance chores without a user ask. */
+export function canFreeRoam(cfg: AutonomyConfig): boolean {
+  return proactiveEnabled(cfg) && cfg.level >= 3;
+}
+
+export type FreeRoamChore = {
+  id: string;
+  title: string;
+  detail: string;
+  /** store-side action key */
+  action:
+    | "refresh_oauth"
+    | "refresh_usage"
+    | "probe_host"
+    | "prune_learning"
+    | "flush_memory"
+    | "refresh_models";
+};
+
+const lastChoreAt = new Map<string, number>();
+const CHORE_COOLDOWN_MS = 12 * 60_000;
+
+/**
+ * Suggest unsolicited but safe maintenance when Proactive/Hands-on is on.
+ * Caller applies actions; we only schedule by cooldown.
+ */
+export function planFreeRoamChores(
+  cfg: AutonomyConfig,
+  ctx: {
+    oauthExpiring?: boolean;
+    hostLikelyDown?: boolean;
+    modelsStale?: boolean;
+    now?: number;
+  },
+): FreeRoamChore[] {
+  if (!canFreeRoam(cfg)) return [];
+  const now = ctx.now ?? Date.now();
+  const out: FreeRoamChore[] = [];
+  const push = (c: FreeRoamChore) => {
+    const prev = lastChoreAt.get(c.id) || 0;
+    if (now - prev < CHORE_COOLDOWN_MS) return;
+    lastChoreAt.set(c.id, now);
+    out.push(c);
+  };
+
+  // Always-safe light chores (one per pass max 2)
+  if (ctx.oauthExpiring) {
+    push({
+      id: "oauth-refresh",
+      title: "Refresh Grok session",
+      detail: "OAuth token near expiry — refreshing before it drops.",
+      action: "refresh_oauth",
+    });
+  }
+  if (ctx.hostLikelyDown) {
+    push({
+      id: "probe-host",
+      title: "Recheck desktop host",
+      detail: "Desktop host looked offline — probing again.",
+      action: "probe_host",
+    });
+  }
+  if (ctx.modelsStale) {
+    push({
+      id: "models-refresh",
+      title: "Refresh model catalog",
+      detail: "Model list looked stale — polling xAI again.",
+      action: "refresh_models",
+    });
+  }
+  // Periodic housekeeping even without a red flag (level 3+)
+  push({
+    id: "prune-learning",
+    title: "Tidy learnings",
+    detail: "Prune stale routing notes and mirror STATUS.md.",
+    action: "prune_learning",
+  });
+  push({
+    id: "usage-refresh",
+    title: "Refresh usage meter",
+    detail: "Quiet usage poll so the meter stays honest.",
+    action: "refresh_usage",
+  });
+
+  // Cap: don't invent a storm
+  return out.slice(0, cfg.level >= 4 ? 3 : 2);
+}
+
+export function markChoreDone(id: string, now = Date.now()) {
+  lastChoreAt.set(id, now);
+}
+
