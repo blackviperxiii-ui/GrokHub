@@ -32,14 +32,28 @@ export type DesktopGrokBridge = {
       apiKey?: string;
       accessToken?: string;
       tokens?: XaiOAuthTokens | null;
+      streamId?: string;
+      workspaceContext?: string;
+      ssoCookie?: string;
+      freeTier?: boolean;
+      allowWebsiteFallback?: boolean;
+      temperature?: number;
     },
     handlers: {
       onDelta: (piece: string) => void;
       onStatus?: (status: string) => void;
+      /** Do not pass AbortSignal over contextBridge */
       signal?: AbortSignal;
     },
-  ) => Promise<GrokChatResult & { tokens?: XaiOAuthTokens; refreshed?: boolean }>;
-  stopChatStream?: (streamId?: string) => void;
+  ) => Promise<
+    GrokChatResult & {
+      tokens?: XaiOAuthTokens;
+      refreshed?: boolean;
+      streamId?: string;
+      aborted?: boolean;
+    }
+  >;
+  stopChatStream?: (streamId?: string | null) => Promise<unknown> | void;
   imagine?: (payload: {
     prompt: string;
     apiKey?: string;

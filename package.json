@@ -1,6 +1,6 @@
 {
   "name": "grokhub",
-  "version": "0.8.13",
+  "version": "0.8.14",
   "private": true,
   "description": "GrokHub — Grok-native agent control plane (Windows, Linux)",
   "author": "ViperXIII",

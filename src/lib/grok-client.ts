@@ -42,7 +42,9 @@ export async function grokChat(opts: {
 > {
   const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
   if (desktop?.chat) {
-    return desktop.chat(opts);
+    // Never pass AbortSignal over contextBridge
+    const { signal: _s, ...payload } = opts;
+    return desktop.chat(payload);
   }
   return rpc("/api/grok", "chat", opts as unknown as Record<string, unknown>, {
     signal: opts.signal,
@@ -84,7 +86,44 @@ export async function grokChatStream(
 > {
   const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
   if (desktop?.chatStream) {
-    return desktop.chatStream(opts, handlers);
+    // AbortSignal cannot cross Electron contextBridge (stripped → no addEventListener).
+    // Keep AbortSignal in the renderer and call stopChatStream(streamId) on abort.
+    if (handlers.signal?.aborted) {
+      return { ok: false, aborted: true, error: "Stopped" };
+    }
+    const streamId = `s-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const onAbort = () => {
+      try {
+        void desktop.stopChatStream?.(streamId);
+      } catch {
+        /* ignore */
+      }
+    };
+    if (handlers.signal) {
+      handlers.signal.addEventListener("abort", onAbort, { once: true });
+    }
+    try {
+      return await desktop.chatStream(
+        { ...opts, streamId },
+        {
+          onDelta: handlers.onDelta,
+          onStatus: handlers.onStatus,
+        },
+      );
+    } catch (e) {
+      if (handlers.signal?.aborted || (e instanceof Error && e.name === "AbortError")) {
+        return { ok: false, aborted: true, error: "Stopped" };
+      }
+      throw e;
+    } finally {
+      if (handlers.signal) {
+        try {
+          handlers.signal.removeEventListener("abort", onAbort);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
   }
 
   // SSE via production / vite /api/grok

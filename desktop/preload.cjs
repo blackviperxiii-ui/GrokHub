@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 /**
  * Exposed to renderer. Host + Grok + Updates talk to main (unsandboxed session).
+ * Do not pass DOM AbortSignal through this bridge — use stopChatStream(streamId).
  */
 contextBridge.exposeInMainWorld("grokhubDesktop", {
   minimize: () => ipcRenderer.invoke("desktop:minimize"),
@@ -27,7 +28,7 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     chat: (payload) => ipcRenderer.invoke("grok:chat", payload),
     /**
      * True streaming: deltas arrive via IPC events while invoke is in flight.
-     * Pass handlers.onDelta / onStatus / signal (AbortSignal) from the renderer.
+     * Pass handlers.onDelta / onStatus only. Abort via stopChatStream(streamId).
      */
     chatStream: (payload, handlers) => {
       const streamId =
@@ -56,27 +57,13 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
       ipcRenderer.on("grok:chatStream:delta", onDelta);
       ipcRenderer.on("grok:chatStream:status", onStatus);
 
-      const onAbort = () => {
-        void ipcRenderer.invoke("grok:chatStreamAbort", streamId);
-      };
-      const signal = handlers && handlers.signal;
-      if (signal) {
-        if (signal.aborted) onAbort();
-        else signal.addEventListener("abort", onAbort, { once: true });
-      }
-
+      // AbortSignal cannot cross contextBridge (stripped to a plain object without
+      // addEventListener). Renderer must call stopChatStream(streamId) on abort.
       return ipcRenderer
         .invoke("grok:chatStream", { ...(payload || {}), streamId })
         .finally(() => {
           ipcRenderer.removeListener("grok:chatStream:delta", onDelta);
           ipcRenderer.removeListener("grok:chatStream:status", onStatus);
-          if (signal) {
-            try {
-              signal.removeEventListener("abort", onAbort);
-            } catch {
-              /* ignore */
-            }
-          }
         });
     },
     stopChatStream: (streamId) => ipcRenderer.invoke("grok:chatStreamAbort", streamId || null),
