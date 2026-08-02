@@ -1072,31 +1072,50 @@ if (process.platform === "linux" && process.env.GROKHUB_SANDBOX !== "1") {
 }
 
 
-// Clean exit bookkeeping (never fuser -k). UI server may be shared — only kill if we own the pidfile and env asks.
+// Clean exit: stop Nitro UI we own (pidfile/lock). Never fuser -k.
+// Set GROKHUB_KEEP_UI=1 to leave the backend running for multi-instance.
 app.on("will-quit", () => {
   try {
     appLog.info("will-quit");
   } catch {
     /* ignore */
   }
-  if (process.env.GROKHUB_KILL_UI_ON_QUIT !== "1") return;
+  if (process.env.GROKHUB_KEEP_UI === "1") return;
   try {
     const fsSync = require("node:fs");
     const pathSync = require("node:path");
     const rt = pathSync.join(process.env.XDG_RUNTIME_DIR || "/tmp", "grokhub");
-    const pidfile = pathSync.join(rt, "ui.pid");
-    if (!fsSync.existsSync(pidfile)) return;
-    const pid = Number(String(fsSync.readFileSync(pidfile, "utf8")).trim());
-    if (!pid || pid <= 1) return;
-    try {
-      const cmd = fsSync.readFileSync(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ");
-      if (!/node|ELECTRON_RUN_AS_NODE/i.test(cmd)) return;
-      if (!/\.output\/server|index\.mjs|grokhub/i.test(cmd)) return;
-      if (/desktop\/main\.mjs/i.test(cmd)) return;
-      process.kill(pid, "SIGTERM");
-      appLog.info("stopped UI on quit", { pid });
-    } catch {
-      /* ignore */
+    const candidates = [];
+    if (process.env.GROKHUB_UI_PID) {
+      candidates.push(Number(process.env.GROKHUB_UI_PID));
+    }
+    for (const name of ["ui.pid", "ui.lock"]) {
+      const f = pathSync.join(rt, name);
+      if (!fsSync.existsSync(f)) continue;
+      try {
+        candidates.push(Number(String(fsSync.readFileSync(f, "utf8")).trim()));
+      } catch {
+        /* ignore */
+      }
+    }
+    const seen = new Set();
+    for (const pid of candidates) {
+      if (!pid || pid <= 1 || seen.has(pid)) continue;
+      seen.add(pid);
+      try {
+        if (!uiServer.isOurUiPidSync?.(pid)) continue;
+        process.kill(pid, "SIGTERM");
+        appLog.info("stopped UI on quit", { pid });
+      } catch {
+        /* ignore */
+      }
+    }
+    for (const name of ["ui.pid", "ui.lock"]) {
+      try {
+        fsSync.unlinkSync(pathSync.join(rt, name));
+      } catch {
+        /* ignore */
+      }
     }
   } catch {
     /* ignore */
@@ -1126,7 +1145,16 @@ app.whenReady().then(async () => {
       /* ignore */
     }
   }
+  // Install root first — UI must never resolve .output relative to $HOME
+  try {
+    const root = uiServer.appRootFrom(__dirname);
+    if (root) process.env.GROKHUB_HOME = root;
+  } catch {
+    /* ignore */
+  }
+
   // Prefer home as process cwd so relative shell paths match a real desktop session
+  // (UI server always uses absolute entry + cwd=GROKHUB_HOME — chdir is safe)
   try {
     const home =
       process.env.HOME || process.env.USERPROFILE || require("node:os").homedir();
@@ -1135,7 +1163,7 @@ app.whenReady().then(async () => {
     /* ignore */
   }
 
-  // Ensure Nitro UI is up before opening the window (fixes Windows install)
+  // Ensure Nitro UI is up before opening the window
   try {
     const resolved = await uiServer.resolveStartUrl(__dirname);
     if (resolved.url) process.env.GROKHUB_URL = resolved.url;

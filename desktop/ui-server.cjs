@@ -102,6 +102,85 @@ function runtimeDir() {
 /**
  * Prefer Electron-as-Node so packaged apps need no system Node install.
  */
+
+function diagLog(line) {
+  try {
+    fs.appendFileSync("/tmp/grokhub-ui-restart.log", line.endsWith("\n") ? line : line + "\n");
+  } catch {
+    /* ignore */
+  }
+}
+
+function rotateDiagLog() {
+  try {
+    const p = "/tmp/grokhub-ui-restart.log";
+    if (!fs.existsSync(p)) return;
+    const st = fs.statSync(p);
+    if (st.size > 200_000) {
+      try {
+        fs.renameSync(p, p + ".prev");
+      } catch {
+        fs.writeFileSync(p, "");
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function isOurUiPidSync(pid) {
+  if (!pid || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    if (process.platform === "linux") {
+      const raw = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+      const cmd = raw.replace(/\0/g, " ");
+      const isNode = /\bnode\b|ELECTRON_RUN_AS_NODE/i.test(cmd) || /\/node\s/.test(cmd);
+      const isUi =
+        /\.output\/server|index\.mjs|nitro|grokhub/i.test(cmd) &&
+        !/desktop\/main\.mjs/i.test(cmd);
+      return isNode && isUi;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Kill a stale UI pid we own (pidfile/lock), never random processes. */
+function killOurUiPid(pid, reason) {
+  if (!isOurUiPidSync(pid)) return false;
+  try {
+    process.kill(pid, "SIGTERM");
+    diagLog(`[ui-server] SIGTERM pid=${pid} (${reason})`);
+  } catch {
+    return false;
+  }
+  const until = Date.now() + 1500;
+  while (Date.now() < until) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    // short spin — only used during reclaim
+    const spin = Date.now() + 40;
+    while (Date.now() < spin) { /* wait */ }
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+    diagLog(`[ui-server] SIGKILL pid=${pid}`);
+  } catch {
+    /* ignore */
+  }
+  return true;
+}
+
+
 function whichNode() {
   const { execFileSync } = require("node:child_process");
   try {
@@ -176,18 +255,24 @@ async function ensureUiServer(desktopDir) {
     "",
   );
 
+  rotateDiagLog();
+  diagLog(`[ui-server] ensure root=${root} url=${url}`);
+
   if (await probe(url + "/")) {
     process.env.GROKHUB_URL = url;
+    process.env.GROKHUB_HOME = root;
     return { url, started: false, root };
   }
 
   const entry = path.resolve(serverEntry(root));
   if (!fs.existsSync(entry)) {
+    const err = `UI build missing: ${entry}`;
+    diagLog(`[ui-server] ${err}`);
     return {
       url,
       started: false,
       root,
-      error: `UI build missing: ${entry}`,
+      error: err,
     };
   }
 
@@ -197,30 +282,43 @@ async function ensureUiServer(desktopDir) {
   } catch {
     /* ignore */
   }
-  // Single-writer lock so multiple instances don't fight the Nitro port
+  // Single-writer lock + pidfile so we can reclaim dead / unhealthy backends
   const lockPath = path.join(rt, "ui.lock");
-  try {
-    if (fs.existsSync(lockPath)) {
-      const prev = Number(fs.readFileSync(lockPath, "utf8").trim());
-      if (prev && !Number.isNaN(prev)) {
-        try {
-          process.kill(prev, 0);
-          // Another UI server is alive — wait for it to become healthy, don't double-spawn
-          const waitUntil = Date.now() + 10_000;
-          while (Date.now() < waitUntil) {
-            if (await probe(url + "/")) {
-              process.env.GROKHUB_URL = url;
-              return { url, started: false, root, reused: true };
-            }
-            await new Promise((r) => setTimeout(r, 250));
-          }
-        } catch {
-          /* stale lock — fall through and spawn */
-        }
+  const pidPath = path.join(rt, "ui.pid");
+  for (const file of [lockPath, pidPath]) {
+    try {
+      if (!fs.existsSync(file)) continue;
+      const prev = Number(fs.readFileSync(file, "utf8").trim());
+      if (!prev || Number.isNaN(prev)) {
+        try { fs.unlinkSync(file); } catch { /* ignore */ }
+        continue;
       }
+      if (!isOurUiPidSync(prev)) {
+        // Dead or foreign — drop stamp
+        try { fs.unlinkSync(file); } catch { /* ignore */ }
+        continue;
+      }
+      // Alive: wait briefly for health, else kill and reclaim
+      const waitUntil = Date.now() + 8_000;
+      let healthy = false;
+      while (Date.now() < waitUntil) {
+        if (await probe(url + "/")) {
+          healthy = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      if (healthy) {
+        process.env.GROKHUB_URL = url;
+        process.env.GROKHUB_HOME = root;
+        diagLog(`[ui-server] reuse healthy pid=${prev}`);
+        return { url, started: false, root, reused: true };
+      }
+      killOurUiPid(prev, "alive but not healthy on " + url);
+      try { fs.unlinkSync(file); } catch { /* ignore */ }
+    } catch {
+      /* ignore */
     }
-  } catch {
-    /* ignore */
   }
   const logPath = path.join(rt, "ui.log");
   let logFd;
@@ -262,7 +360,12 @@ async function ensureUiServer(desktopDir) {
     shell: Boolean(spec.shell),
   });
   try {
-    if (child.pid) fs.writeFileSync(lockPath, String(child.pid) + "\n");
+    if (child.pid) {
+      fs.writeFileSync(lockPath, String(child.pid) + "\n");
+      fs.writeFileSync(pidPath, String(child.pid) + "\n");
+      process.env.GROKHUB_UI_PID = String(child.pid);
+      diagLog(`[ui-server] spawned pid=${child.pid} entry=${entry} cwd=${root}`);
+    }
   } catch {
     /* ignore */
   }
@@ -324,4 +427,9 @@ module.exports = {
   resolveStartUrl,
   appRootFrom,
   pickPort,
+  isOurUiPidSync,
+  killOurUiPid,
+  rotateDiagLog,
+  runtimeDir,
+  serverEntry,
 };

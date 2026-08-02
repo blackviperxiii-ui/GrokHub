@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.57";
+const APP_VERSION = "0.8.58";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -95,6 +95,16 @@ async function stopUiServer(steps) {
   }
   await fs.unlink(pidfile).catch(() => {});
   await fs.unlink(lockfile).catch(() => {});
+  try {
+    const envPid = Number(process.env.GROKHUB_UI_PID || 0);
+    if (envPid && (await isGrokHubUiPid(envPid))) {
+      try {
+        process.kill(envPid, "SIGTERM");
+        steps.push(`Stopped GROKHUB_UI_PID ${envPid}`);
+        stopped = true;
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
   // Wait until port is free (max ~4s) — do not mass-kill the port
   for (let i = 0; i < 20; i++) {
     try {

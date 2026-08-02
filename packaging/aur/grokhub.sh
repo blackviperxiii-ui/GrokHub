@@ -63,6 +63,13 @@ export CHROME_DESKTOP="grokhub.desktop"
 export ELECTRON_FORCE_WINDOW_MENU_BAR=0
 
 mkdir -p "$RUNTIME" "$LOG_DIR"
+# Rotate diagnostic restart log if large
+if [[ -f /tmp/grokhub-ui-restart.log ]]; then
+  sz=$(wc -c </tmp/grokhub-ui-restart.log 2>/dev/null || echo 0)
+  if [[ "${sz:-0}" -gt 200000 ]]; then
+    mv -f /tmp/grokhub-ui-restart.log /tmp/grokhub-ui-restart.log.prev 2>/dev/null || true
+  fi
+fi
 chmod 700 "$LOG_DIR" 2>/dev/null || true
 
 log() {
