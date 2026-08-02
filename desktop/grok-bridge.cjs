@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.6";
+const APP_VERSION = "0.8.7";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -537,7 +537,9 @@ async function isInstallRoot(root) {
 async function readLocalVersion(root) {
   let version = APP_VERSION;
   let sha = null;
-  if (!root) return { version, sha };
+  let uiVersion = null;
+  let uiStale = false;
+  if (!root) return { version, sha, uiVersion, uiStale };
   try {
     const av = (await fs.readFile(path.join(root, "APP_VERSION"), "utf8")).trim();
     if (av) version = av;
@@ -556,7 +558,28 @@ async function readLocalVersion(root) {
       sha = stdout.trim() || null;
     } catch {}
   }
-  return { version, sha };
+  try {
+    const stamp = JSON.parse(
+      await fs.readFile(path.join(root, ".output", "GROKHUB_BUILD.json"), "utf8"),
+    );
+    uiVersion = stamp.version ? String(stamp.version) : null;
+    if (uiVersion && version && uiVersion !== version) uiStale = true;
+    try {
+      await fs.stat(path.join(root, ".output", "STALE_UI"));
+      uiStale = true;
+    } catch {}
+  } catch {
+    // Missing build stamp usually means old install / source-only update
+    try {
+      await fs.stat(path.join(root, ".output", "server", "index.mjs"));
+      uiStale = true; // built UI present but unstamped → force refresh path
+      uiVersion = "unknown";
+    } catch {
+      uiStale = true;
+      uiVersion = null;
+    }
+  }
+  return { version, sha, uiVersion, uiStale };
 }
 
 /**
@@ -608,7 +631,11 @@ async function checkForUpdate(opts = {}) {
       remoteSha = data.sha || null;
       remoteMessage = (data.commit?.message || "").split("\n")[0] || null;
       if (shaMatch(local.sha, remoteSha)) {
-        detail = `Up to date · v${local.version} · ${(local.sha || "").slice(0, 12)}`;
+        if (local.uiStale) {
+          detail = `UI build stale (app v${local.version}, UI v${local.uiVersion || "?"}) — reinstall recommended`;
+        } else {
+          detail = `Up to date · v${local.version} · ${(local.sha || "").slice(0, 12)}`;
+        }
       } else if (!local.sha) {
         detail = "Local VERSION missing — install recommended.";
       } else {
@@ -640,10 +667,15 @@ async function checkForUpdate(opts = {}) {
   }
   return {
     currentVersion: local.version,
+    uiVersion: local.uiVersion,
+    uiStale: Boolean(local.uiStale),
     currentSha: localShort,
     remoteSha: remoteShort,
     remoteMessage,
-    updateAvailable: Boolean(remoteSha && !shaMatch(local.sha, remoteSha)),
+    // Treat stale UI as needing update even when git SHA matches
+    updateAvailable: Boolean(
+      (remoteSha && !shaMatch(local.sha, remoteSha)) || local.uiStale,
+    ),
     repo,
     branch,
     installRoot,
@@ -945,6 +977,7 @@ async function applyUpdate(opts = {}) {
 
     // Build a clean stage directory (only files we install)
     await fs.mkdir(stageRoot, { recursive: true });
+    // Always pull source + desktop so we can rebuild UI when GitHub has no .output
     const want = opts.factory
       ? [
           ".output",
@@ -964,7 +997,21 @@ async function applyUpdate(opts = {}) {
           "README.md",
           "electron-builder.yml",
         ]
-      : [".output", "desktop", "package.json", "scripts", "packaging", "APP_VERSION", "LICENSE"];
+      : [
+          ".output",
+          "desktop",
+          "src",
+          "scripts",
+          "packaging",
+          "public",
+          "package.json",
+          "package-lock.json",
+          "vite.config.ts",
+          "tsconfig.json",
+          "APP_VERSION",
+          "LICENSE",
+          "README.md",
+        ];
 
     for (const name of want) {
       const src = path.join(extracted, name);
@@ -972,7 +1019,7 @@ async function applyUpdate(opts = {}) {
         await fs.stat(src);
       } catch {
         if (name === ".output") {
-          steps.push("Skip .output (not in GitHub archive — keeping installed UI build)");
+          steps.push("Skip .output (not in this archive)");
         } else {
           steps.push(`Skip ${name}`);
         }
@@ -985,29 +1032,134 @@ async function applyUpdate(opts = {}) {
       steps.push(`Staged ${name}`);
     }
 
-    // Preserve existing .output when archive has none (common — .output is gitignored)
-    try {
-      await fs.stat(path.join(stageRoot, ".output", "server", "index.mjs"));
-    } catch {
+    // Ensure stage has a FRESH .output matching this version (never silently keep stale UI)
+    async function stageHasOutput() {
+      try {
+        await fs.stat(path.join(stageRoot, ".output", "server", "index.mjs"));
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    async function tryRebuildUi(workRoot, label) {
+      try {
+        await fs.stat(path.join(workRoot, "package.json"));
+        await fs.stat(path.join(workRoot, "src"));
+      } catch {
+        return false;
+      }
+      // Reuse node_modules from running install when possible (speed + offline)
+      const nmCandidates = [
+        path.join(workRoot, "node_modules"),
+        path.join(targetRoot, "node_modules"),
+        path.join(process.cwd(), "node_modules"),
+        path.join(__dirname, "..", "node_modules"),
+      ];
+      let hasNm = false;
+      for (const nm of nmCandidates) {
+        try {
+          await fs.stat(path.join(nm, "vite"));
+          if (path.resolve(nm) !== path.resolve(workRoot, "node_modules")) {
+            await execAsync(
+              `rm -rf ${JSON.stringify(path.join(workRoot, "node_modules"))}; ln -s ${JSON.stringify(nm)} ${JSON.stringify(path.join(workRoot, "node_modules"))}`,
+              { timeout: 60000, shell: "/bin/bash" },
+            );
+            steps.push(`Linked node_modules from ${nm}`);
+          }
+          hasNm = true;
+          break;
+        } catch {
+          /* next */
+        }
+      }
+      if (!hasNm) {
+        steps.push("No node_modules available for UI rebuild");
+        return false;
+      }
+      steps.push(`Rebuilding UI (${label})…`);
+      try {
+        await execAsync(
+          `cd ${JSON.stringify(workRoot)} && GROKHUB_DESKTOP=1 NODE_ENV=production npm run desktop:build`,
+          {
+            timeout: 600000,
+            maxBuffer: 40 * 1024 * 1024,
+            shell: "/bin/bash",
+            env: { ...process.env, GROKHUB_DESKTOP: "1", NODE_ENV: "production" },
+          },
+        );
+        await fs.stat(path.join(workRoot, ".output", "server", "index.mjs"));
+        steps.push("UI rebuild OK");
+        return true;
+      } catch (e) {
+        steps.push(`UI rebuild failed: ${e instanceof Error ? e.message : e}`);
+        return false;
+      }
+    }
+
+    if (!(await stageHasOutput())) {
+      // 1) Rebuild inside stage from staged source
+      const rebuilt = await tryRebuildUi(stageRoot, "stage");
+      if (!rebuilt) {
+        // 2) Rebuild in extract tree then copy
+        const rebuilt2 = await tryRebuildUi(extracted, "extract");
+        if (rebuilt2) {
+          await execAsync(
+            `cp -a ${JSON.stringify(path.join(extracted, ".output"))} ${JSON.stringify(path.join(stageRoot, ".output"))}`,
+            { timeout: 180000, shell: "/bin/bash" },
+          );
+          steps.push("Staged rebuilt .output from extract");
+        }
+      }
+    }
+
+    if (!(await stageHasOutput())) {
+      // Last resort only: keep old UI but mark it so we don't lie about being fully updated
       const existingOut = path.join(targetRoot, ".output");
       try {
         await fs.stat(path.join(existingOut, "server", "index.mjs"));
-        // For elevated installs we leave .output on dest untouched by not staging a replacement.
-        steps.push("Keeping existing .output on install root (archive had none)");
+        await execAsync(
+          `cp -a ${JSON.stringify(existingOut)} ${JSON.stringify(path.join(stageRoot, ".output"))}`,
+          { timeout: 180000, shell: "/bin/bash" },
+        );
+        steps.push(
+          "WARNING: Using previous .output — UI may be stale. Install release asset grokhub-desktop-v*.tar.gz or rebuild with npm run desktop:build",
+        );
+        await fs.writeFile(
+          path.join(stageRoot, ".output", "STALE_UI"),
+          "archive lacked .output and rebuild failed\n",
+        );
       } catch {
-        // Try copy from system if updating user local
-        const sysOut = path.join("/usr/lib/grokhub", ".output", "server", "index.mjs");
+        const sysOut = path.join("/usr/lib/grokhub", ".output");
         try {
-          await fs.stat(sysOut);
+          await fs.stat(path.join(sysOut, "server", "index.mjs"));
           await execAsync(
-            `cp -a ${JSON.stringify(path.join("/usr/lib/grokhub", ".output"))} ${JSON.stringify(path.join(stageRoot, ".output"))}`,
+            `cp -a ${JSON.stringify(sysOut)} ${JSON.stringify(path.join(stageRoot, ".output"))}`,
             { timeout: 180000, shell: "/bin/bash" },
           );
-          steps.push("Copied .output from /usr/lib/grokhub into stage");
+          steps.push("WARNING: Seeded stale .output from /usr/lib/grokhub");
         } catch {
-          steps.push("Warning: no .output in archive or install — UI may need rebuild");
+          steps.push("ERROR: no UI build available — app window may not load until desktop:build");
         }
       }
+    }
+
+    // Stamp UI build so we can detect mismatch later
+    try {
+      if (await stageHasOutput()) {
+        const stamp = {
+          version: newVersion,
+          builtAt: new Date().toISOString(),
+          source: "update",
+        };
+        // newVersion not set yet — write after version resolve below
+        await fs.writeFile(
+          path.join(stageRoot, ".output", "GROKHUB_BUILD.json"),
+          JSON.stringify({ pending: true }, null, 2),
+        );
+      }
+    } catch {
+      /* ignore */
     }
 
     // Version stamps in stage (so elevated copy installs them atomically)
@@ -1041,6 +1193,27 @@ async function applyUpdate(opts = {}) {
     }
     await fs.writeFile(path.join(stageRoot, "APP_VERSION"), newVersion + "\n");
     steps.push(`APP_VERSION → ${newVersion}`);
+
+    // Stamp UI build for mismatch detection (Settings / checkForUpdate)
+    try {
+      await fs.stat(path.join(stageRoot, ".output", "server", "index.mjs"));
+      await fs.writeFile(
+        path.join(stageRoot, ".output", "GROKHUB_BUILD.json"),
+        JSON.stringify(
+          {
+            version: newVersion,
+            sha: newSha || null,
+            builtAt: new Date().toISOString(),
+            source: "update",
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+      steps.push(`UI build stamp v${newVersion}`);
+    } catch {
+      steps.push("No UI build stamp (missing .output)");
+    }
 
     // Stop Nitro UI before swapping files (prevents crashes / partial reads)
     steps.push("Stopping UI server for safe install…");
@@ -1332,7 +1505,7 @@ const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const XAI_UA = "GrokHub/0.8.6 (xAI OAuth; Electron)";
+const XAI_UA = "GrokHub/0.8.7 (xAI OAuth; Electron)";
 
 async function xaiDiscovery() {
   const res = await fetch(XAI_OAUTH_DISCOVERY, {

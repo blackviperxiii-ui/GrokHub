@@ -17,3 +17,4 @@ packaging/aur/*.pkg.tar*
 dist-desktop/
 node_modules/
 .output/
+dist-release/

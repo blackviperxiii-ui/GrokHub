@@ -79,6 +79,23 @@ run(npx, ["vite", "build"]);
 run(npm, ["run", "db:migrate"]);
 copyPgliteAssets();
 
+// Stamp so install/updater can verify UI matches APP_VERSION
+try {
+  const ver = fs.readFileSync(path.join(root, "APP_VERSION"), "utf8").trim();
+  const stamp = {
+    version: ver,
+    builtAt: new Date().toISOString(),
+    source: "desktop-build",
+  };
+  fs.writeFileSync(
+    path.join(root, ".output", "GROKHUB_BUILD.json"),
+    JSON.stringify(stamp, null, 2) + "\n",
+  );
+  console.log(`[desktop-build] GROKHUB_BUILD.json → v${ver}`);
+} catch (e) {
+  console.warn("[desktop-build] could not write GROKHUB_BUILD.json", e);
+}
+
 const serverEntry = path.join(root, ".output", "server", "index.mjs");
 if (!fs.existsSync(serverEntry)) {
   console.error("[desktop-build] ERROR: missing .output/server/index.mjs");
