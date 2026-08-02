@@ -19,6 +19,8 @@ import {
   memoryRead,
   memoryWrite,
   migrateNotesToFileMemory,
+  syncLearningToDisk,
+  ensureFileMemory,
 } from "./file-memory";
 import {
   emptyLearning,
@@ -29,6 +31,8 @@ import {
   learningPinBundle,
   routeLearningBias,
   learningSummaryLine,
+  learningStatusMarkdown,
+  learningSnapshotMarkdown,
   pushLearningEvent,
   type LearningState,
 } from "./learning";
@@ -241,6 +245,7 @@ type State = {
   rateMessage: (messageId: string, positive: boolean) => void;
   runSelfImprove: () => Promise<{ ok: boolean; detail: string }>;
   clearLearning: () => void;
+  flushLearningToDisk: () => Promise<void>;
   pinWorkItem: (input: {
     title: string;
     detail?: string;
@@ -985,6 +990,7 @@ export const useGrokHub = create<State>()(
           detail: (msg.content || "").slice(0, 80),
           status: "success",
         });
+        void get().flushLearningToDisk();
       },
 
       runSelfImprove: async () => {
@@ -1009,6 +1015,7 @@ export const useGrokHub = create<State>()(
           detail: learningSummaryLine(state),
           status: "success",
         });
+        void get().flushLearningToDisk();
         return {
           ok: true,
           detail: `Reflected into LEARNINGS.md · ${learningSummaryLine(state)}`,
@@ -1017,6 +1024,29 @@ export const useGrokHub = create<State>()(
 
       clearLearning: () => {
         set({ learning: emptyLearning() });
+        void get().flushLearningToDisk();
+      },
+
+      flushLearningToDisk: async () => {
+        try {
+          await ensureFileMemory();
+          let root: string | undefined;
+          let userData: string | undefined;
+          try {
+            const info = await window.grokhubDesktop?.memory?.info?.();
+            root = info?.root;
+            userData = info?.userData;
+          } catch {
+            /* ignore */
+          }
+          const L = get().learning;
+          await syncLearningToDisk({
+            statusMarkdown: learningStatusMarkdown(L, { root, userData }),
+            learningsMarkdown: learningSnapshotMarkdown(L),
+          });
+        } catch {
+          /* ignore */
+        }
       },
 
       pinWorkItem: (input) => {
@@ -3992,7 +4022,8 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx);
             const capabilityBlock = [
               "## GrokHub session capabilities",
               "- Context manager: budgeted history + optional thread summary (see /context).",
-              "- File memory: USER.md, MEMORY.md, daily notes (see /memory show).",
+              "- File memory on disk: ~/.config/GrokHub/memory/ (USER.md, MEMORY.md, LEARNINGS.md, STATUS.md) — NOT ~/.config/grokhub.",
+              "- Learning is live: turns + 👍/👎 write STATUS.md; Reflect fills LEARNINGS.md.",
               "- Workboard: pin tasks with WORK_PIN: title | detail | priority=high; update WORK_UPDATE: id | status=…",
               "- Bound project: prefer HOST_CMD under the project path when set.",
               "- Persistent: chat history, settings, memory notes, Imagine media, connectors.",
@@ -4775,6 +4806,7 @@ if (!cmds.length) {
                 threadId: get().activeThreadId || undefined,
               }),
             });
+            void get().flushLearningToDisk();
           } catch {
             /* ignore */
           }
@@ -4836,6 +4868,7 @@ if (!cmds.length) {
               }),
             });
             const L = get().learning;
+            void get().flushLearningToDisk();
             if (L.totalTurns > 0 && L.totalTurns % 12 === 0) {
               void get().runSelfImprove();
             }
@@ -5215,7 +5248,7 @@ if (!cmds.length) {
           };
         }
         s.learning = normalizeLearning((s as { learning?: unknown }).learning);
-          s.workboard = normalizeWorkboard((s as { workboard?: unknown }).workboard);
+        s.workboard = normalizeWorkboard((s as { workboard?: unknown }).workboard);
           if ((s as { projectWorkspace?: unknown }).projectWorkspace && typeof (s as { projectWorkspace?: { path?: string } }).projectWorkspace === "object") {
             /* keep as-is */
           } else {
@@ -5345,6 +5378,14 @@ if (!cmds.length) {
       skipHydration: true,
       onRehydrateStorage: () => (state, err) => {
         if (err || !state) return;
+        // Create ~/.config/GrokHub/memory/* and mirror learning STATUS.md
+        void ensureFileMemory().then(() => {
+          try {
+            state.flushLearningToDisk();
+          } catch {
+            /* ignore */
+          }
+        });
         // Reload Imagine media from disk after update/restart
         void import("./imagine-media").then(async ({ rehydrateImagineJobs }) => {
           try {

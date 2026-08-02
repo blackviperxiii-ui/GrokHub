@@ -194,3 +194,36 @@ export async function migrateNotesToFileMemory(notes: string): Promise<boolean> 
   const r = await memoryWrite("MEMORY.md", merged);
   return Boolean(r.ok);
 }
+
+
+/** Push learning STATUS.md + LEARNINGS.md to disk (host-scannable). */
+export async function syncLearningToDisk(payload: {
+  statusMarkdown?: string;
+  learningsMarkdown?: string;
+}): Promise<{ ok: boolean; root?: string }> {
+  const m = desktop();
+  if (m?.syncLearning) {
+    try {
+      return await m.syncLearning(payload);
+    } catch {
+      return { ok: false };
+    }
+  }
+  // browser: keep in memory map
+  if (payload.learningsMarkdown) browserFiles.set("LEARNINGS.md", payload.learningsMarkdown);
+  if (payload.statusMarkdown) browserFiles.set("STATUS.md", payload.statusMarkdown);
+  return { ok: true, root: "browser-memory" };
+}
+
+export async function ensureFileMemory(): Promise<{ ok: boolean; root?: string }> {
+  const m = desktop();
+  if (m?.ensure) {
+    try {
+      return await m.ensure();
+    } catch {
+      return { ok: false };
+    }
+  }
+  browserEnsure();
+  return { ok: true, root: "browser-memory" };
+}

@@ -553,3 +553,76 @@ export function learningSummaryLine(state: LearningState): string {
   if (!n && !t) return "No learnings yet — use the app and rate replies";
   return `${n} insights · ${t} turns · ${f} ratings`;
 }
+
+/** Markdown snapshot for STATUS.md on disk (host-scannable proof learning runs). */
+export function learningStatusMarkdown(
+  state: LearningState,
+  paths?: { root?: string; userData?: string },
+): string {
+  const lines = [
+    "# Learning status (live)",
+    "",
+    `Updated: ${new Date().toISOString()}`,
+    `Summary: ${learningSummaryLine(state)}`,
+    paths?.root ? `Memory root: \`${paths.root}\`` : "",
+    paths?.userData ? `userData: \`${paths.userData}\`` : "",
+    "",
+    "## Route track record",
+  ];
+  const routes = Object.entries(state.routeStats || {});
+  if (!routes.length) lines.push("- _(no adaptive turns recorded yet)_");
+  else {
+    for (const [tier, st] of routes) {
+      if (!st) continue;
+      lines.push(`- **${tier}**: ${st.success} ok / ${st.fail} fail`);
+    }
+  }
+  lines.push("", "## Top insights");
+  const top = [...state.insights]
+    .sort((a, b) => b.confidence * b.hits - a.confidence * a.hits)
+    .slice(0, 12);
+  if (!top.length) lines.push("- _(none yet — rate replies or /learn note …)_");
+  else for (const i of top) lines.push(`- (${Math.round(i.confidence * 100)}%) ${i.text}`);
+
+  lines.push("", "## Recent events");
+  const recent = state.events.slice(-10).reverse();
+  if (!recent.length) lines.push("- _(none)_");
+  else
+    for (const e of recent) {
+      lines.push(`- [${e.kind}${e.polarity > 0 ? "+" : e.polarity < 0 ? "-" : ""}] ${e.summary}`);
+    }
+  lines.push(
+    "",
+    "This file is auto-written by GrokHub. Do not search `~/.config/grokhub` (wrong casing).",
+    "",
+  );
+  return lines.filter((l, i, a) => !(l === "" && a[i - 1] === "")).join("\n");
+}
+
+/** Full LEARNINGS.md body without a full reflect pass */
+export function learningSnapshotMarkdown(state: LearningState): string {
+  const top = [...state.insights]
+    .sort((a, b) => b.confidence * b.hits - a.confidence * a.hits)
+    .slice(0, 20);
+  return [
+    "# GrokHub learnings",
+    "",
+    `_Snapshot ${new Date().toISOString().slice(0, 16).replace("T", " ")} · ${learningSummaryLine(state)}_`,
+    "",
+    "## Insights",
+    top.length
+      ? top.map((i) => `- (${Math.round(i.confidence * 100)}%) ${i.text}`).join("\n")
+      : "- _(empty — will fill as you chat and rate replies)_",
+    "",
+    "## Route stats",
+    ...Object.entries(state.routeStats || {}).map(([tier, st]) => {
+      if (!st) return "";
+      return `- ${tier}: ${st.success} ok / ${st.fail} fail`;
+    }).filter(Boolean),
+    "",
+    state.lastReflectionAt
+      ? `Last full reflect: ${new Date(state.lastReflectionAt).toISOString()}`
+      : "No full reflect yet — run `/learn reflect` or Settings → Learning.",
+    "",
+  ].join("\n");
+}

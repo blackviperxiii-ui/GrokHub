@@ -2,25 +2,37 @@
  * M1 file memory under Electron userData/memory/
  * Never under the install tree — survives updates & factory reinstall of code.
  *
- * Layout:
- *   MEMORY.md
- *   USER.md
- *   daily/YYYY-MM-DD.md
+ * Layout (Linux typical):
+ *   ~/.config/GrokHub/memory/MEMORY.md
+ *   ~/.config/GrokHub/memory/USER.md
+ *   ~/.config/GrokHub/memory/LEARNINGS.md
+ *   ~/.config/GrokHub/memory/daily/YYYY-MM-DD.md
+ *   ~/.config/GrokHub/memory/README.md   (path map for agents / host scans)
+ *
+ * Note: directory is "GrokHub" (capital G/H), NOT ~/.config/grokhub
  */
 const fs = require("node:fs");
 const path = require("node:path");
 
 const MAX_FILE_BYTES = 512 * 1024; // 512KB per file safety
-const ALLOWED = new Set(["MEMORY.md", "USER.md", "LEARNINGS.md"]);
+const ALLOWED = new Set(["MEMORY.md", "USER.md", "LEARNINGS.md", "README.md", "STATUS.md"]);
 
 function userDataDir() {
   try {
     const { app } = require("electron");
-    if (app?.getPath) return app.getPath("userData");
+    if (app?.isReady?.() && app?.getPath) return app.getPath("userData");
+    if (app?.getPath) {
+      try {
+        return app.getPath("userData");
+      } catch {
+        /* not ready */
+      }
+    }
   } catch {
     /* not in Electron / app not ready */
   }
   const home = process.env.HOME || process.env.USERPROFILE || "/tmp";
+  // Electron on Linux uses product name under XDG config — match GrokHub branding
   return path.join(
     process.env.XDG_CONFIG_HOME || path.join(home, ".config"),
     "GrokHub",
@@ -35,51 +47,80 @@ function dailyDir() {
   return path.join(memoryRoot(), "daily");
 }
 
+function writeIfMissing(abs, lines) {
+  if (fs.existsSync(abs)) return false;
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, lines.join("\n"), "utf8");
+  return true;
+}
+
 function ensureLayout() {
   fs.mkdirSync(dailyDir(), { recursive: true });
-  const mem = path.join(memoryRoot(), "MEMORY.md");
-  const user = path.join(memoryRoot(), "USER.md");
-  if (!fs.existsSync(mem)) {
-    fs.writeFileSync(
-      mem,
-      [
-        "# Long-term memory",
-        "",
-        "Durable facts, decisions, paths, and preferences.",
-        "Edited by you or flushed from chat compaction.",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-  }
-  if (!fs.existsSync(user)) {
-    fs.writeFileSync(
-      user,
-      [
-        "# User profile",
-        "",
-        "Who you are, preferred tools, environment notes.",
-        "",
-        "- OS: Linux",
-        "- Shell: bash",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-  }
-  const learn = path.join(memoryRoot(), "LEARNINGS.md");
-  if (!fs.existsSync(learn)) {
-    fs.writeFileSync(
-      learn,
-      [
-        "# GrokHub learnings",
-        "",
-        "Distilled self-improvement insights. Updated by Reflect / compact.",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-  }
+  const root = memoryRoot();
+  const ud = userDataDir();
+
+  writeIfMissing(path.join(root, "MEMORY.md"), [
+    "# Long-term memory",
+    "",
+    "Durable facts, decisions, paths, and preferences.",
+    "Edited by you, `/memory`, chat compact flush, or self-improve reflect.",
+    "",
+  ]);
+  writeIfMissing(path.join(root, "USER.md"), [
+    "# User profile",
+    "",
+    "Who you are, preferred tools, environment notes.",
+    "",
+    "- OS: Linux",
+    "- Shell: bash",
+    "",
+  ]);
+  writeIfMissing(path.join(root, "LEARNINGS.md"), [
+    "# GrokHub learnings",
+    "",
+    "Distilled self-improvement insights.",
+    "Updated by Settings → Learning → Reflect, `/learn reflect`, and automatic turn learning.",
+    "",
+    "_No reflections yet — use the app and rate replies, then Reflect._",
+    "",
+  ]);
+  writeIfMissing(path.join(root, "README.md"), [
+    "# GrokHub file memory",
+    "",
+    "This folder is the **on-disk** agent memory (survives app updates).",
+    "",
+    "## Paths (do not look under ~/.config/grokhub — wrong casing)",
+    "",
+    `- userData: \`${ud}\``,
+    `- memory root: \`${root}\``,
+    "",
+    "| File | Purpose |",
+    "|------|---------|",
+    "| USER.md | Profile / prefs |",
+    "| MEMORY.md | Durable facts & decisions |",
+    "| LEARNINGS.md | Self-improve insights + route stats |",
+    "| STATUS.md | Live learning status (auto-written) |",
+    "| daily/YYYY-MM-DD.md | Day log |",
+    "",
+    "Also persisted (app state, not plain markdown):",
+    `- \`${path.join(ud, "grokhub-memory.json")}\` — chat, learning engine state, workboard, etc.`,
+    "",
+    "When investigating with HOST_CMD, list **this** directory first:",
+    `HOST_CMD: ls -la "${root}"`,
+    "",
+  ]);
+
+  // Always refresh STATUS skeleton if missing; content updated by renderer sync
+  writeIfMissing(path.join(root, "STATUS.md"), [
+    "# Learning status",
+    "",
+    "_Waiting for first learning event from the app…_",
+    "",
+    `Memory root: \`${root}\``,
+    "",
+  ]);
+
+  return { root, userData: ud };
 }
 
 function todaySlug() {
@@ -129,7 +170,7 @@ function writeFileSafe(abs, content) {
 function listFiles() {
   ensureLayout();
   const out = [];
-  for (const name of ["USER.md", "MEMORY.md", "LEARNINGS.md"]) {
+  for (const name of ["USER.md", "MEMORY.md", "LEARNINGS.md", "STATUS.md", "README.md"]) {
     const abs = path.join(memoryRoot(), name);
     let bytes = 0;
     let updatedAt = 0;
@@ -198,12 +239,21 @@ function write(rel, content) {
   if (!abs) return { ok: false, error: "Invalid memory path" };
   const r = writeFileSafe(abs, content);
   if (!r.ok) return r;
-  return { ok: true, id: target.startsWith("daily/") ? target : path.basename(abs) === path.basename(target) ? target : target, path: abs, bytes: r.bytes };
+  return { ok: true, id: target, path: abs, bytes: r.bytes };
 }
 
 function append(rel, text, { heading } = {}) {
   ensureLayout();
-  const target = !rel || rel === "today" ? `daily/${todaySlug()}.md` : rel === "memory" ? "MEMORY.md" : rel === "user" ? "USER.md" : rel;
+  const target =
+    !rel || rel === "today"
+      ? `daily/${todaySlug()}.md`
+      : rel === "memory"
+        ? "MEMORY.md"
+        : rel === "user"
+          ? "USER.md"
+          : rel === "learnings" || rel === "learning"
+            ? "LEARNINGS.md"
+            : rel;
   const abs = resolveSafe(target);
   if (!abs) return { ok: false, error: "Invalid memory path" };
   const prev = readFileSafe(abs);
@@ -242,20 +292,38 @@ function appendFacts(facts, { target = "MEMORY.md" } = {}) {
 }
 
 /**
- * Build a budgeted pin string for the model context.
+ * Write live learning status + optional full LEARNINGS body from renderer.
  */
+function syncLearning(payload = {}) {
+  ensureLayout();
+  const status = String(payload.statusMarkdown || "").trim();
+  const learnings = String(payload.learningsMarkdown || "").trim();
+  const results = {};
+  if (status) {
+    results.status = writeFileSafe(path.join(memoryRoot(), "STATUS.md"), status + "\n");
+  }
+  if (learnings) {
+    results.learnings = writeFileSafe(
+      path.join(memoryRoot(), "LEARNINGS.md"),
+      learnings + "\n",
+    );
+  }
+  return { ok: true, root: memoryRoot(), ...results };
+}
+
 function buildPinBundle(opts = {}) {
   ensureLayout();
   const maxUser = opts.maxUserChars ?? 3_000;
   const maxMemory = opts.maxMemoryChars ?? 6_000;
   const maxDaily = opts.maxDailyChars ?? 4_000;
-  const maxTotal = opts.maxTotalChars ?? 12_000;
+  const maxLearn = opts.maxLearnChars ?? 3_000;
+  const maxTotal = opts.maxTotalChars ?? 14_000;
 
   const user = readFileSafe(path.join(memoryRoot(), "USER.md")).trim();
   const mem = readFileSafe(path.join(memoryRoot(), "MEMORY.md")).trim();
+  const learn = readFileSafe(path.join(memoryRoot(), "LEARNINGS.md")).trim();
   const slug = todaySlug();
   const today = readFileSafe(path.join(dailyDir(), `${slug}.md`)).trim();
-  // yesterday
   const y = new Date();
   y.setDate(y.getDate() - 1);
   const ySlug = y.toISOString().slice(0, 10);
@@ -265,8 +333,12 @@ function buildPinBundle(opts = {}) {
   const clip = (s, n) =>
     s.length <= n ? s : s.slice(0, n) + "\n…[truncated for context budget]…";
 
+  parts.push(`## Memory paths (authoritative)\n- root: \`${memoryRoot()}\`\n- userData: \`${userDataDir()}\``);
   if (user) parts.push(`## USER.md\n${clip(user, maxUser)}`);
   if (mem) parts.push(`## MEMORY.md\n${clip(mem, maxMemory)}`);
+  if (learn && !/^_No reflections/i.test(learn.split("\n").filter(Boolean).pop() || "")) {
+    parts.push(`## LEARNINGS.md\n${clip(learn, maxLearn)}`);
+  }
   if (today) parts.push(`## daily/${slug}.md (today)\n${clip(today, maxDaily)}`);
   else if (yesterday)
     parts.push(`## daily/${ySlug}.md (yesterday)\n${clip(yesterday, Math.floor(maxDaily * 0.75))}`);
@@ -278,31 +350,39 @@ function buildPinBundle(opts = {}) {
   return {
     ok: true,
     root: memoryRoot(),
+    userData: userDataDir(),
     bundle,
     chars: bundle.length,
     hasUser: Boolean(user),
     hasMemory: Boolean(mem),
+    hasLearnings: Boolean(learn),
     hasToday: Boolean(today),
   };
 }
 
 function info() {
-  ensureLayout();
+  const layout = ensureLayout();
   const files = listFiles();
   let bytes = 0;
   for (const f of files) bytes += f.bytes || 0;
   return {
     ok: true,
-    root: memoryRoot(),
-    userData: userDataDir(),
+    root: layout.root,
+    userData: layout.userData,
     files,
     bytes,
     today: todaySlug(),
+    /** Common wrong path agents search for */
+    notThisPath: path.join(
+      process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || "", ".config"),
+      "grokhub",
+    ),
   };
 }
 
 module.exports = {
   memoryRoot,
+  userDataDir,
   ensureLayout,
   listFiles,
   read,
@@ -310,6 +390,7 @@ module.exports = {
   append,
   appendFacts,
   buildPinBundle,
+  syncLearning,
   info,
   todaySlug,
 };

@@ -258,6 +258,11 @@ export type DesktopBridge = {
       facts: string[],
       opts?: { target?: string },
     ) => Promise<{ ok: boolean; added?: number; error?: string }>;
+    syncLearning: (payload: {
+      statusMarkdown?: string;
+      learningsMarkdown?: string;
+    }) => Promise<{ ok: boolean; root?: string }>;
+    ensure: () => Promise<{ ok: boolean; root?: string; userData?: string }>;
     pinBundle: (opts?: Record<string, unknown>) => Promise<{
       ok: boolean;
       bundle?: string;

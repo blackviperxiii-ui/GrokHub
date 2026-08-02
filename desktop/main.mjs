@@ -855,6 +855,11 @@ function registerIpc() {
     memoryStore.appendFacts(facts, opts || {}),
   );
   safeHandle("memory:pinBundle", (_e, opts) => memoryStore.buildPinBundle(opts || {}));
+  safeHandle("memory:syncLearning", (_e, payload) => memoryStore.syncLearning(payload || {}));
+  safeHandle("memory:ensure", () => {
+    const r = memoryStore.ensureLayout();
+    return { ok: true, ...r };
+  });
 
   safeHandle("selfmod:info", () => selfMod.info());
   safeHandle("selfmod:list", (_e, rel) => selfMod.listDirRel(rel));
@@ -1021,6 +1026,17 @@ app.whenReady().then(async () => {
     });
   } catch {
     /* ignore */
+  }
+  // Create memory layout on every boot so HOST_CMD scans find real files
+  try {
+    const layout = memoryStore.ensureLayout();
+    appLog.info("memory-layout", layout);
+  } catch (e) {
+    try {
+      appLog.warn?.("memory-layout failed", String(e?.message || e));
+    } catch {
+      /* ignore */
+    }
   }
   // Prefer home as process cwd so relative shell paths match a real desktop session
   try {

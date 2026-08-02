@@ -1580,8 +1580,20 @@ function LearningPanel() {
   const learning = useGrokHub((s) => s.learning);
   const runSelfImprove = useGrokHub((s) => s.runSelfImprove);
   const clearLearning = useGrokHub((s) => s.clearLearning);
+  const flushLearningToDisk = useGrokHub((s) => s.flushLearningToDisk);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [memRoot, setMemRoot] = useState<string>("");
+  useEffect(() => {
+    void import("@/lib/file-memory").then(({ memoryFsInfo, ensureFileMemory }) => {
+      void ensureFileMemory().then(() =>
+        memoryFsInfo().then((i) => {
+          if (i.root) setMemRoot(i.root);
+        }),
+      );
+    });
+    void flushLearningToDisk();
+  }, [flushLearningToDisk]);
   const top = [...(learning?.insights || [])]
     .sort((a, b) => b.confidence * b.hits - a.confidence * a.hits)
     .slice(0, 8);
@@ -1591,6 +1603,11 @@ function LearningPanel() {
     <div className="space-y-3">
       <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-2 text-xs text-[var(--color-muted)]">
         {learningSummaryLine(learning || { insights: [], totalTurns: 0, totalFeedback: 0 } as never)}
+        {memRoot ? (
+          <div className="mt-1 truncate font-mono text-[10px] text-[var(--color-subtle)]" title={memRoot}>
+            disk: {memRoot}
+          </div>
+        ) : null}
         {learning?.lastReflectionAt ? (
           <div className="mt-1 text-[10px] text-[var(--color-subtle)]">
             Last reflect · {new Date(learning.lastReflectionAt).toLocaleString()}

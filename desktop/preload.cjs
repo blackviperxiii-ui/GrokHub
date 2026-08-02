@@ -106,6 +106,8 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     append: (rel, text, opts) => ipcRenderer.invoke("memory:append", rel, text, opts),
     appendFacts: (facts, opts) => ipcRenderer.invoke("memory:appendFacts", facts, opts),
     pinBundle: (opts) => ipcRenderer.invoke("memory:pinBundle", opts),
+    syncLearning: (payload) => ipcRenderer.invoke("memory:syncLearning", payload),
+    ensure: () => ipcRenderer.invoke("memory:ensure"),
   },
   selfmod: {
     info: () => ipcRenderer.invoke("selfmod:info"),

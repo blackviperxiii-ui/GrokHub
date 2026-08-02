@@ -102,6 +102,13 @@ function hostEnv() {
 
 
 async function info() {
+  let memory = null;
+  try {
+    const memoryStore = require("./memory-store.cjs");
+    memory = memoryStore.info();
+  } catch {
+    /* optional */
+  }
   return {
     platform: process.platform,
     arch: process.arch,
@@ -119,6 +126,15 @@ async function info() {
     hostname: os.hostname(),
     bridge: "electron",
     unsandboxed: true,
+    /** Where GrokHub stores durable agent memory (not ~/.config/grokhub) */
+    grokhub: memory
+      ? {
+          userData: memory.userData,
+          memoryRoot: memory.root,
+          memoryFiles: (memory.files || []).map((f) => f.name),
+          wrongPathExample: memory.notThisPath,
+        }
+      : null,
   };
 }
 
