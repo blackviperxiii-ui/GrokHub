@@ -36,9 +36,9 @@ export const GROK_MODES: GrokMode[] = [
   {
     id: "expert",
     label: "Expert",
-    subtitle: "Strong reasoning · Grok 4.5 / 4.3",
-    model: "Grok 4.5",
-    modelId: "grok-4.5",
+    subtitle: "Strong reasoning · Grok 4.20",
+    model: "Grok 4.20 Reasoning",
+    modelId: "grok-4.20-reasoning",
     icon: "expert",
     latencyMs: [900, 1600],
     depth: "deep",
