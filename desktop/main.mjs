@@ -44,6 +44,7 @@ const imagineStore = require("./imagine-store.cjs");
 const selfMod = require("./self-mod.cjs");
 const desktopEntry = require("./desktop-entry.cjs");
 const uiServer = require("./ui-server.cjs");
+const appLog = require("./log.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -176,7 +177,11 @@ if (process.platform === "linux") {
 
 // Keep main process alive logs for stability diagnosis (never crash on stray rejections)
 process.on("uncaughtException", (err) => {
-  console.error("[GrokHub] uncaughtException", err);
+  try {
+    appLog.error("uncaughtException", { err: String(err?.stack || err) });
+  } catch {
+    console.error("[GrokHub] uncaughtException", err);
+  }
 });
 process.on("unhandledRejection", (err) => {
   console.error("[GrokHub] unhandledRejection", err);
@@ -934,13 +939,62 @@ if (process.platform === "linux" && process.env.GROKHUB_WAYLAND !== "0") {
   app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 }
 
-// Linux system electron often needs this; Windows packaged Electron does not.
-if (process.platform === "linux") {
+// Linux: system Electron often lacks setuid chrome-sandbox.
+// Default: no-sandbox (compat). Opt into sandbox with GROKHUB_SANDBOX=1.
+// Host bridge stays unsandboxed either way — this only affects Chromium UI.
+if (process.platform === "linux" && process.env.GROKHUB_SANDBOX !== "1") {
   app.commandLine.appendSwitch("no-sandbox");
+  try {
+    appLog?.warn?.("renderer no-sandbox (set GROKHUB_SANDBOX=1 to try sandbox)");
+  } catch {
+    /* log not ready */
+  }
 }
+
+
+// Clean exit bookkeeping (never fuser -k). UI server may be shared — only kill if we own the pidfile and env asks.
+app.on("will-quit", () => {
+  try {
+    appLog.info("will-quit");
+  } catch {
+    /* ignore */
+  }
+  if (process.env.GROKHUB_KILL_UI_ON_QUIT !== "1") return;
+  try {
+    const fsSync = require("node:fs");
+    const pathSync = require("node:path");
+    const rt = pathSync.join(process.env.XDG_RUNTIME_DIR || "/tmp", "grokhub");
+    const pidfile = pathSync.join(rt, "ui.pid");
+    if (!fsSync.existsSync(pidfile)) return;
+    const pid = Number(String(fsSync.readFileSync(pidfile, "utf8")).trim());
+    if (!pid || pid <= 1) return;
+    try {
+      const cmd = fsSync.readFileSync(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ");
+      if (!/node|ELECTRON_RUN_AS_NODE/i.test(cmd)) return;
+      if (!/\.output\/server|index\.mjs|grokhub/i.test(cmd)) return;
+      if (/desktop\/main\.mjs/i.test(cmd)) return;
+      process.kill(pid, "SIGTERM");
+      appLog.info("stopped UI on quit", { pid });
+    } catch {
+      /* ignore */
+    }
+  } catch {
+    /* ignore */
+  }
+});
 
 app.whenReady().then(async () => {
   if (!gotLock) return;
+  try {
+    appLog.info("boot", {
+      version: process.env.npm_package_version || undefined,
+      electron: process.versions.electron,
+      platform: process.platform,
+      home: process.env.GROKHUB_HOME || null,
+    });
+  } catch {
+    /* ignore */
+  }
   // Prefer home as process cwd so relative shell paths match a real desktop session
   try {
     const home =

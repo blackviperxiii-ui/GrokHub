@@ -32,10 +32,20 @@ else
   sudo bash "$ROOT/scripts/install-arch.sh"
 fi
 
-# Clear stale UI pid
+# Clear stale UI pid (never fuser -k — that kills unrelated processes on the port)
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}/grokhub"
+if [[ -f "$RUNTIME/ui.pid" ]]; then
+  old="$(tr -d ' \n\0' <"$RUNTIME/ui.pid" 2>/dev/null || true)"
+  if [[ -n "${old:-}" ]] && kill -0 "$old" 2>/dev/null; then
+    cmd="$(tr '\0' ' ' <"/proc/$old/cmdline" 2>/dev/null || true)"
+    if [[ "$cmd" == *node* && ( "$cmd" == *".output/server"* || "$cmd" == *"index.mjs"* ) ]]; then
+      kill "$old" 2>/dev/null || true
+      sleep 0.2
+      kill -9 "$old" 2>/dev/null || true
+    fi
+  fi
+fi
 rm -f "$RUNTIME/ui.pid" "$RUNTIME/ui.lock" 2>/dev/null || true
-fuser -k 18765/tcp 2>/dev/null || true
 
 echo ""
 echo "Repair complete. Launch: grokhub"

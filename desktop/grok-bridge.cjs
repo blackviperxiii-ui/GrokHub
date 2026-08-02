@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.15";
+const APP_VERSION = "0.8.16";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -29,7 +29,32 @@ function sleepMs(ms) {
 }
 
 /**
+ * True only if pid looks like our Nitro UI (node … .output/server), not Electron or random apps.
+ */
+async function isGrokHubUiPid(pid) {
+  if (!pid || !Number.isFinite(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    const raw = await fs.readFile(`/proc/${pid}/cmdline`, "utf8");
+    const cmd = raw.replace(/\0/g, " ");
+    const isNode = /\bnode\b|ELECTRON_RUN_AS_NODE/i.test(cmd) || /\/node\s/.test(cmd);
+    const isUi =
+      /\.output\/server|index\.mjs|nitro|grokhub/i.test(cmd) &&
+      !/desktop\/main\.mjs/i.test(cmd);
+    return isNode && isUi;
+  } catch {
+    // Non-Linux: trust pidfile only when process is alive
+    return process.platform !== "linux";
+  }
+}
+
+/**
  * Stop the Nitro UI server so we can swap install files without crashing.
+ * NEVER uses `fuser -k` (that kills anything on the port — collateral damage).
  */
 async function stopUiServer(steps) {
   const port = process.env.GROKHUB_PORT || process.env.PORT || "18765";
@@ -38,36 +63,40 @@ async function stopUiServer(steps) {
   const pidfile = path.join(dir, "ui.pid");
   const lockfile = path.join(dir, "ui.lock");
   let stopped = false;
+  const seen = new Set();
   for (const file of [pidfile, lockfile]) {
     try {
       const raw = await fs.readFile(file, "utf8");
       const pid = Number(String(raw).trim());
-      if (pid && Number.isFinite(pid) && pid > 1) {
+      if (!pid || seen.has(pid)) continue;
+      seen.add(pid);
+      if (!(await isGrokHubUiPid(pid))) {
+        steps.push(`Skip pid ${pid} (not GrokHub UI)`);
+        continue;
+      }
+      try {
+        process.kill(pid, "SIGTERM");
+        steps.push(`Stopped UI pid ${pid}`);
+        stopped = true;
+        await sleepMs(400);
         try {
-          process.kill(pid, "SIGTERM");
-          steps.push(`Stopped UI pid ${pid}`);
-          stopped = true;
+          process.kill(pid, 0);
+          process.kill(pid, "SIGKILL");
+          steps.push(`Force-killed UI pid ${pid}`);
         } catch {
-          /* already dead */
+          /* exited */
         }
+      } catch {
+        /* already dead */
       }
     } catch {
       /* no pid file */
     }
   }
-  // Free the port gently (do not kill Electron — only listeners on the UI port)
-  try {
-    await execAsync(
-      `bash -lc 'if command -v fuser >/dev/null; then fuser -k ${port}/tcp >/dev/null 2>&1 || true; fi'`,
-      { timeout: 4000, shell: "/bin/bash" },
-    );
-  } catch {
-    /* ignore */
-  }
   await fs.unlink(pidfile).catch(() => {});
   await fs.unlink(lockfile).catch(() => {});
-  // Wait until port is free (max ~3s)
-  for (let i = 0; i < 15; i++) {
+  // Wait until port is free (max ~4s) — do not mass-kill the port
+  for (let i = 0; i < 20; i++) {
     try {
       await new Promise((resolve, reject) => {
         const net = require("node:net");
@@ -87,6 +116,7 @@ async function stopUiServer(steps) {
       await sleepMs(200);
     }
   }
+  steps.push(`UI port ${port} may still be busy (left intact — no fuser kill)`);
 }
 
 /**
@@ -132,10 +162,7 @@ if [ -f "${pidfile}" ]; then
   kill "$(cat "${pidfile}" 2>/dev/null)" 2>/dev/null || true
   rm -f "${pidfile}"
 fi
-# Ensure UI port free
-if command -v fuser >/dev/null 2>&1; then
-  fuser -k ${port}/tcp >/dev/null 2>&1 || true
-fi
+# Port free is handled by pidfile kill only (never fuser -k)
 sleep 0.4
 export GROKHUB_HOME="${root}"
 export GROKHUB_PORT="${port}"
@@ -1488,6 +1515,34 @@ echo OK
   }
 }
 
+/**
+ * Keep at most one rollback tree; drop .prev older than maxAgeMs after a healthy boot.
+ */
+async function pruneStalePrevInstalls(root, steps, maxAgeMs = 7 * 86400_000) {
+  try {
+    const prev = root.endsWith(path.sep) ? root.slice(0, -1) + ".prev" : root + ".prev";
+    const st = await fs.stat(prev).catch(() => null);
+    if (!st || !st.isDirectory()) return;
+    const age = Date.now() - (st.mtimeMs || 0);
+    if (age < maxAgeMs) {
+      steps.push(`Kept rollback tree (${Math.round(age / 3600000)}h old)`);
+      return;
+    }
+    const entry = path.join(root, ".output", "server", "index.mjs");
+    const bridgeFile = path.join(root, "desktop", "grok-bridge.cjs");
+    await fs.access(entry);
+    const src = await fs.readFile(bridgeFile, "utf8");
+    if (!src.includes("factoryReinstall")) {
+      steps.push("Skip .prev prune — current bridge incomplete");
+      return;
+    }
+    await fs.rm(prev, { recursive: true, force: true });
+    steps.push(`Pruned stale rollback tree (${Math.round(age / 86400000)}d old)`);
+  } catch (e) {
+    steps.push(`Prev prune skipped: ${e instanceof Error ? e.message : "err"}`);
+  }
+}
+
 async function postUpdateSelfTest(opts = {}) {
   const root =
     opts.root || process.env.GROKHUB_HOME || (await findInstallRoot()) || process.cwd();
@@ -1512,6 +1567,9 @@ async function postUpdateSelfTest(opts = {}) {
     version = (await fs.readFile(path.join(root, "APP_VERSION"), "utf8")).trim() || version;
   } catch {}
   const local = await readLocalVersion(root);
+  if (ok) {
+    await pruneStalePrevInstalls(root, checks, 7 * 86400_000);
+  }
   return {
     ok,
     version,

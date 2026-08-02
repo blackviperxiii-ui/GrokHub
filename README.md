@@ -1,6 +1,6 @@
 # GrokHub
 
-**v0.8.15** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v0.8.16** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
 Adaptive modes · Imagine · connectors · skills · automations · usage meter · free-Grok fallback · setup sync · unsandboxed desktop host (CLI · files · apps).
 
@@ -155,6 +155,19 @@ rm -rf ~/.local/lib/grokhub
 ```
 
 ---
+
+
+
+## Stability notes (Linux)
+
+| Topic | Behavior |
+|-------|----------|
+| **Install pick** | Launcher prefers a complete `~/.local/lib/grokhub` over `/usr` when the system bridge is missing `factoryReinstall` |
+| **Updates** | Stop UI via pidfile + cmdline check only — never `fuser -k` on the port |
+| **Rollback** | `.prev` kept up to ~7 days, pruned after a healthy self-test |
+| **Sandbox** | Default `no-sandbox` for system Electron; set `GROKHUB_SANDBOX=1` to try Chromium sandbox |
+| **Logs** | `~/.config/GrokHub/logs/app-*.log` and `ui.log` |
+| **Electron** | Arch/CachyOS: use distro `electron` (e.g. 43). DevDependency pin is for tooling; runtime is system electron |
 
 ## License
 
