@@ -231,17 +231,11 @@ function emptyThread(now: number): ChatThread {
   const id = `thread_${now}`;
   return {
     id,
-    title: "Welcome",
+    title: "New chat",
     createdAt: now,
     updatedAt: now,
-    messages: [
-      {
-        id: `sys_${now}`,
-        role: "system",
-        content: "Welcome — connect Grok in Settings when ready. Try /help for commands.",
-        ts: now,
-      },
-    ],
+    // Empty messages so the adaptive empty-state welcome (Fast + learning) can render
+    messages: [],
   };
 }
 

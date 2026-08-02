@@ -67,7 +67,7 @@ export function AgentQueueView() {
             Drain queue
           </Button>
           {autonomy.level >= 3 && (
-            <Button size="sm" variant="secondary" onClick={() => claimWorkboardJobs()}>
+            <Button size="sm" variant="secondary" onClick={() => { claimWorkboardJobs(); void processAgentQueue(); }}>
               Claim workboard
             </Button>
           )}

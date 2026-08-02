@@ -1,4 +1,5 @@
 import { PassThrough, Readable } from "node:stream";
+import "node:stream/promises";
 //#region node_modules/h3/node_modules/rou3/dist/index.mjs
 var NullProtoObj = /* @__PURE__ */ (() => {
 	const e = function() {};

@@ -1,5 +1,5 @@
-import { r as __toESM } from "../_runtime.mjs";
-import { M as require_react } from "./@tanstack/react-router+[...].mjs";
+import { o as __toESM } from "../_runtime.mjs";
+import { u as require_react } from "./@floating-ui/react-dom+[...].mjs";
 //#region node_modules/zustand/esm/vanilla.mjs
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 var createStoreImpl = (createState) => {
@@ -199,4 +199,4 @@ var persistImpl = (config, baseOptions) => (set, get, api) => {
 };
 var persist = persistImpl;
 //#endregion
-export { create as n, persist as t };
+export { persist as n, create as r, createJSONStorage as t };

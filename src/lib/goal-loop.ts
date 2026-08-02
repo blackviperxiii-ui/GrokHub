@@ -8,12 +8,22 @@ import type { WorkItem } from "./workboard";
 export function looksIncomplete(assistantText: string): boolean {
   const t = (assistantText || "").toLowerCase();
   if (!t.trim()) return true;
-  if (/next step|still need|todo|to-do|remaining|i'll continue|continue with|partially|in progress|not done yet|blocked on/i.test(t))
+  if (
+    /next step|still need|todo|to-do|remaining|i'll continue|continue with|partially|in progress|not done yet|blocked on|let me know if|want me to/i.test(
+      t,
+    )
+  )
     return true;
-  if (/all done|completed successfully|nothing else|task is complete|fully done|✓ done|marking .* done/i.test(t))
+  if (
+    /all done|completed successfully|nothing else|task is complete|fully done|✓ done|marking .* done|goal_complete|fixed\.|shipped|you're all set|no further action/i.test(
+      t,
+    )
+  )
     return false;
-  // Short acknowledgements without tool results often incomplete for work tasks
-  if (t.length < 80 && !/done|complete|fixed|shipped/.test(t)) return true;
+  // Short acks that sound finished
+  if (t.length < 80 && /\b(done|fixed|complete|shipped|resolved|applied)\b/.test(t)) return false;
+  // Short vague acks without finish words → still open
+  if (t.length < 80) return true;
   return false;
 }
 

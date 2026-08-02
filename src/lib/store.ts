@@ -156,6 +156,8 @@ import { agentCoreEnqueue, agentCoreSetPaused, agentCoreSync } from "./agent-cor
 
 /** In-flight LLM auto-titles (thread id). */
 const autoTitleInflight = new Set<string>();
+/** Prevent parallel agent queue drains */
+let agentQueueDraining = false;
 /** Last successful auto-title timestamp per thread */
 const autoTitleLastAt = new Map<string, number>();
 /** Message count when we last titled */
@@ -3788,8 +3790,10 @@ syncWebsiteConnectors: async () => {
       claimWorkboardJobs: () => {
         const cfg = get().autonomy;
         if (!shouldAutoClaimWorkboard(cfg)) return 0;
+        // Only pull new board cards — in_progress is owned by the active/goal loop
+        // so we don't re-queue the same item forever after a completed step.
         const open = get().workboard.items.filter((w) =>
-          ["approved", "staged", "in_progress"].includes(w.status),
+          ["approved", "staged"].includes(w.status),
         );
         let n = 0;
         for (const item of open.slice(0, 5)) {
@@ -3799,6 +3803,14 @@ syncWebsiteConnectors: async () => {
               ["queued", "running", "waiting_user"].includes(j.status),
           );
           if (already) continue;
+          // Skip if we already completed a job for this item recently without a new approval
+          const recentlyDone = get().agentQueue.jobs.some(
+            (j) =>
+              j.workItemId === item.id &&
+              j.status === "done" &&
+              Date.now() - (j.updatedAt || 0) < 60_000,
+          );
+          if (recentlyDone) continue;
           get().enqueueAgentJob({
             type: "workboard",
             priority: item.priority === "high" ? 9 : 6,
@@ -3813,9 +3825,10 @@ syncWebsiteConnectors: async () => {
             stepIndex: 0,
             maxSteps: cfg.maxStepsPerGoal,
           });
+          // Mark claimed so we don't re-claim until user re-approves
+          get().setWorkItemStatus(item.id, "in_progress");
           n++;
         }
-        if (n) void get().processAgentQueue();
         return n;
       },
 
@@ -3906,20 +3919,26 @@ syncWebsiteConnectors: async () => {
       },
 
       processAgentQueue: async () => {
+        if (agentQueueDraining) return;
         const cfg0 = rollBudgetDay(get().autonomy);
         if (cfg0 !== get().autonomy) set({ autonomy: cfg0 });
         if (get().autonomy.paused) return;
         if (get().running || get().streamingMessageId) return;
         if (get().agentQueue.runningId) return;
-        // Level 3+ auto claim
-        if (shouldAutoClaimWorkboard(get().autonomy)) {
-          get().claimWorkboardJobs();
+        agentQueueDraining = true;
+        try {
+          // Level 3+ auto claim (approved/staged only)
+          if (shouldAutoClaimWorkboard(get().autonomy)) {
+            get().claimWorkboardJobs();
+          }
+          const next = pickNextJob(get().agentQueue, get().autonomy);
+          if (!next) return;
+          await get()._runAgentJob(next);
+        } finally {
+          agentQueueDraining = false;
         }
-        const next = pickNextJob(get().agentQueue, get().autonomy);
-        if (!next) return;
-        await get()._runAgentJob(next);
         // chain next if idle
-        if (!get().running && !get().autonomy.paused) {
+        if (!get().running && !get().streamingMessageId && !get().autonomy.paused) {
           queueMicrotask(() => {
             void get().processAgentQueue();
           });
@@ -6430,12 +6449,39 @@ if (!cmds.length) {
         s.workboard = normalizeWorkboard((s as { workboard?: unknown }).workboard);
         s.autonomy = normalizeAutonomy((s as { autonomy?: unknown }).autonomy);
         s.agentQueue = normalizeAgentQueue((s as { agentQueue?: unknown }).agentQueue);
-          if ((s as { projectWorkspace?: unknown }).projectWorkspace && typeof (s as { projectWorkspace?: { path?: string } }).projectWorkspace === "object") {
-            /* keep as-is */
-          } else {
-            (s as { projectWorkspace: null }).projectWorkspace = null;
+        // Drop legacy generic seed welcome bubble so adaptive empty-state can show
+        try {
+          const threads = Array.isArray(s.threads) ? (s.threads as ChatThread[]) : [];
+          s.threads = threads.map((th) => {
+            const msgs = th.messages || [];
+            if (
+              msgs.length === 1 &&
+              msgs[0]?.role === "system" &&
+              /welcome — connect grok/i.test(String(msgs[0]?.content || ""))
+            ) {
+              return {
+                ...th,
+                messages: [],
+                title: th.title === "Welcome" ? "New chat" : th.title,
+              };
+            }
+            return th;
+          });
+          if (s.activeThreadId) {
+            const active = (s.threads as ChatThread[]).find(
+              (th) => th.id === s.activeThreadId,
+            );
+            if (active) s.chat = active.messages || [];
           }
-          s.quickAssistMemory = normalizeMemory(s.quickAssistMemory);
+        } catch {
+          /* ignore */
+        }
+        if ((s as { projectWorkspace?: unknown }).projectWorkspace && typeof (s as { projectWorkspace?: { path?: string } }).projectWorkspace === "object") {
+          /* keep as-is */
+        } else {
+          (s as { projectWorkspace: null }).projectWorkspace = null;
+        }
+        s.quickAssistMemory = normalizeMemory(s.quickAssistMemory);
         if (!Array.isArray(s.quickAssistDismissed)) s.quickAssistDismissed = [];
         if (typeof s.quickAssistRotation !== "number") s.quickAssistRotation = 0;
         // merge catalog connectors (new website ids without wiping status)
