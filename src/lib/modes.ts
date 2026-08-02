@@ -4,6 +4,8 @@ import {
   friendlyModelName,
   routeAuto,
   type ResolvedCatalog,
+  type RouteContext,
+  type AutoRouteResult,
 } from "./models-catalog";
 
 /**
@@ -13,9 +15,9 @@ import {
 export const GROK_MODES: GrokMode[] = [
   {
     id: "auto",
-    label: "Auto",
-    subtitle: "Routes Fast · 4.3 · 4.5 · Build · Imagine",
-    model: "Auto",
+    label: "Adaptive",
+    subtitle: "Smart router · Fast · Think · Deep · Build",
+    model: "Adaptive",
     modelId: "auto",
     icon: "auto",
     latencyMs: [400, 900],
@@ -74,8 +76,9 @@ export function getModesWithCatalog(catalog: ResolvedCatalog = emptyCatalog()): 
     if (m.id === "auto") {
       return {
         ...m,
-        subtitle: `Router · ${friendlyModelName(s.fast)} / ${friendlyModelName(s.balanced)} / ${friendlyModelName(s.smart)} / ${friendlyModelName(s.build)}`,
-        model: "Auto",
+        label: "Adaptive",
+        subtitle: `Routes ⚡ Fast · 🧠 Think · 🔬 Deep · 🛠️ Build`,
+        model: "Adaptive",
       };
     }
     if (m.id === "fast") {
@@ -83,7 +86,7 @@ export function getModesWithCatalog(catalog: ResolvedCatalog = emptyCatalog()): 
         ...m,
         modelId: s.fast,
         model: friendlyModelName(s.fast),
-        subtitle: `Quick chat · ${friendlyModelName(s.fast)}`,
+        subtitle: `⚡ Quick chat · ${friendlyModelName(s.fast)}`,
       };
     }
     if (m.id === "expert") {
@@ -91,7 +94,7 @@ export function getModesWithCatalog(catalog: ResolvedCatalog = emptyCatalog()): 
         ...m,
         modelId: s.smart,
         model: friendlyModelName(s.smart),
-        subtitle: `Thinks hard · ${friendlyModelName(s.smart)}`,
+        subtitle: `🧠 Think hard · ${friendlyModelName(s.smart)}`,
       };
     }
     if (m.id === "heavy") {
@@ -99,7 +102,7 @@ export function getModesWithCatalog(catalog: ResolvedCatalog = emptyCatalog()): 
         ...m,
         modelId: s.heavy,
         model: friendlyModelName(s.heavy),
-        subtitle: `Team of Experts · ${friendlyModelName(s.heavy)}`,
+        subtitle: `🔬 Deep / team · ${friendlyModelName(s.heavy)}`,
       };
     }
     if (m.id === "build") {
@@ -107,7 +110,7 @@ export function getModesWithCatalog(catalog: ResolvedCatalog = emptyCatalog()): 
         ...m,
         modelId: s.build,
         model: friendlyModelName(s.build),
-        subtitle: `Build apps & sites · ${friendlyModelName(s.build)}`,
+        subtitle: `🛠️ Build apps · ${friendlyModelName(s.build)}`,
       };
     }
     return m;
@@ -115,13 +118,12 @@ export function getModesWithCatalog(catalog: ResolvedCatalog = emptyCatalog()): 
 }
 
 /**
- * Auto routes by intent (kept for mode badge). Concrete model is modelIdForMode.
- * Returns a GrokModeId for usage metering / agent assignment.
+ * Adaptive routes by multi-signal scoring. Concrete model is modelIdForMode.
  */
-export function resolveMode(id: GrokModeId, prompt: string): GrokModeId {
+export function resolveMode(id: GrokModeId, prompt: string, ctx?: RouteContext): GrokModeId {
   if (id !== "auto") return id;
-  const r = routeAuto(prompt, emptyCatalog());
-  if (r.routedMode === "imagine") return "fast"; // chat path shouldn't land here often
+  const r = routeAuto(prompt, emptyCatalog(), ctx);
+  if (r.routedMode === "imagine") return "fast";
   return r.routedMode;
 }
 
@@ -130,9 +132,10 @@ export function resolveModeWithCatalog(
   id: GrokModeId,
   prompt: string,
   catalog: ResolvedCatalog,
+  ctx?: RouteContext,
 ): GrokModeId {
   if (id !== "auto") return id;
-  const r = routeAuto(prompt, catalog);
+  const r = routeAuto(prompt, catalog, ctx);
   if (r.routedMode === "imagine") return "fast";
   return r.routedMode;
 }
@@ -142,10 +145,11 @@ export function modelIdForMode(
   id: GrokModeId,
   prompt = "",
   catalog: ResolvedCatalog = emptyCatalog(),
+  ctx?: RouteContext,
 ): string {
   const slots = catalog.slots;
   if (id === "auto") {
-    return routeAuto(prompt, catalog).modelId;
+    return routeAuto(prompt, catalog, ctx).modelId;
   }
   if (id === "fast") return slots.fast;
   if (id === "expert") return slots.smart;
@@ -154,12 +158,22 @@ export function modelIdForMode(
   return slots.balanced;
 }
 
-/** Full auto route (for UI status + imagine handoff). */
+/** Full adaptive route (for UI status + imagine handoff). */
 export function autoRouteFor(
   prompt: string,
   catalog: ResolvedCatalog = emptyCatalog(),
-) {
-  return routeAuto(prompt, catalog);
+  ctx?: RouteContext,
+): AutoRouteResult {
+  return routeAuto(prompt, catalog, ctx);
+}
+
+/** Map a fixed mode to display tier tags. */
+export function tierForMode(id: GrokModeId): AutoRouteResult["tier"] {
+  if (id === "fast") return "fast";
+  if (id === "build") return "build";
+  if (id === "heavy") return "deep";
+  if (id === "expert") return "think";
+  return "think";
 }
 
 export function modeBadge(id: GrokModeId, catalog?: ResolvedCatalog): string {
@@ -171,7 +185,7 @@ export function modeBadge(id: GrokModeId, catalog?: ResolvedCatalog): string {
 /** Strip UI chrome we used to inject into assistant text (keep history clean for the model). */
 export function stripAssistantChrome(content: string): string {
   return content
-    .replace(/^\[(?:Auto → )?[^\]]+\]\s*\n*/gm, "")
+    .replace(/^\[(?:Auto|Adaptive)[^\]]*\]\s*\n*/gm, "")
     .replace(/^— Offline fallback —\s*\n*/gm, "")
     .replace(/^Could not reach Grok\.\s*\n*/gm, "")
     .replace(/^Grok connection error:.*$/gm, "")

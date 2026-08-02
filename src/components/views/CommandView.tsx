@@ -74,7 +74,7 @@ export function CommandView() {
           <CardHeader>
             <CardTitle>Grok modes</CardTitle>
             <CardDescription>
-              Baked in exactly like the web picker — Auto, Fast, Expert, Heavy, Build. Costs scale
+              Baked in exactly like the web picker — Adaptive, Fast, Expert, Heavy, Build. Costs scale
               by mode.
             </CardDescription>
           </CardHeader>

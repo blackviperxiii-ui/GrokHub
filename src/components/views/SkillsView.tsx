@@ -1,4 +1,4 @@
-import { FolderInput, Play, Plus, Sparkles } from "lucide-react";
+import { Play, Plus, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useGrokHub } from "@/lib/store";
 import { Badge } from "../ui/badge";
@@ -13,16 +13,13 @@ export function SkillsView() {
   const runSkill = useGrokHub((s) => s.runSkill);
   const addSkill = useGrokHub((s) => s.addSkill);
   const running = useGrokHub((s) => s.running);
-  const importOpenClawWorkspace = useGrokHub((s) => s.importOpenClawWorkspace);
   const openClawWorkspace = useGrokHub((s) => s.openClawWorkspace);
+  const setNav = useGrokHub((s) => s.setNav);
 
   const [name, setName] = useState("");
   const [slash, setSlash] = useState("");
   const [description, setDescription] = useState("");
   const [instructions, setInstructions] = useState("");
-  const [ocPath, setOcPath] = useState("~/.openclaw/workspace");
-  const [ocBusy, setOcBusy] = useState(false);
-  const [ocDetail, setOcDetail] = useState("");
 
   function onCreate() {
     if (!name.trim() || !instructions.trim()) return;
@@ -40,49 +37,19 @@ export function SkillsView() {
 
   return (
     <div className="space-y-5">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <FolderInput className="h-4 w-4 text-[var(--color-muted)]" />
-            Import from OpenClaw
-          </CardTitle>
-          <CardDescription>
-            Load workspace skills from{" "}
-            <span className="font-mono">~/.openclaw/workspace/skills</span> (or another path).
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-2">
-          <Input
-            value={ocPath}
-            onChange={(e) => setOcPath(e.target.value)}
-            className="min-w-[200px] max-w-md flex-1 font-mono text-xs"
-            placeholder="~/.openclaw/workspace"
-          />
-          <Button
-            size="sm"
-            disabled={ocBusy}
-            onClick={() => {
-              setOcBusy(true);
-              setOcDetail("");
-              void importOpenClawWorkspace(ocPath.trim() || undefined).then((r) => {
-                setOcDetail(r.detail);
-                setOcBusy(false);
-              });
-            }}
-          >
-            {ocBusy ? "Importing…" : "Import workspace"}
-          </Button>
-          {openClawWorkspace && (
-            <Badge variant="success">
-              {openClawWorkspace.identityName || "Linked"} ·{" "}
-              {openClawWorkspace.filesImported.length} files
-            </Badge>
-          )}
-          {ocDetail && (
-            <span className="w-full text-xs text-[var(--color-muted)]">{ocDetail}</span>
-          )}
-        </CardContent>
-      </Card>
+      {openClawWorkspace && (
+        <Card>
+          <CardContent className="flex flex-wrap items-center justify-between gap-2 py-3">
+            <p className="text-xs text-[var(--color-muted)]">
+              OpenClaw workspace linked · {openClawWorkspace.filesImported.length} files · manage in
+              Settings
+            </p>
+            <Button size="sm" variant="secondary" onClick={() => setNav("settings")}>
+              Settings
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
         <div className="grid gap-3 sm:grid-cols-2">
@@ -124,7 +91,7 @@ export function SkillsView() {
                     </Button>
                     <Button
                       size="sm"
-                      disabled={!sk.enabled || running}
+                      disabled={running || !sk.enabled}
                       onClick={() => void runSkill(sk.id)}
                     >
                       <Play className="h-3.5 w-3.5" />
@@ -137,43 +104,39 @@ export function SkillsView() {
           ))}
         </div>
 
-        <Card className="h-fit lg:sticky lg:top-20">
+        <Card className="h-fit">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
               <Plus className="h-4 w-4" />
-              Skill Creator
+              New skill
             </CardTitle>
-            <CardDescription>
-              Teach once — slash command sticks across sessions.
-            </CardDescription>
+            <CardDescription>Custom slash skill for this workspace.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-[var(--color-muted)]">Name</label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Gig day planner" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-[var(--color-muted)]">Slash</label>
-              <Input value={slash} onChange={(e) => setSlash(e.target.value)} placeholder="/gigs" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-[var(--color-muted)]">Description</label>
-              <Input
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="What this skill does"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-[var(--color-muted)]">Instructions</label>
-              <Textarea
-                value={instructions}
-                onChange={(e) => setInstructions(e.target.value)}
-                placeholder="Steps the agent should always follow…"
-              />
-            </div>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Name"
+            />
+            <Input
+              value={slash}
+              onChange={(e) => setSlash(e.target.value)}
+              placeholder="/slash"
+              className="font-mono text-xs"
+            />
+            <Input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Short description"
+            />
+            <Textarea
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              placeholder="Instructions the agent should follow…"
+              rows={5}
+            />
             <Button className="w-full" onClick={onCreate} disabled={!name.trim() || !instructions.trim()}>
-              Save skill
+              Add skill
             </Button>
           </CardContent>
         </Card>

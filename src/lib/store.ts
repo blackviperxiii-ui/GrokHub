@@ -132,6 +132,10 @@ type State = {
   } | null;
   /** Adaptive quick-assist chip habits */
   quickAssistMemory: QuickAssistMemory;
+  /** Chip values/ids the user dismissed */
+  quickAssistDismissed: string[];
+  /** Bumps to rotate alternate chip packs */
+  quickAssistRotation: number;
   usage: UsageSnapshot;
   heartbeatAt: number;
   running: boolean;
@@ -177,6 +181,8 @@ type State = {
   recordQuickAssistChip: (chip: QuickChip) => void;
   recordQuickAssistTyped: (text: string) => void;
   clearQuickAssistMemory: () => void;
+  dismissQuickAssistChip: (chip: QuickChip) => void;
+  rotateQuickAssist: () => void;
   syncWebsiteConnectors: () => Promise<{ ok: boolean; detail: string; count: number }>;
   setApiKey: (key: string) => void;
   setGithubToken: (token: string) => void;
@@ -364,7 +370,7 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
     return [
       "",
       "Baked-in Grok modes (same as web):",
-      "- Auto — Chooses Fast or Expert",
+      "- Adaptive — Real router: ⚡ Fast · 🧠 Think · 🔬 Deep · 🛠️ Build",
       "- Fast — Quick responses · grok-4-1-fast · 1 unit",
       "- Expert — Thinks hard · grok-4.3 · 4 units",
       "- Heavy — Team of Experts · grok-4.3 · 8 units",
@@ -553,6 +559,8 @@ export const useGrokHub = create<State>()(
       streamingMessageId: null,
       pendingHostConfirm: null,
       quickAssistMemory: emptyQuickAssistMemory(),
+      quickAssistDismissed: [],
+      quickAssistRotation: 0,
       modelCatalog: emptyCatalog(),
       lastModelsFetchAt: 0,
       apiKey: "",
@@ -638,6 +646,8 @@ export const useGrokHub = create<State>()(
       recordQuickAssistChip: (chip) => {
         set((s) => ({
           quickAssistMemory: rememberChipClick(s.quickAssistMemory, chip),
+          // Rotate pack after a click so the next suggestions feel fresh
+          quickAssistRotation: (s.quickAssistRotation || 0) + 1,
         }));
       },
 
@@ -650,7 +660,30 @@ export const useGrokHub = create<State>()(
       },
 
       clearQuickAssistMemory: () => {
-        set({ quickAssistMemory: emptyQuickAssistMemory() });
+        set({
+          quickAssistMemory: emptyQuickAssistMemory(),
+          quickAssistDismissed: [],
+          quickAssistRotation: 0,
+        });
+      },
+
+      dismissQuickAssistChip: (chip) => {
+        const key = (chip.value || chip.id || "").trim();
+        if (!key) return;
+        set((s) => ({
+          quickAssistDismissed: [...new Set([...(s.quickAssistDismissed || []), key, chip.id])].slice(
+            -60,
+          ),
+          quickAssistRotation: (s.quickAssistRotation || 0) + 1,
+        }));
+      },
+
+      rotateQuickAssist: () => {
+        set((s) => ({
+          quickAssistRotation: (s.quickAssistRotation || 0) + 1,
+          // Clear a few oldest dismissals so Suggest can reintroduce useful chips
+          quickAssistDismissed: (s.quickAssistDismissed || []).slice(-20),
+        }));
       },
 
       syncWebsiteConnectors: async () => {
@@ -1818,11 +1851,9 @@ export const useGrokHub = create<State>()(
           usage = { ...usage, plan: inferred };
         }
 
-        // Prefer live Grok website weekly pool (same data as Settings → Usage)
         try {
           const { fetchGrokWebsiteUsage } = await import("./grok-website-usage");
           let sso = st.ssoCookie?.trim() || "";
-          // Electron: try to pull SSO from linked session if empty
           if (!sso && typeof window !== "undefined" && window.grokhubDesktop?.grok?.getWebsiteSso) {
             try {
               const r = await window.grokhubDesktop.grok.getWebsiteSso();
@@ -1834,9 +1865,11 @@ export const useGrokHub = create<State>()(
               /* ignore */
             }
           }
+          const bearer =
+            st.oauth?.accessToken?.trim() || st.apiKey?.trim() || null;
           const web = await fetchGrokWebsiteUsage({
             ssoCookie: sso || null,
-            bearer: null, // website pool needs SSO; management keys are separate
+            bearer: sso ? null : bearer,
           });
           if (web.ok) {
             const planMap =
@@ -1846,51 +1879,77 @@ export const useGrokHub = create<State>()(
                   ? ("free" as const)
                   : ("super" as const);
             const unitCap = PLAN_LIMITS[planMap].units;
+            const pct = Number(web.creditUsagePercent) || 0;
             usage = {
               ...usage,
               plan: planMap,
               periodStart: web.periodStart || usage.periodStart,
               periodEnd: web.periodEnd || usage.periodEnd,
-              usedUnits: Math.round((web.creditUsagePercent / 100) * unitCap * 100) / 100,
+              usedUnits: Math.round((pct / 100) * unitCap * 100) / 100,
               source: "website",
               lastPolledAt: Date.now(),
               website: {
-                planLabel: web.planLabel,
-                creditUsagePercent: web.creditUsagePercent,
-                periodType: web.periodType,
+                planLabel: web.planLabel || PLAN_LIMITS[planMap].label,
+                creditUsagePercent: pct,
+                periodType: web.periodType || "weekly",
                 periodStart: web.periodStart,
                 periodEnd: web.periodEnd,
-                productUsage: web.productUsage,
-                prepaidBalanceCents: web.prepaidBalanceCents,
-                onDemandCapCents: web.onDemandCapCents,
-                onDemandUsedCents: web.onDemandUsedCents,
+                productUsage: web.productUsage || [],
+                prepaidBalanceCents: web.prepaidBalanceCents || 0,
+                onDemandCapCents: web.onDemandCapCents || 0,
+                onDemandUsedCents: web.onDemandUsedCents || 0,
                 error: null,
               },
             };
             set({ usage });
             return;
-          } else if (web.error) {
-            usage = {
-              ...usage,
-              website: {
-                planLabel: usage.website?.planLabel || "—",
-                creditUsagePercent: usage.website?.creditUsagePercent ?? 0,
-                periodType: usage.website?.periodType || "unknown",
-                periodStart: usage.website?.periodStart ?? null,
-                periodEnd: usage.website?.periodEnd ?? null,
-                productUsage: usage.website?.productUsage || [],
-                prepaidBalanceCents: usage.website?.prepaidBalanceCents ?? 0,
-                onDemandCapCents: usage.website?.onDemandCapCents ?? 0,
-                onDemandUsedCents: usage.website?.onDemandUsedCents ?? 0,
-                error: web.error,
-              },
-            };
           }
-        } catch {
-          /* fall through to local */
+          usage = {
+            ...usage,
+            lastPolledAt: Date.now(),
+            website: {
+              planLabel: usage.website?.planLabel || PLAN_LIMITS[usage.plan].label,
+              creditUsagePercent:
+                usage.website?.creditUsagePercent ??
+                Math.round(usagePercent(usage) * 10) / 10,
+              periodType: usage.website?.periodType || "unknown",
+              periodStart: usage.website?.periodStart ?? usage.periodStart,
+              periodEnd: usage.website?.periodEnd ?? usage.periodEnd,
+              productUsage: usage.website?.productUsage || [],
+              prepaidBalanceCents: usage.website?.prepaidBalanceCents ?? 0,
+              onDemandCapCents: usage.website?.onDemandCapCents ?? 0,
+              onDemandUsedCents: usage.website?.onDemandUsedCents ?? 0,
+              error: web.error || "Could not load grok.com usage — link website session in Settings",
+            },
+          };
+        } catch (e) {
+          usage = {
+            ...usage,
+            lastPolledAt: Date.now(),
+            website: {
+              planLabel: usage.website?.planLabel || PLAN_LIMITS[usage.plan].label,
+              creditUsagePercent:
+                usage.website?.creditUsagePercent ??
+                Math.round(usagePercent(usage) * 10) / 10,
+              periodType: usage.website?.periodType || "unknown",
+              periodStart: usage.website?.periodStart ?? usage.periodStart,
+              periodEnd: usage.website?.periodEnd ?? usage.periodEnd,
+              productUsage: usage.website?.productUsage || [],
+              prepaidBalanceCents: usage.website?.prepaidBalanceCents ?? 0,
+              onDemandCapCents: usage.website?.onDemandCapCents ?? 0,
+              onDemandUsedCents: usage.website?.onDemandUsedCents ?? 0,
+              error: e instanceof Error ? e.message : "usage poll failed",
+            },
+          };
         }
 
-        usage = { ...usage, lastPolledAt: Date.now() };
+        if (usage.source !== "website") {
+          usage = {
+            ...usage,
+            source: usage.totalTokens > 0 ? "live" : usage.source || "estimate",
+            lastPolledAt: Date.now(),
+          };
+        }
         set({ usage });
       },
 
@@ -2589,7 +2648,23 @@ export const useGrokHub = create<State>()(
         });
 
         const catalog = get().modelCatalog || emptyCatalog();
-        const auto = autoRouteFor(trimmed, catalog);
+        const recentChat = get().chat.filter((c) => c.id !== botId);
+        const routeCtx = {
+          historyTurns: recentChat.length,
+          recentUserText: recentChat
+            .filter((c) => c.role === "user")
+            .slice(-3)
+            .map((c) => c.content)
+            .join("\n"),
+          recentAssistantText: recentChat
+            .filter((c) => c.role === "assistant")
+            .slice(-2)
+            .map((c) => c.content)
+            .join("\n")
+            .slice(0, 4000),
+          hasAttachments: /\[attachment:|data:image\//i.test(trimmed),
+        };
+        const auto = autoRouteFor(trimmed, catalog, routeCtx);
         if (mode === "auto" && auto.openImagine) {
           set((s) => ({
             chat: s.chat.filter((m) => m.id !== botId && m.id !== userMsg.id),
@@ -2601,7 +2676,7 @@ export const useGrokHub = create<State>()(
           }));
           return;
         }
-        const routed = resolveModeWithCatalog(mode, trimmed, catalog);
+        const routed = resolveModeWithCatalog(mode, trimmed, catalog, routeCtx);
         const m = getMode(routed);
         // Soft quota check (real token units settled after live reply)
         {
@@ -2628,12 +2703,40 @@ export const useGrokHub = create<State>()(
         }
         let bill = { ok: true, cost: costFor("message", routed) };
 
+        const routeStamp =
+          mode === "auto"
+            ? {
+                mode: routed,
+                routeTier: auto.tier,
+                routeReason: auto.reasonDetail,
+                routeModel: auto.modelId,
+              }
+            : {
+                mode: routed,
+                routeTier:
+                  routed === "fast"
+                    ? ("fast" as const)
+                    : routed === "build"
+                      ? ("build" as const)
+                      : routed === "heavy"
+                        ? ("deep" as const)
+                        : ("think" as const),
+                routeReason: `Manual ${m.label} mode`,
+                routeModel: modelIdForMode(mode, trimmed, catalog, routeCtx),
+              };
+
         set((s) => ({
           chat: s.chat.map((row) =>
-            row.id === botId ? { ...row, mode: routed } : row.id === userMsg.id ? { ...row, mode } : row,
+            row.id === botId
+              ? { ...row, ...routeStamp }
+              : row.id === userMsg.id
+                ? { ...row, mode }
+                : row,
           ),
           streamStatus:
-            mode === "auto" ? `Auto → ${auto.reason}` : `Thinking · ${m.label}…`,
+            mode === "auto"
+              ? `Adaptive → ${auto.tierLabel} · ${auto.reasonDetail}`
+              : `Thinking · ${m.label}…`,
         }));
 
         if (get().agents.length === 0) {
@@ -2720,10 +2823,10 @@ export const useGrokHub = create<State>()(
               history.push({ role: "user", content: trimmed });
             }
 
-            const modelId = modelIdForMode(mode, trimmed, catalog);
+            const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx);
             // Surface Auto routing decision while streaming
             if (mode === "auto") {
-              set({ streamStatus: `Auto → ${auto.reason}` });
+              set({ streamStatus: `Adaptive → ${auto.tierLabel} · ${auto.reasonDetail}` });
             }
             let rounds = 0;
             const maxRounds = 4;
@@ -3504,6 +3607,8 @@ if (!cmds.length) {
           ssoCookie: "",
           openClawWorkspace: null,
           quickAssistMemory: emptyQuickAssistMemory(),
+      quickAssistDismissed: [],
+      quickAssistRotation: 0,
           pendingHostConfirm: null,
         });
       },
@@ -3562,6 +3667,9 @@ if (!cmds.length) {
           detail: a.detail != null ? redactSecrets(String(a.detail)) : a.detail,
         })),
         quickAssistMemory: s.quickAssistMemory,
+        quickAssistDismissed: (s.quickAssistDismissed || []).slice(-40),
+        // rotation is session-ish but persist lightly so reopen still varies
+        quickAssistRotation: s.quickAssistRotation || 0,
         // nav not forced — restore last view except desktop
         // Secrets stay in safeStorage (userData), not here
       }),
@@ -3581,6 +3689,8 @@ if (!cmds.length) {
           };
         }
         s.quickAssistMemory = normalizeMemory(s.quickAssistMemory);
+        if (!Array.isArray(s.quickAssistDismissed)) s.quickAssistDismissed = [];
+        if (typeof s.quickAssistRotation !== "number") s.quickAssistRotation = 0;
         // merge catalog connectors (new website ids without wiping status)
         try {
           const cat = createSeeds().connectors;

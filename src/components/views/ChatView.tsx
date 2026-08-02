@@ -15,9 +15,13 @@ import {
   Cable,
   Wrench,
   Monitor,
+  Mic,
+  MicOff,
+  RefreshCw,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
+import { tierMeta } from "@/lib/models-catalog";
 import { buildQuickChips, type QuickChip } from "@/lib/quick-assistant";
 import { useGrokHub } from "@/lib/store";
 import { parseStreamStatus } from "@/lib/tool-status";
@@ -136,6 +140,10 @@ export function ChatView() {
   const quickAssistMemory = useGrokHub((s) => s.quickAssistMemory);
   const recordQuickAssistChip = useGrokHub((s) => s.recordQuickAssistChip);
   const recordQuickAssistTyped = useGrokHub((s) => s.recordQuickAssistTyped);
+  const quickAssistDismissed = useGrokHub((s) => s.quickAssistDismissed);
+  const quickAssistRotation = useGrokHub((s) => s.quickAssistRotation);
+  const dismissQuickAssistChip = useGrokHub((s) => s.dismissQuickAssistChip);
+  const rotateQuickAssist = useGrokHub((s) => s.rotateQuickAssist);
   const sessionResume = useGrokHub((s) => s.sessionResume);
   const resumeLastSession = useGrokHub((s) => s.resumeLastSession);
   const dismissSessionResume = useGrokHub((s) => s.dismissSessionResume);
@@ -149,6 +157,8 @@ export function ChatView() {
   const [historyExtra, setHistoryExtra] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef<{ stop: () => void } | null>(null);
   const [attachments, setAttachments] = useState<Array<{ name: string; dataUrl: string; kind: string }>>([]);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -202,9 +212,11 @@ export function ChatView() {
         draft: text,
         hostOnline,
         memory: quickAssistMemory,
-        max: text.trim().length > 0 ? 10 : Math.min(10, Math.max(4, 4 + Math.min(chat.length, 4))),
+        dismissed: quickAssistDismissed,
+        rotation: quickAssistRotation,
+        max: text.trim().length > 0 ? 10 : Math.min(10, Math.max(5, 5 + Math.min(chat.length, 3))),
       }),
-    [chat, activity, threads, connectors, mode, grokConnected, usage, text, hostOnline, quickAssistMemory],
+    [chat, activity, threads, connectors, mode, grokConnected, usage, text, hostOnline, quickAssistMemory, quickAssistDismissed, quickAssistRotation],
   );
 
   useEffect(() => {
@@ -368,7 +380,84 @@ export function ChatView() {
     setPendingBusy(false);
   }
 
+
+  function stopVoice() {
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      /* ignore */
+    }
+    recognitionRef.current = null;
+    setListening(false);
+  }
+
+  function toggleVoice() {
+    type Rec = {
+      continuous: boolean;
+      interimResults: boolean;
+      lang: string;
+      onresult: ((ev: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal?: boolean }> }) => void) | null;
+      onerror: (() => void) | null;
+      onend: (() => void) | null;
+      start: () => void;
+      stop: () => void;
+    };
+    const w = window as unknown as {
+      SpeechRecognition?: new () => Rec;
+      webkitSpeechRecognition?: new () => Rec;
+    };
+    const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
+    if (!SR) {
+      pushActivity({
+        kind: "system",
+        title: "Voice not available",
+        detail: "Speech recognition is not supported in this shell. Type or paste instead.",
+        status: "failed",
+      });
+      return;
+    }
+    if (listening) {
+      stopVoice();
+      return;
+    }
+    try {
+      const rec = new SR();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = navigator.language || "en-US";
+      rec.onresult = (ev) => {
+        let chunk = "";
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          const r = ev.results[i];
+          if (r && r[0]) chunk += r[0].transcript;
+        }
+        if (chunk) {
+          setText((prev) => {
+            const base = prev.trim();
+            const next = base ? `${base} ${chunk.trim()}` : chunk.trim();
+            return next;
+          });
+          requestAnimationFrame(() => resizeComposer());
+        }
+      };
+      rec.onerror = () => stopVoice();
+      rec.onend = () => setListening(false);
+      recognitionRef.current = rec;
+      rec.start();
+      setListening(true);
+    } catch (e) {
+      pushActivity({
+        kind: "system",
+        title: "Mic failed",
+        detail: e instanceof Error ? e.message : "Could not start voice",
+        status: "failed",
+      });
+      setListening(false);
+    }
+  }
+
   async function onSend(value?: string) {
+
     if (busy) return;
     let payload = (value ?? text).trim();
     if (attachments.length) {
@@ -527,8 +616,29 @@ export function ChatView() {
                       {m.role} · <RelativeTime ts={m.ts} />
                     </span>
                     {m.mode && (
-                      <span className="rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case">
-                        {getMode(m.mode).label}
+                      <span
+                        className="rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case"
+                        title={
+                          m.routeReason
+                            ? m.routeReason
+                            : m.mode === "auto"
+                              ? "Adaptive router"
+                              : getMode(m.mode).label
+                        }
+                      >
+                        {m.routeTier
+                          ? tierMeta(m.routeTier).label
+                          : m.mode === "auto"
+                            ? "Adaptive"
+                            : getMode(m.mode).label}
+                      </span>
+                    )}
+                    {m.routeModel && m.role === "assistant" && (
+                      <span
+                        className="hidden max-w-[10rem] truncate rounded border border-[var(--color-border)] px-1.5 py-px font-mono normal-case text-[var(--color-subtle)] sm:inline"
+                        title={m.routeReason || m.routeModel}
+                      >
+                        {m.routeModel.replace(/^grok-/, "")}
                       </span>
                     )}
                     {m.streaming && (
@@ -638,42 +748,70 @@ export function ChatView() {
           </div>
 
           <div className="shrink-0 space-y-2 border-t border-[var(--color-border)] p-3 md:p-4 3xl:px-8 uw:px-12">
-            {!busy && chips.length > 0 && (
+            {!busy && (
               <div className="mx-auto w-full max-w-[min(56rem,100%)] 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]">
-                <div className="mb-1 flex items-center justify-center gap-2 px-0.5">
+                <div className="mb-1.5 flex items-center justify-center gap-2 px-0.5">
                   <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--color-subtle)]">
                     Quick assist
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => rotateQuickAssist()}
+                    className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]"
+                    title="Generate new suggestions from this chat"
+                  >
+                    <RefreshCw className="h-2.5 w-2.5" />
+                    Suggest chips
+                  </button>
                 </div>
-                <div
-                  className="flex flex-wrap items-center justify-center gap-1.5"
-                  role="listbox"
-                  aria-label="Quick assistant suggestions"
-                >
-                  {chips.map((c) => {
-                    const Icon = chipIcon(c.kind);
-                    return (
-                      <button
-                        key={c.id}
-                        type="button"
-                        role="option"
-                        disabled={busy}
-                        title={c.value.startsWith("__") ? c.label : c.value}
-                        onClick={() => void onChip(c)}
-                        className={cn(
-                          "inline-flex max-w-[14rem] items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors",
-                          "border-[var(--color-border)] text-[var(--color-muted)]",
-                          "hover:border-[var(--color-border-strong)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]",
-                          "disabled:opacity-50",
-                          c.kind === "shell" && "font-mono",
-                        )}
-                      >
-                        <Icon className="h-3 w-3 shrink-0 opacity-70" />
-                        <span className="truncate">{c.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                {chips.length > 0 && (
+                  <div
+                    className="flex flex-wrap items-stretch justify-center gap-2"
+                    role="listbox"
+                    aria-label="Quick assistant suggestions"
+                  >
+                    {chips.map((c) => {
+                      const Icon = chipIcon(c.kind);
+                      return (
+                        <div
+                          key={c.id + String(quickAssistRotation)}
+                          className={cn(
+                            "group relative inline-flex max-w-[min(100%,22rem)] items-start gap-1 rounded-2xl border pl-3 pr-1 py-1 text-left text-xs transition-colors",
+                            "border-[var(--color-border)] text-[var(--color-muted)]",
+                            "hover:border-[var(--color-border-strong)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-fg)]",
+                            c.kind === "shell" && "font-mono",
+                            c.hint === "recent" && "border-[color-mix(in_oklab,var(--color-info)_25%,var(--color-border))]",
+                          )}
+                        >
+                          <button
+                            type="button"
+                            role="option"
+                            disabled={busy}
+                            title={c.value.startsWith("__") ? c.label : c.value}
+                            onClick={() => void onChip(c)}
+                            className="flex min-w-0 flex-1 items-start gap-1.5 py-0.5 text-left disabled:opacity-50"
+                          >
+                            <Icon className="mt-0.5 h-3 w-3 shrink-0 opacity-70" />
+                            <span className="whitespace-normal break-words leading-snug">{c.label}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="mt-0.5 shrink-0 rounded p-0.5 text-[var(--color-subtle)] opacity-60 hover:bg-[var(--color-surface)] hover:text-[var(--color-fg)] hover:opacity-100"
+                            title="Dismiss this suggestion"
+                            aria-label={`Dismiss ${c.label}`}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              dismissQuickAssistChip(c);
+                            }}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
@@ -731,6 +869,15 @@ export function ChatView() {
 
             <form
               className="mx-auto flex w-full max-w-[min(56rem,100%)] gap-2 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]"
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.dataTransfer?.files?.length) void addFiles(e.dataTransfer.files);
+              }}
               onSubmit={(e) => {
                 e.preventDefault();
                 if (busy) {
@@ -745,22 +892,37 @@ export function ChatView() {
                 type="file"
                 className="hidden"
                 multiple
-                accept="image/*,.txt,.md,.json,.csv,.log,.ts,.tsx,.js,.py"
+                accept="image/*,.png,.jpg,.jpeg,.webp,.gif,.txt,.md,.json,.csv,.log,.ts,.tsx,.js,.jsx,.py,.rs,.go,.pdf,.zip"
                 onChange={(e) => {
                   if (e.target.files?.length) void addFiles(e.target.files);
                   e.target.value = "";
                 }}
               />
-              <Button
-                type="button"
-                size="icon"
-                variant="secondary"
-                disabled={busy}
-                title="Attach file or screenshot"
-                onClick={() => fileRef.current?.click()}
-              >
-                <Paperclip className="h-4 w-4" />
-              </Button>
+              <div className="flex shrink-0 flex-col gap-1 sm:flex-row">
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="secondary"
+                  disabled={busy}
+                  title="Attach image or file"
+                  aria-label="Attach file"
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <Paperclip className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant={listening ? "default" : "secondary"}
+                  disabled={busy}
+                  title={listening ? "Stop voice" : "Voice input"}
+                  aria-label="Voice mode"
+                  onClick={() => toggleVoice()}
+                  className={listening ? "border border-[color-mix(in_oklab,var(--color-info)_45%,transparent)]" : undefined}
+                >
+                  {listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                </Button>
+              </div>
               <Textarea
                 ref={inputRef}
                 value={text}
@@ -771,7 +933,7 @@ export function ChatView() {
                 placeholder={
                   busy
                     ? "Agent running — press Stop to interrupt…"
-                    : "Message Grok…  /help · Enter send · Ctrl+L focus · paste image · $ shell"
+                    : "Message Grok…  /help · 📎 attach · 🎤 voice · Enter send · $ shell"
                 }
                 rows={1}
                 className="max-h-40 min-h-[2.5rem] flex-1 resize-none overflow-hidden leading-5"
@@ -832,7 +994,7 @@ export function ChatView() {
             {!busy && (
               <div className="mx-auto w-full max-w-[min(56rem,100%)] text-center text-[10px] text-[var(--color-subtle)]">
                 <span className="font-mono">/help</span> commands · <span className="font-mono">Ctrl+N</span> new ·{" "}
-                <span className="font-mono">Ctrl+L</span> focus · attach or paste images
+                <span className="font-mono">Ctrl+L</span> focus · 📎 attach · 🎤 voice · paste images
               </div>
             )}
             {busy && (

@@ -422,7 +422,7 @@ export async function fetchGrokWebsiteUsageDirect(
     origin: "https://grok.com",
     referer: "https://grok.com/settings",
     "user-agent":
-      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 GrokHub/0.2.14",
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 GrokHub/0.8.4",
   };
   if (cookie) headers.cookie = cookie;
   if (bearer) headers.authorization = `Bearer ${bearer}`;

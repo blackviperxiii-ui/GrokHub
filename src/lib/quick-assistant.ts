@@ -1,7 +1,6 @@
 /**
  * Predictive quick-assistant chips for the Agent composer.
- * Ranked from recent chat, activity, host/Grok state + adaptive memory.
- * Max 10, not crowded.
+ * Context-aware (code / app / host / imagine) + adaptive memory + dismiss/rotate.
  */
 import type {
   ActivityItem,
@@ -45,6 +44,10 @@ export type QuickAssistantInput = {
   max?: number;
   /** Adaptive history from prior chip clicks + typed prompts */
   memory?: QuickAssistMemory | null;
+  /** Chip values the user dismissed (hidden until rotate/suggest) */
+  dismissed?: string[];
+  /** Increments to rotate alternate chip packs after clicks / Suggest */
+  rotation?: number;
 };
 
 const MAX_DEFAULT = 8;
@@ -59,6 +62,15 @@ function recentUserMessages(chat: ChatMessage[], n = 12): string[] {
     .reverse();
 }
 
+function lastAssistant(chat: ChatMessage[]): string {
+  for (let i = chat.length - 1; i >= 0; i--) {
+    if (chat[i]?.role === "assistant" && chat[i]!.content?.trim()) {
+      return chat[i]!.content;
+    }
+  }
+  return "";
+}
+
 function uniqByValue(chips: QuickChip[]): QuickChip[] {
   const seen = new Set<string>();
   const out: QuickChip[] = [];
@@ -71,84 +83,183 @@ function uniqByValue(chips: QuickChip[]): QuickChip[] {
   return out;
 }
 
-function shorten(s: string, n = 36): string {
+function shorten(s: string, n = 42): string {
   const t = s.replace(/\s+/g, " ").trim();
   if (t.length <= n) return t;
   return t.slice(0, n - 1) + "…";
 }
 
-/** Infer follow-ups from a prior user line. */
-function followUpsFrom(msg: string): QuickChip[] {
-  const lower = msg.toLowerCase();
-  const out: QuickChip[] = [];
-  if (/download/i.test(lower)) {
-    out.push({
-      id: "fu-dl",
-      label: "List Downloads again",
-      value: "List what's in my Downloads folder",
-      kind: "chat",
-      score: 70,
-    });
-    out.push({
-      id: "fu-dl-shell",
-      label: "$ ls Downloads",
-      value: '$ ls -la "$HOME/Downloads" | head -40',
-      kind: "shell",
-      score: 65,
-    });
-  }
-  if (/desktop|host|uname|shell|cli/i.test(lower) || lower.startsWith("$")) {
-    out.push({
-      id: "fu-disk",
-      label: "Disk free",
-      value: "$ df -h | head -12",
-      kind: "shell",
-      score: 55,
-    });
-    out.push({
-      id: "fu-ps",
-      label: "Top processes",
-      value: "$ ps aux --sort=-%mem | head -12",
-      kind: "shell",
-      score: 50,
-    });
-  }
-  if (/code|bug|error|implement|refactor|build/i.test(lower)) {
-    out.push({
-      id: "fu-build",
-      label: "Switch to Build",
-      value: "__mode:build",
-      kind: "mode",
-      score: 60,
-      hint: "mode",
-    });
-    out.push({
-      id: "fu-explain",
-      label: "Explain the approach",
-      value: "Explain the approach step by step",
-      kind: "chat",
-      score: 52,
-    });
-  }
-  if (/imagine|image|draw|picture|logo/i.test(lower)) {
-    out.push({
-      id: "fu-imagine",
-      label: "Open Imagine",
-      value: "__nav:imagine",
-      kind: "nav",
-      score: 68,
-    });
-  }
-  if (/usage|quota|limit|plan/i.test(lower)) {
-    out.push({
-      id: "fu-usage",
-      label: "Usage details",
-      value: "What's my SuperGrok usage right now?",
-      kind: "chat",
-      score: 48,
-    });
-  }
-  return out;
+function chatBlob(chat: ChatMessage[], n = 8): string {
+  return chat
+    .slice(-n)
+    .map((m) => m.content)
+    .join("\n")
+    .toLowerCase();
+}
+
+/** Detect conversation context for chip packs. */
+export function detectChipContext(chat: ChatMessage[]): {
+  code: boolean;
+  app: boolean;
+  host: boolean;
+  imagine: boolean;
+  error: boolean;
+  ui: boolean;
+} {
+  const users = recentUserMessages(chat, 6).join("\n");
+  const asst = lastAssistant(chat);
+  const blob = `${users}\n${asst}`.toLowerCase();
+  const hasCodeFence = /```[\s\S]{12,}/.test(`${users}\n${asst}`);
+  const code =
+    hasCodeFence ||
+    /\b(function|const |let |class |import |export |def |fn |package |#include|console\.|npm |cargo |rust|typescript|python|jsx|tsx|css|html)\b/i.test(
+      blob,
+    ) ||
+    /review this code|refactor|compile|typecheck|stack.?trace/i.test(blob);
+  const app =
+    /\b(grokhub|this app|the app|electron|desktop app|sidebar|composer|quick assist|usage meter|oauth|imagine tab|agent chat|settings)\b/i.test(
+      blob,
+    ) || /improve (the )?ui|fix this bug|add feature/i.test(blob);
+  const host =
+    /\$ |HOST_CMD|desktop host|shell|uname|ls -|cwd|filesystem|cli/i.test(blob);
+  const imagine =
+    /\b(imagine|image|generate (a |an )?(pic|image|logo|icon)|draw |video)\b/i.test(
+      blob,
+    );
+  const error =
+    /\b(error|bug|fail|broken|crash|exception|doesn't work|not working|typeerror|eacces)\b/i.test(
+      blob,
+    );
+  const ui =
+    /\b(ui|layout|button|input|sidebar|theme|dark mode|spacing|scrollbar|modal|chip)\b/i.test(
+      blob,
+    );
+  return { code, app, host, imagine, error, ui };
+}
+
+function pack(
+  items: Array<Omit<QuickChip, "score"> & { score?: number }>,
+  base: number,
+): QuickChip[] {
+  return items.map((it, i) => ({
+    ...it,
+    score: (it.score ?? base) - i * 0.5,
+  }));
+}
+
+function codeChips(rotation: number): QuickChip[] {
+  const packs: QuickChip[][] = [
+    pack(
+      [
+        { id: "code-comments", label: "Add comments", value: "Add clear comments to the code we just discussed — keep them concise.", kind: "chat" },
+        { id: "code-optimize", label: "Optimize this", value: "Optimize the code we discussed for performance and readability. Show before/after notes.", kind: "chat" },
+        { id: "code-bugs", label: "Find bugs", value: "Review the recent code for bugs, edge cases, and race conditions. List issues by severity.", kind: "chat" },
+        { id: "code-python", label: "Convert to Python", value: "Convert the recent code to clean, idiomatic Python 3.", kind: "chat" },
+        { id: "code-review", label: "Review this code", value: "Do a thorough code review of what we just worked on. Be specific.", kind: "chat" },
+        { id: "code-tests", label: "Add tests", value: "Suggest unit tests for the code we discussed, including edge cases.", kind: "chat" },
+      ],
+      92,
+    ),
+    pack(
+      [
+        { id: "code-types", label: "Add types", value: "Add or improve TypeScript types for the code we discussed.", kind: "chat" },
+        { id: "code-errors", label: "Better error handling", value: "Improve error handling in the recent code — user-friendly messages, no silent failures.", kind: "chat" },
+        { id: "code-refactor", label: "Refactor cleanly", value: "Refactor the recent code for clarity without changing behavior.", kind: "chat" },
+        { id: "code-secure", label: "Security pass", value: "Security review of the recent code (injection, XSS, path traversal, secrets).", kind: "chat" },
+        { id: "code-docs", label: "Write docs", value: "Write short docs / README notes for the code we discussed.", kind: "chat" },
+        { id: "code-mode", label: "Switch to Build", value: "__mode:build", kind: "mode", hint: "mode" },
+      ],
+      90,
+    ),
+  ];
+  return packs[rotation % packs.length]!;
+}
+
+function appChips(rotation: number): QuickChip[] {
+  const packs: QuickChip[][] = [
+    pack(
+      [
+        { id: "app-ui", label: "Improve this UI", value: "Improve this UI — clearer hierarchy, spacing, and less beta feel. Be concrete.", kind: "chat" },
+        { id: "app-faster", label: "Make this faster", value: "Find and fix performance bottlenecks in what we just discussed. Prioritize biggest wins.", kind: "chat" },
+        { id: "app-dark", label: "Add dark mode", value: "Audit dark-mode contrast and polish any hard-to-read areas (scrollbars, chips, meters).", kind: "chat" },
+        { id: "app-input", label: "Fix the input box", value: "Improve the chat input box: attach, voice, resize, and keyboard UX.", kind: "chat" },
+        { id: "app-errors", label: "Better error handling", value: "Replace bare error dumps with clear user-facing errors and recovery actions.", kind: "chat" },
+        { id: "app-keys", label: "Add keyboard shortcuts", value: "Add useful keyboard shortcuts and document them in the UI.", kind: "chat" },
+      ],
+      94,
+    ),
+    pack(
+      [
+        { id: "app-feature", label: "Add feature", value: "Propose the highest-value feature we should add next to GrokHub, then implement a first slice.", kind: "chat" },
+        { id: "app-bug", label: "Fix this bug", value: "Diagnose and fix the bug we were just talking about. Confirm with a clear retest checklist.", kind: "chat" },
+        { id: "app-usage", label: "Fix usage meter", value: "Make the usage meter show accurate grok.com subscription limits and update every minute.", kind: "chat" },
+        { id: "app-chips", label: "Smarter quick chips", value: "Improve quick-assist chips: more context-aware, actionable, and less truncation.", kind: "chat" },
+        { id: "app-a11y", label: "Accessibility pass", value: "Accessibility pass on the current screen: focus, labels, contrast, keyboard.", kind: "chat" },
+        { id: "app-mobile", label: "Mobile layout", value: "Tighten the layout for small windows and ~390px mobile widths.", kind: "chat" },
+      ],
+      93,
+    ),
+  ];
+  return packs[rotation % packs.length]!;
+}
+
+function uiChips(): QuickChip[] {
+  return pack(
+    [
+      { id: "ui-hierarchy", label: "Cleaner hierarchy", value: "Improve visual hierarchy of the last screen we discussed (sidebar, headers, lists).", kind: "chat" },
+      { id: "ui-spacing", label: "Fix spacing", value: "Tighten inconsistent spacing and align the layout to a consistent scale.", kind: "chat" },
+      { id: "ui-loading", label: "Loading states", value: "Add clear loading / progress states so nothing feels frozen.", kind: "chat" },
+    ],
+    86,
+  );
+}
+
+function hostChips(): QuickChip[] {
+  return pack(
+    [
+      { id: "host-status", label: "Host status", value: "$ uname -a && whoami && pwd && df -h | head -8", kind: "shell" },
+      { id: "host-files", label: "List project files", value: "List the important files in this project and summarize structure.", kind: "chat" },
+      { id: "host-procs", label: "Top processes", value: "$ ps aux --sort=-%mem | head -12", kind: "shell" },
+    ],
+    70,
+  );
+}
+
+function defaultChips(planLabel: string, mode: GrokModeId, rotation: number): QuickChip[] {
+  const packs: QuickChip[][] = [
+    pack(
+      [
+        { id: "def-improve-ui", label: "Improve this UI", value: "Improve this UI — clearer hierarchy, spacing, and polish. Be concrete.", kind: "chat" },
+        { id: "def-faster", label: "Make this faster", value: "Find easy wins to make GrokHub feel snappier.", kind: "chat" },
+        { id: "def-dark", label: "Add dark mode polish", value: "Polish dark mode contrast: scrollbars, chips, code blocks, meters.", kind: "chat" },
+        { id: "def-input", label: "Fix the input box", value: "Improve the agent input box UX (attach, voice, resize, shortcuts).", kind: "chat" },
+        { id: "def-errors", label: "Better error handling", value: "Improve error handling across chat and tools — clear messages, recovery tips.", kind: "chat" },
+        { id: "def-keys", label: "Add keyboard shortcuts", value: "Add and surface keyboard shortcuts for power users.", kind: "chat" },
+        { id: "def-review", label: "Review this code", value: "Review the code we last discussed and suggest concrete improvements.", kind: "chat" },
+      ],
+      22,
+    ),
+    pack(
+      [
+        { id: "def-feature", label: "Suggest a feature", value: "Suggest the next high-impact GrokHub feature and a minimal implementation plan.", kind: "chat" },
+        { id: "def-usage", label: "My usage", value: `What's my usage right now? (${planLabel})`, kind: "chat" },
+        { id: "def-imagine", label: "Open Imagine", value: "__nav:imagine", kind: "nav" },
+        {
+          id: "def-auto",
+          label: mode === "auto" ? "How Auto routes" : "Use Auto mode",
+          value:
+            mode === "auto"
+              ? "How does Auto choose models for my prompts?"
+              : "__mode:auto",
+          kind: mode === "auto" ? "chat" : "mode",
+        },
+        { id: "def-help", label: "What can you help with?", value: "What can you help me with in GrokHub right now?", kind: "chat" },
+        { id: "def-modes", label: "Explain modes", value: "Explain Auto / Fast / Expert / Heavy / Build and when to use each.", kind: "chat" },
+      ],
+      20,
+    ),
+  ];
+  return packs[rotation % packs.length]!;
 }
 
 /**
@@ -157,6 +268,10 @@ function followUpsFrom(msg: string): QuickChip[] {
  */
 export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
   const max = Math.min(input.max ?? MAX_DEFAULT, MAX_HARD);
+  const rotation = Math.max(0, Number(input.rotation) || 0);
+  const dismissed = new Set(
+    (input.dismissed || []).map((v) => v.trim().toLowerCase()).filter(Boolean),
+  );
   const chips: QuickChip[] = [];
   const users = recentUserMessages(input.chat);
   const lastUser = users[0] || "";
@@ -164,8 +279,9 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
   const plan = PLAN_LIMITS[input.usage.plan];
   const recentActivity = input.activity.slice(0, 12);
   const draft = (input.draft || "").trim().toLowerCase();
+  const ctx = detectChipContext(input.chat);
 
-  // ── Context-aware base chips ──────────────────────────────────────────
+  // ── Connection / host context ─────────────────────────────────────────
   if (!input.grokConnected) {
     chips.push({
       id: "ctx-connect",
@@ -176,7 +292,6 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
       hint: "oauth",
     });
   }
-
   if (input.hostOnline === false) {
     chips.push({
       id: "ctx-host",
@@ -185,53 +300,74 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
       kind: "nav",
       score: 95,
     });
-  } else if (input.hostOnline) {
-    chips.push({
-      id: "ctx-uname",
-      label: "$ uname -a",
-      value: "$ uname -a && whoami && pwd",
-      kind: "shell",
-      score: 40,
-    });
   }
-
   if (pct >= 80) {
     chips.push({
       id: "ctx-quota",
-      label: `Usage ${pct}%`,
+      label: `Usage ${pct}% — save units`,
       value: "What's my usage and how can I save units?",
       kind: "chat",
       score: 85,
     });
   }
 
-  // ── Recent chat → continue / re-run ───────────────────────────────────
-  for (let i = 0; i < Math.min(users.length, 5); i++) {
-    const msg = users[i]!;
-    const ageBoost = 30 - i * 5;
-    // Don't re-offer the exact last message as "send again" if it's long
-    if (msg.length < 80 && i > 0) {
-      chips.push({
-        id: `recent-${i}`,
-        label: shorten(msg, 28),
-        value: msg,
-        kind: msg.startsWith("$") ? "shell" : "chat",
-        score: 45 + ageBoost,
-        hint: "recent",
-      });
-    }
-    chips.push(...followUpsFrom(msg).map((c) => ({ ...c, score: c.score + ageBoost * 0.3 })));
+  // ── Biggest win: context packs ────────────────────────────────────────
+  if (ctx.code) chips.push(...codeChips(rotation));
+  if (ctx.app) chips.push(...appChips(rotation));
+  if (ctx.ui && !ctx.app) chips.push(...uiChips());
+  if (ctx.host || input.hostOnline) chips.push(...hostChips());
+  if (ctx.imagine) {
+    chips.push({
+      id: "ctx-imagine",
+      label: "Open Imagine",
+      value: "__nav:imagine",
+      kind: "nav",
+      score: 88,
+    });
+  }
+  if (ctx.error && !ctx.code) {
+    chips.push(
+      ...pack(
+        [
+          {
+            id: "err-diagnose",
+            label: "Diagnose this error",
+            value: "Diagnose the error we hit — root cause, fix, and how to verify.",
+            kind: "chat",
+          },
+          {
+            id: "err-retry",
+            label: "Retry last ask",
+            value: lastUser || "Try that again carefully",
+            kind: "chat",
+          },
+        ],
+        84,
+      ),
+    );
   }
 
-  // ── Activity feed signals ─────────────────────────────────────────────
-  for (const a of recentActivity) {
-    if (a.kind === "desktop") {
+  // ── Recent follow-ups (light) ─────────────────────────────────────────
+  if (lastUser && lastUser.length < 100) {
+    chips.push({
+      id: "recent-continue",
+      label: shorten(`Continue: ${lastUser}`, 40),
+      value: `Continue from: ${lastUser}`,
+      kind: "chat",
+      score: 40,
+      hint: "recent",
+    });
+  }
+
+  // ── Activity signals ──────────────────────────────────────────────────
+  for (const a of recentActivity.slice(0, 6)) {
+    if (a.kind === "chat" && a.status === "failed" && lastUser) {
       chips.push({
-        id: `act-host-${a.id}`,
-        label: "Host status",
-        value: "$ uname -a && df -h | head -8",
-        kind: "shell",
-        score: 42,
+        id: `act-retry-${a.id}`,
+        label: "Retry last ask",
+        value: lastUser,
+        kind: "chat",
+        score: 72,
       });
     }
     if (a.kind === "imagine") {
@@ -243,114 +379,44 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
         score: 50,
       });
     }
-    if (a.kind === "chat" && a.status === "failed") {
-      chips.push({
-        id: `act-retry-${a.id}`,
-        label: "Retry last ask",
-        value: lastUser || "Try that again",
-        kind: "chat",
-        score: 72,
-      });
-    }
-    if (a.kind === "system" && /update/i.test(a.title + a.detail)) {
-      chips.push({
-        id: `act-upd-${a.id}`,
-        label: "Check updates",
-        value: "__nav:settings",
-        kind: "nav",
-        score: 35,
-      });
-    }
-    if (a.kind === "usage") {
-      chips.push({
-        id: `act-usage-${a.id}`,
-        label: "Usage",
-        value: "What's my usage right now?",
-        kind: "chat",
-        score: 44,
-      });
-    }
   }
 
-  // ── Thread continuity ─────────────────────────────────────────────────
-  const otherThreads = input.threads
-    .filter((t) => t.messages.some((m) => m.role === "user"))
-    .slice(0, 3);
-  for (const th of otherThreads) {
-    const first = th.messages.find((m) => m.role === "user");
-    if (!first) continue;
-    chips.push({
-      id: `thread-${th.id}`,
-      label: shorten(th.title || first.content, 26),
-      value: `Continue: ${shorten(first.content, 120)}`,
-      kind: "chat",
-      score: 28,
-      hint: "history",
-    });
+  // ── Defaults when context is thin ─────────────────────────────────────
+  const hasStrongContext = ctx.code || ctx.app || ctx.ui || ctx.error;
+  if (!hasStrongContext || chips.length < 4) {
+    chips.push(...defaultChips(plan.label, input.mode, rotation));
+  } else {
+    // Still offer a couple of high-value app defaults at lower score
+    chips.push(
+      ...defaultChips(plan.label, input.mode, rotation).map((c) => ({
+        ...c,
+        score: Math.min(c.score, 18),
+      })),
+    );
   }
 
-  // ── Connector-aware ───────────────────────────────────────────────────
-  const liveConnectors = input.connectors.filter((c) => c.status === "connected");
-  if (liveConnectors.some((c) => c.id === "desktop-host")) {
-    chips.push({
-      id: "conn-files",
-      label: "Browse home",
-      value: '$ ls -la "$HOME" | head -30',
-      kind: "shell",
-      score: 38,
-    });
-  }
-
-  // ── Stable helpful defaults (low score — fill remaining) ──────────────
-  const defaults: QuickChip[] = [
-    {
-      id: "def-help",
-      label: "What can you help with?",
-      value: "What can you help me with in GrokHub?",
-      kind: "chat",
-      score: 20,
-    },
-    {
-      id: "def-modes",
-      label: "Explain my modes",
-      value: "Explain Auto / Fast / Expert / Heavy / Build and when to use each",
-      kind: "chat",
-      score: 18,
-    },
-    {
-      id: "def-usage",
-      label: "My usage",
-      value: `What's my usage? (${plan.label})`,
-      kind: "chat",
-      score: 16,
-    },
-    {
-      id: "def-imagine",
-      label: "Imagine",
-      value: "__nav:imagine",
-      kind: "nav",
-      score: 15,
-    },
-    {
-      id: "def-auto",
-      label: input.mode === "auto" ? "How Auto routes" : "Use Auto mode",
-      value:
-        input.mode === "auto"
-          ? "How does Auto choose models for my prompts?"
-          : "__mode:auto",
-      kind: input.mode === "auto" ? "chat" : "mode",
-      score: 14,
-    },
-  ];
-  chips.push(...defaults);
-
-  // ── Adaptive memory: habits + frequency + time-of-day + transitions ───
+  // ── Adaptive memory ───────────────────────────────────────────────────
   let withMemory = applyMemoryToChips(chips, input.memory);
+
+  // Dismiss filter
+  withMemory = withMemory.filter(
+    (c) => !dismissed.has(c.value.trim().toLowerCase()) && !dismissed.has(c.id),
+  );
 
   // Don't suggest the exact draft text as a chip
   let ranked = uniqByValue(withMemory)
     .filter((c) => c.value.trim().toLowerCase() !== draft)
     .sort((a, b) => b.score - a.score);
+
+  // Rotation nudge: slightly demote previously top ids when rotation > 0
+  if (rotation > 0) {
+    ranked = ranked
+      .map((c, i) => ({
+        ...c,
+        score: c.score + ((i + rotation) % 5 === 0 ? 8 : 0) - (i < 2 ? 6 : 0),
+      }))
+      .sort((a, b) => b.score - a.score);
+  }
 
   // ── Predictive filter from draft ──────────────────────────────────────
   if (draft.length >= 1) {
@@ -360,18 +426,17 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
         let boost = 0;
         if (hay.startsWith(draft)) boost += 40;
         else if (hay.includes(draft)) boost += 25;
-        // token overlap
         for (const tok of draft.split(/\s+/)) {
           if (tok.length > 2 && hay.includes(tok)) boost += 8;
         }
         if (draft.startsWith("$") && c.kind === "shell") boost += 30;
-        if (/imagine|draw|image/.test(draft) && c.kind === "nav" && c.value.includes("imagine"))
-          boost += 35;
+        if (/imagine|draw|image/.test(draft) && c.value.includes("imagine")) boost += 35;
+        if (/bug|error|fix/.test(draft) && /bug|error|fix|diagnos/i.test(hay)) boost += 20;
+        if (/code|refactor|test/.test(draft) && c.id.startsWith("code-")) boost += 22;
         return { ...c, score: c.score + boost };
       })
       .filter((c) => {
         const hay = `${c.label} ${c.value}`.toLowerCase();
-        // Keep high-score context chips even if no match when draft is short
         if (draft.length < 2) return true;
         return (
           c.score >= 80 ||
@@ -381,27 +446,24 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
       })
       .sort((a, b) => b.score - a.score);
 
-    // If prediction emptied the list, fall back to top ranked
     ranked = pred.length ? pred : ranked;
   }
 
-  // Prefer a mix: not all shell, not all nav — soft diversity for top slots
+  // Prefer a mix: not all shell, not all nav
   const picked: QuickChip[] = [];
   const kindCount: Record<string, number> = {};
   for (const c of ranked) {
     if (picked.length >= max) break;
     const k = c.kind;
     const n = kindCount[k] || 0;
-    // Allow more chat chips; cap shell/nav a bit so UI stays readable
-    if (k === "shell" && n >= 3) continue;
+    if (k === "shell" && n >= 2) continue;
     if (k === "nav" && n >= 2) continue;
     if (k === "mode" && n >= 1) continue;
     picked.push(c);
     kindCount[k] = n + 1;
   }
 
-  // Fill if diversity filter was too aggressive
-  if (picked.length < Math.min(4, max)) {
+  if (picked.length < Math.min(5, max)) {
     for (const c of ranked) {
       if (picked.length >= max) break;
       if (picked.some((p) => p.id === c.id)) continue;
@@ -410,4 +472,16 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
   }
 
   return picked.slice(0, max);
+}
+
+/** Generate a fresh alternate pack (for Suggest chips). */
+export function suggestMoreChips(
+  input: QuickAssistantInput,
+  extraRotation = 1,
+): QuickChip[] {
+  return buildQuickChips({
+    ...input,
+    rotation: (input.rotation || 0) + extraRotation,
+    max: input.max ?? 8,
+  });
 }

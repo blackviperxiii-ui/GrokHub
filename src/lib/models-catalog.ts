@@ -14,12 +14,33 @@ export type RouteIntent =
   | "research"
   | "team";
 
+/** User-facing Adaptive tier shown on messages */
+export type RouteTier = "fast" | "think" | "deep" | "build" | "imagine";
+
 export type AutoRouteResult = {
   routedMode: "fast" | "expert" | "heavy" | "build" | "imagine";
   modelId: string;
   intent: RouteIntent;
   reason: string;
+  /** Short human reason for hover tooltips */
+  reasonDetail: string;
+  tier: RouteTier;
+  /** UI label e.g. ⚡ Fast */
+  tierLabel: string;
   openImagine?: boolean;
+  /** Internal scores for debugging / UI */
+  scores?: Record<string, number>;
+};
+
+export type RouteContext = {
+  /** Prior turns in the active thread (user+assistant) */
+  historyTurns?: number;
+  /** Recent user messages for continuity */
+  recentUserText?: string;
+  /** Recent assistant text (e.g. long code replies) */
+  recentAssistantText?: string;
+  /** Active attachments / files */
+  hasAttachments?: boolean;
 };
 
 /** Heuristic preferred API ids per product slot (first match against live list wins). */
@@ -364,16 +385,19 @@ export function parseGrokSlotPlan(
   }
 }
 
-// ─── Auto router ───────────────────────────────────────────────────────────
+// ─── Adaptive router (real scoring, not Fast-only) ─────────────────────────
 
 const IMAGE_RE =
   /\b(imagine|image|picture|photo|draw|render|generate\s+(an?\s+)?(image|pic|art|logo|icon|wallpaper)|illustration|visuali[sz]e)\b/i;
 
 const CODE_RE =
-  /\b(code|coding|implement|refactor|typescript|javascript|python|rust|golang|react|component|function|class|bugfix|compile|lint|docker|kubernetes|pkgbuild|aur|api\s+route|pull\s+request|unit\s+test|css|html|sql|bash|shell\s+script|write\s+(me\s+)?(a\s+)?(script|app|site|page|endpoint))\b/i;
+  /\b(code|coding|implement|refactor|typescript|javascript|python|rust|golang|react|component|function|class|bugfix|compile|lint|docker|kubernetes|pkgbuild|aur|api\s+route|pull\s+request|unit\s+test|css|html|sql|bash|shell\s+script|write\s+(me\s+)?(a\s+)?(script|app|site|page|endpoint)|typecheck|stack.?trace|PR\b|merge\s+conflict)\b/i;
+
+const ARCH_RE =
+  /\b(architect(?:ure)?|system\s+design|design\s+system|trade-?offs?|scalability|data\s+model|schema|migration\s+plan|service\s+boundary|microservice|event-?driven)\b/i;
 
 const SMART_RE =
-  /\b(architect|design\s+system|trade-?off|tradeoff|root\s+cause|debug|why\s+is|compare|evaluate|critique|security|threat|prove|theorem|math|optimiz|complex|multi-?step|deep\s+dive|analyze\s+carefully|reason\s+about)\b/i;
+  /\b(root\s+cause|debug|why\s+is|compare|evaluate|critique|security|threat|prove|theorem|math|optimiz|complex|multi-?step|deep\s+dive|analyze\s+carefully|reason\s+about|pros?\s+and\s+cons?|step\s+by\s+step)\b/i;
 
 const RESEARCH_RE =
   /\b(research|survey|literature|sources?|citations?|summarize\s+(the\s+)?(paper|article|doc)|investigate)\b/i;
@@ -382,100 +406,295 @@ const TEAM_RE =
   /\b(team\s+of|multi-?agent|heavy|debate|red\s*team|from\s+every\s+angle|ops\s+and\s+build|critiques?)\b/i;
 
 const FAST_RE =
-  /\b(hi|hello|hey|thanks|thank\s+you|ping|quick|tl;?dr|eli5|short\s+answer|one\s+line|yes\/no|what\s+time|who\s+are\s+you)\b/i;
+  /\b(hi|hello|hey|thanks|thank\s+you|ping|quick|tl;?dr|eli5|short\s+answer|one\s+line|yes\/no|what\s+time|who\s+are\s+you|ok\b|cool|gm|good\s+morning|lol|sup)\b/i;
+
+const CREATIVE_RE =
+  /\b(poem|story|joke|brainstorm|rename|tagline|copywriting|marketing\s+blurb|tweet|slogan|creative)\b/i;
+
+const UX_RE =
+  /\b(ux|ui|layout|spacing|sidebar|composer|chips|visual hierarchy|accessibility|dark\s+mode|responsive|design\s+polish)\b/i;
+
+const TOOL_RE =
+  /\b(\$\s|HOST_CMD|shell|cli|run\s+(this\s+)?command|on\s+my\s+(machine|desktop)|list\s+files|read\s+file|edit\s+file)\b/i;
+
+export function tierMeta(tier: RouteTier): { label: string; emoji: string; short: string } {
+  if (tier === "fast") return { label: "⚡ Fast", emoji: "⚡", short: "Fast" };
+  if (tier === "think") return { label: "🧠 Think", emoji: "🧠", short: "Think" };
+  if (tier === "deep") return { label: "🔬 Deep", emoji: "🔬", short: "Deep" };
+  if (tier === "build") return { label: "🛠️ Build", emoji: "🛠️", short: "Build" };
+  return { label: "🎨 Imagine", emoji: "🎨", short: "Imagine" };
+}
+
+function scorePrompt(prompt: string, ctx: RouteContext = {}) {
+  const p = prompt.trim();
+  const lower = p.toLowerCase();
+  const words = lower.split(/\s+/).filter(Boolean).length;
+  const hist = ctx.historyTurns ?? 0;
+  const recent = `${ctx.recentUserText || ""}\n${ctx.recentAssistantText || ""}`;
+  const blob = `${p}\n${recent}`;
+
+  const hasCodeFence = /```[\s\S]{20,}/.test(blob);
+  const codeHit = CODE_RE.test(blob) || hasCodeFence;
+  const archHit = ARCH_RE.test(p) || ARCH_RE.test(recent);
+  const smartHit = SMART_RE.test(p);
+  const researchHit = RESEARCH_RE.test(p);
+  const teamHit = TEAM_RE.test(p);
+  const fastHit = FAST_RE.test(p) && words <= 18;
+  const creativeHit = CREATIVE_RE.test(p);
+  const uxHit = UX_RE.test(p);
+  const toolHit = TOOL_RE.test(p) || Boolean(ctx.hasAttachments);
+  const longReplyContext = (ctx.recentAssistantText || "").length > 1200;
+
+  // Dimensional scores 0–100
+  let complexity = 0;
+  if (words <= 8) complexity += 5;
+  else if (words <= 20) complexity += 18;
+  else if (words <= 45) complexity += 35;
+  else if (words <= 90) complexity += 55;
+  else complexity += 75;
+  if (p.length > 600) complexity += 15;
+  if (p.length > 1500) complexity += 15;
+  if (/\?/.test(p) && words > 25) complexity += 8;
+  if (/(1\)|2\)|3\)|first,|second,|then )/i.test(p)) complexity += 12;
+  if (hist >= 8) complexity += 8;
+  if (hist >= 16) complexity += 8;
+  if (longReplyContext) complexity += 10;
+
+  let analytical = 0;
+  if (smartHit) analytical += 35;
+  if (archHit) analytical += 40;
+  if (researchHit) analytical += 35;
+  if (uxHit && words > 15) analytical += 22;
+  if (/\bwhy\b|\bhow\s+should\b|\btrade/.test(lower)) analytical += 15;
+  if (/\bcompare\b|\bvs\.?\b|\bdifference\b/.test(lower)) analytical += 18;
+
+  let code = 0;
+  if (codeHit) code += 40;
+  if (hasCodeFence) code += 25;
+  if (/\b(implement|scaffold|rewrite|migrate|refactor|full\s+app)\b/i.test(p)) code += 25;
+  if (/\b(one-?liner|snippet|regex|rename\s+var)\b/i.test(p)) code -= 15;
+  if (toolHit && codeHit) code += 10;
+
+  let creative = 0;
+  if (creativeHit) creative += 40;
+  if (/\bstory\b|\bjoke\b|\bpoem\b/.test(lower)) creative += 20;
+
+  let simple = 0;
+  if (fastHit) simple += 50;
+  if (words <= 6 && !codeHit && !smartHit) simple += 35;
+  if (/^(yes|no|ok|thanks|thank you)[.!]?$/i.test(p.trim())) simple += 40;
+  if (creativeHit && words < 25) simple += 15;
+
+  // Clamp
+  const clamp = (n: number) => Math.max(0, Math.min(100, n));
+  return {
+    words,
+    complexity: clamp(complexity),
+    analytical: clamp(analytical),
+    code: clamp(code),
+    creative: clamp(creative),
+    simple: clamp(simple),
+    codeHit,
+    archHit,
+    smartHit,
+    researchHit,
+    teamHit,
+    fastHit,
+    creativeHit,
+    uxHit,
+    toolHit,
+    hasCodeFence,
+    imageHit: IMAGE_RE.test(p),
+  };
+}
 
 /**
- * Auto mode router — picks intent + concrete model balancing quality vs tokens.
+ * Adaptive mode router — real multi-signal routing (not Fast-only).
+ * Balances quality vs tokens: Fast for chat, Think for analysis, Deep for hard,
+ * Build for long coding, Imagine for media.
  */
 export function routeAuto(
   prompt: string,
   catalog: ResolvedCatalog = emptyCatalog(),
+  ctx: RouteContext = {},
 ): AutoRouteResult {
   const p = prompt.trim();
-  const lower = p.toLowerCase();
-  const words = lower.split(/\s+/).filter(Boolean).length;
   const slots = catalog.slots;
-
-  if (IMAGE_RE.test(p)) {
-    return {
-      routedMode: "imagine",
-      modelId: slots.imagine,
-      intent: "image",
-      reason: `Image → ${friendlyModelName(slots.imagine)}`,
-      openImagine: true,
-    };
-  }
-
-  if (TEAM_RE.test(p) || (words > 80 && SMART_RE.test(p))) {
-    return {
-      routedMode: "heavy",
-      modelId: slots.heavy,
-      intent: "team",
-      reason: `Heavy/team → ${friendlyModelName(slots.heavy)}`,
-    };
-  }
-
-  const codeHit = CODE_RE.test(p);
-  const longCode =
-    codeHit &&
-    (words > 24 ||
-      p.includes("```") ||
-      /\b(full|complete|entire|rewrite|migrate|scaffold|implement)\b/i.test(p));
-
-  if (longCode || (codeHit && /\b(app|site|package|module|service)\b/i.test(p))) {
-    return {
-      routedMode: "build",
-      modelId: slots.build,
-      intent: "code",
-      reason: `Coding → ${friendlyModelName(slots.build)}`,
-    };
-  }
-
-  if (codeHit && words <= 24) {
-    return {
-      routedMode: "fast",
-      modelId: slots.fast,
-      intent: "chat_fast",
-      reason: `Short code Q → ${friendlyModelName(slots.fast)}`,
-    };
-  }
-
-  if (RESEARCH_RE.test(p) || SMART_RE.test(p) || words > 60 || p.length > 400) {
-    return {
-      routedMode: "expert",
-      modelId: slots.smart,
-      intent: "chat_smart",
-      reason: `Deep reasoning → ${friendlyModelName(slots.smart)}`,
-    };
-  }
-
-  if (
-    words > 28 ||
-    /\b(plan|explain|how\s+do\s+i|help\s+me|walk\s+through|step\s+by\s+step)\b/i.test(p)
-  ) {
-    return {
-      routedMode: "expert",
-      modelId: slots.balanced,
-      intent: "chat_balanced",
-      reason: `Medium → ${friendlyModelName(slots.balanced)}`,
-    };
-  }
-
-  if (FAST_RE.test(p) || words <= 12) {
-    return {
-      routedMode: "fast",
-      modelId: slots.fast,
-      intent: "chat_fast",
-      reason: `Quick chat → ${friendlyModelName(slots.fast)}`,
-    };
-  }
-
-  return {
-    routedMode: "expert",
-    modelId: slots.balanced,
-    intent: "chat_balanced",
-    reason: `Default Auto → ${friendlyModelName(slots.balanced)}`,
+  const s = scorePrompt(p, ctx);
+  const scores = {
+    complexity: s.complexity,
+    analytical: s.analytical,
+    code: s.code,
+    creative: s.creative,
+    simple: s.simple,
   };
+
+  const finish = (
+    routedMode: AutoRouteResult["routedMode"],
+    modelId: string,
+    intent: RouteIntent,
+    tier: RouteTier,
+    why: string,
+    openImagine?: boolean,
+  ): AutoRouteResult => {
+    const tm = tierMeta(tier);
+    const model = friendlyModelName(modelId);
+    return {
+      routedMode,
+      modelId,
+      intent,
+      tier,
+      tierLabel: tm.label,
+      reason: `${tm.label} · ${model}`,
+      reasonDetail: why,
+      openImagine,
+      scores,
+    };
+  };
+
+  // 1) Imagine / media
+  if (s.imageHit && !s.codeHit) {
+    return finish(
+      "imagine",
+      slots.imagine,
+      "image",
+      "imagine",
+      "Adaptive chose Imagine because this looks like an image/media request.",
+      true,
+    );
+  }
+
+  // 2) Explicit team / multi-agent
+  if (s.teamHit || (s.complexity >= 80 && s.analytical >= 50 && s.words > 70)) {
+    return finish(
+      "heavy",
+      slots.heavy,
+      "team",
+      "deep",
+      "Adaptive chose Deep (Heavy) — multi-angle / high-complexity analytical work.",
+    );
+  }
+
+  // 3) Substantial coding → Build
+  if (s.code >= 55 || (s.codeHit && (s.hasCodeFence || s.words > 28 || s.complexity >= 45))) {
+    // Tiny code Q can stay Fast — but not implement/refactor/scaffold work
+    const heavyCodeVerb =
+      /\b(implement|refactor|rewrite|migrate|scaffold|architect|full\s+app|end-?to-?end|production)\b/i.test(
+        p,
+      );
+    if (
+      s.codeHit &&
+      s.words <= 14 &&
+      !s.hasCodeFence &&
+      s.complexity < 30 &&
+      !heavyCodeVerb
+    ) {
+      return finish(
+        "fast",
+        slots.fast,
+        "chat_fast",
+        "fast",
+        "Adaptive chose Fast — short code question; save tokens.",
+      );
+    }
+    return finish(
+      "build",
+      slots.build,
+      "code",
+      "build",
+      "Adaptive chose Build — coding / implementation session.",
+    );
+  }
+
+  // Also catch shorter but clearly implementational prompts
+  if (
+    s.codeHit &&
+    /\b(implement|refactor|rewrite|migrate|scaffold|fix\s+the\s+bug|add\s+tests?)\b/i.test(p)
+  ) {
+    return finish(
+      "build",
+      slots.build,
+      "code",
+      "build",
+      "Adaptive chose Build — implementation / refactor request.",
+    );
+  }
+
+  // 4) Deep research / hard analysis
+  if (
+    s.researchHit ||
+    (s.analytical >= 45 && s.complexity >= 50) ||
+    (s.archHit && s.words > 20) ||
+    s.words > 100 ||
+    p.length > 900
+  ) {
+    return finish(
+      "expert",
+      slots.smart,
+      s.researchHit ? "research" : "chat_smart",
+      "deep",
+      s.archHit
+        ? "Adaptive chose Deep — architecture / system-design depth."
+        : s.researchHit
+          ? "Adaptive chose Deep — research-style analysis."
+          : "Adaptive chose Deep — high complexity; using the strongest chat model.",
+    );
+  }
+
+  // 5) Medium think: UX polish, plans, explanations, moderate analysis
+  if (
+    s.uxHit ||
+    s.analytical >= 22 ||
+    s.smartHit ||
+    s.complexity >= 32 ||
+    s.words > 22 ||
+    /\b(plan|explain|help\s+me|walk\s+through|improve|fix|design)\b/i.test(p)
+  ) {
+    // Prefer balanced (4.3) unless analytical is high → smart (4.5)
+    const useSmart = s.analytical >= 35 || s.complexity >= 55 || s.archHit;
+    return finish(
+      "expert",
+      useSmart ? slots.smart : slots.balanced,
+      useSmart ? "chat_smart" : "chat_balanced",
+      "think",
+      s.uxHit
+        ? "Adaptive chose Think — UX / product reasoning benefits from a stronger model."
+        : useSmart
+          ? "Adaptive chose Think+ — analytical request; using a stronger model."
+          : "Adaptive chose Think — more than a quick chat; balanced model.",
+    );
+  }
+
+  // 6) Creative short
+  if (s.creativeHit && s.complexity < 40) {
+    return finish(
+      "fast",
+      slots.fast,
+      "chat_fast",
+      "fast",
+      "Adaptive chose Fast — light creative request.",
+    );
+  }
+
+  // 7) Truly simple / greetings
+  if (s.simple >= 40 || s.fastHit || s.words <= 12) {
+    return finish(
+      "fast",
+      slots.fast,
+      "chat_fast",
+      "fast",
+      "Adaptive chose Fast — short / casual prompt; minimize tokens.",
+    );
+  }
+
+  // 8) Default think (not Fast) so Adaptive never collapses to Fast-only
+  return finish(
+    "expert",
+    slots.balanced,
+    "chat_balanced",
+    "think",
+    "Adaptive chose Think — default for non-trivial prompts.",
+  );
 }
 
 export function friendlyModelName(id: string): string {

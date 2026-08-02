@@ -33,13 +33,18 @@ const PRODUCT_COLORS = [
 export function UsageMeterChip({ className }: { className?: string }) {
   const usage = useGrokHub((s) => s.usage);
   const setNav = useGrokHub((s) => s.setNav);
+  const refreshUsage = useGrokHub((s) => s.refreshUsage);
   const web = usage.website;
-  const pct = web?.creditUsagePercent != null && usage.source === "website"
-    ? web.creditUsagePercent
-    : usagePercent(usage);
+  const pct =
+    web?.creditUsagePercent != null && (usage.source === "website" || web.creditUsagePercent > 0)
+      ? web.creditUsagePercent
+      : usagePercent(usage);
   const tone = usageTone(pct);
   const label = web?.planLabel || PLAN_LIMITS[usage.plan].label;
   const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
+  const stale =
+    !usage.lastPolledAt || Date.now() - usage.lastPolledAt > 5 * 60_000;
+  const err = web?.error;
 
   return (
     <button
@@ -48,35 +53,42 @@ export function UsageMeterChip({ className }: { className?: string }) {
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
+        void refreshUsage();
         setNav("settings");
       }}
       title={
-        web
-          ? `Usage: ${Math.round(pct)}% of weekly limit · resets ${formatResetAt(web.periodEnd)} · open Settings`
-          : `Usage on ${label}: ${Math.round(pct)}% · open Settings`
+        err
+          ? `Usage error: ${err}`
+          : web && usage.source === "website"
+            ? `${label}: ${Math.round(pct)}% weekly · resets ${formatResetAt(web.periodEnd)}`
+            : `${label}: ${Math.round(pct)}% (local meter) · link grok.com in Settings for live weekly %`
       }
       className={cn(
         "flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-1 text-left transition-colors hover:border-[var(--color-border-strong)]",
+        err && "border-[color-mix(in_oklab,var(--color-warn)_40%,var(--color-border))]",
         className,
       )}
     >
       <Gauge
         className={cn(
           "h-3.5 w-3.5 shrink-0",
-          tone === "danger"
-            ? "text-[var(--color-danger)]"
-            : tone === "warn"
-              ? "text-[var(--color-warn)]"
-              : "text-[var(--color-muted)]",
+          err
+            ? "text-[var(--color-warn)]"
+            : tone === "danger"
+              ? "text-[var(--color-danger)]"
+              : tone === "warn"
+                ? "text-[var(--color-warn)]"
+                : "text-[var(--color-muted)]",
         )}
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[10px] font-medium text-[var(--color-fg)]">
-            Usage
+            {usage.source === "website" ? label : "Usage"}
           </span>
           <span className="tabular text-[10px] text-[var(--color-subtle)]">
             {Math.round(pct)}%
+            {stale ? " ·" : ""}
           </span>
         </div>
         <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-[var(--color-border)]">

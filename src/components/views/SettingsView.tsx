@@ -937,7 +937,7 @@ export function SettingsView() {
         <CardHeader>
           <CardTitle className="text-sm">Model modes</CardTitle>
           <CardDescription>
-            Auto routes each prompt to Fast · 4.3 · 4.5 · Build · Imagine balancing tokens.
+            Adaptive scores complexity, code, and intent — then routes ⚡ Fast · 🧠 Think · 🔬 Deep · 🛠️ Build · Imagine.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">

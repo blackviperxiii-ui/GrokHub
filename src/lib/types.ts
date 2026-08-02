@@ -127,6 +127,12 @@ export type ChatMessage = {
   content: string;
   ts: number;
   mode?: GrokModeId;
+  /** Adaptive tier actually used (⚡ Fast / 🧠 Think / 🔬 Deep / …) */
+  routeTier?: "fast" | "think" | "deep" | "build" | "imagine";
+  /** Human explanation for hover */
+  routeReason?: string;
+  /** Concrete model id used */
+  routeModel?: string;
   /** True while tokens are still arriving */
   streaming?: boolean;
   /** Stopped by user mid-stream */
