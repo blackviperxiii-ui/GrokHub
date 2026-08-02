@@ -13,10 +13,9 @@ PIDFILE="${RUNTIME}/ui.pid"
 export GROKHUB_WAYLAND="${GROKHUB_WAYLAND:-1}"
 export GROKHUB_TRAY="${GROKHUB_TRAY:-1}"
 
-# Help desktop environments map this process to grokhub.desktop (pin / taskbar)
+# Map this process to grokhub.desktop (basename = Wayland app_id = "grokhub")
+export CHROME_DESKTOP="grokhub.desktop"
 export ELECTRON_FORCE_WINDOW_MENU_BAR=0
-# Chromium app name hints (used by some shells alongside --class)
-export CHROME_DESKTOP="${CHROME_DESKTOP:-grokhub.desktop}"
 
 mkdir -p "$RUNTIME"
 
@@ -85,18 +84,13 @@ start_ui
 
 export GROKHUB_URL="$URL"
 
-# Resolve electron binary (absolute) so pinned launchers don't lose the path
 ELECTRON_BIN="$(command -v electron)"
 
-# Taskbar / panel identity:
-#  - --class / --name match StartupWMClass=GrokHub in grokhub.desktop
-#  - exec -a GrokHub sets argv0 so some panels don't label the pin "Electron"
-#  - CHROME_DESKTOP + app.setDesktopName map the window to grokhub.desktop
-#
+# Use a stable argv0 + WM class that match StartupWMClass=grokhub / desktop id.
 # Flags MUST come before the main script path.
-exec -a GrokHub "$ELECTRON_BIN" \
-  --class=GrokHub \
-  --name=GrokHub \
-  --enable-features=UseOzonePlatform \
+# --class/--name lowercase "grokhub" so GNOME/KDE group the window with the pin.
+exec -a grokhub "$ELECTRON_BIN" \
+  --class=grokhub \
+  --name=grokhub \
   "$APP_ROOT/desktop/main.mjs" \
   "$@"

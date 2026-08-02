@@ -11,10 +11,12 @@ Terminal=false
 Categories=Utility;Development;Office;Network;AI;
 Keywords=grok;ai;agent;xai;hub;electron;automation;chat;
 StartupNotify=true
-StartupWMClass=GrokHub
+# MUST match Chromium/Electron WM_CLASS / Wayland app_id (see launcher --class=grokhub)
+StartupWMClass=grokhub
 SingleMainWindow=true
 X-GNOME-SingleWindow=true
 X-GNOME-UsesNotifications=true
+DBusActivatable=false
 Actions=NewChat;Settings;Automations;
 
 [Desktop Action NewChat]

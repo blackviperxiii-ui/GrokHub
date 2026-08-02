@@ -88,12 +88,36 @@ let mainWindow = null;
 /** @type {Tray | null} */
 let tray = null;
 
-// —— Taskbar / pin identity (must run before ready) ——
-// System `electron` otherwise shows as generic Electron when pinned.
-app.setName("GrokHub");
+/**
+ * Linux taskbar pin identity
+ * ─────────────────────────
+ * Desktop file id is `grokhub` (grokhub.desktop). GNOME/KDE Wayland match the
+ * running window's app_id / WM_CLASS to that id (or StartupWMClass).
+ * If they disagree (e.g. "electron" or "GrokHub" vs "grokhub"), the shell
+ * shows a *second* icon when you relaunch from the pin.
+ *
+ * Canonical class / app_id: **grokhub** (lowercase, matches .desktop basename).
+ * Visible title stays "GrokHub". userData stays under the previous path.
+ */
+const APP_DISPLAY_NAME = "GrokHub";
+const APP_WM_CLASS = "grokhub"; // must match StartupWMClass + desktop file id
+const APP_DESKTOP_FILE = "grokhub.desktop";
+
+// Preserve existing userData directory (was set when name was "GrokHub")
 try {
-  // Associates this process with grokhub.desktop so GNOME/KDE pin the app, not electron
-  app.setDesktopName("grokhub.desktop");
+  const userDataKeep = path.join(app.getPath("appData"), APP_DISPLAY_NAME);
+  if (fs.existsSync(userDataKeep)) {
+    app.setPath("userData", userDataKeep);
+  }
+} catch {
+  /* appData unavailable extremely early — default userData is fine */
+}
+
+// —— Identity before ready ——
+// setName drives some Chromium paths; we still force --class separately.
+app.setName(APP_DISPLAY_NAME);
+try {
+  app.setDesktopName(APP_DESKTOP_FILE);
 } catch {
   /* older electron */
 }
@@ -103,31 +127,38 @@ try {
   /* non-windows */
 }
 if (process.platform === "linux") {
-  app.commandLine.appendSwitch("class", "GrokHub");
-  app.commandLine.appendSwitch("name", "GrokHub");
-  // Helps some compositors treat us as a distinct app
+  // Wayland app_id / X11 WM_CLASS — lowercase matches grokhub.desktop
+  app.commandLine.appendSwitch("class", APP_WM_CLASS);
+  app.commandLine.appendSwitch("name", APP_WM_CLASS);
   try {
-    process.title = "GrokHub";
+    process.title = APP_WM_CLASS;
   } catch {
     /* ignore */
   }
 }
 
-// Single instance: second pin/launch focuses existing window instead of a bare electron
+// Single instance: pin click while running focuses the existing window (no 2nd icon)
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.exit(0);
 } else {
-  app.on("second-instance", (_event, _argv) => {
-    const show = () => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        if (mainWindow.isMinimized()) mainWindow.restore();
-        mainWindow.show();
-        mainWindow.focus();
+  app.on("second-instance", () => {
+    const focus = () => {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        if (app.isReady()) createWindow();
+        return;
       }
+      try {
+        mainWindow.setSkipTaskbar(false);
+      } catch {
+        /* ignore */
+      }
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
     };
-    if (app.isReady()) show();
-    else app.whenReady().then(show);
+    if (app.isReady()) focus();
+    else void app.whenReady().then(focus);
   });
 }
 
@@ -251,13 +282,14 @@ function createWindow() {
     minHeight: 600,
     show: false,
     backgroundColor: "#0a0a0b",
-    title: "GrokHub",
+    title: APP_DISPLAY_NAME,
     icon: icon.isEmpty() ? undefined : icon,
     frame: false,
     titleBarStyle: "hidden",
     autoHideMenuBar: true,
     useContentSize: false,
-    // Linux: keep a stable title/class for taskbar matching
+    // Stay on the taskbar while open so the pin groups with this window
+    skipTaskbar: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -275,16 +307,14 @@ function createWindow() {
     }
   }
 
-  // Re-assert identity after create (some WMs read class late)
   try {
-    mainWindow.setTitle("GrokHub");
+    mainWindow.setTitle(APP_DISPLAY_NAME);
   } catch {
     /* ignore */
   }
   if (process.platform === "linux") {
     try {
-      app.setName("GrokHub");
-      app.setDesktopName("grokhub.desktop");
+      app.setDesktopName(APP_DESKTOP_FILE);
     } catch {
       /* ignore */
     }
@@ -329,7 +359,7 @@ function createWindow() {
       }
     }
     try {
-      mainWindow?.setTitle("GrokHub");
+      mainWindow?.setTitle(APP_DISPLAY_NAME);
     } catch {
       /* ignore */
     }
@@ -342,19 +372,29 @@ function createWindow() {
       }
     }
     if (process.env.GROKHUB_START_MINIMIZED === "1") {
+      try {
+        mainWindow?.setSkipTaskbar(true);
+      } catch {
+        /* ignore */
+      }
       mainWindow?.hide();
     } else {
+      try {
+        mainWindow?.setSkipTaskbar(false);
+      } catch {
+        /* ignore */
+      }
       mainWindow?.show();
       mainWindow?.focus();
     }
     scheduleSave();
   });
 
-  // Keep title stable (page title changes can rename the taskbar entry)
+  // Keep title stable (page title changes can split the taskbar entry)
   mainWindow.on("page-title-updated", (e) => {
     e.preventDefault();
     try {
-      mainWindow?.setTitle("GrokHub");
+      mainWindow?.setTitle(APP_DISPLAY_NAME);
     } catch {
       /* ignore */
     }
@@ -383,7 +423,22 @@ function createWindow() {
     saveWindowState();
     if (process.env.GROKHUB_TRAY !== "0" && tray) {
       e.preventDefault();
+      // Drop the running window from the taskbar so only the *pin* remains.
+      // On show we clear skipTaskbar so it re-groups with the same pin (same app_id).
+      try {
+        mainWindow?.setSkipTaskbar(true);
+      } catch {
+        /* ignore */
+      }
       mainWindow?.hide();
+    }
+  });
+
+  mainWindow.on("show", () => {
+    try {
+      mainWindow?.setSkipTaskbar(false);
+    } catch {
+      /* ignore */
     }
   });
 
@@ -417,14 +472,23 @@ function createTray() {
   } else {
     tray = new Tray(icon);
   }
-  tray.setToolTip("GrokHub");
+  tray.setToolTip(APP_DISPLAY_NAME);
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
         label: "Show GrokHub",
         click: () => {
-          mainWindow?.show();
-          mainWindow?.focus();
+          if (!mainWindow || mainWindow.isDestroyed()) {
+            createWindow();
+            return;
+          }
+          try {
+            mainWindow.setSkipTaskbar(false);
+          } catch {
+            /* ignore */
+          }
+          mainWindow.show();
+          mainWindow.focus();
         },
       },
       {
@@ -438,9 +502,23 @@ function createTray() {
     ]),
   );
   tray.on("click", () => {
-    if (!mainWindow) return;
-    if (mainWindow.isVisible()) mainWindow.hide();
-    else {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      createWindow();
+      return;
+    }
+    if (mainWindow.isVisible()) {
+      try {
+        mainWindow.setSkipTaskbar(true);
+      } catch {
+        /* ignore */
+      }
+      mainWindow.hide();
+    } else {
+      try {
+        mainWindow.setSkipTaskbar(false);
+      } catch {
+        /* ignore */
+      }
       mainWindow.show();
       mainWindow.focus();
     }
@@ -658,8 +736,8 @@ app.whenReady().then(() => {
   // Dock / taskbar name + pin identity
   if (process.platform === "linux") {
     try {
-      app.setName("GrokHub");
-      app.setDesktopName("grokhub.desktop");
+      app.setName(APP_DISPLAY_NAME);
+      app.setDesktopName(APP_DESKTOP_FILE);
     } catch {
       /* ignore */
     }

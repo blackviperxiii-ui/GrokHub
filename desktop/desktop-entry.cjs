@@ -96,7 +96,7 @@ Terminal=false
 Categories=Utility;Development;Office;Network;AI;
 Keywords=grok;ai;agent;xai;hub;electron;automation;
 StartupNotify=true
-StartupWMClass=GrokHub
+StartupWMClass=grokhub
 SingleMainWindow=true
 X-GNOME-SingleWindow=true
 X-GNOME-UsesNotifications=true
@@ -223,7 +223,7 @@ function status() {
     autostartPath: auto,
     exec: resolveExec(),
     desktopName: "grokhub.desktop",
-    startupWmClass: "GrokHub",
+    startupWmClass: "grokhub",
   };
 }
 
