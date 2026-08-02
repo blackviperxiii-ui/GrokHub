@@ -856,7 +856,15 @@ function registerIpc() {
 
   safeHandle("grok:linkWebsiteSession", async () => {
     try {
-      return await websiteSession.linkWebsiteSession();
+      const r = await websiteSession.linkWebsiteSession();
+      // Persist only verified cookies into secrets when present
+      try {
+        const cookie = r?.cookie || r?.cookieHeader || "";
+        if (cookie) secretsStore.set("ssoCookie", cookie);
+      } catch {
+        /* ignore */
+      }
+      return r;
     } catch (e) {
       return { error: e instanceof Error ? e.message : "link failed" };
     }
@@ -864,15 +872,32 @@ function registerIpc() {
 
   safeHandle("grok:injectWebsiteCookie", async (_e, raw) => {
     try {
-      return await websiteSession.injectCookieHeader(String(raw || ""));
+      const r = await websiteSession.injectCookieHeader(String(raw || ""));
+      if (r?.ok && (r.cookie || r.cookieHeader || raw)) {
+        try {
+          secretsStore.set("ssoCookie", String(r.cookie || r.cookieHeader || raw));
+        } catch {
+          /* ignore */
+        }
+      }
+      return r;
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : "inject failed" };
     }
   });
 
   safeHandle("grok:websiteUsage", async (_e, opts) => {
+    let sso = String(opts?.ssoCookie || "").trim();
+    if (!sso) {
+      try {
+        const sec = secretsStore.get("ssoCookie");
+        sso = String(sec?.value || "").trim();
+      } catch {
+        /* ignore */
+      }
+    }
     return websiteSession.fetchWebsiteUsage({
-      ssoCookie: String(opts?.ssoCookie || ""),
+      ssoCookie: sso,
       bearer: String(opts?.bearer || ""),
     });
   });
@@ -1165,6 +1190,21 @@ app.whenReady().then(async () => {
     });
   } catch (e) {
     console.error("[GrokHub] agent-core start failed", e);
+  }
+  try {
+    if (typeof websiteSession.hydrateWebsiteSession === "function") {
+      const h = await websiteSession.hydrateWebsiteSession();
+      try {
+        appLog.info?.(
+          "usage",
+          `hydrate ${JSON.stringify({ ok: h?.ok, signedIn: h?.signedIn, fromSecrets: h?.fromSecrets })}`,
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch (e) {
+    console.error("[GrokHub] website session hydrate failed", e);
   }
   createWindow();
   createTray();

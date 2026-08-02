@@ -3338,26 +3338,39 @@ syncWebsiteConnectors: async () => {
         try {
           const { fetchGrokWebsiteUsage } = await import("./grok-website-usage");
           let sso = st.ssoCookie?.trim() || "";
-          if (!sso && typeof window !== "undefined" && window.grokhubDesktop?.grok?.getWebsiteSso) {
+          // Always try secrets + partition (zustand may be empty after update)
+          if (typeof window !== "undefined") {
             try {
-              const r = await window.grokhubDesktop.grok.getWebsiteSso();
-              if (r?.cookie) {
-                sso = r.cookie;
-                set({ ssoCookie: sso });
-                try {
-                  void window.grokhubDesktop?.secrets?.set?.("ssoCookie", sso);
-                } catch {
-                  /* ignore */
-                }
+              const sec = await window.grokhubDesktop?.secrets?.get?.("ssoCookie");
+              if (sec?.value && String(sec.value).trim()) {
+                sso = String(sec.value).trim();
+                if (sso !== st.ssoCookie) set({ ssoCookie: sso });
               }
             } catch {
               /* ignore */
+            }
+            if (!sso && window.grokhubDesktop?.grok?.getWebsiteSso) {
+              try {
+                const r = await window.grokhubDesktop.grok.getWebsiteSso();
+                if (r?.cookie) {
+                  sso = r.cookie;
+                  set({ ssoCookie: sso });
+                  try {
+                    void window.grokhubDesktop?.secrets?.set?.("ssoCookie", sso);
+                  } catch {
+                    /* ignore */
+                  }
+                }
+              } catch {
+                /* ignore */
+              }
             }
           }
           const bearer =
             st.oauth?.accessToken?.trim() || st.apiKey?.trim() || null;
           const web = await fetchGrokWebsiteUsage({
             ssoCookie: sso || null,
+            // Prefer SSO for website credits; bearer alone can't fill weekly bar
             bearer: sso ? null : bearer,
           });
 
@@ -3376,6 +3389,19 @@ syncWebsiteConnectors: async () => {
               if (up > 0 && up <= 1.0001) up *= 100;
               return { ...row, usagePercent: up };
             });
+            // Persist refreshed cookie header from main when returned
+            if ((web as { ssoCookie?: string }).ssoCookie && typeof window !== "undefined") {
+              const c = String((web as { ssoCookie?: string }).ssoCookie);
+              if (c.length > 20 && c !== get().ssoCookie) {
+                set({ ssoCookie: c });
+                try {
+                  void window.grokhubDesktop?.secrets?.set?.("ssoCookie", c);
+                } catch {
+                  /* ignore */
+                }
+              }
+            }
+            const warning = (web as { warning?: string }).warning || null;
             usage = {
               ...usage,
               plan: planMap,
@@ -3394,7 +3420,7 @@ syncWebsiteConnectors: async () => {
                 prepaidBalanceCents: web.prepaidBalanceCents || 0,
                 onDemandCapCents: web.onDemandCapCents || 0,
                 onDemandUsedCents: web.onDemandUsedCents || 0,
-                error: null,
+                error: warning,
               },
             };
             set({ usage });
@@ -3402,22 +3428,24 @@ syncWebsiteConnectors: async () => {
           }
 
           const prevWeb = usage.website;
+          // Don't keep a fake 0% website reading when unauthenticated
+          const authish = /unauthenticated|no-credentials|expired|re-link|no grok website/i.test(
+            String(web.error || ""),
+          );
           usage = {
             ...usage,
             lastPolledAt: Date.now(),
-            source:
-              prevWeb && prevWeb.error == null && prevWeb.creditUsagePercent != null
-                ? usage.source
-                : "local",
+            source: "local",
             website: {
               planLabel: prevWeb?.planLabel || PLAN_LIMITS[usage.plan].label,
-              creditUsagePercent:
-                prevWeb?.creditUsagePercent ??
-                Math.round(usagePercent(usage) * 10) / 10,
+              creditUsagePercent: authish
+                ? 0
+                : prevWeb?.creditUsagePercent ??
+                  Math.round(usagePercent(usage) * 10) / 10,
               periodType: prevWeb?.periodType || "unknown",
               periodStart: prevWeb?.periodStart ?? usage.periodStart,
               periodEnd: prevWeb?.periodEnd ?? usage.periodEnd,
-              productUsage: prevWeb?.productUsage || [],
+              productUsage: authish ? [] : prevWeb?.productUsage || [],
               prepaidBalanceCents: prevWeb?.prepaidBalanceCents ?? 0,
               onDemandCapCents: prevWeb?.onDemandCapCents ?? 0,
               onDemandUsedCents: prevWeb?.onDemandUsedCents ?? 0,

@@ -377,24 +377,147 @@ function linkWebsiteSession() {
   });
 }
 
-async function readSessionCookieHeader(fallbackSso) {
-  const fromSes = await collectSessionCookies();
-  if (fromSes.cookieHeader) return fromSes.cookieHeader;
-  if (fromSes.sso) return fromSes.sso;
-  const t = String(fallbackSso || "").trim();
-  if (!t) return "";
-  // If user pasted a raw value, inject it for this process too
-  if (t && !fromSes.count) {
+function usageLog(level, msg, extra) {
+  try {
+    const appLog = require("./log.cjs");
+    const line = extra ? `${msg} ${JSON.stringify(extra)}` : msg;
+    if (level === "warn" && appLog.warn) appLog.warn("usage", line);
+    else if (appLog.info) appLog.info("usage", line);
+    else console.log(`[usage] ${line}`);
+  } catch {
     try {
-      await injectCookieHeader(t);
-      const again = await collectSessionCookies();
-      if (again.cookieHeader) return again.cookieHeader;
+      console.log(`[usage] ${msg}`, extra || "");
     } catch {
       /* ignore */
     }
   }
-  if (/sso=/i.test(t) || t.includes("=")) return t;
-  return `sso=${t}`;
+}
+
+function secretsSso() {
+  try {
+    const secretsStore = require("./secrets-store.cjs");
+    const r = secretsStore.get("ssoCookie");
+    return String(r?.value || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Resolve full cookie header for grok.com API:
+ * 1) partition jar  2) opts.ssoCookie  3) secrets-store
+ * Always re-inject secret/opts into partition when partition lacks sso-like cookies.
+ */
+async function resolveUsageCredentials(opts = {}) {
+  const t0 = Date.now();
+  let cookieSource = "none";
+  let fromSes = await collectSessionCookies();
+  let optsSso = String(opts?.ssoCookie || "").trim();
+  let secretSso = secretsSso();
+
+  // Prefer fuller header: partition first if signed in
+  if (fromSes.signedIn && fromSes.cookieHeader && fromSes.cookieHeader.length > 20) {
+    cookieSource = "partition";
+  } else if (optsSso) {
+    cookieSource = "opts";
+    try {
+      await injectCookieHeader(optsSso);
+      fromSes = await collectSessionCookies();
+      if (fromSes.cookieHeader) cookieSource = "opts+partition";
+    } catch (e) {
+      usageLog("warn", "inject_opts_failed", { err: String(e?.message || e) });
+    }
+  } else if (secretSso) {
+    cookieSource = "secrets";
+    try {
+      await injectCookieHeader(secretSso);
+      fromSes = await collectSessionCookies();
+      if (fromSes.cookieHeader) cookieSource = "secrets+partition";
+    } catch (e) {
+      usageLog("warn", "inject_secrets_failed", { err: String(e?.message || e) });
+    }
+  }
+
+  // Still empty — last ditch raw header from opts/secrets
+  let cookieHeader = fromSes.cookieHeader || fromSes.sso || "";
+  if (!cookieHeader) {
+    const raw = optsSso || secretSso;
+    if (raw) {
+      cookieHeader = /sso=/i.test(raw) || raw.includes("=") ? raw : `sso=${raw}`;
+      cookieSource = optsSso ? "opts-raw" : "secrets-raw";
+    }
+  }
+
+  const cookieNames = (fromSes.names || []).filter(Boolean).slice(0, 40);
+  usageLog("info", "usage_creds", {
+    cookieSource,
+    signedIn: Boolean(fromSes.signedIn),
+    cookieNames,
+    headerLen: cookieHeader.length,
+    partitionCount: fromSes.count || 0,
+    hasSecrets: Boolean(secretSso),
+    hasOpts: Boolean(optsSso),
+    ms: Date.now() - t0,
+  });
+
+  return {
+    cookieHeader,
+    cookieSource,
+    signedIn: Boolean(fromSes.signedIn || cookieHeader),
+    cookieNames,
+    ssoOnly: fromSes.sso || "",
+  };
+}
+
+async function readSessionCookieHeader(fallbackSso) {
+  const r = await resolveUsageCredentials({ ssoCookie: fallbackSso });
+  return r.cookieHeader || "";
+}
+
+/** Boot: secrets → partition so usage/connectors work after restart */
+async function hydrateWebsiteSession() {
+  const secret = secretsSso();
+  const before = await collectSessionCookies();
+  if (!secret) {
+    usageLog("info", "hydrate_skip", {
+      reason: "no_secrets",
+      signedIn: before.signedIn,
+      count: before.count,
+    });
+    return {
+      ok: Boolean(before.signedIn || before.cookieHeader),
+      signedIn: before.signedIn,
+      fromSecrets: false,
+      cookie: before.sso || before.cookieHeader || "",
+    };
+  }
+  if (before.signedIn && before.sso) {
+    usageLog("info", "hydrate_ok_partition", { count: before.count });
+    return {
+      ok: true,
+      signedIn: true,
+      fromSecrets: false,
+      cookie: before.sso || before.cookieHeader || "",
+    };
+  }
+  try {
+    await injectCookieHeader(secret);
+    const after = await collectSessionCookies();
+    usageLog("info", "hydrate_injected", {
+      signedIn: after.signedIn,
+      count: after.count,
+      names: (after.names || []).slice(0, 20),
+    });
+    return {
+      ok: Boolean(after.sso || after.cookieHeader),
+      signedIn: after.signedIn,
+      fromSecrets: true,
+      cookie: after.sso || after.cookieHeader || secret,
+    };
+  } catch (e) {
+    usageLog("warn", "hydrate_failed", { err: String(e?.message || e) });
+    return { ok: false, error: String(e?.message || e), cookie: secret };
+  }
 }
 
 function parseGrpcWeb(buf) {
@@ -694,8 +817,11 @@ function emptyUsage(error) {
  * Falls back to Cookie header if partition is empty.
  */
 async function fetchWebsiteUsage(opts = {}) {
-  const cookieHeader = await readSessionCookieHeader(opts.ssoCookie);
+  const t0 = Date.now();
+  const creds = await resolveUsageCredentials(opts);
+  const cookieHeader = creds.cookieHeader;
   if (!cookieHeader) {
+    usageLog("warn", "usage_fetch_no_creds", { ms: Date.now() - t0 });
     return emptyUsage(
       "No Grok website session. Click Link Grok website and sign in until chat loads, then “Use this session”.",
     );
@@ -704,7 +830,7 @@ async function fetchWebsiteUsage(opts = {}) {
   try {
     const ses = grokSession();
     const body = grpcWebFrame(Buffer.from([0x08, 0x01])); // exclude_legacy_monthly_usage=true
-    const headers = {
+    const baseHeaders = {
       "content-type": "application/grpc-web+proto",
       accept: "application/grpc-web+proto",
       "x-grpc-web": "1",
@@ -712,20 +838,70 @@ async function fetchWebsiteUsage(opts = {}) {
       origin: "https://grok.com",
       referer: "https://grok.com/settings",
       "user-agent": CHROME_UA,
-      cookie: cookieHeader,
     };
+    // Prefer partition-attached cookies (ses.fetch without Cookie) after hydrate;
+    // fall back to explicit Cookie header for global fetch.
+    const headersWithCookie = { ...baseHeaders, cookie: cookieHeader };
+
+    usageLog("info", "usage_fetch_start", {
+      cookieSource: creds.cookieSource,
+      signedIn: creds.signedIn,
+      cookieNames: creds.cookieNames,
+      headerLen: cookieHeader.length,
+    });
 
     let res;
+    let usedExplicitCookie = false;
     try {
-      res = await ses.fetch(CREDITS_URL, { method: "POST", headers, body });
+      res = await ses.fetch(CREDITS_URL, {
+        method: "POST",
+        headers: baseHeaders,
+        body,
+      });
+      // If unauthenticated body likely, retry with explicit jar header
+      const probe = Buffer.from(await res.clone().arrayBuffer());
+      const probeParsed = parseGrpcWeb(probe);
+      const probeMsg = (probeParsed.message || res.headers.get("grpc-message") || "").toLowerCase();
+      const needRetry =
+        !res.ok ||
+        probeParsed.status === 16 ||
+        /unauthenticated|no-credentials|unauth/i.test(probeMsg) ||
+        (!probeParsed.messages[0] && probeParsed.status);
+      if (needRetry) {
+        usageLog("warn", "usage_retry_explicit_cookie", {
+          httpStatus: res.status,
+          grpcStatus: probeParsed.status,
+          grpcMessage: probeParsed.message || "",
+        });
+        res = await ses.fetch(CREDITS_URL, {
+          method: "POST",
+          headers: headersWithCookie,
+          body,
+        });
+        usedExplicitCookie = true;
+      }
     } catch {
-      res = await fetch(CREDITS_URL, { method: "POST", headers, body });
+      usedExplicitCookie = true;
+      res = await fetch(CREDITS_URL, {
+        method: "POST",
+        headers: headersWithCookie,
+        body,
+      });
     }
 
     const ab = Buffer.from(await res.arrayBuffer());
     const headerStatus = res.headers.get("grpc-status");
     const headerMsg = res.headers.get("grpc-message");
     const parsed = parseGrpcWeb(ab);
+    usageLog("info", "usage_fetch_http", {
+      httpStatus: res.status,
+      grpcStatus: parsed.status,
+      grpcMessage: (parsed.message || headerMsg || "").slice(0, 160),
+      hasMsg: Boolean(parsed.messages[0]),
+      explicitCookie: usedExplicitCookie,
+      cookieSource: creds.cookieSource,
+      ms: Date.now() - t0,
+    });
     const status =
       parsed.status || (headerStatus != null && headerStatus !== "" ? Number(headerStatus) : 0);
     let message = parsed.message;
@@ -781,10 +957,20 @@ async function fetchWebsiteUsage(opts = {}) {
     }
 
     if ((status !== 0 && status !== undefined) || !parsed.messages[0]) {
+      const authFail =
+        status === 16 ||
+        /unauthenticated|no-credentials|expired|permission/i.test(String(message || ""));
+      usageLog("warn", "usage_fetch_auth_fail", {
+        status,
+        message: String(message || "").slice(0, 200),
+        cookieSource: creds.cookieSource,
+        cookieNames: creds.cookieNames,
+        ms: Date.now() - t0,
+      });
       return emptyUsage(
         message ||
-          (status === 16
-            ? "Website session expired — re-link Grok SSO in Settings."
+          (authFail
+            ? "Website session expired or incomplete — re-link Grok website in Settings (sign in until chat loads)."
             : `Grok usage error (grpc ${status || "?"}) — re-link website session`),
       );
     }
@@ -818,6 +1004,17 @@ async function fetchWebsiteUsage(opts = {}) {
       planId = "heavy";
     }
 
+    const emptyPayload =
+      (!usage.creditUsagePercent || usage.creditUsagePercent === 0) &&
+      (!usage.productUsage || usage.productUsage.length === 0);
+    usageLog("info", "usage_fetch_ok", {
+      planId,
+      creditUsagePercent: usage.creditUsagePercent,
+      products: (usage.productUsage || []).length,
+      periodType: usage.periodType,
+      emptyPayload,
+      ms: Date.now() - t0,
+    });
     return {
       ok: true,
       planLabel,
@@ -831,17 +1028,27 @@ async function fetchWebsiteUsage(opts = {}) {
       onDemandCapCents: usage.onDemandCapCents,
       onDemandUsedCents: usage.onDemandUsedCents,
       ssoCookie: cookieHeader,
+      ...(emptyPayload
+        ? { warning: "empty credits payload — session may be partial" }
+        : {}),
     };
   } catch (e) {
+    usageLog("warn", "usage_fetch_exception", {
+      err: e instanceof Error ? e.message : String(e),
+      ms: Date.now() - t0,
+    });
     return emptyUsage(e instanceof Error ? e.message : "usage fetch failed");
   }
 }
 
 async function getStoredSso() {
+  const hydrated = await hydrateWebsiteSession();
   const { sso, cookieHeader, signedIn } = await collectSessionCookies();
+  const cookie = sso || cookieHeader || hydrated.cookie || secretsSso() || "";
   return {
-    cookie: sso || cookieHeader || "",
-    signedIn: Boolean(signedIn || sso),
+    cookie,
+    signedIn: Boolean(signedIn || sso || cookie),
+    fromSecrets: Boolean(hydrated.fromSecrets),
   };
 }
 
@@ -1213,6 +1420,9 @@ function extractTextDeep(node, depth = 0) {
 }
 
 module.exports = {
+  hydrateWebsiteSession,
+  resolveUsageCredentials,
+
   PARTITION,
   linkWebsiteSession,
   fetchWebsiteUsage,

@@ -34,15 +34,21 @@ export function UsageMeterChip({ className }: { className?: string }) {
   const usage = useGrokHub((s) => s.usage);
   const setNav = useGrokHub((s) => s.setNav);
   const web = usage.website;
-  const hasLive =
-    usage.source === "website" && web && web.error == null;
-  const pct = hasLive
-    ? Number(web.creditUsagePercent) || 0
-    : web?.creditUsagePercent != null && !web.error && web.creditUsagePercent > 0
-      ? web.creditUsagePercent
-      : usagePercent(usage);
+  const err = web?.error || null;
+  const needsRelink =
+    Boolean(err) &&
+    /unauthenticated|no-credentials|expired|re-link|no grok website|incomplete/i.test(
+      String(err),
+    );
+  const hasLive = usage.source === "website" && web && !err;
+  const pct = hasLive ? Number(web.creditUsagePercent) || 0 : usagePercent(usage);
   const tone = usageTone(pct);
-  const label = web?.planLabel || PLAN_LIMITS[usage.plan].label;
+  const label =
+    needsRelink
+      ? "Link site"
+      : hasLive && web?.planLabel
+        ? web.planLabel
+        : PLAN_LIMITS[usage.plan].label;
   const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
   // Avoid Date.now() during SSR — causes hydration mismatch on "stale"
   const [stale, setStale] = useState(false);
@@ -54,7 +60,6 @@ export function UsageMeterChip({ className }: { className?: string }) {
     const id = setInterval(check, 30_000);
     return () => clearInterval(id);
   }, [usage.lastPolledAt]);
-  const err = web?.error;
 
   return (
     <button
@@ -64,6 +69,11 @@ export function UsageMeterChip({ className }: { className?: string }) {
         e.preventDefault();
         e.stopPropagation();
         setNav("settings");
+        try {
+          window.location.hash = needsRelink ? "sec-oauth" : "sec-usage";
+        } catch {
+          /* ignore */
+        }
       }}
       aria-label={
         err
@@ -72,14 +82,15 @@ export function UsageMeterChip({ className }: { className?: string }) {
       }
       title={
         err
-          ? `Usage: ${err}`
+          ? `${err}\nClick to re-link Grok website for the live SuperGrok weekly bar.`
           : hasLive
             ? `${label}: ${Math.round(pct)}% weekly · resets ${formatResetAt(web.periodEnd)} · open Settings`
-            : `${label}: ${Math.round(pct)}% (local) · open Settings to link grok.com`
+            : `${label}: ${Math.round(pct)}% (local) · link grok.com for live weekly limit`
       }
       className={cn(
         "flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-1 text-left transition-colors hover:border-[var(--color-border-strong)]",
-        err && "border-[color-mix(in_oklab,var(--color-warn)_40%,var(--color-border))]",
+        (err || needsRelink) &&
+          "border-[color-mix(in_oklab,var(--color-warn)_45%,var(--color-border))]",
         className,
       )}
     >
@@ -98,17 +109,22 @@ export function UsageMeterChip({ className }: { className?: string }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[10px] font-medium text-[var(--color-fg)]">
-            {hasLive ? label : "Usage"}
+            {hasLive ? label : needsRelink ? "Link site" : "Usage"}
           </span>
           <span className="tabular text-[10px] text-[var(--color-subtle)]">
-            {Math.round(pct)}%
-            {stale ? " stale" : ""}
+            {needsRelink ? "!" : `${Math.round(pct)}%`}
+            {!needsRelink && stale ? " stale" : ""}
           </span>
         </div>
         <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-[var(--color-border)]">
           <div
-            className={cn("h-full rounded-full transition-all duration-300", barColor(tone))}
-            style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
+            className={cn(
+              "h-full rounded-full transition-all duration-300",
+              needsRelink ? "bg-[var(--color-warn)]" : barColor(tone),
+            )}
+            style={{
+              width: needsRelink ? "100%" : `${Math.min(100, Math.max(0, pct))}%`,
+            }}
           />
         </div>
       </div>
@@ -193,6 +209,29 @@ export function UsageMeterPanel({ compact }: { compact?: boolean }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {web?.error && (
+          <div className="rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-warn)_40%,var(--color-border))] bg-[var(--color-elevated)] px-3 py-2 text-xs text-[var(--color-fg)]">
+            <p className="font-medium text-[var(--color-warn)]">Website usage unavailable</p>
+            <p className="mt-1 text-[var(--color-muted)]">{web.error}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                disabled={linkBusy}
+                onClick={() => void onLink()}
+              >
+                <Link2 className="mr-1 h-3.5 w-3.5" />
+                {linkBusy ? "Linking…" : "Re-link Grok website"}
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => void refreshUsage()}>
+                Retry
+              </Button>
+            </div>
+            <p className="mt-2 text-[10px] text-[var(--color-subtle)]">
+              OAuth alone cannot fill the SuperGrok weekly bar — website SSO is required.
+              Showing local counters until the link works.
+            </p>
+          </div>
+        )}
         {/* Weekly pool — website style */}
         <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
           <div className="mb-1 text-xs font-medium text-[var(--color-muted)]">
