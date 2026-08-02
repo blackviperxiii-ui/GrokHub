@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.2.16";
+const APP_VERSION = "0.4.3";
 
 function shaMatch(a, b) {
   if (!a || !b) return false;
@@ -424,6 +424,26 @@ async function readLocalVersion(root) {
   return { version, sha };
 }
 
+/**
+ * Helpers for system vs user install paths.
+ */
+async function pathWritable(dir) {
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    const probe = path.join(dir, `.grokhub-write-test-${process.pid}`);
+    await fs.writeFile(probe, "ok\n");
+    await fs.unlink(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isSystemInstall(root) {
+  const r = path.resolve(String(root || ""));
+  return r === "/usr/lib/grokhub" || r.startsWith("/usr/lib/grokhub" + path.sep);
+}
+
 async function checkForUpdate(opts = {}) {
   const repo = opts.repo || process.env.GROKHUB_REPO || DEFAULT_REPO;
   const branch = opts.branch || process.env.GROKHUB_BRANCH || DEFAULT_BRANCH;
@@ -469,6 +489,20 @@ async function checkForUpdate(opts = {}) {
   }
   const remoteShort = remoteSha ? String(remoteSha).slice(0, 12) : null;
   const localShort = local.sha ? String(local.sha).slice(0, 12) : null;
+  let writable = null;
+  if (installRoot) {
+    try {
+      const probe = path.join(installRoot, `.grokhub-write-test-${process.pid}`);
+      await fs.writeFile(probe, "ok\n");
+      await fs.unlink(probe);
+      writable = true;
+    } catch {
+      writable = false;
+      if (isSystemInstall(installRoot) && !/admin|permission|writable/i.test(detail)) {
+        detail = (detail ? detail + " · " : "") + "System install needs admin for updates (pkexec)";
+      }
+    }
+  }
   return {
     currentVersion: local.version,
     currentSha: localShort,
@@ -478,8 +512,115 @@ async function checkForUpdate(opts = {}) {
     repo,
     branch,
     installRoot,
+    writable,
     detail,
   };
+}
+
+
+/**
+ * Install staged files into dest. Elevates with pkexec/sudo when needed (Arch /usr install).
+ */
+async function installStagedTree(stageRoot, destRoot, steps) {
+  if (await pathWritable(destRoot)) {
+    const names = await fs.readdir(stageRoot);
+    for (const name of names) {
+      const src = path.join(stageRoot, name);
+      const dest = path.join(destRoot, name);
+      const bak = `${dest}.bak-${Date.now()}`;
+      let had = false;
+      try {
+        await fs.stat(dest);
+        had = true;
+        await fs.rename(dest, bak);
+      } catch {
+        /* new path */
+      }
+      try {
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await execAsync(`cp -a ${JSON.stringify(src)} ${JSON.stringify(dest)}`, {
+          timeout: 180000,
+          shell: "/bin/bash",
+        });
+        if (had) await fs.rm(bak, { recursive: true, force: true }).catch(() => {});
+        steps.push(`Updated ${name}`);
+      } catch (e) {
+        if (had) {
+          await fs.rm(dest, { recursive: true, force: true }).catch(() => {});
+          await fs.rename(bak, dest).catch(() => {});
+        }
+        throw e;
+      }
+    }
+    return { ok: true, elevated: false };
+  }
+
+  if (process.platform !== "linux") {
+    throw new Error(
+      `Cannot write to ${destRoot} (permission denied). Reinstall to a user path or run the installer as admin.`,
+    );
+  }
+
+  steps.push(`Need admin to write ${destRoot}`);
+  const shPath = path.join(os.tmpdir(), `grokhub-elevate-${process.pid}.sh`);
+  const sh = `#!/bin/bash
+set -euo pipefail
+STAGE=${JSON.stringify(stageRoot)}
+DEST=${JSON.stringify(destRoot)}
+mkdir -p "$DEST"
+for item in "$STAGE"/*; do
+  [ -e "$item" ] || continue
+  name=$(basename "$item")
+  rm -rf "$DEST/$name"
+  cp -a "$item" "$DEST/$name"
+  echo "Installed $name"
+done
+if [[ "$DEST" == /usr/lib/grokhub || "$DEST" == /usr/lib/grokhub/* ]]; then
+  chown -R root:root "$DEST" 2>/dev/null || true
+  find "$DEST" -type d -exec chmod 755 {} + 2>/dev/null || true
+  find "$DEST" -type f -exec chmod 644 {} + 2>/dev/null || true
+  [ -f "$DEST/desktop/main.mjs" ] && chmod 755 "$DEST/desktop/main.mjs" || true
+fi
+echo OK
+`;
+  await fs.writeFile(shPath, sh, { mode: 0o755 });
+
+  const elevators = [];
+  // Graphical polkit first
+  elevators.push(["pkexec", ["bash", shPath]]);
+  // Fallback sudo (may prompt in terminal only)
+  elevators.push(["sudo", ["-n", "bash", shPath]]); // non-interactive first
+  elevators.push(["sudo", ["bash", shPath]]);
+
+  let lastErr = "elevation failed";
+  for (const [bin, args] of elevators) {
+    try {
+      await execAsync(`command -v ${bin}`, { timeout: 3000, shell: "/bin/bash" });
+    } catch {
+      continue;
+    }
+    try {
+      steps.push(`Elevating via ${bin}…`);
+      const { stdout, stderr } = await execAsync(`${bin} ${args.map((a) => JSON.stringify(a)).join(" ")}`, {
+        timeout: 300000,
+        maxBuffer: 5 * 1024 * 1024,
+        shell: "/bin/bash",
+      });
+      if (stdout) steps.push(...String(stdout).trim().split("\n").filter(Boolean).slice(0, 20));
+      if (stderr && /error|denied|fail/i.test(stderr)) steps.push(stderr.slice(0, 200));
+      await fs.unlink(shPath).catch(() => {});
+      return { ok: true, elevated: true, via: bin };
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : String(e);
+      steps.push(`${bin}: ${lastErr.slice(0, 160)}`);
+    }
+  }
+  await fs.unlink(shPath).catch(() => {});
+  throw new Error(
+    `Permission denied writing ${destRoot}. ` +
+      `Approve the admin prompt (pkexec), or run: sudo cp -a <stage>/* ${destRoot}/ ` +
+      `or reinstall with user prefix. Last error: ${lastErr.slice(0, 200)}`,
+  );
 }
 
 async function applyUpdate(opts = {}) {
@@ -494,8 +635,13 @@ async function applyUpdate(opts = {}) {
     "";
 
   async function isAppRoot(root) {
+    if (!root) return false;
     try {
       await fs.stat(path.join(root, ".output", "server", "index.mjs"));
+      return true;
+    } catch {}
+    try {
+      await fs.stat(path.join(root, "desktop", "main.mjs"));
       return true;
     } catch {}
     try {
@@ -506,28 +652,44 @@ async function applyUpdate(opts = {}) {
     }
   }
 
-  let root = process.env.GROKHUB_HOME || path.join(os.homedir(), ".local/share/grokhub");
-  for (const c of [
+  // Prefer currently running install (GROKHUB_HOME), then system, then user local
+  const candidates = [
     process.env.GROKHUB_HOME,
-    process.cwd(),
     "/usr/lib/grokhub",
     path.join(os.homedir(), ".local/share/grokhub"),
-  ].filter(Boolean)) {
+    process.cwd(),
+  ].filter(Boolean);
+
+  let root = null;
+  for (const c of candidates) {
     if (await isAppRoot(c)) {
       root = c;
       break;
     }
   }
-  if (!(await isAppRoot(root))) {
+  if (!root) {
+    root = path.join(os.homedir(), ".local/share/grokhub");
     await fs.mkdir(root, { recursive: true });
     steps.push(`Created ${root}`);
   }
-  steps.push(`Install root: ${root}`);
+
+  // If system root is not writable and elevation may annoy, allow explicit user fallback
+  const userRoot = path.join(os.homedir(), ".local/share/grokhub");
+  let targetRoot = root;
+  const forceUser = Boolean(opts.userLocal);
+  if (forceUser) {
+    targetRoot = userRoot;
+    await fs.mkdir(targetRoot, { recursive: true });
+    steps.push(`User-local update target: ${targetRoot}`);
+  }
+
+  steps.push(`Install root: ${targetRoot}`);
   steps.push("User data / memory is outside the install tree and is not modified by updates");
 
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "grokhub-up-"));
   const tarball = path.join(tmp, "update.tar.gz");
   const extractDir = path.join(tmp, "extract");
+  const stageRoot = path.join(tmp, "stage");
 
   try {
     steps.push("Downloading GitHub archive…");
@@ -547,7 +709,10 @@ async function applyUpdate(opts = {}) {
         const res = await fetch(url, {
           headers: url.includes("api.github.com")
             ? headers
-            : { "user-agent": "GrokHub-Updater", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+            : {
+                "user-agent": "GrokHub-Updater",
+                ...(token ? { authorization: `Bearer ${token}` } : {}),
+              },
           redirect: "follow",
         });
         if (!res.ok) {
@@ -571,9 +736,10 @@ async function applyUpdate(opts = {}) {
 
     steps.push("Extracting…");
     await fs.mkdir(extractDir, { recursive: true });
-    await execAsync(`tar -xzf "${tarball}" -C "${extractDir}"`, {
+    await execAsync(`tar -xzf ${JSON.stringify(tarball)} -C ${JSON.stringify(extractDir)}`, {
       timeout: 120000,
       maxBuffer: 20 * 1024 * 1024,
+      shell: "/bin/bash",
     });
     const entries = await fs.readdir(extractDir);
     let extracted = extractDir;
@@ -582,58 +748,81 @@ async function applyUpdate(opts = {}) {
       if ((await fs.stat(only)).isDirectory()) extracted = only;
     }
 
-    async function swap(srcName) {
-      const src = path.join(extracted, srcName);
-      const dest = path.join(root, srcName);
+    // Build a clean stage directory (only files we install)
+    await fs.mkdir(stageRoot, { recursive: true });
+    const want = opts.factory
+      ? [
+          ".output",
+          "desktop",
+          "src",
+          "scripts",
+          "packaging",
+          "public",
+          "package.json",
+          "package-lock.json",
+          "vite.config.ts",
+          "tsconfig.json",
+          "startup.sh",
+          ".grok",
+          "APP_VERSION",
+          "LICENSE",
+          "README.md",
+          "electron-builder.yml",
+        ]
+      : [".output", "desktop", "package.json", "scripts", "packaging", "APP_VERSION", "LICENSE"];
+
+    for (const name of want) {
+      const src = path.join(extracted, name);
       try {
         await fs.stat(src);
       } catch {
-        steps.push(`Skip ${srcName}`);
-        return;
-      }
-      const bak = `${dest}.bak-${Date.now()}`;
-      let had = false;
-      try {
-        await fs.stat(dest);
-        had = true;
-        await fs.rename(dest, bak);
-      } catch {}
-      try {
-        await fs.mkdir(path.dirname(dest), { recursive: true });
-        await execAsync(`cp -a "${src}" "${dest}"`, { timeout: 120000 });
-        if (had) await fs.rm(bak, { recursive: true, force: true }).catch(() => {});
-        steps.push(`Updated ${srcName}`);
-      } catch (e) {
-        if (had) {
-          await fs.rm(dest, { recursive: true, force: true }).catch(() => {});
-          await fs.rename(bak, dest).catch(() => {});
+        if (name === ".output") {
+          steps.push("Skip .output (not in GitHub archive — keeping installed UI build)");
+        } else {
+          steps.push(`Skip ${name}`);
         }
-        throw e;
+        continue;
+      }
+      await execAsync(`cp -a ${JSON.stringify(src)} ${JSON.stringify(path.join(stageRoot, name))}`, {
+        timeout: 180000,
+        shell: "/bin/bash",
+      });
+      steps.push(`Staged ${name}`);
+    }
+
+    // Preserve existing .output when archive has none (common — .output is gitignored)
+    try {
+      await fs.stat(path.join(stageRoot, ".output", "server", "index.mjs"));
+    } catch {
+      const existingOut = path.join(targetRoot, ".output");
+      try {
+        await fs.stat(path.join(existingOut, "server", "index.mjs"));
+        // For elevated installs we leave .output on dest untouched by not staging a replacement.
+        steps.push("Keeping existing .output on install root (archive had none)");
+      } catch {
+        // Try copy from system if updating user local
+        const sysOut = path.join("/usr/lib/grokhub", ".output", "server", "index.mjs");
+        try {
+          await fs.stat(sysOut);
+          await execAsync(
+            `cp -a ${JSON.stringify(path.join("/usr/lib/grokhub", ".output"))} ${JSON.stringify(path.join(stageRoot, ".output"))}`,
+            { timeout: 180000, shell: "/bin/bash" },
+          );
+          steps.push("Copied .output from /usr/lib/grokhub into stage");
+        } catch {
+          steps.push("Warning: no .output in archive or install — UI may need rebuild");
+        }
       }
     }
 
-    await swap(".output");
-    await swap("desktop");
-    const factoryExtras = opts.factory
-      ? ["src", "scripts", "packaging", "public", "package.json", "package-lock.json", "vite.config.ts", "tsconfig.json", "startup.sh", ".grok"]
-      : ["package.json", "scripts", "packaging"];
-    for (const extra of factoryExtras) {
-      try {
-        await fs.stat(path.join(extracted, extra));
-        await swap(extra);
-      } catch {}
-    }
-
+    // Version stamps in stage (so elevated copy installs them atomically)
     let newSha;
     let newVersion = APP_VERSION;
     try {
-      const head = await checkForUpdate({ repo, branch, token });
-      newSha = head.remoteSha || undefined;
-    } catch {}
-    try {
-      const headers = { accept: "application/vnd.github+json", "user-agent": "GrokHub-Updater" };
-      if (token) headers.authorization = `Bearer ${token}`;
-      const res = await fetch(`https://api.github.com/repos/${repo}/commits/${branch}`, { headers });
+      const res = await fetch(
+        `https://api.github.com/repos/${repo}/commits/${encodeURIComponent(branch)}`,
+        { headers },
+      );
       if (res.ok) {
         const data = await res.json();
         if (data.sha) newSha = data.sha;
@@ -644,32 +833,82 @@ async function applyUpdate(opts = {}) {
       if (m) newSha = m[1];
     }
     try {
-      const pkg = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
+      const pkg = JSON.parse(
+        await fs.readFile(path.join(stageRoot, "package.json"), "utf8").catch(async () =>
+          fs.readFile(path.join(extracted, "package.json"), "utf8"),
+        ),
+      );
       if (pkg.version) newVersion = String(pkg.version);
     } catch {}
     if (newSha) {
-      await fs.writeFile(path.join(root, "VERSION"), newSha + "\n");
-      steps.push(`VERSION → ${newSha.slice(0, 12)}`);
+      await fs.writeFile(path.join(stageRoot, "VERSION"), newSha + "\n");
+      steps.push(`VERSION → ${String(newSha).slice(0, 12)}`);
     }
-    await fs.writeFile(path.join(root, "APP_VERSION"), newVersion + "\n");
+    await fs.writeFile(path.join(stageRoot, "APP_VERSION"), newVersion + "\n");
     steps.push(`APP_VERSION → ${newVersion}`);
 
+    // Install stage → target (elevates for /usr/lib/grokhub)
+    let installResult;
     try {
-      await fs.stat(path.join(root, ".output", "server", "index.mjs"));
+      installResult = await installStagedTree(stageRoot, targetRoot, steps);
+    } catch (e) {
+      // Auto-fallback: system install without elevation → user local
+      if (isSystemInstall(targetRoot) && !forceUser) {
+        steps.push(
+          `System update failed (${e instanceof Error ? e.message : e}). Falling back to user install…`,
+        );
+        targetRoot = userRoot;
+        await fs.mkdir(targetRoot, { recursive: true });
+        // Seed .output from system if stage still lacks it
+        try {
+          await fs.stat(path.join(stageRoot, ".output", "server", "index.mjs"));
+        } catch {
+          try {
+            await fs.stat(path.join("/usr/lib/grokhub", ".output", "server", "index.mjs"));
+            await execAsync(
+              `cp -a ${JSON.stringify("/usr/lib/grokhub/.output")} ${JSON.stringify(path.join(stageRoot, ".output"))}`,
+              { timeout: 180000, shell: "/bin/bash" },
+            );
+            steps.push("Seeded .output from system install into user stage");
+          } catch {}
+        }
+        installResult = await installStagedTree(stageRoot, targetRoot, steps);
+        steps.push(`User install ready: ${targetRoot}`);
+        steps.push("Launch with: GROKHUB_HOME=" + targetRoot + " grokhub");
+        // Best-effort user launcher
+        try {
+          const binDir = path.join(os.homedir(), ".local", "bin");
+          await fs.mkdir(binDir, { recursive: true });
+          const launcher = path.join(binDir, "grokhub-user");
+          await fs.writeFile(
+            launcher,
+            `#!/bin/bash\nexport GROKHUB_HOME=${JSON.stringify(targetRoot)}\nexec ${JSON.stringify(path.join(targetRoot, "packaging/aur/grokhub.sh"))} "$@" 2>/dev/null || exec electron ${JSON.stringify(path.join(targetRoot, "desktop/main.mjs"))} "$@"\n`,
+            { mode: 0o755 },
+          );
+          steps.push(`User launcher: ${launcher}`);
+        } catch {}
+      } else {
+        throw e;
+      }
+    }
+
+    // Verify UI exists on target
+    try {
+      await fs.stat(path.join(targetRoot, ".output", "server", "index.mjs"));
       steps.push("Verified .output/server/index.mjs");
     } catch {
-      throw new Error("Update missing .output/server/index.mjs");
+      steps.push("Warning: .output/server/index.mjs missing after update");
     }
 
     try {
       if (typeof process.getuid === "function" && process.getuid() === 0) {
-        const script = path.join(root, "scripts", "install-arch.sh");
+        const script = path.join(targetRoot, "scripts", "install-arch.sh");
         await fs.stat(script);
         steps.push("Running install-arch.sh");
-        await execAsync(`bash "${script}"`, { cwd: root, timeout: 180000 });
+        await execAsync(`bash ${JSON.stringify(script)}`, { cwd: targetRoot, timeout: 180000, shell: "/bin/bash" });
       }
     } catch {
-      steps.push("System reinstall skipped");
+      steps.push("System reinstall script skipped");
     }
 
     let status;
@@ -677,34 +916,38 @@ async function applyUpdate(opts = {}) {
       status = await checkForUpdate({ repo, branch, token });
       if (status.updateAvailable && newSha && shaMatch(newSha, status.remoteSha)) {
         status.updateAvailable = false;
-        status.currentSha = newSha.slice(0, 12);
+        status.currentSha = String(newSha).slice(0, 12);
         status.currentVersion = newVersion;
-        status.detail = `Up to date · v${newVersion} · ${newSha.slice(0, 12)}`;
+        status.detail = `Up to date · v${newVersion} · ${String(newSha).slice(0, 12)}`;
       }
+      // If we fell back to user local, report that path
+      status.installRoot = targetRoot;
     } catch {}
 
     const doRestart = opts.restart !== false;
     if (doRestart) {
       steps.push("Restarting GrokHub…");
-      scheduleAppRestart(root);
+      process.env.GROKHUB_HOME = targetRoot;
+      scheduleAppRestart(targetRoot);
     } else {
       steps.push("Done — relaunch GrokHub to load the new build");
     }
 
     return {
       ok: true,
-      detail: `Updated to v${newVersion} (${(newSha || "latest").slice(0, 12)})`,
+      detail: `Updated to v${newVersion} (${(newSha || "latest").toString().slice(0, 12)}) @ ${targetRoot}`,
       steps,
-      newSha: newSha ? newSha.slice(0, 12) : undefined,
+      newSha: newSha ? String(newSha).slice(0, 12) : undefined,
       newVersion,
+      installRoot: targetRoot,
+      elevated: Boolean(installResult && installResult.elevated),
       restarting: doRestart,
       status,
     };
-
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     steps.push(`Failed: ${msg}`);
-    return { ok: false, detail: msg.slice(0, 2000), steps };
+    return { ok: false, detail: msg.slice(0, 2000), steps, installRoot: targetRoot };
   } finally {
     await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
   }
@@ -716,7 +959,7 @@ const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const XAI_UA = "GrokHub/0.2.10 (xAI OAuth; Electron)";
+const XAI_UA = "GrokHub/0.4.3 (xAI OAuth; Electron)";
 
 async function xaiDiscovery() {
   const res = await fetch(XAI_OAUTH_DISCOVERY, {

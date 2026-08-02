@@ -30,6 +30,8 @@ export type UpdateStatus = {
   repo: string;
   branch: string;
   installRoot: string | null;
+  /** false when install root is root-owned (e.g. /usr/lib/grokhub) */
+  writable?: boolean | null;
   detail: string;
 };
 
@@ -40,6 +42,8 @@ export type UpdateResult = {
   newSha?: string;
   newVersion?: string;
   restarting?: boolean;
+  installRoot?: string;
+  elevated?: boolean;
   /** Post-apply check so UI can clear “Update available” immediately */
   status?: UpdateStatus;
 };

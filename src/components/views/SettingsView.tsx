@@ -813,6 +813,14 @@ export function SettingsView() {
               </div>
               <div className="mt-2 space-y-1 font-mono text-xs text-[var(--color-muted)]">
                 <div>{update.detail}</div>
+                {update.writable === false && (
+                  <div className="text-[11px] text-amber-400/90">
+                    Install path is not writable by your user (e.g.{" "}
+                    <span className="font-mono">/usr/lib/grokhub</span>). Updating will ask for admin
+                    (pkexec) or fall back to{" "}
+                    <span className="font-mono">~/.local/share/grokhub</span>.
+                  </div>
+                )}
                 {(update.currentSha || update.remoteSha) && (
                   <div>
                     local {update.currentSha || "?"}
