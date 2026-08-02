@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ExternalLink, FolderInput, HardDrive, RefreshCw } from "lucide-react";
 import { getModesWithCatalog } from "@/lib/modes";
 import { friendlyModelName } from "@/lib/models-catalog";
-import { applyUpdate, checkUpdate } from "@/lib/grok-client";
+import { applyUpdate, checkUpdate, applyRollback, postUpdateSelfTest } from "@/lib/grok-client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { exportMemory, importMemory, memoryInfo } from "@/lib/persistent-storage";
 import {
@@ -218,6 +218,11 @@ export function SettingsView() {
   }
 
   async function onInstallUpdate() {
+    const st = useGrokHub.getState();
+    if (st.running) {
+      setUpdateLog("Agent is running — stop it before installing an update.");
+      return;
+    }
     setUpdateBusy(true);
     setUpdateLog("Installing update from GitHub…");
     try {
@@ -251,6 +256,44 @@ export function SettingsView() {
       setUpdateLog(lines.join("\n"));
     } catch (e) {
       setUpdateLog(e instanceof Error ? e.message : "update failed");
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
+  async function onRollback() {
+    if (useGrokHub.getState().running) {
+      setUpdateLog("Stop the agent before rollback.");
+      return;
+    }
+    if (!window.confirm("Undo last update and restore the previous install? The app will restart.")) {
+      return;
+    }
+    setUpdateBusy(true);
+    setUpdateLog("Rolling back…");
+    try {
+      const r = await applyRollback();
+      const lines = [r.ok ? "OK" : "FAILED", r.detail || "", "", ...((r as { steps?: string[] }).steps || [])].filter(Boolean);
+      if (r.ok && (r as { restarting?: boolean }).restarting) {
+        lines.push("", "Restarting…");
+        setUpdateLog(lines.join("\n"));
+        return;
+      }
+      setUpdateLog(lines.join("\n"));
+    } catch (e) {
+      setUpdateLog(e instanceof Error ? e.message : "rollback failed");
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
+  async function onSelfTest() {
+    setUpdateBusy(true);
+    try {
+      const r = await postUpdateSelfTest();
+      setUpdateLog([r.detail || "", "", ...((r as { checks?: string[] }).checks || [])].join("\n"));
+    } catch (e) {
+      setUpdateLog(e instanceof Error ? e.message : "self-test failed");
     } finally {
       setUpdateBusy(false);
     }
@@ -871,7 +914,17 @@ export function SettingsView() {
                   ? "Install latest"
                   : "Reinstall / repair"}
             </Button>
+            <Button variant="secondary" disabled={updateBusy} onClick={() => void onRollback()}>
+              Undo last update
+            </Button>
+            <Button variant="secondary" disabled={updateBusy} onClick={() => void onSelfTest()}>
+              Self-test install
+            </Button>
           </div>
+          <p className="text-[11px] text-[var(--color-subtle)]">
+            Updates are blocked while the agent is running. Previous install is kept as{" "}
+            <span className="font-mono">.prev</span> for one-shot rollback.
+          </p>
           {updateLog && (
             <pre className="scroll-panel max-h-48 whitespace-pre-wrap rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] p-3 font-mono text-xs text-[var(--color-muted)]">
               {updateLog}
@@ -945,6 +998,11 @@ export function SettingsView() {
                 "selfModifyEnabled",
                 "Allow self-modification",
                 "Agent may edit install files (src/, desktop/, …). Use Factory reinstall if something breaks.",
+              ],
+              [
+                "hostSafeMode",
+                "Host safe mode",
+                "Block dangerous shell patterns (rm -rf, sudo, pipe-to-shell, …)",
               ],
             ] as const
           ).map(([key, label, hint]) => (

@@ -8,13 +8,32 @@ const { promisify } = require("node:util");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { shell } = require("electron");
+let shell = null;
+try {
+  shell = require("electron").shell;
+} catch {
+  /* unit tests / non-electron */
+}
 
 const isWin = process.platform === "win32";
 
 const execAsync = promisify(exec);
 const MAX_STDOUT = 200_000;
 const MAX_TIMEOUT = 120_000;
+let safeMode = process.env.GROKHUB_HOST_SAFE === "1";
+/** @type {Map<string, import('node:child_process').ChildProcess>} */
+const runningJobs = new Map();
+
+const SAFE_DENY =
+  /\b(rm\s+-rf|mkfs|dd\s+if=|shutdown|reboot|poweroff|userdel|passwd\s|chmod\s+777|curl[^|]*\|\s*(ba)?sh|wget[^|]*\|\s*(ba)?sh|sudo\s+|pkexec\s+)/i;
+
+function setSafeMode(enabled) {
+  safeMode = Boolean(enabled);
+  return { ok: true, safeMode };
+}
+function getSafeMode() {
+  return { ok: true, safeMode };
+}
 
 function clip(s, max = MAX_STDOUT) {
   if (!s) return "";
@@ -147,7 +166,7 @@ async function writeFile(filePath, content) {
   return { path: target, bytes: Buffer.byteLength(content, "utf8") };
 }
 
-async function runExec(command, cwd, timeoutMs = 30_000) {
+async function runExec(command, cwd, timeoutMs = 30_000, opts = {}) {
   const cmd = String(command || "").trim();
   if (!cmd) {
     return {
@@ -158,6 +177,18 @@ async function runExec(command, cwd, timeoutMs = 30_000) {
       cwd: cwd || defaultCwd(),
       command: "",
       ms: 0,
+    };
+  }
+  if (safeMode && SAFE_DENY.test(cmd)) {
+    return {
+      ok: false,
+      code: 126,
+      stdout: "",
+      stderr: "Blocked by host safe mode (dangerous pattern). Disable in Settings → Desktop host.",
+      cwd: cwd || defaultCwd(),
+      command: cmd,
+      ms: 0,
+      safeMode: true,
     };
   }
   const workdir = cwd ? path.resolve(cwd) : defaultCwd();
@@ -310,7 +341,7 @@ async function listApps() {
 async function openApp(opts = {}) {
   try {
     if (opts.path) {
-      const err = await shell.openPath(opts.path);
+      const err = shell?.openPath ? await shell.openPath(opts.path) : "no-shell";
       if (err) {
         if (isWin) {
           spawn("cmd.exe", ["/c", "start", "", opts.path], {
@@ -326,7 +357,7 @@ async function openApp(opts = {}) {
     }
     if (opts.desktopFile) {
       if (isWin) {
-        const err = await shell.openPath(opts.desktopFile);
+        const err = shell?.openPath ? await shell.openPath(opts.desktopFile) : "no-shell";
         if (err) {
           spawn("cmd.exe", ["/c", "start", "", opts.desktopFile], {
             detached: true, stdio: "ignore", windowsHide: true, env: hostEnv(),
@@ -478,12 +509,47 @@ async function readOpenClawWorkspace(dirPath) {
 }
 
 
+function killExec(jobId) {
+  const id = String(jobId || "");
+  const child = runningJobs.get(id);
+  if (!child) return { ok: false, error: "no such job" };
+  try {
+    if (process.platform === "win32") {
+      try {
+        require("node:child_process").execSync(`taskkill /pid ${child.pid} /T /F`, {
+          windowsHide: true,
+          stdio: "ignore",
+        });
+      } catch {
+        child.kill();
+      }
+    } else {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    runningJobs.delete(id);
+    return { ok: true, killed: id };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 module.exports = {
   info,
   listDir,
   readFile,
   writeFile,
   runExec,
+  killExec,
+  setSafeMode,
+  getSafeMode,
   listApps,
   openApp,
   readOpenClawWorkspace,

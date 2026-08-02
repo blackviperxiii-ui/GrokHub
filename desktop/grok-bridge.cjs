@@ -11,7 +11,8 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.7.1";
+const APP_VERSION = "0.8.1";
+let updateInProgress = false;
 
 function shaMatch(a, b) {
   if (!a || !b) return false;
@@ -106,9 +107,10 @@ exec >>"${log}" 2>&1
 echo "[restart] $(date -Iseconds) root=${root}"
 # Wait for previous Electron to exit and release files
 sleep 2.8
-# Old process should be dead — free previous tree inodes
-rm -rf "${root}.prev" 2>/dev/null || true
+# Free incomplete .new only; KEEP .prev for one-shot rollback from Settings
 rm -rf "${root}.new" 2>/dev/null || true
+# Write stamp so post-update self-test can confirm
+echo "ok $(date -Iseconds)" > "${runtime}/grokhub/last-restart.ok" 2>/dev/null || true
 if [ -f "${pidfile}" ]; then
   kill "$(cat "${pidfile}" 2>/dev/null)" 2>/dev/null || true
   rm -f "${pidfile}"
@@ -477,12 +479,34 @@ async function probeXaiKey(apiKey) {
 }
 
 function installRoots() {
+  const home = os.homedir();
+  // Prefer env, then writable user trees, then system. Dual-install safe.
   return [
     process.env.GROKHUB_HOME || "",
+    path.join(home, ".local/lib/grokhub"),
+    path.join(home, ".local/share/grokhub"),
     "/usr/lib/grokhub",
-    path.join(os.homedir(), ".local/share/grokhub"),
     path.resolve(process.cwd()),
   ].filter(Boolean);
+}
+
+/** Prefer a writable install when multiple exist (user over root /usr). */
+async function findInstallRoot() {
+  const roots = installRoots();
+  const found = [];
+  for (const root of roots) {
+    if (await isInstallRoot(root)) found.push(root);
+  }
+  if (!found.length) return null;
+  // Prefer first writable
+  for (const root of found) {
+    if (await pathWritable(root)) return root;
+  }
+  // Prefer user paths over /usr even if not writable test failed oddly
+  for (const root of found) {
+    if (!isSystemInstall(root)) return root;
+  }
+  return found[0];
 }
 
 async function isInstallRoot(root) {
@@ -503,12 +527,6 @@ async function isInstallRoot(root) {
   return false;
 }
 
-async function findInstallRoot() {
-  for (const root of installRoots()) {
-    if (await isInstallRoot(root)) return root;
-  }
-  return null;
-}
 
 async function readLocalVersion(root) {
   let version = APP_VERSION;
@@ -681,9 +699,11 @@ if [[ "$DEST" == /usr/lib/grokhub || "$DEST" == /usr/lib/grokhub/* ]]; then
   [ -f "$DEST/desktop/main.mjs" ] && chmod 755 "$DEST/desktop/main.mjs" || true
   [ -f "$DEST/packaging/aur/grokhub.sh" ] && chmod 755 "$DEST/packaging/aur/grokhub.sh" || true
 fi
-# 7) Keep PREV until the old process exits (deleting it now crashes running Electron)
-# Restart script removes DEST.prev after relaunch delay.
-echo "Previous tree kept at $PREV until restart"
+# 7) Keep PREV for Settings → Undo last update (do not delete here)
+if [ -d "$PREV" ]; then
+  echo "$DEST" > "$PREV/.grokhub-rollback-target" 2>/dev/null || true
+  echo "Previous tree kept for rollback at $PREV"
+fi
 echo OK
 `
 
@@ -749,6 +769,14 @@ echo OK
 }
 
 async function applyUpdate(opts = {}) {
+  if (updateInProgress) {
+    return {
+      ok: false,
+      detail: "An update is already in progress",
+      steps: ["Rejected: concurrent update"],
+    };
+  }
+  updateInProgress = true;
   const steps = [];
   const repo = opts.repo || process.env.GROKHUB_REPO || DEFAULT_REPO;
   const branch = opts.branch || process.env.GROKHUB_BRANCH || DEFAULT_BRANCH;
@@ -780,8 +808,9 @@ async function applyUpdate(opts = {}) {
   // Prefer currently running install (GROKHUB_HOME), then system, then user local
   const candidates = [
     process.env.GROKHUB_HOME,
+    path.join(os.homedir(), ".local/lib/grokhub"),
+    path.join(os.homedir(), ".local/lib/grokhub"),
     "/usr/lib/grokhub",
-    path.join(os.homedir(), ".local/share/grokhub"),
     process.cwd(),
   ].filter(Boolean);
 
@@ -793,13 +822,13 @@ async function applyUpdate(opts = {}) {
     }
   }
   if (!root) {
-    root = path.join(os.homedir(), ".local/share/grokhub");
+    root = path.join(os.homedir(), ".local/lib/grokhub");
     await fs.mkdir(root, { recursive: true });
     steps.push(`Created ${root}`);
   }
 
-  // If system root is not writable and elevation may annoy, allow explicit user fallback
-  const userRoot = path.join(os.homedir(), ".local/share/grokhub");
+  // Prefer ~/.local/lib for user fallback (matches install-arch --user / OpenClaw layout)
+  const userRoot = path.join(os.homedir(), ".local/lib/grokhub");
   let targetRoot = root;
   const forceUser = Boolean(opts.userLocal);
   if (forceUser) {
@@ -1099,8 +1128,190 @@ async function applyUpdate(opts = {}) {
     steps.push(`Failed: ${msg}`);
     return { ok: false, detail: msg.slice(0, 2000), steps, installRoot: targetRoot };
   } finally {
-    await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
+    updateInProgress = false;
+    try {
+      if (typeof tmp !== "undefined" && tmp) {
+        await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
+      }
+    } catch {
+      /* ignore */
+    }
   }
+}
+
+/** List / apply rollback from DEST.prev if present */
+async function checkRollback(opts = {}) {
+  const root =
+    opts.root ||
+    process.env.GROKHUB_HOME ||
+    (await findInstallRoot()) ||
+    path.join(os.homedir(), ".local/lib/grokhub");
+  const prev = root + ".prev";
+  try {
+    await fs.stat(path.join(prev, "desktop", "main.mjs"));
+    let version = "?";
+    try {
+      version = (await fs.readFile(path.join(prev, "APP_VERSION"), "utf8")).trim() || version;
+    } catch {}
+    return {
+      ok: true,
+      available: true,
+      prevRoot: prev,
+      installRoot: root,
+      prevVersion: version,
+      detail: `Rollback available → v${version} (${prev})`,
+    };
+  } catch {
+    return {
+      ok: true,
+      available: false,
+      installRoot: root,
+      detail: "No previous install kept for rollback",
+    };
+  }
+}
+
+async function applyRollback(opts = {}) {
+  if (updateInProgress) {
+    return { ok: false, detail: "Update already in progress", steps: [] };
+  }
+  updateInProgress = true;
+  const steps = [];
+  try {
+    const root =
+      opts.root ||
+      process.env.GROKHUB_HOME ||
+      (await findInstallRoot()) ||
+      path.join(os.homedir(), ".local/lib/grokhub");
+    const prev = root + ".prev";
+    try {
+      await fs.stat(path.join(prev, "desktop", "main.mjs"));
+    } catch {
+      return { ok: false, detail: "No rollback snapshot (.prev)", steps: ["Missing " + prev] };
+    }
+    steps.push(`Rollback ${root} ← ${prev}`);
+    await stopUiServer(steps);
+
+    const sh = `#!/bin/bash
+set -euo pipefail
+DEST=${JSON.stringify(root)}
+PREV=${JSON.stringify(prev)}
+BROKEN="$DEST.broken-$(date +%s)"
+if [ ! -d "$PREV" ]; then echo "no prev"; exit 2; fi
+if [ -d "$DEST" ]; then mv "$DEST" "$BROKEN"; fi
+mv "$PREV" "$DEST"
+# Drop the broken tree after swap (old process should be exiting)
+rm -rf "$BROKEN" 2>/dev/null || true
+echo OK
+`
+    const shPath = path.join(os.tmpdir(), `grokhub-rollback-${process.pid}.sh`);
+    await fs.writeFile(shPath, sh, { mode: 0o755 });
+    try {
+      const elevated = !(await pathWritable(root));
+      if (elevated) {
+        steps.push("Elevating for rollback…");
+        try {
+          await execAsync(`pkexec bash ${JSON.stringify(shPath)}`, {
+            timeout: 180000,
+            shell: "/bin/bash",
+          });
+        } catch {
+          await execAsync(`sudo bash ${JSON.stringify(shPath)}`, {
+            timeout: 180000,
+            shell: "/bin/bash",
+          });
+        }
+      } else {
+        await execAsync(`bash ${JSON.stringify(shPath)}`, { timeout: 180000, shell: "/bin/bash" });
+      }
+      steps.push("Rollback swap complete");
+    } finally {
+      await fs.unlink(shPath).catch(() => {});
+    }
+
+    const doRestart = opts.restart !== false;
+    if (doRestart) {
+      process.env.GROKHUB_HOME = root;
+      steps.push("Restarting after rollback…");
+      scheduleAppRestart(root);
+    }
+    return {
+      ok: true,
+      detail: "Rolled back to previous install",
+      steps,
+      restarting: doRestart,
+      installRoot: root,
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    steps.push(msg);
+    return { ok: false, detail: msg.slice(0, 2000), steps };
+  } finally {
+    updateInProgress = false;
+  }
+}
+
+async function postUpdateSelfTest(opts = {}) {
+  const root =
+    opts.root || process.env.GROKHUB_HOME || (await findInstallRoot()) || process.cwd();
+  const checks = [];
+  let ok = true;
+  try {
+    await fs.stat(path.join(root, "desktop", "main.mjs"));
+    checks.push("desktop/main.mjs OK");
+  } catch {
+    ok = false;
+    checks.push("desktop/main.mjs MISSING");
+  }
+  try {
+    await fs.stat(path.join(root, ".output", "server", "index.mjs"));
+    checks.push(".output/server OK");
+  } catch {
+    ok = false;
+    checks.push(".output/server MISSING — run repair-install");
+  }
+  let version = APP_VERSION;
+  try {
+    version = (await fs.readFile(path.join(root, "APP_VERSION"), "utf8")).trim() || version;
+  } catch {}
+  const local = await readLocalVersion(root);
+  return {
+    ok,
+    version,
+    sha: local.sha,
+    installRoot: root,
+    detail: ok ? `Self-test OK · v${version}` : `Self-test FAILED · v${version}`,
+    checks,
+  };
+}
+
+/** Factory reinstall = full applyUpdate with factory file set */
+async function factoryReinstall(opts = {}) {
+  const steps = ["Factory reinstall requested"];
+  if (opts.wipeMemory) {
+    steps.push("Note: wipeMemory should be handled by the renderer before restart");
+  }
+  if (opts.clearSelfMod) {
+    try {
+      const selfMod = require("./self-mod.cjs");
+      if (typeof selfMod.clearJournal === "function") {
+        await selfMod.clearJournal();
+        steps.push("Cleared self-mod journal");
+      }
+    } catch {
+      steps.push("Self-mod clear skipped");
+    }
+  }
+  const r = await applyUpdate({
+    ...opts,
+    factory: true,
+    restart: opts.restart !== false,
+  });
+  return {
+    ...r,
+    steps: [...steps, ...(r.steps || [])],
+    detail: r.detail || "Factory reinstall finished",
+  };
 }
 
 
@@ -1109,7 +1320,7 @@ const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const XAI_UA = "GrokHub/0.7.1 (xAI OAuth; Electron)";
+const XAI_UA = "GrokHub/0.8.1 (xAI OAuth; Electron)";
 
 async function xaiDiscovery() {
   const res = await fetch(XAI_OAUTH_DISCOVERY, {
@@ -1638,6 +1849,9 @@ module.exports = {
   probeXaiKey,
   checkForUpdate,
   applyUpdate,
+  checkRollback,
+  applyRollback,
+  postUpdateSelfTest,
   factoryReinstall,
   scheduleAppRestart,
   oauthStart,

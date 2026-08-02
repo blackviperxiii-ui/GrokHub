@@ -71,6 +71,20 @@ export type DesktopGrokBridge = {
     restart?: boolean;
     factory?: boolean;
   }) => Promise<UpdateResult>;
+  checkRollback?: (opts?: { root?: string }) => Promise<{
+    ok: boolean;
+    available?: boolean;
+    prevVersion?: string;
+    detail?: string;
+    installRoot?: string;
+  }>;
+  applyRollback?: (opts?: { root?: string; restart?: boolean }) => Promise<UpdateResult>;
+  selfTest?: (opts?: { root?: string }) => Promise<{
+    ok: boolean;
+    version?: string;
+    detail?: string;
+    checks?: string[];
+  }>;
   factoryReinstall?: (opts?: {
     token?: string;
     wipeMemory?: boolean;
@@ -171,7 +185,15 @@ export type DesktopBridge = {
       maxBytes?: number,
     ) => Promise<{ path: string; content: string; truncated: boolean }>;
     writeFile: (p: string, content: string) => Promise<{ path: string; bytes: number }>;
-    exec: (command: string, cwd?: string, timeoutMs?: number) => Promise<HostExecResult>;
+    exec: (
+      command: string,
+      cwd?: string,
+      timeoutMs?: number,
+      opts?: { jobId?: string },
+    ) => Promise<HostExecResult>;
+    killExec?: (jobId: string) => Promise<{ ok: boolean; error?: string }>;
+    setSafeMode?: (enabled: boolean) => Promise<{ ok: boolean; safeMode?: boolean }>;
+    getSafeMode?: () => Promise<{ ok: boolean; safeMode?: boolean }>;
     listApps: () => Promise<HostApp[]>;
     openApp: (opts: {
       exec?: string;

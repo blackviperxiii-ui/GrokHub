@@ -1,6 +1,6 @@
 # GrokHub
 
-**v0.7.1** — Grok-native agent control plane for **Windows** and **Arch Linux / CachyOS**.
+**v0.8.1** — Grok-native agent control plane for **Windows** and **Arch Linux / CachyOS**.
 
 Modes (Auto / Fast / Expert / Heavy / Build) · Imagine · connectors · skills · automations · usage meter · free-Grok fallback · setup sync · unsandboxed host (CLI · files · apps).
 
@@ -59,6 +59,14 @@ sudo ./scripts/install-arch.sh
 grokhub
 ```
 
+**User install (no root, recommended if dual-install issues):**
+
+```bash
+./scripts/install-arch.sh --user
+# ensure ~/.local/bin is on PATH
+grokhub
+```
+
 **AUR-style local package:**
 
 ```bash
@@ -106,7 +114,8 @@ Secrets and chat history stay on the device; clean installs do not ship personal
 | **Skills / Automations** | Heartbeat schedules · multi-time runs |
 | **Desktop host** | Unsandboxed shell · files · apps (PowerShell on Windows, bash on Linux) |
 | **Usage** | Plan meter · poll from website |
-| **Updates** | Check / install from this GitHub repo |
+| **Updates** | Check / install / rollback / self-test from this GitHub repo |
+| **Host safe mode** | Optional block of dangerous shell patterns |
 
 ---
 

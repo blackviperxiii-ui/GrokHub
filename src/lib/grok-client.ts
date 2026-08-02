@@ -279,3 +279,22 @@ export async function applyUpdate(token?: string, force = true) {
     restart: false,
   });
 }
+
+
+export async function checkRollback() {
+  const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
+  if (desktop?.checkRollback) return desktop.checkRollback({});
+  return { ok: true, available: false, detail: "Rollback only in desktop app" };
+}
+
+export async function applyRollback() {
+  const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
+  if (desktop?.applyRollback) return desktop.applyRollback({ restart: true });
+  return { ok: false, detail: "Rollback only in desktop app", steps: [] };
+}
+
+export async function postUpdateSelfTest() {
+  const desktop = typeof window !== "undefined" ? window.grokhubDesktop?.grok : undefined;
+  if (desktop?.selfTest) return desktop.selfTest({});
+  return { ok: true, detail: "browser preview", checks: ["n/a"] };
+}

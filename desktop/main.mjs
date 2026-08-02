@@ -6,7 +6,37 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const host = require("./host-bridge.cjs");
-const grokBridge = require("./grok-bridge.cjs");
+let grokBridge;
+try {
+  grokBridge = require("./grok-bridge.cjs");
+  if (typeof grokBridge.factoryReinstall !== "function") {
+    // Harden against partial exports from older installs
+    grokBridge.factoryReinstall = async (opts = {}) =>
+      grokBridge.applyUpdate({
+        ...opts,
+        factory: true,
+        restart: opts.restart !== false,
+      });
+  }
+} catch (e) {
+  console.error("[GrokHub] failed to load grok-bridge.cjs", e);
+  grokBridge = {
+    checkForUpdate: async () => ({ updateAvailable: false, detail: "bridge missing" }),
+    applyUpdate: async () => ({ ok: false, detail: "bridge missing", steps: [] }),
+    factoryReinstall: async () => ({ ok: false, detail: "bridge missing", steps: [] }),
+    checkRollback: async () => ({ ok: true, available: false }),
+    applyRollback: async () => ({ ok: false, detail: "bridge missing", steps: [] }),
+    postUpdateSelfTest: async () => ({ ok: false, detail: "bridge missing", checks: [] }),
+    probeXaiKey: async () => ({ ok: false, detail: "bridge missing" }),
+    oauthStart: async () => ({ ok: false }),
+    oauthPoll: async () => ({ ok: false }),
+    oauthEnsure: async () => ({ ok: false }),
+    callXaiChatWithOAuth: async () => ({ ok: false }),
+    callXaiChatStream: async () => ({ ok: false }),
+    callXaiImagine: async () => ({ ok: false }),
+    callXaiChat: async () => ({ ok: false }),
+  };
+}
 const websiteSession = require("./website-session.cjs");
 const secretsStore = require("./secrets-store.cjs");
 const stateStore = require("./state-store.cjs");
@@ -221,30 +251,62 @@ function saveWindowState() {
   }
 }
 
-/** Ensure saved bounds are still on a connected display */
+/** Ensure saved bounds are still on a connected display (multi-monitor safe). */
 function sanitizeBounds(state) {
   const displays = screen.getAllDisplays();
   if (!state || !displays.length) return null;
-  const width = Math.max(880, state.width || 1200);
-  const height = Math.max(600, state.height || 800);
-  let x = typeof state.x === "number" ? state.x : displays[0].workArea.x + 40;
-  let y = typeof state.y === "number" ? state.y : displays[0].workArea.y + 40;
+  const primary = screen.getPrimaryDisplay();
+  const width = Math.min(
+    Math.max(880, state.width || 1200),
+    Math.max(880, primary.workArea.width),
+  );
+  const height = Math.min(
+    Math.max(600, state.height || 800),
+    Math.max(600, primary.workArea.height),
+  );
+  let x = typeof state.x === "number" ? state.x : primary.workArea.x + 40;
+  let y = typeof state.y === "number" ? state.y : primary.workArea.y + 40;
 
-  // Must intersect some display work area (at least 100px visible)
-  const intersects = displays.some((d) => {
+  // Prefer the same display id when still connected
+  let target = null;
+  if (state.displayId != null) {
+    target = displays.find((d) => d.id === state.displayId) || null;
+  }
+  // Must intersect some display work area (at least 80px visible on both axes)
+  const visibleOn = (d) => {
     const wa = d.workArea;
-    const overlapW =
-      Math.min(x + width, wa.x + wa.width) - Math.max(x, wa.x);
-    const overlapH =
-      Math.min(y + height, wa.y + wa.height) - Math.max(y, wa.y);
-    return overlapW > 100 && overlapH > 100;
-  });
+    const overlapW = Math.min(x + width, wa.x + wa.width) - Math.max(x, wa.x);
+    const overlapH = Math.min(y + height, wa.y + wa.height) - Math.max(y, wa.y);
+    return overlapW > 80 && overlapH > 80;
+  };
+  const intersects = displays.some(visibleOn);
   if (!intersects) {
-    const wa = screen.getPrimaryDisplay().workArea;
+    const wa = (target || primary).workArea;
     x = wa.x + Math.max(0, Math.floor((wa.width - width) / 2));
     y = wa.y + Math.max(0, Math.floor((wa.height - height) / 2));
+  } else if (target && !visibleOn(target)) {
+    // Saved display exists but window is off its workArea — center on that display
+    const wa = target.workArea;
+    x = wa.x + Math.max(0, Math.floor((wa.width - width) / 2));
+    y = wa.y + Math.max(0, Math.floor((wa.height - height) / 2));
+  } else {
+    // Clamp into the matching display work area so title bar stays reachable
+    const match =
+      displays.find(visibleOn) ||
+      screen.getDisplayMatching({ x, y, width, height }) ||
+      primary;
+    const wa = match.workArea;
+    x = Math.min(Math.max(x, wa.x), wa.x + Math.max(0, wa.width - 100));
+    y = Math.min(Math.max(y, wa.y), wa.y + Math.max(0, wa.height - 80));
   }
-  return { x, y, width, height, isMaximized: Boolean(state.isMaximized) };
+
+  // Never maximize onto a missing displayId
+  let isMaximized = Boolean(state.isMaximized);
+  if (isMaximized && state.displayId != null && !displays.some((d) => d.id === state.displayId)) {
+    isMaximized = false;
+  }
+
+  return { x, y, width, height, isMaximized, displayId: state.displayId };
 }
 
 function fitToWorkArea(win) {
@@ -607,8 +669,11 @@ function registerIpc() {
   );
   safeHandle(
     "host:exec",
-    wrap((_e, command, cwd, timeoutMs) => host.runExec(command, cwd, timeoutMs)),
+    wrap((_e, command, cwd, timeoutMs, opts) => host.runExec(command, cwd, timeoutMs, opts || {})),
   );
+  safeHandle("host:killExec", (_e, jobId) => host.killExec(jobId));
+  safeHandle("host:setSafeMode", (_e, enabled) => host.setSafeMode(Boolean(enabled)));
+  safeHandle("host:getSafeMode", () => host.getSafeMode());
   safeHandle(
     "host:listApps",
     wrap(() => host.listApps()),
@@ -665,6 +730,27 @@ function registerIpc() {
     }
     return r;
   });
+  safeHandle("update:checkRollback", (_e, opts) => grokBridge.checkRollback(opts || {}));
+  safeHandle("update:rollback", async (_e, opts) => {
+    const r = await grokBridge.applyRollback({ ...(opts || {}), restart: true });
+    if (r?.ok && r?.restarting) {
+      setTimeout(() => {
+        try {
+          tray?.destroy();
+        } catch {
+          /* ignore */
+        }
+        try {
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+        } catch {
+          /* ignore */
+        }
+        app.exit(0);
+      }, 1600);
+    }
+    return r;
+  });
+  safeHandle("update:selfTest", (_e, opts) => grokBridge.postUpdateSelfTest(opts || {}));
 
   /** Capture grok.com SSO cookie (website Usage / weekly SuperGrok limit). */
   safeHandle("grok:getWebsiteSso", async () => {

@@ -14,8 +14,11 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     listDir: (p) => ipcRenderer.invoke("host:listDir", p),
     readFile: (p, maxBytes) => ipcRenderer.invoke("host:readFile", p, maxBytes),
     writeFile: (p, content) => ipcRenderer.invoke("host:writeFile", p, content),
-    exec: (command, cwd, timeoutMs) =>
-      ipcRenderer.invoke("host:exec", command, cwd, timeoutMs),
+    exec: (command, cwd, timeoutMs, opts) =>
+      ipcRenderer.invoke("host:exec", command, cwd, timeoutMs, opts),
+    killExec: (jobId) => ipcRenderer.invoke("host:killExec", jobId),
+    setSafeMode: (enabled) => ipcRenderer.invoke("host:setSafeMode", enabled),
+    getSafeMode: () => ipcRenderer.invoke("host:getSafeMode"),
     listApps: () => ipcRenderer.invoke("host:listApps"),
     openApp: (opts) => ipcRenderer.invoke("host:openApp", opts),
     readOpenClawWorkspace: (p) => ipcRenderer.invoke("host:readOpenClawWorkspace", p),
@@ -33,6 +36,9 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     oauthEnsure: (tokens) => ipcRenderer.invoke("grok:oauthEnsure", tokens),
     checkUpdate: (opts) => ipcRenderer.invoke("update:check", opts),
     applyUpdate: (opts) => ipcRenderer.invoke("update:apply", opts),
+    checkRollback: (opts) => ipcRenderer.invoke("update:checkRollback", opts),
+    applyRollback: (opts) => ipcRenderer.invoke("update:rollback", opts),
+    selfTest: (opts) => ipcRenderer.invoke("update:selfTest", opts),
     factoryReinstall: (opts) => ipcRenderer.invoke("update:factory", opts),
     linkWebsiteSession: () => ipcRenderer.invoke("grok:linkWebsiteSession"),
     getWebsiteSso: () => ipcRenderer.invoke("grok:getWebsiteSso"),

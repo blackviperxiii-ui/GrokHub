@@ -219,6 +219,7 @@ export function AppShell() {
   const tickHeartbeat = useGrokHub((s) => s.tickHeartbeat);
   const grokConnected = useGrokHub((s) => s.grokConnected);
   const grokStatusDetail = useGrokHub((s) => s.grokStatusDetail);
+  const apiKey = useGrokHub((s) => s.apiKey);
   const probeGrok = useGrokHub((s) => s.probeGrok);
   const syncFromGrok = useGrokHub((s) => s.syncFromGrok);
   const newThread = useGrokHub((s) => s.newThread);
@@ -288,6 +289,13 @@ export function AppShell() {
       })();
     });
     setIsDesktop(Boolean(window.grokhubDesktop));
+    // Sync host safe mode preference into Electron host bridge
+    try {
+      const safe = useGrokHub.getState().desktop.hostSafeMode;
+      void window.grokhubDesktop?.host?.setSafeMode?.(Boolean(safe));
+    } catch {
+      /* ignore */
+    }
 
     // Flush memory on hide/close so restarts keep the latest turn
     const flush = () => {
@@ -394,6 +402,8 @@ export function AppShell() {
   const drag = { WebkitAppRegion: "drag" } as CSSProperties;
   const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
   const recent = [...threads].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6);
+  const showOffline =
+    grokConnected === false && !oauth?.accessToken && !apiKey;
 
   return (
     <div className="flex h-dvh max-h-dvh w-full max-w-none flex-col overflow-hidden bg-[var(--color-bg)] text-[var(--color-fg)]">
@@ -485,6 +495,15 @@ export function AppShell() {
           )}
         </div>
       </div>
+
+      {showOffline ? (
+        <div className="shrink-0 border-b border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-warn)_12%,var(--color-surface))] px-3 py-1.5 text-center text-[11px] text-[var(--color-muted)]">
+          Offline / not connected — free fallback when possible.{" "}
+          <button type="button" className="underline" onClick={() => setNav("settings")}>
+            Connect Grok in Settings
+          </button>
+        </div>
+      ) : null}
 
       <div className="app-frame flex min-h-0 w-full flex-1 overflow-hidden">
         <aside className="sidebar-rail hidden shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-surface)] md:flex">

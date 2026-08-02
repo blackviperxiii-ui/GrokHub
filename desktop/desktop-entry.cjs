@@ -37,27 +37,51 @@ function resolveExec() {
   if (process.env.GROKHUB_EXEC && fs.existsSync(process.env.GROKHUB_EXEC)) {
     return process.env.GROKHUB_EXEC;
   }
+  const homeDir = home();
+  const userBin = path.join(homeDir, ".local/bin/grokhub");
+  const userLibMain = path.join(homeDir, ".local/lib/grokhub/desktop/main.mjs");
+  const userShareMain = path.join(homeDir, ".local/share/grokhub/desktop/main.mjs");
+  // Prefer user install when present — GUI PATH often puts /usr/bin first (broken dual-install)
   const candidates = [
-    which("grokhub"),
-    path.join(home(), ".local/bin/grokhub"),
-    "/usr/bin/grokhub",
-    "/usr/local/bin/grokhub",
+    fs.existsSync(userBin) ? userBin : "",
+    fs.existsSync(userLibMain) || fs.existsSync(userShareMain) ? userBin : "",
+    path.join(homeDir, ".local/bin/grokhub"),
+    // only use which(grokhub) if it is NOT the system path while a user bin exists
   ].filter(Boolean);
+
+  const whichPath = which("grokhub");
+  if (whichPath) {
+    const isSystem = whichPath === "/usr/bin/grokhub" || whichPath === "/usr/local/bin/grokhub";
+    if (!(isSystem && fs.existsSync(userBin))) {
+      candidates.push(whichPath);
+    }
+  }
+  candidates.push("/usr/bin/grokhub", "/usr/local/bin/grokhub");
+
+  const seen = new Set();
   for (const c of candidates) {
+    if (!c || seen.has(c)) continue;
+    seen.add(c);
     try {
-      if (c && fs.existsSync(c)) return c;
+      if (fs.existsSync(c)) {
+        // Prefer absolute path always
+        return path.resolve(c);
+      }
     } catch {
       /* next */
     }
   }
-  // Last resort: PATH name (still better than electron)
-  return candidates[0] || "grokhub";
+  // Last resort
+  if (fs.existsSync(userBin)) return path.resolve(userBin);
+  return "grokhub";
 }
 
 function resolveIconPath() {
+  const homeDir = home();
   const roots = [
     process.env.GROKHUB_HOME,
-    path.join(home(), ".local/share/grokhub"),
+    path.join(homeDir, ".local/lib/grokhub"),
+    path.join(homeDir, ".local/share/grokhub"),
     "/usr/lib/grokhub",
     process.cwd(),
   ].filter(Boolean);

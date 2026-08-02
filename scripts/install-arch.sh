@@ -1,28 +1,91 @@
 #!/usr/bin/env bash
-# Install GrokHub system-wide on Arch / CachyOS from this repo (or a clone).
-# Usage: sudo ./scripts/install-arch.sh
+# Install GrokHub on Arch / CachyOS from this repo.
+#
+# System (default):  sudo ./scripts/install-arch.sh
+# User (no root):    ./scripts/install-arch.sh --user
+#
+# User layout:
+#   ~/.local/lib/grokhub   app files
+#   ~/.local/bin/grokhub   launcher
+#   ~/.local/share/applications/grokhub.desktop
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PREFIX="${PREFIX:-/usr}"
-APP_LIB="${PREFIX}/lib/grokhub"
+USER_MODE=0
+for arg in "$@"; do
+  case "$arg" in
+    --user|-u) USER_MODE=1 ;;
+    --help|-h)
+      echo "Usage: $0 [--user]"
+      echo "  default: system install to /usr (requires root)"
+      echo "  --user:  install to ~/.local (no root)"
+      exit 0
+      ;;
+  esac
+done
 
-if [[ "$(id -u)" -ne 0 ]]; then
+if [[ "$USER_MODE" -eq 1 ]]; then
+  PREFIX="${HOME}/.local"
+  APP_LIB="${PREFIX}/lib/grokhub"
+  BIN="${PREFIX}/bin/grokhub"
+  DESKTOP_DIR="${PREFIX}/share/applications"
+  ICON_ROOT="${PREFIX}/share/icons/hicolor"
+  NEED_ROOT=0
+else
+  PREFIX="${PREFIX:-/usr}"
+  APP_LIB="${PREFIX}/lib/grokhub"
+  BIN="${PREFIX}/bin/grokhub"
+  DESKTOP_DIR="${PREFIX}/share/applications"
+  ICON_ROOT="${PREFIX}/share/icons/hicolor"
+  NEED_ROOT=1
+fi
+
+if [[ "$NEED_ROOT" -eq 1 && "$(id -u)" -ne 0 ]]; then
   echo "Run as root: sudo $0" >&2
+  echo "Or user install: $0 --user" >&2
   exit 1
 fi
 
 if ! command -v electron >/dev/null 2>&1; then
-  echo "Installing electron nodejs curl …"
-  pacman -S --needed --noconfirm electron nodejs curl
+  if [[ "$NEED_ROOT" -eq 1 ]]; then
+    echo "Installing electron nodejs curl …"
+    pacman -S --needed --noconfirm electron nodejs curl
+  else
+    echo "error: electron not found (pacman -S electron)" >&2
+    exit 1
+  fi
 fi
 
-if [[ ! -f "$ROOT/.output/server/index.mjs" ]]; then
+if ! command -v node >/dev/null 2>&1; then
+  echo "error: node not found (pacman -S nodejs)" >&2
+  exit 1
+fi
+
+build_ui() {
   echo "Building desktop runtime (GROKHUB_DESKTOP=1) …"
   if [[ ! -d "$ROOT/node_modules" ]]; then
     (cd "$ROOT" && npm ci --ignore-scripts || npm install --ignore-scripts)
   fi
-  (cd "$ROOT" && GROKHUB_DESKTOP=1 npm run build)
+  (cd "$ROOT" && GROKHUB_DESKTOP=1 npm run desktop:build)
+}
+
+if [[ ! -f "$ROOT/.output/server/index.mjs" ]]; then
+  build_ui
+fi
+
+# Always ensure PGLite assets exist (may be missing on older builds)
+if [[ ! -f "$ROOT/.output/server/_libs/pglite.data" ]]; then
+  echo "PGLite assets missing — rebuilding desktop UI …"
+  build_ui
+fi
+
+if [[ ! -f "$ROOT/.output/server/index.mjs" ]]; then
+  echo "error: build failed — missing .output/server/index.mjs" >&2
+  exit 1
+fi
+if [[ ! -f "$ROOT/.output/server/_libs/pglite.data" ]]; then
+  echo "error: build incomplete — missing .output/server/_libs/pglite.data" >&2
+  exit 1
 fi
 
 echo "Installing into ${APP_LIB} …"
@@ -30,76 +93,103 @@ rm -rf "$APP_LIB"
 install -dm755 "$APP_LIB"
 cp -a "$ROOT/.output" "$ROOT/desktop" "$APP_LIB/"
 
-# Ensure window/taskbar icons ship next to Electron main
+# Optional packaging bits for user launcher
+if [[ -d "$ROOT/packaging" ]]; then
+  cp -a "$ROOT/packaging" "$APP_LIB/" 2>/dev/null || true
+fi
+if [[ -f "$ROOT/package.json" ]]; then
+  cp -a "$ROOT/package.json" "$APP_LIB/" 2>/dev/null || true
+fi
+if [[ -f "$ROOT/APP_VERSION" ]]; then
+  cp -a "$ROOT/APP_VERSION" "$APP_LIB/" 2>/dev/null || true
+fi
+if [[ -f "$ROOT/LICENSE" ]]; then
+  cp -a "$ROOT/LICENSE" "$APP_LIB/" 2>/dev/null || true
+fi
+
 if [[ -d "$ROOT/desktop/icons" ]]; then
   install -dm755 "$APP_LIB/desktop/icons"
   cp -a "$ROOT/desktop/icons/." "$APP_LIB/desktop/icons/"
 fi
 
-install -Dm755 "$ROOT/packaging/aur/grokhub.sh" "${PREFIX}/bin/grokhub"
-install -Dm644 "$ROOT/packaging/grokhub.desktop" \
-  "${PREFIX}/share/applications/grokhub.desktop"
+install -dm755 "$(dirname "$BIN")"
+install -Dm755 "$ROOT/packaging/aur/grokhub.sh" "$BIN"
 
-# SVG + PNG hicolor theme (taskbar / launcher / dock)
-install -Dm644 "$ROOT/packaging/grokhub.svg" \
-  "${PREFIX}/share/icons/hicolor/scalable/apps/grokhub.svg"
+# Desktop entry with absolute Exec pointing at this install's launcher
+install -dm755 "$DESKTOP_DIR"
+if [[ -f "$ROOT/packaging/grokhub.desktop" ]]; then
+  # Rewrite Exec/TryExec to absolute user/system bin
+  sed -e "s|^Exec=.*|Exec=${BIN} %U|" \
+      -e "s|^TryExec=.*|TryExec=${BIN}|" \
+      "$ROOT/packaging/grokhub.desktop" >"${DESKTOP_DIR}/grokhub.desktop"
+  chmod 644 "${DESKTOP_DIR}/grokhub.desktop"
+else
+  cat >"${DESKTOP_DIR}/grokhub.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=GrokHub
+Exec=${BIN} %U
+TryExec=${BIN}
+Icon=grokhub
+Terminal=false
+Categories=Utility;Development;
+StartupWMClass=grokhub
+EOF
+fi
+
+# Icons
+if [[ -f "$ROOT/packaging/grokhub.svg" ]]; then
+  install -Dm644 "$ROOT/packaging/grokhub.svg" \
+    "${ICON_ROOT}/scalable/apps/grokhub.svg"
+fi
 if [[ -d "$ROOT/packaging/icons/hicolor" ]]; then
   while IFS= read -r -d '' png; do
     rel="${png#"$ROOT/packaging/icons/hicolor/"}"
-    install -Dm644 "$png" "${PREFIX}/share/icons/hicolor/${rel}"
+    install -Dm644 "$png" "${ICON_ROOT}/${rel}"
   done < <(find "$ROOT/packaging/icons/hicolor" -type f -name '*.png' -print0)
 fi
-# Legacy pixmaps fallback (some panels only look here)
-if [[ -f "$ROOT/packaging/icons/grokhub-128.png" ]]; then
-  install -Dm644 "$ROOT/packaging/icons/grokhub-128.png" \
-    "${PREFIX}/share/pixmaps/grokhub.png"
+
+find "$APP_LIB" -type f -exec chmod 644 {} + 2>/dev/null || true
+find "$APP_LIB" -type d -exec chmod 755 {} + 2>/dev/null || true
+chmod 755 "$BIN"
+chmod 755 "$APP_LIB/desktop/main.mjs" || true
+chmod 755 "$APP_LIB/packaging/aur/grokhub.sh" 2>/dev/null || true
+
+# Stamp versions for updater
+if command -v git >/dev/null 2>&1 && [[ -d "$ROOT/.git" ]]; then
+  git -C "$ROOT" rev-parse HEAD >"$APP_LIB/VERSION" 2>/dev/null || true
+fi
+if [[ -f "$ROOT/package.json" ]]; then
+  node -e "const p=require(process.argv[1]); require('fs').writeFileSync(process.argv[2], p.version+'\\n')" \
+    "$ROOT/package.json" "$APP_LIB/APP_VERSION" 2>/dev/null \
+    || cp -f "$ROOT/APP_VERSION" "$APP_LIB/APP_VERSION" 2>/dev/null \
+    || echo "0.8.0" >"$APP_LIB/APP_VERSION"
 fi
 
-install -Dm644 "$ROOT/LICENSE" \
-  "${PREFIX}/share/licenses/grokhub/LICENSE"
-
-find "$APP_LIB" -type f -exec chmod 644 {} +
-find "$APP_LIB" -type d -exec chmod 755 {} +
-chmod 755 "${PREFIX}/bin/grokhub"
-chmod 755 "$APP_LIB/desktop/main.mjs" || true
-
-# Refresh icon/desktop caches so taskbar picks up Icon=grokhub immediately
 if command -v update-desktop-database >/dev/null 2>&1; then
-  update-desktop-database "${PREFIX}/share/applications" 2>/dev/null || true
+  update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
 fi
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-  gtk-update-icon-cache -f -t "${PREFIX}/share/icons/hicolor" 2>/dev/null || true
+  gtk-update-icon-cache -f -t "$ICON_ROOT" 2>/dev/null || true
 fi
-if command -v xdg-icon-resource >/dev/null 2>&1; then
-  for s in 16 32 48 64 128 256; do
-    f="$ROOT/packaging/icons/grokhub-${s}.png"
-    if [[ -f "$f" ]]; then
-      xdg-icon-resource install --novendor --size "$s" "$f" grokhub 2>/dev/null || true
-    fi
-  done
+
+# Ensure user bin is on PATH hint
+if [[ "$USER_MODE" -eq 1 ]]; then
+  if ! echo ":$PATH:" | grep -q ":${HOME}/.local/bin:"; then
+    echo "note: add ~/.local/bin to PATH if 'grokhub' is not found"
+  fi
 fi
 
 cat <<EOF
 
-GrokHub installed (with taskbar icons).
+GrokHub installed.
 
-  Run:   grokhub
-  Menu:  Applications → GrokHub
-  Icon:  ${PREFIX}/share/icons/hicolor/*/apps/grokhub.png
+  Mode:    $([[ "$USER_MODE" -eq 1 ]] && echo user || echo system)
+  App:     ${APP_LIB}
+  Launch:  ${BIN}
+  Menu:    ${DESKTOP_DIR}/grokhub.desktop
 
-If the panel still shows a generic Electron icon, log out/in once or run:
-  gtk-update-icon-cache -f /usr/share/icons/hicolor
+Run:  grokhub
+      # or: GROKHUB_HOME=${APP_LIB} ${BIN}
 
 EOF
-
-# Stamp version files for updater
-if [[ -n "${GROKHUB_SRC:-}" && -f "$GROKHUB_SRC/VERSION" ]]; then
-  install -Dm644 "$GROKHUB_SRC/VERSION" "$APP_ROOT/VERSION"
-elif command -v git >/dev/null 2>&1 && [[ -d "${GROKHUB_SRC:-.}/.git" ]]; then
-  git -C "${GROKHUB_SRC:-.}" rev-parse HEAD > "$APP_ROOT/VERSION" || true
-fi
-if [[ -f "${GROKHUB_SRC:-.}/package.json" ]]; then
-  node -e "const p=require('./package.json'); require('fs').writeFileSync(process.argv[1], p.version+'\n')" "$APP_ROOT/APP_VERSION" 2>/dev/null || echo "0.2.4" > "$APP_ROOT/APP_VERSION"
-else
-  echo "0.2.4" > "$APP_ROOT/APP_VERSION"
-fi

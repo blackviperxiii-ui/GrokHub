@@ -15,6 +15,14 @@ function appRootFrom(desktopDir) {
     const h = path.resolve(process.env.GROKHUB_HOME);
     if (fs.existsSync(path.join(h, ".output", "server", "index.mjs"))) return h;
   }
+  // 1b) User install layouts (prefer over system)
+  const home = os.homedir();
+  for (const h of [
+    path.join(home, ".local/lib/grokhub"),
+    path.join(home, ".local/share/grokhub"),
+  ]) {
+    if (fs.existsSync(path.join(h, ".output", "server", "index.mjs"))) return h;
+  }
   // 2) Packaged Electron — prefer app.asar.unpacked (spawn can't exec inside asar)
   try {
     const { app } = require("electron");
@@ -43,7 +51,11 @@ function appRootFrom(desktopDir) {
   } catch {
     /* not in electron yet */
   }
-  // 3) desktop/ sibling of .output
+  // 3) system install
+  if (fs.existsSync(path.join("/usr/lib/grokhub", ".output", "server", "index.mjs"))) {
+    return "/usr/lib/grokhub";
+  }
+  // 4) desktop/ sibling of .output
   const sibling = path.resolve(desktopDir, "..");
   if (fs.existsSync(path.join(sibling, ".output", "server", "index.mjs"))) return sibling;
   return sibling;

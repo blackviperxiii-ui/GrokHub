@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { persistentStorage } from "./persistent-storage";
+import { redactSecrets } from "./redact";
 import { renderImaginePreview } from "./imagine";
 import { getMode, resolveMode, resolveModeWithCatalog, stripAssistantChrome, modelIdForMode, autoRouteFor } from "./modes";
 import { buildCatalog, emptyCatalog, applyGrokPlan, needsGrokClassification, type ResolvedCatalog, type GrokSlotPlan } from "./models-catalog";
@@ -104,6 +105,8 @@ type State = {
     confirmDestructiveOnly: boolean;
     /** Allow agent SELF_MOD writes under the install tree */
     selfModifyEnabled: boolean;
+    /** Block dangerous host shell patterns (rm -rf, sudo, pipe-to-shell, …) */
+    hostSafeMode: boolean;
   };
   /** Host commands awaiting user approval */
   pendingHostConfirm: {
@@ -510,6 +513,7 @@ export const useGrokHub = create<State>()(
         confirmHostCommands: true,
         confirmDestructiveOnly: true,
         selfModifyEnabled: false,
+        hostSafeMode: false,
       },
       usage: createUsage("pro"),
       heartbeatAt: boot.heartbeatAt,
@@ -544,6 +548,13 @@ export const useGrokHub = create<State>()(
       setModeMenuOpen: (open) => set({ modeMenuOpen: open }),
       setDesktop: (patch) => {
         set((s) => ({ desktop: { ...s.desktop, ...patch } }));
+        if (typeof patch.hostSafeMode === "boolean" && typeof window !== "undefined") {
+          try {
+            void window.grokhubDesktop?.host?.setSafeMode?.(patch.hostSafeMode);
+          } catch {
+            /* ignore */
+          }
+        }
         get().scheduleSetupAutoPush();
       },
 
@@ -3100,8 +3111,8 @@ if (!cmds.length) {
           id: uid("act"),
           ts: item.ts ?? Date.now(),
           kind: item.kind,
-          title: item.title,
-          detail: item.detail,
+          title: redactSecrets(item.title),
+          detail: item.detail != null ? redactSecrets(String(item.detail)) : item.detail,
           status: item.status,
         };
         set((s) => ({ activity: [row, ...s.activity].slice(0, 80) }));
@@ -3220,7 +3231,11 @@ if (!cmds.length) {
           streaming: false,
           // don't persist ephemeral stop flags forever
         })),
-        activity: s.activity.slice(0, 100),
+        activity: s.activity.slice(0, 40).map((a) => ({
+          ...a,
+          title: redactSecrets(a.title),
+          detail: a.detail != null ? redactSecrets(String(a.detail)) : a.detail,
+        })),
         quickAssistMemory: s.quickAssistMemory,
         // nav not forced — restore last view except desktop
         // Secrets stay in safeStorage (userData), not here
@@ -3257,6 +3272,15 @@ if (!cmds.length) {
         if (s.imagineQuality !== "speed" && s.imagineQuality !== "quality") s.imagineQuality = "speed";
         if (!s.imagineAspect) s.imagineAspect = "auto";
         if (!Array.isArray(s.imagineJobs)) s.imagineJobs = [];
+        // desktop defaults
+        try {
+          const d = (s.desktop || {}) as Record<string, unknown>;
+          if (typeof d.hostSafeMode !== "boolean") d.hostSafeMode = false;
+          if (typeof d.confirmHostCommands !== "boolean") d.confirmHostCommands = true;
+          s.desktop = d;
+        } catch {
+          /* ignore */
+        }
         // Host safety defaults for upgrades
         const desk = s.desktop as Record<string, unknown> | undefined;
         if (desk) {
