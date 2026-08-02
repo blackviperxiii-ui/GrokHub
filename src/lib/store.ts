@@ -56,6 +56,11 @@ import {
   type ProjectWorkspace,
 } from "./project-workspace";
 import { compactMessagesSmart, reflectLearningSmart } from "./smart-compact";
+import {
+  applyTurnLearning,
+  extractMemoryNotes,
+  applyAgentMemoryNotes,
+} from "./session-learn";
 import { renderImaginePreview } from "./imagine";
 import { getMode, resolveMode, resolveModeWithCatalog, stripAssistantChrome, modelIdForMode, autoRouteFor } from "./modes";
 import { buildCatalog, emptyCatalog, applyGrokPlan, needsGrokClassification, type ResolvedCatalog, type GrokSlotPlan } from "./models-catalog";
@@ -996,7 +1001,41 @@ export const useGrokHub = create<State>()(
       runSelfImprove: async () => {
         const s = get();
         const online = Boolean(s.oauth?.accessToken || s.apiKey);
-        const { state, markdown } = await reflectLearningSmart(s.learning, {
+        let learning = s.learning;
+        try {
+          const { extractSessionSignals } = await import("./session-learn");
+          const { upsertInsight } = await import("./learning");
+          const recent = s.chat
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .slice(-16);
+          for (let i = 0; i < recent.length; i++) {
+            const u = recent[i];
+            if (u?.role !== "user") continue;
+            const a = recent[i + 1]?.role === "assistant" ? recent[i + 1] : null;
+            const sig = extractSessionSignals(u.content || "", a?.content || "");
+            for (const p of [
+              ...sig.prefs,
+              ...sig.facts,
+              ...sig.topics.map((t) => `Focus: ${t}`),
+            ]) {
+              learning = upsertInsight(learning, {
+                key: `reflect-chat:${p.toLowerCase().slice(0, 40)}`,
+                text: p,
+                confidence: 0.55,
+                source: "distill",
+              });
+            }
+            if (sig.prefs.length) {
+              await memoryAppendFacts(sig.prefs, { target: "USER.md" });
+            }
+            if (sig.facts.length) {
+              await memoryAppendFacts(sig.facts, { target: "MEMORY.md" });
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+        const { state, markdown } = await reflectLearningSmart(learning, {
           online,
           bearer: s.oauth?.accessToken,
           apiKey: s.apiKey,
@@ -1004,8 +1043,12 @@ export const useGrokHub = create<State>()(
         set({ learning: state });
         try {
           await memoryWrite("LEARNINGS.md", markdown);
-          const tops = state.insights.slice(0, 5).map((i) => i.text);
+          const tops = state.insights.slice(0, 8).map((i) => i.text);
           if (tops.length) await memoryAppendFacts(tops, { target: "MEMORY.md" });
+          await memoryAppend(
+            "today",
+            `Full reflect · ${state.insights.length} insights · ${state.totalTurns} turns`,
+          );
         } catch {
           /* browser ok */
         }
@@ -1018,7 +1061,7 @@ export const useGrokHub = create<State>()(
         void get().flushLearningToDisk();
         return {
           ok: true,
-          detail: `Reflected into LEARNINGS.md · ${learningSummaryLine(state)}`,
+          detail: `Reflected into LEARNINGS.md + MEMORY.md · ${learningSummaryLine(state)}`,
         };
       },
 
@@ -4220,6 +4263,17 @@ while (rounds < maxRounds && !aborted) {
                 } catch {
                   /* ignore */
                 }
+                // Agent durable notes → MEMORY.md + learning
+                try {
+                  const mn = extractMemoryNotes(fullRaw);
+                  if (mn.notes.length) {
+                    const nextL = await applyAgentMemoryNotes(get().learning, mn.notes);
+                    set({ learning: nextL });
+                    void get().flushLearningToDisk();
+                  }
+                } catch {
+                  /* ignore */
+                }
                 const full = fullRaw;
                 const visible = scrubAssistant(full);
                 accumulated = full;
@@ -4796,17 +4850,16 @@ if (!cmds.length) {
             /* ignore */
           }
           try {
-            set({
-              learning: learnFromTurn(get().learning, {
-                ok: false,
-                mode: routed,
-                routeTier: auto?.tier,
-                userText: trimmed,
-                assistantText: finalAnswer || "",
-                threadId: get().activeThreadId || undefined,
-              }),
+            const turn = await applyTurnLearning(get().learning, {
+              ok: false,
+              mode: routed,
+              routeTier: auto?.tier,
+              userText: trimmed,
+              assistantText: finalAnswer || "",
+              threadId: get().activeThreadId || undefined,
+              online: Boolean(get().oauth?.accessToken || get().apiKey),
             });
-            void get().flushLearningToDisk();
+            set({ learning: turn.learning });
           } catch {
             /* ignore */
           }
@@ -4854,22 +4907,31 @@ if (!cmds.length) {
           }
           try {
             const botRow = get().chat.find((m) => m.id === botId);
-            set({
-              learning: learnFromTurn(get().learning, {
-                ok: Boolean(usedLive) || Boolean(answer?.trim()),
-                mode: routed,
-                routeTier: botRow?.routeTier || auto?.tier,
-                modelId: botRow?.routeModel || auto?.modelId,
-                userText: trimmed,
-                assistantText: answer || "",
-                threadId: get().activeThreadId || undefined,
-                usedHostTools: /host|HOST_CMD|Desktop host/i.test(answer || ""),
-                usedConnectors: /connector|CONNECTOR_CMD/i.test(answer || ""),
-              }),
+            const th = get().threads.find((x) => x.id === get().activeThreadId);
+            const turn = await applyTurnLearning(get().learning, {
+              ok: Boolean(usedLive) || Boolean(answer?.trim()),
+              mode: routed,
+              routeTier: botRow?.routeTier || auto?.tier,
+              modelId: botRow?.routeModel || auto?.modelId,
+              userText: trimmed,
+              assistantText: answer || "",
+              threadId: get().activeThreadId || undefined,
+              threadTitle: th?.title,
+              usedHostTools: /host|HOST_CMD|Desktop host/i.test(answer || ""),
+              usedConnectors: /connector|CONNECTOR_CMD/i.test(answer || ""),
+              online: Boolean(get().oauth?.accessToken || get().apiKey),
             });
-            const L = get().learning;
-            void get().flushLearningToDisk();
-            if (L.totalTurns > 0 && L.totalTurns % 12 === 0) {
+            set({ learning: turn.learning });
+            if (turn.didReflect) {
+              get().pushActivity({
+                kind: "system",
+                title: "Learning reflect",
+                detail: `Wrote insights · ${turn.diskRoot || "memory"}`,
+                status: "success",
+              });
+            }
+            // Heavier LLM reflect less often
+            if (turn.learning.totalTurns > 0 && turn.learning.totalTurns % 12 === 0) {
               void get().runSelfImprove();
             }
           } catch {

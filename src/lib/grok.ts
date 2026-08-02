@@ -29,6 +29,10 @@ Verify with: HOST_CMD: ls -la "\$HOME/.config/GrokHub/memory"
 Do NOT claim self-improvement is unimplemented if STATUS.md / LEARNINGS.md exist under that root.
 Imagine gallery media, connectors status, automations, OAuth/session links are also persisted.
 
+When you learn a durable fact about the user or machine, emit (own line, stripped from UI):
+MEMORY_NOTE: short durable fact or preference
+These append to MEMORY.md and the learning engine. Prefer concrete facts (paths, prefs, decisions).
+
 ## Desktop host (unsandboxed)
 When the Desktop Host connector is LIVE you can act on the real machine (files, shell, apps).
 Do NOT invent filesystem listings, command output, or process state.
@@ -488,12 +492,16 @@ export function stripHostCommands(text: string): string {
       (line) =>
         !/^\s*HOST_CMD:\s*/i.test(line) &&
         !/^\s*WORK_PIN:\s*/i.test(line) &&
-        !/^\s*WORK_UPDATE:\s*/i.test(line),
+        !/^\s*WORK_UPDATE:\s*/i.test(line) &&
+        !/^\s*MEMORY_NOTE:\s*/i.test(line) &&
+        !/^\s*LEARN_NOTE:\s*/i.test(line),
     )
     .join("\n");
   out = out.replace(/\s*HOST_CMD:\s*.+$/gim, "");
   out = out.replace(/\s*WORK_PIN:\s*.+$/gim, "");
   out = out.replace(/\s*WORK_UPDATE:\s*.+$/gim, "");
+  out = out.replace(/\s*MEMORY_NOTE:\s*.+$/gim, "");
+  out = out.replace(/\s*LEARN_NOTE:\s*.+$/gim, "");
   // Drop short host fences only (keep large code samples for display)
   out = out.replace(/```(?:host|bash|sh)\s*\n([\s\S]*?)```/gi, (block, body: string) => {
     const lines = String(body || "")

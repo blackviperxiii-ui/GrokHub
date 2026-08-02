@@ -1,6 +1,6 @@
 # GrokHub
 
-**v0.8.19** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v0.8.20** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
 Adaptive modes · Imagine · connectors · skills · automations · usage meter · free-Grok fallback · setup sync · unsandboxed desktop host (CLI · files · apps).
 
@@ -175,6 +175,18 @@ Statuses: **proposed → approved → staged → in progress → done** (or dism
 ## Project workspace
 
 Settings → Project: bind a folder. Agent context gets a tree + README/package summary; host tools prefer that tree.
+
+## Learning & self-improvement
+
+After **every** agent turn GrokHub:
+
+1. Extracts prefs / paths / topics from the exchange  
+2. Appends a line to `daily/YYYY-MM-DD.md`  
+3. Writes facts into `MEMORY.md` / prefs into `USER.md`  
+4. Updates `STATUS.md` + `LEARNINGS.md`  
+5. Every **3** turns: light reflect · every **12**: full reflect (LLM when online)  
+
+Agent can also emit: `MEMORY_NOTE: durable fact`
 
 ## Learning & self-improvement
 
