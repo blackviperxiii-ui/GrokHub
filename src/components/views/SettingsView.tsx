@@ -976,7 +976,7 @@ export function SettingsView() {
           <p className="text-[11px] leading-relaxed text-[var(--color-subtle)]">
             <strong className="text-[var(--color-muted)]">Taskbar pin:</strong> install the menu
             entry, then pin <em>GrokHub</em> from the app launcher — not a generic Electron icon.
-            Pins use <span className="font-mono">/usr/bin/grokhub</span> (Linux) or Start Menu / <span className="font-mono">%LOCALAPPDATA%\GrokHub\grokhub.cmd</span> (Windows) so they still work after
+            Pins use <span className="font-mono">/usr/bin/grokhub</span> so they still work after
             you quit. Window class / app id is <span className="font-mono">grokhub</span> (must
             match the desktop file). After updating, unpin + re-pin once if you still see a second
             icon.

@@ -1,6 +1,6 @@
 # GrokHub
 
-**v0.5.1** — Grok-native agent desktop (OpenClaw-style) for **Arch Linux** and **Windows**.
+**v0.5.2** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
 Modes (Auto / Fast / Expert / Heavy / Build) · Imagine · connectors · skills · automations · usage meter · free-Grok fallback · setup sync · unsandboxed host (CLI · files · apps).
 
@@ -8,9 +8,7 @@ Modes (Auto / Fast / Expert / Heavy / Build) · Imagine · connectors · skills 
 
 ---
 
-## Install
-
-### Arch Linux / CachyOS (recommended)
+## Install (Arch Linux / CachyOS)
 
 ```bash
 sudo pacman -S --needed git electron nodejs npm curl base-devel
@@ -18,17 +16,15 @@ sudo pacman -S --needed git electron nodejs npm curl base-devel
 git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
 cd Grok-Hub
 
-# Build UI if needed, install to /usr
 sudo ./scripts/install-arch.sh
-
 grokhub
 ```
 
-**AUR-style local package** (uses prebuilt `.output` when present):
+**AUR-style local package:**
 
 ```bash
 cd packaging/aur
-cp PKGBUILD-bin PKGBUILD   # or use PKGBUILD for from-source
+cp PKGBUILD-bin PKGBUILD
 makepkg -si
 grokhub
 ```
@@ -38,59 +34,25 @@ grokhub
 | Launcher | `/usr/bin/grokhub` |
 | App files | `/usr/lib/grokhub` |
 | Desktop entry | `/usr/share/applications/grokhub.desktop` |
-| User data | `~/.config/GrokHub` (Electron userData) |
+| User data | `~/.config/GrokHub` |
 
-**Pin to taskbar:** open from the app menu (**GrokHub**), then pin that icon — not a generic Electron process. After updates, unpin/re-pin once if the shell still shows a second icon.
+**Pin to taskbar:** open from the app menu (**GrokHub**), then pin that icon — not a generic Electron process.
 
 More detail: [packaging/aur/README.md](packaging/aur/README.md)
 
 ---
 
-### Windows 10 / 11
-
-#### Download the installer (recommended)
-
-1. Open **[Releases](https://github.com/blackviperxiii-ui/Grok-Hub/releases)**
-2. Download **`GrokHub-Setup-0.5.1.exe`** (or the latest `GrokHub-Setup-*.exe`)
-3. Run the installer → Start Menu / Desktop **GrokHub**
-
-Portable (no install): **`GrokHub-Portable-*.exe`** from the same release.
-
-No Node.js, Git, or PowerShell build steps required for the packaged app.
-
-> First run: Windows SmartScreen may say “Windows protected your PC” on unsigned builds → **More info** → **Run anyway**.
-
-#### Build from source (developers)
-
-```powershell
-cd $env:USERPROFILE\Downloads
-# If git SSL fails, download ZIP instead:
-# https://github.com/blackviperxiii-ui/Grok-Hub/archive/refs/heads/main.zip
-
-git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
-cd Grok-Hub
-npm install
-npm run desktop:build
-npm install -D electron@35.1.2 electron-builder
-npm run dist:win
-# artifacts in dist\GrokHub-Setup-*.exe
-```
-
-Or CI: GitHub Actions workflow **Release Windows** builds and publishes the `.exe` on each `v*` tag.
-
-
-## First-run setup (all platforms)
+## First-run setup
 
 1. Open **Settings**.
 2. Connect access (any one works):
    - **Link Grok website** — free grok.com account works (free-tier fallback)
    - **Connect with Grok OAuth** — SuperGrok / X Premium+
-   - **xAI API key** — from [console.x.ai](https://console.x.ai) (trial credits count as free-tier API)
-3. Optional: **Free Grok fallback** card — free plan limits + website fallback when premium models are denied.
-4. Optional: **Install app menu entry** / Start Menu shortcut.
-5. Optional: GitHub token + **Setup sync** to push/pull skills & automations across machines.
+   - **xAI API key** — from [console.x.ai](https://console.x.ai)
+3. Optional: **Install app menu entry**.
+4. Optional: GitHub token + **Setup sync** across machines.
 
-Secrets and chat history stay on the device (`userData`); clean installs do not ship personal data.
+Secrets and chat history stay on the device; clean installs do not ship personal data.
 
 ---
 
@@ -103,10 +65,9 @@ Secrets and chat history stay on the device (`userData`); clean installs do not 
 | **Imagine** | Image / video · aspect · quality · reference |
 | **Connectors** | Website-linked status · tools where available |
 | **Skills / Automations** | Heartbeat schedules · multi-time runs |
-| **Desktop host** | Unsandboxed shell (bash / PowerShell) · files · apps |
-| **Usage** | Plan meter (Free / SuperGrok / Pro) · poll from website |
-| **Updates** | Check / install from this GitHub repo · factory reinstall |
-| **Setup sync** | OAuth-keyed pack · optional encrypted Gist |
+| **Desktop host** | Unsandboxed shell · files · apps |
+| **Usage** | Plan meter · poll from website |
+| **Updates** | Check / install from this GitHub repo |
 
 ---
 
@@ -115,24 +76,20 @@ Secrets and chat history stay on the device (`userData`); clean installs do not 
 ```bash
 npm install
 npm run dev              # UI on 0.0.0.0:8080
-npm run desktop:dev      # Electron → dev UI (Linux/mac env)
-npm run desktop:build    # production .output for desktop packaging
+npm run desktop:dev      # Electron → dev UI
+npm run desktop:build    # production .output for packaging
 npm run typecheck
 ```
 
 | Script | Purpose |
 |--------|---------|
-| `npm run desktop` | Electron against current env `GROKHUB_URL` |
+| `npm run desktop` | Electron against `GROKHUB_URL` |
 | `npm run desktop:arch` | Arch helper launcher |
-| `npm run desktop:win` | Electron on Windows |
-| `npm run dist:win` | NSIS + portable (needs electron-builder) |
 | `npm run aur:release` | AUR release helper |
 
 ---
 
 ## Uninstall
-
-**Arch**
 
 ```bash
 sudo rm -f /usr/bin/grokhub /usr/share/applications/grokhub.desktop
@@ -140,17 +97,6 @@ sudo rm -rf /usr/lib/grokhub
 # optional user data:
 # rm -rf ~/.config/GrokHub ~/.local/share/applications/grokhub.desktop
 ```
-
-**Windows (user install)**
-
-```powershell
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\GrokHub"
-Remove-Item -Force "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\GrokHub.lnk" -ErrorAction SilentlyContinue
-# optional user data:
-# Remove-Item -Recurse -Force "$env:APPDATA\GrokHub"
-```
-
-NSIS installs: **Settings → Apps → GrokHub**.
 
 ---
 

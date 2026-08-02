@@ -1,4 +1,4 @@
-# GrokHub on Arch Linux (v0.1)
+# GrokHub on Arch Linux
 
 ## Install
 

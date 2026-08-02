@@ -1,1 +1,0 @@
-import{a as e,n as t,t as n}from"./jsx-runtime-KJkY8l8U.js";import{r}from"./dist-CLNNfRwf.js";var i=e(t(),1),a=n();function o({ts:e,className:t}){let[n,o]=(0,i.useState)(`—`);return(0,i.useEffect)(()=>{let t=()=>o(r(e));t();let n=window.setInterval(t,15e3);return()=>window.clearInterval(n)},[e]),(0,a.jsx)(`span`,{className:t,children:n})}export{o as t};

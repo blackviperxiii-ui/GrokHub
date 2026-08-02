@@ -14,9 +14,7 @@ grokhub
 
 ```bash
 cd packaging/aur
-# Binary-style (expects .output already built in repo root):
 cp PKGBUILD-bin PKGBUILD
-# Or source PKGBUILD for full rebuild
 makepkg -si
 ```
 
@@ -27,7 +25,3 @@ makepkg -si
 | `/usr/bin/grokhub` | Launcher (`packaging/aur/grokhub.sh`) |
 | `/usr/lib/grokhub` | `.output` + `desktop/` |
 | `/usr/share/applications/grokhub.desktop` | Menu entry (`StartupWMClass=grokhub`) |
-
-## Windows
-
-See [../windows/README.md](../windows/README.md) and the root [README.md](../../README.md).
