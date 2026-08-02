@@ -1,7 +1,6 @@
 import type { ComponentType } from "react";
 import { Command } from "cmdk";
 import {
-  Cable,
   ClipboardList,
   Command as CommandIcon,
   Download,
@@ -20,7 +19,6 @@ import {
   Square,
   Keyboard,
   FileDown,
-  ListTodo,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useGrokHub } from "@/lib/store";

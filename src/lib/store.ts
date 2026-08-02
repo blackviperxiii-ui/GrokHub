@@ -1122,9 +1122,13 @@ export const useGrokHub = create<State>()(
       toolsNavCollapsed: false,
       grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
 
-      setNav: (nav) => set({ nav, modeMenuOpen: false }),
+      setNav: (nav) => {
+        set({ nav, modeMenuOpen: false });
+        scheduleSettingsPersist();
+      },
       setMode: (mode) => {
         set({ mode, modeMenuOpen: false });
+        scheduleSettingsPersist();
         get().pushActivity({
           kind: "system",
           title: `Mode → ${getMode(mode).label}`,
@@ -3258,6 +3262,7 @@ syncWebsiteConnectors: async () => {
         const prev = get().usage;
         const next = createUsage(plan);
         set({ usage: next });
+        scheduleSettingsPersist();
         get().pushActivity({
           kind: "usage",
           title: `Plan → ${PLAN_LIMITS[plan].label}`,
@@ -7028,6 +7033,14 @@ function finalizeChatStream(
   opts?: { content?: string; markStopped?: boolean },
 ) {
   streamStartedAt = null;
+  if (!botId) {
+    set((s) => ({
+      running: false,
+      streamStatus: null,
+      streamingMessageId: null,
+    }));
+    return;
+  }
   set((s) => {
     const owns =
       s.streamingMessageId === botId ||

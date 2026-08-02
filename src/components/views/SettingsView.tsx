@@ -2286,7 +2286,7 @@ function AutonomySettingsPanel() {
                   {lv} · {AUTONOMY_LABEL[lv]}
                 </span>
                 {active ? (
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-primary)]">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-info)]">
                     Active
                   </span>
                 ) : null}
