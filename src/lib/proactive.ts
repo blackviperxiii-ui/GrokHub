@@ -113,11 +113,15 @@ export function scanProactiveIssues(input: ProactiveScanInput): ProactiveAction[
     });
   }
 
-  // Empty / hollow assistant at end of idle chat
-  if (!input.running && !input.streamingMessageId) {
+  // Empty / incomplete assistant when turn is idle (even if stream flags still stuck)
+  if (!input.running) {
     const last = [...chat].reverse().find((m) => m.role === "assistant");
     const lastUser = [...chat].reverse().find((m) => m.role === "user");
-    if (last && (!last.content || last.content === "(empty)" || last.content.trim() === "_Stopped._")) {
+    if (
+      last &&
+      (!last.content || last.content === "(empty)" || last.content.trim() === "_Stopped._") &&
+      !last.streaming
+    ) {
       actions.push({
         id: `empty-${last.id}`,
         kind: "clear_empty_assistant",
@@ -129,11 +133,11 @@ export function scanProactiveIssues(input: ProactiveScanInput): ProactiveAction[
       });
     }
     // Auto-continue incomplete “let me check…” once per thread (level 2+)
+    // Allow even if last.streaming — housekeeping finalizes stream first in the same pass.
     if (
       last &&
       lastUser &&
       canAutoContinue(cfg) &&
-      !last.streaming &&
       looksLikeIncompleteAgentTurn(last.content || "", {
         userPrompt: lastUser.content,
         hadTools: /HOST_RESULT|CONNECTOR_RESULT/i.test(last.content || ""),

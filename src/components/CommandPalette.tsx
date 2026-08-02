@@ -104,13 +104,7 @@ export function CommandPalette({
         run: () => go("imagine"),
       },
       
-      {
-        id: "nav-command",
-        label: "Command",
-        group: "Navigate",
-        icon: Terminal,
-        run: () => go("command"),
-      },
+      
       {
         id: "nav-workboard",
         label: "Workboard",
@@ -132,6 +126,13 @@ export function CommandPalette({
         group: "Navigate",
         icon: TimerReset,
         run: () => go("automations"),
+      },
+      {
+        id: "nav-command",
+        label: "Command",
+        group: "Navigate",
+        icon: Terminal,
+        run: () => go("command"),
       },
       {
         id: "nav-settings",
