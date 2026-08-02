@@ -8,9 +8,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui
 import { Input } from "../ui/input";
 import { cn } from "@/lib/utils";
 
-function dateBucket(ts: number): string {
+function dateBucket(ts: number, nowMs: number): string {
   const d = new Date(ts);
-  const now = new Date();
+  const now = new Date(nowMs);
   const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const startYesterday = startToday - 86400000;
   if (ts >= startToday) return "Today";
@@ -35,6 +35,11 @@ export function HistoryView() {
   const [folderFilter, setFolderFilter] = useState<string | "all" | "pinned">("all");
   const [folderDraftId, setFolderDraftId] = useState<string | null>(null);
   const [folderDraft, setFolderDraft] = useState("");
+  // Stable "now" only after mount — avoids SSR/client Today/Yesterday mismatches
+  const [nowMs, setNowMs] = useState(0);
+  useEffect(() => {
+    setNowMs(Date.now());
+  }, []);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const folders = useMemo(() => {
@@ -66,14 +71,19 @@ export function HistoryView() {
 
   const grouped = useMemo(() => {
     const map = new Map<string, typeof filtered>();
+    const clock = nowMs || 0;
     for (const t of filtered) {
-      const key = t.pinned ? "Pinned" : dateBucket(t.updatedAt);
+      const key = t.pinned
+        ? "Pinned"
+        : clock
+          ? dateBucket(t.updatedAt, clock)
+          : "Recent";
       const list = map.get(key) || [];
       list.push(t);
       map.set(key, list);
     }
     // Pinned first, then Today, Yesterday, This week, then months
-    const order = ["Pinned", "Today", "Yesterday", "This week"];
+    const order = ["Pinned", "Today", "Yesterday", "This week", "Recent"];
     const keys = [...map.keys()].sort((a, b) => {
       const ia = order.indexOf(a);
       const ib = order.indexOf(b);
@@ -81,7 +91,7 @@ export function HistoryView() {
       return a.localeCompare(b);
     });
     return keys.map((k) => [k, map.get(k)!] as const);
-  }, [filtered]);
+  }, [filtered, nowMs]);
 
   useEffect(() => {
     if (renamingId) {

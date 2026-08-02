@@ -122,6 +122,12 @@ let hostConfirmWaiter: ((allow: boolean) => void) | null = null;
 /** In-flight host exec job id (for Stop → killExec). */
 const activeHostJobIds = new Set<string>();
 let activeHostJobId: string | null = null; // last job (compat)
+/** Serialize post-turn learning so rapid turns don't drop insights or clobber disk */
+let learningChain: Promise<void> = Promise.resolve();
+function enqueueLearning(task: () => Promise<void>) {
+  learningChain = learningChain.then(task).catch(() => {});
+  return learningChain;
+}
 
 function requestHostConfirm(
   set: (partial: Partial<State> | ((s: State) => Partial<State>)) => void,
@@ -2340,6 +2346,13 @@ export const useGrokHub = create<State>()(
           };
         });
         if (resend) {
+          if (get().running || get().streamingMessageId) {
+            try {
+              get().stopChat();
+            } catch {
+              /* ignore */
+            }
+          }
           set((s) => {
             const chat = s.chat.slice(0, idx);
             const tid = s.activeThreadId;
@@ -2497,6 +2510,13 @@ export const useGrokHub = create<State>()(
         if (!r || r.kind !== "interrupted") {
           set({ sessionResume: null });
           return;
+        }
+        if (get().running || get().streamingMessageId) {
+          try {
+            get().stopChat();
+          } catch {
+            /* ignore */
+          }
         }
 
         // Ensure we're on the right thread first
@@ -4895,10 +4915,9 @@ if (!cmds.length) {
           } catch {
             /* ignore */
           }
-          void (async () => {
+          void enqueueLearning(async () => {
             try {
               await wait(0);
-              if (get().running) return;
               const turn = await applyTurnLearning(get().learning, {
                 ok: false,
                 mode: routed,
@@ -4906,14 +4925,15 @@ if (!cmds.length) {
                 userText: trimmed,
                 assistantText: finalAnswer || "",
                 threadId: get().activeThreadId || undefined,
-                online: Boolean(get().oauth?.accessToken || get().apiKey),
+                online: Boolean(
+                  get().oauth?.accessToken || get().apiKey || get().ssoCookie,
+                ),
               });
-              if (get().running) return;
               set({ learning: turn.learning });
             } catch {
               /* ignore */
             }
-          })();
+          });
         } else {
           const answer = stripHostCommands(stripAssistantChrome(finalAnswer || ""));
           set((s) => {
@@ -4971,26 +4991,23 @@ if (!cmds.length) {
               threadTitle: th?.title,
               usedHostTools: /host|HOST_CMD|Desktop host/i.test(answer || ""),
               usedConnectors: /connector|CONNECTOR_CMD/i.test(answer || ""),
-              online: Boolean(get().oauth?.accessToken || get().apiKey),
+              online: Boolean(
+                get().oauth?.accessToken || get().apiKey || get().ssoCookie,
+              ),
             };
-            void (async () => {
+            void enqueueLearning(async () => {
               try {
-                // Yield so React paints streaming:false first
                 await wait(0);
+                let L = get().learning;
                 if (pendingMemoryNotes.length) {
                   try {
-                    const nextL = await applyAgentMemoryNotes(
-                      get().learning,
-                      pendingMemoryNotes,
-                    );
-                    if (!get().running) set({ learning: nextL });
+                    L = await applyAgentMemoryNotes(L, pendingMemoryNotes);
                   } catch {
                     /* ignore */
                   }
                 }
-                const turn = await applyTurnLearning(get().learning, snap);
-                // Only apply if still same thread (avoid clobber mid-new-turn)
-                if (get().running) return;
+                const turn = await applyTurnLearning(L, snap);
+                // Serial queue: always commit (don't drop when next turn is running)
                 set({ learning: turn.learning });
                 if (turn.didReflect) {
                   get().pushActivity({
@@ -5001,12 +5018,12 @@ if (!cmds.length) {
                   });
                 }
                 if (turn.learning.totalTurns > 0 && turn.learning.totalTurns % 12 === 0) {
-                  void get().runSelfImprove();
+                  void get().runSelfImprove().catch(() => {});
                 }
               } catch {
                 /* ignore */
               }
-            })();
+            });
           }
         }
 

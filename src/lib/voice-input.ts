@@ -217,6 +217,12 @@ export async function toggleVoiceSession(
     return text ? "transcribed" : "error";
   }
   const s = new VoiceSession(handlers, auth);
+  if (!auth.apiKey && !auth.accessToken) {
+    handlers.onError?.(
+      "Connect Grok (OAuth or API key) in Settings so voice can be transcribed.",
+    );
+    return "error";
+  }
   sessionRef.current = s;
   await s.start();
   return s.isListening() ? "started" : "error";
