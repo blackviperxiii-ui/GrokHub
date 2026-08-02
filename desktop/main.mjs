@@ -12,6 +12,7 @@ const secretsStore = require("./secrets-store.cjs");
 const stateStore = require("./state-store.cjs");
 const selfMod = require("./self-mod.cjs");
 const desktopEntry = require("./desktop-entry.cjs");
+const uiServer = require("./ui-server.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -331,13 +332,25 @@ function createWindow() {
     }
   }
 
+  // Prefer UI server URL set by resolveStartUrl / launcher (production Nitro on :18765)
   const startUrl =
     process.env.GROKHUB_URL ||
-    (isDev
-      ? "http://127.0.0.1:8080"
-      : `file://${path.join(__dirname, "../dist/client/index.html")}`);
+    `http://127.0.0.1:${uiServer.pickPort()}`;
 
-  void mainWindow.loadURL(startUrl);
+  void mainWindow.loadURL(startUrl).catch((err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    void mainWindow.loadURL(
+      "data:text/html;charset=utf-8," +
+        encodeURIComponent(
+          `<!doctype html><html><body style="font-family:system-ui;background:#0a0a0b;color:#eee;padding:2rem">
+          <h1>GrokHub UI failed to load</h1>
+          <p>${msg}</p>
+          <p>Tried: <code>${startUrl}</code></p>
+          <p>Ensure the app was installed with a built <code>.output</code> folder, or run <code>npm run desktop:build</code>.</p>
+          </body></html>`,
+        ),
+    );
+  });
 
   let saveTimer = null;
   const scheduleSave = () => {
@@ -727,7 +740,7 @@ if (process.platform === "linux") {
   app.commandLine.appendSwitch("no-sandbox");
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (!gotLock) return;
   // Prefer home as process cwd so relative shell paths match a real desktop session
   try {
@@ -737,6 +750,18 @@ app.whenReady().then(() => {
   } catch {
     /* ignore */
   }
+
+  // Ensure Nitro UI is up before opening the window (fixes Windows install)
+  try {
+    const resolved = await uiServer.resolveStartUrl(__dirname);
+    if (resolved.url) process.env.GROKHUB_URL = resolved.url;
+    if (!resolved.ok && resolved.error) {
+      console.error("[GrokHub]", resolved.error);
+    }
+  } catch (e) {
+    console.error("[GrokHub] UI bootstrap failed", e);
+  }
+
   // Dock / taskbar name + pin identity
   try {
     app.setName(APP_DISPLAY_NAME);

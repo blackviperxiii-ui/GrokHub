@@ -1,94 +1,95 @@
 # GrokHub on Windows
 
-GrokHub is an Electron desktop app. On Windows it uses the same codebase as Linux:
-
-- Unsandboxed **desktop host** (PowerShell by default)
-- Grok OAuth / free website session / API key
-- Start Menu pin + tray
-
 ## Requirements
 
-- **Windows 10/11** x64
-- **Node.js 20+** ([nodejs.org](https://nodejs.org/))
-- **Electron** (installed with the app, or `npm i -D electron`)
+- Windows 10/11 **x64**
+- [Node.js 20+ LTS](https://nodejs.org/) (includes npm)
+- PowerShell 5.1+ (built-in)
 
-## Quick install (from source)
+## Install (recommended)
 
-In **PowerShell** from a clone of this repo:
+From a clone of the repo in **PowerShell**:
 
 ```powershell
-# Optional: build + install for current user
-powershell -ExecutionPolicy Bypass -File packaging\windows\install.ps1 -Build
+git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
+cd Grok-Hub
+
+# Build UI + install Electron + copy to %LOCALAPPDATA%\GrokHub
+powershell -ExecutionPolicy Bypass -File .\packaging\windows\install.ps1 -Build
 ```
 
-This copies the production UI + desktop shell to:
+What the installer does:
 
-`%LOCALAPPDATA%\GrokHub`
+1. `npm install` (if needed)
+2. Installs **Electron** binary into `node_modules/electron`
+3. Runs `npm run desktop:build` → `.output/server`
+4. Copies app to `%LOCALAPPDATA%\GrokHub`
+5. Creates **Start Menu → GrokHub** (and a direct Electron shortcut)
+6. Sets user env `GROKHUB_HOME` and adds install dir to user `PATH`
+7. Smoke-launches the app
 
-and adds a **Start Menu → GrokHub** shortcut.
+### Launch
 
-Launch:
+| Method | Command / place |
+|--------|------------------|
+| Start Menu | **GrokHub** |
+| CMD / Run | `%LOCALAPPDATA%\GrokHub\grokhub.cmd` |
+| After PATH refresh | `grokhub.cmd` |
 
-```text
-%LOCALAPPDATA%\GrokHub\grokhub.cmd
+### If install fails
+
+| Symptom | Fix |
+|---------|-----|
+| `Node.js is required` | Install Node LTS, **close and reopen** PowerShell |
+| `electron binary missing` | `npm install electron@35.1.2 --save-dev` then re-run install |
+| `UI build failed` | From repo root: `npm install` then `npm run desktop:build` and check errors |
+| `ExecutionPolicy` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| Window opens but blank | Check `%LOCALAPPDATA%\GrokHub\runtime\ui.log` — Node must be on PATH |
+| Start Menu does nothing | Use **GrokHub (direct)** shortcut, or run `grokhub.cmd` from Explorer |
+
+Reinstall / repair:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\packaging\windows\install.ps1 -Build
 ```
 
-## Dev run
+## How it runs
+
+1. `grokhub.cmd` starts `electron.exe desktop\main.mjs`
+2. `desktop/ui-server.cjs` starts Nitro from `.output\server\index.mjs` on port **18765** if needed
+3. The window loads `http://127.0.0.1:18765`
+
+You do **not** need a separate terminal for the UI server.
+
+## Packaged NSIS / portable (optional)
 
 ```powershell
 npm install
 npm run desktop:build
-$env:GROKHUB_URL = "http://127.0.0.1:8080"
-# terminal A
-npm run dev
-# terminal B
-npm run desktop:win
-```
-
-Or after a production build:
-
-```powershell
-npm run desktop:win:prod
-```
-
-## Packaged installer (NSIS / portable)
-
-On a Windows machine (or CI with Windows runners):
-
-```powershell
-npm install
-npm run desktop:build
+npm install --save-dev electron@35.1.2 electron-builder
 npm run dist:win
 ```
 
-Artifacts land in `dist/`:
+Output under `dist/`. Prefer `install.ps1` for source installs.
 
-| File | Notes |
-|------|--------|
-| `GrokHub Setup *.exe` | NSIS installer (Start Menu, optional desktop icon) |
-| `GrokHub *.exe` | Portable (no install) |
-
-`electron-builder` config lives in `electron-builder.yml`.
-
-## Taskbar pin
-
-1. Launch **GrokHub** from the Start Menu (not a raw `electron.exe`).
-2. Right-click the taskbar icon → **Pin to taskbar**.
-3. AppUserModelID is `com.grokhub.app` so the pin survives restarts.
-
-## Uninstall (user install)
+## Uninstall
 
 ```powershell
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\GrokHub"
 Remove-Item -Force "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\GrokHub.lnk" -ErrorAction SilentlyContinue
-# Optional: wipe app data
+Remove-Item -Force "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\GrokHub (direct).lnk" -ErrorAction SilentlyContinue
+# Optional app data:
 # Remove-Item -Recurse -Force "$env:APPDATA\GrokHub"
 ```
 
-NSIS installs use **Settings → Apps**.
+## Dev
 
-## Notes
-
-- Host agent commands run in **PowerShell** on Windows.
-- Wayland/Linux-only flags are skipped automatically.
-- Secrets and chat memory stay under `%APPDATA%\GrokHub` (Electron `userData`).
+```powershell
+npm install
+npm run desktop:build
+# Terminal A — optional live UI
+npm run dev
+# Terminal B
+$env:GROKHUB_URL = "http://127.0.0.1:8080"
+npx electron desktop/main.mjs
+```

@@ -48,18 +48,19 @@ More detail: [packaging/aur/README.md](packaging/aur/README.md)
 
 ### Windows 10 / 11
 
-**Requirements:** [Node.js 20+](https://nodejs.org/) (LTS), PowerShell 5+
+**Requirements:** [Node.js 20+ LTS](https://nodejs.org/) (must be on PATH), PowerShell 5.1+
 
-#### Option A — Install from source (current user)
+#### Install (current user) — use `-Build`
 
 ```powershell
 git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
 cd Grok-Hub
 
-powershell -ExecutionPolicy Bypass -File packaging\windows\install.ps1 -Build
+# Important: -Build compiles the UI and installs Electron
+powershell -ExecutionPolicy Bypass -File .\packaging\windows\install.ps1 -Build
 ```
 
-This installs to `%LOCALAPPDATA%\GrokHub`, adds a **Start Menu → GrokHub** shortcut, and puts the folder on your user `PATH`.
+Installs to `%LOCALAPPDATA%\GrokHub`, creates **Start Menu → GrokHub**, sets `GROKHUB_HOME`.
 
 Launch:
 
@@ -67,7 +68,15 @@ Launch:
 %LOCALAPPDATA%\GrokHub\grokhub.cmd
 ```
 
-or **Start Menu → GrokHub**.
+or **Start Menu → GrokHub** (or **GrokHub (direct)**).
+
+If the script is blocked:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Troubleshooting: [packaging/windows/README.md](packaging/windows/README.md)
 
 #### Option B — Packaged installer (NSIS / portable)
 
