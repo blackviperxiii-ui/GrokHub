@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 import type { ChatMessage, ChatRole } from "@/lib/types";
 import { RelativeTime } from "../RelativeTime";
 import { HostGatewayBanner } from "../HostGatewayBanner";
+import { EmojiPicker } from "../EmojiPicker";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { MarkdownBody } from "@/lib/markdown";
@@ -437,6 +438,7 @@ export function ChatView() {
   const voiceRef = useRef<import("@/lib/voice-input").VoiceSession | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
   const [chipsOpen, setChipsOpen] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const [attachments, setAttachments] = useState<Array<{ name: string; dataUrl: string; kind: string }>>([]);
   const endRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -629,6 +631,26 @@ export function ChatView() {
     const next = Math.min(max, Math.max(min, ta.scrollHeight));
     ta.style.height = `${next}px`;
     ta.style.overflowY = ta.scrollHeight > max ? "auto" : "hidden";
+  }
+
+  function insertEmoji(emoji: string) {
+    const ta = inputRef.current;
+    const start = ta?.selectionStart ?? text.length;
+    const end = ta?.selectionEnd ?? text.length;
+    const next = text.slice(0, start) + emoji + text.slice(end);
+    setText(next);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      const pos = start + emoji.length;
+      el.focus();
+      try {
+        el.setSelectionRange(pos, pos);
+      } catch {
+        /* ignore */
+      }
+      resizeComposer(el);
+    });
   }
 
   useEffect(() => {
@@ -1460,6 +1482,12 @@ export function ChatView() {
                 >
                   <Paperclip className="h-4 w-4" />
                 </Button>
+                <EmojiPicker
+                  open={emojiOpen}
+                  onOpenChange={setEmojiOpen}
+                  disabled={busy || Boolean(pendingHostConfirm)}
+                  onPick={insertEmoji}
+                />
                 <Button
                   type="button"
                   size="icon"
