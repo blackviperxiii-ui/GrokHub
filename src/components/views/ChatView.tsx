@@ -450,6 +450,9 @@ export function ChatView() {
   const editChatMessage = useGrokHub((s) => s.editChatMessage);
   const deleteChatMessages = useGrokHub((s) => s.deleteChatMessages);
   const rateMessage = useGrokHub((s) => s.rateMessage);
+  const welcomeMessage = useGrokHub((s) => s.welcomeMessage);
+  const welcomeBusy = useGrokHub((s) => s.welcomeBusy);
+  const refreshWelcomeMessage = useGrokHub((s) => s.refreshWelcomeMessage);
   const replyTo = useGrokHub((s) => s.replyTo);
   const setReplyTo = useGrokHub((s) => s.setReplyTo);
   const composerDrafts = useGrokHub((s) => s.composerDrafts);
@@ -602,6 +605,12 @@ export function ChatView() {
   useEffect(() => {
     if (chat.length === 0) setChipsOpen(true);
   }, [chat.length, activeThreadId]);
+
+  // Adaptive welcome for empty chat pages
+  useEffect(() => {
+    if (chat.length !== 0) return;
+    void refreshWelcomeMessage();
+  }, [chat.length, activeThreadId, refreshWelcomeMessage]);
 
   const findMatches = useMemo(() => {
     const q = findQ.trim().toLowerCase();
@@ -1344,14 +1353,24 @@ export function ChatView() {
                 </div>
                 <div className="space-y-1.5">
                   <p className="text-base font-semibold tracking-tight text-[var(--color-fg)]">
-                    Start a conversation
+                    {welcomeBusy && !welcomeMessage
+                      ? "Getting ready…"
+                      : welcomeMessage?.headline || "What's next?"}
                   </p>
                   <p className="text-sm leading-relaxed text-[var(--color-muted)]">
-                    Ask anything, run <span className="font-mono text-[var(--color-fg)]">$ shell</span>{" "}
-                    commands, or try{" "}
-                    <span className="font-mono text-[var(--color-fg)]">/help</span> for slash
-                    commands.
+                    {welcomeMessage?.body || (
+                      <>
+                        Ask anything, run{" "}
+                        <span className="font-mono text-[var(--color-fg)]">$ shell</span> commands,
+                        or try{" "}
+                        <span className="font-mono text-[var(--color-fg)]">/help</span> for slash
+                        commands.
+                      </>
+                    )}
                   </p>
+                  {welcomeMessage?.source === "llm" && (
+                    <p className="text-[10px] text-[var(--color-subtle)]">Personal welcome · Fast</p>
+                  )}
                 </div>
               </div>
             )}

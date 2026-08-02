@@ -119,6 +119,13 @@ import {
 } from "./quick-assist-memory";
 import type { QuickChip } from "./quick-assistant";
 import {
+  buildWelcomePrompt,
+  collectWelcomeContext,
+  emptyWelcomeFallback,
+  parseWelcomePayload,
+  type WelcomePayload,
+} from "./welcome-message";
+import {
   buildChipSuggestPrompt,
   contextFingerprint,
   parseLlmChips,
@@ -272,6 +279,9 @@ type State = {
   quickAssistLlmAt: number;
   quickAssistLlmTag: string | null;
   quickAssistLlmBusy: boolean;
+  /** Adaptive empty-chat welcome (Fast mode + learning) */
+  welcomeMessage: WelcomePayload | null;
+  welcomeBusy: boolean;
   /** Self-improvement: outcomes, feedback, distilled insights */
   learning: LearningState;
   workboard: WorkboardState;
@@ -349,6 +359,7 @@ type State = {
   rotateQuickAssist: () => void;
   /** Refresh context chips via Fast mode */
   refreshQuickAssistLlm: (opts?: { force?: boolean }) => Promise<void>;
+  refreshWelcomeMessage: (opts?: { force?: boolean }) => Promise<void>;
   syncWebsiteConnectors: () => Promise<{ ok: boolean; detail: string; count: number }>;
   setApiKey: (key: string) => void;
   setGithubToken: (token: string) => void;
@@ -1023,6 +1034,8 @@ export const useGrokHub = create<State>()(
       quickAssistLlmAt: 0,
       quickAssistLlmTag: null,
       quickAssistLlmBusy: false,
+      welcomeMessage: null,
+      welcomeBusy: false,
       learning: emptyLearning(),
       workboard: emptyWorkboard(),
       projectWorkspace: null,
@@ -1559,7 +1572,85 @@ export const useGrokHub = create<State>()(
         }
       },
 
-      syncWebsiteConnectors: async () => {
+      
+      refreshWelcomeMessage: async (opts) => {
+        const force = Boolean(opts?.force);
+        const s0 = get();
+        if (s0.welcomeBusy) return;
+        // Cache ~10 min unless forced
+        if (
+          !force &&
+          s0.welcomeMessage &&
+          Date.now() - (s0.welcomeMessage.generatedAt || 0) < 10 * 60_000
+        ) {
+          return;
+        }
+
+        // Pull USER.md best-effort
+        let userMd = "";
+        try {
+          const { memoryRead } = await import("./file-memory");
+          const r = await memoryRead("USER.md");
+          if (r?.ok && r.content) userMd = String(r.content);
+        } catch {
+          try {
+            const desktop = typeof window !== "undefined" ? window.grokhubDesktop : null;
+            const r = await desktop?.memory?.read?.("USER.md");
+            if (r?.ok && r.content) userMd = String(r.content);
+          } catch {
+            /* ignore */
+          }
+        }
+
+        const ctx = collectWelcomeContext({
+          learning: s0.learning,
+          quickAssistMemory: s0.quickAssistMemory,
+          memoryNotes: s0.agentPrefs?.memoryNotes,
+          userMd,
+          threads: s0.threads,
+          displayName: s0.profile?.displayName || null,
+          planLabel: null,
+        });
+        const fallback = emptyWelcomeFallback({
+          displayName: ctx.displayName,
+          habits: ctx.habits,
+          interests: [...ctx.interests, ...ctx.recentTopics].slice(0, 4),
+        });
+
+        const can =
+          Boolean(s0.oauth?.accessToken || s0.apiKey || s0.ssoCookie) ||
+          s0.preferFreeGrok !== false;
+        if (!can) {
+          set({ welcomeMessage: fallback, welcomeBusy: false });
+          return;
+        }
+
+        set({ welcomeBusy: true });
+        try {
+          const { grokChat } = await import("./grok-client");
+          const prompt = buildWelcomePrompt(ctx);
+          const result = await grokChat({
+            messages: [{ role: "user", content: prompt }],
+            mode: "fast",
+            model: s0.modelCatalog?.slots?.fast,
+            apiKey: s0.apiKey || undefined,
+            accessToken: s0.oauth?.accessToken,
+            tokens: s0.oauth,
+            ssoCookie: s0.ssoCookie || undefined,
+            freeTier: !s0.oauth?.accessToken && !s0.apiKey,
+          });
+          if (!result.ok || !result.content) {
+            set({ welcomeMessage: fallback, welcomeBusy: false });
+            return;
+          }
+          const welcome = parseWelcomePayload(result.content, fallback);
+          set({ welcomeMessage: welcome, welcomeBusy: false });
+        } catch {
+          set({ welcomeMessage: fallback, welcomeBusy: false });
+        }
+      },
+
+syncWebsiteConnectors: async () => {
         try {
           const { fetchWebsiteConnectors } = await import("./website-connectors");
           const { createSeeds } = await import("./seed");
@@ -2536,7 +2627,7 @@ export const useGrokHub = create<State>()(
           try { get().stopChat(); } catch { /* ignore */ }
         }
         const now = Date.now();
-        // Empty thread — no repeating welcome spam on every New chat / restart
+        // Empty thread — adaptive welcome is UI-only (not a chat bubble)
         const thread: ChatThread = {
           id: uid("thread"),
           title: "New chat",
@@ -2553,6 +2644,7 @@ export const useGrokHub = create<State>()(
           streamStatus: null,
           streamingMessageId: null,
         }));
+        void get().refreshWelcomeMessage({ force: true });
       },
 
       selectThread: (id) => {
