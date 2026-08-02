@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Check,
   ClipboardList,
@@ -254,7 +254,7 @@ function IconBtn({
   title,
   onClick,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   title: string;
   onClick: () => void;
 }) {

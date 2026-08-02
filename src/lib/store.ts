@@ -2101,11 +2101,25 @@ export const useGrokHub = create<State>()(
       selectThread: (id) => {
         const t = get().threads.find((x) => x.id === id);
         if (!t) return;
+        // Switching threads mid-run leaves a zombie stream — stop first
+        if (get().running || get().streamingMessageId) {
+          try {
+            get().stopChat();
+          } catch {
+            /* ignore */
+          }
+        }
+        const msgs = (t.messages || []).map((m) =>
+          m.streaming ? { ...m, streaming: false } : m,
+        );
         set({
           activeThreadId: id,
-          chat: t.messages,
+          chat: msgs,
           nav: "chat",
           mode: t.mode || get().mode,
+          running: false,
+          streamStatus: null,
+          streamingMessageId: null,
         });
       },
 
@@ -3025,14 +3039,17 @@ export const useGrokHub = create<State>()(
           detail: `${skill.slash} · ${m.label} · ${bill.cost}u`,
           status: "running",
         });
+        try {
         await wait(m.latencyMs[0] + Math.random() * (m.latencyMs[1] - m.latencyMs[0]));
         set((s) => ({
-          running: false,
           skills: s.skills.map((sk) =>
             sk.id === id ? { ...sk, runs: sk.runs + 1 } : sk,
           ),
         }));
+        } finally {
+        set({ running: false, streamStatus: null });
         get().setAgentStatus("primary", "idle", 0);
+        }
         get().pushActivity({
           kind: "skill",
           title: `${skill.name} finished`,
@@ -3091,7 +3108,8 @@ export const useGrokHub = create<State>()(
         const m = getMode(routed);
         const bill = get().recordUsage("automation", routed);
         if (!bill.ok) return;
-        set({ running: true, streamStatus: `Automation: ${auto.name}` });
+        // IMPORTANT: do not set running:true here — sendChat owns the run flag.
+        // Setting it first caused sendChat to no-op (deadlock) while reporting success.
         get().setAgentStatus("ops", "working", 1);
         get().pushActivity({
           kind: "automation",
@@ -3102,15 +3120,13 @@ export const useGrokHub = create<State>()(
         let summary = "";
         let ok = true;
         try {
-          const { grokChat } = await import("./grok-client");
-          const prompt = [
-            `You are running a scheduled automation named "${auto.name}".`,
-            "Follow the instructions. Be concise. If host shell is needed, reply with HOST_CMD lines.",
-            "",
-            auto.instructions,
-          ].join("\n");
-          // Prefer sending through agent chat path for host tools when connected
-          if (get().oauth?.accessToken || get().apiKey) {
+          const canChat = Boolean(
+            get().oauth?.accessToken ||
+              get().apiKey ||
+              get().ssoCookie ||
+              get().preferFreeGrok,
+          );
+          if (canChat) {
             await get().sendChat(
               `[Automation: ${auto.name}]\n${auto.instructions}`,
             );
@@ -3119,8 +3135,6 @@ export const useGrokHub = create<State>()(
             summary = "Not connected to Grok — automation recorded only";
             ok = false;
           }
-          void prompt;
-          void grokChat;
         } catch (e) {
           ok = false;
           summary = e instanceof Error ? e.message : "automation failed";
@@ -3129,6 +3143,7 @@ export const useGrokHub = create<State>()(
         set((s) => ({
           running: false,
           streamStatus: null,
+          streamingMessageId: null,
           automations: s.automations.map((a) =>
             a.id === id
               ? {
@@ -3725,7 +3740,13 @@ if (cmd === "tools") {
 
         void import("./persistent-storage").then(({ setPersistPaused }) => setPersistPaused(true));
         set((s) => {
-          const chat = [...s.chat, userMsg, botPlaceholder];
+          const chat = [
+            ...s.chat.map((m) =>
+              m.streaming ? { ...m, streaming: false } : m,
+            ),
+            userMsg,
+            botPlaceholder,
+          ];
           const tid = s.activeThreadId;
           return {
             chat,
@@ -3913,6 +3934,7 @@ if (cmd === "tools") {
         let usedLive = false;
         let finalAnswer = "";
         let aborted = false;
+        try {
         // Host helpers always available for final sanitization
         const {
           extractHostCommands,
@@ -4971,6 +4993,45 @@ if (!cmds.length) {
           }
         }
 
+        } catch (fatal) {
+          // Import or unexpected failure after running:true — always clear stream chrome
+          try {
+            const msg =
+              fatal instanceof Error ? fatal.message : "Agent turn failed";
+            set((s) => {
+              const chat = s.chat.map((row) =>
+                row.id === botId
+                  ? {
+                      ...row,
+                      streaming: false,
+                      content:
+                        row.content?.trim() ||
+                        `Something went wrong: ${msg}`,
+                    }
+                  : row.streaming
+                    ? { ...row, streaming: false }
+                    : row,
+              );
+              return {
+                chat,
+                threads: s.threads.map((th) =>
+                  th.id === s.activeThreadId
+                    ? { ...th, messages: chat, updatedAt: Date.now() }
+                    : th,
+                ),
+                running: false,
+                streamStatus: null,
+                streamingMessageId: null,
+              };
+            });
+          } catch {
+            set({
+              running: false,
+              streamStatus: null,
+              streamingMessageId: null,
+            });
+          }
+        } finally {
         // Safety net: never leave bubbles in streaming state after turn ends
         try {
           const stuck = get().chat.some(
@@ -4997,6 +5058,7 @@ if (!cmds.length) {
         get().setAgentStatus("builder", "idle", 0);
         get().setAgentStatus("research", "idle", 0);
         get().setAgentStatus("ops", "idle", 0);
+        }
       },
 
       setImaginePrompt: (v) => set({ imaginePrompt: v }),
@@ -5391,7 +5453,26 @@ if (!cmds.length) {
         s.running = false;
         s.streamStatus = null;
         s.streamingMessageId = null;
+        s.running = false;
         s.pendingHostConfirm = null;
+        // Never rehydrate mid-stream chrome
+        try {
+          if (Array.isArray(s.chat)) {
+            s.chat = (s.chat as import("./types").ChatMessage[]).map((m) =>
+              m.streaming ? { ...m, streaming: false } : m,
+            );
+          }
+          if (Array.isArray(s.threads)) {
+            s.threads = (s.threads as import("./types").ChatThread[]).map((th) => ({
+              ...th,
+              messages: (th.messages || []).map((m) =>
+                m.streaming ? { ...m, streaming: false } : m,
+              ),
+            }));
+          }
+        } catch {
+          /* ignore */
+        }
         // Resume card only for real interrupts (drop legacy "last chat" cards)
         try {
           const r = s.sessionResume as Record<string, unknown> | null;

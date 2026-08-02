@@ -58,6 +58,7 @@ type MessageRowProps = {
   m: ChatMessage;
   busy: boolean;
   streamStatus: string | null;
+  streamingMessageId: string | null;
   editingId: string | null;
   editDraft: string;
   copiedId: string | null;
@@ -76,6 +77,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   m,
   busy,
   streamStatus,
+  streamingMessageId,
   editingId,
   editDraft,
   copiedId,
@@ -89,11 +91,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onDelete,
   onRate,
 }: MessageRowProps) {
-  // Prefer live stream ownership over stale m.streaming flags after turn ends
+  // Only the active stream owner shows LIVE chrome
   const showStreaming =
     Boolean(m.streaming) &&
     m.role === "assistant" &&
-    (busy || Boolean(streamStatus));
+    (busy || Boolean(streamStatus)) &&
+    (streamingMessageId == null || m.id === streamingMessageId);
   return (
     <div
       className={cn(
@@ -374,6 +377,7 @@ export function ChatView() {
   const stopChat = useGrokHub((s) => s.stopChat);
   const running = useGrokHub((s) => s.running);
   const streamStatus = useGrokHub((s) => s.streamStatus);
+  const streamingMessageId = useGrokHub((s) => s.streamingMessageId);
   const mode = useGrokHub((s) => s.mode);
   const setMode = useGrokHub((s) => s.setMode);
   const setNav = useGrokHub((s) => s.setNav);
@@ -1146,6 +1150,7 @@ export function ChatView() {
                 m={m}
                 busy={busy}
                 streamStatus={streamStatus}
+                streamingMessageId={streamingMessageId}
                 editingId={editingId}
                 editDraft={editDraft}
                 copiedId={copiedId}

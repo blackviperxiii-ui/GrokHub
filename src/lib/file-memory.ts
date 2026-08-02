@@ -143,10 +143,35 @@ export async function memoryAppendFacts(
 ): Promise<{ ok: boolean; added?: number }> {
   const m = desktop();
   if (m?.appendFacts) return m.appendFacts(facts, opts);
+  browserEnsure();
+  const target =
+    opts?.target === "USER.md" || opts?.target === "user"
+      ? "USER.md"
+      : opts?.target === "today"
+        ? "today"
+        : "MEMORY.md";
+  let body =
+    target === "today"
+      ? browserFiles.get(`daily/${new Date().toISOString().slice(0, 10)}.md`) || ""
+      : browserFiles.get(target) || "";
+  const lower = body.toLowerCase();
   let added = 0;
   for (const f of facts) {
-    const r = await memoryAppend(opts?.target === "today" ? "today" : "memory", f);
-    if (r.ok) added += 1;
+    const clean = String(f || "").trim();
+    if (clean.length < 8) continue;
+    if (lower.includes(clean.toLowerCase().slice(0, 40))) continue;
+    body = body.trimEnd() + `\n- ${clean}`;
+    added += 1;
+  }
+  if (added) {
+    if (target === "today") {
+      browserFiles.set(
+        `daily/${new Date().toISOString().slice(0, 10)}.md`,
+        body.trimEnd() + "\n",
+      );
+    } else {
+      browserFiles.set(target, body.trimEnd() + "\n");
+    }
   }
   return { ok: true, added };
 }

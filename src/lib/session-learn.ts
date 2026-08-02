@@ -111,20 +111,7 @@ export function extractSessionSignals(userText: string, assistantText: string): 
   if (/\b(self-?improv|learning|memory)\b/i.test(user)) {
     // Don't re-log learning meta every turn — only once as a soft fact later via prefs
   }
-  if (/\b(workboard|HOST_CMD|desktop host)\b/i.test(user + asst)) {
-    facts.push("Session uses desktop host / agent tooling");
-  }
-
-  // Decision language from assistant
-  const decided = asst.match(
-    /\b(?:I'll|I will|going to|we should|recommend(?:ed)?|fixed|shipped|pushed)\b[^.!?\n]{8,100}/gi,
-  );
-  if (decided) {
-    for (const d of decided.slice(0, 2)) {
-      const clean = d.replace(/\s+/g, " ").trim();
-      if (clean.length >= 12) facts.push(`Agent action: ${clean.slice(0, 140)}`);
-    }
-  }
+  // Skip host/agent-action spam — those bloated MEMORY.md every turn
 
   // Dedupe prefs
   const prefOut: string[] = [];

@@ -13,7 +13,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 function barColor(tone: "ok" | "warn" | "danger") {
   if (tone === "danger") return "bg-[var(--color-danger)]";
@@ -44,8 +44,16 @@ export function UsageMeterChip({ className }: { className?: string }) {
   const tone = usageTone(pct);
   const label = web?.planLabel || PLAN_LIMITS[usage.plan].label;
   const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
-  const stale =
-    !usage.lastPolledAt || Date.now() - usage.lastPolledAt > 90_000;
+  // Avoid Date.now() during SSR — causes hydration mismatch on "stale"
+  const [stale, setStale] = useState(false);
+  useEffect(() => {
+    const check = () => {
+      setStale(!usage.lastPolledAt || Date.now() - usage.lastPolledAt > 90_000);
+    };
+    check();
+    const id = setInterval(check, 30_000);
+    return () => clearInterval(id);
+  }, [usage.lastPolledAt]);
   const err = web?.error;
 
   return (
