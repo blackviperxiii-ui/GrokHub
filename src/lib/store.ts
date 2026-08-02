@@ -400,6 +400,8 @@ type State = {
   selectThread: (id: string) => void;
   deleteThread: (id: string) => void;
   renameThread: (id: string, title: string) => void;
+  /** Sidebar/History: Fast-mode auto title (unlocks manual freeze) */
+  autoRenameThread: (id: string) => Promise<void>;
   pinThread: (id: string, pinned?: boolean) => void;
   setThreadFolder: (id: string, folder: string | null) => void;
   dismissSessionResume: () => void;
@@ -835,20 +837,24 @@ function buildTitleTranscript(messages: ChatMessage[], maxTurns = 6): string {
 
 /**
  * Use Fast mode for a super-short chat name (summary → 2–5 words).
- * Respects titleLocked. Heuristic title stays as interim until this lands.
+ * Respects titleLocked unless opts.force (user-initiated from sidebar).
  */
 async function autoRenameThreadWithFast(
   get: () => State,
   set: (partial: Partial<State> | ((s: State) => Partial<State>)) => void,
   threadId: string | null | undefined,
+  opts?: { force?: boolean },
 ): Promise<void> {
   if (!threadId) return;
+  const force = Boolean(opts?.force);
   const th = get().threads.find((x) => x.id === threadId);
-  if (!th || th.titleLocked) return;
+  if (!th) return;
+  if (th.titleLocked && !force) return;
   const msgs = th.id === get().activeThreadId ? get().chat : th.messages || [];
   const users = msgs.filter((m) => m.role === "user");
   const assts = msgs.filter((m) => m.role === "assistant" && !m.streaming);
-  if (!users.length || !assts.length) return;
+  if (!users.length) return;
+  if (!force && !assts.length) return;
 
   // Don't spam: only re-title when new content arrived (or still "New chat")
   const n = msgs.length;
@@ -859,15 +865,26 @@ async function autoRenameThreadWithFast(
     /^new chat$/i.test(title) ||
     title.length < 3 ||
     /^chat$/i.test(title);
-  if (!stillGeneric && n - lastN < 2) return;
-  const lastAt = autoTitleLastAt.get(threadId) || 0;
-  if (Date.now() - lastAt < 12_000 && !stillGeneric) return;
+  if (!force) {
+    if (!stillGeneric && n - lastN < 2) return;
+    const lastAt = autoTitleLastAt.get(threadId) || 0;
+    if (Date.now() - lastAt < 12_000 && !stillGeneric) return;
+  }
   if (autoTitleInflight.has(threadId)) return;
 
   const can =
     Boolean(get().oauth?.accessToken || get().apiKey || get().ssoCookie) ||
     get().preferFreeGrok !== false;
   if (!can) return;
+
+  // User-initiated auto-name unlocks manual freeze
+  if (force && th.titleLocked) {
+    set((s) => ({
+      threads: s.threads.map((x) =>
+        x.id === threadId ? { ...x, titleLocked: false } : x,
+      ),
+    }));
+  }
 
   autoTitleInflight.add(threadId);
   try {
@@ -909,14 +926,16 @@ async function autoRenameThreadWithFast(
     });
 
     if (!result.ok || !result.content) return;
-    // Re-check lock — user may have renamed mid-flight
+    // Re-check lock — user may have manually renamed mid-flight
     const live = get().threads.find((x) => x.id === threadId);
-    if (!live || live.titleLocked) return;
+    if (!live) return;
+    if (live.titleLocked) return;
 
-    let raw = String(result.content || "")
-      .split("\n")
-      .map((l) => l.trim())
-      .find((l) => l && !/^title\s*:/i.test(l)) || String(result.content);
+    let raw =
+      String(result.content || "")
+        .split("\n")
+        .map((l) => l.trim())
+        .find((l) => l && !/^title\s*:/i.test(l)) || String(result.content);
     raw = raw
       .replace(/^title\s*:\s*/i, "")
       .replace(/^["'“”]+|["'“”]+$/g, "")
@@ -927,8 +946,13 @@ async function autoRenameThreadWithFast(
 
     set((s) => ({
       threads: s.threads.map((x) =>
-        x.id === threadId && !x.titleLocked
-          ? { ...x, title: next, updatedAt: Date.now() }
+        x.id === threadId
+          ? {
+              ...x,
+              title: next,
+              titleLocked: false,
+              updatedAt: Date.now(),
+            }
           : x,
       ),
     }));
@@ -2732,6 +2756,39 @@ syncWebsiteConnectors: async () => {
               : t,
           ),
         }));
+      },
+
+      autoRenameThread: async (id: string) => {
+        const th = get().threads.find((t) => t.id === id);
+        if (!th) return;
+        const msgs = th.id === get().activeThreadId ? get().chat : th.messages || [];
+        if (!msgs.some((m) => m.role === "user")) {
+          get().pushActivity({
+            kind: "system",
+            title: "Nothing to name yet",
+            detail: "Send a message first, then try Auto name",
+            status: "queued",
+          });
+          return;
+        }
+        get().pushActivity({
+          kind: "system",
+          title: "Naming chat…",
+          detail: "Fast mode summary title",
+          status: "running",
+        });
+        const before = th.title;
+        await autoRenameThreadWithFast(get, set, id, { force: true });
+        const after = get().threads.find((t) => t.id === id)?.title;
+        get().pushActivity({
+          kind: "system",
+          title: after && after !== before ? `Named “${after}”` : "Auto name finished",
+          detail:
+            after && after !== before
+              ? "Updated from chat summary"
+              : "Could not generate a better title — try again when connected",
+          status: after && after !== before ? "success" : "queued",
+        });
       },
 
       pinThread: (id, pinned) => {

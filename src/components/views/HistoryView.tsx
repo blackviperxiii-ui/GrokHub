@@ -1,4 +1,4 @@
-import { Folder, History, MessageSquarePlus, Pencil, Pin, PinOff, Search, Trash2 } from "lucide-react";
+import { Folder, History, MessageSquarePlus, Pencil, Pin, PinOff, Search, Trash2, Wand2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useGrokHub } from "@/lib/store";
 import { RelativeTime } from "../RelativeTime";
@@ -26,6 +26,7 @@ export function HistoryView() {
   const selectThread = useGrokHub((s) => s.selectThread);
   const deleteThread = useGrokHub((s) => s.deleteThread);
   const renameThread = useGrokHub((s) => s.renameThread);
+  const autoRenameThread = useGrokHub((s) => s.autoRenameThread);
   const pinThread = useGrokHub((s) => s.pinThread);
   const setThreadFolder = useGrokHub((s) => s.setThreadFolder);
   const newThread = useGrokHub((s) => s.newThread);
@@ -332,6 +333,15 @@ export function HistoryView() {
                     onClick={() => startRename(t.id, t.title)}
                   >
                     <Pencil className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    title="Auto name (Fast summary)"
+                    onClick={() => void autoRenameThread(t.id)}
+                  >
+                    <Wand2 className="h-3.5 w-3.5" />
                   </Button>
                   <Button
                     size="icon"

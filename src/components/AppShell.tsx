@@ -14,15 +14,16 @@ import { ListTodo,
   MoreHorizontal,
   Pencil,
   Pin,
+  Sparkles,
   Search,
   Settings,
-  Sparkles,
   Square,
   TimerReset,
   Trash2,
   Users,
   X,
   Download,
+  Wand2,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
@@ -119,7 +120,9 @@ function RecentThreadRow({
   const renameThread = useGrokHub((s) => s.renameThread);
   const deleteThread = useGrokHub((s) => s.deleteThread);
   const pinThread = useGrokHub((s) => s.pinThread);
+  const autoRenameThread = useGrokHub((s) => s.autoRenameThread);
   const [renaming, setRenaming] = useState(false);
+  const [naming, setNaming] = useState(false);
   const [draft, setDraft] = useState(title);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -206,6 +209,16 @@ function RecentThreadRow({
           >
             <Pencil className="h-3 w-3" />
             Rename
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={naming}
+            onClick={() => {
+              setNaming(true);
+              void autoRenameThread(id).finally(() => setNaming(false));
+            }}
+          >
+            <Wand2 className="h-3 w-3" />
+            {naming ? "Naming…" : "Auto name"}
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => pinThread(id, !pinned)}>
             <Pin className="h-3 w-3" />
