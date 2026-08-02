@@ -15,8 +15,8 @@ import type { OpenClawWorkspaceRaw } from "./openclaw-import";
 import { defaultOpenClawPaths } from "./openclaw-import";
 
 const execAsync = promisify(execCb);
-const MAX_STDOUT = 200_000;
-const MAX_TIMEOUT = 120_000;
+const MAX_STDOUT = 2_000_000;
+const MAX_TIMEOUT = 300_000;
 
 function clip(s: string, max = MAX_STDOUT): string {
   if (!s) return "";
@@ -172,10 +172,13 @@ export async function handleExec(
       stderr?: string | Buffer;
       message?: string;
     };
+    const msg = String(e.message || "exec failed");
+    const maxBuf = /maxBuffer|ERR_CHILD_PROCESS_STDIO_MAXBUFFER/i.test(msg);
+    const timedOut = Boolean(e.killed) || /timed out/i.test(msg);
     const code =
       typeof e.code === "number"
         ? e.code
-        : e.killed
+        : timedOut
           ? 124
           : typeof e.code === "string"
             ? 1
@@ -187,7 +190,11 @@ export async function handleExec(
       stderr: clip(
         String(
           e.stderr ||
-            (e.killed ? `command timed out after ${timeout}ms` : e.message || "exec failed"),
+            (timedOut
+              ? `command timed out after ${timeout}ms`
+              : maxBuf
+                ? `output exceeded buffer — partial stdout returned`
+                : msg),
         ),
       ),
       cwd: workdir,

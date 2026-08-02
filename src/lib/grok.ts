@@ -20,8 +20,12 @@ When you need real filesystem / shell data (Downloads, home, processes, etc.), d
 Put the host command on its OWN line, alone, like:
 HOST_CMD: ls -la "$HOME/Downloads"
 Never glue HOST_CMD onto a prose sentence. Prefer one simple command (ls, head, cat, find, stat).
+For broad filesystem scans always bound the work:
+- use find -maxdepth 3 (or 4) and exclude huge trees when possible
+- pipe to head -n 100 (never unbounded find / grep -R on / or $HOME)
+- prefer targeted paths (project dir) over whole-home scans
 The runtime executes it and returns HOST_RESULT — then summarize clearly for the user.
-You may use multiple HOST_CMD rounds if needed.
+You may use multiple HOST_CMD rounds if needed. If a scan times out, narrow scope instead of repeating the same broad command.
 
 ## Connectors
 Only use tools listed as LIVE in the connector context below. Do not invent mail, calendar, or Notion results.

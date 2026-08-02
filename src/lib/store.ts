@@ -1741,14 +1741,106 @@ export const useGrokHub = create<State>()(
 
       resumeLastSession: () => {
         const r = get().sessionResume;
-        if (!r?.threadId) return;
-        const t = get().threads.find((x) => x.id === r.threadId);
-        if (t) {
-          get().selectThread(t.id);
-        } else {
+        if (!r) {
           set({ nav: "chat" });
+          return;
         }
-        set({ sessionResume: null });
+
+        const threads = get().threads;
+        let t =
+          (r.threadId && threads.find((x) => x.id === r.threadId)) ||
+          null;
+
+        // Fallbacks when id drifted after update / rehydrate
+        if (!t && r.title) {
+          const title = r.title.trim().toLowerCase();
+          t =
+            threads.find(
+              (x) =>
+                x.title.trim().toLowerCase() === title &&
+                (x.messages?.length || 0) > 0,
+            ) ||
+            threads.find((x) => x.title.trim().toLowerCase() === title) ||
+            null;
+        }
+        if (!t) {
+          t =
+            [...threads]
+              .filter((x) => (x.messages?.length || 0) > 0)
+              .sort((a, b) => b.updatedAt - a.updatedAt)[0] || null;
+        }
+
+        if (t) {
+          // Prefer the longer of thread history vs live chat when same thread
+          let messages = Array.isArray(t.messages) ? t.messages : [];
+          if (
+            get().activeThreadId === t.id &&
+            get().chat.length > messages.length
+          ) {
+            messages = get().chat;
+          }
+          // Also prefer live chat if thread messages empty but chat has content
+          if (!messages.length && get().chat.length && get().activeThreadId === t.id) {
+            messages = get().chat;
+          }
+
+          set((s) => ({
+            activeThreadId: t!.id,
+            chat: messages,
+            nav: "chat" as const,
+            mode: r.mode || t!.mode || s.mode,
+            threads: s.threads.map((th) =>
+              th.id === t!.id
+                ? {
+                    ...th,
+                    messages,
+                    mode: r.mode || th.mode,
+                    updatedAt: Date.now(),
+                  }
+                : th,
+            ),
+            running: false,
+            streamStatus: null,
+            streamingMessageId: null,
+            sessionResume: null,
+          }));
+        } else {
+          // Last resort: open chat and keep context in a soft note
+          set({
+            nav: "chat",
+            sessionResume: null,
+          });
+          get().pushActivity({
+            kind: "system",
+            title: "Resume unavailable",
+            detail: "Could not find that chat — start a new one or pick from History.",
+            status: "failed",
+          });
+          return;
+        }
+
+        get().pushActivity({
+          kind: "system",
+          title: "Resumed chat",
+          detail: r.title || "Previous session",
+          status: "success",
+        });
+
+        if (typeof window !== "undefined") {
+          try {
+            window.dispatchEvent(
+              new CustomEvent("grokhub:resume-session", {
+                detail: {
+                  threadId: t.id,
+                  title: r.title,
+                  preview: r.preview,
+                },
+              }),
+            );
+          } catch {
+            /* ignore */
+          }
+        }
       },
 
       setPreferFreeGrok: (v) => set({ preferFreeGrok: Boolean(v) }),
@@ -2829,7 +2921,7 @@ export const useGrokHub = create<State>()(
               set({ streamStatus: `Adaptive → ${auto.tierLabel} · ${auto.reasonDetail}` });
             }
             let rounds = 0;
-            const maxRounds = 4;
+            const maxRounds = 6;
             let accumulated = "";
 
             while (rounds < maxRounds) {
@@ -3180,17 +3272,17 @@ if (!cmds.length) {
 
                 // Execute host commands and feed results back
                 const { classifyHostCommand, needsHostConfirm, riskLabel } = await import("./host-safety");
-                const riskList = cmds.slice(0, 3).map((c) => riskLabel(classifyHostCommand(c)));
+                const riskList = cmds.slice(0, 5).map((c) => riskLabel(classifyHostCommand(c)));
                 const desk = get().desktop;
                 if (
-                  needsHostConfirm(cmds.slice(0, 3), {
+                  needsHostConfirm(cmds.slice(0, 5), {
                     confirmAll: Boolean(desk.confirmHostCommands) && !desk.confirmDestructiveOnly,
                     confirmDestructive: Boolean(desk.confirmHostCommands),
                   })
                 ) {
                   const allowed = await requestHostConfirm(
                     set,
-                    cmds.slice(0, 3),
+                    cmds.slice(0, 5),
                     riskList,
                     botId,
                   );
@@ -3204,48 +3296,69 @@ if (!cmds.length) {
                 }
                 set({ streamStatus: "Running on your desktop…" });
                 const { hostExec } = await import("./host-client");
+                const { boundHostScanCommand, hostTimeoutMs, clipHostOutput } = await import("./host-scan");
                 const outputs: string[] = [];
-                for (const cmd of cmds.slice(0, 3)) {
-                  get().pushActivity({
-                    kind: "desktop",
-                    title: "Host command",
-                    detail: cmd.slice(0, 160),
-                    status: "running",
-                  });
+                // Allow a few more cmds for multi-step scans; still cap to keep turns sane
+                for (const rawCmd of cmds.slice(0, 5)) {
                   if (abort.signal.aborted || gen !== chatGeneration) {
                     aborted = true;
                     break;
                   }
-                  set({ streamStatus: `Host: ${cmd.slice(0, 72)}…` });
+                  const bounded = boundHostScanCommand(rawCmd);
+                  const cmd = bounded.command;
+                  const timeoutMs = hostTimeoutMs(cmd, 90_000);
+                  get().pushActivity({
+                    kind: "desktop",
+                    title: "Host command",
+                    detail: (bounded.note ? `[${bounded.note}] ` : "") + rawCmd.slice(0, 140),
+                    status: "running",
+                  });
+                  set({
+                    streamStatus: `Host: ${rawCmd.slice(0, 72)}…`,
+                  });
                   patchBot(
                     toolRunningMarkdown({
                       kind: "host",
-                      command: cmd,
+                      command: rawCmd,
                       preface: visible || "Working on your machine…",
                     }),
                     { streaming: true },
                   );
                   try {
-                    const r = await hostExec(cmd, undefined, 45_000);
-                    outputs.push(
+                    // Long scans: do not abort the whole agent turn on timeout —
+                    // hostExec returns ok:false with stderr; we feed that back and continue.
+                    const r = await hostExec(cmd, undefined, timeoutMs);
+                    const out = clipHostOutput(
                       [
-                        `$ ${cmd}`,
+                        `$ ${rawCmd}`,
+                        bounded.bounded && bounded.note
+                          ? `# runtime bounds: ${bounded.note}`
+                          : "",
                         `exit ${r.code ?? "?"} · ${r.ms}ms · ${r.cwd}`,
                         r.stdout || "(no stdout)",
                         r.stderr ? `[stderr]\n${r.stderr}` : "",
+                        r.ok
+                          ? ""
+                          : r.stderr && /timed out/i.test(r.stderr)
+                            ? "(scan timed out — partial output above; narrow the path or maxdepth)"
+                            : "",
                       ]
                         .filter(Boolean)
                         .join("\n"),
                     );
+                    outputs.push(out);
                     get().pushActivity({
                       kind: "desktop",
-                      title: r.ok ? "Host ok" : "Host failed",
-                      detail: cmd.slice(0, 120),
+                      title: r.ok ? "Host ok" : /timed out/i.test(r.stderr || "") ? "Host timeout" : "Host failed",
+                      detail: rawCmd.slice(0, 120),
                       status: r.ok ? "success" : "failed",
                     });
                   } catch (e) {
+                    // Soft-fail: keep the tool loop alive so the model can summarize
                     outputs.push(
-                      `$ ${cmd}\n[host error] ${e instanceof Error ? e.message : "failed"}`,
+                      clipHostOutput(
+                        `$ ${rawCmd}\n[host error] ${e instanceof Error ? e.message : "failed"}\n(continuing agent turn)`,
+                      ),
                     );
                     get().pushActivity({
                       kind: "desktop",
@@ -3261,7 +3374,9 @@ if (!cmds.length) {
                   "HOST_RESULT (authoritative — use this, do not invent files):",
                   outputs.join("\n\n---\n\n"),
                   "",
-                  "Summarize these results for the user in plain language. Do not output HOST_CMD again unless you need another command.",
+                  "Summarize these results for the user in plain language.",
+                  "If a scan timed out or was truncated, say so and suggest a narrower path.",
+                  "Do not output HOST_CMD again unless you still need a different command.",
                 ].join("\n");
 
                 history.push({ role: "assistant", content: full });

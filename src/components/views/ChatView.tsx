@@ -42,9 +42,18 @@ function chipIcon(kind: QuickChip["kind"]) {
   return Sparkles;
 }
 
-function ToolActivityBanner({ status }: { status: string | null }) {
+function ToolActivityBanner({
+  status,
+  fading = false,
+  onDismiss,
+}: {
+  status: string | null;
+  /** Opacity fade when tool just finished */
+  fading?: boolean;
+  onDismiss?: () => void;
+}) {
   const tool = parseStreamStatus(status);
-  if (!tool || tool.phase !== "running") return null;
+  if (!tool) return null;
   const Icon =
     tool.kind === "host"
       ? Monitor
@@ -67,6 +76,8 @@ function ToolActivityBanner({ status }: { status: string | null }) {
     <div
       className={cn(
         "mx-auto flex w-full max-w-[min(56rem,100%)] items-start gap-3 rounded-[var(--radius-md)] border px-3 py-2.5 3xl:max-w-[min(64rem,100%)]",
+        "transition-opacity duration-700 ease-out",
+        fading ? "pointer-events-none opacity-0" : "opacity-100",
         accent,
       )}
       role="status"
@@ -76,17 +87,12 @@ function ToolActivityBanner({ status }: { status: string | null }) {
         <Icon
           className={cn(
             "h-3.5 w-3.5",
-            (tool.kind === "stream" || tool.kind === "summarize") &&
+            !fading &&
+              (tool.kind === "stream" || tool.kind === "summarize") &&
               "animate-spin text-[var(--color-info)]",
             tool.kind === "host" && "text-[var(--color-success)]",
             tool.kind === "connector" && "text-[var(--color-info)]",
             tool.kind === "selfmod" && "text-[var(--color-warn)]",
-            tool.kind !== "stream" &&
-              tool.kind !== "summarize" &&
-              tool.kind !== "host" &&
-              tool.kind !== "connector" &&
-              tool.kind !== "selfmod" &&
-              "text-[var(--color-info)]",
           )}
         />
       </span>
@@ -94,15 +100,31 @@ function ToolActivityBanner({ status }: { status: string | null }) {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-semibold text-[var(--color-fg)]">{tool.title}</span>
           <span className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] px-1.5 py-px text-[10px] uppercase tracking-wide text-[var(--color-subtle)]">
-            <span className="pulse-live inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-info)]" />
-            live
+            <span
+              className={cn(
+                "inline-block h-1.5 w-1.5 rounded-full",
+                fading ? "bg-[var(--color-subtle)]" : "pulse-live bg-[var(--color-info)]",
+              )}
+            />
+            {fading ? "done" : "live"}
           </span>
         </div>
         <p className="mt-0.5 break-all font-mono text-[11px] leading-snug text-[var(--color-muted)]">
           {tool.detail}
         </p>
       </div>
-      <Loader2 className="mt-1 h-3.5 w-3.5 shrink-0 animate-spin text-[var(--color-subtle)]" />
+      {!fading ? (
+        <Loader2 className="mt-1 h-3.5 w-3.5 shrink-0 animate-spin text-[var(--color-subtle)]" />
+      ) : onDismiss ? (
+        <button
+          type="button"
+          className="mt-1 text-[var(--color-subtle)] hover:text-[var(--color-fg)]"
+          onClick={onDismiss}
+          aria-label="Dismiss"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -152,6 +174,10 @@ export function ChatView() {
   const clearChat = useGrokHub((s) => s.clearChat);
   const [text, setText] = useState("");
   const [localRunning, setLocalRunning] = useState(false);
+  /** Single toast for tool/host activity (avoids duplicate banners) */
+  const [toastStatus, setToastStatus] = useState<string | null>(null);
+  const [toastFading, setToastFading] = useState(false);
+  const toastTimers = useRef<{ fade?: ReturnType<typeof setTimeout>; clear?: ReturnType<typeof setTimeout> }>({});
   const [pendingBusy, setPendingBusy] = useState(false);
   const [hostOnline, setHostOnline] = useState<boolean | undefined>(undefined);
   const [historyExtra, setHistoryExtra] = useState(0);
@@ -165,6 +191,52 @@ export function ChatView() {
   const fileRef = useRef<HTMLInputElement>(null);
   const modeMeta = getMode(mode);
   const busy = running || localRunning || pendingBusy;
+
+  // One tool toast: show while busy; hold then fade after idle (no double banners)
+  useEffect(() => {
+    const active =
+      streamStatus ||
+      (localRunning ? "Host: running…" : null) ||
+      (running ? "Thinking…" : null);
+
+    if (busy && active) {
+      // Cancel any in-flight fade when work resumes
+      if (toastTimers.current.fade) clearTimeout(toastTimers.current.fade);
+      if (toastTimers.current.clear) clearTimeout(toastTimers.current.clear);
+      toastTimers.current = {};
+      setToastFading(false);
+      setToastStatus(active);
+      return;
+    }
+
+    if (!busy) {
+      // Schedule fade once when we have something to show
+      setToastStatus((prev) => {
+        if (!prev) return prev;
+        if (!toastTimers.current.fade && !toastTimers.current.clear) {
+          toastTimers.current.fade = setTimeout(() => setToastFading(true), 1400);
+          toastTimers.current.clear = setTimeout(() => {
+            setToastStatus(null);
+            setToastFading(false);
+            toastTimers.current = {};
+          }, 1400 + 800);
+        }
+        return prev;
+      });
+    }
+
+    return () => {
+      /* timers owned across busy→idle; only clear on unmount */
+    };
+  }, [busy, streamStatus, localRunning, running]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimers.current.fade) clearTimeout(toastTimers.current.fade);
+      if (toastTimers.current.clear) clearTimeout(toastTimers.current.clear);
+    };
+  }, []);
+
   const plan = PLAN_LIMITS[usage.plan];
   const pct = Math.round(usagePercent(usage));
 
@@ -222,6 +294,19 @@ export function ChatView() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat, busy, streamStatus]);
+
+  useEffect(() => {
+    const onResume = () => {
+      // Jump to latest message + focus composer after Resume
+      requestAnimationFrame(() => {
+        endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+        inputRef.current?.focus();
+        resizeComposer();
+      });
+    };
+    window.addEventListener("grokhub:resume-session", onResume);
+    return () => window.removeEventListener("grokhub:resume-session", onResume);
+  }, []);
 
   useEffect(() => {
     const focus = () => {
@@ -553,8 +638,8 @@ export function ChatView() {
         <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-0">
           <div className="shrink-0 space-y-2 px-4 pt-3 md:px-6 3xl:px-8">
             <HostGatewayBanner variant="compact" />
-            {sessionResume && sessionResume.threadId && !busy && (
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-2">
+            {sessionResume && !busy && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-info)_30%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-info)_8%,var(--color-elevated))] px-3 py-2">
                 <div className="min-w-0">
                   <div className="text-xs font-medium">Continue where you left off</div>
                   <div className="truncate text-[11px] text-[var(--color-muted)]">
@@ -563,7 +648,18 @@ export function ChatView() {
                   </div>
                 </div>
                 <div className="flex shrink-0 gap-1.5">
-                  <Button size="sm" onClick={() => resumeLastSession()}>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      resumeLastSession();
+                      // Ensure scroll/focus even if already on this thread
+                      requestAnimationFrame(() => {
+                        endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+                        inputRef.current?.focus();
+                        resizeComposer();
+                      });
+                    }}
+                  >
                     Resume
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => dismissSessionResume()}>
@@ -729,19 +825,12 @@ export function ChatView() {
               </div>
             ))}
             {busy && (
-              <div className="space-y-2">
-                <ToolActivityBanner
-                  status={
-                    streamStatus || (localRunning ? "Host: running…" : "Thinking…")
-                  }
-                />
-                <div className="flex items-center gap-2 text-xs text-[var(--color-subtle)]">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-info)]" />
-                  <span className="shimmer rounded px-1">
-                    {streamStatus ||
-                      (localRunning ? "Host running…" : `${modeMeta.label} · working…`)}
-                  </span>
-                </div>
+              <div className="flex items-center gap-2 text-xs text-[var(--color-subtle)]">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-info)]" />
+                <span className="shimmer rounded px-1">
+                  {streamStatus ||
+                    (localRunning ? "Host running…" : `${modeMeta.label} · working…`)}
+                </span>
               </div>
             )}
             <div ref={endRef} />
@@ -997,22 +1086,29 @@ export function ChatView() {
                 <span className="font-mono">Ctrl+L</span> focus · 📎 attach · 🎤 voice · paste images
               </div>
             )}
-            {busy && (
-              <ToolActivityBanner status={streamStatus || "Working…"} />
-            )}
-            {busy && (
-              <div className="mx-auto flex w-full max-w-[min(56rem,100%)] items-center justify-between text-[10px] text-[var(--color-subtle)] 3xl:max-w-[min(64rem,100%)]">
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="pulse-live inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-info)]" />
-                  {streamStatus || "Running"}
-                </span>
-                <button
-                  type="button"
-                  className="font-medium text-[var(--color-danger)] hover:underline"
-                  onClick={onStop}
-                >
-                  Stop generating
-                </button>
+            {(toastStatus || busy) && (
+              <div className="space-y-1.5">
+                {toastStatus && (
+                  <ToolActivityBanner
+                    status={toastStatus}
+                    fading={toastFading}
+                    onDismiss={() => {
+                      setToastStatus(null);
+                      setToastFading(false);
+                    }}
+                  />
+                )}
+                {busy && (
+                  <div className="mx-auto flex w-full max-w-[min(56rem,100%)] items-center justify-end text-[10px] text-[var(--color-subtle)] 3xl:max-w-[min(64rem,100%)]">
+                    <button
+                      type="button"
+                      className="font-medium text-[var(--color-danger)] hover:underline"
+                      onClick={onStop}
+                    >
+                      Stop generating
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

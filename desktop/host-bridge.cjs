@@ -18,8 +18,8 @@ try {
 const isWin = process.platform === "win32";
 
 const execAsync = promisify(exec);
-const MAX_STDOUT = 200_000;
-const MAX_TIMEOUT = 120_000;
+const MAX_STDOUT = 2_000_000;
+const MAX_TIMEOUT = 300_000;
 let safeMode = process.env.GROKHUB_HOST_SAFE === "1";
 /** @type {Map<string, import('node:child_process').ChildProcess>} */
 const runningJobs = new Map();
@@ -231,19 +231,28 @@ async function runExec(command, cwd, timeoutMs = 30_000, opts = {}) {
       ms: Date.now() - started,
     };
   } catch (err) {
+    const msg = String(err && err.message ? err.message : err || "exec failed");
+    const maxBuf = /maxBuffer|ERR_CHILD_PROCESS_STDIO_MAXBUFFER/i.test(msg);
+    const timedOut = Boolean(err && err.killed) || /timed out/i.test(msg);
     return {
       ok: false,
-      code: typeof err.code === "number" ? err.code : err.killed ? 124 : 1,
-      stdout: clip(String(err.stdout || "")),
+      code: typeof err.code === "number" ? err.code : timedOut ? 124 : 1,
+      // node often still has partial stdout/stderr on maxBuffer / timeout
+      stdout: clip(String((err && err.stdout) || "")),
       stderr: clip(
         String(
-          err.stderr ||
-            (err.killed ? `command timed out after ${timeout}ms` : err.message || "exec failed"),
+          (err && err.stderr) ||
+            (timedOut
+              ? `command timed out after ${timeout}ms`
+              : maxBuf
+                ? `output exceeded buffer — partial stdout returned (${MAX_STDOUT} bytes cap)`
+                : msg),
         ),
       ),
       cwd: workdir,
       command: cmd,
       ms: Date.now() - started,
+      partial: maxBuf || timedOut,
     };
   }
 }
