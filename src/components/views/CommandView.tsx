@@ -39,11 +39,11 @@ export function CommandView() {
     <div className="space-y-6">
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label="Connectors"
+          label="Live tools"
           value={`${connected}/${connectors.length}`}
           hint="OAuth tools live"
           icon={<Cable className="h-4 w-4" />}
-          onClick={() => setNav("connectors")}
+          onClick={() => setNav("settings")}
         />
         <StatCard
           label="Skills"

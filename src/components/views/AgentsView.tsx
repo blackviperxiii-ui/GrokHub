@@ -73,7 +73,7 @@ export function AgentsView() {
         <CardContent className="grid gap-3 text-sm text-[var(--color-muted)] md:grid-cols-3">
           <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
             <div className="mb-1 font-medium text-[var(--color-fg)]">Connectors</div>
-            I/O layer — Gmail, Drive, GitHub, Notion, custom MCP. Same idea as grok.com/connectors.
+            Grok + Desktop Host (and optional GitHub token) — keep it simple.
           </div>
           <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
             <div className="mb-1 font-medium text-[var(--color-fg)]">Skills</div>

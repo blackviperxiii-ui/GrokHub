@@ -908,7 +908,7 @@ export function ChatView() {
   async function onChip(chip: QuickChip) {
     recordQuickAssistChip(chip);
     if (chip.kind === "nav" && chip.value.startsWith("__nav:")) {
-      setNav(chip.value.slice("__nav:".length) as "settings" | "imagine" | "connectors" | "desktop");
+      setNav(chip.value.slice("__nav:".length) as "settings" | "imagine" | "desktop");
       return;
     }
     if (chip.kind === "mode" && chip.value.startsWith("__mode:")) {

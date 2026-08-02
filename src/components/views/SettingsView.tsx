@@ -82,7 +82,7 @@ const SECTION_SEARCH: Record<string, string> = {
   "sec-model-overrides": "pin override mode model",
   "sec-modes": "adaptive fast balanced think max build mode",
   "sec-autonomy": "autonomy always-on queue daemon agent",
-  "sec-agent": "temperature tools host connector agent",
+  "sec-agent": "temperature tools host github agent",
   "sec-desktop": "desktop shell arch confirm safe",
   "sec-project": "project workspace openclaw path",
   "sec-memory": "memory files user.md learnings",
@@ -2225,9 +2225,9 @@ function AgentPrefsPanel() {
       </div>
       <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-3">
         <div>
-          <div className="text-sm font-medium">Connector tools</div>
+          <div className="text-sm font-medium">GitHub tool commands</div>
           <div className="text-xs text-[var(--color-muted)]">
-            GitHub and website connector commands
+            Allow CONNECTOR_CMD for GitHub when a token is set
           </div>
         </div>
         <input

@@ -127,13 +127,6 @@ export function CommandPalette({
         run: () => go("workboard"),
       },
       {
-        id: "nav-connectors",
-        label: "Connectors",
-        group: "Navigate",
-        icon: Cable,
-        run: () => go("connectors"),
-      },
-      {
         id: "nav-skills",
         label: "Skills",
         group: "Navigate",

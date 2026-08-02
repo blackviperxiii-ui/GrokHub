@@ -1008,6 +1008,29 @@ function initialFromSeeds() {
 
 const boot = initialFromSeeds();
 
+/** Flush debounced/parked memory so Settings stick across restart/update. */
+function scheduleSettingsPersist() {
+  void import("./persistent-storage").then(({ flushPersistentStorage }) => {
+    void flushPersistentStorage();
+  });
+}
+
+const CORE_CONNECTOR_IDS = new Set(["grok-xai", "desktop-host", "github"]);
+
+function pruneToCoreConnectors(list: Connector[]): Connector[] {
+  const byId = new Map<string, Connector>();
+  for (const c of list || []) {
+    if (CORE_CONNECTOR_IDS.has(c.id)) byId.set(c.id, c);
+  }
+  // Ensure cores always exist
+  for (const seed of createSeeds().connectors) {
+    if (!byId.has(seed.id)) byId.set(seed.id, seed);
+  }
+  return ["grok-xai", "desktop-host", "github"]
+    .map((id) => byId.get(id)!)
+    .filter(Boolean);
+}
+
 export const useGrokHub = create<State>()(
   persist(
     (set, get) => ({
@@ -1101,16 +1124,22 @@ export const useGrokHub = create<State>()(
         });
       },
       setModeMenuOpen: (open) => set({ modeMenuOpen: open }),
-      setModelOverride: (mode, modelId) =>
+      setModelOverride: (mode, modelId) => {
         set((s) => {
           const next = { ...cleanModelOverrides(s.modelOverrides) };
           if (modelId && modelId.trim()) next[mode] = modelId.trim();
           else delete next[mode];
           return { modelOverrides: next };
-        }),
-      clearModelOverrides: () => set({ modelOverrides: {} }),
+        });
+        scheduleSettingsPersist();
+      },
+      clearModelOverrides: () => {
+        set({ modelOverrides: {} });
+        scheduleSettingsPersist();
+      },
       setDesktop: (patch) => {
         set((s) => ({ desktop: { ...s.desktop, ...patch } }));
+        scheduleSettingsPersist();
         if (typeof patch.hostSafeMode === "boolean" && typeof window !== "undefined") {
           try {
             void window.grokhubDesktop?.host?.setSafeMode?.(patch.hostSafeMode);
@@ -1699,97 +1728,21 @@ export const useGrokHub = create<State>()(
       },
 
 syncWebsiteConnectors: async () => {
-        try {
-          const { fetchWebsiteConnectors } = await import("./website-connectors");
-          const { createSeeds } = await import("./seed");
-          const r = await fetchWebsiteConnectors({
-            ssoCookie: get().ssoCookie || undefined,
-            bearer: get().oauth?.accessToken,
-          });
-          // Ensure catalog has all known ids
-          const catalog = createSeeds().connectors;
-          set((s) => {
-            const byId = new Map(s.connectors.map((c) => [c.id, c]));
-            for (const c of catalog) {
-              if (!byId.has(c.id)) byId.set(c.id, c);
-            }
-            // Apply website hits
-            for (const hit of r.connectors) {
-              const prev = byId.get(hit.id);
-              if (!prev) {
-                byId.set(hit.id, {
-                  id: hit.id,
-                  name: hit.name,
-                  category: "Website",
-                  description: "Linked on Grok website",
-                  status: "connected",
-                  tools: [],
-                  accountLabel: hit.accountLabel,
-                  source: "website",
-                  liveTools: hit.id === "github",
-                  lastUsed: Date.now(),
-                });
-                continue;
-              }
-              byId.set(hit.id, {
-                ...prev,
-                status: "connected",
-                accountLabel: hit.accountLabel || prev.accountLabel,
-                source: prev.source === "token" || prev.liveTools ? prev.source : "website",
-                // GitHub stays live if token present
-                liveTools:
-                  prev.id === "github"
-                    ? Boolean(get().githubToken) || prev.liveTools
-                    : prev.id === "desktop-host" || prev.id === "grok-xai"
-                      ? true
-                      : false,
-                lastUsed: Date.now(),
-                description: hit.accountLabel
-                  ? `${prev.description.split(" · ")[0]} · ${hit.accountLabel}`
-                  : prev.description,
-              });
-            }
-            // GitHub token implies connected + live
-            if (get().githubToken) {
-              const gh = byId.get("github");
-              if (gh) {
-                byId.set("github", {
-                  ...gh,
-                  status: "connected",
-                  liveTools: true,
-                  source: "token",
-                  lastUsed: Date.now(),
-                });
-              }
-            }
-            return { connectors: Array.from(byId.values()) };
-          });
-          if (r.ok && r.connectors.length) {
-            get().pushActivity({
-              kind: "connector",
-              title: "Website connectors synced",
-              detail: r.detail,
-              status: "success",
-            });
-          }
-          return {
-            ok: r.ok,
-            detail: r.detail,
-            count: r.connectors.length,
-          };
-        } catch (e) {
-          const detail = e instanceof Error ? e.message : "sync failed";
-          return { ok: false, detail, count: 0 };
-        }
+        // Website multi-connector catalog removed — keep core three only
+        set((s) => ({ connectors: pruneToCoreConnectors(s.connectors) }));
+        scheduleSettingsPersist();
+        return { ok: true, detail: "Core tools only (Grok, Desktop, GitHub)", count: 3 };
       },
 
       setApiKey: (key) => {
         set({ apiKey: key, grokConnected: null });
         void import("./secrets-client").then((m) => m.secretsSet("apiKey", key));
+        scheduleSettingsPersist();
       },
       setGithubToken: (token) => {
         set({ githubToken: token });
         void import("./secrets-client").then((m) => m.secretsSet("githubToken", token));
+        scheduleSettingsPersist();
       },
       setSsoCookie: (cookie) => {
         const raw = cookie.trim();
@@ -1824,6 +1777,7 @@ syncWebsiteConnectors: async () => {
         }
         void get().refreshUsage();
         void get().syncWebsiteConnectors();
+        scheduleSettingsPersist();
       },
 
       startGrokOAuth: async () => {
@@ -2869,8 +2823,9 @@ syncWebsiteConnectors: async () => {
             ),
           },
         }));
+      
+        scheduleSettingsPersist();
       },
-
       compactThread: (threadId) => {
         const s = get();
         const tid = threadId || s.activeThreadId;
@@ -3277,9 +3232,18 @@ syncWebsiteConnectors: async () => {
         await get().sendChat(prompt);
       },
 
-      setPreferFreeGrok: (v) => set({ preferFreeGrok: Boolean(v) }),
-      setUiTheme: (t) => set({ uiTheme: t }),
-      setToolsNavCollapsed: (v) => set({ toolsNavCollapsed: Boolean(v) }),
+      setPreferFreeGrok: (v) => {
+        set({ preferFreeGrok: Boolean(v) });
+        scheduleSettingsPersist();
+      },
+      setUiTheme: (t) => {
+        set({ uiTheme: t });
+        scheduleSettingsPersist();
+      },
+      setToolsNavCollapsed: (v) => {
+        set({ toolsNavCollapsed: Boolean(v) });
+        scheduleSettingsPersist();
+      },
 
       setPlan: (plan) => {
         const prev = get().usage;
@@ -3870,7 +3834,9 @@ syncWebsiteConnectors: async () => {
       setAutonomy: (patch) => {
         set((s) => {
           let autonomy = rollBudgetDay({ ...s.autonomy, ...patch });
-          return { autonomy };
+          const out = { autonomy };
+          scheduleSettingsPersist();
+          return out;
         });
         const a = get().autonomy;
         void agentCoreSync({ paused: a.paused, level: a.level, jobs: get().agentQueue.jobs });
@@ -6650,7 +6616,12 @@ if (!cmds.length) {
         uiTheme: s.uiTheme || "dark",
         toolsNavCollapsed: Boolean(s.toolsNavCollapsed),
         preferFreeGrok: s.preferFreeGrok !== false,
-        // nav not forced — restore last view except desktop
+        setupSyncMeta: s.setupSyncMeta || { autoPullOnLogin: true, autoPushOnChange: false },
+        // Restore last tab (connectors removed — remapped on hydrate)
+        nav:
+          s.nav === "connectors" || s.nav === "desktop"
+            ? "chat"
+            : s.nav || "chat",
         // Secrets stay in safeStorage (userData), not here
       }),
       version: 1,
@@ -6774,10 +6745,23 @@ if (!cmds.length) {
             if (!chat.length || chat.length < (active.messages?.length || 0)) {
               s.chat = active.messages || [];
             }
-            if (active.mode && ["auto", "fast", "expert", "heavy", "build"].includes(String(active.mode))) {
+            if (
+              active.mode &&
+              ["auto", "fast", "balanced", "expert", "heavy", "max", "build"].includes(
+                String(active.mode),
+              )
+            ) {
               // Do not force routed modes onto global selector on boot —
               // prefer the persisted global mode (partialize). Only fill if missing.
               if (!s.mode) s.mode = active.mode;
+            }
+            // Global mode must stay valid after version upgrades
+            if (
+              !["auto", "fast", "balanced", "expert", "heavy", "max", "build"].includes(
+                String(s.mode || ""),
+              )
+            ) {
+              s.mode = "auto";
             }
           }
         } catch {
@@ -6809,15 +6793,25 @@ if (!cmds.length) {
           };
         }
         // Host safety defaults for upgrades
-        const desk = s.desktop as Record<string, unknown> | undefined;
-        if (desk) {
-          if (desk.confirmHostCommands === undefined) desk.confirmHostCommands = true;
-          if (desk.confirmDestructiveOnly === undefined) desk.confirmDestructiveOnly = true;
-          if (desk.selfModifyEnabled === undefined) desk.selfModifyEnabled = false;
+        const desk = (s.desktop || {}) as Record<string, unknown>;
+        if (typeof desk.hostSafeMode !== "boolean") desk.hostSafeMode = false;
+        if (desk.confirmHostCommands === undefined) desk.confirmHostCommands = true;
+        if (desk.confirmDestructiveOnly === undefined) desk.confirmDestructiveOnly = true;
+        if (desk.selfModifyEnabled === undefined) desk.selfModifyEnabled = false;
+        s.desktop = desk;
+
         if (!s.setupSyncMeta) s.setupSyncMeta = { autoPullOnLogin: true, autoPushOnChange: false };
         if (s.preferFreeGrok === undefined) s.preferFreeGrok = true;
         if (s.uiTheme !== "dark" && s.uiTheme !== "light" && s.uiTheme !== "system") s.uiTheme = "dark";
         if (s.toolsNavCollapsed === undefined) s.toolsNavCollapsed = false;
+        // Drop website-only connector catalog (Gmail, Notion, …) — keep core three
+        try {
+          s.connectors = pruneToCoreConnectors(
+            (s.connectors as import("./types").Connector[]) || [],
+          );
+        } catch {
+          /* ignore */
+        }
         // normalize automation times / heartbeat fields
         if (Array.isArray(s.automations)) {
           s.automations = (s.automations as import("./types").Automation[]).map((a) => {
@@ -6832,10 +6826,11 @@ if (!cmds.length) {
               times,
               time: times[0] || a.time || "09:00",
               heartbeatEveryMin: a.heartbeatEveryMin || 5,
+              connectorIds: (a.connectorIds || []).filter((id) =>
+                ["grok-xai", "desktop-host", "github"].includes(id),
+              ),
             };
           });
-        }
-          s.desktop = desk;
         }
         // Drop old demo-seeded usage (842 units SuperGrok Pro) so meter shows real usage
         const u = s.usage as Record<string, unknown> | undefined;

@@ -1,6 +1,5 @@
 import type { ComponentType, CSSProperties } from "react";
 import { ListTodo,
-  Cable,
   ClipboardList,
   ChevronDown,
   ChevronRight,
@@ -62,9 +61,6 @@ const ChatView = lazy(() =>
 const CommandView = lazy(() =>
   import("./views/CommandView").then((m) => ({ default: m.CommandView })),
 );
-const ConnectorsView = lazy(() =>
-  import("./views/ConnectorsView").then((m) => ({ default: m.ConnectorsView })),
-);
 const DesktopHostView = lazy(() =>
   import("./views/DesktopHostView").then((m) => ({ default: m.DesktopHostView })),
 );
@@ -95,7 +91,6 @@ const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string 
   { id: "command", label: "Command", icon: Command },
   { id: "workboard", label: "Workboard", icon: ClipboardList },
   { id: "imagine", label: "Imagine", icon: ImageIcon },
-  { id: "connectors", label: "Connectors", icon: Cable },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "queue", label: "Queue", icon: ListTodo },
   { id: "automations", label: "Automations", icon: TimerReset },
@@ -310,13 +305,23 @@ export function AppShell() {
   useEffect(() => {
     const p = useGrokHub.persist.rehydrate();
     Promise.resolve(p).finally(() => {
+      const restored = useGrokHub.getState().nav;
+      const safeNav =
+        !restored || restored === "connectors" || restored === "desktop"
+          ? "chat"
+          : restored;
       useGrokHub.setState({
-        nav: "chat",
+        nav: safeNav,
         running: false,
         streamStatus: null,
         streamingMessageId: null,
         pendingHostConfirm: null,
       });
+      try {
+        void useGrokHub.getState().syncWebsiteConnectors();
+      } catch {
+        /* ignore */
+      }
       void import("@/lib/imagine-media").then(async ({ rehydrateImagineJobs }) => {
         const jobs = useGrokHub.getState().imagineJobs || [];
         if (!jobs.length) return;
@@ -650,7 +655,7 @@ export function AppShell() {
     ["chat", "history", "command", "workboard", "imagine"].includes(item.id),
   );
   const toolsNav = NAV.filter((item) =>
-    ["queue", "connectors", "skills", "automations", "agents", "settings"].includes(item.id),
+    ["queue", "skills", "automations", "agents", "settings"].includes(item.id),
   );
 
   const stageTitle =
@@ -1008,8 +1013,7 @@ export function AppShell() {
                   <div className="scroll-panel min-h-0 flex-1">
                     {nav === "history" && <HistoryView />}
                     {nav === "command" && <CommandView />}
-                    {nav === "connectors" && <ConnectorsView />}
-                    {nav === "skills" && <SkillsView />}
+                                        {nav === "skills" && <SkillsView />}
                     {nav === "automations" && <AutomationsView />}
                     {nav === "agents" && <AgentsView />}
                     {nav === "workboard" && <WorkboardView />}
