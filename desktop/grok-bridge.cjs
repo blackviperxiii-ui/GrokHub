@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.37";
+const APP_VERSION = "0.8.38";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -261,13 +261,36 @@ function isSubscriptionError(status, msg) {
   );
 }
 
+
+function isMultiAgentModel(id) {
+  return /multi[-_]?agent|multiagent/i.test(String(id || ""));
+}
+function sanitizeChatModel(model, mode) {
+  let m = String(model || "");
+  if (isMultiAgentModel(m) || /multi[-_]?agent/i.test(m)) {
+    m = mode === "max" || mode === "heavy" ? "grok-4.5" : "grok-4.20-reasoning";
+  }
+  if ((mode === "max" || mode === "heavy") && /4[.-]?20/i.test(m)) {
+    m = "grok-4.5";
+  }
+  if (mode === "max") m = "grok-4.5";
+  return m;
+}
+
 function modelForMode(mode, prompt = "", opts = {}) {
   const free = Boolean(opts.freeTier);
-  const id = free ? (resolveMode(mode, prompt) === "build" ? "fast" : resolveMode(mode, prompt) === "heavy" ? "expert" : resolveMode(mode, prompt)) : resolveMode(mode, prompt);
+  const resolved = resolveMode(mode, prompt);
+  const id = free
+    ? resolved === "build"
+      ? "fast"
+      : resolved === "heavy" || resolved === "max"
+        ? "expert"
+        : resolved
+    : resolved;
   // Free tier: never route to 4.5 / heavy / build-only models first
   if (free) {
     if (id === "build") return "grok-3-mini-fast";
-    if (id === "expert" || id === "heavy") return "grok-3-mini";
+    if (id === "expert" || id === "heavy" || id === "max") return "grok-3-mini";
     return "grok-3-mini-fast";
   }
   const p = String(prompt || "");
@@ -320,13 +343,14 @@ Refuse criminal activity, malware, exploits. Confirm destructive commands. Prefe
   const id = resolveMode(mode, prompt);
   if (id === "fast") return `${base}\nMode: Fast — concise answers, minimal preamble. Still emit HOST_CMD when machine data is required.`;
   if (id === "expert") return `${base}\nMode: Expert — reason carefully, surface tradeoffs. Prefer real HOST_CMD evidence over speculation.`;
-  if (id === "max") return `${base}\nMode: Max — top-tier flagship (Grok 4.5). Maximum capability; be thorough and precise. Prefer real HOST_CMD evidence over speculation.`;
+  if (id === "max") return `${base}\nMode: Max — top-tier flagship (Grok 4.5). Maximum capability; be thorough and precise. Prefer real HOST_CMD evidence over speculation. Single-agent only (not multi-agent API).`;
   if (id === "heavy") return `${base}\nMode: Heavy (team of experts) — multi-angle synthesis backed by HOST_CMD when local facts matter.`;
   if (id === "build") return `${base}\nMode: Build — prioritize working code and file paths; use HOST_CMD to inspect the real tree.`;
   return base;
 }
 
 async function callXaiChatOnce(apiKey, model, messages, temperature, max_tokens) {
+  model = sanitizeChatModel(model, "");
   const res = await fetch(`${XAI_BASE}/chat/completions`, {
     method: "POST",
     headers: {

@@ -2,6 +2,7 @@ import type { GrokMode, GrokModeId } from "./types";
 import {
   emptyCatalog,
   friendlyModelName,
+  pickFlagshipModel,
   routeAuto,
   type ResolvedCatalog,
   type RouteContext,
@@ -108,16 +109,17 @@ export function getModesWithCatalog(catalog: ResolvedCatalog = emptyCatalog()): 
       };
     }
     if (m.id === "heavy") {
+      const flagship = pickFlagshipModel(catalog.all || []) || s.heavy;
       return {
         ...m,
-        modelId: s.heavy,
-        model: friendlyModelName(s.heavy),
-        subtitle: `🔬 Deep / team · ${friendlyModelName(s.heavy)}`,
+        modelId: flagship,
+        model: friendlyModelName(flagship),
+        subtitle: `🔬 Deep / team · ${friendlyModelName(flagship)}`,
       };
     }
     if (m.id === "max") {
-      // Always prefer live top-tier (heavy slot = flagship, currently 4.5)
-      const flagship = s.heavy || s.smart || "grok-4.5";
+      // Max always = top single-agent flagship (Grok 4.5), never 4.20 / multi-agent
+      const flagship = pickFlagshipModel(catalog.all || []) || s.heavy || "grok-4.5";
       return {
         ...m,
         modelId: flagship,
@@ -173,8 +175,8 @@ export function modelIdForMode(
   }
   if (id === "fast") return slots.fast;
   if (id === "expert") return slots.smart;
-  if (id === "heavy") return slots.heavy;
-  if (id === "max") return slots.heavy || slots.smart || "grok-4.5";
+  if (id === "heavy") return pickFlagshipModel(catalog.all || []) || slots.heavy;
+  if (id === "max") return pickFlagshipModel(catalog.all || []) || slots.heavy || "grok-4.5";
   if (id === "build") return slots.build;
   return slots.balanced;
 }

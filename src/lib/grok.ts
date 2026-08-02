@@ -1,5 +1,6 @@
 import type { GrokModeId } from "./types";
 import { modelIdForMode, resolveMode } from "./modes";
+import { isMultiAgentModel, pickFlagshipModel } from "./models-catalog";
 import { parseRateLimitHeaders } from "./usage";
 
 export const XAI_BASE = "https://api.x.ai/v1";
@@ -104,7 +105,9 @@ Long-running interactive TUIs are awkward — prefer non-interactive commands an
     case "expert":
       return `${base}\nMode: Expert — reason carefully, surface tradeoffs, cite assumptions.`;
     case "heavy":
-      return `${base}\nMode: Heavy (team of experts) — consider multiple angles (ops, research, build, critique), then synthesize a clear recommendation.`;
+      return `${base}\nMode: Heavy — deep multi-angle analysis (ops, research, build, critique), then synthesize a clear recommendation. Single-agent; do not assume multi-agent orchestration.`;
+    case "max":
+      return `${base}\nMode: Max — top-tier flagship (Grok 4.5). Maximum capability, thorough and precise. Prefer real HOST_CMD evidence over speculation. Single-agent chat/completions only.`;
     case "build":
       return `${base}\nMode: Build — prioritize working code, file paths, and implementable steps. Prefer complete snippets.`;
     default:
@@ -189,7 +192,18 @@ function buildBody(req: GrokChatRequest, stream: boolean) {
   const mode = req.mode ?? "auto";
   const lastUser = [...req.messages].reverse().find((m) => m.role === "user")?.content ?? "";
   const routed = resolveMode(mode, lastUser);
-  const model = req.model || modelForMode(mode, lastUser);
+  let model = req.model || modelForMode(mode, lastUser);
+  // xAI rejects multi-agent models on /chat/completions
+  if (isMultiAgentModel(model)) {
+    model =
+      mode === "max" || mode === "heavy"
+        ? pickFlagshipModel([])
+        : modelForMode(mode === "auto" ? "expert" : mode, lastUser);
+    if (isMultiAgentModel(model)) model = "grok-4.5";
+  }
+  if ((mode === "max" || mode === "heavy") && /4[.-]?20/i.test(model)) {
+    model = pickFlagshipModel([]) || "grok-4.5";
+  }
   const system =
     systemPromptForMode(mode, lastUser) +
     (req.workspaceContext?.trim()
@@ -201,10 +215,22 @@ function buildBody(req: GrokChatRequest, stream: boolean) {
   ];
   const temperature =
     req.temperature ??
-    (routed === "fast" ? 0.5 : routed === "build" ? 0.4 : routed === "heavy" ? 0.8 : 0.7);
+    (routed === "fast"
+      ? 0.5
+      : routed === "build"
+        ? 0.4
+        : routed === "heavy" || routed === "max"
+          ? 0.75
+          : 0.7);
   const max_tokens =
     req.maxTokens ??
-    (routed === "heavy" ? 8192 : routed === "build" ? 8192 : routed === "expert" ? 6144 : 4096);
+    (routed === "heavy" || routed === "max"
+      ? 8192
+      : routed === "build"
+        ? 8192
+        : routed === "expert"
+          ? 6144
+          : 4096);
   return {
     model,
     body: {

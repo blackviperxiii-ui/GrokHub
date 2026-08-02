@@ -4914,14 +4914,15 @@ if (cmd === "tools") {
           }
         }
         get().setAgentStatus(
-          routed === "build" ? "builder" : routed === "heavy" ? "research" : "primary",
+          routed === "build"
+            ? "builder"
+            : routed === "heavy" || routed === "max"
+              ? "research"
+              : "primary",
           "working",
           1,
         );
-        if (routed === "heavy") {
-          get().setAgentStatus("ops", "working", 1);
-          get().setAgentStatus("builder", "working", 1);
-        }
+        // UI-only status dots — never emit multi-agent API requests
 
         const patchBot = (content: string, extra?: Partial<ChatMessage>) => {
           if (gen !== chatGeneration) return;
