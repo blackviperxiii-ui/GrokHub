@@ -31,6 +31,53 @@ function ensureLogDir() {
   }
 }
 
+/** Keep last `keepDays` app-YYYY-MM-DD.log files; drop older. */
+function rotateOldLogs(keepDays = 5) {
+  try {
+    const dir = logDir();
+    if (!fs.existsSync(dir)) return { removed: 0 };
+    const re = /^app-(\d{4}-\d{2}-\d{2})\.log$/;
+    const files = fs
+      .readdirSync(dir)
+      .filter((n) => re.test(n))
+      .map((n) => {
+        const full = path.join(dir, n);
+        let mtime = 0;
+        try {
+          mtime = fs.statSync(full).mtimeMs;
+        } catch {
+          /* ignore */
+        }
+        return { n, full, mtime };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    let removed = 0;
+    for (const f of files.slice(Math.max(0, keepDays))) {
+      try {
+        fs.unlinkSync(f.full);
+        removed += 1;
+      } catch {
+        /* ignore */
+      }
+    }
+    // Cap ui.log at ~2MB — keep tail
+    const ui = path.join(dir, "ui.log");
+    try {
+      const st = fs.statSync(ui);
+      if (st.size > 2_000_000) {
+        const raw = fs.readFileSync(ui, "utf8");
+        const tail = raw.slice(-800_000);
+        fs.writeFileSync(ui, `[rotated ${new Date().toISOString()}]\n` + tail);
+      }
+    } catch {
+      /* ignore */
+    }
+    return { removed, kept: Math.min(files.length, keepDays) };
+  } catch {
+    return { removed: 0 };
+  }
+}
+
 function logFile() {
   const d = new Date();
   const day = d.toISOString().slice(0, 10);
@@ -49,6 +96,14 @@ function write(level, msg, extra) {
   const text = JSON.stringify(line);
   try {
     ensureLogDir();
+    if (!global.__grokhubLogRotated) {
+      global.__grokhubLogRotated = true;
+      try {
+        rotateOldLogs(5);
+      } catch {
+        /* ignore */
+      }
+    }
     fs.appendFileSync(logFile(), text + "\n", { mode: 0o600 });
   } catch {
     /* disk full / permissions */
@@ -83,4 +138,4 @@ function paths() {
   return { configDir: configDir(), logDir: logDir(), logFile: logFile() };
 }
 
-module.exports = { info, warn, error, write, tail, paths, configDir, logDir };
+module.exports = { info, warn, error, write, tail, paths, configDir, logDir, rotateOldLogs, ensureLogDir };

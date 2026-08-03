@@ -1131,6 +1131,25 @@ app.whenReady().then(async () => {
       platform: process.platform,
       home: process.env.GROKHUB_HOME || null,
     });
+    try {
+      const rot = appLog.rotateOldLogs?.(5);
+      if (rot?.removed) appLog.info("log-rotate", rot);
+    } catch {
+      /* ignore */
+    }
+    // Prune rollback tree older than 7d if current install is healthy
+    try {
+      const root =
+        process.env.GROKHUB_HOME ||
+        require("./ui-server.cjs").appRootFrom(__dirname);
+      if (root && grokBridge.pruneStalePrevInstalls) {
+        const steps = [];
+        await grokBridge.pruneStalePrevInstalls(root, steps, 7 * 86400_000);
+        if (steps.length) appLog.info("prev-prune", { steps });
+      }
+    } catch {
+      /* ignore */
+    }
   } catch {
     /* ignore */
   }

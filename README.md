@@ -2,7 +2,7 @@
 
 > **Scope:** GrokHub **Linux desktop** (Arch/CachyOS + Electron). Windows is a separate repository.
 
-**v0.8.61** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v1.0.0** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
 Adaptive modes · Imagine · skills · automations · setup sync · unsandboxed desktop host (CLI · files · apps).
 
@@ -37,6 +37,28 @@ systemctl --user daemon-reload && systemctl --user enable --now grokhub-agent.se
 UI: **Queue** sidebar · **Settings → Autonomy**. Website connectors stay status-only until native OAuth invoke.
 
 
+
+
+## GrokHub 1.0 (Linux desktop)
+
+Stable track for **Arch / CachyOS + system Electron**. Windows is a separate repository.
+
+**Install (user):** in-app update, or extract `grokhub-desktop-v1.0.0.tar.gz` to `~/.local/lib/grokhub`.
+
+**Data:** `~/.config/GrokHub` (chats, secrets, memory) — not touched by updates.
+
+**Hygiene (automatic):**
+- Stale TanStack manifests pruned on boot/update
+- App logs kept ~5 days; large `ui.log` rotated
+- Rollback tree `~/.local/lib/grokhub.prev` pruned after **7 days** if the current install self-tests OK
+
+**Optional cleanup after a good update:**
+```bash
+rm -rf ~/.local/lib/grokhub.prev   # only if you don't need rollback
+# old daily logs auto-rotate; or:
+rm -f ~/.config/GrokHub/logs/app-2026-08-02.log
+sudo rm -rf /usr/lib/grokhub       # remove stale system package if present
+```
 
 ## Install paths (Linux)
 
