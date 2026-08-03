@@ -423,51 +423,103 @@ async function stampInstall(
  */
 export function scheduleAppRestart(opts?: { port?: string; appRoot?: string }): void {
   const port = opts?.port || process.env.GROKHUB_PORT || "18765";
-  const appRoot =
-    opts?.appRoot ||
-    process.env.GROKHUB_HOME ||
-    path.resolve(process.cwd());
+  let appRoot = path.resolve(
+    opts?.appRoot || process.env.GROKHUB_HOME || process.cwd(),
+  );
+  // Prefer user install when cwd is $HOME or root lacks UI
+  try {
+    const home = process.env.HOME || "";
+    const ui = path.join(appRoot, ".output", "server", "index.mjs");
+    if (!existsSync(ui) || (home && appRoot === path.resolve(home))) {
+      for (const cand of [
+        process.env.GROKHUB_HOME,
+        home && path.join(home, ".local/lib/grokhub"),
+        home && path.join(home, ".local/share/grokhub"),
+        "/usr/lib/grokhub",
+      ].filter(Boolean) as string[]) {
+        if (existsSync(path.join(cand, ".output", "server", "index.mjs"))) {
+          appRoot = path.resolve(cand);
+          break;
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
   const runtime = process.env.XDG_RUNTIME_DIR || "/tmp";
   const pidfile = path.join(runtime, "grokhub", "ui.pid");
+  const lockfile = path.join(runtime, "grokhub", "ui.lock");
+  const uiEntry = path.join(appRoot, ".output", "server", "index.mjs");
+  const userBin = process.env.HOME
+    ? path.join(process.env.HOME, ".local", "bin", "grokhub")
+    : "";
 
+  // Never fuser -k; never relative node .output (cwd=$HOME bug)
   const script = `
 set +e
-sleep 1.2
-# Stop old UI server
-if [ -f "${pidfile}" ]; then
-  kill "$(cat "${pidfile}")" 2>/dev/null || true
-  rm -f "${pidfile}"
-fi
-fuser -k ${port}/tcp >/dev/null 2>&1 || true
-# Prefer system launcher
-if command -v grokhub >/dev/null 2>&1; then
-  nohup grokhub >/dev/null 2>&1 &
-  exit 0
-fi
-# Fallback: run packaged launcher or electron main
+export HOME="\${HOME:-/tmp}"
 export GROKHUB_HOME="${appRoot}"
 export GROKHUB_PORT="${port}"
-if [ -x "${appRoot}/packaging/aur/grokhub.sh" ]; then
-  nohup bash "${appRoot}/packaging/aur/grokhub.sh" >/dev/null 2>&1 &
-elif [ -f "${appRoot}/desktop/main.mjs" ] && command -v electron >/dev/null 2>&1; then
-  # start UI if present
-  if [ -f "${appRoot}/.output/server/index.mjs" ]; then
-    (
-      cd "${appRoot}"
-      export PORT="${port}" NITRO_PORT="${port}" HOST=127.0.0.1 NITRO_HOST=127.0.0.1
-      nohup node .output/server/index.mjs >/tmp/grokhub-ui-restart.log 2>&1 &
-      echo $! > "${pidfile}"
-    )
-    sleep 0.8
+mkdir -p "${runtime}/grokhub"
+exec >>/tmp/grokhub-ui-restart.log 2>&1
+echo "[restart-ts] $(date -Iseconds) root=${appRoot} entry=${uiEntry}"
+sleep 1.2
+for f in "${pidfile}" "${lockfile}"; do
+  if [ -f "\$f" ]; then
+    old=\$(cat "\$f" 2>/dev/null || true)
+    if [ -n "\$old" ]; then
+      cmd=\$(tr "\0" " " </proc/\$old/cmdline 2>/dev/null || true)
+      case "\$cmd" in
+        *node*|*ELECTRON_RUN_AS_NODE*)
+          case "\$cmd" in
+            *.output/server*|*index.mjs*|*grokhub*) kill "\$old" 2>/dev/null || true ;;
+          esac
+          ;;
+      esac
+    fi
+    rm -f "\$f"
   fi
-  nohup electron --class=GrokHub --name=GrokHub "${appRoot}/desktop/main.mjs" >/dev/null 2>&1 &
+done
+sleep 0.3
+cd "${appRoot}" || { echo "FATAL cannot cd ${appRoot}"; exit 1; }
+if [ -x "${appRoot}/packaging/aur/grokhub.sh" ]; then
+  nohup env HOME="\$HOME" GROKHUB_HOME="${appRoot}" bash "${appRoot}/packaging/aur/grokhub.sh" >/dev/null 2>&1 &
+  exit 0
 fi
+if [ -n "${userBin}" ] && [ -x "${userBin}" ]; then
+  nohup env HOME="\$HOME" GROKHUB_HOME="${appRoot}" "${userBin}" >/dev/null 2>&1 &
+  exit 0
+fi
+if [ -f "${appRoot}/desktop/main.mjs" ] && command -v electron >/dev/null 2>&1; then
+  if [ -f "${uiEntry}" ]; then
+    (
+      cd "${appRoot}" || exit 1
+      export PORT="${port}" NITRO_PORT="${port}" HOST=127.0.0.1 NITRO_HOST=127.0.0.1 GROKHUB_HOME="${appRoot}"
+      nohup node "${uiEntry}" >>/tmp/grokhub-ui-restart.log 2>&1 &
+      echo \$! > "${pidfile}"
+      echo \$! > "${lockfile}"
+    )
+    for i in \$(seq 1 40); do
+      curl -sf -o /dev/null --max-time 1 "http://127.0.0.1:${port}/" && break
+      sleep 0.2
+    done
+  fi
+  nohup env HOME="\$HOME" GROKHUB_HOME="${appRoot}" electron --class=grokhub --name=grokhub "${appRoot}/desktop/main.mjs" >/dev/null 2>&1 &
+  exit 0
+fi
+echo "no launcher found"
+exit 1
 `.trim();
 
   const child = spawn("bash", ["-c", script], {
     detached: true,
     stdio: "ignore",
-    env: process.env,
+    cwd: appRoot,
+    env: {
+      ...process.env,
+      GROKHUB_HOME: appRoot,
+      GROKHUB_PORT: String(port),
+    },
   });
   child.unref();
 }
