@@ -21,3 +21,12 @@ dist-release/
 .vercel
 
 .tmp-router*.mjs
+
+# Sandbox / app-builder (never ship)
+.grok/
+.vercel/
+artifacts/
+AGENTS.md
+AGENTS.project.md
+startup.sh
+.node_modules.lock
