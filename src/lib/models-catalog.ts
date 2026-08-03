@@ -557,13 +557,13 @@ const IMAGE_RE =
   /\b(imagine|image|picture|photo|draw|render|generate\s+(an?\s+)?(image|pic|art|logo|icon|wallpaper)|illustration|visuali[sz]e|edit\s+(this\s+)?(image|photo|pic))\b/i;
 
 const CODE_RE =
-  /\b(code|coding|implement|refactor|typescript|javascript|python|rust|golang|react|component|function|class|bugfix|compile|lint|docker|kubernetes|pkgbuild|aur|api\s+route|pull\s+request|unit\s+test|css|html|sql|bash|shell\s+script|write\s+(me\s+)?(a\s+)?(script|app|site|page|endpoint)|typecheck|stack.?trace|PR\b|merge\s+conflict)\b/i;
+  /\b(code|coding|implement|refactor|typescript|javascript|python|rust|golang|react|component|function|class|bugfix|compile|lint|docker|kubernetes|pkgbuild|aur|api\s+route|pull\s+request|unit\s+test|css|html|sql|bash|shell\s+script|write\s+(me\s+)?(a\s+)?(script|app|site|page|endpoint)|typecheck|stack.?trace|PR\b|merge\s+conflict|patch|diff|commit|branch|feature|fix\s+the|wire\s+up|hook\s+up|build\s+out)\b/i;
 
 const ARCH_RE =
   /\b(architect(?:ure)?|system\s+design|design\s+system|trade-?offs?|scalability|data\s+model|schema|migration\s+plan|service\s+boundary|microservice|event-?driven|end-?to-?end|production\s+ready|multi-?region)\b/i;
 
 const SMART_RE =
-  /\b(root\s+cause|debug|why\s+is|compare|evaluate|critique|security|threat|prove|theorem|math|optimiz|complex|multi-?step|deep\s+dive|analyze\s+carefully|reason\s+about|pros?\s+and\s+cons?|step\s+by\s+step)\b/i;
+  /\b(root\s+cause|debug|why\s+is|compare|evaluate|critique|security|threat|prove|theorem|math|optimiz|complex|multi-?step|deep\s+dive|deep\s+dive|analyze\s+carefully|reason\s+about|pros?\s+and\s+cons?|step\s+by\s+step|investigate|diagnose|audit|figure\s+out|what'?s\s+going\s+on|trace\s+through)\b/i;
 
 const JUDGMENT_RE =
   /\b(what\s+do\s+you\s+think|how\s+do\s+(you\s+)?(feel|see)|feels?\s+off|doesn'?t\s+feel|something'?s\s+off|seems?\s+(off|wrong|weird)|how\s+(can|do)\s+i\s+improve|improve\s+(this|it|the)|make\s+(this|it)\s+better|thoughts\s+on|your\s+(take|opinion)|review\s+(this|my)|is\s+this\s+(good|ok|right|wrong)|what'?s\s+wrong|why\s+is\s+this|honest\s+feedback|feedback\s+on|rate\s+this|look\s+(right|wrong)|still\s+broken|not\s+working\s+right|help\s+me\s+(decide|choose|pick)|should\s+i)\b/i;
@@ -588,10 +588,10 @@ const UX_RE =
   /\b(ux|ui|layout|spacing|sidebar|composer|chips|visual hierarchy|accessibility|dark\s+mode|responsive|design\s+polish|badge|toast|banner)\b/i;
 
 const TOOL_RE =
-  /\b(\$\s|HOST_CMD|shell|cli|run\s+(this\s+)?command|on\s+my\s+(machine|desktop|system)|list\s+files|read\s+file|edit\s+file|~\/\.config|\/usr\/lib|journalctl|systemctl)\b/i;
+  /\b(\$\s|HOST_CMD|shell|cli|run\s+(this\s+)?command|on\s+my\s+(machine|desktop|system|pc|linux)|list\s+files|read\s+file|edit\s+file|~\/\.config|~\/\.local|\/usr\/lib|journalctl|systemctl|process(es)?|pid|cpu|install\s+path|live\s+(scan|results?)|grokhub)\b/i;
 
 const DEBUG_SESSION_RE =
-  /\b(bug|broken|error|crash|fix|debug|stack|trace|failing|regression|doesn'?t\s+work|not\s+working)\b/i;
+  /\b(bug|broken|error|crash|fix|debug|stack|trace|failing|regression|doesn'?t\s+work|not\s+working|stall|stuck|interrupt|timeout|zombie|high.?cpu)\b/i;
 
 const FOLLOW_UP_RE =
   /^(yes|yeah|yep|yup|sure|please|ok|okay)([,.]?\s+(please|continue|proceed|go\s+(on|ahead)|do\s+(it|that)|try\s+(it|that|again)|fix\s+it))?[.!]*$|^(do\s+it|do\s+that|go\s+ahead|continue|proceed|try\s+(it|that|again)|fix\s+it|same|also|and\s+(also|then)|ok\s+(do|go|try|please)|sounds\s+good|that\s+one|this\s+one|again|more|keep\s+going)[.!]*$/i;
@@ -620,10 +620,12 @@ const TIER_RANK: Record<RouteTier, number> = {
   imagine: 1,
 };
 
-/** Min score gap to jump more than one ladder step in a single turn */
-const HYSTERESIS_JUMP = 18;
-/** Soft hold toward last tier */
-const STICKY_BONUS = 10;
+/** Min score gap per ladder step when switching (lower = more fluid) */
+const HYSTERESIS_JUMP = 11;
+/** Soft hold toward last tier (only when intent is ambiguous) */
+const STICKY_BONUS = 5;
+/** Strong intent shift: ignore sticky + allow multi-step jumps */
+const INTENT_SHIFT_DELTA = 14;
 
 export function tierMeta(tier: RouteTier): {
   label: string;
@@ -737,15 +739,13 @@ function scorePrompt(prompt: string, ctx: RouteContext = {}): PromptSignals {
   const longReplyContext = (ctx.recentAssistantText || "").length > 800;
   const stickyDeep =
     ctx.lastRouteTier === "deep" ||
-    ctx.lastRouteTier === "build" ||
     ctx.lastRoutedMode === "heavy" ||
-    ctx.lastRoutedMode === "build";
+    ctx.lastRoutedMode === "max";
+  // Only sticky-think when last turn was actually Think — NOT balanced (was freezing Adaptive)
   const stickyThink =
     stickyDeep ||
     ctx.lastRouteTier === "think" ||
-    ctx.lastRouteTier === "balanced" ||
-    ctx.lastRoutedMode === "expert" ||
-    ctx.lastRoutedMode === "balanced";
+    ctx.lastRoutedMode === "expert";
 
   // Session roles from recent turns
   const codingSession =
@@ -847,6 +847,39 @@ function scorePrompt(prompt: string, ctx: RouteContext = {}): PromptSignals {
   };
 }
 
+
+/** Coarse domain for a prompt — used to detect topic/mode shifts mid-thread. */
+export function intentDomain(s: PromptSignals): RouteTier | "mixed" {
+  if (s.imageHit) return "imagine";
+  if (s.archHit || s.researchHit || s.teamHit || (s.debugHit && s.complexity >= 45))
+    return "deep";
+  if (s.heavyCode || (s.codeHit && (s.hasCodeFence || s.codingSession || s.toolHit)))
+    return "build";
+  if (
+    (s.judgmentHit && !s.lightJudgment) ||
+    s.smartHit ||
+    s.debugHit ||
+    s.analytical >= 40
+  )
+    return "think";
+  if (s.pureFast || (s.simple >= 55 && s.words <= 5)) return "fast";
+  if (s.uxHit || s.lightJudgment || s.chatSession) return "balanced";
+  return "mixed";
+}
+
+function domainsConflict(a: RouteTier | "mixed", b: RouteTier | undefined): boolean {
+  if (!b || a === "mixed" || a === b) return false;
+  // Adjacent chat tiers are soft (fast↔balanced, balanced↔think)
+  const soft = new Set([
+    "fast|balanced",
+    "balanced|fast",
+    "balanced|think",
+    "think|balanced",
+  ]);
+  if (soft.has(`${a}|${b}`)) return false;
+  return true;
+}
+
 /** Per-tier raw scores before hysteresis / usage pressure. */
 export function scoreTiers(
   s: PromptSignals,
@@ -866,9 +899,11 @@ export function scoreTiers(
   if (s.pureFast) scores.fast += 40;
   if (s.words <= 4 && !s.judgmentHit && !s.codeHit) scores.fast += 22;
   if (s.creativeHit && s.complexity < 30) scores.fast += 18;
-  if (s.words <= 10 && !s.stickyThink && !s.debugHit && !s.judgmentHit) scores.fast += 12;
-  if (s.codeHit && s.words <= 10 && !s.hasCodeFence && !s.heavyCode && !s.debugHit) {
-    scores.fast += 16;
+  if (s.words <= 10 && !s.stickyThink && !s.debugHit && !s.judgmentHit && !s.toolHit && !s.smartHit)
+    scores.fast += 10;
+  // Short code one-liners can stay Fast/Balanced — not forced Fast over Build
+  if (s.codeHit && s.words <= 8 && !s.hasCodeFence && !s.heavyCode && !s.debugHit && !s.toolHit) {
+    scores.balanced += 10;
   }
 
   // Balanced — everyday default
@@ -885,7 +920,11 @@ export function scoreTiers(
   scores.think += Math.min(40, s.analytical * 0.45);
   if (s.smartHit) scores.think += 18;
   if (s.judgmentHit && !s.lightJudgment) scores.think += 22;
-  if (s.debugHit && !s.codingSession) scores.think += 16;
+  if (s.debugHit && !s.codingSession) scores.think += 20;
+  if (s.toolHit && s.debugHit) scores.think += 18;
+  if (s.toolHit && !s.codeHit && s.words >= 6) scores.think += 18;
+  if (s.toolHit && s.smartHit) scores.think += 22;
+  if (s.smartHit && s.words >= 10) scores.think += 10;
   if (s.analytical >= 34 || s.complexity >= 48) scores.think += 12;
   if (s.archHit && s.words < 12) scores.think += 10; // short arch note → think
 
@@ -945,9 +984,20 @@ export function scoreTiers(
     scores.fast += 10 * scale + (ctx.preferFree ? 8 : 0);
   }
 
-  // Sticky bonus toward last tier (soft)
+  // Sticky bonus only when new prompt is ambiguous (no hard domain conflict)
   if (ctx.lastRouteTier && ctx.lastRouteTier !== "imagine") {
-    scores[ctx.lastRouteTier] += STICKY_BONUS;
+    const domain = intentDomain(s);
+    if (!domainsConflict(domain, ctx.lastRouteTier)) {
+      scores[ctx.lastRouteTier] += STICKY_BONUS;
+      // Mild continuity for short follow-ons without new keywords
+      if (s.followUp && s.words <= 8) scores[ctx.lastRouteTier] += 4;
+    } else {
+      // Intent shift: nudge away from previous so Adaptive can re-pick
+      scores[ctx.lastRouteTier] -= 6;
+      if (domain !== "mixed" && domain !== "imagine") {
+        scores[domain] += INTENT_SHIFT_DELTA;
+      }
+    }
   }
 
   return scores;
@@ -960,35 +1010,83 @@ function pickWinner(
   s: PromptSignals,
   ctx: RouteContext,
 ): { tier: RouteTier; why: string } {
+  const domain = intentDomain(s);
+  const last = ctx.lastRouteTier;
+  const shift = domainsConflict(domain, last);
+
   // Hard Imagine gate
   if (s.imageHit && scores.imagine >= Math.max(scores.build, scores.think, scores.balanced) - 5) {
     return { tier: "imagine", why: "image/media request" };
   }
 
-  // Follow-up: hard hold previous (except pure greetings)
-  if (s.followUp && ctx.lastRouteTier && ctx.lastRouteTier !== "imagine" && !s.pureFast) {
+  // Pure greetings always Fast (even mid-thread)
+  if (s.pureFast && !s.codeHit && !s.debugHit && !s.judgmentHit) {
+    return { tier: "fast", why: "greeting/ack — save tokens" };
+  }
+
+  // Follow-up: soft hold only for pure continue/ack with same domain — never hard-lock
+  if (
+    s.followUp &&
+    last &&
+    last !== "imagine" &&
+    !s.pureFast &&
+    !shift &&
+    s.words <= 10 &&
+    !s.codeHit &&
+    !s.smartHit &&
+    !s.archHit &&
+    !s.imageHit &&
+    !s.heavyCode
+  ) {
     return {
-      tier: ctx.lastRouteTier,
+      tier: last,
       why: "short follow-up — held prior tier",
     };
   }
 
-  // Pure fast acks (skip if mid-thread after heavy work unless pure greeting)
-  if (s.pureFast) {
-    return { tier: "fast", why: "greeting/ack — save tokens" };
-  }
   if (
     s.simple >= 55 &&
     s.words <= 4 &&
     !s.judgmentHit &&
     !s.debugHit &&
-    !s.stickyDeep &&
-    !(ctx.lastRouteTier && TIER_RANK[ctx.lastRouteTier] >= 2)
+    !s.codeHit &&
+    !s.toolHit &&
+    !shift
   ) {
     return { tier: "fast", why: "short casual — save tokens" };
   }
 
-  // argmax over ladder + imagine only if high
+  // Hard intent promotion (clear task language beats sticky Fast)
+  if (s.imageHit) {
+    return { tier: "imagine", why: "image/media request" };
+  }
+  if (s.heavyCode || (s.codeHit && s.hasCodeFence && s.words > 12)) {
+    if (scores.build + 8 >= scores.deep) {
+      return { tier: "build", why: "implementation / code work" };
+    }
+  }
+  const cheapBias = Boolean(ctx.preferFree) || (ctx.usagePressure ?? 0) > 0.75;
+  if (s.archHit && s.words >= 10 && !s.heavyCode && !cheapBias) {
+    return { tier: "deep", why: "architecture / system design" };
+  }
+  if (s.researchHit && s.words >= 8 && !cheapBias) {
+    return { tier: "deep", why: "research-style analysis" };
+  }
+  if (s.teamHit && !cheapBias) {
+    return { tier: "deep", why: "multi-angle / team-style work" };
+  }
+  // Under usage pressure, architecture/review lands on Think instead of Deep
+  if (cheapBias && (s.archHit || s.researchHit || s.teamHit) && !s.heavyCode) {
+    return { tier: "think", why: "analytical work · usage pressure" };
+  }
+  // Host/system investigation → Think (not Balanced/Fast)
+  if (s.toolHit && (s.smartHit || s.debugHit) && !s.heavyCode && s.words >= 8) {
+    if (scores.build < scores.think + 24) {
+      return { tier: "think", why: "system investigation / host diagnostics" };
+    }
+  }
+
+  // argmax over ladder
   let best: RouteTier = "balanced";
   let bestScore = -1e9;
   for (const tier of [...TIER_LADDER, "imagine"] as RouteTier[]) {
@@ -1000,57 +1098,82 @@ function pickWinner(
     }
   }
 
-  // Soft Deep promotion for architecture / research when close
+  // Soft Deep promotion when Think wins but Deep is close
   if (
     best === "think" &&
-    (s.archHit || s.researchHit || s.teamHit) &&
-    scores.deep >= scores.think - 12 &&
+    (s.archHit || s.researchHit || s.teamHit || (s.debugHit && s.complexity >= 40)) &&
+    scores.deep >= scores.think - 14 &&
     !(s.codeHit && s.heavyCode)
   ) {
     best = "deep";
     bestScore = scores.deep;
   }
 
-  // Code/implement sessions prefer Build over Deep when both strong
+  // Code sessions prefer Build over Deep/Think
   if (
     (best === "deep" || best === "think") &&
     s.codeHit &&
-    (s.heavyCode || s.hasCodeFence || s.codingSession) &&
-    scores.build >= scores.deep - 15
+    (s.heavyCode || s.hasCodeFence || s.codingSession || (s.toolHit && s.debugHit)) &&
+    scores.build >= scores[best] - 18
   ) {
     best = "build";
     bestScore = scores.build;
   }
 
-  // Hysteresis: max one ladder step unless score gap large
-  const last = ctx.lastRouteTier;
+  // Debug / audit without heavy code → Think (not Fast)
+  if (
+    (best === "fast" || best === "balanced") &&
+    (s.debugHit || s.smartHit || s.toolHit) &&
+    scores.think >= scores.balanced - 4
+  ) {
+    best = "think";
+    bestScore = scores.think;
+  }
+
+  // Hysteresis — fluid when intent shifts; gentle when same domain
   if (last && last !== "imagine" && best !== "imagine" && !s.pureFast) {
     const from = TIER_RANK[last];
     const to = TIER_RANK[best];
     const gap = Math.abs(to - from);
     const lastScore = scores[last] ?? 0;
     const delta = bestScore - lastScore;
-    // Require larger score gaps to leap multiple ladder steps
-    if (gap > 1 && delta < HYSTERESIS_JUMP * gap) {
-      const step = to > from ? 1 : -1;
-      const mid = TIER_LADDER[from + step];
-      if (mid) {
+
+    if (shift) {
+      // Clear topic/mode change: allow full jump when score supports it
+      if (gap > 1 && delta < INTENT_SHIFT_DELTA) {
+        // still allow at least one step toward target
+        const step = to > from ? 1 : -1;
+        const mid = TIER_LADDER[from + step];
+        if (mid && scores[mid]! >= lastScore - 2) {
+          return {
+            tier: mid,
+            why: `intent shift (${tierMeta(last).short} → ${tierMeta(best).short}); stepped to ${tierMeta(mid).short}`,
+          };
+        }
+      }
+      // else keep best — switch freely
+    } else {
+      // Same domain: cap multi-step leaps
+      if (gap > 1 && delta < HYSTERESIS_JUMP * gap) {
+        const step = to > from ? 1 : -1;
+        const mid = TIER_LADDER[from + step];
+        if (mid) {
+          return {
+            tier: mid,
+            why: `smooth step (${tierMeta(last).short} → ${tierMeta(best).short} via ${tierMeta(mid).short})`,
+          };
+        }
+      }
+      // Barely-better: hold only if very weak gap and short prompt
+      if (best !== last && delta < 4 && gap >= 1 && s.words <= 14 && !s.debugHit) {
         return {
-          tier: mid,
-          why: `hysteresis (was ${tierMeta(last).short} → ${tierMeta(best).short}; stepped to ${tierMeta(mid).short})`,
+          tier: last,
+          why: `held ${tierMeta(last).short} — weak score gap`,
         };
       }
     }
-    // If winner barely beats last, stay
-    if (best !== last && delta < 6 && gap >= 1 && (s.stickyThink || (ctx.historyTurns || 0) >= 2)) {
-      return {
-        tier: last,
-        why: `held ${tierMeta(last).short} — weak score gap`,
-      };
-    }
   }
 
-  // Reasons
   let why = "best overall score";
   if (best === "deep") {
     if (s.teamHit) why = "multi-angle / team-style work";
@@ -1063,6 +1186,7 @@ function pickWinner(
   } else if (best === "think") {
     if (s.judgmentHit && !s.lightJudgment) why = "substantive judgment / analysis";
     else if (s.debugHit) why = "debugging needs reasoning";
+    else if (s.toolHit) why = "system investigation";
     else why = "analytical prompt";
   } else if (best === "balanced") {
     if (s.lightJudgment) why = "light opinion — everyday model";
@@ -1070,6 +1194,10 @@ function pickWinner(
     else why = "solid everyday chat";
   } else if (best === "fast") {
     why = "short / low-cost turn";
+  }
+
+  if (shift && last) {
+    why += ` · switched from ${tierMeta(last).short}`;
   }
 
   if (ctx.preferFree || (ctx.usagePressure ?? 0) > 0.7) {

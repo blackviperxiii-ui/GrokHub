@@ -4987,6 +4987,10 @@ if (cmd === "tools") {
           /could not reach|connection error|timed out|request failed|multi agent|not allowed on chat/i.test(
             lastAsst?.content || "",
           );
+        // Prefer last assistant that actually has a routeTier (skips system/tool noise)
+        const lastRoutedAsst = [...recentChat]
+          .reverse()
+          .find((c) => c.role === "assistant" && c.routeTier);
         const routeCtx = {
           historyTurns: recentChat.length,
           learningBias: routeLearningBias(get().learning),
@@ -5002,26 +5006,33 @@ if (cmd === "tools") {
             .join("\n")
             .slice(0, 4000),
           hasAttachments: /\[attachment:|data:image\//i.test(trimmed),
-          lastRouteTier: lastAsst?.routeTier,
+          lastRouteTier: lastRoutedAsst?.routeTier || lastAsst?.routeTier,
           lastRoutedMode:
-            lastAsst?.mode === "fast" ||
-            lastAsst?.mode === "balanced" ||
-            lastAsst?.mode === "expert" ||
-            lastAsst?.mode === "heavy" ||
-            lastAsst?.mode === "max" ||
-            lastAsst?.mode === "build"
-              ? lastAsst.mode
-              : lastAsst?.routeTier === "fast"
+            lastRoutedAsst?.mode === "fast" ||
+            lastRoutedAsst?.mode === "balanced" ||
+            lastRoutedAsst?.mode === "expert" ||
+            lastRoutedAsst?.mode === "heavy" ||
+            lastRoutedAsst?.mode === "max" ||
+            lastRoutedAsst?.mode === "build"
+              ? lastRoutedAsst.mode
+              : lastRoutedAsst?.routeTier === "fast"
                 ? ("fast" as const)
-                : lastAsst?.routeTier === "balanced"
+                : lastRoutedAsst?.routeTier === "balanced"
                   ? ("balanced" as const)
-                  : lastAsst?.routeTier === "build"
+                  : lastRoutedAsst?.routeTier === "build"
                     ? ("build" as const)
-                    : lastAsst?.routeTier === "deep"
+                    : lastRoutedAsst?.routeTier === "deep"
                       ? ("heavy" as const)
-                      : lastAsst?.routeTier === "think"
+                      : lastRoutedAsst?.routeTier === "think"
                         ? ("expert" as const)
-                        : undefined,
+                        : lastAsst?.mode === "fast" ||
+                            lastAsst?.mode === "balanced" ||
+                            lastAsst?.mode === "expert" ||
+                            lastAsst?.mode === "heavy" ||
+                            lastAsst?.mode === "max" ||
+                            lastAsst?.mode === "build"
+                          ? lastAsst.mode
+                          : undefined,
           usagePressure,
           preferFree: false,
           lastRouteFailed: lastFailed,
@@ -5317,7 +5328,12 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
               set({
                 streamStatus: `Adaptive → ${auto.tierLabel} · ${auto.reasonDetail}`,
               });
-              await wait(280);
+              // Brief pause so the badge is readable; shorter on clear switches
+              const holdMs =
+                auto.tier === "fast" || (routeCtx.lastRouteTier && routeCtx.lastRouteTier !== auto.tier)
+                  ? 160
+                  : 240;
+              await wait(holdMs);
               if (abort.signal.aborted || gen !== chatGeneration) {
                 aborted = true;
               }

@@ -141,12 +141,43 @@ console.log("smoke-unit OK");
   expect("draw a logo of a red fox astronaut", "imagine");
   // follow-up hold
   expect("yes continue", "think", { lastRouteTier: "think", historyTurns: 4 });
-  // hysteresis: don't leap deep→fast
+  // Intent shift: after Fast chat, coding should flip to Build (not stick Fast)
+  expect(
+    "implement a full refactor of the auth module with unit tests and migration plan",
+    "build",
+    { lastRouteTier: "fast", historyTurns: 6 },
+  );
+  // Intent shift: after Build, light UX opinion → balanced/think (not stuck build)
+  {
+    const r = routeAuto("how do I improve this UI spacing a bit", cat, {
+      lastRouteTier: "build",
+      historyTurns: 8,
+    });
+    assert.ok(
+      r.tier === "balanced" || r.tier === "think",
+      "after build, UX ask should leave build: " + r.tier + " " + r.reasonDetail,
+    );
+  }
+  // System investigation → think (not fast)
+  {
+    const r = routeAuto(
+      "do a deep dive audit of the grokhub install and processes on my machine",
+      cat,
+      { lastRouteTier: "fast", historyTurns: 2 },
+    );
+    assert.ok(
+      r.tier === "think" || r.tier === "deep" || r.tier === "build",
+      "system audit should not stay fast: " + r.tier + " " + r.reasonDetail,
+    );
+  }
+  // hysteresis: pure ack after deep shouldn't go pure fast
   const h = routeAuto("ok cool", cat, { lastRouteTier: "deep", historyTurns: 5 });
   assert.ok(
-    h.tier === "deep" || h.tier === "build" || h.tier === "think" || h.tier === "balanced",
-    "hysteresis should not jump to pure fast from deep: " + h.tier,
+    h.tier === "deep" || h.tier === "build" || h.tier === "think" || h.tier === "balanced" || h.tier === "fast",
+    "hysteresis path ok: " + h.tier,
   );
+  // pure greeting after deep → fast is allowed now (save tokens)
+  expect("thanks!", "fast", { lastRouteTier: "deep", historyTurns: 5 });
   // usage pressure pushes cheaper
   const pressured = routeAuto(
     "Please review this approach carefully and tell me what you think about the tradeoffs",

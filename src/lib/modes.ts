@@ -68,7 +68,7 @@ export const GROK_MODES: GrokMode[] = [
   {
     id: "auto",
     label: "Adaptive",
-    subtitle: "Score router · hysteresis · usage-aware",
+    subtitle: "Fluid score router · intent-shift aware",
     model: "Adaptive",
     modelId: "auto",
     icon: "auto",
@@ -165,7 +165,7 @@ export function getModesWithCatalog(
       return {
         ...m,
         label: "Adaptive",
-        subtitle: `⚡ Fast · ⚖️ Balanced · 🧠 Think · 🛠️ Build · 🔬 Deep`,
+        subtitle: `⚡ Fast · ⚖️ Balanced · 🧠 Think · 🛠️ Build · 🔬 Deep · switches on intent`,
         model: "Adaptive",
       };
     }
