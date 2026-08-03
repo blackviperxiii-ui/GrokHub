@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, screen } from "electron";
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, screen, dialog, globalShortcut } from "electron";
 import path from "node:path";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -637,6 +637,20 @@ function createTray() {
           },
         },
         {
+          label: "Focus chat",
+          click: () => {
+            if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+            try {
+              mainWindow?.setSkipTaskbar(false);
+            } catch {
+              /* ignore */
+            }
+            mainWindow?.show();
+            mainWindow?.focus();
+            mainWindow?.webContents.send("agent:command", { type: "focus-composer" });
+          },
+        },
+        {
           label: due ? `Open app (${due} background jobs)` : "Open GrokHub",
           click: () => {
             if (!mainWindow || mainWindow.isDestroyed()) createWindow();
@@ -735,6 +749,46 @@ function registerIpc() {
   safeHandle("desktop:platform", () => process.platform);
   safeHandle("desktop:fit", () => {
     if (mainWindow) fitToWorkArea(mainWindow);
+  });
+
+  safeHandle("desktop:pickFolder", async () => {
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : BrowserWindow.getFocusedWindow();
+    const r = await dialog.showOpenDialog(win || undefined, {
+      title: "Bind project folder",
+      properties: ["openDirectory", "createDirectory"],
+    });
+    if (r.canceled || !r.filePaths?.[0]) return { ok: false, canceled: true };
+    return { ok: true, path: r.filePaths[0] };
+  });
+
+  safeHandle("desktop:setGlobalHotkey", async (_e, accel) => {
+    try {
+      globalShortcut.unregisterAll();
+    } catch {
+      /* ignore */
+    }
+    const key = String(accel || "").trim();
+    if (!key || key === "off" || key === "none") {
+      return { ok: true, registered: false, accelerator: null };
+    }
+    try {
+      const ok = globalShortcut.register(key, () => {
+        try {
+          if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+          if (!mainWindow || mainWindow.isDestroyed()) return;
+          mainWindow.setSkipTaskbar(false);
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.show();
+          mainWindow.focus();
+          mainWindow.webContents.send("agent:command", { type: "focus-composer" });
+        } catch (e) {
+          console.warn("[GrokHub] hotkey activate", e);
+        }
+      });
+      return { ok, registered: Boolean(ok), accelerator: key, error: ok ? null : "register failed (in use?)" };
+    } catch (e) {
+      return { ok: false, registered: false, accelerator: key, error: String(e?.message || e) };
+    }
   });
 
   safeHandle(
@@ -1075,6 +1129,11 @@ if (process.platform === "linux" && process.env.GROKHUB_SANDBOX !== "1") {
 // Clean exit: stop Nitro UI we own (pidfile/lock). Never fuser -k.
 // Set GROKHUB_KEEP_UI=1 to leave the backend running for multi-instance.
 app.on("will-quit", () => {
+  try {
+    globalShortcut.unregisterAll();
+  } catch {
+    /* ignore */
+  }
   try {
     appLog.info("will-quit");
   } catch {

@@ -359,6 +359,8 @@ export function AppShell() {
     try {
       const safe = useGrokHub.getState().desktop.hostSafeMode;
       void window.grokhubDesktop?.host?.setSafeMode?.(Boolean(safe));
+      const hk = useGrokHub.getState().desktop.globalHotkey;
+      if (hk) void window.grokhubDesktop?.setGlobalHotkey?.(hk);
     } catch {
       /* ignore */
     }
@@ -476,6 +478,10 @@ export function AppShell() {
       if (d.type === "open-queue") setNav("settings");
       if (d.type === "new-chat") useGrokHub.getState().newThread();
       if (d.type === "set-paused") useGrokHub.getState().pauseAutonomy(Boolean(d.paused));
+      if (d.type === "focus-composer") {
+        setNav("chat");
+        window.dispatchEvent(new CustomEvent("grokhub:focus-composer"));
+      }
     };
     window.addEventListener("grokhub:agent-command", onCmd as EventListener);
     // Bridge ipc if exposed

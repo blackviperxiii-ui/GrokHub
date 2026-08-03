@@ -1,4 +1,4 @@
-import {
+import { FolderOpen,
   Loader2,
   Download,
   Pencil,
@@ -409,6 +409,73 @@ function ContextBudgetChip() {
         </span>
       ) : null}
     </button>
+  );
+}
+
+
+function ProjectBar() {
+  const project = useGrokHub((s) => s.projectWorkspace);
+  const bindProjectWorkspace = useGrokHub((s) => s.bindProjectWorkspace);
+  const clearProjectWorkspace = useGrokHub((s) => s.clearProjectWorkspace);
+  const pushActivity = useGrokHub((s) => s.pushActivity);
+  const [busy, setBusy] = useState(false);
+
+  async function bind() {
+    setBusy(true);
+    try {
+      let path = "";
+      const desk = window.grokhubDesktop;
+      if (desk?.pickFolder) {
+        const r = await desk.pickFolder();
+        if (r?.canceled) return;
+        if (r?.ok && r.path) path = r.path;
+      }
+      if (!path) {
+        path = window.prompt("Project folder path", project?.path || "") || "";
+      }
+      path = path.trim();
+      if (!path) return;
+      const res = await bindProjectWorkspace(path);
+      pushActivity({
+        kind: "desktop",
+        title: res.ok ? "Project bound" : "Bind failed",
+        detail: res.detail,
+        status: res.ok ? "success" : "failed",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-panel)]/80 px-3 py-1.5 text-[11px] md:px-4">
+      <FolderOpen className="h-3.5 w-3.5 shrink-0 text-[var(--color-muted)]" />
+      {project?.path ? (
+        <>
+          <span className="text-[var(--color-muted)]">Project</span>
+          <span className="max-w-[min(28rem,50vw)] truncate font-medium text-[var(--color-fg)]" title={project.path}>
+            {project.name}
+          </span>
+          <span className="hidden font-mono text-[10px] text-[var(--color-subtle)] sm:inline">
+            {project.path}
+          </span>
+          <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-[11px]" disabled={busy} onClick={() => void bind()}>
+            Change
+          </Button>
+          <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-[11px]" disabled={busy} onClick={() => clearProjectWorkspace()}>
+            Unbind
+          </Button>
+        </>
+      ) : (
+        <>
+          <span className="text-[var(--color-muted)]">No project bound</span>
+          <Button type="button" size="sm" variant="secondary" className="h-7 px-2 text-[11px]" disabled={busy} onClick={() => void bind()}>
+            Bind folder
+          </Button>
+          <span className="text-[10px] text-[var(--color-subtle)]">or <span className="font-mono">/project bind</span></span>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -1175,10 +1242,20 @@ export function ChatView() {
     let payload = (value ?? text).trim();
     if (attachments.length) {
       const blocks = attachments.map((a) => {
-        if (a.kind.startsWith("image/")) {
+        if (a.kind.startsWith("image/") || a.dataUrl.startsWith("data:image/")) {
           return `![${a.name}](${a.dataUrl})`;
         }
-        return `Attached file: **${a.name}** (\`${a.kind}\`)\n\n\`\`\`\n${a.dataUrl.slice(0, 200)}…\n\`\`\``;
+        const body = a.dataUrl.startsWith("data:")
+          ? "_binary attachment (preview omitted)_"
+          : a.dataUrl;
+        const fence = a.name.match(/\.(\w+)$/)?.[1] || "";
+        return [
+          `Attached file: **${a.name}** (\`${a.kind}\`)`,
+          "",
+          "```" + fence,
+          body.slice(0, 120_000),
+          "```",
+        ].join("\n");
       });
       payload = [payload, ...blocks].filter(Boolean).join("\n\n");
     }
@@ -1227,6 +1304,8 @@ export function ChatView() {
   return (
     <div className="chat-stage mx-auto flex h-full min-h-0 w-full flex-col">
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--color-bg)]">
+        {/* Project workspace bar */}
+        <ProjectBar />
         {/* Slim toolbar — context budget + export */}
         {findOpen && (
           <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-panel)] px-4 py-1.5 md:px-6">
@@ -1717,7 +1796,7 @@ export function ChatView() {
 
             {attachError && (
               <div className="mx-auto w-full max-w-[min(56rem,100%)] text-xs text-[var(--color-danger)]">
-                {attachError} · images & text files under ~1.2 MB
+                {attachError} · images & text files under ~4 MB · paste or drop
               </div>
             )}
             {attachments.length > 0 && (

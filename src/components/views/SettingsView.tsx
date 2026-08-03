@@ -1363,22 +1363,89 @@ export function SettingsView() {
           <CardTitle className="text-sm">Arch Linux shell preferences</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
+          <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
+            <div className="text-sm font-medium">Host approval mode</div>
+            <div className="mb-2 text-xs text-[var(--color-muted)]">
+              What to ask before the agent runs shell on your machine. Slash:{" "}
+              <span className="font-mono">/approve off|risky|all</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  ["off", "Auto-run", "No prompts (still safe-mode blocked)"],
+                  ["risky", "Confirm risky", "ls/cat free; rm/sudo need OK"],
+                  ["all", "Confirm all", "Every HOST_CMD needs OK"],
+                ] as const
+              ).map(([id, label, hint]) => {
+                const active =
+                  id === "off"
+                    ? !desktop.confirmHostCommands
+                    : id === "risky"
+                      ? desktop.confirmHostCommands && desktop.confirmDestructiveOnly
+                      : desktop.confirmHostCommands && !desktop.confirmDestructiveOnly;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    title={hint}
+                    className={`rounded-[var(--radius-md)] border px-3 py-1.5 text-left text-xs transition-colors ${
+                      active
+                        ? "border-[var(--color-info)] bg-[color-mix(in_oklab,var(--color-info)_12%,transparent)] text-[var(--color-fg)]"
+                        : "border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-muted)]"
+                    }`}
+                    onClick={() => {
+                      if (id === "off") setDesktop({ confirmHostCommands: false });
+                      else if (id === "risky")
+                        setDesktop({ confirmHostCommands: true, confirmDestructiveOnly: true });
+                      else setDesktop({ confirmHostCommands: true, confirmDestructiveOnly: false });
+                    }}
+                  >
+                    <div className="font-medium">{label}</div>
+                    <div className="text-[10px] opacity-80">{hint}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
+            <div className="text-sm font-medium">Global hotkey</div>
+            <div className="mb-2 text-xs text-[var(--color-muted)]">
+              Focus GrokHub + chat input from anywhere (Electron). Empty or{" "}
+              <span className="font-mono">off</span> disables. Examples:{" "}
+              <span className="font-mono">Super+Space</span>,{" "}
+              <span className="font-mono">CommandOrControl+Shift+Space</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Input
+                value={desktop.globalHotkey || ""}
+                onChange={(e) => setDesktop({ globalHotkey: e.target.value })}
+                placeholder="Super+Space"
+                className="max-w-xs font-mono text-xs"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  void window.grokhubDesktop?.setGlobalHotkey?.(desktop.globalHotkey || "off").then((r) => {
+                    setSelfMsg(
+                      r?.registered
+                        ? `Hotkey registered: ${desktop.globalHotkey}`
+                        : r?.error || (r?.ok ? "Hotkey cleared" : "Hotkey not registered"),
+                    );
+                  });
+                }}
+              >
+                Apply hotkey
+              </Button>
+            </div>
+          </div>
           {(
             [
               ["wayland", "Prefer Wayland", "Ozone flags"],
               ["tray", "System tray", "Minimize to tray"],
               ["launchOnLogin", "Launch on login", "Writes ~/.config/autostart/grokhub.desktop"],
               ["startMinimized", "Start minimized", "Tray only"],
-              [
-                "confirmHostCommands",
-                "Confirm host commands",
-                "Ask before agent runs shell on your machine",
-              ],
-              [
-                "confirmDestructiveOnly",
-                "Only risky commands",
-                "Skip confirm for read-only commands (ls, cat, …)",
-              ],
               [
                 "selfModifyEnabled",
                 "Allow self-modification",

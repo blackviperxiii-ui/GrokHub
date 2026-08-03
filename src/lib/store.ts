@@ -229,6 +229,8 @@ type State = {
     launchOnLogin: boolean;
     wayland: boolean;
     tray: boolean;
+    /** Electron global accelerator e.g. Super+Space or CommandOrControl+Shift+Space; empty = off */
+    globalHotkey: string;
     /** Prompt before running host commands from the agent */
     confirmHostCommands: boolean;
     /** When confirmHostCommands, only prompt for non-read-only commands */
@@ -1075,6 +1077,7 @@ export const useGrokHub = create<State>()(
         launchOnLogin: false,
         wayland: true,
         tray: true,
+        globalHotkey: "Super+Space",
         confirmHostCommands: true,
         confirmDestructiveOnly: true,
         selfModifyEnabled: false,
@@ -1161,6 +1164,14 @@ export const useGrokHub = create<State>()(
         if (typeof patch.hostSafeMode === "boolean" && typeof window !== "undefined") {
           try {
             void window.grokhubDesktop?.host?.setSafeMode?.(patch.hostSafeMode);
+          } catch {
+            /* ignore */
+          }
+        }
+        if ("globalHotkey" in patch && typeof window !== "undefined") {
+          try {
+            const accel = String(patch.globalHotkey || "").trim() || "off";
+            void window.grokhubDesktop?.setGlobalHotkey?.(accel);
           } catch {
             /* ignore */
           }
@@ -1530,7 +1541,17 @@ export const useGrokHub = create<State>()(
       },
 
       bindProjectWorkspace: async (path) => {
-        const root = String(path || "").trim();
+        let root = String(path || "").trim();
+        if (root.startsWith("~/")) {
+          try {
+            const { hostInfo } = await import("./host-client");
+            const h = await hostInfo();
+            const home = h?.homedir || "";
+            if (home) root = home.replace(/\/$/, "") + root.slice(1);
+          } catch {
+            /* leave as-is */
+          }
+        }
         if (!root) return { ok: false, detail: "Path required" };
         try {
           const summary = await buildProjectSummary(root);
@@ -4274,7 +4295,250 @@ syncWebsiteConnectors: async () => {
             });
             return;
           }
-          if (cmd === "mode" && arg) {
+          if (cmd === "rename") {
+            const title = arg.trim();
+            if (!title) {
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: "Usage: `/rename Short title` (locks auto-rename for this chat)",
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+              return;
+            }
+            const tid = get().activeThreadId;
+            if (tid) {
+              get().renameThread(tid, title);
+            }
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                {
+                  id: uid("msg"),
+                  role: "system",
+                  content: `Chat renamed to **${title.slice(0, 80)}** (auto-rename off for this chat).`,
+                  ts: Date.now(),
+                },
+              ],
+            }));
+            return;
+          }
+          if (cmd === "remember") {
+            const note = arg.trim();
+            if (!note) {
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: "Usage: `/remember durable fact or preference`",
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+              return;
+            }
+            // reuse memory append path
+            const line = `- ${new Date().toISOString().slice(0, 10)}: ${note}`;
+            const prev = get().agentPrefs.memoryNotes || "";
+            get().setAgentPrefs({ memoryNotes: prev ? `${prev}\n${line}` : line });
+            await memoryAppend("memory", note);
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                {
+                  id: uid("msg"),
+                  role: "system",
+                  content: `Saved to **MEMORY.md**:\n${line}`,
+                  ts: Date.now(),
+                },
+              ],
+            }));
+            return;
+          }
+          if (cmd === "project") {
+            const sub = (arg || "").trim();
+            if (/^clear$/i.test(sub)) {
+              get().clearProjectWorkspace();
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: "Project workspace unbound.",
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+              return;
+            }
+            if (/^bind(\s|$)/i.test(sub) || sub.startsWith("/") || sub.startsWith("~")) {
+              let pathArg = sub.replace(/^bind\s*/i, "").trim();
+              if (!pathArg && typeof window !== "undefined" && window.grokhubDesktop?.pickFolder) {
+                const picked = await window.grokhubDesktop.pickFolder();
+                if (picked?.ok && picked.path) pathArg = picked.path;
+                else if (picked?.canceled) return;
+              }
+              if (!pathArg) {
+                set((s) => ({
+                  chat: [
+                    ...s.chat,
+                    { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                    {
+                      id: uid("msg"),
+                      role: "system",
+                      content: "Usage: `/project bind` (picker) or `/project bind /path/to/folder`",
+                      ts: Date.now(),
+                    },
+                  ],
+                }));
+                return;
+              }
+              const r = await get().bindProjectWorkspace(pathArg);
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: r.ok
+                      ? `**Project bound:** \`${pathArg}\`\n\n${r.detail}`
+                      : `**Bind failed:** ${r.detail}`,
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+              return;
+            }
+            const ws = get().projectWorkspace;
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                {
+                  id: uid("msg"),
+                  role: "system",
+                  content: ws?.path
+                    ? `**Project:** ${ws.name}\n\`${ws.path}\`\n\n_/project bind · /project clear_`
+                    : "No project bound. `/project bind` to pick a folder.",
+                  ts: Date.now(),
+                },
+              ],
+            }));
+            return;
+          }
+          if (cmd === "host") {
+            const sub = (arg || "").trim().toLowerCase();
+            if (sub === "on" || sub === "off") {
+              const on = sub === "on";
+              get().setAgentPrefs({ hostToolsEnabled: on });
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: on ? "Host tools **enabled**." : "Host tools **disabled**.",
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+              return;
+            }
+            let info = "Desktop host status unavailable (browser-only?).";
+            try {
+              const { hostInfo } = await import("./host-client");
+              const h = await hostInfo();
+              const live = h?.bridge && h.bridge !== "none";
+              const proj = get().projectWorkspace;
+              info = [
+                "**Desktop host**",
+                "",
+                `- Live: **${live ? "yes" : "no"}** (${h?.bridge || "unknown"})`,
+                h?.platform ? `- Platform: ${h.platform}` : "",
+                h?.homedir ? `- Home: \`${h.homedir}\`` : "",
+                proj?.path ? `- Project: \`${proj.path}\`` : "- Project: _(none)_",
+                `- Tools: ${get().agentPrefs.hostToolsEnabled ? "on" : "off"}`,
+                `- Confirm: ${
+                  !get().desktop.confirmHostCommands
+                    ? "off"
+                    : get().desktop.confirmDestructiveOnly
+                      ? "risky only"
+                      : "all commands"
+                }`,
+                `- Safe mode: ${get().desktop.hostSafeMode ? "on" : "off"}`,
+              ]
+                .filter(Boolean)
+                .join("\n");
+            } catch (e) {
+              info = `Host probe failed: ${e instanceof Error ? e.message : e}`;
+            }
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                { id: uid("msg"), role: "system", content: info, ts: Date.now() },
+              ],
+            }));
+            return;
+          }
+          if (cmd === "approve") {
+            const sub = (arg || "").trim().toLowerCase();
+            if (sub === "off" || sub === "none" || sub === "auto") {
+              get().setDesktop({ confirmHostCommands: false, confirmDestructiveOnly: true });
+            } else if (sub === "risky" || sub === "safe" || sub === "destructive") {
+              get().setDesktop({ confirmHostCommands: true, confirmDestructiveOnly: true });
+            } else if (sub === "all" || sub === "always") {
+              get().setDesktop({ confirmHostCommands: true, confirmDestructiveOnly: false });
+            } else {
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: "Usage: `/approve off` | `/approve risky` | `/approve all`",
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+              return;
+            }
+            const mode = !get().desktop.confirmHostCommands
+              ? "off (auto-run)"
+              : get().desktop.confirmDestructiveOnly
+                ? "risky only"
+                : "all commands";
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                {
+                  id: uid("msg"),
+                  role: "system",
+                  content: `Host approval mode → **${mode}**`,
+                  ts: Date.now(),
+                },
+              ],
+            }));
+            return;
+          }
+                    if (cmd === "mode" && arg) {
             const resolved = resolveModeArg(arg);
             if (resolved) {
               get().setMode(resolved as import("./types").GrokModeId);
@@ -6908,6 +7172,7 @@ if (!cmds.length) {
         const desk = (s.desktop || {}) as Record<string, unknown>;
         if (typeof desk.hostSafeMode !== "boolean") desk.hostSafeMode = false;
         if (desk.confirmHostCommands === undefined) desk.confirmHostCommands = true;
+        if (desk.globalHotkey === undefined) desk.globalHotkey = "Super+Space";
         if (desk.confirmDestructiveOnly === undefined) desk.confirmDestructiveOnly = true;
         if (desk.selfModifyEnabled === undefined) desk.selfModifyEnabled = false;
         s.desktop = desk;

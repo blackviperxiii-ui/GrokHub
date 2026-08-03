@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
   maximize: () => ipcRenderer.invoke("desktop:maximize"),
   close: () => ipcRenderer.invoke("desktop:close"),
   fit: () => ipcRenderer.invoke("desktop:fit"),
+  pickFolder: () => ipcRenderer.invoke("desktop:pickFolder"),
+  setGlobalHotkey: (accel) => ipcRenderer.invoke("desktop:setGlobalHotkey", accel),
   platform: process.platform,
   host: {
     info: () => ipcRenderer.invoke("host:info"),

@@ -305,6 +305,10 @@ export type DesktopBridge = {
     }>;
   };
   grok?: DesktopGrokBridge;
+  pickFolder?: () => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
+  setGlobalHotkey?: (
+    accel: string,
+  ) => Promise<{ ok: boolean; registered?: boolean; accelerator?: string | null; error?: string | null }>;
 };
 
 declare global {
