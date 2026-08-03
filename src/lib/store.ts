@@ -1563,6 +1563,7 @@ export const useGrokHub = create<State>()(
             threadId: get().activeThreadId,
           };
           set({ projectWorkspace: ws });
+          scheduleSettingsPersist();
           get().pushActivity({
             kind: "desktop",
             title: "Project bound",
@@ -1578,7 +1579,10 @@ export const useGrokHub = create<State>()(
         }
       },
 
-      clearProjectWorkspace: () => set({ projectWorkspace: null }),
+      clearProjectWorkspace: () => {
+        set({ projectWorkspace: null });
+        scheduleSettingsPersist();
+      },
 
       exportDiagnostics: async () => {
         const { copyDiagnostics } = await import("./diagnostics");
