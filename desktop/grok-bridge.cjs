@@ -6,12 +6,13 @@ const { promisify } = require("node:util");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
+const { cleanInstallOutput } = require("./clean-output.cjs");
 
 const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.60";
+const APP_VERSION = "0.8.61";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -1431,6 +1432,12 @@ async function applyUpdate(opts = {}) {
     let installResult;
     try {
       installResult = await installStagedTree(stageRoot, targetRoot, steps);
+      try {
+        const hy = cleanInstallOutput(targetRoot);
+        if (hy.ok) steps.push(`Output hygiene: ${hy.detail}`);
+      } catch (e) {
+        steps.push(`Output hygiene skipped: ${e instanceof Error ? e.message : e}`);
+      }
     } catch (e) {
       // Auto-fallback: system install without elevation → user local
       if (isSystemInstall(targetRoot) && !forceUser) {
@@ -1453,6 +1460,12 @@ async function applyUpdate(opts = {}) {
           } catch {}
         }
         installResult = await installStagedTree(stageRoot, targetRoot, steps);
+      try {
+        const hy = cleanInstallOutput(targetRoot);
+        if (hy.ok) steps.push(`Output hygiene: ${hy.detail}`);
+      } catch (e) {
+        steps.push(`Output hygiene skipped: ${e instanceof Error ? e.message : e}`);
+      }
         steps.push(`User install ready: ${targetRoot}`);
         steps.push("Launch with: GROKHUB_HOME=" + targetRoot + " grokhub");
         // Best-effort user launcher

@@ -8,6 +8,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const os = require("node:os");
+const { cleanInstallOutput } = require("./clean-output.cjs");
 
 function appRootFrom(desktopDir) {
   // 1) Explicit install home
@@ -256,6 +257,14 @@ async function ensureUiServer(desktopDir) {
   );
 
   rotateDiagLog();
+  try {
+    const hygiene = cleanInstallOutput(root);
+    if (hygiene.ok && hygiene.manifests && hygiene.manifests.removed > 0) {
+      diagLog(`[ui-server] cleaned ${hygiene.manifests.removed} stale server manifests`);
+    }
+  } catch {
+    /* ignore */
+  }
   diagLog(`[ui-server] ensure root=${root} url=${url}`);
 
   if (await probe(url + "/")) {
