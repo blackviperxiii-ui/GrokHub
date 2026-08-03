@@ -261,6 +261,14 @@ async function ensureUiServer(desktopDir) {
   if (await probe(url + "/")) {
     process.env.GROKHUB_URL = url;
     process.env.GROKHUB_HOME = root;
+    try {
+      fs.writeFileSync(
+        "/tmp/grokhub-ui-restart.log",
+        `[session] ${new Date().toISOString()} healthy reuse root=${root}\n`,
+      );
+    } catch {
+      /* ignore */
+    }
     return { url, started: false, root };
   }
 
@@ -386,6 +394,21 @@ async function ensureUiServer(desktopDir) {
     if (await probe(`http://127.0.0.1:${port}/`)) {
       const finalUrl = `http://127.0.0.1:${port}`;
       process.env.GROKHUB_URL = finalUrl;
+      process.env.GROKHUB_HOME = root;
+      try {
+        fs.writeFileSync(
+          "/tmp/grokhub-ui-restart.log",
+          `[session] ${new Date().toISOString()} UI ready root=${root} entry=${entry} pid=${child.pid || "?"}\n`,
+        );
+      } catch {
+        /* ignore */
+      }
+      try {
+        const line = `\n[session] ${new Date().toISOString()} UI ready port=${port} pid=${child.pid || "?"}\n`;
+        fs.appendFileSync(logPath, line);
+      } catch {
+        /* ignore */
+      }
       return { url: finalUrl, started: true, root };
     }
     await new Promise((r) => setTimeout(r, 200));

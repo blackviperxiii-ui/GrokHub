@@ -79,6 +79,63 @@ function copyPgliteAssets() {
  * Removes stale hashed ChatView-*.js / models-catalog-*.js piles that
  * confuse host greps and inflate install size.
  */
+
+/**
+ * Keep only the newest _tanstack-start-manifest_*.mjs (and any referenced by index).
+ * Release builds accumulate dozens of dated manifests that confuse greps.
+ */
+function cleanStaleServerManifests() {
+  const serverDir = path.join(root, ".output", "server");
+  if (!fs.existsSync(serverDir)) return;
+  const re = /^_tanstack-start-manifest_.*\.mjs$/;
+  let files = [];
+  try {
+    files = fs
+      .readdirSync(serverDir)
+      .filter((n) => re.test(n))
+      .map((n) => {
+        const full = path.join(serverDir, n);
+        let mtime = 0;
+        try {
+          mtime = fs.statSync(full).mtimeMs;
+        } catch {
+          /* ignore */
+        }
+        return { n, full, mtime };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch {
+    return;
+  }
+  if (files.length <= 1) {
+    console.log(`[desktop-build] server manifests: ${files.length} (ok)`);
+    return;
+  }
+  // Keep newest + any basename referenced from index.mjs / chunks
+  const keep = new Set([files[0].n]);
+  try {
+    const index = fs.readFileSync(path.join(serverDir, "index.mjs"), "utf8");
+    for (const f of files) {
+      if (index.includes(f.n)) keep.add(f.n);
+    }
+  } catch {
+    /* ignore */
+  }
+  let removed = 0;
+  for (const f of files) {
+    if (keep.has(f.n)) continue;
+    try {
+      fs.unlinkSync(f.full);
+      removed += 1;
+    } catch {
+      /* ignore */
+    }
+  }
+  console.log(
+    `[desktop-build] server manifests: kept=${keep.size} removed=${removed}`,
+  );
+}
+
 function cleanStaleClientAssets() {
   const assetDirs = [
     path.join(root, ".output", "public", "assets"),
@@ -193,6 +250,7 @@ run(npx, ["vite", "build"]);
 run(npm, ["run", "db:migrate"]);
 copyPgliteAssets();
 cleanStaleClientAssets();
+cleanStaleServerManifests();
 
 // Stamp so install/updater can verify UI matches APP_VERSION
 try {

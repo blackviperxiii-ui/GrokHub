@@ -46,6 +46,27 @@ pick_app_root() {
 
 APP_ROOT="$(pick_app_root)"
 export GROKHUB_HOME="$APP_ROOT"
+
+# Dual-install safety: once a complete user install exists, never fall back to system
+# without an explicit override. Pin choice for desktop entries / repair scripts.
+INSTALL_PIN="${XDG_CONFIG_HOME:-$HOME/.config}/GrokHub/install-source"
+if install_ok "$user_lib"; then
+  if [[ "$APP_ROOT" != "$user_lib" && "$APP_ROOT" != "$user_share" ]]; then
+    if [[ "${GROKHUB_ALLOW_SYSTEM:-}" != "1" ]]; then
+      APP_ROOT="$user_lib"
+      export GROKHUB_HOME="$APP_ROOT"
+      log "forced user install over system (set GROKHUB_ALLOW_SYSTEM=1 to override)"
+      echo "note: dual install detected — using $APP_ROOT (system ignored). Remove /usr/lib/grokhub to silence." >&2
+    fi
+  fi
+  mkdir -p "$(dirname "$INSTALL_PIN")" 2>/dev/null || true
+  printf '%s
+' "user:$user_lib" >"$INSTALL_PIN" 2>/dev/null || true
+elif install_ok "$sys_lib"; then
+  mkdir -p "$(dirname "$INSTALL_PIN")" 2>/dev/null || true
+  printf '%s
+' "system:$sys_lib" >"$INSTALL_PIN" 2>/dev/null || true
+fi
 PORT="${GROKHUB_PORT:-18765}"
 URL="${GROKHUB_URL:-http://127.0.0.1:${PORT}}"
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}/grokhub"
@@ -106,7 +127,7 @@ fi
 
 # Dual-install note
 if [[ -f "$sys_lib/desktop/main.mjs" && -f "$user_lib/desktop/main.mjs" && "$APP_ROOT" == "$user_lib" ]]; then
-  log "using user install $APP_ROOT (system also present at $sys_lib)"
+  log "using user install $APP_ROOT (stale system also at $sys_lib — ignored; remove with: sudo rm -rf /usr/lib/grokhub)"
 fi
 
 # Single-instance: if another grokhub electron is live, focus path is handled by Electron lock;

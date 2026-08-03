@@ -1,6 +1,6 @@
 # GrokHub
 
-**v0.8.58** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v0.8.59** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
 Adaptive modes · Imagine · skills · automations · setup sync · unsandboxed desktop host (CLI · files · apps).
 
@@ -33,6 +33,25 @@ systemctl --user daemon-reload && systemctl --user enable --now grokhub-agent.se
 ```
 
 UI: **Queue** sidebar · **Settings → Autonomy**. Website connectors stay status-only until native OAuth invoke.
+
+
+
+## Install paths (Linux)
+
+Prefer **one** install tree:
+
+| Path | Role |
+|------|------|
+| `~/.local/lib/grokhub` | **Recommended** user install (in-app updates) |
+| `/usr/lib/grokhub` | System/AUR package |
+
+If both exist, the launcher **always prefers a complete user install** (unless `GROKHUB_ALLOW_SYSTEM=1`). Remove a stale system tree with:
+
+```bash
+sudo rm -rf /usr/lib/grokhub /usr/bin/grokhub
+```
+
+User data stays in `~/.config/GrokHub` either way.
 
 ## Install — Arch Linux / CachyOS
 

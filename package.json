@@ -1,6 +1,6 @@
 {
   "name": "grokhub",
-  "version": "0.8.58",
+  "version": "0.8.59",
   "private": true,
   "description": "GrokHub \u2014 Grok-native agent control plane (Windows, Linux)",
   "author": "ViperXIII",
@@ -37,7 +37,8 @@
     "release:bundle": "bash scripts/make-release-bundle.sh",
     "assert:versions": "node scripts/assert-versions.mjs",
     "test:unit": "node scripts/smoke-unit.mjs",
-    "test": "npm run assert:versions && npm run test:unit"
+    "test": "node scripts/assert-versions.mjs && node scripts/smoke-unit.mjs",
+    "release:smoke": "bash scripts/release-smoke.sh"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.3",
