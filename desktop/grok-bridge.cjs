@@ -11,7 +11,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "0.8.59";
+const APP_VERSION = "0.8.60";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -821,6 +821,47 @@ async function checkForUpdate(opts = {}) {
       }
     }
   }
+  // Dual-install audit: list complete trees so UI can warn about stale /usr
+  const dualRoots = [];
+  for (const r of installRoots()) {
+    try {
+      if (await isInstallRoot(r)) {
+        let ver = null;
+        try {
+          ver = (await fs.readFile(path.join(r, "APP_VERSION"), "utf8")).trim();
+        } catch {
+          try {
+            ver = (await fs.readFile(path.join(r, "VERSION"), "utf8")).trim();
+          } catch {
+            ver = null;
+          }
+        }
+        dualRoots.push({
+          root: r,
+          system: isSystemInstall(r),
+          version: ver,
+          active: installRoot ? path.resolve(r) === path.resolve(installRoot) : false,
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  // de-dupe by resolved path
+  const seen = new Set();
+  const installs = [];
+  for (const d of dualRoots) {
+    const key = path.resolve(d.root);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    installs.push(d);
+  }
+  const dualInstall = installs.filter((x) => x.system).length > 0
+    && installs.filter((x) => !x.system).length > 0;
+  if (dualInstall) {
+    detail = (detail ? detail + " · " : "")
+      + "Dual install: user + system trees present — launcher prefers user. Remove /usr/lib/grokhub when ready.";
+  }
   return {
     currentVersion: local.version,
     uiVersion: local.uiVersion,
@@ -837,6 +878,8 @@ async function checkForUpdate(opts = {}) {
     installRoot,
     writable,
     detail,
+    dualInstall,
+    installs,
   };
 }
 
@@ -1286,16 +1329,25 @@ async function applyUpdate(opts = {}) {
           "archive lacked .output and rebuild failed\n",
         );
       } catch {
+        // Never seed user installs from a possibly stale /usr tree
         const sysOut = path.join("/usr/lib/grokhub", ".output");
-        try {
-          await fs.stat(path.join(sysOut, "server", "index.mjs"));
-          await execAsync(
-            `cp -a ${JSON.stringify(sysOut)} ${JSON.stringify(path.join(stageRoot, ".output"))}`,
-            { timeout: 180000, shell: "/bin/bash" },
+        const allowSysSeed =
+          isSystemInstall(targetRoot) || process.env.GROKHUB_ALLOW_SYSTEM === "1";
+        if (allowSysSeed) {
+          try {
+            await fs.stat(path.join(sysOut, "server", "index.mjs"));
+            await execAsync(
+              `cp -a ${JSON.stringify(sysOut)} ${JSON.stringify(path.join(stageRoot, ".output"))}`,
+              { timeout: 180000, shell: "/bin/bash" },
+            );
+            steps.push("WARNING: Seeded .output from /usr/lib/grokhub");
+          } catch {
+            steps.push("ERROR: no UI build available — app window may not load until desktop:build");
+          }
+        } else {
+          steps.push(
+            "ERROR: release archive missing .output and rebuild failed — re-download grokhub-desktop-v*.tar.gz (not seeding from /usr)",
           );
-          steps.push("WARNING: Seeded stale .output from /usr/lib/grokhub");
-        } catch {
-          steps.push("ERROR: no UI build available — app window may not load until desktop:build");
         }
       }
     }

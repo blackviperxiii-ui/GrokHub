@@ -513,7 +513,7 @@ export function SettingsView() {
         <CardHeader>
           <CardTitle className="text-sm">Proactive behavior</CardTitle>
           <CardDescription>
-            Self-awareness and unsolicited caretaking: stuck streams, incomplete answers,
+            Default is Aware (self-heal only). Raise for unsolicited caretaking: stuck streams, incomplete answers,
             session/host refresh, tidy memory. Level 3+ invents small safe chores on its own.
             Pause anytime for fully manual.
           </CardDescription>
@@ -1219,7 +1219,24 @@ export function SettingsView() {
                     Install path is not writable by your user (e.g.{" "}
                     <span className="font-mono">/usr/lib/grokhub</span>). Updating will ask for admin
                     (pkexec) or fall back to{" "}
-                    <span className="font-mono">~/.local/share/grokhub</span>.
+                    <span className="font-mono">~/.local/lib/grokhub</span>.
+                  </div>
+                )}
+                {Boolean((update as { dualInstall?: boolean }).dualInstall) && (
+                  <div className="mt-2 rounded-[var(--radius-sm)] border border-[color-mix(in_oklab,var(--color-warn)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-warn)_10%,transparent)] px-2 py-1.5 text-[11px] text-[var(--color-fg)]">
+                    <div className="font-medium text-[var(--color-warn)]">Dual install detected</div>
+                    <div className="mt-0.5 text-[var(--color-muted)]">
+                      Active tree:{" "}
+                      <span className="font-mono text-[10px]">
+                        {(update as { installRoot?: string }).installRoot || "user"}
+                      </span>
+                      . A stale system package at{" "}
+                      <span className="font-mono text-[10px]">/usr/lib/grokhub</span> is ignored.
+                      Remove it when ready:
+                    </div>
+                    <pre className="mt-1 overflow-x-auto rounded bg-[var(--color-elevated)] px-2 py-1 font-mono text-[10px] text-[var(--color-muted)]">
+                      sudo rm -rf /usr/lib/grokhub /usr/bin/grokhub
+                    </pre>
                   </div>
                 )}
                 {(update.currentSha || update.remoteSha) && (
