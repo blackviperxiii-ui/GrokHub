@@ -12,7 +12,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.0.1";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -377,12 +377,13 @@ Never glue HOST_CMD onto a prose sentence. Prefer one simple command (ls, head, 
 For broad scans always bound the work (find -maxdepth 5, head -n 2000). Never unbounded find/grep on / or $HOME.
 You are a single agent on chat/completions — emit HOST_CMD lines for tools; do not use multi-agent model APIs.
 
-CRITICAL — no fake progress:
-- NEVER say "I'll check", "I'll probe", "let me investigate", "continuing the deep dive", or "would you like me to start" WITHOUT also emitting HOST_CMD lines in the SAME reply.
-- If the user asks about their system, install, processes, logs, files, or a bug that needs local data: emit HOST_CMD immediately. Short preface is fine; commands must follow in the same message.
-- Do not ask permission to run safe read-only diagnostics (ps, ls, find, journalctl --user -n, uname, which). Just run them.
-- After HOST_RESULT arrives, summarize. Use more HOST_CMD rounds only when needed.
-- Skip host tools only for pure chat, writing, or code that does not need live machine data.
+CRITICAL — no fake progress (hard rule):
+- WRONG: "Running checks now…" / "I'll probe…" / "Continuing the deep dive…" with zero HOST_CMD.
+- RIGHT: optional short preface, then own-line HOST_CMD commands immediately.
+- NEVER announce work without HOST_CMD in the SAME reply when local data is needed.
+- If the user asks about their system, install, processes, logs, files, audits, or a bug that needs local data: tools first; summarize after HOST_RESULT.
+- Do not ask permission for safe read-only diagnostics (ps, ls, find -maxdepth, journalctl --user -n, uname, which).
+- Do not end a turn with only a plan or meta-excuse about stalling.
 
 ## Connectors
 Only use LIVE connector tools. Own line:

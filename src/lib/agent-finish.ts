@@ -9,26 +9,44 @@ export function looksLikePlanningStall(text: string): boolean {
   if (!s) return true;
   if (/HOST_CMD\s*:/i.test(s)) return false;
   if (/CONNECTOR_CMD\s*:/i.test(s)) return false;
+  // Real tool evidence already in the message
+  if (/HOST_RESULT|### 🖥️|exit code|```host\b/i.test(s)) return false;
 
   const plan =
-    /\b(i('ll| will)|let me|i can|i should|i'm going to|i am going to|going to)\b.{0,50}\b(check|probe|inspect|investigate|scan|look|run|start|continue|dig|examine|verify|read|open|list|fetch|pull|search|find|try)\b/i.test(
+    /\b(i('ll| will)|let me|i can|i should|i'm going to|i am going to|going to)\b.{0,60}\b(check|probe|inspect|investigate|scan|look|run|start|continue|dig|examine|verify|read|open|list|fetch|pull|search|find|try|audit|diagnose)\b/i.test(
       s,
     ) ||
-    /\b(continuing|continue)\b.{0,30}\b(deep dive|investigation|scan|probe|next)\b/i.test(s) ||
+    /\b(continuing|continue)\b.{0,40}\b(deep dive|investigation|scan|probe|next|audit)\b/i.test(s) ||
     /\b(would you like me to|shall i|want me to|should i)\b.{0,50}\b(start|run|check|investigate|probe|continue|do that)\b/i.test(
       s,
     ) ||
     /\binstead of actually running\b/i.test(s) ||
     /\b(i('ll| will)\s+(do|handle|take care of)\s+(that|this|it)\b)/i.test(s) ||
-    /\b(give me a (moment|sec|second)|one (sec|second|moment)|hang on)\b/i.test(s);
+    /\b(give me a (moment|sec|second)|one (sec|second|moment)|hang on)\b/i.test(s) ||
+    // Announcement-only (field bug: "running checks now" then stop)
+    /\b(running (checks?|diagnostics?|scan|commands?)|taking a look|looking into (it|this|that)|on it now|checking now)\b/i.test(
+      s,
+    ) ||
+    /\b(next i('ll| will)|first i('ll| will)|then i('ll| will))\b/i.test(s) ||
+    /\b(here('s| is) (what|the) (plan|approach)|i('m| am) (about to|going to) (run|check|scan))\b/i.test(
+      s,
+    ) ||
+    /\b(ready for the next|say the word|give the word)\b/i.test(s);
 
-  // Ends mid-thought
+  // Ends mid-thought or with a cliffhanger
   const endsOpen =
-    /\b(let me|i'll|i will|next i('ll| will)|first i('ll| will))\b[^.!?]{0,80}$/i.test(s) ||
+    /\b(let me|i'll|i will|next i('ll| will)|first i('ll| will))\b[^.!?]{0,100}$/i.test(s) ||
     /[:…]\s*$/.test(s) ||
-    /\b(starting|working on it|on it)\s*[.!]?\s*$/i.test(s);
+    /\b(starting|working on it|on it|running checks?|stand by)\s*[.!]\s*$/i.test(s);
 
-  return plan || endsOpen;
+  // Long "report" that is really meta / excuse about not using tools
+  const metaExcuse =
+    s.length > 80 &&
+    /\b(only describing|never output|didn't (run|emit|fire)|treating it like a normal chat|switch(ing)? into (active )?tool)\b/i.test(
+      s,
+    );
+
+  return plan || endsOpen || metaExcuse;
 }
 
 /** Substantive completion markers */
@@ -114,9 +132,13 @@ export function buildAutoFinishNudge(opts: {
   return [
     "SYSTEM — AUTO-FINISH (do not mention this system note to the user):",
     `Progress ${opts.round}/${opts.maxRounds}. Your previous message stopped before the goal was complete.`,
-    "Do NOT only plan. Do NOT say “let me check/look/investigate” without acting in this same reply.",
+    "Do NOT only plan. Do NOT say “let me check/look/investigate/running checks” without acting in this same reply.",
     host,
-    "Deliver concrete progress: tools and/or a complete answer.",
+    "WRONG: prose about what you will do. RIGHT: own-line HOST_CMD then wait for results.",
+    "Example (own lines):",
+    "HOST_CMD: ps -eo pid,cmd --sort=-%cpu | head -25",
+    'HOST_CMD: ls -la "$HOME/.local/lib/grokhub" | head -30',
+    "Deliver concrete progress: tools and/or a complete answer with real data.",
     "When the user goal is fully done, end with a clear summary (and GOAL_COMPLETE if tracking a goal).",
     "If truly blocked, say GOAL_BLOCKED: <reason> and what you need.",
     "",

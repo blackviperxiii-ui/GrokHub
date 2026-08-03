@@ -66,12 +66,16 @@ WORK_UPDATE: id | status=done
 Statuses: proposed (default on pin), approved, staged, in_progress, done, dismissed.
 Do not mark done unless the work is actually finished. Keep pins short; user reviews them on the Workboard.
 
-CRITICAL — no fake progress / no stalling:
-- NEVER say "I'll check", "I'll probe", "let me investigate", "continuing the deep dive", or "would you like me to start" without also emitting HOST_CMD lines in the SAME reply.
-- If the user asks about their system, install, processes, logs, files, or bugs needing local data: emit HOST_CMD immediately (short preface OK).
-- Do not ask permission for safe read-only diagnostics — just run them.
-- Do not end a turn with only a plan. Commands first, then summarize after HOST_RESULT.
-- The app may auto-nudge you to finish if you stall — treat that as mandatory continuation until the user goal is done or GOAL_BLOCKED.
+CRITICAL — no fake progress / no stalling (this is a hard rule):
+- WRONG: "Running checks now…" / "I'll probe processes…" / "Continuing the deep dive…" / "Would you like me to start?" with zero HOST_CMD.
+- RIGHT: one short sentence optional, then immediately own-line commands, e.g.
+  HOST_CMD: uname -a
+  HOST_CMD: ls -la "$HOME/.local/lib/grokhub" | head -40
+- NEVER announce work without emitting HOST_CMD in the SAME reply when local data is needed.
+- If the user asks about their system, install, processes, logs, files, audits, or bugs needing local data: tools first, prose after HOST_RESULT.
+- Do not ask permission for safe read-only diagnostics (ps, ls, find -maxdepth, journalctl --user -n, uname, which, cat of app logs).
+- Do not end a turn with only a plan or a meta-explanation of why you stalled.
+- The app auto-nudges stalled turns — treat that as mandatory: act, do not re-apologize.
 
 ## Tools (keep simple)
 - Desktop host: HOST_CMD for shell/files/apps
@@ -596,21 +600,26 @@ export function stripHostCommands(text: string): string {
  * e.g. "I'll probe processes…" / "Would you like me to start the investigation?"
  */
 export function looksLikeDeferredHostWork(text: string): boolean {
-  // Shared with agent-finish planning stall (keep in sync conceptually)
+  // Keep aligned with agent-finish.looksLikePlanningStall
   const s = text || "";
   if (/HOST_CMD\s*:/i.test(s) || /CONNECTOR_CMD\s*:/i.test(s)) return false;
+  if (/HOST_RESULT|### 🖥️/i.test(s)) return false;
   const plan =
-    /\b(i('ll| will)|let me|i can|i should|i'm going to|i am going to|going to)\b.{0,50}\b(check|probe|inspect|investigate|scan|look|run|start|continue|dig|examine|verify|read|list|fetch)\b/i.test(
+    /\b(i('ll| will)|let me|i can|i should|i'm going to|i am going to|going to)\b.{0,60}\b(check|probe|inspect|investigate|scan|look|run|start|continue|dig|examine|verify|read|list|fetch|audit|diagnose)\b/i.test(
       s,
     ) ||
-    /\b(continuing|continue)\b.{0,30}\b(deep dive|investigation|scan|probe)\b/i.test(s) ||
+    /\b(continuing|continue)\b.{0,40}\b(deep dive|investigation|scan|probe|audit)\b/i.test(s) ||
     /\b(would you like me to|shall i|want me to|should i)\b.{0,50}\b(start|run|check|investigate|probe|continue)\b/i.test(
       s,
     ) ||
     /\binstead of actually running\b/i.test(s) ||
     /\bnever output any real\b.{0,20}\bHOST_CMD\b/i.test(s) ||
     /\b(give me a (moment|sec)|one (sec|second|moment)|hang on|working on it)\b/i.test(s) ||
-    /\b(let me|i'll|i will)\b[^.!?]{0,80}$/i.test(s.trim());
+    /\b(running (checks?|diagnostics?|scan|commands?)|taking a look|checking now|on it now)\b/i.test(
+      s,
+    ) ||
+    /\b(ready for the next|say the word|give the word)\b/i.test(s) ||
+    /\b(let me|i'll|i will)\b[^.!?]{0,100}$/i.test(s.trim());
   return plan;
 }
 
@@ -618,11 +627,16 @@ export function looksLikeDeferredHostWork(text: string): boolean {
 export function userWantsHostInvestigation(prompt: string): boolean {
   const pr = prompt || "";
   return (
-    /\b(deep dive|investigate|diagnos|why.*(stop|stall|break|fail)|what.*(wrong|broken)|check (my |the )?(system|install|process|log)|on my (machine|desktop|pc|linux)|host (cmd|tool)|run (commands?|diagnostics?)|look at (my |the )?(system|files?|install))\b/i.test(
+    /\b(deep dive|investigate|diagnos|audit|why.*(stop|stall|break|fail)|what.*(wrong|broken)|check (my |the )?(system|install|process|log|app)|on my (machine|desktop|pc|linux)|host (cmd|tool)|run (commands?|diagnostics?)|look at (my |the )?(system|files?|install|logs?))\b/i.test(
       pr,
     ) ||
-    /\b(streaming stops?|agent (stall|stuck|not working)|host.?cmd|desktop host)\b/i.test(pr) ||
-    /\b(ps aux|journalctl|find \/|list (files|processes)|read (the )?log)\b/i.test(pr)
+    /\b(streaming stops?|agent (stall|stuck|not working)|host.?cmd|desktop host|live (results?|scan)|plain language)\b/i.test(
+      pr,
+    ) ||
+    /\b(ps aux|journalctl|find \/|list (files|processes)|read (the )?log|grokhub\.(prev|log)|~\/\.local\/lib\/grokhub|~\/\.config\/GrokHub)\b/i.test(
+      pr,
+    ) ||
+    /\b(process(es)?|cpu|zombie|pid|install path|dual install|manifest)\b/i.test(pr)
   );
 }
 
@@ -659,7 +673,10 @@ export function inferHostCommandsFromUser(prompt: string): string[] {
   }
   if (userWantsHostInvestigation(prompt)) {
     return [
-      'uname -a; echo "---"; whoami; echo "---"; pwd; echo "---"; ls -la "${HOME}/.local/lib/grokhub" 2>/dev/null | head -30; ls -la /usr/lib/grokhub 2>/dev/null | head -20; echo "---"; ps -eo pid,cmd --sort=-pid 2>/dev/null | grep -iE "grokhub|electron" | grep -v grep | head -20 || true',
+      'uname -a; echo "---"; whoami; pwd; echo "---"; date -Iseconds',
+      'ls -la "${HOME}/.local/lib/grokhub" 2>/dev/null | head -40; echo "---"; test -d /usr/lib/grokhub && ls -la /usr/lib/grokhub | head -15 || echo "no /usr/lib/grokhub"',
+      'ps -eo pid,pcpu,pmem,cmd --sort=-pcpu 2>/dev/null | head -5; echo "---"; ps -eo pid,pcpu,cmd --sort=-pid 2>/dev/null | grep -iE "grokhub|electron.*grokhub|node .*index.mjs" | grep -v grep | head -25 || true',
+      'test -f "${XDG_RUNTIME_DIR:-/tmp}/grokhub/ui.pid" && echo "ui.pid=$(cat "${XDG_RUNTIME_DIR:-/tmp}/grokhub/ui.pid")" || echo "no ui.pid"; tail -n 30 /tmp/grokhub-ui-restart.log 2>/dev/null || true',
     ];
   }
   return [];

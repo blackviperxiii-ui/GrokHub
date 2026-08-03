@@ -16,7 +16,7 @@ cp -a .output desktop packaging package.json APP_VERSION LICENSE README.md "$STA
 [[ -f VERSION ]] && cp VERSION "$STAGE/grokhub/" || echo "$VER" > "$STAGE/grokhub/VERSION"
 # Ship smoke/version scripts so installed trees can self-check (audit P0)
 mkdir -p "$STAGE/grokhub/scripts"
-for s in assert-versions.mjs smoke-unit.mjs start-ui.sh repair-install.sh browser-smoke.mjs release-smoke.sh; do
+for s in assert-versions.mjs smoke-unit.mjs smoke-agent-finish.mjs start-ui.sh repair-install.sh browser-smoke.mjs release-smoke.sh; do
   if [[ -f "scripts/$s" ]]; then
     cp -a "scripts/$s" "$STAGE/grokhub/scripts/"
   fi

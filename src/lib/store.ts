@@ -5069,14 +5069,24 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
                     ? 12
                     : 8;
             let hostNudges = 0;
+            const maxHostNudges = 5;
             let finishNudges = 0;
             const maxFinishNudges =
               mode === "max" || routed === "max" || mode === "heavy" || routed === "heavy"
-                ? 4
+                ? 5
                 : mode === "build" || routed === "build" || mode === "auto"
-                  ? 3
-                  : 2;
+                  ? 4
+                  : 3;
             let usedAnyTools = false;
+            // Sticky protocol reminder (reduces plan-only replies)
+            if (get().agentPrefs.hostToolsEnabled) {
+              history.push({
+                role: "user",
+                content:
+                  "SYSTEM REMINDER: For any local install/process/file/log question, emit HOST_CMD on its own line in the same reply. Announcing “running checks” without HOST_CMD is invalid.",
+              });
+            }
+
             let accumulated = "";
 
             // Build workspace context once per user turn (budgeted pins + capabilities)
@@ -5342,20 +5352,26 @@ while (rounds < maxRounds && !aborted) {
                   cmds = inferHostCommandsFromUser(trimmed);
                 }
                 // Model planned host work but never emitted HOST_CMD — force a tool turn
+                const needsHost =
+                  get().agentPrefs.hostToolsEnabled &&
+                  (looksLikeDeferredHostWork(full) ||
+                    looksLikePlanningStall(full) ||
+                    (!usedAnyTools &&
+                      userWantsHostInvestigation(trimmed) &&
+                      rounds <= 4));
                 if (
                   !cmds.length &&
                   !connCmds.length &&
-                  get().agentPrefs.hostToolsEnabled &&
-                  hostNudges < 4 &&
-                  (looksLikeDeferredHostWork(full) ||
-                    looksLikePlanningStall(full) ||
-                    (rounds === 1 && userWantsHostInvestigation(trimmed)))
+                  needsHost &&
+                  hostNudges < maxHostNudges
                 ) {
                   hostNudges += 1;
                   const inferred = inferHostCommandsFromUser(trimmed);
                   if (inferred.length) {
                     cmds = inferred;
-                    set({ streamStatus: "Starting host investigation…" });
+                    set({
+                      streamStatus: `Starting host investigation… (${hostNudges}/${maxHostNudges})`,
+                    });
                     get().pushActivity({
                       kind: "desktop",
                       title: "Auto host nudge",
@@ -5367,13 +5383,19 @@ while (rounds < maxRounds && !aborted) {
                     history.push({
                       role: "user",
                       content: [
-                        "SYSTEM: You described planned host work but did not emit HOST_CMD.",
-                        "Do not ask permission. Immediately output one or more HOST_CMD lines",
-                        "for safe read-only diagnostics (ps, ls, uname, find -maxdepth, journalctl --user -n).",
-                        "No preamble-only replies.",
-                      ].join(" "),
+                        "SYSTEM: INVALID TURN — you announced work or planned diagnostics without HOST_CMD.",
+                        "Do not apologize. Do not ask permission. Do not only describe what you will do.",
+                        "Immediately emit one or more own-line HOST_CMD commands for safe read-only diagnostics.",
+                        "Examples:",
+                        'HOST_CMD: uname -a',
+                        'HOST_CMD: ps -eo pid,pcpu,cmd --sort=-pcpu | head -20',
+                        'HOST_CMD: ls -la "$HOME/.local/lib/grokhub" | head -40',
+                        "No preamble-only replies. Commands first.",
+                      ].join("\n"),
                     });
-                    set({ streamStatus: "Nudging agent to use host tools…" });
+                    set({
+                      streamStatus: `Nudging agent to use host tools… (${hostNudges}/${maxHostNudges})`,
+                    });
                     patchBot(
                       (visible || full) + "\n\n_Switching to host tools…_",
                       { streaming: true },
