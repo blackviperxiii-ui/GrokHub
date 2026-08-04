@@ -116,8 +116,12 @@ export function HostGatewayBanner({ variant = "card", className, onOpenDesktop }
             size="sm"
             variant="ghost"
             onClick={() => {
+              try {
+                onOpenDesktop?.();
+              } catch {
+                /* ignore */
+              }
               setNav("settings");
-              onOpenDesktop?.();
             }}
           >
             Desktop

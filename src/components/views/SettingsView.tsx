@@ -1356,7 +1356,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <HostGatewayBanner variant="card" onOpenDesktop={() => setNav("desktop")} />
+      <HostGatewayBanner variant="card" />
 
       <Card id="sec-desktop" data-settings-cat="agent" data-hit={sectionHit("sec-desktop") ? "1" : "0"}>
         <CardHeader>

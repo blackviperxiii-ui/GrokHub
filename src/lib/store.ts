@@ -1137,7 +1137,10 @@ export const useGrokHub = create<State>()(
       grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
 
       setNav: (nav) => {
-        set({ nav, modeMenuOpen: false });
+        // Removed surfaces — keep navigation recoverable
+        const dead = new Set(["desktop", "connectors", "agents", "queue", "roster"]);
+        const next = dead.has(String(nav)) ? "settings" : nav;
+        set({ nav: next as typeof nav, modeMenuOpen: false });
         scheduleSettingsPersist();
       },
       setMode: (mode) => {

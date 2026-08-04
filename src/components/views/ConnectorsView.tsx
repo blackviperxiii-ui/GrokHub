@@ -142,7 +142,7 @@ export function ConnectorsView() {
               </Button>
             )}
             {c.id === "desktop-host" && (
-              <Button size="sm" variant="secondary" onClick={() => setNav("desktop")}>
+              <Button size="sm" variant="secondary" onClick={() => setNav("settings")}>
                 Host
               </Button>
             )}

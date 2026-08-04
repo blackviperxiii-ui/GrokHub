@@ -999,7 +999,12 @@ export function ChatView() {
   async function onChip(chip: QuickChip) {
     recordQuickAssistChip(chip);
     if (chip.kind === "nav" && chip.value.startsWith("__nav:")) {
-      setNav(chip.value.slice("__nav:".length) as "settings" | "imagine" | "desktop");
+      let dest = chip.value.slice("__nav:".length);
+      // Desktop tab removed — host controls live in Settings
+      if (dest === "desktop" || dest === "connectors" || dest === "queue" || dest === "agents") {
+        dest = "settings";
+      }
+      setNav(dest as "settings" | "imagine" | "history" | "command" | "chat");
       return;
     }
     if (chip.kind === "mode" && chip.value.startsWith("__mode:")) {

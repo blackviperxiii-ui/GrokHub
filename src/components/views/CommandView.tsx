@@ -125,7 +125,7 @@ export function CommandView() {
             <Button
               variant="secondary"
               className="h-auto justify-start px-4 py-3 text-left"
-              onClick={() => setNav("desktop")}
+              onClick={() => setNav("settings")}
             >
               <div className="flex items-center gap-2">
                 <HardDrive className="h-4 w-4 text-[var(--color-muted)]" />
