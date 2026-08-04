@@ -1,3 +1,5 @@
+import { APP_VERSION } from "./version";
+
 /**
  * xAI Grok OAuth (device-code) — same public client used by Grok CLI / OpenClaw.
  * SuperGrok or X Premium+ accounts get API access tokens without a console API key.
@@ -11,7 +13,7 @@ export const XAI_OAUTH_ISSUER = "https://auth.x.ai";
 export const XAI_OAUTH_DISCOVERY = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
 export const XAI_DEVICE_CODE_GRANT =
   "urn:ietf:params:oauth:grant-type:device_code";
-export const XAI_UA = "GrokHub/0.2.10 (xAI OAuth; Linux)";
+export const XAI_UA = `GrokHub/${APP_VERSION} (xAI OAuth; Linux)`;
 
 /** Refresh access token this long before expiresAt (xAI tokens ~6h). */
 export const TOKEN_REFRESH_SKEW_MS = 30 * 60 * 1000;
