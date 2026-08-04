@@ -2359,7 +2359,7 @@ function AutonomySettingsPanel() {
         ) : null}
       </div>
       <p className="text-[11px] text-[var(--color-subtle)]">
-        Level 3–4 also free-roams: refresh OAuth before expiry, re-probe desktop host, usage meter,
+        Level 3–4 also free-roams: refresh OAuth before expiry, re-probe desktop host,
         prune stale learnings. Large or destructive work still waits for you.
       </p>
     </div>

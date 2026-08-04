@@ -116,7 +116,7 @@ export function HostGatewayBanner({ variant = "card", className, onOpenDesktop }
             size="sm"
             variant="ghost"
             onClick={() => {
-              setNav("desktop");
+              setNav("settings");
               onOpenDesktop?.();
             }}
           >
@@ -202,7 +202,7 @@ export function HostGatewayBanner({ variant = "card", className, onOpenDesktop }
           ) : (
             <Button
               onClick={() => {
-                setNav("desktop");
+                setNav("settings");
                 onOpenDesktop?.();
               }}
             >

@@ -162,11 +162,12 @@ export async function dispatchApi(
     }
 
     if (action === "websiteUsage") {
-      const { fetchGrokWebsiteUsageDirect } = await import("./grok-website-usage");
-      return fetchGrokWebsiteUsageDirect({
-        ssoCookie: String(body.ssoCookie || ""),
-        bearer: String(body.bearer || body.accessToken || "") || null,
-      });
+      // Website usage meter removed — requires Grok.com SSO APIs not exposed for desktop.
+      return {
+        ok: false,
+        error: "Usage meter is not available in this build. Local session limits are not polled from grok.com.",
+        source: "disabled",
+      };
     }
 
     if (action === "usageProbe") {

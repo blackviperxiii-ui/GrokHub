@@ -1,12 +1,35 @@
 /**
  * Encrypted secrets for Electron (safeStorage + userData file).
+ * Lazy-requires electron so plain Node (tests/smoke) can load the module.
  */
-const { safeStorage, app } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
+
+let _electron = null;
+function electron() {
+  if (_electron) return _electron;
+  try {
+    _electron = require("electron");
+  } catch {
+    _electron = null;
+  }
+  return _electron;
+}
+
+function userDataDir() {
+  const el = electron();
+  try {
+    if (el?.app?.getPath) return el.app.getPath("userData");
+  } catch {
+    /* not ready */
+  }
+  const home = process.env.HOME || os.homedir() || "/tmp";
+  return path.join(home, ".config", "GrokHub");
+}
 
 function storePath() {
-  return path.join(app.getPath("userData"), "grokhub-secrets.json");
+  return path.join(userDataDir(), "grokhub-secrets.json");
 }
 
 function readStore() {
@@ -27,19 +50,26 @@ function writeStore(obj) {
 function encrypt(value) {
   const s = String(value ?? "");
   if (!s) return { empty: true };
-  if (safeStorage.isEncryptionAvailable()) {
-    const buf = safeStorage.encryptString(s);
-    return { enc: buf.toString("base64") };
+  const el = electron();
+  try {
+    if (el?.safeStorage?.isEncryptionAvailable?.()) {
+      const buf = el.safeStorage.encryptString(s);
+      return { enc: buf.toString("base64") };
+    }
+  } catch {
+    /* fall through */
   }
-  // Fallback: still isolate from renderer localStorage (file mode 600)
   return { plain: s };
 }
 
 function decrypt(entry) {
   if (!entry || entry.empty) return "";
-  if (entry.enc && safeStorage.isEncryptionAvailable()) {
+  const el = electron();
+  if (entry.enc) {
     try {
-      return safeStorage.decryptString(Buffer.from(entry.enc, "base64"));
+      if (el?.safeStorage?.isEncryptionAvailable?.()) {
+        return el.safeStorage.decryptString(Buffer.from(entry.enc, "base64"));
+      }
     } catch {
       return "";
     }

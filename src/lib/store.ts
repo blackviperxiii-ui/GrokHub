@@ -97,6 +97,14 @@ import {
   unitsFromTokens,
   usagePercent,
 } from "./usage";
+import {
+  detectJobKind,
+  jobContractPrompt,
+  isolateHostResultsForModel,
+  buildChangedRetryNudge,
+  detectTriedStrategies,
+  type LoopRetryStrategy,
+} from "./pcl-layers";
 import { uid } from "./utils";
 import { computeNextRun } from "./automation-schedule";
 import {
@@ -446,7 +454,6 @@ type State = {
   clearChat: () => void;
   setPlan: (plan: SubscriptionPlanId) => void;
   /** When true, allow free website session + free-model cascade if paid access fails */
-  preferFreeGrok: boolean;
   setPreferFreeGrok: (v: boolean) => void;
   /** App chrome theme */
   uiTheme: "dark" | "light" | "system";
@@ -1125,7 +1132,6 @@ export const useGrokHub = create<State>()(
       oauthPending: null,
       setupSyncMeta: { autoPullOnLogin: true, autoPushOnChange: false },
       grokConnected: null,
-      preferFreeGrok: false,
       uiTheme: "dark" as const,
       toolsNavCollapsed: false,
       grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
@@ -3282,7 +3288,6 @@ syncWebsiteConnectors: async () => {
       },
 
       setPreferFreeGrok: (_v) => {
-        set({ preferFreeGrok: false });
         scheduleSettingsPersist();
       },
       setUiTheme: (t) => {
@@ -5354,6 +5359,11 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
                     : 8;
             let hostNudges = 0;
             const maxHostNudges = 5;
+            const jobKind = detectJobKind(trimmed, {
+              hostToolsEnabled: get().agentPrefs.hostToolsEnabled,
+            });
+            const jobContract = jobContractPrompt(jobKind);
+            let triedStrategies: LoopRetryStrategy[] = [];
             let finishNudges = 0;
             const maxFinishNudges =
               mode === "max" || routed === "max" || mode === "heavy" || routed === "heavy"
@@ -5366,8 +5376,7 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
             if (get().agentPrefs.hostToolsEnabled) {
               history.push({
                 role: "user",
-                content:
-                  "SYSTEM REMINDER: For any local install/process/file/log question, emit HOST_CMD on its own line in the same reply. Announcing “running checks” without HOST_CMD is invalid.",
+                content: `SYSTEM REMINDER (job=${jobKind}): For any local install/process/file/log question, emit HOST_CMD on its own line in the same reply. Announcing “running checks” without HOST_CMD is invalid. Follow the job contract.`,
               });
             }
 
@@ -5422,6 +5431,7 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
             const turnWorkspaceContext =
               [
                 ctxBuilt.workspaceContext,
+                `## Job contract (${jobKind})\n${jobContract}`,
                 capabilityBlock,
                 proactiveBlock,
                 !stTurn.agentPrefs?.hostToolsEnabled
@@ -5703,13 +5713,27 @@ while (rounds < maxRounds && !aborted) {
                     history.push({ role: "assistant", content: full });
                     history.push({
                       role: "user",
-                      content: buildAutoFinishNudge({
-                        round: finishNudges,
-                        maxRounds: maxFinishNudges,
-                        userPrompt: trimmed,
-                        lastAssistant: candidate,
-                        hostAvailable: Boolean(get().agentPrefs.hostToolsEnabled),
-                      }),
+                      content: (() => {
+                        triedStrategies = [
+                          ...new Set([
+                            ...triedStrategies,
+                            ...detectTriedStrategies(candidate, []),
+                          ]),
+                        ];
+                        if (finishNudges >= 2) {
+                          return buildChangedRetryNudge(finishNudges, triedStrategies, {
+                            userPrompt: trimmed,
+                            hostAvailable: Boolean(get().agentPrefs.hostToolsEnabled),
+                          });
+                        }
+                        return buildAutoFinishNudge({
+                          round: finishNudges,
+                          maxRounds: maxFinishNudges,
+                          userPrompt: trimmed,
+                          lastAssistant: candidate,
+                          hostAvailable: Boolean(get().agentPrefs.hostToolsEnabled),
+                        });
+                      })(),
                     });
                     set({
                       streamStatus: `Auto-finish ${finishNudges}/${maxFinishNudges} — completing goal…`,
@@ -6137,14 +6161,13 @@ if (!cmds.length) {
                 }
                 if (aborted) break;
 
-                const toolBlock = [
-                  "HOST_RESULT (authoritative — use this, do not invent files):",
-                  outputs.join("\n\n---\n\n"),
-                  "",
-                  "Summarize these results for the user in plain language.",
-                  "If a scan timed out or was truncated, say so and suggest a narrower path.",
-                  "Do not output HOST_CMD again unless you still need a different command.",
-                ].join("\n");
+                const iso = isolateHostResultsForModel(outputs, 4500);
+                const toolBlock = iso.modelBlock;
+                if (iso.isolated) {
+                  set({
+                    streamStatus: `Host results compressed for context (${Math.round(iso.totalRaw / 1024)} KB raw)…`,
+                  });
+                }
 
                 history.push({ role: "assistant", content: full });
                 history.push({ role: "user", content: toolBlock });
@@ -6169,8 +6192,8 @@ if (!cmds.length) {
                 friendlyAssistantError(err),
                 "",
                 hasOauth
-                  ? "Your OAuth session is saved. Try reconnecting OAuth, paste an xAI API key, or Link Grok website for free-tier chat."
-                  : "Fix: Link Grok website (free), Connect with Grok OAuth, or paste an xAI API key (console.x.ai free credits).",
+                  ? "Your OAuth session is saved. Try reconnecting OAuth or paste an xAI API key in Settings."
+                  : "Fix: Connect with Grok OAuth or paste an xAI API key in Settings (console.x.ai).",
               ].join("\n");
               set({
                 grokConnected: false,
@@ -7011,7 +7034,6 @@ if (!cmds.length) {
         quickAssistRotation: s.quickAssistRotation || 0,
         uiTheme: s.uiTheme || "dark",
         toolsNavCollapsed: Boolean(s.toolsNavCollapsed),
-        preferFreeGrok: false,
         setupSyncMeta: s.setupSyncMeta || { autoPullOnLogin: true, autoPushOnChange: false },
         // Restore last tab (connectors removed — remapped on hydrate)
         nav:
@@ -7198,7 +7220,6 @@ if (!cmds.length) {
         s.desktop = desk;
 
         if (!s.setupSyncMeta) s.setupSyncMeta = { autoPullOnLogin: true, autoPushOnChange: false };
-        s.preferFreeGrok = false; // free Grok product surface removed
         if (s.uiTheme !== "dark" && s.uiTheme !== "light" && s.uiTheme !== "system") s.uiTheme = "dark";
         if (s.toolsNavCollapsed === undefined) s.toolsNavCollapsed = false;
         // Drop website-only connector catalog (Gmail, Notion, …) — keep core three

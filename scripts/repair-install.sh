@@ -1,82 +1,40 @@
 #!/usr/bin/env bash
-# Repair a broken GrokHub install without wiping user data.
-#   ./scripts/repair-install.sh --user   # ~/.local (default when not root)
-#   sudo ./scripts/repair-install.sh     # /usr system install
+# Repair GrokHub without wiping user data.
+#   ./scripts/repair-install.sh --user   (default when not root)
+#   sudo ./scripts/repair-install.sh --system
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-
 USER_MODE=0
 for arg in "$@"; do
   case "$arg" in
     --user|-u) USER_MODE=1 ;;
     --system) USER_MODE=0 ;;
-    --help|-h)
-      echo "Usage: $0 [--user|--system]"
-      echo "  --user   repair ~/.local/lib/grokhub (no root) [default if not root]"
-      echo "  --system repair /usr/lib/grokhub (needs root/sudo)"
-      exit 0
-      ;;
+    --help|-h) echo "Usage: $0 [--user|--system]"; exit 0 ;;
   esac
 done
-
-# Default to user when not root
-if [[ "$(id -u)" -ne 0 && "$USER_MODE" -eq 0 ]]; then
-  # only force user if --system wasn't asked; if no flags and not root → user
-  if [[ "$#" -eq 0 ]]; then
-    USER_MODE=1
-  fi
-fi
-
-echo "==> GrokHub repair install"
-echo "    Source: $ROOT"
-echo "    User data (~/.config/GrokHub) is NOT modified"
-echo "    Mode: $([[ "$USER_MODE" -eq 1 ]] && echo user || echo system)"
-
-if [[ ! -d node_modules ]]; then
-  echo "==> npm install"
-  npm install --ignore-scripts || npm install
-fi
-
-echo "==> Building desktop UI"
-export GROKHUB_DESKTOP=1
-export NODE_ENV=production
+if [[ "$(id -u)" -ne 0 && "$#" -eq 0 ]]; then USER_MODE=1; fi
+echo "==> GrokHub repair ($([[ $USER_MODE -eq 1 ]] && echo user || echo system))"
+[[ -d node_modules ]] || npm install --ignore-scripts || npm install
+export GROKHUB_DESKTOP=1 NODE_ENV=production
 npm run desktop:build
-
-if [[ ! -f .output/server/index.mjs ]]; then
-  echo "error: build failed — missing .output/server/index.mjs" >&2
-  exit 1
-fi
-
+[[ -f .output/server/index.mjs ]] || { echo "build failed" >&2; exit 1; }
 if [[ "$USER_MODE" -eq 1 ]]; then
-  echo "==> Installing to ~/.local (user)"
   bash "$ROOT/scripts/install-arch.sh" --user
   bash "$ROOT/scripts/sync-user-integration.sh" || true
 else
-  if [[ "$(id -u)" -eq 0 ]]; then
-    echo "==> Installing to /usr (root)"
-    bash "$ROOT/scripts/install-arch.sh"
-  else
-    echo "==> Installing to /usr (needs sudo)"
-    sudo bash "$ROOT/scripts/install-arch.sh"
-  fi
+  if [[ "$(id -u)" -eq 0 ]]; then bash "$ROOT/scripts/install-arch.sh"
+  else sudo bash "$ROOT/scripts/install-arch.sh"; fi
 fi
-
-# Clear stale UI pid (never fuser -k — that kills unrelated processes on the port)
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}/grokhub"
 if [[ -f "$RUNTIME/ui.pid" ]]; then
   old="$(tr -d ' \n\0' <"$RUNTIME/ui.pid" 2>/dev/null || true)"
   if [[ -n "${old:-}" ]] && kill -0 "$old" 2>/dev/null; then
     cmd="$(tr '\0' ' ' <"/proc/$old/cmdline" 2>/dev/null || true)"
     if [[ "$cmd" == *node* && ( "$cmd" == *".output/server"* || "$cmd" == *"index.mjs"* ) ]]; then
-      kill "$old" 2>/dev/null || true
-      sleep 0.2
-      kill -9 "$old" 2>/dev/null || true
+      kill "$old" 2>/dev/null || true; sleep 0.2; kill -9 "$old" 2>/dev/null || true
     fi
   fi
 fi
 rm -f "$RUNTIME/ui.pid" "$RUNTIME/ui.lock" 2>/dev/null || true
-
-echo ""
 echo "Repair complete. Launch: grokhub"
-echo "If the window is still blank: tail -n 50 ${RUNTIME}/ui.log"

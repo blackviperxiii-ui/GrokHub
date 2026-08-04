@@ -12,7 +12,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "1.1.5";
+const APP_VERSION = "1.1.6";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -1513,12 +1513,14 @@ async function applyUpdate(opts = {}) {
           } catch {}
         }
         installResult = await installStagedTree(stageRoot, targetRoot, steps);
-      try {
-        const hy = cleanInstallOutput(targetRoot);
-        if (hy.ok) steps.push(`Output hygiene: ${hy.detail}`);
-      } catch (e) {
-        steps.push(`Output hygiene skipped: ${e instanceof Error ? e.message : e}`);
-      }
+        try {
+          const hy = cleanInstallOutput(targetRoot);
+          if (hy.ok) steps.push(`Output hygiene: ${hy.detail}`);
+        } catch (hyErr) {
+          steps.push(
+            `Output hygiene skipped: ${hyErr instanceof Error ? hyErr.message : hyErr}`,
+          );
+        }
         steps.push(`User install ready: ${targetRoot}`);
         steps.push("Launch with: GROKHUB_HOME=" + targetRoot + " grokhub");
         syncUserIntegration(targetRoot, steps);
@@ -1531,16 +1533,13 @@ async function applyUpdate(opts = {}) {
     try {
       await fs.stat(path.join(targetRoot, ".output", "server", "index.mjs"));
       steps.push("Verified .output/server/index.mjs");
-    // Keep ~/.local/bin/grokhub + menu entry in sync (user installs)
-    if (!isSystemInstall(targetRoot)) {
-      syncUserIntegration(targetRoot, steps);
-    }
-
+      if (!isSystemInstall(targetRoot)) {
+        syncUserIntegration(targetRoot, steps);
+      }
     } catch {
       steps.push("Warning: .output/server/index.mjs missing after update");
     }
 
-    // Never run install-arch.sh mid-session — it reinstalls packages while UI is half-down.
     steps.push("Skipped install-arch.sh (use repair-install offline if needed)");
 
     let status;
@@ -1552,7 +1551,6 @@ async function applyUpdate(opts = {}) {
         status.currentVersion = newVersion;
         status.detail = `Up to date · v${newVersion} · ${String(newSha).slice(0, 12)}`;
       }
-      // If we fell back to user local, report that path
       status.installRoot = targetRoot;
     } catch {}
 

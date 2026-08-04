@@ -2,7 +2,38 @@
  * Grok website SSO session + usage fetch for Electron main.
  * Uses a persistent partition so login cookies stick and API calls reuse them.
  */
-const { BrowserWindow, session, shell } = require("electron");
+let _electron = null;
+function electronApi() {
+  if (_electron) return _electron;
+  try { _electron = require("electron"); } catch { _electron = null; }
+  return _electron;
+}
+const getElectron = () => {
+  const el = electronApi();
+  if (!el) throw new Error("Electron unavailable (desktop only)");
+  return el;
+};
+const BrowserWindow = new Proxy(function () {}, {
+  construct(_t, args) {
+    return new (getElectron().BrowserWindow)(...args);
+  },
+});
+const session = new Proxy(
+  {},
+  {
+    get(_t, prop) {
+      return getElectron().session[prop];
+    },
+  },
+);
+const shell = new Proxy(
+  {},
+  {
+    get(_t, prop) {
+      return getElectron().shell[prop];
+    },
+  },
+);
 
 const PARTITION = "persist:grokhub-grok-web";
 const CREDITS_URL =

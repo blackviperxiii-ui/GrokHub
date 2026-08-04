@@ -2,7 +2,7 @@
 
 > **Scope:** GrokHub **Linux desktop** (Arch/CachyOS + Electron). Windows is a separate repository.
 
-**v1.1.5** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v1.1.6** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
 Adaptive modes · Imagine · skills · automations · setup sync · unsandboxed desktop host (CLI · files · apps).
 
@@ -20,7 +20,7 @@ Durable **agent job queue**, autonomy levels (0 Assist → 4 Goal mode), tray Pa
 |------|----------|
 | 0 Assist | Chat; tools when asked |
 | 1 Supervised | Default — tools with confirm |
-| 2 Semi-auto | Queue when busy |
+| 2 Semi-auto | Light proactive housekeeping |
 | 3 Always-on | Auto-claim workboard; tray approvals |
 | 4 Goal mode | Multi-step resume with budgets |
 
@@ -34,7 +34,7 @@ cp packaging/systemd/grokhub-agent.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now grokhub-agent.service
 ```
 
-UI: **Queue** sidebar · **Settings → Autonomy**. Website connectors stay status-only until native OAuth invoke.
+UI: **Settings → Autonomy**. Optional agent: `./scripts/sync-user-integration.sh --agent --now`.
 
 
 

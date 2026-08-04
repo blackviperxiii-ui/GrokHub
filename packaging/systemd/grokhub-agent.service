@@ -1,12 +1,10 @@
 [Unit]
 Description=GrokHub always-on agent core
-Documentation=file://%h/.local/lib/grokhub/packaging/systemd/README.md
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
 Type=simple
-# Prefer user install launcher. HOME is set by systemd --user.
 WorkingDirectory=%h/.local/lib/grokhub
 ExecStart=%h/.local/bin/grokhub --agent
 Restart=on-failure
