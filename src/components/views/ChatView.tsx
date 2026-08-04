@@ -1623,14 +1623,40 @@ export function ChatView() {
 
             {!busy && (
               <div className="mx-auto w-full max-w-[min(56rem,100%)] 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]">
-                <div className="mb-1 flex items-center justify-center gap-2">
+                <div className="mb-1 flex flex-wrap items-center justify-center gap-2">
+                  {/* Live predictive primary — updates as you type */}
+                  {!chipsOpen && chips[0] ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      title={
+                        chips[0].hint
+                          ? `${chips[0].hint}\n\n${chips[0].value.slice(0, 180)}`
+                          : chips[0].value.slice(0, 180)
+                      }
+                      onClick={() => void onChip(chips[0]!)}
+                      className="inline-flex max-w-[min(100%,30rem)] items-center gap-1.5 rounded-full border border-[color-mix(in_oklab,var(--color-accent)_40%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-accent)_8%,var(--color-surface))] px-3 py-1 text-[11px] font-medium text-[var(--color-fg)] shadow-sm hover:border-[var(--color-accent)] disabled:opacity-50"
+                    >
+                      <Sparkles className="h-3 w-3 shrink-0 text-[var(--color-accent)]" />
+                      <span className="truncate">{chips[0].label}</span>
+                      {text.trim().length >= 2 ? (
+                        <span className="shrink-0 rounded-full bg-[var(--color-elevated)] px-1.5 text-[9px] font-normal text-[var(--color-subtle)]">
+                          as you type
+                        </span>
+                      ) : chips[0].hint?.toLowerCase().includes("predict") ? (
+                        <span className="shrink-0 rounded-full bg-[var(--color-elevated)] px-1.5 text-[9px] font-normal text-[var(--color-subtle)]">
+                          predicted
+                        </span>
+                      ) : null}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => setChipsOpen((v) => !v)}
                     className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] text-[var(--color-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]"
                   >
                     <Sparkles className="h-3 w-3" />
-                    {chipsOpen ? "Hide suggestions" : "Suggestions"}
+                    {chipsOpen ? "Hide" : chips[0] ? "More" : "Suggestions"}
                     {chips.length > 0 ? (
                       <span className="rounded-full bg-[var(--color-elevated)] px-1.5 font-mono text-[10px]">
                         {chips.length}

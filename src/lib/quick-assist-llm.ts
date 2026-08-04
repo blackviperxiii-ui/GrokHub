@@ -55,6 +55,8 @@ export function buildChipSuggestPrompt(opts: {
     "- label: short, action-first (e.g. Fix this bug, Add tests, Next step)",
     "- value: a concrete instruction the user would send (1–2 sentences max)",
     "- Prefer next steps grounded in the transcript (not generic tips)",
+    "- Predict what the user will want NEXT, not a recap of what already happened",
+    "- If user is mid-typing (draft shown), align chips with that draft",
     "- If code present → review/optimize/test style chips",
     "- If errors → diagnose/fix/verify chips",
     "- If host/tools → one shell-oriented chat chip is OK (kind chat, not raw $ unless clear)",
@@ -155,5 +157,8 @@ export function contextFingerprint(
   if (c.imagine) bits.push("imagine");
   if (c.error) bits.push("error");
   if (c.ui) bits.push("ui");
+  if (c.decide) bits.push("decide");
+  if (c.implement) bits.push("impl");
+  if (c.incomplete) bits.push("todo");
   return bits.join("+") || "default";
 }

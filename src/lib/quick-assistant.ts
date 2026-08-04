@@ -1,6 +1,6 @@
 /**
  * Predictive quick-assistant chips for the Agent composer.
- * Stage-aware · last-message targeted · draft predictive · habit + success learning.
+ * Stage-aware · last-message · draft/intent predictive · habit transitions · success learning.
  */
 import type {
   ActivityItem,
@@ -16,6 +16,12 @@ import {
   memoryBoostForContext,
   type QuickAssistMemory,
 } from "./quick-assist-memory";
+import {
+  applyIntentBoost,
+  applyPredictiveDraftBoost,
+  collectPredictiveChips,
+  topIntentLabel,
+} from "./quick-assist-predict";
 
 export type QuickChipKind = "chat" | "shell" | "nav" | "mode";
 
@@ -56,7 +62,7 @@ export type QuickAssistantInput = {
 };
 
 /** Visible default — keep the dock clean; hard cap still 10 for refresh packs */
-const MAX_DEFAULT = 4;
+const MAX_DEFAULT = 5;
 const MAX_HARD = 8;
 
 export type ChipStage =
@@ -145,6 +151,9 @@ export function detectChipContext(chat: ChatMessage[]): {
   imagine: boolean;
   error: boolean;
   ui: boolean;
+  decide: boolean;
+  implement: boolean;
+  incomplete: boolean;
 } {
   const users = recentUserMessages(chat, 6).join("\n");
   const asst = lastAssistant(chat);
@@ -161,7 +170,7 @@ export function detectChipContext(chat: ChatMessage[]): {
       blob,
     ) || /improve (the )?ui|fix this bug|add feature/i.test(blob);
   const host =
-    /\$ |HOST_CMD|desktop host|shell|uname|ls -|filesystem|cli|journalctl/i.test(blob);
+    /\$ |HOST_CMD|desktop host|shell|uname|ls -|filesystem|cli|journalctl|ps aux/i.test(blob);
   const imagine =
     /\b(imagine|image|generate (a |an )?(pic|image|logo|icon)|draw |video)\b/i.test(blob);
   const error =
@@ -172,7 +181,21 @@ export function detectChipContext(chat: ChatMessage[]): {
     /\b(ui|layout|button|input|sidebar|theme|dark mode|spacing|scrollbar|modal|chip)\b/i.test(
       blob,
     );
-  return { code, app, host, imagine, error, ui };
+  const decide =
+    /\b(should i|which|options?|tradeoff|recommend|compare|vs\.?|better)\b/i.test(blob);
+  const implement =
+    /\b(implement|add |build |create |wire |ship |write the|patch|apply)\b/i.test(users);
+  const incomplete =
+    /\b(i('ll| will)|let me|next i|continuing|in progress|still need|want me to|shall i)\b/i.test(
+      asst,
+    ) ||
+    (
+      !/HOST_CMD\s*:/i.test(asst) &&
+      /\b(check|probe|investigate|scan|look at)\b/i.test(asst) &&
+      asst.length > 0 &&
+      asst.length < 600
+    );
+  return { code, app, host, imagine, error, ui, decide, implement, incomplete };
 }
 
 export function detectChipStage(
@@ -279,7 +302,7 @@ export function chipsFromLastAssistant(chat: ChatMessage[]): QuickChip[] {
   if (hasHost || isPlan) {
     out.push({
       id: "last-run-host",
-      label: "Run diagnostics now",
+      label: isPlan ? "Finish — run tools now" : "Run diagnostics now",
       value: [
         "Don't just plan — actually investigate my machine now.",
         "Emit HOST_CMD lines for safe read-only checks (uname, paths, processes).",
@@ -287,7 +310,9 @@ export function chipsFromLastAssistant(chat: ChatMessage[]): QuickChip[] {
       ].join(" "),
       kind: "chat",
       score: 97,
-      hint: "Because the last reply planned work without tools",
+      hint: isPlan
+        ? "Predicted: you need action, not another plan"
+        : "Because the last reply planned work without tools",
     });
   }
 
@@ -845,8 +870,51 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
     });
   }
 
-  // ── Last-assistant targeting (biggest win) ────────────────────────────
+  // ── Predictive pool (draft / habits / transitions / activity) ─────────
+  const { chips: predicted, intents } = collectPredictiveChips({
+    chat: input.chat,
+    draft: input.draft,
+    activity: input.activity,
+    memory: input.memory,
+  });
+  chips.push(...predicted);
+
+  // ── Last-assistant targeting ──────────────────────────────────────────
   chips.push(...chipsFromLastAssistant(input.chat));
+
+  if (ctx.incomplete) {
+    chips.push({
+      id: "ctx-incomplete",
+      label: "Finish the job",
+      value:
+        "Finish the incomplete work from your last reply. Act now (HOST_CMD if needed). End with status.",
+      kind: "chat",
+      score: 96,
+      hint: "Predicted incomplete turn",
+    });
+  }
+  if (ctx.decide) {
+    chips.push({
+      id: "ctx-decide",
+      label: "Recommend & do",
+      value:
+        "Recommend the best option for my setup and take the first concrete step.",
+      kind: "chat",
+      score: 89,
+      hint: "Decision context",
+    });
+  }
+  if (ctx.implement) {
+    chips.push({
+      id: "ctx-implement",
+      label: "Implement it",
+      value:
+        "Implement the requested change as a minimal solid slice. Inspect files if needed, then apply.",
+      kind: "chat",
+      score: 91,
+      hint: "Implement context",
+    });
+  }
 
   // ── Stage packs ───────────────────────────────────────────────────────
   chips.push(...stageChips(stage, lastUser, plan.label));
@@ -945,15 +1013,23 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
       .sort((a, b) => b.score - a.score);
   }
 
-  // ── Draft predictive re-rank ──────────────────────────────────────────
+  // ── Intent boost (trajectory prediction) ──────────────────────────────
+  ranked = applyIntentBoost(ranked, intents);
+
+  // ── Draft predictive re-rank (strong while typing) ────────────────────
   if (draft.length >= 1) {
-    ranked = applyDraftBoost(ranked, draft);
-    // Soft filter only when draft is meaningful
+    ranked = applyPredictiveDraftBoost(ranked, draft, intents);
+    // Legacy soft token boost for very short drafts
+    if (draft.length > 0 && draft.length < 4) {
+      ranked = applyDraftBoost(ranked, draft);
+    }
+    // Soft filter — keep high-confidence predictions even if wording differs
     if (draft.length >= 2) {
       const filtered = ranked.filter((c) => {
-        const hay = `${c.label} ${c.value}`.toLowerCase();
+        const hay = `${c.label} ${c.value} ${c.hint || ""}`.toLowerCase();
         return (
-          c.score >= 90 ||
+          c.score >= 85 ||
+          c.id.startsWith("pred-") ||
           hay.includes(draft) ||
           draft.split(/\s+/).some((tok) => tok.length > 2 && hay.includes(tok)) ||
           c.kind === "nav" ||
@@ -964,6 +1040,15 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
     }
   }
 
+  // Mid-thread: prefer chat actions over nav chrome
+  if (stage !== "empty" && input.chat.length >= 2) {
+    ranked = ranked
+      .map((c) =>
+        c.kind === "nav" || c.kind === "mode" ? { ...c, score: c.score - 16 } : c,
+      )
+      .sort((a, b) => b.score - a.score);
+  }
+
   // ── Mix kinds · pick top N · mark primary ─────────────────────────────
   const picked: QuickChip[] = [];
   const kindCount: Record<string, number> = {};
@@ -971,9 +1056,9 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
     if (picked.length >= max) break;
     const k = c.kind;
     const n = kindCount[k] || 0;
-    if (k === "shell" && n >= 1 && max <= 4) continue;
+    if (k === "shell" && n >= 1 && max <= 5) continue;
     if (k === "shell" && n >= 2) continue;
-    if (k === "nav" && n >= 1 && max <= 4) continue;
+    if (k === "nav" && n >= 1 && max <= 5 && stage !== "empty") continue;
     if (k === "nav" && n >= 2) continue;
     if (k === "mode" && n >= 1) continue;
     picked.push(c);
@@ -989,16 +1074,18 @@ export function buildQuickChips(input: QuickAssistantInput): QuickChip[] {
   }
 
   const final = picked.slice(0, max);
+  const intentHint = topIntentLabel(intents);
   if (final[0]) {
     final[0] = {
       ...final[0],
       primary: true,
-      // Ensure primary has a useful hint
       hint:
         final[0].hint ||
-        (stage === "empty"
-          ? "Best next step for a new chat"
-          : "Highest-ranked next action"),
+        (intentHint
+          ? `Predicted next: ${intentHint}`
+          : stage === "empty"
+            ? "Best next step for a new chat"
+            : "Highest-ranked next action"),
     };
   }
   return final;
