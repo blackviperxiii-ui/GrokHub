@@ -12,7 +12,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "1.1.4";
+const APP_VERSION = "1.1.5";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -134,6 +134,58 @@ async function stopUiServer(steps) {
  * Relaunch after a clean exit. Never mutates files here — only starts a fresh process
  * once the old Electron has quit.
  */
+
+/** After user install / update: ensure ~/.local/bin/grokhub + app menu point at this tree. */
+function syncUserIntegration(targetRoot, steps) {
+  const fss = require("node:fs");
+  try {
+    const homeDir = process.env.HOME || os.homedir() || "";
+    if (!homeDir) {
+      steps.push("User integration skip: HOME not set");
+      return;
+    }
+    const binDir = path.join(homeDir, ".local", "bin");
+    const bin = path.join(binDir, "grokhub");
+    fss.mkdirSync(binDir, { recursive: true });
+    const launcherSrc = path.join(targetRoot, "packaging", "aur", "grokhub.sh");
+    if (fss.existsSync(launcherSrc)) {
+      fss.copyFileSync(launcherSrc, bin);
+      fss.chmodSync(bin, 0o755);
+      steps.push(`User launcher: ${bin}`);
+    } else {
+      const body =
+        "#!/bin/bash\n" +
+        `export GROKHUB_HOME=${JSON.stringify(targetRoot)}\n` +
+        `export HOME="\${HOME:-${homeDir}}"\n` +
+        `exec electron --class=grokhub --name=grokhub ${JSON.stringify(path.join(targetRoot, "desktop/main.mjs"))} "$@"\n`;
+      fss.writeFileSync(bin, body, { mode: 0o755 });
+      steps.push(`User launcher (wrapper): ${bin}`);
+    }
+    try {
+      const alias = path.join(binDir, "grokhub-user");
+      fss.writeFileSync(
+        alias,
+        "#!/bin/bash\n" +
+          `export GROKHUB_HOME=${JSON.stringify(targetRoot)}\n` +
+          `exec ${JSON.stringify(bin)} "$@"\n`,
+        { mode: 0o755 },
+      );
+    } catch {
+      /* ignore */
+    }
+    try {
+      const de = require("./desktop-entry.cjs");
+      const r = de.installMenuEntry({ exec: bin });
+      if (r && r.ok) steps.push(`Desktop menu: ${r.path}`);
+      else steps.push(`Desktop menu: ${(r && r.error) || "skipped"}`);
+    } catch (e) {
+      steps.push(`Desktop menu skipped: ${e instanceof Error ? e.message : e}`);
+    }
+  } catch (e) {
+    steps.push(`User integration failed: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
 function scheduleAppRestart(appRoot) {
   const { spawn } = require("node:child_process");
   const port = process.env.GROKHUB_PORT || "18765";
@@ -1469,18 +1521,7 @@ async function applyUpdate(opts = {}) {
       }
         steps.push(`User install ready: ${targetRoot}`);
         steps.push("Launch with: GROKHUB_HOME=" + targetRoot + " grokhub");
-        // Best-effort user launcher
-        try {
-          const binDir = path.join(os.homedir(), ".local", "bin");
-          await fs.mkdir(binDir, { recursive: true });
-          const launcher = path.join(binDir, "grokhub-user");
-          await fs.writeFile(
-            launcher,
-            `#!/bin/bash\nexport GROKHUB_HOME=${JSON.stringify(targetRoot)}\nexec ${JSON.stringify(path.join(targetRoot, "packaging/aur/grokhub.sh"))} "$@" 2>/dev/null || exec electron ${JSON.stringify(path.join(targetRoot, "desktop/main.mjs"))} "$@"\n`,
-            { mode: 0o755 },
-          );
-          steps.push(`User launcher: ${launcher}`);
-        } catch {}
+        syncUserIntegration(targetRoot, steps);
       } else {
         throw e;
       }
@@ -1490,6 +1531,11 @@ async function applyUpdate(opts = {}) {
     try {
       await fs.stat(path.join(targetRoot, ".output", "server", "index.mjs"));
       steps.push("Verified .output/server/index.mjs");
+    // Keep ~/.local/bin/grokhub + menu entry in sync (user installs)
+    if (!isSystemInstall(targetRoot)) {
+      syncUserIntegration(targetRoot, steps);
+    }
+
     } catch {
       steps.push("Warning: .output/server/index.mjs missing after update");
     }

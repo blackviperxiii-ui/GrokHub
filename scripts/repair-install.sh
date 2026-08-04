@@ -1,13 +1,37 @@
 #!/usr/bin/env bash
-# Repair a broken GrokHub system install without wiping user data.
-# Rebuilds .output + reinstalls /usr/lib/grokhub desktop shell.
+# Repair a broken GrokHub install without wiping user data.
+#   ./scripts/repair-install.sh --user   # ~/.local (default when not root)
+#   sudo ./scripts/repair-install.sh     # /usr system install
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+USER_MODE=0
+for arg in "$@"; do
+  case "$arg" in
+    --user|-u) USER_MODE=1 ;;
+    --system) USER_MODE=0 ;;
+    --help|-h)
+      echo "Usage: $0 [--user|--system]"
+      echo "  --user   repair ~/.local/lib/grokhub (no root) [default if not root]"
+      echo "  --system repair /usr/lib/grokhub (needs root/sudo)"
+      exit 0
+      ;;
+  esac
+done
+
+# Default to user when not root
+if [[ "$(id -u)" -ne 0 && "$USER_MODE" -eq 0 ]]; then
+  # only force user if --system wasn't asked; if no flags and not root → user
+  if [[ "$#" -eq 0 ]]; then
+    USER_MODE=1
+  fi
+fi
+
 echo "==> GrokHub repair install"
 echo "    Source: $ROOT"
 echo "    User data (~/.config/GrokHub) is NOT modified"
+echo "    Mode: $([[ "$USER_MODE" -eq 1 ]] && echo user || echo system)"
 
 if [[ ! -d node_modules ]]; then
   echo "==> npm install"
@@ -24,12 +48,18 @@ if [[ ! -f .output/server/index.mjs ]]; then
   exit 1
 fi
 
-if [[ "$(id -u)" -eq 0 ]]; then
-  echo "==> Installing to /usr (root)"
-  bash "$ROOT/scripts/install-arch.sh"
+if [[ "$USER_MODE" -eq 1 ]]; then
+  echo "==> Installing to ~/.local (user)"
+  bash "$ROOT/scripts/install-arch.sh" --user
+  bash "$ROOT/scripts/sync-user-integration.sh" || true
 else
-  echo "==> Installing to /usr (needs sudo)"
-  sudo bash "$ROOT/scripts/install-arch.sh"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    echo "==> Installing to /usr (root)"
+    bash "$ROOT/scripts/install-arch.sh"
+  else
+    echo "==> Installing to /usr (needs sudo)"
+    sudo bash "$ROOT/scripts/install-arch.sh"
+  fi
 fi
 
 # Clear stale UI pid (never fuser -k — that kills unrelated processes on the port)

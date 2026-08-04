@@ -118,10 +118,14 @@ install -Dm755 "$ROOT/packaging/aur/grokhub.sh" "$BIN"
 # Desktop entry with absolute Exec pointing at this install's launcher
 install -dm755 "$DESKTOP_DIR"
 if [[ -f "$ROOT/packaging/grokhub.desktop" ]]; then
-  # Rewrite Exec/TryExec to absolute user/system bin
-  sed -e "s|^Exec=.*|Exec=${BIN} %U|" \
+  # Rewrite every /usr/bin/grokhub (main + Desktop Actions) to this install's launcher
+  sed -e "s|/usr/bin/grokhub|${BIN}|g" \
       -e "s|^TryExec=.*|TryExec=${BIN}|" \
       "$ROOT/packaging/grokhub.desktop" >"${DESKTOP_DIR}/grokhub.desktop"
+  # Ensure main Exec has %U once
+  if ! grep -q '^Exec=.*%U' "${DESKTOP_DIR}/grokhub.desktop"; then
+    sed -i "0,/^Exec=/s|^Exec=.*|Exec=${BIN} %U|" "${DESKTOP_DIR}/grokhub.desktop"
+  fi
   chmod 644 "${DESKTOP_DIR}/grokhub.desktop"
 else
   cat >"${DESKTOP_DIR}/grokhub.desktop" <<EOF
@@ -180,6 +184,11 @@ if [[ "$USER_MODE" -eq 1 ]]; then
   fi
 fi
 
+# Sync menu/actions again (covers Desktop Action Exec lines)
+if [[ "$USER_MODE" -eq 1 && -x "$ROOT/scripts/sync-user-integration.sh" ]]; then
+  bash "$ROOT/scripts/sync-user-integration.sh" || true
+fi
+
 cat <<EOF
 
 GrokHub installed.
@@ -191,5 +200,10 @@ GrokHub installed.
 
 Run:  grokhub
       # or: GROKHUB_HOME=${APP_LIB} ${BIN}
+
+Optional always-on agent (systemd --user):
+  bash $ROOT/scripts/sync-user-integration.sh --agent --now
+
+Note: the standalone xAI CLI under ~/.grok is NOT GrokHub (command: grok ≠ grokhub).
 
 EOF

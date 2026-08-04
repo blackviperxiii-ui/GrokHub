@@ -47,6 +47,16 @@ pick_app_root() {
 APP_ROOT="$(pick_app_root)"
 export GROKHUB_HOME="$APP_ROOT"
 
+# Standalone xAI CLI (~/.grok/downloads/grok-*) is NOT this app.
+# If you see a high-CPU process named "grok", that is usually the CLI, not GrokHub.
+if [[ -d "${HOME}/.grok/downloads" ]] && command -v grok >/dev/null 2>&1; then
+  grok_path="$(command -v grok 2>/dev/null || true)"
+  if [[ "$grok_path" == *".grok"* ]]; then
+    log "note: PATH has standalone grok CLI at $grok_path (unrelated to GrokHub)"
+  fi
+fi
+
+
 # Dual-install safety: once a complete user install exists, never fall back to system
 # without an explicit override. Pin choice for desktop entries / repair scripts.
 INSTALL_PIN="${XDG_CONFIG_HOME:-$HOME/.config}/GrokHub/install-source"

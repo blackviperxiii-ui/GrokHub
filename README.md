@@ -2,7 +2,7 @@
 
 > **Scope:** GrokHub **Linux desktop** (Arch/CachyOS + Electron). Windows is a separate repository.
 
-**v1.1.4** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v1.1.5** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
 Adaptive modes · Imagine · skills · automations · setup sync · unsandboxed desktop host (CLI · files · apps).
 
@@ -76,6 +76,36 @@ sudo rm -rf /usr/lib/grokhub /usr/bin/grokhub
 ```
 
 User data stays in `~/.config/GrokHub` either way.
+
+
+## User install integration (desktop + optional agent)
+
+After a user install or in-app update, keep launcher + app menu in sync:
+
+```bash
+# From ~/.local/lib/grokhub or a repo checkout:
+./scripts/sync-user-integration.sh
+
+# Optional always-on agent (tray / background — not required for chat):
+./scripts/sync-user-integration.sh --agent --now
+```
+
+| Path | Role |
+|------|------|
+| `~/.local/bin/grokhub` | Launcher (this is **GrokHub**) |
+| `~/.local/share/applications/grokhub.desktop` | App menu + taskbar pin target |
+| `~/.config/systemd/user/grokhub-agent.service` | Optional always-on agent |
+
+### Not the same as `~/.grok`
+
+The standalone **xAI `grok` CLI** (often under `~/.grok/downloads/`) is a **different product**.  
+GrokHub never installs a binary named `grok`. A high-CPU process named `grok` is almost never GrokHub.
+
+```bash
+# Optional cleanup of old standalone CLI downloads (only if you do not use that CLI):
+# rm -rf ~/.grok/downloads/grok-*
+```
+
 
 ## Install — Arch Linux / CachyOS
 

@@ -1,16 +1,19 @@
 [Unit]
 Description=GrokHub always-on agent core
+Documentation=file://%h/.local/lib/grokhub/packaging/systemd/README.md
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
 Type=simple
-# Prefer user install; fall back to system
-ExecStart=/bin/sh -c 'if [ -x "$HOME/.local/bin/grokhub" ]; then exec "$HOME/.local/bin/grokhub" --agent; elif [ -x /usr/bin/grokhub ]; then exec /usr/bin/grokhub --agent; else exec grokhub --agent; fi'
+# Prefer user install launcher. HOME is set by systemd --user.
+WorkingDirectory=%h/.local/lib/grokhub
+ExecStart=%h/.local/bin/grokhub --agent
 Restart=on-failure
 RestartSec=5
 Environment=GROKHUB_AGENT=1
 Environment=GROKHUB_TRAY=1
+Environment=GROKHUB_HOME=%h/.local/lib/grokhub
 
 [Install]
 WantedBy=default.target
