@@ -2,14 +2,36 @@
  * Persist Imagine images/videos under userData so they survive updates.
  * JSON memory only keeps metadata + relative paths; bytes live on disk.
  */
-const { app } = require("electron");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const os = require("node:os");
+
+function electronApp() {
+  try {
+    return require("electron").app;
+  } catch {
+    return null;
+  }
+}
+
+function userDataDir() {
+  const app = electronApp();
+  try {
+    if (app?.getPath) return app.getPath("userData");
+  } catch {
+    /* ignore */
+  }
+  const home = process.env.HOME || os.homedir() || "/tmp";
+  return path.join(
+    process.env.XDG_CONFIG_HOME || path.join(home, ".config"),
+    "GrokHub",
+  );
+}
 
 function rootDir() {
-  return path.join(app.getPath("userData"), "imagine-media");
+  return path.join(userDataDir(), "imagine-media");
 }
 
 function ensureRoot() {

@@ -2,16 +2,34 @@
  * Persistent app memory under Electron userData.
  * Survives restarts and in-place updates (updates never touch userData).
  */
-const { app } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
+
+function electronApp() {
+  try {
+    return require("electron").app;
+  } catch {
+    return null;
+  }
+}
 
 const STATE_FILE = "grokhub-memory.json";
 const BACKUP_FILE = "grokhub-memory.backup.json";
 const MAX_BYTES = 24 * 1024 * 1024; // 24MB safety cap
 
 function dir() {
-  return app.getPath("userData");
+  const app = electronApp();
+  try {
+    if (app?.getPath) return app.getPath("userData");
+  } catch {
+    /* not ready */
+  }
+  const home = process.env.HOME || os.homedir() || "/tmp";
+  return path.join(
+    process.env.XDG_CONFIG_HOME || path.join(home, ".config"),
+    "GrokHub",
+  );
 }
 
 function statePath() {

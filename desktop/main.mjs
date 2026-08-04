@@ -37,16 +37,40 @@ try {
     callXaiChat: async () => ({ ok: false }),
   };
 }
-const websiteSession = require("./website-session.cjs");
-const secretsStore = require("./secrets-store.cjs");
-const stateStore = require("./state-store.cjs");
-const imagineStore = require("./imagine-store.cjs");
-const selfMod = require("./self-mod.cjs");
-const memoryStore = require("./memory-store.cjs");
-const agentCore = require("./agent-core.cjs");
-const desktopEntry = require("./desktop-entry.cjs");
-const uiServer = require("./ui-server.cjs");
-const appLog = require("./log.cjs");
+function safeRequire(label, rel) {
+  try {
+    return require(rel);
+  } catch (e) {
+    console.error(`[GrokHub] failed to load ${label}:`, e && e.message ? e.message : e);
+    return null;
+  }
+}
+const websiteSession = safeRequire("website-session", "./website-session.cjs") || {};
+const secretsStore = safeRequire("secrets-store", "./secrets-store.cjs") || {
+  get: () => ({ value: "" }),
+  set: () => ({ ok: false }),
+  del: () => ({ ok: false }),
+};
+const stateStore = safeRequire("state-store", "./state-store.cjs") || {
+  get: () => ({ value: null }),
+  set: () => ({ ok: false }),
+};
+const imagineStore = safeRequire("imagine-store", "./imagine-store.cjs") || {};
+const selfMod = safeRequire("self-mod", "./self-mod.cjs") || {};
+const memoryStore = safeRequire("memory-store", "./memory-store.cjs") || {};
+const agentCore = safeRequire("agent-core", "./agent-core.cjs") || {
+  start: () => {},
+  stop: () => {},
+};
+const desktopEntry = safeRequire("desktop-entry", "./desktop-entry.cjs") || {
+  installMenuEntry: () => ({ ok: false }),
+  installAutostart: () => ({ ok: false }),
+  status: () => ({ ok: false }),
+};
+const uiServer = safeRequire("ui-server", "./ui-server.cjs") || {
+  resolveStartUrl: async () => ({ ok: false, url: "", error: "ui-server missing" }),
+};
+const appLog = safeRequire("log", "./log.cjs") || { info: () => {}, error: () => {} };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -198,6 +222,12 @@ process.on("unhandledRejection", (err) => {
 // Single instance: pin click while running focuses the existing window (no 2nd icon)
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
+  // Another live instance holds the lock — exit quietly so the first window focuses.
+  // If the app "won't open", a zombie may be holding the lock: kill leftover grokhub/electron.
+  console.error(
+    "[GrokHub] another instance holds the single-instance lock — exiting. " +
+      "If nothing is visible: pkill -f 'desktop/main.mjs' then relaunch.",
+  );
   app.exit(0);
 } else {
   app.on("second-instance", () => {

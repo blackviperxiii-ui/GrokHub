@@ -168,12 +168,18 @@ ui_up() {
 }
 
 ui_healthy() {
-  local body
-  body="$(curl -sf --max-time 2 "${URL}/" 2>/dev/null | tr -d '\0' || true)"
-  if [[ -z "$body" ]]; then
-    return 1
+  # HTTP 200 with real HTML is enough. Use grep -a (null bytes in SSR can make
+  # GNU grep treat the body as binary and fail the match → launcher exits, app never opens).
+  local code body
+  code="$(curl -s -o ${RUNTIME}/ui-health.body -w '%{http_code}' --max-time 2 "${URL}/" 2>/dev/null || echo 000)"
+  [[ "$code" == "200" ]] || return 1
+  body="$(tr -d '\0' <${RUNTIME}/ui-health.body 2>/dev/null || true)"
+  [[ -n "$body" && ${#body} -gt 200 ]] || return 1
+  if printf '%s' "$body" | grep -aqiE 'GrokHub|<!DOCTYPE html>|tanstack|/assets/|root'; then
+    return 0
   fi
-  printf '%s' "$body" | grep -qiE 'GrokHub|<!DOCTYPE html>|tanstack|/assets/'
+  # Accept large 200 HTML even if markers missing (build variants)
+  [[ ${#body} -gt 1500 ]]
 }
 
 start_ui() {
@@ -226,24 +232,26 @@ start_ui() {
   # Diagnostic mirror
   echo "[ui] $(date -Iseconds) pid=$(cat "$PIDFILE" 2>/dev/null) root=$APP_ROOT entry=$UI_ENTRY" >>/tmp/grokhub-ui-restart.log 2>/dev/null || true
 
-  for _ in $(seq 1 100); do
+  for _ in $(seq 1 150); do
     if ui_healthy; then
       log "UI healthy pid=$(cat "$PIDFILE" 2>/dev/null || echo '?')"
       return 0
     fi
-    sleep 0.15
+    sleep 0.2
   done
 
-  echo "error: UI failed health check — see $LOG" >&2
+  echo "warning: UI slow/unhealthy after start — see $LOG (continuing)" >&2
   tail -n 40 "$LOG" >&2 || true
-  exit 1
+  log "UI health timeout — continuing to Electron"
+  return 0
 }
 
 start_ui
 
 if ! ui_healthy; then
-  echo "error: GrokHub UI not healthy at ${URL}" >&2
-  exit 1
+  echo "warning: GrokHub UI not healthy at ${URL} — launching Electron anyway (UI may recover)" >&2
+  log "UI unhealthy at launch; continuing to Electron"
+  # do not exit 1 — blank/recoverable window is better than app refusing to open
 fi
 
 export GROKHUB_URL="$URL"

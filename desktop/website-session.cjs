@@ -2,38 +2,26 @@
  * Grok website SSO session + usage fetch for Electron main.
  * Uses a persistent partition so login cookies stick and API calls reuse them.
  */
-let _electron = null;
-function electronApi() {
-  if (_electron) return _electron;
-  try { _electron = require("electron"); } catch { _electron = null; }
-  return _electron;
+/**
+ * Lazy electron access. Methods are always called on the real electron
+ * objects (Proxy get traps lose `this` and break session.fromPartition).
+ */
+function el() {
+  try {
+    return require("electron");
+  } catch (e) {
+    throw new Error("Electron unavailable (desktop only): " + (e && e.message));
+  }
 }
-const getElectron = () => {
-  const el = electronApi();
-  if (!el) throw new Error("Electron unavailable (desktop only)");
-  return el;
-};
-const BrowserWindow = new Proxy(function () {}, {
-  construct(_t, args) {
-    return new (getElectron().BrowserWindow)(...args);
-  },
-});
-const session = new Proxy(
-  {},
-  {
-    get(_t, prop) {
-      return getElectron().session[prop];
-    },
-  },
-);
-const shell = new Proxy(
-  {},
-  {
-    get(_t, prop) {
-      return getElectron().shell[prop];
-    },
-  },
-);
+function BrowserWindowCtor() {
+  return el().BrowserWindow;
+}
+function sessionApi() {
+  return el().session;
+}
+function shellApi() {
+  return el().shell;
+}
 
 const PARTITION = "persist:grokhub-grok-web";
 const CREDITS_URL =
@@ -44,7 +32,7 @@ const CHROME_UA =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 function grokSession() {
-  return session.fromPartition(PARTITION);
+  return sessionApi().fromPartition(PARTITION);
 }
 
 function grpcWebFrame(payload) {
@@ -197,7 +185,7 @@ async function injectCookieHeader(raw) {
 function linkWebsiteSession() {
   return new Promise((resolve) => {
     const ses = grokSession();
-    const win = new BrowserWindow({
+    const win = new (BrowserWindowCtor())({
       width: 1100,
       height: 860,
       minWidth: 720,
@@ -331,7 +319,7 @@ function linkWebsiteSession() {
         win.loadURL(url);
         return { action: "deny" };
       }
-      shell.openExternal(url);
+      shellApi().openExternal(url);
       return { action: "deny" };
     });
 

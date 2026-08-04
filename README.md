@@ -2,7 +2,7 @@
 
 > **Scope:** GrokHub **Linux desktop** (Arch/CachyOS + Electron). Windows is a separate repository.
 
-**v1.1.6** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v1.1.7** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
 Adaptive modes · Imagine · skills · automations · setup sync · unsandboxed desktop host (CLI · files · apps).
 
