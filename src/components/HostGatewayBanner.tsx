@@ -124,7 +124,7 @@ export function HostGatewayBanner({ variant = "card", className, onOpenDesktop }
               setNav("settings");
             }}
           >
-            Desktop
+            Settings
           </Button>
         </div>
       </div>
@@ -162,7 +162,7 @@ export function HostGatewayBanner({ variant = "card", className, onOpenDesktop }
                 {info.bridge} · {info.platform}/{info.arch} · {info.homedir}
               </div>
               <div className="mt-1 text-xs text-[var(--color-subtle)]">
-                Agent can use <span className="font-mono">$</span> shell in chat and the Desktop host panel.
+                Agent can use <span className="font-mono">$</span> shell in chat and host tools from Settings.
               </div>
             </div>
           </div>
@@ -206,11 +206,15 @@ export function HostGatewayBanner({ variant = "card", className, onOpenDesktop }
           ) : (
             <Button
               onClick={() => {
+                try {
+                  onOpenDesktop?.();
+                } catch {
+                  /* ignore */
+                }
                 setNav("settings");
-                onOpenDesktop?.();
               }}
             >
-              Open Desktop host
+              Host settings
             </Button>
           )}
           <Button variant="secondary" size="default" disabled={busy} onClick={() => void probe()}>

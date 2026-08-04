@@ -191,7 +191,8 @@ export function detectChipContext(chat: ChatMessage[]): {
     ) ||
     (
       !/HOST_CMD\s*:/i.test(asst) &&
-      /\b(check|probe|investigate|scan|look at)\b/i.test(asst) &&
+      /\b(i('ll| will)|let me)\b/i.test(asst) &&
+      /\b(check|probe|investigate|scan|look at|run)\b/i.test(asst) &&
       asst.length > 0 &&
       asst.length < 600
     );

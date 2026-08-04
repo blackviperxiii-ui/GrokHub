@@ -90,3 +90,29 @@ console.log(
   "smoke-predict OK · draft:",
   withDraft.map((c) => c.label).join(" · "),
 );
+
+// Memory key: predicted dismiss must share habit with built-in chip
+import {
+  emptyQuickAssistMemory,
+  rememberChipClick,
+  rememberChipDismiss,
+  chipMemoryKey,
+} from "../src/lib/quick-assist-memory";
+{
+  let mem = emptyQuickAssistMemory();
+  const habit = {
+    id: "host-diag",
+    label: "System snapshot",
+    value: "Run a quick system snapshot",
+    kind: "chat" as const,
+    score: 50,
+  };
+  mem = rememberChipClick(mem, habit);
+  const pred = { ...habit, id: "pred-habit-xyz", score: 90 };
+  assert.equal(chipMemoryKey(pred), chipMemoryKey(habit));
+  mem = rememberChipDismiss(mem, pred);
+  mem = rememberChipDismiss(mem, pred);
+  const hit = mem.hits.find((h) => h.value === habit.value);
+  assert.ok(hit && (hit.dismisses || 0) >= 2);
+  console.log("memory-key dismiss OK");
+}

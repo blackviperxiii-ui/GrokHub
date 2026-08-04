@@ -938,7 +938,19 @@ export function ChatView() {
     try {
       const bill = recordUsage("host");
       if (!bill.ok) {
-        useGrokHub.setState({ running: false, streamStatus: null });
+        useGrokHub.setState((s) => ({
+          running: false,
+          streamStatus: null,
+          chat: [
+            ...s.chat,
+            {
+              id: `a_${Date.now()}`,
+              role: "system" as const,
+              content: "Host command blocked by local limits.",
+              ts: Date.now(),
+            },
+          ],
+        }));
         return;
       }
       const { hostExec } = await import("@/lib/host-client");

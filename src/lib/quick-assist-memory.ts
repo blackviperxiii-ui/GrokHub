@@ -96,8 +96,18 @@ function valueKey(value: string, kind?: QuickChipKind): string {
 }
 
 export function chipMemoryKey(chip: Pick<QuickChip, "id" | "value" | "kind">): string {
-  // Prefer stable id for built-ins; value key for freeform
-  if (chip.id.startsWith("learn-") || chip.id.startsWith("recent-")) {
+  // Chat/shell: always key by value so built-in, predicted, and learned clones share one habit.
+  // Nav/mode: keep id-based keys (values are synthetic __nav: / __mode: tokens).
+  if (chip.kind === "chat" || chip.kind === "shell") {
+    return valueKey(chip.value, chip.kind);
+  }
+  if (
+    chip.id.startsWith("learn-") ||
+    chip.id.startsWith("recent-") ||
+    chip.id.startsWith("pred-") ||
+    chip.id.startsWith("llm-") ||
+    chip.id.startsWith("act-")
+  ) {
     return valueKey(chip.value, chip.kind);
   }
   return `id:${chip.id}`;

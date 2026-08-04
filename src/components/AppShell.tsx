@@ -293,9 +293,14 @@ export function AppShell() {
     Promise.resolve(p).finally(() => {
       const restored = useGrokHub.getState().nav;
       const safeNav =
-        !restored || restored === "connectors" || restored === "agents" || restored === "queue" || restored === "desktop"
+        !restored
           ? "chat"
-          : restored;
+          : restored === "connectors" ||
+              restored === "agents" ||
+              restored === "queue" ||
+              restored === "desktop"
+            ? "settings"
+            : restored;
       useGrokHub.setState({
         nav: safeNav,
         running: false,

@@ -7041,7 +7041,7 @@ if (!cmds.length) {
         // Restore last tab (connectors removed — remapped on hydrate)
         nav:
           s.nav === "connectors" || s.nav === "agents" || s.nav === "queue" || s.nav === "desktop"
-            ? "chat"
+            ? "settings"
             : s.nav || "chat",
         // Secrets stay in safeStorage (userData), not here
       }),
