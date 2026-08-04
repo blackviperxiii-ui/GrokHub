@@ -12,7 +12,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "1.1.7";
+const APP_VERSION = "1.1.8";
 let updateInProgress = false;
 
 function shaMatch(a, b) {

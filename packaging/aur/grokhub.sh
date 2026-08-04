@@ -6,6 +6,31 @@ user_lib="${HOME}/.local/lib/grokhub"
 user_share="${HOME}/.local/share/grokhub"
 sys_lib="/usr/lib/grokhub"
 
+# --- logging first (must exist before any log call; set -euo makes missing log fatal) ---
+PORT="${GROKHUB_PORT:-18765}"
+URL="${GROKHUB_URL:-http://127.0.0.1:${PORT}}"
+RUNTIME="${XDG_RUNTIME_DIR:-/tmp}/grokhub"
+LOG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/GrokHub/logs"
+LOG="${LOG_DIR}/ui.log"
+PIDFILE="${RUNTIME}/ui.pid"
+LOCKFILE="${RUNTIME}/ui.lock"
+INSTANCE_LOCK="${RUNTIME}/instance.lock"
+
+mkdir -p "$RUNTIME" "$LOG_DIR" 2>/dev/null || true
+chmod 700 "$LOG_DIR" 2>/dev/null || true
+
+log() {
+  printf '[%s] %s\n' "$(date -Iseconds 2>/dev/null || date)" "$*" >>"$LOG" 2>/dev/null || true
+}
+
+# Rotate diagnostic restart log if large
+if [[ -f /tmp/grokhub-ui-restart.log ]]; then
+  sz=$(wc -c </tmp/grokhub-ui-restart.log 2>/dev/null || echo 0)
+  if [[ "${sz:-0}" -gt 200000 ]]; then
+    mv -f /tmp/grokhub-ui-restart.log /tmp/grokhub-ui-restart.log.prev 2>/dev/null || true
+  fi
+fi
+
 # A complete install needs main, UI build, and a bridge that exports factoryReinstall.
 install_ok() {
   local root="$1"
@@ -46,15 +71,7 @@ pick_app_root() {
 
 APP_ROOT="$(pick_app_root)"
 export GROKHUB_HOME="$APP_ROOT"
-
-# Standalone xAI CLI (~/.grok/downloads/grok-*) is NOT this app.
-if [[ -d "${HOME}/.grok/downloads" ]] && command -v grok >/dev/null 2>&1; then
-  grok_path="$(command -v grok 2>/dev/null || true)"
-  if [[ "$grok_path" == *".grok"* ]]; then
-    log "note: PATH has standalone grok CLI at $grok_path (unrelated to GrokHub)"
-  fi
-fi
-
+log "launcher start root=$APP_ROOT"
 
 # Standalone xAI CLI (~/.grok/downloads/grok-*) is NOT this app.
 # If you see a high-CPU process named "grok", that is usually the CLI, not GrokHub.
@@ -64,7 +81,6 @@ if [[ -d "${HOME}/.grok/downloads" ]] && command -v grok >/dev/null 2>&1; then
     log "note: PATH has standalone grok CLI at $grok_path (unrelated to GrokHub)"
   fi
 fi
-
 
 # Dual-install safety: once a complete user install exists, never fall back to system
 # without an explicit override. Pin choice for desktop entries / repair scripts.
@@ -79,21 +95,11 @@ if install_ok "$user_lib"; then
     fi
   fi
   mkdir -p "$(dirname "$INSTALL_PIN")" 2>/dev/null || true
-  printf '%s
-' "user:$user_lib" >"$INSTALL_PIN" 2>/dev/null || true
+  printf '%s\n' "user:$user_lib" >"$INSTALL_PIN" 2>/dev/null || true
 elif install_ok "$sys_lib"; then
   mkdir -p "$(dirname "$INSTALL_PIN")" 2>/dev/null || true
-  printf '%s
-' "system:$sys_lib" >"$INSTALL_PIN" 2>/dev/null || true
+  printf '%s\n' "system:$sys_lib" >"$INSTALL_PIN" 2>/dev/null || true
 fi
-PORT="${GROKHUB_PORT:-18765}"
-URL="${GROKHUB_URL:-http://127.0.0.1:${PORT}}"
-RUNTIME="${XDG_RUNTIME_DIR:-/tmp}/grokhub"
-LOG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/GrokHub/logs"
-LOG="${LOG_DIR}/ui.log"
-PIDFILE="${RUNTIME}/ui.pid"
-LOCKFILE="${RUNTIME}/ui.lock"
-INSTANCE_LOCK="${RUNTIME}/instance.lock"
 
 export GROKHUB_WAYLAND="${GROKHUB_WAYLAND:-1}"
 export GROKHUB_TRAY="${GROKHUB_TRAY:-1}"
@@ -101,20 +107,6 @@ export GROKHUB_TRAY="${GROKHUB_TRAY:-1}"
 # Map this process to grokhub.desktop (basename = Wayland app_id = "grokhub")
 export CHROME_DESKTOP="grokhub.desktop"
 export ELECTRON_FORCE_WINDOW_MENU_BAR=0
-
-mkdir -p "$RUNTIME" "$LOG_DIR"
-# Rotate diagnostic restart log if large
-if [[ -f /tmp/grokhub-ui-restart.log ]]; then
-  sz=$(wc -c </tmp/grokhub-ui-restart.log 2>/dev/null || echo 0)
-  if [[ "${sz:-0}" -gt 200000 ]]; then
-    mv -f /tmp/grokhub-ui-restart.log /tmp/grokhub-ui-restart.log.prev 2>/dev/null || true
-  fi
-fi
-chmod 700 "$LOG_DIR" 2>/dev/null || true
-
-log() {
-  printf '[%s] %s\n' "$(date -Iseconds 2>/dev/null || date)" "$*" >>"$LOG" 2>/dev/null || true
-}
 
 if ! command -v electron >/dev/null 2>&1; then
   echo "error: electron not found (pacman -S electron)" >&2
