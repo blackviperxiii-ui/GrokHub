@@ -2,13 +2,18 @@
 
 > **Scope:** GrokHub **Linux desktop** (Arch/CachyOS + Electron). Windows is a separate repository.
 
-**v1.1.8** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v1.1.15** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
-Adaptive modes · Imagine · skills · automations · setup sync · unsandboxed desktop host (CLI · files · apps).
+Adaptive modes (including **Max / Grok 4.5** flagship) · Imagine · skills · automations · setup sync · unsandboxed desktop host (CLI · files · apps).
 
 **Repository:** [github.com/blackviperxiii-ui/Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub)
 
-> Windows builds live in a **separate repository**. This repo is Linux-focused (Arch / CachyOS packaging, AUR, and in-app updates).
+| Platform | Repository | Latest |
+|----------|------------|--------|
+| **Linux** (this) | [Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub) | **v1.1.15** |
+| **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | **v1.1.15** (parity track) |
+
+> Windows builds and Setup.exe updates live only in **Grok-Hub-Windows**. This repo is Linux-focused (Arch / CachyOS packaging, AUR, user tarball, and in-app updates).
 
 ---
 
@@ -39,11 +44,11 @@ UI: **Settings → Autonomy**. Optional agent: `./scripts/sync-user-integration.
 
 
 
-## GrokHub 1.0 (Linux desktop)
+## GrokHub 1.1 (Linux desktop)
 
-Stable track for **Arch / CachyOS + system Electron**. Windows is a separate repository.
+Stable track for **Arch / CachyOS + system Electron** (**v1.1.15**). Windows parity: [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows).
 
-**Install (user):** in-app update, or extract `grokhub-desktop-v1.0.1.tar.gz` to `~/.local/lib/grokhub`.
+**Install (user):** in-app update, or extract `grokhub-desktop-v1.1.15.tar.gz` to `~/.local/lib/grokhub`.
 
 **Data:** `~/.config/GrokHub` (chats, secrets, memory) — not touched by updates.
 
