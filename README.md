@@ -12,7 +12,7 @@ Adaptive modes (including **Max / Grok 4.6** flagship) · Imagine · skills · a
 |----------|------------|--------|
 | **Linux** (this) | [Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub) | **v1.1.18** |
 | **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | **v1.1.18** |
-| **Android** | *coming* | — |
+| **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | **v1.0.1** |
 
 > Windows builds and Setup.exe updates live only in **Grok-Hub-Windows**. This repo is Linux-focused (Arch / CachyOS packaging, AUR, user tarball, and in-app updates).
 
