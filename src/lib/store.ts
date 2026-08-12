@@ -5617,17 +5617,43 @@ while (rounds < maxRounds && !aborted) {
 
               if (result.ok && (result.content || roundText)) {
                 usedLive = true;
+                const accessPath = (result as { accessPath?: string }).accessPath;
+                const fallbackFrom = (result as { fallbackFrom?: string }).fallbackFrom;
+                const resolvedModel =
+                  (result as { model?: string }).model || routeStamp.routeModel;
+                const pathNote = accessPath
+                  ? accessPath === "api"
+                    ? "API"
+                    : accessPath === "api_free"
+                      ? "free API"
+                      : accessPath === "website_free"
+                        ? "website free"
+                        : accessPath
+                  : "";
+                const honestyStamp: Partial<ChatMessage> = {
+                  ...(resolvedModel ? { routeModel: resolvedModel } : {}),
+                  ...(accessPath ? { accessPath } : {}),
+                  ...(fallbackFrom ? { fallbackFrom } : {}),
+                  routeReason: [
+                    routeStamp.routeReason,
+                    resolvedModel ? `model ${resolvedModel}` : "",
+                    pathNote ? `via ${pathNote}` : "",
+                    fallbackFrom ? `fallback from ${fallbackFrom}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · "),
+                };
                 if (
                   (result as { freeTier?: boolean }).freeTier ||
-                  String((result as { accessPath?: string }).accessPath || "").includes("free")
+                  String(accessPath || "").includes("free")
                 ) {
                   set((s) => ({
                     grokConnected: true,
                     grokStatusDetail:
-                      (result as { accessPath?: string }).accessPath === "website_free"
+                      accessPath === "website_free"
                         ? "Website session"
-                        : (result as { fallbackFrom?: string }).fallbackFrom
-                          ? `Session fallback · ${(result as { model?: string }).model || "model"}`
+                        : fallbackFrom
+                          ? `Session fallback · ${resolvedModel || "model"}`
                           : "Session fallback",
                     usage:
                       s.oauth || s.apiKey
@@ -5690,14 +5716,16 @@ while (rounds < maxRounds && !aborted) {
                 const full = fullRaw;
                 const visible = scrubAssistant(full);
                 accumulated = full;
-                // Never show raw HOST_CMD lines to the user
-                patchBot(
-                  visible || "Working on your machine…",
-                  { streaming: true },
-                );
+                // Never show raw HOST_CMD lines to the user; stamp resolved model/path
+                patchBot(visible || "Working on your machine…", {
+                  streaming: true,
+                  ...honestyStamp,
+                });
                 set({
                   grokConnected: true,
-                  grokStatusDetail: `Live · ${result.model || modelId}`,
+                  grokStatusDetail: `Live · ${result.model || modelId}${
+                    accessPath && accessPath !== "api" ? ` · ${accessPath}` : ""
+                  }`,
                 });
 
                 let cmds = extractHostCommands(full);

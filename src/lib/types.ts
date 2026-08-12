@@ -139,6 +139,10 @@ export type ChatMessage = {
   routeReason?: string;
   /** Concrete model id used */
   routeModel?: string;
+  /** How the turn reached the model (api / api_free / website_free) */
+  accessPath?: string;
+  /** Primary model if a fallback was used */
+  fallbackFrom?: string;
   /** True while tokens are still arriving */
   streaming?: boolean;
   /** Stopped by user mid-stream */
