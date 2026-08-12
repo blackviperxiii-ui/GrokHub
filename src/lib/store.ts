@@ -63,7 +63,7 @@ import {
   applyAgentMemoryNotes,
 } from "./session-learn";
 import { renderImaginePreview } from "./imagine";
-import { getMode, resolveMode, resolveModeWithCatalog, stripAssistantChrome, modelIdForMode, autoRouteFor, cleanModelOverrides, type ModelModeOverrides } from "./modes";
+import { getMode, resolveMode, resolveModeWithCatalog, stripAssistantChrome, modelIdForMode, autoRouteFor, cleanModelOverrides, normalizeMode, type ModelModeOverrides } from "./modes";
 import { buildCatalog, emptyCatalog, applyGrokPlan, needsGrokClassification, type ResolvedCatalog, type GrokSlotPlan } from "./models-catalog";
 import { createSeeds } from "./seed";
 import type {
@@ -338,7 +338,7 @@ type State = {
   proactiveNotice: { message: string; at: number } | null;
   /** Live essential models from xAI */
   modelCatalog: ResolvedCatalog;
-  /** User pins for mode → model id; unset modes stay auto-classified */
+  /** Retired — Adaptive slots are permanent (kept so persist still parses). */
   modelOverrides: ModelModeOverrides;
   lastModelsFetchAt: number;
   /** xAI API key (local only; never sent to third parties except api.x.ai) */
@@ -592,8 +592,8 @@ function replyFor(text: string, s: State, routed: GrokModeId): string {
     return [
       "Modes",
       "",
-      "- Adaptive — routes ⚡ Fast · 🧠 Think · 🔬 Deep · 🛠️ Build",
-      "- Fast / Expert / Heavy / Build — manual lock",
+      "- Adaptive — routes ⚡ Fast · ⚖️ Balanced · 🛠️ Build · 🚀 Max (Grok 4.6)",
+      "- Fast / Balanced / Max / Build — manual lock",
       "",
       `Active: ${getMode(s.mode).label}${s.mode === "auto" ? ` (this turn → ${m.label})` : ""}`,
     ].join("\n");
@@ -1159,23 +1159,19 @@ export const useGrokHub = create<State>()(
         scheduleSettingsPersist();
       },
       setMode: (mode) => {
-        set({ mode, modeMenuOpen: false });
+        const next = normalizeMode(mode);
+        set({ mode: next, modeMenuOpen: false });
         scheduleSettingsPersist();
         get().pushActivity({
           kind: "system",
-          title: `Mode → ${getMode(mode).label}`,
-          detail: getMode(mode).subtitle,
+          title: `Mode → ${getMode(next).label}`,
+          detail: getMode(next).subtitle,
           status: "success",
         });
       },
       setModeMenuOpen: (open) => set({ modeMenuOpen: open }),
-      setModelOverride: (mode, modelId) => {
-        set((s) => {
-          const next = { ...cleanModelOverrides(s.modelOverrides) };
-          if (modelId && modelId.trim()) next[mode] = modelId.trim();
-          else delete next[mode];
-          return { modelOverrides: next };
-        });
+      setModelOverride: (_mode, _modelId) => {
+        set({ modelOverrides: {} });
         scheduleSettingsPersist();
       },
       clearModelOverrides: () => {
@@ -5052,32 +5048,17 @@ if (cmd === "tools") {
             .slice(0, 4000),
           hasAttachments: /\[attachment:|data:image\//i.test(trimmed),
           lastRouteTier: lastRoutedAsst?.routeTier || lastAsst?.routeTier,
-          lastRoutedMode:
-            lastRoutedAsst?.mode === "fast" ||
-            lastRoutedAsst?.mode === "balanced" ||
-            lastRoutedAsst?.mode === "expert" ||
-            lastRoutedAsst?.mode === "heavy" ||
-            lastRoutedAsst?.mode === "max" ||
-            lastRoutedAsst?.mode === "build"
-              ? lastRoutedAsst.mode
-              : lastRoutedAsst?.routeTier === "fast"
-                ? ("fast" as const)
-                : lastRoutedAsst?.routeTier === "balanced"
-                  ? ("balanced" as const)
-                  : lastRoutedAsst?.routeTier === "build"
-                    ? ("build" as const)
-                    : lastRoutedAsst?.routeTier === "deep"
-                      ? ("heavy" as const)
-                      : lastRoutedAsst?.routeTier === "think"
-                        ? ("expert" as const)
-                        : lastAsst?.mode === "fast" ||
-                            lastAsst?.mode === "balanced" ||
-                            lastAsst?.mode === "expert" ||
-                            lastAsst?.mode === "heavy" ||
-                            lastAsst?.mode === "max" ||
-                            lastAsst?.mode === "build"
-                          ? lastAsst.mode
-                          : undefined,
+          lastRoutedMode: (() => {
+            const raw = lastRoutedAsst?.mode || lastAsst?.mode;
+            const n = normalizeMode(raw);
+            if (n === "fast" || n === "balanced" || n === "max" || n === "build") return n;
+            const tier = lastRoutedAsst?.routeTier || lastAsst?.routeTier;
+            if (tier === "fast") return "fast" as const;
+            if (tier === "balanced" || tier === "think") return "balanced" as const;
+            if (tier === "build") return "build" as const;
+            if (tier === "deep") return "max" as const;
+            return undefined;
+          })(),
           usagePressure,
           preferFree: false,
           lastRouteFailed: lastFailed,
@@ -5144,9 +5125,7 @@ if (cmd === "tools") {
                       ? ("balanced" as const)
                       : routed === "build"
                         ? ("build" as const)
-                        : routed === "heavy" || routed === "max"
-                          ? ("deep" as const)
-                          : ("think" as const),
+                        : ("deep" as const),
                 routeReason: `Manual ${m.label} mode`,
                 routeModel: modelIdForMode(mode, trimmed, catalog, routeCtx, overrides),
               };
@@ -7083,7 +7062,7 @@ if (!cmds.length) {
         activeThreadId: s.activeThreadId,
         sessionResume: s.sessionResume,
         agents: s.agents,
-        mode: s.mode,
+        mode: normalizeMode(s.mode),
         desktop: s.desktop,
         agentPrefs: s.agentPrefs,
         composerDrafts: Object.fromEntries(
@@ -7283,22 +7262,14 @@ if (!cmds.length) {
             }
             if (
               active.mode &&
-              ["auto", "fast", "balanced", "expert", "heavy", "max", "build"].includes(
-                String(active.mode),
+              ["auto", "fast", "balanced", "max", "build"].includes(
+                String(normalizeMode(active.mode)),
               )
             ) {
-              // Do not force routed modes onto global selector on boot —
-              // prefer the persisted global mode (partialize). Only fill if missing.
-              if (!s.mode) s.mode = active.mode;
+              if (!s.mode) s.mode = normalizeMode(active.mode);
             }
-            // Global mode must stay valid after version upgrades
-            if (
-              !["auto", "fast", "balanced", "expert", "heavy", "max", "build"].includes(
-                String(s.mode || ""),
-              )
-            ) {
-              s.mode = "auto";
-            }
+            s.mode = normalizeMode(s.mode as string);
+            s.modelOverrides = {};
           }
         } catch {
           /* ignore */

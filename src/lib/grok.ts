@@ -112,12 +112,8 @@ Long-running interactive TUIs are awkward — prefer non-interactive commands an
       return `${base}\nMode: Fast — concise answers, minimal preamble.`;
     case "balanced":
       return `${base}\nMode: Balanced — solid everyday chat (Grok 4.3-class). Clear and practical, not shallow.`;
-    case "expert":
-      return `${base}\nMode: Expert — reason carefully, surface tradeoffs, cite assumptions.`;
-    case "heavy":
-      return `${base}\nMode: Heavy — deep multi-angle analysis (ops, research, build, critique), then synthesize a clear recommendation. Single-agent; do not assume multi-agent orchestration.`;
     case "max":
-      return `${base}\nMode: Max — top-tier flagship (Grok 4.5). Maximum capability, thorough and precise. Prefer real HOST_CMD evidence over speculation. Single-agent chat/completions only.`;
+      return `${base}\nMode: Max — top-tier flagship (Grok 4.6). Maximum capability, thorough and precise. Prefer real HOST_CMD evidence over speculation. Single-agent chat/completions only.`;
     case "build":
       return `${base}\nMode: Build — prioritize working code, file paths, and implementable steps. Prefer complete snippets.`;
     default:
@@ -290,12 +286,12 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
         const m = req.mode ?? "auto";
         const fallback =
           m === "max" || m === "heavy" || m === "auto"
-            ? "grok-4.5"
+            ? "grok-4.6"
             : m === "build"
               ? "grok-build-0.1"
               : m === "fast"
                 ? "grok-4-1-fast-non-reasoning"
-                : "grok-4.20-reasoning";
+                : "grok-4.3";
         return callXaiChat({
           ...req,
           model: sanitizeChatModel(fallback, m, []),
@@ -306,6 +302,9 @@ export async function callXaiChat(req: GrokChatRequest): Promise<GrokChatResult>
         res.status === 404 ||
         /model|not found|invalid/i.test(errMsg)
       ) {
+        if (model === "grok-4.6" || model === "grok-4-6") {
+          return callXaiChat({ ...req, model: "grok-4.5" });
+        }
         if (model === "grok-4.5" || model === "grok-4-5") {
           return callXaiChat({ ...req, model: "grok-4.3" });
         }
@@ -401,12 +400,12 @@ export async function callXaiChatStream(
         const m = req.mode ?? "auto";
         const fallback =
           m === "max" || m === "heavy" || m === "auto"
-            ? "grok-4.5"
+            ? "grok-4.6"
             : m === "build"
               ? "grok-build-0.1"
               : m === "fast"
                 ? "grok-4-1-fast-non-reasoning"
-                : "grok-4.20-reasoning";
+                : "grok-4.3";
         handlers.onStatus?.("retry-single-agent");
         return callXaiChatStream(
           {
@@ -418,6 +417,9 @@ export async function callXaiChatStream(
         );
       }
       if (res.status === 404 || /model|not found|invalid/i.test(errText)) {
+        if (model === "grok-4.6" || model === "grok-4-6") {
+          return callXaiChatStream({ ...req, model: "grok-4.5" }, handlers);
+        }
         if (model === "grok-4.5" || model === "grok-4-5") {
           return callXaiChatStream({ ...req, model: "grok-4.3" }, handlers);
         }

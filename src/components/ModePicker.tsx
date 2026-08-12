@@ -1,16 +1,14 @@
 import {
-  Brain,
   Crown,
   Hammer,
   Scale,
   Sparkles,
-  Users,
   Zap,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { getModesWithCatalog, hasModelOverride, modeBadge } from "@/lib/modes";
+import { getModesWithCatalog, modeBadge } from "@/lib/modes";
 import { useGrokHub } from "@/lib/store";
 import type { GrokModeId } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -19,8 +17,8 @@ const ICONS: Record<GrokModeId, LucideIcon> = {
   auto: Sparkles,
   fast: Zap,
   balanced: Scale,
-  expert: Brain,
-  heavy: Users,
+  expert: Scale,
+  heavy: Crown,
   max: Crown,
   build: Hammer,
 };
@@ -35,11 +33,10 @@ export function ModePicker() {
   const setMode = useGrokHub((s) => s.setMode);
   const setModeMenuOpen = useGrokHub((s) => s.setModeMenuOpen);
   const catalog = useGrokHub((s) => s.modelCatalog);
-  const modelOverrides = useGrokHub((s) => s.modelOverrides);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
-  const modes = getModesWithCatalog(catalog, modelOverrides);
+  const modes = getModesWithCatalog(catalog);
   const active = modes.find((m) => m.id === mode) ?? modes[0]!;
   const ActiveIcon = ICONS[active.id];
 
@@ -156,11 +153,6 @@ export function ModePicker() {
                       Beta
                     </span>
                   )}
-                  {m.id !== "auto" && hasModelOverride(modelOverrides, m.id) && (
-                    <span className="rounded bg-[color-mix(in_oklab,var(--color-info)_18%,transparent)] px-1 py-px text-[10px] text-[var(--color-info)]">
-                      Pin
-                    </span>
-                  )}
                   {selected && (
                     <span className="ml-auto text-[var(--color-muted)]">✓</span>
                   )}
@@ -177,11 +169,8 @@ export function ModePicker() {
         })}
         {catalog.essential.length > 0 && (
           <div className="border-t border-[var(--color-border)] px-2.5 py-1.5 text-[10px] text-[var(--color-subtle)]">
-            {catalog.source === "live" ? "Live" : "Fallback"} · {catalog.essential.length}{" "}
-            models · slots by {catalog.classifiedBy === "grok" ? "Grok" : "heuristic"}
-            {Object.keys(modelOverrides || {}).length
-              ? ` · ${Object.keys(modelOverrides || {}).length} pin(s)`
-              : ""}
+            {catalog.source === "live" ? "Live" : "Fallback"} · permanent Adaptive map
+            {catalog.essential.length ? ` · ${catalog.essential.length} models` : ""}
           </div>
         )}
       </div>,
@@ -205,7 +194,7 @@ export function ModePicker() {
         )}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`Model mode: ${modeBadge(active.id, catalog, modelOverrides)}`}
+        aria-label={`Model mode: ${modeBadge(active.id, catalog)}`}
       >
         <ActiveIcon className="h-3.5 w-3.5 text-[var(--color-muted)]" />
         <span className="text-xs font-medium text-[var(--color-fg)]">{active.label}</span>
