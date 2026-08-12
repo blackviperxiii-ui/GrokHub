@@ -680,7 +680,7 @@ export function tierMeta(tier: RouteTier): {
     label: "🎨 Imagine",
     emoji: "🎨",
     short: "Imagine",
-    tone: "border-[color-mix(in_oklab,#c084fc_45%,var(--color-border))] bg-[color-mix(in_oklab,#c084fc_14%,transparent)] text-[#c084fc]",
+    tone: "border-[color-mix(in_oklab,var(--color-muted)_45%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-elevated)_80%,transparent)] text-[var(--color-muted)]",
   };
 }
 

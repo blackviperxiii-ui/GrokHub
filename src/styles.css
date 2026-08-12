@@ -2,25 +2,24 @@
 @import "tw-animate-css";
 
 @theme {
-  /* Surfaces — clearer ladder so panels aren't gray-on-gray */
-  --color-bg: #08080a;
-  --color-surface: #101014;
-  --color-panel: #16161c;
-  --color-elevated: #1f1f27;
-  --color-fg: #f4f4f5;
-  --color-muted: #a8a8b3;
-  --color-subtle: #7c7c88;
-  --color-border: color-mix(in oklab, #f4f4f5 11%, transparent);
-  --color-border-strong: color-mix(in oklab, #f4f4f5 20%, transparent);
-  /* Primary CTA: soft cool light (not purple) */
-  --color-accent: #e8eaef;
-  --color-accent-fg: #0a0a0c;
-  --color-success: #34d399;
-  --color-warn: #fbbf24;
-  --color-danger: #f87171;
-  --color-info: #7aa2ff;
-  --color-ring: #c4c4cc;
-  --color-bubble-user: color-mix(in oklab, var(--color-info) 14%, var(--color-elevated));
+  /* Surfaces — true black / gray / white, no cool-blue undertone */
+  --color-bg: #090909;
+  --color-surface: #111111;
+  --color-panel: #171717;
+  --color-elevated: #1f1f1f;
+  --color-fg: #f5f5f5;
+  --color-muted: #a3a3a3;
+  --color-subtle: #737373;
+  --color-border: color-mix(in oklab, #f5f5f5 12%, transparent);
+  --color-border-strong: color-mix(in oklab, #f5f5f5 22%, transparent);
+  --color-accent: #f5f5f5;
+  --color-accent-fg: #0a0a0a;
+  --color-success: #d4d4d4;
+  --color-warn: #a3a3a3;
+  --color-danger: #f5f5f5;
+  --color-info: #e5e5e5;
+  --color-ring: #d4d4d4;
+  --color-bubble-user: color-mix(in oklab, var(--color-fg) 9%, var(--color-elevated));
   --color-bubble-assistant: var(--color-panel);
 
   --font-sans: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -57,23 +56,23 @@
 }
 
 html[data-theme="light"] {
-  --color-bg: #f2f2f4;
+  --color-bg: #f5f5f5;
   --color-surface: #ffffff;
-  --color-elevated: #ececf0;
-  --color-panel: #fafafb;
-  --color-fg: #18181b;
-  --color-muted: #52525b;
-  --color-subtle: #71717a;
-  --color-border: color-mix(in oklab, #18181b 10%, transparent);
-  --color-border-strong: color-mix(in oklab, #18181b 18%, transparent);
-  --color-accent: #18181b;
+  --color-elevated: #ececec;
+  --color-panel: #fafafa;
+  --color-fg: #111111;
+  --color-muted: #525252;
+  --color-subtle: #737373;
+  --color-border: color-mix(in oklab, #111111 10%, transparent);
+  --color-border-strong: color-mix(in oklab, #111111 18%, transparent);
+  --color-accent: #111111;
   --color-accent-fg: #fafafa;
-  --color-success: #059669;
-  --color-warn: #d97706;
-  --color-danger: #dc2626;
-  --color-info: #2563eb;
-  --color-ring: #52525b;
-  --color-bubble-user: color-mix(in oklab, var(--color-info) 10%, var(--color-elevated));
+  --color-success: #404040;
+  --color-warn: #737373;
+  --color-danger: #0a0a0a;
+  --color-info: #171717;
+  --color-ring: #525252;
+  --color-bubble-user: color-mix(in oklab, var(--color-fg) 8%, var(--color-elevated));
   --color-bubble-assistant: var(--color-surface);
   --shadow-soft: 0 8px 28px rgba(0, 0, 0, 0.08);
   --shadow-composer: 0 -6px 24px rgba(0, 0, 0, 0.05);
@@ -117,7 +116,7 @@ html[data-theme="light"] {
   }
 
   ::selection {
-    background: color-mix(in oklab, var(--color-info) 28%, transparent);
+    background: color-mix(in oklab, var(--color-fg) 22%, transparent);
   }
 
   * {
@@ -280,7 +279,7 @@ html[data-theme="light"] {
 
   .nav-item-active {
     position: relative;
-    background: color-mix(in oklab, var(--color-elevated) 88%, var(--color-info) 12%);
+    background: var(--color-elevated);
     color: var(--color-fg);
     font-weight: 500;
   }
@@ -290,9 +289,9 @@ html[data-theme="light"] {
     left: 0;
     top: 7px;
     bottom: 7px;
-    width: 2.5px;
+    width: 2px;
     border-radius: 999px;
-    background: color-mix(in oklab, var(--color-info) 70%, var(--color-accent));
+    background: var(--color-fg);
   }
 
   .composer-dock {
@@ -404,14 +403,14 @@ html[data-theme="light"] {
   }
 }
 
-.markdown-body .tok-kw { color: color-mix(in oklab, var(--color-info) 85%, var(--color-fg)); font-weight: 500; }
-.markdown-body .tok-str { color: color-mix(in oklab, var(--color-success) 75%, var(--color-fg)); }
+.markdown-body .tok-kw { color: var(--color-fg); font-weight: 500; }
+.markdown-body .tok-str { color: var(--color-muted); }
 .markdown-body .tok-cmt { color: var(--color-subtle); font-style: italic; }
-.markdown-body .tok-num { color: color-mix(in oklab, var(--color-warn) 70%, var(--color-fg)); }
-.code-block .tok-kw { color: color-mix(in oklab, var(--color-info) 85%, var(--color-fg)); font-weight: 500; }
-.code-block .tok-str { color: color-mix(in oklab, var(--color-success) 75%, var(--color-fg)); }
+.markdown-body .tok-num { color: var(--color-fg); }
+.code-block .tok-kw { color: var(--color-fg); font-weight: 500; }
+.code-block .tok-str { color: var(--color-muted); }
 .code-block .tok-cmt { color: var(--color-subtle); font-style: italic; }
-.code-block .tok-num { color: color-mix(in oklab, var(--color-warn) 70%, var(--color-fg)); }
+.code-block .tok-num { color: var(--color-fg); }
 
 .markdown-body {
   font-size: 0.9375rem;

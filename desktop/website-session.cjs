@@ -307,8 +307,8 @@ function linkWebsiteSession() {
         <h1 style="font-size:1.25rem">Could not load Grok</h1>
         <p style="color:#aaa;line-height:1.5">Error ${code}: ${desc || "unknown"}</p>
         <p style="color:#aaa;word-break:break-all">${url || ""}</p>
-        <p><a href="https://grok.com/" style="color:#7dd3fc">Retry grok.com</a>
-        · <a href="https://accounts.x.ai/sign-in?redirect=grok-com" style="color:#7dd3fc">xAI sign-in</a></p>
+        <p><a href="https://grok.com/" style="color:#e5e5e5">Retry grok.com</a>
+        · <a href="https://accounts.x.ai/sign-in?redirect=grok-com" style="color:#e5e5e5">xAI sign-in</a></p>
         <p style="color:#888;font-size:0.9rem;line-height:1.5">If the embed stays blank, open <b>grok.com</b> in Firefox/Chrome, DevTools → Application → Cookies → copy the <code>sso</code> value, and paste it in GrokHub.</p>
       </body></html>`;
       win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);

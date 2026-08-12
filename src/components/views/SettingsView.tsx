@@ -1010,7 +1010,7 @@ export function SettingsView() {
               <div className="mt-2 space-y-1 font-mono text-xs text-[var(--color-muted)]">
                 <div>{update.detail}</div>
                 {update.writable === false && (
-                  <div className="text-[11px] text-amber-400/90">
+                  <div className="text-[11px] text-[var(--color-muted)]">
                     Install path is not writable by your user (e.g.{" "}
                     <span className="font-mono">/usr/lib/grokhub</span>). Updating will ask for admin
                     (pkexec) or fall back to{" "}

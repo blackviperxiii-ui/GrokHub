@@ -107,6 +107,11 @@ assert.match(memSrc, /MEMORY\.md/);
 assert.match(memSrc, /USER\.md/);
 assert.ok(fs.existsSync(path.join(process.cwd(), "src/lib/file-memory.ts")));
 assert.ok(fs.existsSync(path.join(process.cwd(), "src/lib/learning.ts")));
+
+const themeCss = fs.readFileSync(path.join(process.cwd(), "src/styles.css"), "utf8");
+assert.doesNotMatch(themeCss, /#7aa2ff|#2563eb|#3b82f6|#7dd3fc|#c084fc|#34d399|#fbbf24|#f87171/, "theme must be black/gray/white — no hue accents");
+assert.match(themeCss, /--color-bg:\s*#090909/, "dark bg is true black-gray");
+assert.match(themeCss, /--color-info:\s*#e5e5e5/, "info token is gray, not blue");
 console.log("smoke-unit OK");
 
 

@@ -79,7 +79,7 @@ export function CommandView() {
               const selected = m.id === mode;
               const costHint =
                 m.id === "max"
-                  ? "text-amber-400"
+                  ? "8u"
                   : m.id === "heavy"
                   ? "8u"
                   : m.id === "expert"
