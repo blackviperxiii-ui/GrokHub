@@ -204,6 +204,22 @@ const ChatMessageRow = memo(function ChatMessageRow({
               {m.routeModel.replace(/^grok-/, "")}
             </span>
           )}
+          {m.accessPath && m.role === "assistant" && m.accessPath !== "api" && (
+            <span
+              className="hidden max-w-[8rem] truncate rounded border border-[color-mix(in_oklab,var(--color-warn)_45%,var(--color-border))] px-1.5 py-px font-mono normal-case text-[var(--color-warn)] sm:inline"
+              title={
+                m.fallbackFrom
+                  ? `Access: ${m.accessPath} (fallback from ${m.fallbackFrom})`
+                  : `Access: ${m.accessPath}`
+              }
+            >
+              {m.accessPath === "api_free"
+                ? "free API"
+                : m.accessPath === "website_free"
+                  ? "website"
+                  : m.accessPath}
+            </span>
+          )}
           {showStreaming && (
             <span
               className="inline-flex max-w-[min(100%,18rem)] items-center gap-1 rounded border border-[color-mix(in_oklab,var(--color-info)_40%,transparent)] px-1.5 py-px font-mono normal-case text-[var(--color-info)]"

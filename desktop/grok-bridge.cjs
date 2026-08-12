@@ -12,7 +12,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "1.1.14";
+const APP_VERSION = "1.1.15";
 let updateInProgress = false;
 
 function shaMatch(a, b) {
@@ -322,6 +322,14 @@ exit 1
 }
 
 
+/** Single flagship for Max/Heavy/auto top-tier — never multi-agent or 4.20. */
+const FLAGSHIP_MODEL = "grok-4.5";
+/** Expert / Think reasoning tier (single-agent). */
+const THINK_MODEL = "grok-4.20-reasoning";
+const FAST_MODEL = "grok-4-1-fast-non-reasoning";
+const BALANCED_MODEL = "grok-4.3";
+const BUILD_MODEL = "grok-code-fast-1";
+
 function resolveMode(mode, prompt = "") {
   let id = mode || "auto";
   if (id !== "auto") return id;
@@ -329,10 +337,25 @@ function resolveMode(mode, prompt = "") {
   const lower = p.toLowerCase();
   const words = lower.split(/\s+/).filter(Boolean).length;
   if (/\b(imagine|image|picture|draw|render|illustration)\b/i.test(p)) return "fast";
-  if (/\b(team of|multi-agent|heavy|red team)\b/i.test(p) || (words > 80 && /debug|architect|debug/i.test(p))) return "heavy";
-  if (/\b(code|implement|refactor|typescript|react|scaffold|pkgbuild|full app|rewrite)\b/i.test(p) && words > 20) return "build";
-  if (/\b(architect|root cause|trade-?off|research|prove|deep dive|complex)\b/i.test(p) || words > 60 || p.length > 400) return "expert";
-  if (words > 28 || /\b(plan|explain|how do i|step by step)\b/i.test(p)) return "expert";
+  // Multi-angle / long debug → Heavy (same flagship model as Max)
+  if (/\b(team of|multi-agent|heavy|red team)\b/i.test(p) || (words > 80 && /fix|architect|debug/i.test(p))) {
+    return "heavy";
+  }
+  if (/\b(code|implement|refactor|typescript|react|scaffold|pkgbuild|full app|rewrite)\b/i.test(p) && words > 20) {
+    return "build";
+  }
+  // Top-tier analytical / complex → Max (flagship 4.5). Auto must be able to pick Max.
+  if (
+    /\b(architect|root cause|trade-?off|research|prove|deep dive|complex|flagship|maximum)\b/i.test(p) ||
+    words > 60 ||
+    p.length > 400
+  ) {
+    return "max";
+  }
+  // Medium analytical → Expert / Think (4.20 reasoning)
+  if (words > 28 || /\b(plan|explain|how do i|step by step|reason|analyze|compare)\b/i.test(p)) {
+    return "expert";
+  }
   return "fast";
 }
 
@@ -365,15 +388,32 @@ function isMultiAgentModel(id) {
   if (/grok/.test(s) && /(?:^|[-_.])agents?(?:$|[-_.])/.test(s)) return true;
   return false;
 }
+
+/**
+ * Fail closed for /chat/completions: never send multi-agent ids;
+ * Max/Heavy always land on FLAGSHIP_MODEL (grok-4.5).
+ */
 function sanitizeChatModel(model, mode) {
-  let m = String(model || "");
-  if (isMultiAgentModel(m) || /multi[-_]?agent/i.test(m)) {
-    m = mode === "max" || mode === "heavy" ? "grok-4.5" : "grok-4.20-reasoning";
+  let m = String(model || "").trim();
+  const modeId = String(mode || "");
+  const byMode = () => {
+    if (modeId === "build") return BUILD_MODEL;
+    if (modeId === "fast") return FAST_MODEL;
+    if (modeId === "balanced") return BALANCED_MODEL;
+    if (modeId === "expert") return THINK_MODEL;
+    // max, heavy, auto, empty → flagship
+    return FLAGSHIP_MODEL;
+  };
+  if (!m || isMultiAgentModel(m) || /multi[-_]?agent/i.test(m)) {
+    m = byMode();
   }
-  if ((mode === "max" || mode === "heavy") && /4[.-]?20/i.test(m)) {
-    m = "grok-4.5";
+  // Max/Heavy must never land on 4.20 reasoning
+  if ((modeId === "max" || modeId === "heavy") && /4[.-]?20/i.test(m)) {
+    m = FLAGSHIP_MODEL;
   }
-  if (mode === "max") m = "grok-4.5";
+  if (modeId === "max") m = FLAGSHIP_MODEL;
+  // Final fail-closed
+  if (isMultiAgentModel(m)) m = FLAGSHIP_MODEL;
   return m;
 }
 
@@ -393,24 +433,21 @@ function modelForMode(mode, prompt = "", opts = {}) {
     if (id === "expert" || id === "heavy" || id === "max") return "grok-3-mini";
     return "grok-3-mini-fast";
   }
-  const p = String(prompt || "");
   switch (id) {
     case "fast":
-      return "grok-4-1-fast-non-reasoning";
+      return FAST_MODEL;
     case "balanced":
-      return "grok-4.3";
+      return BALANCED_MODEL;
     case "expert":
-      // Think mode → Grok 4.20 reasoning
-      return "grok-4.20-reasoning";
+      // Think mode → Grok 4.20 reasoning (single-agent)
+      return THINK_MODEL;
     case "max":
-      // Max → latest top-tier flagship
-      return "grok-4.5";
     case "heavy":
-      return "grok-4.5";
+      return FLAGSHIP_MODEL;
     case "build":
-      return "grok-code-fast-1";
+      return BUILD_MODEL;
     default:
-      return "grok-4-1-fast-non-reasoning";
+      return FAST_MODEL;
   }
 }
 
@@ -614,10 +651,19 @@ async function callXaiChat(req = {}) {
       lastErr = r;
       const msg = r.error || "";
       // Multi-agent models rejected on chat/completions → force single-agent and retry
-      if (/multi\s*agent|not allowed on chat completions/i.test(msg)) {
+      // (do not surface this error if a later model succeeds)
+      if (/multi\s*agent|not allowed on chat completions|multi-?agent requests are not allowed/i.test(msg)) {
         const fallback = sanitizeChatModel(
-          mode === "max" || mode === "heavy" ? "grok-4.5" : "grok-4.20-reasoning",
-          mode,
+          mode === "build"
+            ? BUILD_MODEL
+            : mode === "fast"
+              ? FAST_MODEL
+              : mode === "balanced"
+                ? BALANCED_MODEL
+                : mode === "expert"
+                  ? THINK_MODEL
+                  : FLAGSHIP_MODEL,
+          mode === "auto" ? "max" : mode,
         );
         if (!tried.has(fallback)) queue.unshift(fallback);
         continue;
@@ -2429,18 +2475,33 @@ async function callXaiChatStream(req = {}, handlers = {}) {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      if (/multi\s*agent|not allowed on chat completions/i.test(text) && !req._multiAgentRetried) {
-        const fallback =
-          mode === "max" || mode === "heavy" || mode === "auto"
-            ? "grok-4.5"
-            : mode === "build"
-              ? "grok-build-0.1"
-              : mode === "fast"
-                ? "grok-4-1-fast-non-reasoning"
-                : "grok-4.20-reasoning";
+      if (
+        /multi\s*agent|not allowed on chat completions|multi-?agent requests are not allowed/i.test(
+          text,
+        ) &&
+        !req._multiAgentRetried
+      ) {
+        // Never surface multi-agent error if we can complete on single-agent flagship
+        const fallback = sanitizeChatModel(
+          mode === "build"
+            ? "grok-code-fast-1"
+            : mode === "fast"
+              ? "grok-4-1-fast-non-reasoning"
+              : mode === "balanced"
+                ? "grok-4.3"
+                : mode === "expert"
+                  ? THINK_MODEL
+                  : FLAGSHIP_MODEL,
+          mode === "auto" ? "max" : mode,
+        );
         onStatus("retry-single-agent");
         return callXaiChatStream(
-          { ...req, model: sanitizeChatModel(fallback, mode), _multiAgentRetried: true },
+          {
+            ...req,
+            model: fallback,
+            mode: mode === "auto" ? "max" : mode,
+            _multiAgentRetried: true,
+          },
           handlers,
         );
       }
@@ -2515,6 +2576,7 @@ async function callXaiChatStream(req = {}, handlers = {}) {
       model,
       usage,
       freeTier,
+      accessPath: freeTier ? "api_free" : "api",
       streamed: true,
       ...(tokensOut ? { tokens: tokensOut } : {}),
     };

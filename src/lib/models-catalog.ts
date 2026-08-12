@@ -18,7 +18,7 @@ export type RouteIntent =
 export type RouteTier = "fast" | "balanced" | "think" | "deep" | "build" | "imagine";
 
 export type AutoRouteResult = {
-  routedMode: "fast" | "balanced" | "expert" | "heavy" | "build" | "imagine";
+  routedMode: "fast" | "balanced" | "expert" | "heavy" | "max" | "build" | "imagine";
   modelId: string;
   intent: RouteIntent;
   reason: string;
@@ -1241,9 +1241,9 @@ function tierToRoute(
   if (tier === "build") {
     return { routedMode: "build", modelId: slots.build, intent: "code" };
   }
-  // deep
+  // deep → Max (flagship 4.5). Heavy remains available as a manual mode.
   return {
-    routedMode: "heavy",
+    routedMode: "max",
     modelId: slots.heavy,
     intent: s.researchHit ? "research" : s.teamHit ? "team" : "chat_smart",
   };
