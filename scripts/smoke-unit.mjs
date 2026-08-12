@@ -197,3 +197,48 @@ console.log("smoke-unit OK");
   console.log("routeAuto golden OK");
 }
 
+
+// Perf util: delta coalescer + boot timeline + trace flags
+const perf = require("../desktop/perf-util.cjs");
+assert.equal(typeof perf.parseTrace, "function");
+assert.equal(typeof perf.createDeltaCoalescer, "function");
+const flags = perf.parseTrace({ GROKHUB_DEBUG: "1" });
+assert.equal(flags.debug, true);
+assert.equal(flags.boot, true);
+const tl = perf.createBootTimeline(() => 1000);
+tl.mark("a");
+const snap = tl.snapshot();
+assert.ok(Array.isArray(snap.phases));
+assert.equal(snap.phases[0].phase, "a");
+
+const sent = [];
+let now = 0;
+const timers = [];
+const coal = perf.createDeltaCoalescer({
+  maxWaitMs: 20,
+  maxChars: 10,
+  schedule: (fn, ms) => {
+    const fireAt = now + ms;
+    const entry = { fireAt, fn, cancelled: false };
+    timers.push(entry);
+    return () => {
+      entry.cancelled = true;
+    };
+  },
+});
+coal.push("hello", (s) => sent.push(s));
+// under maxChars — buffered
+assert.equal(sent.length, 0);
+coal.push("world!!", (s) => sent.push(s)); // exceeds maxChars
+assert.equal(sent.join(""), "helloworld!!");
+coal.push("x", (s) => sent.push(s));
+coal.flush((s) => sent.push(s));
+assert.ok(sent.includes("x") || sent.join("").endsWith("x"));
+const coalStats = coal.stats();
+assert.ok(coalStats.deltaCount >= 2);
+assert.ok(coalStats.flushCount >= 1);
+
+// Runtime metrics (TS via strip-types if available path — import not needed; file presence)
+assert.ok(fs.existsSync(path.join(process.cwd(), "src/lib/runtime-metrics.ts")));
+assert.ok(fs.existsSync(path.join(process.cwd(), "desktop/perf-util.cjs")));
+console.log("smoke-unit: perf helpers ok");

@@ -114,6 +114,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   return (
     <div
       id={`msg-${m.id}`}
+      style={{ contentVisibility: "auto", containIntrinsicSize: "auto 120px" }}
       className={cn(
         "group/msg msg-enter flex",
         m.role === "user" ? "justify-end" : "justify-start",
@@ -369,10 +370,23 @@ function ContextBudgetChip() {
   const threads = useGrokHub((s) => s.threads);
   const activeThreadId = useGrokHub((s) => s.activeThreadId);
   const memoryNotes = useGrokHub((s) => s.agentPrefs.memoryNotes);
+  const running = useGrokHub((s) => s.running);
+  // While streaming, freeze the expensive full-context estimate (update ~1Hz max)
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!running) {
+      setTick((n) => n + 1);
+      return;
+    }
+    const id = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [running]);
   const stats = useMemo(() => {
     const th = threads.find((x) => x.id === activeThreadId);
     return estimateThreadContextPercent(chat, th || null, memoryNotes);
-  }, [chat, threads, activeThreadId, memoryNotes]);
+    // tick gates recompute while running; chat still listed for idle accuracy
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick, running, threads, activeThreadId, memoryNotes, running ? null : chat]);
   const th = threads.find((x) => x.id === activeThreadId);
   const tone =
     stats.percent >= 85
@@ -750,6 +764,13 @@ export function ChatView() {
   useEffect(() => {
     if (!stickToBottomRef.current) {
       setShowJumpLatest(true);
+      return;
+    }
+    const el = listRef.current;
+    // Instant scroll during stream — smooth fights fast token paint
+    if (busy || streamStatus) {
+      if (el) el.scrollTop = el.scrollHeight;
+      else endRef.current?.scrollIntoView({ behavior: "auto" });
       return;
     }
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1579,15 +1600,15 @@ export function ChatView() {
               <ChatMessageRow
                 key={m.id}
                 m={m}
-                busy={busy}
-                streamStatus={streamStatus}
+                busy={busy && m.id === streamingMessageId}
+                streamStatus={m.id === streamingMessageId ? streamStatus : null}
                 streamingMessageId={streamingMessageId}
                 findHit={findOpen && findMatches.includes(m.id)}
                 isLastAssistant={m.id === lastAssistantId}
                 onRegenerate={() => void regenerateLast()}
-                editingId={editingId}
-                editDraft={editDraft}
-                copiedId={copiedId}
+                editingId={editingId === m.id ? editingId : null}
+                editDraft={editingId === m.id ? editDraft : ""}
+                copiedId={copiedId === m.id ? copiedId : null}
                 onJumpReply={jumpToReply}
                 onReply={replyToMessage}
                 onCopy={copyMessage}

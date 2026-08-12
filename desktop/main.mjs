@@ -71,6 +71,26 @@ const uiServer = safeRequire("ui-server", "./ui-server.cjs") || {
   resolveStartUrl: async () => ({ ok: false, url: "", error: "ui-server missing" }),
 };
 const appLog = safeRequire("log", "./log.cjs") || { info: () => {}, error: () => {} };
+const perfUtil = safeRequire("perf-util", "./perf-util.cjs") || {
+  parseTrace: () => ({ debug: false, boot: false, ipc: false, stream: false, host: false }),
+  createBootTimeline: () => ({ mark: () => ({}), snapshot: () => ({ phases: [] }) }),
+  createDeltaCoalescer: () => ({
+    push: (_p, send) => send && send(_p),
+    flush: (send) => send && send(""),
+    stats: () => ({ deltaCount: 0, charCount: 0, flushCount: 0 }),
+    resetStats: () => {},
+  }),
+  createIpcMetrics: () => ({
+    recordInvoke: () => {},
+    recordStream: () => {},
+    snapshot: () => ({}),
+    counters: {},
+  }),
+};
+const traceFlags = perfUtil.parseTrace(process.env);
+const ipcMetrics = perfUtil.createIpcMetrics();
+/** @type {ReturnType<typeof perfUtil.createBootTimeline> | null} */
+let bootTimeline = null;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -216,7 +236,13 @@ process.on("uncaughtException", (err) => {
   }
 });
 process.on("unhandledRejection", (err) => {
-  console.error("[GrokHub] unhandledRejection", err);
+  try {
+    appLog.error("unhandledRejection", {
+      err: err instanceof Error ? String(err.stack || err.message) : String(err),
+    });
+  } catch {
+    console.error("[GrokHub] unhandledRejection", err);
+  }
 });
 
 // Single instance: pin click while running focuses the existing window (no 2nd icon)
@@ -747,6 +773,7 @@ function createTray() {
 }
 
 function registerIpc() {
+  // Error-boundary only; timing lives in safeHandle (avoid double-count)
   const wrap = (fn) => {
     return async (...args) => {
       try {
@@ -766,8 +793,63 @@ function registerIpc() {
     } catch {
       /* ignore */
     }
-    ipcMain.handle(channel, listener);
+    ipcMain.handle(channel, async (event, ...args) => {
+      const t0 = Date.now();
+      try {
+        const out = await listener(event, ...args);
+        const ms = Date.now() - t0;
+        try {
+          ipcMetrics.recordInvoke(channel, ms, true);
+          if ((traceFlags.ipc || ms >= 100) && !String(channel).startsWith("grok:chatStream")) {
+            appLog.info?.("ipc", { channel, ms, ok: true });
+          }
+        } catch {
+          /* ignore */
+        }
+        return out;
+      } catch (e) {
+        const ms = Date.now() - t0;
+        try {
+          ipcMetrics.recordInvoke(channel, ms, false);
+          appLog.error?.("ipc-error", {
+            channel,
+            ms,
+            message: e instanceof Error ? e.message : String(e),
+          });
+        } catch {
+          /* ignore */
+        }
+        throw e;
+      }
+    });
   };
+
+  safeHandle("logs:tail", (_e, n) => {
+    try {
+      return { ok: true, text: appLog.tail?.(n ?? 80) || "", paths: appLog.paths?.() || null };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+  safeHandle("logs:paths", () => {
+    try {
+      return { ok: true, ...(appLog.paths?.() || {}) };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+  safeHandle("debug:metrics", () => {
+    try {
+      return {
+        ok: true,
+        ipc: ipcMetrics.snapshot(),
+        boot: bootTimeline?.snapshot?.() || null,
+        trace: traceFlags,
+      };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
 
   safeHandle("desktop:minimize", () => mainWindow?.minimize());
   safeHandle("desktop:maximize", () => {
@@ -1091,6 +1173,12 @@ function registerIpc() {
       const ac = new AbortController();
       streamAborts.set(streamId, ac);
       const sender = e.sender;
+      const streamT0 = Date.now();
+      let firstDeltaAt = 0;
+      const coalescer = perfUtil.createDeltaCoalescer({
+        maxWaitMs: 24,
+        maxChars: 64,
+      });
       const sendDelta = (d) => {
         try {
           if (!sender.isDestroyed()) {
@@ -1112,11 +1200,35 @@ function registerIpc() {
       try {
         const result = await grokBridge.callXaiChatStream(payload || {}, {
           signal: ac.signal,
-          onDelta: (d) => sendDelta(d),
+          onDelta: (d) => {
+            if (!firstDeltaAt) firstDeltaAt = Date.now();
+            coalescer.push(d, sendDelta);
+          },
           onStatus: (st) => sendStatus(st),
         });
+        coalescer.flush(sendDelta);
+        const stats = coalescer.stats();
+        try {
+          ipcMetrics.recordStream(stats);
+          if (traceFlags.stream || traceFlags.debug) {
+            appLog.info?.("stream-end", {
+              streamId,
+              ttfbMs: firstDeltaAt ? firstDeltaAt - streamT0 : null,
+              totalMs: Date.now() - streamT0,
+              ...stats,
+              ok: Boolean(result?.ok !== false),
+            });
+          }
+        } catch {
+          /* ignore */
+        }
         return { ...result, streamId, content: result.content || "" };
       } finally {
+        try {
+          coalescer.flush(sendDelta);
+        } catch {
+          /* ignore */
+        }
         streamAborts.delete(streamId);
       }
     });
@@ -1213,12 +1325,26 @@ app.on("will-quit", () => {
 
 app.whenReady().then(async () => {
   if (!gotLock) return;
+  bootTimeline = perfUtil.createBootTimeline();
+  const bootMark = (phase, extra) => {
+    try {
+      const row = bootTimeline.mark(phase, extra);
+      if (traceFlags.boot || traceFlags.debug) {
+        appLog.info?.("boot-phase", row);
+      }
+      return row;
+    } catch {
+      return null;
+    }
+  };
+  bootMark("whenReady");
   try {
     appLog.info("boot", {
       version: process.env.npm_package_version || undefined,
       electron: process.versions.electron,
       platform: process.platform,
       home: process.env.GROKHUB_HOME || null,
+      debug: Boolean(traceFlags.debug),
     });
     try {
       const rot = appLog.rotateOldLogs?.(5);
@@ -1226,19 +1352,23 @@ app.whenReady().then(async () => {
     } catch {
       /* ignore */
     }
-    // Prune rollback tree older than 7d if current install is healthy
-    try {
-      const root =
-        process.env.GROKHUB_HOME ||
-        require("./ui-server.cjs").appRootFrom(__dirname);
-      if (root && grokBridge.pruneStalePrevInstalls) {
-        const steps = [];
-        await grokBridge.pruneStalePrevInstalls(root, steps, 7 * 86400_000);
-        if (steps.length) appLog.info("prev-prune", { steps });
-      }
-    } catch {
-      /* ignore */
-    }
+    // Prune rollback tree older than 7d — off critical path
+    setImmediate(() => {
+      void (async () => {
+        try {
+          const root =
+            process.env.GROKHUB_HOME ||
+            require("./ui-server.cjs").appRootFrom(__dirname);
+          if (root && grokBridge.pruneStalePrevInstalls) {
+            const steps = [];
+            await grokBridge.pruneStalePrevInstalls(root, steps, 7 * 86400_000);
+            if (steps.length) appLog.info("prev-prune", { steps });
+          }
+        } catch {
+          /* ignore */
+        }
+      })();
+    });
   } catch {
     /* ignore */
   }
@@ -1246,6 +1376,7 @@ app.whenReady().then(async () => {
   try {
     const layout = memoryStore.ensureLayout();
     appLog.info("memory-layout", layout);
+    bootMark("memory-layout");
   } catch (e) {
     try {
       appLog.warn?.("memory-layout failed", String(e?.message || e));
@@ -1271,18 +1402,7 @@ app.whenReady().then(async () => {
     /* ignore */
   }
 
-  // Ensure Nitro UI is up before opening the window
-  try {
-    const resolved = await uiServer.resolveStartUrl(__dirname);
-    if (resolved.url) process.env.GROKHUB_URL = resolved.url;
-    if (!resolved.ok && resolved.error) {
-      console.error("[GrokHub]", resolved.error);
-    }
-  } catch (e) {
-    console.error("[GrokHub] UI bootstrap failed", e);
-  }
-
-  // Dock / taskbar name + pin identity
+  // Dock / taskbar name + pin identity (cheap — before window)
   try {
     app.setName(APP_DISPLAY_NAME);
   } catch {
@@ -1302,15 +1422,11 @@ app.whenReady().then(async () => {
       /* ignore */
     }
   }
-  // Best-effort Start Menu / app menu entry (Linux .desktop or Windows .lnk)
-  if (process.platform === "linux" || process.platform === "win32") {
-    try {
-      desktopEntry.installMenuEntry();
-    } catch {
-      /* ignore */
-    }
-  }
+
+  // Register IPC early so a loading window can talk to main
   registerIpc();
+  bootMark("ipc-ready");
+
   try {
     agentCore.start({
       intervalMs: 15000,
@@ -1327,23 +1443,97 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.error("[GrokHub] agent-core start failed", e);
   }
-  try {
-    if (typeof websiteSession.hydrateWebsiteSession === "function") {
-      const h = await websiteSession.hydrateWebsiteSession();
+
+  // Start UI resolve in parallel with shell window creation
+  const uiReady = (async () => {
+    try {
+      const resolved = await uiServer.resolveStartUrl(__dirname);
+      if (resolved.url) process.env.GROKHUB_URL = resolved.url;
+      bootMark("ui-ready", { ok: Boolean(resolved.ok), url: resolved.url || null });
+      if (!resolved.ok && resolved.error) {
+        console.error("[GrokHub]", resolved.error);
+        appLog.error?.("ui-bootstrap", { error: resolved.error });
+      }
+      return resolved;
+    } catch (e) {
+      console.error("[GrokHub] UI bootstrap failed", e);
+      appLog.error?.("ui-bootstrap", { error: String(e?.message || e) });
+      return { ok: false, url: process.env.GROKHUB_URL || "", error: String(e) };
+    }
+  })();
+
+  // Create window shell immediately (show:false until ready-to-show).
+  // If UI is already up (launcher), loadURL hits it; else we reload after resolve.
+  createWindow();
+  createTray();
+  bootMark("window-created");
+
+  const resolved = await uiReady;
+  if (resolved?.url && mainWindow && !mainWindow.isDestroyed()) {
+    const current = process.env.GROKHUB_URL || resolved.url;
+    try {
+      const loaded = mainWindow.webContents.getURL?.() || "";
+      if (!loaded || loaded.startsWith("data:") || !loaded.includes(String(new URL(current).port || ""))) {
+        void mainWindow.loadURL(current).catch(() => {});
+      }
+    } catch {
       try {
-        appLog.info?.(
-          "usage",
-          `hydrate ${JSON.stringify({ ok: h?.ok, signedIn: h?.signedIn, fromSecrets: h?.fromSecrets })}`,
-        );
+        void mainWindow.loadURL(current);
       } catch {
         /* ignore */
       }
     }
-  } catch (e) {
-    console.error("[GrokHub] website session hydrate failed", e);
   }
-  createWindow();
-  createTray();
+  bootMark("ui-load");
+
+  // Defer non-critical work until after first paint opportunity (once)
+  let bgDeferred = false;
+  const deferBg = () => {
+    if (bgDeferred) return;
+    bgDeferred = true;
+    // Best-effort Start Menu / app menu entry (Linux .desktop or Windows .lnk)
+    if (process.platform === "linux" || process.platform === "win32") {
+      try {
+        desktopEntry.installMenuEntry();
+      } catch {
+        /* ignore */
+      }
+    }
+    void (async () => {
+      try {
+        if (typeof websiteSession.hydrateWebsiteSession === "function") {
+          const h = await websiteSession.hydrateWebsiteSession();
+          bootMark("hydrate", { ok: h?.ok, signedIn: h?.signedIn });
+          try {
+            appLog.info?.(
+              "usage",
+              `hydrate ${JSON.stringify({ ok: h?.ok, signedIn: h?.signedIn, fromSecrets: h?.fromSecrets })}`,
+            );
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch (e) {
+        console.error("[GrokHub] website session hydrate failed", e);
+      }
+      try {
+        appLog.info?.("boot-complete", bootTimeline?.snapshot?.());
+      } catch {
+        /* ignore */
+      }
+    })();
+  };
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.once("ready-to-show", () => {
+      bootMark("ready-to-show");
+      setImmediate(deferBg);
+    });
+    // Fallback if ready-to-show never fires (headless / agent)
+    setTimeout(deferBg, 4000);
+  } else {
+    setImmediate(deferBg);
+  }
+
   if (agentMode) {
     // Headless / always-on: keep tray, hide main window after create
     try {

@@ -1,7 +1,7 @@
 /**
  * Lightweight code block chrome + simple syntax coloring (no heavy deps).
  */
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { cn } from "./utils";
 
@@ -13,9 +13,9 @@ const NUMBERS = /\b(\d+\.?\d*)\b/g;
 
 function escapeHtml(s: string) {
   return s
-    .replace(/&/g, "&")
-    .replace(/</g, "<")
-    .replace(/>/g, ">");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 export function highlightCode(code: string, lang?: string): string {
@@ -28,18 +28,25 @@ export function highlightCode(code: string, lang?: string): string {
   return html;
 }
 
-export function CodeBlock({
+export const CodeBlock = memo(function CodeBlock({
   code,
   language,
   className,
+  streaming,
 }: {
   code: string;
   language?: string;
   className?: string;
+  /** Skip regex highlight while the parent message is still streaming */
+  streaming?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const lang = (language || "").replace(/^language-/, "") || "code";
-  const html = highlightCode(code.replace(/\n$/, ""), lang);
+  const body = code.replace(/\n$/, "");
+  const html = useMemo(() => {
+    if (streaming) return null;
+    return highlightCode(body, lang);
+  }, [body, lang, streaming]);
 
   async function copy() {
     try {
@@ -72,11 +79,17 @@ export function CodeBlock({
         </button>
       </div>
       <pre className="m-0 overflow-x-auto p-3">
-        <code
-          className="font-mono text-[12.5px] leading-relaxed text-[var(--color-fg)]"
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
+        {html ? (
+          <code
+            className="font-mono text-[12.5px] leading-relaxed text-[var(--color-fg)]"
+            dangerouslySetInnerHTML={{ __html: html }}
+          />
+        ) : (
+          <code className="font-mono text-[12.5px] leading-relaxed text-[var(--color-fg)]">
+            {body}
+          </code>
+        )}
       </pre>
     </div>
   );
-}
+});
