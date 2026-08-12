@@ -430,7 +430,7 @@ function createWindow(opts = {}) {
     minWidth: 880,
     minHeight: 600,
     show: false,
-    backgroundColor: "#0a0a0b",
+    backgroundColor: "#090909",
     title: APP_DISPLAY_NAME,
     icon: icon.isEmpty() ? undefined : icon,
     frame: false,
@@ -523,7 +523,7 @@ function createWindow(opts = {}) {
       mainWindow.__ghUiLastError = String(msg || "unknown error");
       return;
     }
-    const html = `<!doctype html><html><body style="font-family:system-ui;background:#0a0a0b;color:#eee;padding:2rem;line-height:1.5">
+    const html = `<!doctype html><html><body style="font-family:system-ui;background:#090909;color:#eee;padding:2rem;line-height:1.5">
       <h1 style="margin:0 0 1rem">GrokHub UI failed to load</h1>
       <p>${String(msg || "unknown error").replace(/</g, "&lt;")}</p>
       <p>Tried: <code>${startUrl}</code></p>
@@ -1696,7 +1696,7 @@ app.whenReady().then(async () => {
       if (mainWindow.__ghUiLastError) {
         // trigger show via failed flag — force one last load attempt already done
         try {
-          const html = `<!doctype html><html><body style="font-family:system-ui;background:#0a0a0b;color:#eee;padding:2rem">
+          const html = `<!doctype html><html><body style="font-family:system-ui;background:#090909;color:#eee;padding:2rem">
             <h1>GrokHub UI failed to load</h1>
             <p>${String(mainWindow.__ghUiLastError).replace(/</g, "&lt;")}</p>
             <p>Tried: <code>${current}</code></p>
