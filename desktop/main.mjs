@@ -503,10 +503,22 @@ function createWindow() {
     process.env.GROKHUB_URL ||
     `http://127.0.0.1:${uiServer.pickPort()}`;
 
+  // Track successful UI load so parallel bootstrap can force a retry after Nitro is ready
+  // (without this, a race loads the error page and never reloads when the port is already in the URL)
+  mainWindow.__ghUiLoadOk = false;
+  mainWindow.__ghUiLoadPending = true;
+
   const showLoadError = (msg) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    // Don't clobber a good page, and suppress while bootstrap is still bringing UI up
+    if (mainWindow.__ghUiLoadOk) return;
+    if (mainWindow.__ghUiBootstrapHold) {
+      mainWindow.__ghUiLastError = String(msg || "unknown error");
+      return;
+    }
     const html = `<!doctype html><html><body style="font-family:system-ui;background:#0a0a0b;color:#eee;padding:2rem;line-height:1.5">
       <h1 style="margin:0 0 1rem">GrokHub UI failed to load</h1>
-      <p>${String(msg || "unknown error").replace(/</g, "<")}</p>
+      <p>${String(msg || "unknown error").replace(/</g, "&lt;")}</p>
       <p>Tried: <code>${startUrl}</code></p>
       <p style="color:#9ca3af">Fix: reinstall with a built <code>.output</code> folder<br/>
       Arch: <code>sudo ./scripts/install-arch.sh</code><br/>
@@ -518,13 +530,32 @@ function createWindow() {
     );
   };
 
+  mainWindow.webContents.on("did-finish-load", () => {
+    try {
+      const u = mainWindow?.webContents?.getURL?.() || "";
+      if (/^https?:\/\//i.test(u) && !u.startsWith("data:")) {
+        mainWindow.__ghUiLoadOk = true;
+        mainWindow.__ghUiLoadPending = false;
+        mainWindow.__ghUiLastError = null;
+      }
+    } catch {
+      /* ignore */
+    }
+  });
+
   mainWindow.webContents.on("did-fail-load", (_e, code, desc, url, isMain) => {
     if (!isMain) return;
-    if (code === -3) return; // aborted
+    // -3 ERR_ABORTED: superseded navigation (retry / second loadURL) — ignore
+    if (code === -3 || Number(code) === -3) return;
+    mainWindow.__ghUiLoadOk = false;
+    mainWindow.__ghUiLoadPending = false;
     showLoadError(`${desc} (${code}) loading ${url}`);
   });
 
+  // Soft hold: don't flash error page while UI server is still starting
+  mainWindow.__ghUiBootstrapHold = true;
   void mainWindow.loadURL(startUrl).catch((err) => {
+    mainWindow.__ghUiLoadOk = false;
     showLoadError(err instanceof Error ? err.message : String(err));
   });
 
@@ -1463,24 +1494,74 @@ app.whenReady().then(async () => {
   })();
 
   // Create window shell immediately (show:false until ready-to-show).
-  // If UI is already up (launcher), loadURL hits it; else we reload after resolve.
+  // Always re-verify load after UI resolve — parallel probe can race the first navigation.
   createWindow();
   createTray();
   bootMark("window-created");
 
   const resolved = await uiReady;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.__ghUiBootstrapHold = false;
+  }
   if (resolved?.url && mainWindow && !mainWindow.isDestroyed()) {
-    const current = process.env.GROKHUB_URL || resolved.url;
-    try {
-      const loaded = mainWindow.webContents.getURL?.() || "";
-      if (!loaded || loaded.startsWith("data:") || !loaded.includes(String(new URL(current).port || ""))) {
-        void mainWindow.loadURL(current).catch(() => {});
+    const current = (process.env.GROKHUB_URL || resolved.url).replace(/\/$/, "");
+    process.env.GROKHUB_URL = current;
+    const needReload = () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      if (mainWindow.__ghUiLoadOk) {
+        try {
+          const u = mainWindow.webContents.getURL?.() || "";
+          return !/^https?:\/\//i.test(u) || u.startsWith("data:");
+        } catch {
+          return true;
+        }
       }
-    } catch {
+      return true;
+    };
+    if (needReload()) {
       try {
-        void mainWindow.loadURL(current);
+        appLog.info?.("ui-reload", { url: current, reason: "post-resolve" });
       } catch {
         /* ignore */
+      }
+      try {
+        mainWindow.__ghUiLoadOk = false;
+        mainWindow.__ghUiLoadPending = true;
+        await mainWindow.loadURL(current);
+      } catch (e) {
+        // One more retry after a short wait (Nitro sometimes binds a beat late)
+        await new Promise((r) => setTimeout(r, 400));
+        try {
+          await mainWindow.loadURL(current);
+        } catch (e2) {
+          const msg = e2 instanceof Error ? e2.message : String(e2 || e);
+          try {
+            mainWindow.__ghUiBootstrapHold = false;
+            if (typeof mainWindow.webContents?.loadURL === "function") {
+              // fall through to did-fail-load / explicit error
+            }
+          } catch {
+            /* ignore */
+          }
+          appLog.error?.("ui-reload-failed", { error: msg });
+        }
+      }
+    }
+    // If still not ok, surface the deferred error
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.__ghUiLoadOk) {
+      mainWindow.__ghUiBootstrapHold = false;
+      if (mainWindow.__ghUiLastError) {
+        // trigger show via failed flag — force one last load attempt already done
+        try {
+          const html = `<!doctype html><html><body style="font-family:system-ui;background:#0a0a0b;color:#eee;padding:2rem">
+            <h1>GrokHub UI failed to load</h1>
+            <p>${String(mainWindow.__ghUiLastError).replace(/</g, "&lt;")}</p>
+            <p>Tried: <code>${current}</code></p>
+          </body></html>`;
+          void mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+        } catch {
+          /* ignore */
+        }
       }
     }
   }
