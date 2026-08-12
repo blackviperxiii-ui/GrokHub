@@ -405,6 +405,10 @@ async function runExec(command, cwd, timeoutMs = 30_000, opts = {}) {
   });
 }
 
+
+let listAppsCache = { at: 0, apps: null };
+const LIST_APPS_TTL_MS = 45_000;
+
 async function listAppsWindows() {
   const apps = [];
   const roots = [
@@ -436,63 +440,72 @@ async function listAppsWindows() {
 }
 
 async function listApps() {
+  const now = Date.now();
+  if (listAppsCache.apps && now - listAppsCache.at < LIST_APPS_TTL_MS) {
+    return listAppsCache.apps;
+  }
+
+  let result;
   if (isWin) {
     const apps = await listAppsWindows();
     apps.sort((a, b) => a.name.localeCompare(b.name));
     const seen = new Set();
-    return apps.filter((a) => {
+    result = apps.filter((a) => {
       const k = a.name.toLowerCase();
       if (seen.has(k)) return false;
       seen.add(k);
       return true;
     }).slice(0, 500);
-  }
-  const dirs = [
-    "/usr/share/applications",
-    "/usr/local/share/applications",
-    path.join(os.homedir(), ".local/share/applications"),
-  ];
-  const apps = [];
-  for (const dir of dirs) {
-    let files = [];
-    try {
-      files = (await fs.readdir(dir)).filter((f) => f.endsWith(".desktop"));
-    } catch {
-      continue;
-    }
-    for (const file of files.slice(0, 500)) {
-      const desktopFile = path.join(dir, file);
+  } else {
+    const dirs = [
+      "/usr/share/applications",
+      "/usr/local/share/applications",
+      path.join(os.homedir(), ".local/share/applications"),
+    ];
+    const apps = [];
+    for (const dir of dirs) {
+      let files = [];
       try {
-        const raw = await fs.readFile(desktopFile, "utf8");
-        if (/^NoDisplay\s*=\s*true/im.test(raw)) continue;
-        if (/^Hidden\s*=\s*true/im.test(raw)) continue;
-        const name = (raw.match(/^Name\s*=\s*(.+)$/m) || [])[1]?.trim() || file;
-        const execLine = (raw.match(/^Exec\s*=\s*(.+)$/m) || [])[1]?.trim() || "";
-        const terminal = /^Terminal\s*=\s*true/im.test(raw);
-        const execCmd = execLine.replace(/\s+%[a-zA-Z]/g, "").trim();
-        if (!execCmd) continue;
-        apps.push({
-          id: `${dir}:${file}`,
-          name,
-          exec: execCmd,
-          desktopFile,
-          terminal,
-        });
+        files = (await fs.readdir(dir)).filter((f) => f.endsWith(".desktop"));
       } catch {
-        /* skip */
+        continue;
+      }
+      for (const file of files.slice(0, 500)) {
+        const desktopFile = path.join(dir, file);
+        try {
+          const raw = await fs.readFile(desktopFile, "utf8");
+          if (/^NoDisplay\s*=\s*true/im.test(raw)) continue;
+          if (/^Hidden\s*=\s*true/im.test(raw)) continue;
+          const name = (raw.match(/^Name\s*=\s*(.+)$/m) || [])[1]?.trim() || file;
+          const execLine = (raw.match(/^Exec\s*=\s*(.+)$/m) || [])[1]?.trim() || "";
+          const terminal = /^Terminal\s*=\s*true/im.test(raw);
+          const execCmd = execLine.replace(/\s+%[a-zA-Z]/g, "").trim();
+          if (!execCmd) continue;
+          apps.push({
+            id: `${dir}:${file}`,
+            name,
+            exec: execCmd,
+            desktopFile,
+            terminal,
+          });
+        } catch {
+          /* skip */
+        }
       }
     }
+    apps.sort((a, b) => a.name.localeCompare(b.name));
+    const seen = new Set();
+    result = apps
+      .filter((a) => {
+        const k = a.name.toLowerCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .slice(0, 500);
   }
-  apps.sort((a, b) => a.name.localeCompare(b.name));
-  const seen = new Set();
-  return apps
-    .filter((a) => {
-      const k = a.name.toLowerCase();
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    })
-    .slice(0, 500);
+  listAppsCache = { at: Date.now(), apps: result };
+  return result;
 }
 
 async function openApp(opts = {}) {

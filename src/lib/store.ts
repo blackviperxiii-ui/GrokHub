@@ -174,6 +174,21 @@ import { runHealthPass, formatHealthMarkdown } from "./health-pass";
 import { resolveModeArg, slashHelpMarkdown } from "./slash-commands";
 
 /** In-flight LLM auto-titles (thread id). */
+/** Short-lived pin bundle cache (avoids re-reading memory files every send). */
+let pinBundleCache: { at: number; bundle: string } | null = null;
+const PIN_BUNDLE_TTL_MS = 8_000;
+
+async function loadMemoryPinBundleCached(): Promise<{ bundle: string }> {
+  const now = Date.now();
+  if (pinBundleCache && now - pinBundleCache.at < PIN_BUNDLE_TTL_MS) {
+    return { bundle: pinBundleCache.bundle };
+  }
+  const fileMem = await loadMemoryPinBundle();
+  const bundle = fileMem.bundle || "";
+  pinBundleCache = { at: now, bundle };
+  return { bundle };
+}
+
 const autoTitleInflight = new Set<string>();
 /** Prevent parallel agent queue drains */
 let agentQueueDraining = false;
@@ -1569,7 +1584,7 @@ export const useGrokHub = create<State>()(
             name: projectNameFromPath(root),
             summary,
             boundAt: Date.now(),
-            threadId: get().activeThreadId,
+            threadId: get().activeThreadId || undefined,
           };
           set({ projectWorkspace: ws });
           scheduleSettingsPersist();
@@ -1600,9 +1615,27 @@ export const useGrokHub = create<State>()(
         const counts = workboardCounts(get().workboard);
         const open =
           counts.proposed + counts.approved + counts.staged + counts.in_progress;
+        let context: {
+          percent?: number;
+          tokensEst?: number;
+          budget?: number;
+          shouldCompact?: boolean;
+        } | undefined;
+        try {
+          const stats = get().getContextStats();
+          context = {
+            percent: stats.percent,
+            tokensEst: stats.tokensEst,
+            budget: stats.budget,
+            shouldCompact: stats.shouldCompact,
+          };
+        } catch {
+          /* ignore */
+        }
         return copyDiagnostics({
           learningLine: learningSummaryLine(get().learning),
           workboardOpen: open,
+          context,
         });
       },
 
@@ -5208,6 +5241,12 @@ if (cmd === "tools") {
         let usedLive = false;
         let finalAnswer = "";
         let aborted = false;
+        let turnStartedAt = Date.now();
+        let firstTokenAt = 0;
+        let deltaPaints = 0;
+        let streamRounds = 0;
+        let streamModelId = "";
+        let streamAccumChars = 0;
         try {
         // Host helpers always available for final sanitization
         const {
@@ -5246,25 +5285,13 @@ if (cmd === "tools") {
 
             // Multi-turn host tool loop (model can emit HOST_CMD: lines)
             const { expandMessageMedia } = await import("./chat-media");
-            // Context manager: auto-compact if over budget, then budgeted history
-            {
-              const th0 = get().threads.find((x) => x.id === get().activeThreadId);
-              const probe = buildContext({
-                messages: get().chat.filter((c) => c.id !== botId),
-                thread: th0 || null,
-                memoryNotes: get().agentPrefs.memoryNotes,
-                openClawBundle: get().openClawWorkspace?.contextBundle,
-                trimTools: true,
-              });
-              if (probe.shouldCompact) {
-                const r = get().compactThread(get().activeThreadId);
-                if (r.ok) {
-                  set({ streamStatus: "Context compacted…" });
-                  await wait(120);
-                }
-              }
-            }
+            const { perfMark } = await import("./runtime-metrics");
+            perfMark("send-start");
+            turnStartedAt = Date.now();
+            firstTokenAt = 0;
+            deltaPaints = 0;
 
+            // Build expanded history once, then single buildContext (compact if needed)
             const thCtx = get().threads.find((x) => x.id === get().activeThreadId);
             const rawForCtx = get()
               .chat.filter((c) => c.role === "user" || c.role === "assistant")
@@ -5310,13 +5337,13 @@ if (cmd === "tools") {
               });
             }
 
-            // M1 file memory pin (USER.md / MEMORY.md / daily)
+            // M1 file memory pin (USER.md / MEMORY.md / daily) — cached across rapid turns
             const notes = get().agentPrefs.memoryNotes || "";
             if (notes.trim()) {
               void migrateNotesToFileMemory(notes);
             }
-            const fileMem = await loadMemoryPinBundle();
-            const ctxBuilt = buildContext({
+            const fileMem = await loadMemoryPinBundleCached();
+            let ctxBuilt = buildContext({
               messages: expandedMsgs,
               thread: thCtx || null,
               memoryNotes: notes,
@@ -5331,10 +5358,40 @@ if (cmd === "tools") {
               capabilityBlock: undefined, // filled below after we know tool flags
               trimTools: true,
             });
+            // Auto-compact once if over budget, then rebuild context from compacted thread
+            if (ctxBuilt.shouldCompact) {
+              const r = get().compactThread(get().activeThreadId);
+              if (r.ok) {
+                set({ streamStatus: "Context compacted…" });
+                await wait(80);
+                const thAfter = get().threads.find((x) => x.id === get().activeThreadId);
+                const msgsAfter = (thAfter?.messages || get().chat).filter(
+                  (c) =>
+                    (c.role === "user" || c.role === "assistant") && c.id !== botId,
+                );
+                ctxBuilt = buildContext({
+                  messages: msgsAfter.length ? msgsAfter : expandedMsgs,
+                  thread: thAfter || thCtx || null,
+                  memoryNotes: notes,
+                  fileMemoryBundle: fileMem.bundle || "",
+                  learningBundle: learningPinBundle(get().learning),
+                  projectBundle: projectContextBlock(get().projectWorkspace),
+                  workboardBundle: workboardContextBlock(get().workboard),
+                  openClawBundle: get().openClawWorkspace?.contextBundle,
+                  connectorBlock: (await import("./grok")).connectorContextBlock(
+                    get().connectors,
+                  ),
+                  capabilityBlock: undefined,
+                  trimTools: true,
+                });
+              }
+            }
             const history: Array<{ role: "user" | "assistant"; content: string }> =
               ctxBuilt.messages;
+            perfMark("context-ready");
 
 const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
+            streamModelId = modelId;
             // Hold Adaptive decision so it feels intentional (not a flash)
             if (mode === "auto") {
               set({
@@ -5458,6 +5515,7 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
 
 while (rounds < maxRounds && !aborted) {
               rounds += 1;
+              streamRounds = rounds;
               if (abort.signal.aborted || gen !== chatGeneration) {
                 aborted = true;
                 break;
@@ -5516,6 +5574,7 @@ while (rounds < maxRounds && !aborted) {
                     if (gen !== chatGeneration) return;
                     roundText += piece;
                     accumulated = roundText;
+                    if (!firstTokenAt) firstTokenAt = Date.now();
                     const scrub = (s: string) => scrubAssistant(s) || "…";
                     // First token: paint immediately so stream never looks dead
                     const g = globalThis as unknown as {
@@ -5524,6 +5583,7 @@ while (rounds < maxRounds && !aborted) {
                     };
                     if (!g.__ghFirstTok) {
                       g.__ghFirstTok = true;
+                      deltaPaints += 1;
                       patchBot(scrub(roundText), { streaming: true });
                       set({
                         streamStatus:
@@ -5536,6 +5596,7 @@ while (rounds < maxRounds && !aborted) {
                       g.__ghRaf = requestAnimationFrame(() => {
                         g.__ghRaf = 0;
                         if (gen !== chatGeneration) return;
+                        deltaPaints += 1;
                         patchBot(scrub(roundText), { streaming: true });
                       });
                     }
@@ -6221,10 +6282,36 @@ if (!cmds.length) {
             aborted = true;
           } else {
             const msg = e instanceof Error ? e.message : "request failed";
+            try {
+              const { pushRuntimeError } = await import("./runtime-metrics");
+              pushRuntimeError("sendChat", msg);
+            } catch {
+              /* ignore */
+            }
             finalAnswer = friendlyAssistantError(msg);
             set({ grokConnected: false, grokStatusDetail: msg });
             patchBot(finalAnswer, { streaming: false });
           }
+        }
+
+        // Record stream turn metrics for diagnostics (best-effort)
+        try {
+          streamAccumChars = (finalAnswer || "").length;
+          const { recordStreamTurn } = await import("./runtime-metrics");
+          recordStreamTurn({
+            ts: new Date().toISOString(),
+            threadId: get().activeThreadId ?? undefined,
+            model: streamModelId || undefined,
+            ttfbMs: firstTokenAt ? firstTokenAt - turnStartedAt : undefined,
+            totalMs: Date.now() - turnStartedAt,
+            rounds: streamRounds,
+            chars: streamAccumChars,
+            deltaPaints,
+            ok: !aborted && Boolean(finalAnswer),
+            error: aborted ? "aborted" : undefined,
+          });
+        } catch {
+          /* ignore */
         }
 
         if (gen !== chatGeneration) {
