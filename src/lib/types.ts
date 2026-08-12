@@ -12,7 +12,7 @@ export type NavId =
   | "desktop"
   | "settings";
 
-/** Matches Grok web model modes (Auto / Fast / Expert / Heavy / Build). */
+/** Adaptive + permanent Fast / Balanced / Max / Build. Expert/Heavy remapped on load. */
 export type GrokModeId = "auto" | "fast" | "balanced" | "expert" | "heavy" | "max" | "build";
 
 export type GrokMode = {
@@ -133,7 +133,7 @@ export type ChatMessage = {
   content: string;
   ts: number;
   mode?: GrokModeId;
-  /** Adaptive tier actually used (⚡ Fast / 🧠 Think / 🔬 Deep / …) */
+  /** Adaptive tier actually used (⚡ Fast / ⚖️ Balanced / 🚀 Max / 🛠️ Build) */
   routeTier?: "fast" | "balanced" | "think" | "deep" | "build" | "imagine";
   /** Human explanation for hover */
   routeReason?: string;
