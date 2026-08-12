@@ -63,6 +63,28 @@ assert.equal(
   "launcher must not invoke fuser -k",
 );
 
+// Backend must be fully healthy before Electron creates a window
+const mainSrc = fs.readFileSync(path.join(process.cwd(), "desktop/main.mjs"), "utf8");
+assert.doesNotMatch(
+  mainSrc,
+  /Start UI resolve in parallel with shell window creation/,
+  "must not create the Electron window in parallel with backend boot",
+);
+assert.match(mainSrc, /waiting-backend/, "main must wait for backend before createWindow");
+assert.match(mainSrc, /createWindow\(\{\s*startUrl:/s, "createWindow only after resolveStartUrl");
+assert.ok(
+  mainSrc.indexOf("waiting-backend") < mainSrc.indexOf("createWindow({"),
+  "wait for backend before first createWindow",
+);
+
+const uiSrc = fs.readFileSync(path.join(process.cwd(), "desktop/ui-server.cjs"), "utf8");
+assert.match(uiSrc, /HEALTHY_BODY_RE/, "probe must require a real HTML body");
+assert.match(uiSrc, /waitUntilHealthy/, "ui-server exports waitUntilHealthy");
+assert.ok(
+  fs.existsSync(path.join(process.cwd(), "desktop/wait-backend.cjs")),
+  "wait-backend.cjs launcher helper required",
+);
+
 // Context manager module present
 assert.ok(
   fs.existsSync(path.join(process.cwd(), "src/lib/context-manager.ts")),
