@@ -140,6 +140,13 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     delete: (jobId) => ipcRenderer.invoke("imagine:delete", jobId),
     clear: () => ipcRenderer.invoke("imagine:clear"),
   },
+  logs: {
+    tail: (n) => ipcRenderer.invoke("logs:tail", n),
+    paths: () => ipcRenderer.invoke("logs:paths"),
+  },
+  debug: {
+    metrics: () => ipcRenderer.invoke("debug:metrics"),
+  },
 });
 
 

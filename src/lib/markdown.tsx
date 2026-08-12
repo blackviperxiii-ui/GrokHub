@@ -1,5 +1,5 @@
 import type { Components } from "react-markdown";
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CodeBlock } from "./code-highlight";
@@ -49,7 +49,8 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   );
 }
 
-const components: Components = {
+function buildMarkdownComponents(streaming?: boolean): Components {
+  return {
   a: ({ href, children }) => (
     <a
       href={href}
@@ -66,7 +67,13 @@ const components: Components = {
     const isBlock =
       Boolean(langMatch) || text.includes("\n") || (className || "").includes("language-");
     if (isBlock) {
-      return <CodeBlock code={text} language={langMatch?.[1] || "code"} />;
+      return (
+        <CodeBlock
+          code={text}
+          language={langMatch?.[1] || "code"}
+          streaming={streaming}
+        />
+      );
     }
     return (
       <code
@@ -138,7 +145,8 @@ const components: Components = {
     <hr className="my-3 border-0 border-t border-[var(--color-border-strong)] opacity-70" />
   ),
   img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
-};
+  };
+}
 
 /** Throttle markdown re-renders while streaming to cut layout thrash. */
 function useThrottledContent(content: string, streaming?: boolean, ms = 100) {
@@ -165,8 +173,26 @@ export const MarkdownBody = memo(function MarkdownBody({
   /** While streaming, still render markdown so hierarchy stays visible */
   streaming?: boolean;
 }) {
-  const body = useThrottledContent(content, streaming, 100);
+  // Slightly slower markdown refresh while streaming; plain text for very long bodies
+  const body = useThrottledContent(content, streaming, streaming ? 160 : 0);
+  const components = useMemo(() => buildMarkdownComponents(streaming), [streaming]);
   if (!body && !content) return null;
+
+  // Long streaming replies: plain text is much cheaper than full remark-gfm reparse
+  if (streaming && (body || content).length > 1400) {
+    return (
+      <div
+        className={cn(
+          "markdown-body markdown-streaming min-w-0 break-words whitespace-pre-wrap",
+          className,
+        )}
+      >
+        {body || content}
+        <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-[var(--color-fg)] align-middle opacity-70" />
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
