@@ -218,6 +218,10 @@ console.log("smoke-unit OK");
   );
   assert.doesNotMatch(settingsSrc, /sec-model-overrides/);
   assert.doesNotMatch(settingsSrc, /setModelOverride/);
+  assert.doesNotMatch(settingsSrc, /sec-models/);
+  assert.doesNotMatch(settingsSrc, /sec-modes/);
+  assert.match(settingsSrc, /DevicesHubPanel/);
+  assert.match(settingsSrc, /id: "devices"/);
   const slashSrc = fs.readFileSync(
     path.join(process.cwd(), "src/lib/slash-commands.ts"),
     "utf8",
@@ -225,7 +229,115 @@ console.log("smoke-unit OK");
   assert.doesNotMatch(slashSrc, /\/mode expert/);
   assert.doesNotMatch(slashSrc, /\/mode think/);
   assert.doesNotMatch(slashSrc, /\/mode heavy/);
+  assert.match(slashSrc, /\/sync/);
+  assert.match(slashSrc, /\/send/);
+  assert.match(slashSrc, /\/hub/);
   console.log("permanent Adaptive map OK");
+}
+
+{
+  const hub = require("../desktop/hub-server.cjs");
+  hub._resetForTests();
+  assert.equal(hub.normalizeCode("abc-234"), "ABC234");
+  assert.equal(hub.normalizeCode("ab c-23 4"), "ABC234");
+  const code = hub.makePairCode();
+  assert.match(code, /^[A-Z2-9]{3}-[A-Z2-9]{3}$/, "pair code format " + code);
+  const port = 18776 + Math.floor(Math.random() * 120);
+  const started = await hub.startShare({ port });
+  assert.equal(started.ok, true, "hub startShare");
+  assert.equal(started.sharing, true);
+  const pair = hub._getState().pair?.code;
+  assert.ok(pair, "pair code after share");
+  const res = await fetch(`http://127.0.0.1:${port}/v1/pair`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code: pair, deviceId: "d-test", deviceName: "Laptop" }),
+  });
+  const data = await res.json();
+  assert.equal(data.ok, true, "pair ok: " + JSON.stringify(data));
+  assert.ok(data.token, "pair token");
+  const snap = {
+    kind: "grokhub-hub-v1",
+    fromDeviceId: "d-test",
+    fromDeviceName: "Laptop",
+    exportedAt: Date.now(),
+    threads: [{ id: "t1", title: "Hi", updatedAt: 2, messages: [] }],
+    workboard: { items: [] },
+    skills: [],
+    automations: [],
+    learning: null,
+    memoryFiles: [{ name: "USER.md", content: "# me", updatedAt: 1 }],
+    profile: { displayName: "Viper" },
+  };
+  const put = await fetch(`http://127.0.0.1:${port}/v1/snapshot`, {
+    method: "PUT",
+    headers: {
+      authorization: `Bearer ${data.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ snapshot: snap }),
+  });
+  const putBody = await put.json();
+  assert.equal(putBody.ok, true, "snapshot put");
+  const got = await fetch(`http://127.0.0.1:${port}/v1/snapshot`, {
+    headers: { authorization: `Bearer ${data.token}` },
+  });
+  const gotBody = await got.json();
+  assert.equal(gotBody.ok, true);
+  assert.equal(gotBody.snapshot?.kind, "grokhub-hub-v1");
+  await hub.stopShare({ persist: false });
+  hub._resetForTests();
+  console.log("hub-server pair/snapshot OK");
+}
+
+{
+  const { spawnSync } = await import("node:child_process");
+  const out = path.join(process.cwd(), ".tmp-hub-sync-test.mjs");
+  const r = spawnSync(
+    "npx",
+    ["esbuild", "src/lib/hub-sync.ts", "--bundle", "--platform=node", "--format=esm", `--outfile=${out}`],
+    { encoding: "utf8" },
+  );
+  assert.equal(r.status, 0, "esbuild hub-sync: " + (r.stderr || r.stdout || ""));
+  const mod = await import(pathToFileURL(out).href + `?t=${Date.now()}`);
+  const older = mod.buildHubSnapshot({
+    deviceId: "a",
+    deviceName: "A",
+    threads: [{ id: "t1", title: "old", updatedAt: 1, messages: [{ id: "m1" }] }],
+    workboard: { items: [{ id: "w1", title: "old", updatedAt: 1 }] },
+    skills: [{ id: "s1", name: "old", updatedAt: 1 }],
+    automations: [{ id: "au1", name: "old", updatedAt: 1 }],
+    learning: { tag: "old" },
+    memoryFiles: [{ name: "USER.md", content: "old", updatedAt: 1 }],
+    displayName: "Old",
+  });
+  const newer = mod.buildHubSnapshot({
+    deviceId: "b",
+    deviceName: "B",
+    threads: [{ id: "t1", title: "new", updatedAt: 9, messages: [{ id: "m2" }] }],
+    workboard: { items: [{ id: "w1", title: "new", updatedAt: 9 }] },
+    skills: [{ id: "s1", name: "new", updatedAt: 9 }],
+    automations: [{ id: "au1", name: "new", updatedAt: 9 }],
+    learning: { tag: "new" },
+    memoryFiles: [{ name: "USER.md", content: "new", updatedAt: 9 }],
+    displayName: "New",
+  });
+  const merged = mod.mergeHubSnapshots(older, newer);
+  assert.equal(merged.kind, "grokhub-hub-v1");
+  assert.equal(merged.threads[0].title, "new");
+  assert.equal(merged.workboard.items[0].title, "new");
+  assert.equal(merged.skills[0].name, "new");
+  assert.equal(merged.automations[0].name, "new");
+  assert.equal(merged.memoryFiles[0].content, "new");
+  assert.equal(merged.learning.tag, "new");
+  assert.ok(mod.isHubSnapshot(merged));
+  assert.equal(mod.isHubSnapshot({ kind: "nope" }), false);
+  try {
+    fs.unlinkSync(out);
+  } catch {
+    /* ignore */
+  }
+  console.log("hub-sync merge OK");
 }
 
 

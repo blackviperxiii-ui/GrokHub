@@ -305,6 +305,37 @@ export type DesktopBridge = {
     }>;
   };
   grok?: DesktopGrokBridge;
+  hub?: {
+    status: () => Promise<import("./hub-client").HubStatus>;
+    startShare: () => Promise<import("./hub-client").HubStatus>;
+    stopShare: () => Promise<import("./hub-client").HubStatus>;
+    newPairCode: () => Promise<import("./hub-client").HubStatus>;
+    setName: (name: string) => Promise<import("./hub-client").HubStatus>;
+    join: (opts: { url: string; code: string }) => Promise<import("./hub-client").HubStatus>;
+    leave: (id: string) => Promise<import("./hub-client").HubStatus>;
+    forgetPeer: (id: string) => Promise<import("./hub-client").HubStatus>;
+    pushSnapshot: (snapshot: unknown) => Promise<{ ok: boolean; error?: string; pushed?: number }>;
+    pullSnapshot: () => Promise<{
+      ok: boolean;
+      snapshot?: unknown;
+      snapshots?: unknown[];
+      error?: string;
+    }>;
+    sendTask: (opts: {
+      targetDeviceId: string;
+      prompt: string;
+      title?: string;
+    }) => Promise<{ ok: boolean; error?: string; local?: boolean }>;
+    claimInbox: () => Promise<{
+      ok: boolean;
+      tasks?: import("./hub-client").HubTask[];
+      error?: string;
+    }>;
+    targets: () => Promise<{
+      ok: boolean;
+      targets?: Array<{ id: string; name: string; self?: boolean }>;
+    }>;
+  };
   pickFolder?: () => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
   setGlobalHotkey?: (
     accel: string,

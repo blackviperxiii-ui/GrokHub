@@ -46,6 +46,9 @@ export const SLASH_COMMANDS: SlashDef[] = [
   { cmd: "/tools off", hint: "Disable host tools", runOnPick: true },
   { cmd: "/sh", hint: "Run shell on host", insert: "/sh " },
   { cmd: "$", hint: "Host shell shortcut", insert: "$ " },
+  { cmd: "/hub", hint: "Device hub status", runOnPick: true },
+  { cmd: "/sync", hint: "Sync chats & memory with paired computers", runOnPick: true },
+  { cmd: "/send", hint: "Send a task to another computer", insert: "/send " },
 ];
 
 export function filterSlashCommands(draft: string): SlashDef[] {

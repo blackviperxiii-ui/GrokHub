@@ -8,7 +8,6 @@ import {
   Sun,
   Monitor,
   UserRound,
-  Cpu,
   Bot,
   Brain,
   AppWindow,
@@ -23,10 +22,10 @@ const SETTINGS_CATEGORIES = [
     sections: ["sec-wizard", "sec-oauth", "sec-setup", "sec-api"],
   },
   {
-    id: "models",
-    label: "Models",
-    hint: "Catalog & Adaptive map",
-    sections: ["sec-models", "sec-modes"],
+    id: "devices",
+    label: "Devices",
+    hint: "LAN pair, sync & remote tasks",
+    sections: ["sec-hub", "sec-hub-join", "sec-hub-sync"],
   },
   {
     id: "agent",
@@ -53,8 +52,9 @@ const SECTION_CAT: Record<string, (typeof SETTINGS_CATEGORIES)[number]["id"]> = 
   "sec-oauth": "account",
   "sec-setup": "account",
   "sec-api": "account",
-  "sec-models": "models",
-  "sec-modes": "models",
+  "sec-hub": "devices",
+  "sec-hub-join": "devices",
+  "sec-hub-sync": "devices",
   "sec-autonomy": "agent",
   "sec-agent": "agent",
   "sec-desktop": "agent",
@@ -73,8 +73,9 @@ const SECTION_SEARCH: Record<string, string> = {
   "sec-oauth": "oauth login sign in grok xai super",
   "sec-setup": "sync pack export import",
   "sec-api": "api key token xai",
-  "sec-models": "models catalog poll essential fast balanced max build",
-  "sec-modes": "adaptive fast balanced max build mode",
+  "sec-hub": "devices pair hub share lan sync remote computer",
+  "sec-hub-join": "join pair code address wifi",
+  "sec-hub-sync": "sync history memory remote task send",
   "sec-autonomy": "autonomy always-on queue daemon agent",
   "sec-agent": "temperature tools host github agent",
   "sec-desktop": "desktop shell arch confirm safe",
@@ -88,8 +89,6 @@ const SECTION_SEARCH: Record<string, string> = {
   "sec-danger": "danger reset wipe clean",
 };
 
-import { getModesWithCatalog } from "@/lib/modes";
-import { friendlyModelName } from "@/lib/models-catalog";
 import { applyUpdate, checkUpdate, applyRollback, postUpdateSelfTest } from "@/lib/grok-client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { exportMemory, importMemory, memoryInfo } from "@/lib/persistent-storage";
@@ -108,23 +107,18 @@ import {
 } from "@/lib/self-mod-client";
 import { AUTONOMY_HINT, AUTONOMY_LABEL } from "@/lib/agent-jobs";
 import { useGrokHub } from "@/lib/store";
-import type { GrokModeId } from "@/lib/types";
 import type { UpdateStatus } from "@/lib/update";
 import { learningSummaryLine } from "@/lib/learning";
 import { cn } from "@/lib/utils";
 import { ProfileAvatar } from "../ProfileAvatar";
 import { HostGatewayBanner } from "../HostGatewayBanner";
+import { DevicesHubPanel } from "../DevicesHubPanel";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Input } from "../ui/input";
 
 export function SettingsView() {
-  const mode = useGrokHub((s) => s.mode);
-  const setMode = useGrokHub((s) => s.setMode);
-  const modelCatalog = useGrokHub((s) => s.modelCatalog);
-  const refreshModels = useGrokHub((s) => s.refreshModels);
-  const lastModelsFetchAt = useGrokHub((s) => s.lastModelsFetchAt);
   const desktop = useGrokHub((s) => s.desktop);
   const setDesktop = useGrokHub((s) => s.setDesktop);
   const setNav = useGrokHub((s) => s.setNav);
@@ -421,7 +415,7 @@ export function SettingsView() {
   const catMeta = SETTINGS_CATEGORIES.find((c) => c.id === settingsCat) || SETTINGS_CATEGORIES[0]!;
   const catIcon = (id: string) => {
     if (id === "account") return UserRound;
-    if (id === "models") return Cpu;
+    if (id === "devices") return Monitor;
     if (id === "agent") return Bot;
     if (id === "memory") return Brain;
     return AppWindow;
@@ -995,70 +989,7 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-models" data-settings-cat="models" data-hit={sectionHit("sec-models") ? "1" : "0"}>
-        <CardHeader>
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <CardTitle className="text-sm">Essential models</CardTitle>
-              <CardDescription>
-                Permanent Adaptive map · Fast / Balanced / Max (Grok 4.6) / Build / Imagine
-              </CardDescription>
-            </div>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => void refreshModels({ force: true })}
-            >
-              Refresh + reclassify
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid gap-2 sm:grid-cols-2">
-            {(
-              [
-                ["fast", "Fast"],
-                ["balanced", "Balanced"],
-                ["heavy", "Max · Grok 4.6"],
-                ["build", "Build / code"],
-                ["imagine", "Imagine"],
-              ] as const
-            ).map(([slot, label]) => (
-              <div
-                key={slot}
-                className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2"
-              >
-                <div className="text-[10px] uppercase tracking-wide text-[var(--color-subtle)]">
-                  {label}
-                </div>
-                <div className="text-sm font-medium text-[var(--color-fg)]">
-                  {friendlyModelName(modelCatalog.slots[slot])}
-                </div>
-                <div className="font-mono text-[10px] text-[var(--color-muted)]">
-                  {modelCatalog.slots[slot]}
-                </div>
-              </div>
-            ))}
-          </div>
-          {modelCatalog.essential.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {modelCatalog.essential.map((m) => (
-                <Badge key={m} className="font-mono text-[10px]">
-                  {m}
-                </Badge>
-              ))}
-            </div>
-          )}
-          <div className="text-[10px] text-[var(--color-subtle)]">
-            Source: {modelCatalog.source} · slots by{" "}
-            {modelCatalog.classifiedBy === "grok" ? "Grok" : "heuristic"}
-            {modelCatalog.classifyNotes ? ` · ${modelCatalog.classifyNotes}` : ""}
-            {lastModelsFetchAt
-              ? ` · last poll ${new Date(lastModelsFetchAt).toLocaleTimeString()}`
-              : " · not polled yet"}
-          </div>
-        </CardContent>
-      </Card>
+      <DevicesHubPanel sectionHit={sectionHit} />
 
       <Card id="sec-updates" data-settings-cat="app" data-hit={sectionHit("sec-updates") ? "1" : "0"}>
         <CardHeader>
@@ -1167,44 +1098,6 @@ export function SettingsView() {
               {updateLog}
             </pre>
           )}
-        </CardContent>
-      </Card>
-
-      <Card id="sec-modes" data-settings-cat="models" data-hit={sectionHit("sec-modes") ? "1" : "0"}>
-        <CardHeader>
-          <CardTitle className="text-sm">Model modes</CardTitle>
-          <CardDescription>
-            Adaptive permanently routes Fast · Balanced · Build · Max (Grok 4.6). Think and Heavy are gone. Slots are locked — no per-mode model pickers.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {getModesWithCatalog(modelCatalog).map((m) => {
-            const selected = m.id === mode;
-            return (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => setMode(m.id as GrokModeId)}
-                className={cn(
-                  "flex w-full items-center justify-between gap-3 rounded-[var(--radius-md)] border px-3 py-3 text-left transition-colors",
-                  selected
-                    ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)]"
-                    : "border-[var(--color-border)] hover:border-[var(--color-border-strong)]",
-                )}
-              >
-                <div>
-                  <div className="text-sm font-medium">{m.label}</div>
-                  <div className="text-xs text-[var(--color-muted)]">{m.subtitle}</div>
-                  {m.id !== "auto" && (
-                    <div className="mt-0.5 font-mono text-[10px] text-[var(--color-subtle)]">
-                      {m.modelId}
-                    </div>
-                  )}
-                </div>
-                {selected && <span className="text-xs text-[var(--color-muted)]">Active</span>}
-              </button>
-            );
-          })}
         </CardContent>
       </Card>
 
