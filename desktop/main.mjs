@@ -67,6 +67,7 @@ const desktopEntry = safeRequire("desktop-entry", "./desktop-entry.cjs") || {
   installAutostart: () => ({ ok: false }),
   status: () => ({ ok: false }),
 };
+const hubServer = safeRequire("hub-server", "./hub-server.cjs") || {};
 const uiServer = safeRequire("ui-server", "./ui-server.cjs") || {
   resolveStartUrl: async () => ({ ok: false, url: "", error: "ui-server missing" }),
 };
@@ -1180,6 +1181,116 @@ function registerIpc() {
     desktopEntry.installAutostart(Boolean(enabled)),
   );
 
+  safeHandle("hub:status", () => hubServer.publicStatus?.() || { ok: false, error: "hub missing" });
+  safeHandle("hub:startShare", () => hubServer.startShare?.() || { ok: false, error: "hub missing" });
+  safeHandle("hub:stopShare", () => hubServer.stopShare?.() || { ok: false, error: "hub missing" });
+  safeHandle("hub:newPairCode", () => {
+    hubServer.rotatePair?.();
+    return hubServer.publicStatus?.() || { ok: false };
+  });
+  safeHandle("hub:setName", (_e, name) => hubServer.setDeviceName?.(name) || { ok: false });
+  safeHandle("hub:join", (_e, opts) =>
+    hubServer.joinHub?.(opts || {}) || { ok: false, error: "hub missing" },
+  );
+  safeHandle("hub:leave", (_e, id) => hubServer.removeRemote?.(id) || { ok: false });
+  safeHandle("hub:forgetPeer", (_e, id) => hubServer.forgetPeer?.(id) || { ok: false });
+  safeHandle("hub:pushSnapshot", async (_e, snapshot) => {
+    if (!hubServer.storeSnapshot) return { ok: false, error: "hub missing" };
+    hubServer.storeSnapshot(snapshot);
+    let pushed = 0;
+    for (const r of hubServer.listRemotes?.() || []) {
+      try {
+        await hubServer.hubFetch(r, "PUT", "/v1/snapshot", { snapshot });
+        pushed += 1;
+      } catch {
+        /* offline remote */
+      }
+    }
+    return { ok: true, pushed };
+  });
+  safeHandle("hub:pullSnapshot", async () => {
+    const snaps = [];
+    const local = hubServer.getStoredSnapshot?.();
+    if (local) snaps.push(local);
+    for (const r of hubServer.listRemotes?.() || []) {
+      try {
+        const data = await hubServer.hubFetch(r, "GET", "/v1/snapshot");
+        if (data.snapshot) snaps.push(data.snapshot);
+      } catch {
+        /* offline */
+      }
+    }
+    return { ok: true, snapshots: snaps, snapshot: snaps[snaps.length - 1] || null };
+  });
+  safeHandle("hub:sendTask", async (_e, opts) => {
+    const o = opts || {};
+    const st = hubServer.publicStatus?.() || {};
+    if (!o.prompt) return { ok: false, error: "Empty task" };
+    if (o.targetDeviceId && o.targetDeviceId === st.deviceId) {
+      hubServer.enqueueTask?.(
+        { id: "local-ui", name: st.deviceName || "here" },
+        o.targetDeviceId,
+        o.title,
+        o.prompt,
+      );
+      return { ok: true, local: true };
+    }
+    for (const r of hubServer.listRemotes?.() || []) {
+      try {
+        await hubServer.hubFetch(r, "POST", "/v1/task", o);
+        return { ok: true };
+      } catch {
+        /* try next */
+      }
+    }
+    if (st.sharing) {
+      hubServer.enqueueTask?.(
+        { id: st.deviceId, name: st.deviceName },
+        o.targetDeviceId,
+        o.title,
+        o.prompt,
+      );
+      return { ok: true };
+    }
+    return { ok: false, error: "Not connected to that computer." };
+  });
+  safeHandle("hub:claimInbox", async () => {
+    const local = hubServer.claimLocalInbox?.() || [];
+    const extra = [];
+    for (const r of hubServer.listRemotes?.() || []) {
+      try {
+        const data = await hubServer.hubFetch(r, "GET", "/v1/inbox");
+        for (const t of data.tasks || []) {
+          extra.push(t);
+          try {
+            await hubServer.hubFetch(r, "POST", `/v1/inbox/${t.id}/ack`);
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch {
+        /* offline */
+      }
+    }
+    return { ok: true, tasks: [...local, ...extra] };
+  });
+  safeHandle("hub:targets", async () => {
+    const targets = hubServer.listTargets?.() || [];
+    for (const r of hubServer.listRemotes?.() || []) {
+      try {
+        const data = await hubServer.hubFetch(r, "GET", "/v1/status");
+        for (const p of data.peers || []) {
+          if (!targets.some((t) => t.id === p.id)) {
+            targets.push({ id: p.id, name: p.name, self: false });
+          }
+        }
+      } catch {
+        /* offline */
+      }
+    }
+    return { ok: true, targets };
+  });
+
   // Non-stream chat already registered; true streaming with abort
   if (typeof grokBridge.callXaiChatStream === "function") {
     /** @type {Map<string, AbortController>} */
@@ -1315,6 +1426,11 @@ if (process.platform === "linux" && process.env.GROKHUB_SANDBOX !== "1") {
 app.on("will-quit", () => {
   try {
     globalShortcut.unregisterAll();
+  } catch {
+    /* ignore */
+  }
+  try {
+    void hubServer.stopShare?.({ persist: false });
   } catch {
     /* ignore */
   }
@@ -1467,6 +1583,13 @@ app.whenReady().then(async () => {
 
   // Register IPC early so a loading window can talk to main
   registerIpc();
+  try {
+    if (hubServer._getState?.()?.sharing) {
+      void hubServer.startShare?.();
+    }
+  } catch {
+    /* hub optional */
+  }
   bootMark("ipc-ready");
 
   try {
