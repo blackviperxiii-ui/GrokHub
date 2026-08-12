@@ -1,6 +1,8 @@
 /**
  * Persistent app memory under Electron userData.
  * Survives restarts and in-place updates (updates never touch userData).
+ *
+ * In-memory cache + debounced flush avoids full-file RMW on every keystroke.
  */
 const fs = require("node:fs");
 const path = require("node:path");
@@ -17,6 +19,7 @@ function electronApp() {
 const STATE_FILE = "grokhub-memory.json";
 const BACKUP_FILE = "grokhub-memory.backup.json";
 const MAX_BYTES = 24 * 1024 * 1024; // 24MB safety cap
+const FLUSH_MS = 180;
 
 function dir() {
   const app = electronApp();
@@ -44,11 +47,17 @@ function ensureDir() {
   fs.mkdirSync(dir(), { recursive: true });
 }
 
+/** @type {{ version: number, keys: Record<string, string>, updatedAt: number } | null} */
+let cache = null;
+let dirty = false;
+/** @type {ReturnType<typeof setTimeout> | null} */
+let flushTimer = null;
+
 /**
  * Read raw string value for a named key (zustand store name).
  * File shape: { version: 1, keys: { [name]: string }, updatedAt }
  */
-function readFile() {
+function readFileFromDisk() {
   try {
     const raw = fs.readFileSync(statePath(), "utf8");
     const data = JSON.parse(raw);
@@ -68,34 +77,32 @@ function readFile() {
   }
 }
 
-function writeFile(data) {
+function ensureCache() {
+  if (!cache) {
+    cache = readFileFromDisk();
+  }
+  return cache;
+}
+
+function writeFileSync(data) {
   ensureDir();
-  const payload = JSON.stringify({
+  let keys = { ...(data.keys || {}) };
+  let out = JSON.stringify({
     version: 1,
-    keys: data.keys || {},
+    keys,
     updatedAt: Date.now(),
   });
-  if (Buffer.byteLength(payload, "utf8") > MAX_BYTES) {
-    // Drop largest key values until under cap (keep grokhub primary)
-    const keys = { ...data.keys };
+  if (Buffer.byteLength(out, "utf8") > MAX_BYTES) {
     const entries = Object.entries(keys).sort(
       (a, b) => Buffer.byteLength(String(b[1]), "utf8") - Buffer.byteLength(String(a[1]), "utf8"),
     );
-    let json = payload;
     for (const [k] of entries) {
-      if (Buffer.byteLength(json, "utf8") <= MAX_BYTES) break;
+      if (Buffer.byteLength(out, "utf8") <= MAX_BYTES) break;
       if (k.includes("grokhub")) continue;
       delete keys[k];
-      json = JSON.stringify({ version: 1, keys, updatedAt: Date.now() });
+      out = JSON.stringify({ version: 1, keys, updatedAt: Date.now() });
     }
-    // last resort: truncate primary store payload's nested data is caller's problem
-    data = { keys };
   }
-  const out = JSON.stringify({
-    version: 1,
-    keys: data.keys || {},
-    updatedAt: Date.now(),
-  });
   // rotate backup
   try {
     if (fs.existsSync(statePath())) {
@@ -107,11 +114,37 @@ function writeFile(data) {
   const tmp = statePath() + ".tmp";
   fs.writeFileSync(tmp, out, { mode: 0o600 });
   fs.renameSync(tmp, statePath());
+  cache = { version: 1, keys, updatedAt: Date.now() };
+  dirty = false;
   return { ok: true, bytes: Buffer.byteLength(out, "utf8"), path: statePath() };
 }
 
+function scheduleFlush() {
+  dirty = true;
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    if (!dirty || !cache) return;
+    try {
+      writeFileSync(cache);
+    } catch {
+      /* disk full */
+    }
+  }, FLUSH_MS);
+}
+
+function flushNow() {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  if (!cache) return { ok: true, skipped: true };
+  if (!dirty) return { ok: true, skipped: true };
+  return writeFileSync(cache);
+}
+
 function get(name) {
-  const data = readFile();
+  const data = ensureCache();
   const value = data.keys[String(name)];
   return {
     value: typeof value === "string" ? value : value != null ? JSON.stringify(value) : null,
@@ -121,29 +154,38 @@ function get(name) {
 }
 
 function set(name, value) {
-  const data = readFile();
+  const data = ensureCache();
   const key = String(name);
   if (value == null || value === "") {
     delete data.keys[key];
   } else {
     data.keys[key] = String(value);
   }
-  return writeFile(data);
+  data.updatedAt = Date.now();
+  scheduleFlush();
+  return { ok: true, path: statePath(), deferred: true };
 }
 
 function remove(name) {
-  const data = readFile();
+  const data = ensureCache();
   delete data.keys[String(name)];
-  return writeFile(data);
+  data.updatedAt = Date.now();
+  scheduleFlush();
+  return { ok: true, path: statePath(), deferred: true };
 }
 
 function info() {
-  const data = readFile();
+  const data = ensureCache();
   let bytes = 0;
   try {
+    // Prefer on-disk size; fall back to estimate if not flushed yet
     bytes = fs.statSync(statePath()).size;
   } catch {
-    bytes = 0;
+    try {
+      bytes = Buffer.byteLength(JSON.stringify(data), "utf8");
+    } catch {
+      bytes = 0;
+    }
   }
   return {
     path: statePath(),
@@ -152,17 +194,19 @@ function info() {
     updatedAt: data.updatedAt || 0,
     keys: Object.keys(data.keys || {}),
     bytes,
+    dirty,
   };
 }
 
 /** Full export for user backup */
 function exportAll() {
-  const data = readFile();
+  flushNow();
+  const data = ensureCache();
   return {
     ok: true,
     exportedAt: Date.now(),
     userData: dir(),
-    data,
+    data: { version: 1, keys: { ...data.keys }, updatedAt: data.updatedAt },
   };
 }
 
@@ -174,13 +218,26 @@ function importAll(payload) {
       return { ok: false, error: "Invalid memory backup" };
     }
     // backup current first
-    const cur = readFile();
-    writeFile(cur);
-    writeFile({ keys });
+    const cur = ensureCache();
+    writeFileSync(cur);
+    writeFileSync({ keys });
     return { ok: true, path: statePath() };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "import failed" };
   }
+}
+
+// Best-effort flush on process exit
+try {
+  process.on("exit", () => {
+    try {
+      if (dirty && cache) writeFileSync(cache);
+    } catch {
+      /* ignore */
+    }
+  });
+} catch {
+  /* ignore */
 }
 
 module.exports = {
@@ -192,4 +249,5 @@ module.exports = {
   importAll,
   statePath,
   dir,
+  flushNow,
 };

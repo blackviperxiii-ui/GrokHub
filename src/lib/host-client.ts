@@ -309,6 +309,19 @@ export type DesktopBridge = {
   setGlobalHotkey?: (
     accel: string,
   ) => Promise<{ ok: boolean; registered?: boolean; accelerator?: string | null; error?: string | null }>;
+  logs?: {
+    tail?: (n?: number) => Promise<{ ok?: boolean; text?: string; paths?: unknown; error?: string }>;
+    paths?: () => Promise<{ ok?: boolean; configDir?: string; logDir?: string; logFile?: string; error?: string }>;
+  };
+  debug?: {
+    metrics?: () => Promise<{
+      ok?: boolean;
+      ipc?: unknown;
+      boot?: unknown;
+      trace?: unknown;
+      error?: string;
+    }>;
+  };
 };
 
 declare global {

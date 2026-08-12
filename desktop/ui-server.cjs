@@ -161,16 +161,25 @@ function killOurUiPid(pid, reason) {
   } catch {
     return false;
   }
+  // Async-friendly reclaim: fixed short sleeps (no busy-spin on the event loop)
   const until = Date.now() + 1500;
+  const { execFileSync } = require("node:child_process");
   while (Date.now() < until) {
     try {
       process.kill(pid, 0);
     } catch {
       return true;
     }
-    // short spin — only used during reclaim
-    const spin = Date.now() + 40;
-    while (Date.now() < spin) { /* wait */ }
+    try {
+      // ~40ms yield without spinning the CPU (Atomics.wait blocks this thread only)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40);
+    } catch {
+      try {
+        execFileSync("sleep", ["0.04"], { stdio: "ignore" });
+      } catch {
+        /* ignore */
+      }
+    }
   }
   try {
     process.kill(pid, "SIGKILL");
@@ -181,21 +190,28 @@ function killOurUiPid(pid, reason) {
   return true;
 }
 
+let cachedNodeBin = undefined;
 
 function whichNode() {
+  if (cachedNodeBin !== undefined) return cachedNodeBin;
   const { execFileSync } = require("node:child_process");
   try {
     if (process.platform === "win32") {
       const out = execFileSync("where", ["node"], { encoding: "utf8" }).trim();
-      return out.split(/\r?\n/)[0] || "node.exe";
+      cachedNodeBin = out.split(/\r?\n/)[0] || "node.exe";
+      return cachedNodeBin;
     }
     const out = execFileSync("bash", ["-lc", "command -v node"], {
       encoding: "utf8",
     }).trim();
-    if (out) return out;
+    if (out) {
+      cachedNodeBin = out;
+      return cachedNodeBin;
+    }
   } catch {
     /* fall through */
   }
+  cachedNodeBin = null;
   return null;
 }
 
@@ -257,16 +273,9 @@ async function ensureUiServer(desktopDir) {
   );
 
   rotateDiagLog();
-  try {
-    const hygiene = cleanInstallOutput(root);
-    if (hygiene.ok && hygiene.manifests && hygiene.manifests.removed > 0) {
-      diagLog(`[ui-server] cleaned ${hygiene.manifests.removed} stale server manifests`);
-    }
-  } catch {
-    /* ignore */
-  }
   diagLog(`[ui-server] ensure root=${root} url=${url}`);
 
+  // Warm path first: never run cleanInstall hygiene before a healthy probe
   if (await probe(url + "/")) {
     process.env.GROKHUB_URL = url;
     process.env.GROKHUB_HOME = root;
@@ -278,7 +287,31 @@ async function ensureUiServer(desktopDir) {
     } catch {
       /* ignore */
     }
+    // Defer install hygiene off the critical path (once per process)
+    if (!global.__grokhubCleanedOutput) {
+      global.__grokhubCleanedOutput = true;
+      setImmediate(() => {
+        try {
+          const hygiene = cleanInstallOutput(root);
+          if (hygiene.ok && hygiene.manifests && hygiene.manifests.removed > 0) {
+            diagLog(`[ui-server] cleaned ${hygiene.manifests.removed} stale server manifests (deferred)`);
+          }
+        } catch {
+          /* ignore */
+        }
+      });
+    }
     return { url, started: false, root };
+  }
+
+  // Cold / unhealthy: clean once before spawn
+  try {
+    const hygiene = cleanInstallOutput(root);
+    if (hygiene.ok && hygiene.manifests && hygiene.manifests.removed > 0) {
+      diagLog(`[ui-server] cleaned ${hygiene.manifests.removed} stale server manifests`);
+    }
+  } catch {
+    /* ignore */
   }
 
   const entry = path.resolve(serverEntry(root));

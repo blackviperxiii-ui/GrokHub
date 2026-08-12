@@ -2,6 +2,11 @@
  * One-click diagnostics bundle for crash / support reports.
  */
 import { APP_VERSION, APP_NAME } from "./version";
+import {
+  getLastStreamMetrics,
+  getRuntimeErrors,
+  getStreamMetricsHistory,
+} from "./runtime-metrics";
 
 export type DiagnosticsBundle = {
   app: string;
@@ -16,13 +21,28 @@ export type DiagnosticsBundle = {
   workboardOpen?: number;
   lastErrors?: string[];
   notes?: string;
+  context?: {
+    percent?: number;
+    tokensEst?: number;
+    budget?: number;
+    shouldCompact?: boolean;
+  };
+  stream?: unknown;
+  streamHistory?: unknown;
+  runtimeErrors?: unknown;
+  mainMetrics?: unknown;
+  logPaths?: unknown;
+  logTail?: string;
+  stateBytes?: number;
 };
 
 export async function buildDiagnostics(extra?: {
   learningLine?: string;
   workboardOpen?: number;
   lastErrors?: string[];
+  context?: DiagnosticsBundle["context"];
 }): Promise<DiagnosticsBundle> {
+  const runtimeErrors = getRuntimeErrors(20);
   const bundle: DiagnosticsBundle = {
     app: APP_NAME,
     version: APP_VERSION,
@@ -32,7 +52,13 @@ export async function buildDiagnostics(extra?: {
     electron: null,
     learning: extra?.learningLine,
     workboardOpen: extra?.workboardOpen,
-    lastErrors: extra?.lastErrors?.slice(0, 20),
+    lastErrors:
+      extra?.lastErrors?.slice(0, 20) ||
+      runtimeErrors.map((e) => `${e.ts} [${e.source}] ${e.message}`),
+    context: extra?.context,
+    stream: getLastStreamMetrics(),
+    streamHistory: getStreamMetricsHistory(8),
+    runtimeErrors,
   };
 
   if (typeof window !== "undefined" && window.grokhubDesktop) {
@@ -57,6 +83,32 @@ export async function buildDiagnostics(extra?: {
     try {
       // @ts-expect-error optional
       bundle.electron = window.grokhubDesktop.version?.electron || null;
+    } catch {
+      /* ignore */
+    }
+    try {
+      const st = await window.grokhubDesktop.state?.info?.();
+      if (st && typeof (st as { bytes?: number }).bytes === "number") {
+        bundle.stateBytes = (st as { bytes: number }).bytes;
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      const logs = window.grokhubDesktop as {
+        logs?: { tail?: (n?: number) => Promise<unknown>; paths?: () => Promise<unknown> };
+        debug?: { metrics?: () => Promise<unknown> };
+      };
+      if (logs.logs?.paths) {
+        bundle.logPaths = await logs.logs.paths();
+      }
+      if (logs.logs?.tail) {
+        const t = (await logs.logs.tail(40)) as { text?: string };
+        bundle.logTail = t?.text?.slice(-4000);
+      }
+      if (logs.debug?.metrics) {
+        bundle.mainMetrics = await logs.debug.metrics();
+      }
     } catch {
       /* ignore */
     }
