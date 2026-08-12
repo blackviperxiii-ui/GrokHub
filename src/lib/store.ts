@@ -2720,7 +2720,7 @@ syncWebsiteConnectors: async () => {
                     model: "Grok · Build",
                     status: "idle" as const,
                     tasks: 0,
-                    color: "#7dd3fc",
+                    color: "#a3a3a3",
                   },
                 ],
         }));

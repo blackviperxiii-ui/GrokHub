@@ -349,7 +349,7 @@ export function DesktopHostView() {
               ))}
             </div>
             {result && (
-              <div className="overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[#0c0c0e]">
+              <div className="overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)]">
                 <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2 text-[10px] text-[var(--color-subtle)]">
                   <span className="font-mono">$ {result.command}</span>
                   <span>
@@ -428,7 +428,7 @@ export function DesktopHostView() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <pre className="max-h-[420px] overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[#0c0c0e] p-3 font-mono text-xs text-[var(--color-muted)] whitespace-pre-wrap">
+              <pre className="max-h-[420px] overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)] p-3 font-mono text-xs text-[var(--color-muted)] whitespace-pre-wrap">
                 {filePreview?.content || "—"}
               </pre>
             </CardContent>

@@ -240,7 +240,7 @@ export function mapOpenClawWorkspace(raw: OpenClawWorkspaceRaw): OpenClawImportR
       model: "Auto",
       status: "idle",
       tasks: 0,
-      color: "#3b82f6",
+      color: "#d4d4d4",
     },
   ];
   if (agentsMd) {
@@ -251,7 +251,7 @@ export function mapOpenClawWorkspace(raw: OpenClawWorkspaceRaw): OpenClawImportR
       model: "Build",
       status: "idle",
       tasks: 0,
-      color: "#a855f7",
+      color: "#a3a3a3",
     });
   }
 
