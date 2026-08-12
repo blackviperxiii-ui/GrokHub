@@ -19,6 +19,7 @@ import {
   Square,
   Keyboard,
   FileDown,
+  Monitor,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useGrokHub } from "@/lib/store";
@@ -138,6 +139,25 @@ export function CommandPalette({
         group: "Navigate",
         icon: Settings,
         run: () => go("settings"),
+      },
+      {
+        id: "nav-devices",
+        label: "Devices",
+        hint: "LAN sync",
+        group: "Navigate",
+        icon: Monitor,
+        run: () => go("settings"),
+      },
+      {
+        id: "act-sync-hub",
+        label: "Sync devices now",
+        hint: "LAN hub",
+        group: "Actions",
+        icon: Monitor,
+        run: () => {
+          void useGrokHub.getState().syncHubNow();
+          onOpenChange(false);
+        },
       },
       {
         id: "act-new",

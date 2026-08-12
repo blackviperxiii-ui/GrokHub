@@ -147,6 +147,21 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
   debug: {
     metrics: () => ipcRenderer.invoke("debug:metrics"),
   },
+  hub: {
+    status: () => ipcRenderer.invoke("hub:status"),
+    startShare: () => ipcRenderer.invoke("hub:startShare"),
+    stopShare: () => ipcRenderer.invoke("hub:stopShare"),
+    newPairCode: () => ipcRenderer.invoke("hub:newPairCode"),
+    setName: (name) => ipcRenderer.invoke("hub:setName", name),
+    join: (opts) => ipcRenderer.invoke("hub:join", opts),
+    leave: (id) => ipcRenderer.invoke("hub:leave", id),
+    forgetPeer: (id) => ipcRenderer.invoke("hub:forgetPeer", id),
+    pushSnapshot: (snapshot) => ipcRenderer.invoke("hub:pushSnapshot", snapshot),
+    pullSnapshot: () => ipcRenderer.invoke("hub:pullSnapshot"),
+    sendTask: (opts) => ipcRenderer.invoke("hub:sendTask", opts),
+    claimInbox: () => ipcRenderer.invoke("hub:claimInbox"),
+    targets: () => ipcRenderer.invoke("hub:targets"),
+  },
 });
 
 

@@ -16,6 +16,7 @@ import {
   loadMemoryPinBundle,
   memoryAppend,
   memoryAppendFacts,
+  memoryList,
   memoryRead,
   memoryWrite,
   migrateNotesToFileMemory,
@@ -172,6 +173,22 @@ import {
 } from "./proactive";
 import { runHealthPass, formatHealthMarkdown } from "./health-pass";
 import { resolveModeArg, slashHelpMarkdown } from "./slash-commands";
+import {
+  hubClaimInbox,
+  hubPullSnapshot,
+  hubPushSnapshot,
+  hubSendTask,
+  hubStatus,
+  hubTargets,
+  isHubDesktop,
+} from "./hub-client";
+import {
+  buildHubSnapshot,
+  isHubSnapshot,
+  mergeHubSnapshots,
+  type HubMemoryFile,
+  type HubSnapshot,
+} from "./hub-sync";
 
 /** In-flight LLM auto-titles (thread id). */
 /** Short-lived pin bundle cache (avoids re-reading memory files every send). */
@@ -189,9 +206,100 @@ async function loadMemoryPinBundleCached(): Promise<{ bundle: string }> {
   return { bundle };
 }
 
+async function collectHubMemoryFiles(): Promise<HubMemoryFile[]> {
+  const files = await memoryList();
+  const out: HubMemoryFile[] = [];
+  for (const f of files.slice(0, 40)) {
+    const name = String(f.id || f.name || "").trim();
+    if (!name) continue;
+    const r = await memoryRead(name);
+    if (!r.ok) continue;
+    out.push({
+      name,
+      content: String(r.content || ""),
+      updatedAt: Number(f.updatedAt || Date.now()),
+    });
+  }
+  return out;
+}
+
+function asChatThreads(rows: unknown[]): ChatThread[] {
+  const out: ChatThread[] = [];
+  for (const row of rows || []) {
+    if (!row || typeof row !== "object") continue;
+    const t = row as Partial<ChatThread>;
+    if (!t.id) continue;
+    out.push({
+      id: String(t.id),
+      title: String(t.title || "Chat"),
+      createdAt: Number(t.createdAt || Date.now()),
+      updatedAt: Number(t.updatedAt || t.createdAt || Date.now()),
+      messages: Array.isArray(t.messages) ? (t.messages as ChatMessage[]) : [],
+      mode: t.mode,
+      pinned: Boolean(t.pinned),
+      folder: t.folder ?? null,
+      titleLocked: Boolean(t.titleLocked),
+      summary: t.summary,
+      summaryUpToId: t.summaryUpToId ?? null,
+      compactedAt: t.compactedAt,
+      compactedMessageCount: t.compactedMessageCount,
+    });
+  }
+  return out;
+}
+
+function asSkills(rows: unknown[], fallback: Skill[]): Skill[] {
+  const out: Skill[] = [];
+  for (const row of rows || []) {
+    if (!row || typeof row !== "object") continue;
+    const s = row as Partial<Skill>;
+    if (!s.id || !s.name) continue;
+    out.push({
+      id: String(s.id),
+      name: String(s.name),
+      description: String(s.description || ""),
+      kind: s.kind === "custom" ? "custom" : "builtin",
+      enabled: s.enabled !== false,
+      slash: String(s.slash || ""),
+      instructions: String(s.instructions || ""),
+      runs: Number(s.runs || 0),
+    });
+  }
+  return out.length ? out : fallback;
+}
+
+function asAutomations(rows: unknown[], fallback: Automation[]): Automation[] {
+  const out: Automation[] = [];
+  for (const row of rows || []) {
+    if (!row || typeof row !== "object") continue;
+    const a = row as Partial<Automation>;
+    if (!a.id || !a.name) continue;
+    out.push({
+      id: String(a.id),
+      name: String(a.name),
+      instructions: String(a.instructions || ""),
+      schedule: (a.schedule || "daily") as Automation["schedule"],
+      time: String(a.time || "09:00"),
+      times: Array.isArray(a.times) ? a.times.map(String) : undefined,
+      heartbeatEveryMin: a.heartbeatEveryMin,
+      enabled: a.enabled !== false,
+      connectorIds: Array.isArray(a.connectorIds) ? a.connectorIds.map(String) : [],
+      skillIds: Array.isArray(a.skillIds) ? a.skillIds.map(String) : [],
+      lastRun: a.lastRun,
+      nextRun: a.nextRun,
+      runCount: Number(a.runCount || 0),
+      failCount: a.failCount,
+      lastThreadId: a.lastThreadId ?? null,
+    });
+  }
+  return out.length ? out : fallback;
+}
+
 const autoTitleInflight = new Set<string>();
 /** Prevent parallel agent queue drains */
 let agentQueueDraining = false;
+/** Throttle background device sync */
+let lastHubAutoSyncAt = 0;
 /** Last successful auto-title timestamp per thread */
 const autoTitleLastAt = new Map<string, number>();
 /** Message count when we last titled */
@@ -419,6 +527,15 @@ type State = {
     json: string,
     opts?: { passphrase?: string },
   ) => Promise<{ ok: boolean; detail: string }>;
+  /** Last successful LAN hub snapshot merge (not Grok OAuth). */
+  lastHubSyncAt: number;
+  syncHubNow: () => Promise<{ ok: boolean; detail: string }>;
+  sendRemoteTask: (
+    targetDeviceId: string,
+    prompt: string,
+    title?: string,
+  ) => Promise<{ ok: boolean; detail: string }>;
+  tickHub: () => Promise<void>;
   clearGrokOAuth: () => void;
   setSsoCookie: (cookie: string) => void;
   linkGrokWebsiteSession: () => Promise<{ ok: boolean; detail: string }>;
@@ -1146,6 +1263,7 @@ export const useGrokHub = create<State>()(
       openClawWorkspace: null,
       oauthPending: null,
       setupSyncMeta: { autoPullOnLogin: true, autoPushOnChange: false },
+      lastHubSyncAt: 0,
       grokConnected: null,
       uiTheme: "dark" as const,
       toolsNavCollapsed: false,
@@ -4135,6 +4253,165 @@ syncWebsiteConnectors: async () => {
           await get().runAutomation(a.id);
         }
         void get().processAgentQueue();
+        void get().tickHub();
+      },
+
+      syncHubNow: async () => {
+        if (!isHubDesktop()) {
+          return { ok: false, detail: "Device sync runs in the desktop app." };
+        }
+        try {
+          const st = await hubStatus();
+          const deviceId = st.deviceId || "local";
+          const deviceName = st.deviceName || "This computer";
+          const memoryFiles = await collectHubMemoryFiles();
+          const s0 = get();
+          const local = buildHubSnapshot({
+            deviceId,
+            deviceName,
+            threads: s0.threads,
+            workboard: s0.workboard,
+            skills: s0.skills,
+            automations: s0.automations,
+            learning: s0.learning,
+            memoryFiles,
+            displayName: s0.profile?.displayName ?? null,
+          });
+          const pulled = await hubPullSnapshot();
+          const remotes = [
+            ...(Array.isArray(pulled.snapshots) ? pulled.snapshots : []),
+            pulled.snapshot,
+          ].filter(isHubSnapshot);
+          let merged: HubSnapshot = local;
+          for (const snap of remotes) merged = mergeHubSnapshots(merged, snap);
+          for (const f of merged.memoryFiles || []) {
+            if (!f?.name) continue;
+            await memoryWrite(f.name, f.content || "");
+          }
+          set((s) => {
+            const threads = asChatThreads(merged.threads);
+            const active =
+              threads.find((t) => t.id === s.activeThreadId) ||
+              threads[0] ||
+              null;
+            const nextName =
+              s.profile?.displayName || merged.profile?.displayName || s.profile?.displayName;
+            return {
+              threads: threads.length ? threads : s.threads,
+              chat: active ? active.messages : s.chat,
+              activeThreadId: active?.id || s.activeThreadId,
+              skills: asSkills(merged.skills, s.skills),
+              automations: asAutomations(merged.automations, s.automations),
+              workboard: normalizeWorkboard(merged.workboard),
+              learning: normalizeLearning(merged.learning),
+              profile:
+                nextName && nextName !== s.profile?.displayName
+                  ? { ...s.profile, displayName: nextName }
+                  : s.profile,
+              lastHubSyncAt: Date.now(),
+            };
+          });
+          await hubPushSnapshot(merged);
+          get().pushActivity({
+            kind: "system",
+            title: "Devices synced",
+            detail: remotes.length
+              ? `Merged ${remotes.length} snapshot${remotes.length === 1 ? "" : "s"}`
+              : "Published this computer",
+            status: "success",
+          });
+          return {
+            ok: true,
+            detail: remotes.length
+              ? `Synced with ${remotes.length} snapshot${remotes.length === 1 ? "" : "s"}`
+              : "Published this computer",
+          };
+        } catch (e) {
+          const detail = e instanceof Error ? e.message : "Sync failed";
+          return { ok: false, detail };
+        }
+      },
+
+      sendRemoteTask: async (targetDeviceId, prompt, title) => {
+        const text = String(prompt || "").trim();
+        if (!text) return { ok: false, detail: "Task is empty." };
+        if (!isHubDesktop()) {
+          return { ok: false, detail: "Remote tasks run in the desktop app." };
+        }
+        const st = await hubStatus();
+        const label = title || `Remote task`;
+        if (st.deviceId && targetDeviceId === st.deviceId) {
+          get().pinWorkItem({
+            title: label,
+            detail: "Queued on this computer",
+            priority: "high",
+            source: "user",
+          });
+          get().enqueueAgentJob({
+            type: "chat",
+            priority: 9,
+            title: label,
+            prompt: text,
+            maxRounds: 8,
+          });
+          void get().processAgentQueue();
+          return { ok: true, detail: "Queued on this computer" };
+        }
+        const r = await hubSendTask({
+          targetDeviceId,
+          prompt: text,
+          title: label,
+        });
+        if (!r.ok) return { ok: false, detail: r.error || "Could not send task" };
+        get().pushActivity({
+          kind: "system",
+          title: "Task sent",
+          detail: label,
+          status: "queued",
+        });
+        return { ok: true, detail: "Sent" };
+      },
+
+      tickHub: async () => {
+        if (!isHubDesktop()) return;
+        try {
+          const claimed = await hubClaimInbox();
+          const tasks = claimed.tasks || [];
+          for (const task of tasks) {
+            const prompt = String(task.prompt || "").trim();
+            if (!prompt) continue;
+            const title =
+              task.title ||
+              `Remote: ${String(task.fromName || "another computer").slice(0, 40)}`;
+            get().pinWorkItem({
+              title,
+              detail: `From ${task.fromName || task.fromId || "another computer"}`,
+              priority: "high",
+              source: "user",
+            });
+            get().enqueueAgentJob({
+              type: "chat",
+              priority: 9,
+              title,
+              prompt: [
+                `Remote task from ${task.fromName || "another GrokHub"}:`,
+                "",
+                prompt,
+              ].join("\n"),
+              maxRounds: 8,
+            });
+          }
+          if (tasks.length) void get().processAgentQueue();
+          const now = Date.now();
+          if (now - lastHubAutoSyncAt < 120_000) return;
+          lastHubAutoSyncAt = now;
+          const st = await hubStatus();
+          if (st.sharing || (st.remotes && st.remotes.length)) {
+            await get().syncHubNow();
+          }
+        } catch {
+          /* hub optional */
+        }
       },
 
       addAutomation: (input) => {
@@ -4632,6 +4909,118 @@ syncWebsiteConnectors: async () => {
             } catch {
               /* ignore */
             }
+            return;
+          }
+          if (cmd === "hub") {
+            const st = await hubStatus();
+            const body = isHubDesktop()
+              ? [
+                  "**Devices** — separate from Grok sign-in",
+                  "",
+                  `- This computer: **${st.deviceName || "unnamed"}**`,
+                  `- Sharing: **${st.sharing ? "on" : "off"}**`,
+                  st.pairCode ? `- Pairing code: \`${st.pairCode}\`` : "",
+                  ...(st.urls || []).map((u) => `- Address: \`${u}\``),
+                  `- Paired here: ${(st.peers || []).length}`,
+                  `- Joined: ${(st.remotes || []).map((r) => r.name).join(", ") || "none"}`,
+                  `- Inbox: ${st.inboxCount || 0}`,
+                  get().lastHubSyncAt
+                    ? `- Last sync: ${new Date(get().lastHubSyncAt).toLocaleString()}`
+                    : "- Last sync: never",
+                  "",
+                  "_Settings → Devices · `/sync` · `/send <computer> <task>`_",
+                ]
+                  .filter(Boolean)
+                  .join("\n")
+              : "Device sync runs in the GrokHub desktop app.";
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                { id: uid("msg"), role: "system", content: body, ts: Date.now() },
+              ],
+              nav: "chat",
+            }));
+            return;
+          }
+          if (cmd === "sync") {
+            const r = await get().syncHubNow();
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                {
+                  id: uid("msg"),
+                  role: "system",
+                  content: r.ok ? `**Synced.** ${r.detail}` : `**Sync failed.** ${r.detail}`,
+                  ts: Date.now(),
+                },
+              ],
+              nav: "chat",
+            }));
+            return;
+          }
+          if (cmd === "send") {
+            const m = arg.match(/^(\S+)\s+([\s\S]+)$/);
+            if (!m) {
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content: "Usage: `/send <computer> <task>` — pair first in Settings → Devices.",
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+              return;
+            }
+            const needle = m[1]!.toLowerCase();
+            const task = m[2]!.trim();
+            const listed = await hubTargets();
+            const hit = (listed.targets || []).find(
+              (x) =>
+                x.id.toLowerCase() === needle ||
+                x.name.toLowerCase() === needle ||
+                x.name.toLowerCase().includes(needle),
+            );
+            if (!hit) {
+              set((s) => ({
+                chat: [
+                  ...s.chat,
+                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                  {
+                    id: uid("msg"),
+                    role: "system",
+                    content:
+                      (listed.targets || []).length === 0
+                        ? "No computers listed. Open Settings → Devices, share or join first."
+                        : `No computer matching **${m[1]}**. Try: ${(listed.targets || [])
+                            .map((t) => t.name)
+                            .join(", ")}`,
+                    ts: Date.now(),
+                  },
+                ],
+              }));
+              return;
+            }
+            const r = await get().sendRemoteTask(hit.id, task);
+            set((s) => ({
+              chat: [
+                ...s.chat,
+                { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
+                {
+                  id: uid("msg"),
+                  role: "system",
+                  content: r.ok
+                    ? `**Task sent to ${hit.name}.** ${r.detail}`
+                    : `**Could not send.** ${r.detail}`,
+                  ts: Date.now(),
+                },
+              ],
+            }));
             return;
           }
           if (cmd === "memory") {
@@ -7132,6 +7521,7 @@ if (!cmds.length) {
         uiTheme: s.uiTheme || "dark",
         toolsNavCollapsed: Boolean(s.toolsNavCollapsed),
         setupSyncMeta: s.setupSyncMeta || { autoPullOnLogin: true, autoPushOnChange: false },
+        lastHubSyncAt: Number(s.lastHubSyncAt || 0),
         // Restore last tab (connectors removed — remapped on hydrate)
         nav:
           s.nav === "connectors" || s.nav === "agents" || s.nav === "queue" || s.nav === "desktop"
@@ -7309,6 +7699,7 @@ if (!cmds.length) {
         s.desktop = desk;
 
         if (!s.setupSyncMeta) s.setupSyncMeta = { autoPullOnLogin: true, autoPushOnChange: false };
+        if (typeof s.lastHubSyncAt !== "number") s.lastHubSyncAt = 0;
         if (s.uiTheme !== "dark" && s.uiTheme !== "light" && s.uiTheme !== "system") s.uiTheme = "dark";
         if (s.toolsNavCollapsed === undefined) s.toolsNavCollapsed = false;
         // Drop website-only connector catalog (Gmail, Notion, …) — keep core three
