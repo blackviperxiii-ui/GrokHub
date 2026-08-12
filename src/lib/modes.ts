@@ -11,56 +11,47 @@ import {
 } from "./models-catalog";
 
 /**
- * Mode catalog — labels match Grok web; modelId is resolved against live
- * essential models (4.5 / 4.3 / 4.1 Fast / Build) when available.
- * User overrides (Settings) pin a concrete model id per mode without
- * blocking auto assignment for modes left on "Auto".
+ * Mode catalog — Adaptive uses a permanent Fast / Balanced / Build / Max map.
+ * Think and Heavy were removed; persisted values remap on load.
  */
 
-/** User pin: mode → model id. Omit / empty = auto from catalog. */
+/** Legacy type kept so old persisted JSON still parses; pins are ignored. */
 export type ModelModeOverrides = Partial<
   Record<Exclude<GrokModeId, "auto">, string | null | undefined>
 >;
 
-export const OVERRIDABLE_MODES: Exclude<GrokModeId, "auto">[] = [
-  "fast",
-  "balanced",
-  "expert",
-  "heavy",
-  "max",
-  "build",
-];
+export const OVERRIDABLE_MODES: Exclude<GrokModeId, "auto">[] = [];
+
+/** Retired modes → current permanent modes. */
+export function normalizeMode(id: string | null | undefined): GrokModeId {
+  const s = String(id || "").trim();
+  if (s === "expert" || s === "think") return "balanced";
+  if (s === "heavy") return "max";
+  if (s === "fast" || s === "balanced" || s === "max" || s === "build" || s === "auto") {
+    return s;
+  }
+  return "auto";
+}
 
 export function cleanModelOverrides(
-  raw: ModelModeOverrides | null | undefined,
+  _raw: ModelModeOverrides | null | undefined,
 ): ModelModeOverrides {
-  const out: ModelModeOverrides = {};
-  if (!raw || typeof raw !== "object") return out;
-  for (const id of OVERRIDABLE_MODES) {
-    const v = raw[id];
-    if (typeof v === "string" && v.trim()) out[id] = v.trim();
-  }
-  return out;
+  // Overrides retired — Adaptive slots are permanent.
+  return {};
 }
 
 export function hasModelOverride(
-  overrides: ModelModeOverrides | null | undefined,
-  mode: GrokModeId,
+  _overrides: ModelModeOverrides | null | undefined,
+  _mode: GrokModeId,
 ): boolean {
-  if (mode === "auto") return false;
-  const v = overrides?.[mode];
-  return typeof v === "string" && v.trim().length > 0;
+  return false;
 }
 
-/** Prefer user pin when set; otherwise keep auto/catalog model. */
 export function applyModelOverride(
-  mode: GrokModeId,
+  _mode: GrokModeId,
   autoModel: string,
-  overrides?: ModelModeOverrides | null,
+  _overrides?: ModelModeOverrides | null,
 ): string {
-  if (mode === "auto") return autoModel;
-  const o = overrides?.[mode];
-  if (typeof o === "string" && o.trim()) return o.trim();
   return autoModel;
 }
 
@@ -68,7 +59,7 @@ export const GROK_MODES: GrokMode[] = [
   {
     id: "auto",
     label: "Adaptive",
-    subtitle: "Fluid score router · intent-shift aware",
+    subtitle: "Routes Fast · Balanced · Build · Max",
     model: "Adaptive",
     modelId: "auto",
     icon: "auto",
@@ -88,7 +79,7 @@ export const GROK_MODES: GrokMode[] = [
   {
     id: "balanced",
     label: "Balanced",
-    subtitle: "Everyday chat · Grok 4.3 class",
+    subtitle: "Everyday chat · Grok 4.3",
     model: "Grok 4.3",
     modelId: "grok-4.3",
     icon: "balanced",
@@ -96,31 +87,11 @@ export const GROK_MODES: GrokMode[] = [
     depth: "standard",
   },
   {
-    id: "expert",
-    label: "Expert",
-    subtitle: "Strong reasoning · Grok 4.20",
-    model: "Grok 4.20 Reasoning",
-    modelId: "grok-4.20-reasoning",
-    icon: "expert",
-    latencyMs: [900, 1600],
-    depth: "deep",
-  },
-  {
-    id: "heavy",
-    label: "Heavy",
-    subtitle: "Deep analysis · single-agent flagship",
-    model: "Grok 4.5",
-    modelId: "grok-4.5",
-    icon: "heavy",
-    latencyMs: [1400, 2400],
-    depth: "team",
-  },
-  {
     id: "max",
     label: "Max",
-    subtitle: "Top-tier flagship · Grok 4.5",
-    model: "Grok 4.5",
-    modelId: "grok-4.5",
+    subtitle: "Top-tier flagship · Grok 4.6",
+    model: "Grok 4.6",
+    modelId: "grok-4.6",
     icon: "max",
     latencyMs: [1500, 2800],
     depth: "team",
@@ -138,195 +109,127 @@ export const GROK_MODES: GrokMode[] = [
 ];
 
 export function getMode(id: GrokModeId): GrokMode {
-  return GROK_MODES.find((m) => m.id === id) ?? GROK_MODES[0]!;
+  const nid = normalizeMode(id);
+  return GROK_MODES.find((m) => m.id === nid) ?? GROK_MODES[0]!;
 }
 
-/** Auto slot model before user override. */
+/** Permanent slot model (live catalog match, no user pin). */
 function autoModelForMode(id: GrokModeId, catalog: ResolvedCatalog): string {
   const s = catalog.slots;
-  if (id === "fast") return s.fast;
-  if (id === "balanced") return s.balanced;
-  if (id === "expert") return s.smart;
-  if (id === "heavy") return pickFlagshipModel(catalog.all || []) || s.heavy;
-  if (id === "max") return pickFlagshipModel(catalog.all || []) || s.heavy || "grok-4.5";
-  if (id === "build") return s.build;
+  const nid = normalizeMode(id);
+  if (nid === "fast") return s.fast;
+  if (nid === "balanced") return s.balanced;
+  if (nid === "max") return pickFlagshipModel(catalog.all || []) || s.heavy || "grok-4.6";
+  if (nid === "build") return s.build;
   return s.balanced;
 }
 
-/** Modes with live model ids/labels from catalog (+ optional user overrides). */
 export function getModesWithCatalog(
   catalog: ResolvedCatalog = emptyCatalog(),
-  overrides?: ModelModeOverrides | null,
+  _overrides?: ModelModeOverrides | null,
 ): GrokMode[] {
-  const s = catalog.slots;
-  const ov = cleanModelOverrides(overrides);
   return GROK_MODES.map((m) => {
     if (m.id === "auto") {
       return {
         ...m,
         label: "Adaptive",
-        subtitle: `⚡ Fast · ⚖️ Balanced · 🧠 Think · 🛠️ Build · 🔬 Deep · switches on intent`,
+        subtitle: "⚡ Fast · ⚖️ Balanced · 🛠️ Build · 🚀 Max (Grok 4.6)",
         model: "Adaptive",
       };
     }
-    const autoId = autoModelForMode(m.id, catalog);
     const modelId = sanitizeChatModel(
-      applyModelOverride(m.id, autoId, ov),
+      autoModelForMode(m.id, catalog),
       m.id,
       catalog.all || [],
     );
-    const pinned = hasModelOverride(ov, m.id);
     const name = friendlyModelName(modelId);
     if (m.id === "fast") {
-      return {
-        ...m,
-        modelId,
-        model: name,
-        subtitle: pinned
-          ? `⚡ Override · ${name}`
-          : `⚡ Quick chat · ${name}`,
-      };
+      return { ...m, modelId, model: name, subtitle: `⚡ Quick chat · ${name}` };
     }
     if (m.id === "balanced") {
-      return {
-        ...m,
-        modelId,
-        model: name,
-        subtitle: pinned
-          ? `⚖️ Override · ${name}`
-          : `⚖️ Everyday · ${name}`,
-      };
-    }
-    if (m.id === "expert") {
-      return {
-        ...m,
-        modelId,
-        model: name,
-        subtitle: pinned
-          ? `🧠 Override · ${name}`
-          : `🧠 Think hard · ${name}`,
-      };
-    }
-    if (m.id === "heavy") {
-      return {
-        ...m,
-        modelId,
-        model: name,
-        subtitle: pinned
-          ? `🔬 Override · ${name}`
-          : `🔬 Deep / team · ${name}`,
-      };
+      return { ...m, modelId, model: name, subtitle: `⚖️ Everyday · ${name}` };
     }
     if (m.id === "max") {
-      return {
-        ...m,
-        modelId,
-        model: name,
-        subtitle: pinned
-          ? `🚀 Override · ${name}`
-          : `🚀 Max · top-tier ${name}`,
-      };
+      return { ...m, modelId, model: name, subtitle: `🚀 Max · ${name}` };
     }
     if (m.id === "build") {
-      return {
-        ...m,
-        modelId,
-        model: name,
-        subtitle: pinned
-          ? `🛠️ Override · ${name}`
-          : `🛠️ Build apps · ${name}`,
-      };
+      return { ...m, modelId, model: name, subtitle: `🛠️ Build apps · ${name}` };
     }
     return { ...m, modelId, model: name };
   });
 }
 
-/**
- * Adaptive routes by multi-signal scoring. Concrete model is modelIdForMode.
- */
 export function resolveMode(id: GrokModeId, prompt: string, ctx?: RouteContext): GrokModeId {
-  if (id !== "auto") return id;
+  const nid = normalizeMode(id);
+  if (nid !== "auto") return nid;
   const r = routeAuto(prompt, emptyCatalog(), ctx);
   if (r.routedMode === "imagine") return "fast";
-  return r.routedMode;
+  return normalizeMode(r.routedMode);
 }
 
-/** Resolve mode using live catalog (preferred). */
 export function resolveModeWithCatalog(
   id: GrokModeId,
   prompt: string,
   catalog: ResolvedCatalog,
   ctx?: RouteContext,
 ): GrokModeId {
-  if (id !== "auto") return id;
+  const nid = normalizeMode(id);
+  if (nid !== "auto") return nid;
   const r = routeAuto(prompt, catalog, ctx);
   if (r.routedMode === "imagine") return "fast";
-  return r.routedMode;
+  return normalizeMode(r.routedMode);
 }
 
-/** Resolve the concrete xAI model id for a mode + prompt (+ live catalog + overrides). */
 export function modelIdForMode(
   id: GrokModeId,
   prompt = "",
   catalog: ResolvedCatalog = emptyCatalog(),
   ctx?: RouteContext,
-  overrides?: ModelModeOverrides | null,
+  _overrides?: ModelModeOverrides | null,
 ): string {
-  const ov = cleanModelOverrides(overrides);
-  if (id === "auto") {
+  const nid = normalizeMode(id);
+  if (nid === "auto") {
     const r = routeAuto(prompt, catalog, ctx);
-    const routed: GrokModeId =
-      r.routedMode === "imagine" ? "fast" : (r.routedMode as GrokModeId);
-    return sanitizeChatModel(
-      applyModelOverride(routed, r.modelId, ov),
-      routed,
-      catalog.all || [],
-    );
+    const routed = normalizeMode(r.routedMode === "imagine" ? "fast" : r.routedMode);
+    return sanitizeChatModel(r.modelId, routed, catalog.all || []);
   }
-  return sanitizeChatModel(
-    applyModelOverride(id, autoModelForMode(id, catalog), ov),
-    id,
-    catalog.all || [],
-  );
+  return sanitizeChatModel(autoModelForMode(nid, catalog), nid, catalog.all || []);
 }
 
-/** Full adaptive route (for UI status + imagine handoff). */
 export function autoRouteFor(
   prompt: string,
   catalog: ResolvedCatalog = emptyCatalog(),
   ctx?: RouteContext,
-  overrides?: ModelModeOverrides | null,
+  _overrides?: ModelModeOverrides | null,
 ): AutoRouteResult {
   const r = routeAuto(prompt, catalog, ctx);
-  const routed: GrokModeId =
-    r.routedMode === "imagine" ? "fast" : r.routedMode;
+  const routed = normalizeMode(r.routedMode === "imagine" ? "fast" : r.routedMode);
   return {
     ...r,
-    modelId: sanitizeChatModel(
-      applyModelOverride(routed, r.modelId, cleanModelOverrides(overrides)),
-      routed,
-      catalog.all || [],
-    ),
+    routedMode:
+      routed === "fast" || routed === "balanced" || routed === "max" || routed === "build"
+        ? routed
+        : "balanced",
+    modelId: sanitizeChatModel(r.modelId, routed, catalog.all || []),
   };
 }
 
-/** Map a fixed mode to display tier tags. */
 export function tierForMode(id: GrokModeId): AutoRouteResult["tier"] {
-  if (id === "fast") return "fast";
-  if (id === "balanced") return "balanced";
-  if (id === "build") return "build";
-  if (id === "heavy" || id === "max") return "deep";
-  if (id === "expert") return "think";
-  return "think";
+  const nid = normalizeMode(id);
+  if (nid === "fast") return "fast";
+  if (nid === "balanced") return "balanced";
+  if (nid === "build") return "build";
+  if (nid === "max") return "deep";
+  return "balanced";
 }
 
-export function modeBadge(id: GrokModeId, catalog?: ResolvedCatalog, overrides?: ModelModeOverrides | null): string {
-  const modes = catalog ? getModesWithCatalog(catalog, overrides) : GROK_MODES;
-  const m = modes.find((x) => x.id === id) ?? modes[0]!;
+export function modeBadge(id: GrokModeId, catalog?: ResolvedCatalog): string {
+  const modes = catalog ? getModesWithCatalog(catalog) : GROK_MODES;
+  const nid = normalizeMode(id);
+  const m = modes.find((x) => x.id === nid) ?? modes[0]!;
   return m.id === "auto" ? m.label : `${m.label} · ${m.model}`;
 }
 
-/** Strip UI chrome we used to inject into assistant text (keep history clean for the model). */
 export function stripAssistantChrome(content: string): string {
   return content
     .replace(/^\[(?:Auto|Adaptive)[^\]]*\]\s*\n*/gm, "")

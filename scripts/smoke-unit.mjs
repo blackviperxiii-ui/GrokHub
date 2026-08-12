@@ -99,25 +99,28 @@ console.log("smoke-unit OK");
   );
   assert.equal(r.status, 0, "esbuild router: " + (r.stderr || r.stdout || ""));
   const mod = await import(pathToFileURL(out).href + `?t=${Date.now()}`);
-  const { routeAuto, buildCatalog } = mod;
+  const { routeAuto, buildCatalog, pickFlagshipModel } = mod;
   const cat = buildCatalog([
     "grok-4.20-0309-non-reasoning",
     "grok-4.20-0309-reasoning",
     "grok-4.3",
     "grok-4.5",
+    "grok-4.6",
     "grok-build-0.1",
     "grok-imagine-image",
   ]);
-  // ensure flagship slots
   cat.slots.fast = "grok-4.20-0309-non-reasoning";
   cat.slots.balanced = "grok-4.3";
-  cat.slots.smart = "grok-4.20-0309-reasoning";
-  cat.slots.heavy = "grok-4.5";
+  cat.slots.smart = "grok-4.3";
+  cat.slots.heavy = "grok-4.6";
   cat.slots.build = "grok-build-0.1";
   cat.slots.imagine = "grok-imagine-image";
 
   const expect = (prompt, tier, ctx = {}) => {
     const res = routeAuto(prompt, cat, ctx);
+    assert.notEqual(res.tier, "think", `retired think leaked for ${JSON.stringify(prompt)}`);
+    assert.notEqual(res.routedMode, "expert", `retired expert leaked for ${JSON.stringify(prompt)}`);
+    assert.notEqual(res.routedMode, "heavy", `retired heavy leaked for ${JSON.stringify(prompt)}`);
     assert.equal(
       res.tier,
       tier,
@@ -140,7 +143,7 @@ console.log("smoke-unit OK");
   );
   expect("draw a logo of a red fox astronaut", "imagine");
   // follow-up hold
-  expect("yes continue", "think", { lastRouteTier: "think", historyTurns: 4 });
+  expect("yes continue", "balanced", { lastRouteTier: "think", historyTurns: 4 });
   // Intent shift: after Fast chat, coding should flip to Build (not stick Fast)
   expect(
     "implement a full refactor of the auth module with unit tests and migration plan",
@@ -154,7 +157,7 @@ console.log("smoke-unit OK");
       historyTurns: 8,
     });
     assert.ok(
-      r.tier === "balanced" || r.tier === "think",
+      r.tier === "balanced" || r.tier === "deep",
       "after build, UX ask should leave build: " + r.tier + " " + r.reasonDetail,
     );
   }
@@ -166,7 +169,7 @@ console.log("smoke-unit OK");
       { lastRouteTier: "fast", historyTurns: 2 },
     );
     assert.ok(
-      r.tier === "think" || r.tier === "deep" || r.tier === "build",
+      r.tier === "deep" || r.tier === "build" || r.tier === "balanced",
       "system audit should not stay fast: " + r.tier + " " + r.reasonDetail,
     );
   }
@@ -185,8 +188,14 @@ console.log("smoke-unit OK");
     { usagePressure: 0.9, preferFree: true },
   );
   assert.ok(
-    pressured.tier === "fast" || pressured.tier === "balanced" || pressured.tier === "think",
+    pressured.tier === "fast" || pressured.tier === "balanced",
     "usage pressure should avoid deep for mid prompt: " + pressured.tier,
+  );
+
+  assert.equal(
+    pickFlagshipModel(["grok-4.5", "grok-4.6", "grok-4.3", "grok-4.20-reasoning"]),
+    "grok-4.6",
+    "Max flagship must prefer grok-4.6",
   );
 
   try {
@@ -195,6 +204,28 @@ console.log("smoke-unit OK");
     /* ignore */
   }
   console.log("routeAuto golden OK");
+}
+
+{
+  const modesSrc = fs.readFileSync(path.join(process.cwd(), "src/lib/modes.ts"), "utf8");
+  assert.doesNotMatch(modesSrc, /id: "expert"/);
+  assert.doesNotMatch(modesSrc, /id: "heavy"/);
+  assert.match(modesSrc, /normalizeMode/);
+  assert.match(modesSrc, /grok-4\.6/);
+  const settingsSrc = fs.readFileSync(
+    path.join(process.cwd(), "src/components/views/SettingsView.tsx"),
+    "utf8",
+  );
+  assert.doesNotMatch(settingsSrc, /sec-model-overrides/);
+  assert.doesNotMatch(settingsSrc, /setModelOverride/);
+  const slashSrc = fs.readFileSync(
+    path.join(process.cwd(), "src/lib/slash-commands.ts"),
+    "utf8",
+  );
+  assert.doesNotMatch(slashSrc, /\/mode expert/);
+  assert.doesNotMatch(slashSrc, /\/mode think/);
+  assert.doesNotMatch(slashSrc, /\/mode heavy/);
+  console.log("permanent Adaptive map OK");
 }
 
 

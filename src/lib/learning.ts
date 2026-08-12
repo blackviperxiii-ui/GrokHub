@@ -641,7 +641,7 @@ export function pruneStaleRoutingInsights(state: LearningState): LearningState {
   if (insights.length !== (state.insights || []).length) {
     next = upsertInsight(next, {
       key: "route-max-flagship",
-      text: "Max mode uses top single-agent flagship (Grok 4.5 class), not 4.20-reasoning. Think/Expert uses 4.20-reasoning.",
+      text: "Max mode uses Grok 4.6 (flagship). Adaptive no longer routes Think/Expert or Heavy.",
       confidence: 0.9,
       source: "route",
     });

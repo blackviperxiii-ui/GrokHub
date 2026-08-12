@@ -63,17 +63,14 @@ export const SLOT_CANDIDATES: Record<ModelSlot, string[]> = {
   ],
   balanced: ["grok-4.3", "grok-4", "grok-3", "grok-2"],
   smart: [
-    "grok-4.20-reasoning",
-    "grok-4-20-reasoning",
-    "grok-4.20",
-    "grok-4-20",
-    "grok-4.5",
-    "grok-4-5",
-    "grok-4.5-latest",
     "grok-4.3",
     "grok-4",
   ],
   heavy: [
+    "grok-4.6",
+    "grok-4-6",
+    "grok-4.6-latest",
+    "grok-4-6-latest",
     "grok-4.5",
     "grok-4-5",
     "grok-4.5-latest",
@@ -98,8 +95,8 @@ export const SLOT_CANDIDATES: Record<ModelSlot, string[]> = {
 
 /** Models we consider product-essential (shown in Settings). */
 export const ESSENTIAL_NAME_HINTS = [
-  /grok-4\.20/i,
-  /grok-4-20/i,
+  /grok-4\.6/i,
+  /grok-4-6/i,
   /grok-4\.5/i,
   /grok-4-5/i,
   /grok-4\.3/i,
@@ -141,33 +138,33 @@ export function sanitizeChatModel(
   if (!m) {
     m =
       modeId === "max" || modeId === "heavy"
-        ? pickFlagshipModel(liveIds) || "grok-4.5"
+        ? pickFlagshipModel(liveIds) || "grok-4.6"
         : modeId === "fast"
           ? "grok-4-1-fast-non-reasoning"
           : modeId === "build"
             ? "grok-build-0.1"
-            : modeId === "balanced"
+            : modeId === "balanced" || modeId === "expert"
               ? "grok-4.3"
-              : "grok-4.20-reasoning";
+              : "grok-4.3";
   }
   if (isMultiAgentModel(m)) {
     m =
       modeId === "max" || modeId === "heavy"
-        ? pickFlagshipModel(liveIds) || "grok-4.5"
+        ? pickFlagshipModel(liveIds) || "grok-4.6"
         : modeId === "fast"
           ? "grok-4-1-fast-non-reasoning"
           : modeId === "build"
             ? "grok-build-0.1"
-            : "grok-4.20-reasoning";
+            : "grok-4.3";
   }
-  // Max/Heavy must not land on 4.20 reasoning
+  // Max must not land on 4.20 reasoning
   if ((modeId === "max" || modeId === "heavy") && /4[.-]?20/i.test(m)) {
-    m = pickFlagshipModel(liveIds) || "grok-4.5";
+    m = pickFlagshipModel(liveIds) || "grok-4.6";
   }
   if (modeId === "max") {
-    m = pickFlagshipModel(liveIds) || m || "grok-4.5";
+    m = pickFlagshipModel(liveIds) || m || "grok-4.6";
   }
-  if (isMultiAgentModel(m)) m = "grok-4.5";
+  if (isMultiAgentModel(m)) m = "grok-4.6";
   return m;
 }
 
@@ -176,28 +173,39 @@ export function filterChatCompletionModels(liveIds: string[]): string[] {
   return (liveIds || []).filter((id) => id && !SKIP_MODEL_RE.test(id) && !isMultiAgentModel(id));
 }
 
-/** True top-tier single-agent flagship (Max / Heavy), not reasoning-4.20 or multi-agent. */
+/** True top-tier single-agent flagship (Max), not reasoning-4.20 or multi-agent. */
 export function isFlagshipModel(id: string): boolean {
   const s = String(id || "");
   if (!s || isMultiAgentModel(s)) return false;
   if (/4[.-]?20/i.test(s)) return false;
-  return /grok-4[.-]?5/i.test(s);
+  return /grok-4[.-]?6/i.test(s) || /grok-4[.-]?5/i.test(s);
 }
 
-/** Pick Max/flagship from live list — always grok-4.5 class, never multi-agent or 4.20. */
+/** Pick Max/flagship from live list — prefer grok-4.6, never multi-agent or 4.20. */
 export function pickFlagshipModel(liveIds: string[]): string {
   const live = (liveIds || []).filter(
     (id) => id && !SKIP_MODEL_RE.test(id) && !isMultiAgentModel(id),
   );
-  const preferred = ["grok-4.5", "grok-4-5", "grok-4.5-latest", "grok-4-5-latest"];
+  const preferred = [
+    "grok-4.6",
+    "grok-4-6",
+    "grok-4.6-latest",
+    "grok-4-6-latest",
+    "grok-4.5",
+    "grok-4-5",
+    "grok-4.5-latest",
+    "grok-4-5-latest",
+  ];
   for (const want of preferred) {
     const hit = live.find((id) => id.toLowerCase() === want.toLowerCase());
     if (hit) return hit;
   }
+  const fourSix = live.find((id) => /grok-4[.-]?6/i.test(id) && !/4[.-]?20/i.test(id));
+  if (fourSix) return fourSix;
   const fourFive = live.find((id) => isFlagshipModel(id));
   if (fourFive) return fourFive;
   const soft = live.find(
-    (id) => /grok-4[.-]5/i.test(id) && !/4[.-]20|reasoning|multi/i.test(id),
+    (id) => /grok-4[.-][56]/i.test(id) && !/4[.-]20|reasoning|multi/i.test(id),
   );
   if (soft) return soft;
   for (const want of ["grok-4.3", "grok-4", "grok-3"]) {
@@ -213,7 +221,7 @@ export function pickFlagshipModel(liveIds: string[]): string {
     });
     if (hit) return hit;
   }
-  return "grok-4.5";
+  return "grok-4.6";
 }
 
 export type ResolvedCatalog = {
@@ -240,8 +248,8 @@ export type GrokSlotPlan = {
 const FALLBACK_SLOTS: Record<ModelSlot, string> = {
   fast: "grok-4-1-fast-non-reasoning",
   balanced: "grok-4.3",
-  smart: "grok-4.20-reasoning",
-  heavy: "grok-4.5",
+  smart: "grok-4.3",
+  heavy: "grok-4.6",
   build: "grok-build-0.1",
   imagine: "grok-2-image",
 };
@@ -385,7 +393,7 @@ export function buildCatalog(
     for (const k of SLOT_KEYS) {
       slots[k] = sanitizeChatModel(slots[k], k === "heavy" ? "heavy" : k === "smart" ? "expert" : k, all);
     }
-    if (/4[.-]?20/i.test(slots.heavy) || isMultiAgentModel(slots.heavy)) {
+    if (/4[.-]?20/i.test(slots.heavy) || isMultiAgentModel(slots.heavy) || !/4[.-]?6/i.test(slots.heavy)) {
       slots.heavy = pickFlagshipModel(all);
     }
     return {
@@ -503,8 +511,8 @@ Assign the best model for each product slot. Prefer newest generation in that cl
 Slots:
 - fast: quick low-token chat (non-reasoning / mini / fast variants)
 - balanced: solid everyday chat (e.g. 4.3-class)
-- smart: hard reasoning / Think mode (prefer grok-4.20-reasoning, then 4.5-class flagship)
-- heavy: top single-agent flagship for Max/Deep (prefer grok-4.5). NEVER multi-agent model ids (chat completions rejects them).
+- smart: unused (Think retired — map to balanced / 4.3)
+- heavy: Max flagship (prefer grok-4.6). NEVER multi-agent.
 - build: long coding sessions / agent coding (code or build models)
 - imagine: image generation (if none, use empty string "")
 
@@ -656,9 +664,9 @@ export function tierMeta(tier: RouteTier): {
     };
   if (tier === "deep")
     return {
-      label: "🔬 Deep",
-      emoji: "🔬",
-      short: "Deep",
+      label: "🚀 Max",
+      emoji: "🚀",
+      short: "Max",
       tone: "border-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]",
     };
   if (tier === "build")
@@ -1241,7 +1249,7 @@ function tierToRoute(
   if (tier === "build") {
     return { routedMode: "build", modelId: slots.build, intent: "code" };
   }
-  // deep → Max (flagship 4.5). Heavy remains available as a manual mode.
+  // deep → Max (Grok 4.6). Heavy/Think modes are retired.
   return {
     routedMode: "max",
     modelId: slots.heavy,
@@ -1275,7 +1283,22 @@ export function routeAuto(
     tierScores.deep += 20;
   }
 
-  const { tier, why } = pickWinner(tierScores, s, ctx);
+  const { tier: rawTier, why: rawWhy } = pickWinner(tierScores, s, ctx);
+  // Think / Expert retired — fold into Balanced, or Max when the ask is genuinely heavy.
+  let tier = rawTier;
+  let why = rawWhy;
+  if (tier === "think") {
+    const pressure = Number(ctx.usagePressure || 0);
+    const toMax =
+      !ctx.preferFree &&
+      pressure < 0.7 &&
+      (s.archHit ||
+        s.researchHit ||
+        s.teamHit ||
+        (s.analytical >= 55 && s.complexity >= 48));
+    tier = toMax ? "deep" : "balanced";
+    why = `${rawWhy} · Think retired → ${toMax ? "Max" : "Balanced"}`;
+  }
   const mapped = tierToRoute(tier, slots, s);
   const tm = tierMeta(tier);
   const scoreLine = formatScoreLine(tierScores);
@@ -1305,6 +1328,7 @@ export function routeAuto(
 
 export function friendlyModelName(id: string): string {
   if (!id) return "—";
+  if (/4\.6|4-6/i.test(id)) return "Grok 4.6";
   if (/4\.5|4-5/i.test(id)) return "Grok 4.5";
   if (/4\.3/i.test(id)) return "Grok 4.3";
   if (/4[.-]?20/i.test(id) && /reason/i.test(id)) return "Grok 4.20 Reasoning";

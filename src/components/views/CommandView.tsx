@@ -25,7 +25,6 @@ export function CommandView() {
   const mode = useGrokHub((s) => s.mode);
   const setMode = useGrokHub((s) => s.setMode);
   const modelCatalog = useGrokHub((s) => s.modelCatalog);
-  const modelOverrides = useGrokHub((s) => s.modelOverrides);
   const setNav = useGrokHub((s) => s.setNav);
   const runAutomation = useGrokHub((s) => s.runAutomation);
   const sendChat = useGrokHub((s) => s.sendChat);
@@ -72,12 +71,11 @@ export function CommandView() {
           <CardHeader>
             <CardTitle>Grok modes</CardTitle>
             <CardDescription>
-              Baked in exactly like the web picker — Adaptive, Fast, Expert, Heavy, Build. Costs scale
-              by mode.
+              Adaptive, Fast, Balanced, Max (Grok 4.6), and Build. Adaptive uses a permanent map.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
-            {getModesWithCatalog(modelCatalog, modelOverrides).map((m) => {
+            {getModesWithCatalog(modelCatalog).map((m) => {
               const selected = m.id === mode;
               const costHint =
                 m.id === "max"

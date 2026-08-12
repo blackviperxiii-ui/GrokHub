@@ -1057,7 +1057,7 @@ export function ChatView() {
       return;
     }
     if (chip.kind === "mode" && chip.value.startsWith("__mode:")) {
-      const m = chip.value.slice("__mode:".length) as "auto" | "fast" | "balanced" | "expert" | "heavy" | "max" | "build";
+      const m = chip.value.slice("__mode:".length) as "auto" | "fast" | "balanced" | "max" | "build";
       setMode(m);
       return;
     }

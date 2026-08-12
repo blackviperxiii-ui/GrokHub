@@ -2,16 +2,16 @@
 
 > **Scope:** GrokHub **Linux desktop** (Arch/CachyOS + Electron). Windows is a separate repository.
 
-**v1.1.15** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v1.1.16** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
-Adaptive modes (including **Max / Grok 4.5** flagship) · Imagine · skills · automations · setup sync · unsandboxed desktop host (CLI · files · apps).
+Adaptive modes (including **Max / Grok 4.6** flagship) · Imagine · skills · automations · setup sync · unsandboxed desktop host (CLI · files · apps).
 
 **Repository:** [github.com/blackviperxiii-ui/Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub)
 
 | Platform | Repository | Latest |
 |----------|------------|--------|
-| **Linux** (this) | [Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub) | **v1.1.15** |
-| **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | **v1.1.15** (parity track) |
+| **Linux** (this) | [Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub) | **v1.1.16** |
+| **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | **v1.1.16** (parity track) |
 
 > Windows builds and Setup.exe updates live only in **Grok-Hub-Windows**. This repo is Linux-focused (Arch / CachyOS packaging, AUR, user tarball, and in-app updates).
 
@@ -46,9 +46,9 @@ UI: **Settings → Autonomy**. Optional agent: `./scripts/sync-user-integration.
 
 ## GrokHub 1.1 (Linux desktop)
 
-Stable track for **Arch / CachyOS + system Electron** (**v1.1.15**). Windows parity: [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows).
+Stable track for **Arch / CachyOS + system Electron** (**v1.1.16**). Windows parity: [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows).
 
-**Install (user):** in-app update, or extract `grokhub-desktop-v1.1.15.tar.gz` to `~/.local/lib/grokhub`.
+**Install (user):** in-app update, or extract `grokhub-desktop-v1.1.16.tar.gz` to `~/.local/lib/grokhub`.
 
 **Data:** `~/.config/GrokHub` (chats, secrets, memory) — not touched by updates.
 
@@ -298,7 +298,7 @@ GrokHub learns from turn outcomes, 👍/👎 on replies, and explicit prefs:
 |--|--|
 | **Signals** | Success/fail turns, host/tool use, user prefs in chat, thumbs |
 | **Insights** | Distilled bullets pinned into context |
-| **Adaptive bias** | Soft weight on Fast/Think/Deep/Build from track record |
+| **Adaptive bias** | Soft weight on Fast/Balanced/Build/Max from track record |
 | **Reflect** | `/learn reflect` or Settings → Learning → writes `LEARNINGS.md` |
 | **Manual** | `/learn note …` · rate assistant messages |
 

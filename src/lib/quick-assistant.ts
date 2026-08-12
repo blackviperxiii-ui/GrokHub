@@ -749,7 +749,7 @@ function defaultChips(planLabel: string, mode: GrokModeId, rotation: number): Qu
         {
           id: "def-modes",
           label: "Explain modes",
-          value: "Explain Adaptive / Fast / Expert / Heavy / Build and when to use each.",
+          value: "Explain Adaptive / Fast / Balanced / Max / Build and when to use each.",
           kind: "chat",
           hint: "Default",
         },
