@@ -537,6 +537,17 @@ function createWindow() {
         mainWindow.__ghUiLoadOk = true;
         mainWindow.__ghUiLoadPending = false;
         mainWindow.__ghUiLastError = null;
+        // Ensure window is actually visible (Wayland / multi-monitor / tray edge cases)
+        try {
+          if (process.env.GROKHUB_START_MINIMIZED !== "1") {
+            mainWindow.setSkipTaskbar(false);
+            if (!mainWindow.isVisible()) mainWindow.show();
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.focus();
+          }
+        } catch {
+          /* ignore */
+        }
       }
     } catch {
       /* ignore */
