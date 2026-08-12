@@ -70,6 +70,8 @@ const desktopEntry = safeRequire("desktop-entry", "./desktop-entry.cjs") || {
 const hubServer = safeRequire("hub-server", "./hub-server.cjs") || {};
 const uiServer = safeRequire("ui-server", "./ui-server.cjs") || {
   resolveStartUrl: async () => ({ ok: false, url: "", error: "ui-server missing" }),
+  pickPort: () => 18765,
+  waitUntilHealthy: async () => false,
 };
 const appLog = safeRequire("log", "./log.cjs") || { info: () => {}, error: () => {} };
 const perfUtil = safeRequire("perf-util", "./perf-util.cjs") || {
@@ -405,7 +407,7 @@ function fitToWorkArea(win) {
   }
 }
 
-function createWindow() {
+function createWindow(opts = {}) {
   const saved = sanitizeBounds(loadWindowState());
   const display = screen.getPrimaryDisplay();
   const { x: dx, y: dy, width: aw, height: ah } = display.workArea;
@@ -499,13 +501,17 @@ function createWindow() {
     }
   }
 
-  // Prefer UI server URL set by resolveStartUrl / launcher (production Nitro on :18765)
-  const startUrl =
-    process.env.GROKHUB_URL ||
-    `http://127.0.0.1:${uiServer.pickPort()}`;
+  // Backend is health-checked before the first window; later tray /
+  // second-instance opens reuse GROKHUB_URL.
+  const startUrl = String(
+    opts.startUrl ||
+      process.env.GROKHUB_URL ||
+      `http://127.0.0.1:${typeof uiServer.pickPort === "function" ? uiServer.pickPort() : 18765}`,
+  ).replace(/\/$/, "");
+  const backendReady =
+    opts.backendReady === true ||
+    (opts.backendReady !== false && Boolean(process.env.GROKHUB_URL));
 
-  // Track successful UI load so parallel bootstrap can force a retry after Nitro is ready
-  // (without this, a race loads the error page and never reloads when the port is already in the URL)
   mainWindow.__ghUiLoadOk = false;
   mainWindow.__ghUiLoadPending = true;
 
@@ -564,8 +570,8 @@ function createWindow() {
     showLoadError(`${desc} (${code}) loading ${url}`);
   });
 
-  // Soft hold: don't flash error page while UI server is still starting
-  mainWindow.__ghUiBootstrapHold = true;
+  // Soft hold only if we opened before the backend finished (should be rare now)
+  mainWindow.__ghUiBootstrapHold = !backendReady;
   void mainWindow.loadURL(startUrl).catch((err) => {
     mainWindow.__ghUiLoadOk = false;
     showLoadError(err instanceof Error ? err.message : String(err));
@@ -1609,31 +1615,34 @@ app.whenReady().then(async () => {
     console.error("[GrokHub] agent-core start failed", e);
   }
 
-  // Start UI resolve in parallel with shell window creation
-  const uiReady = (async () => {
-    try {
-      const resolved = await uiServer.resolveStartUrl(__dirname);
-      if (resolved.url) process.env.GROKHUB_URL = resolved.url;
-      bootMark("ui-ready", { ok: Boolean(resolved.ok), url: resolved.url || null });
-      if (!resolved.ok && resolved.error) {
-        console.error("[GrokHub]", resolved.error);
-        appLog.error?.("ui-bootstrap", { error: resolved.error });
-      }
-      return resolved;
-    } catch (e) {
-      console.error("[GrokHub] UI bootstrap failed", e);
-      appLog.error?.("ui-bootstrap", { error: String(e?.message || e) });
-      return { ok: false, url: process.env.GROKHUB_URL || "", error: String(e) };
-    }
-  })();
-
-  // Create window shell immediately (show:false until ready-to-show).
-  // Always re-verify load after UI resolve — parallel probe can race the first navigation.
-  createWindow();
+  // Backend first: start / wait until the UI server is fully healthy,
+  // then create the Electron window. Launchers may start the backend and
+  // then spawn Electron — resolveStartUrl reuses a healthy server.
   createTray();
-  bootMark("window-created");
+  bootMark("tray-ready");
+  startupLog("waiting-backend");
 
-  const resolved = await uiReady;
+  let resolved;
+  try {
+    resolved = await uiServer.resolveStartUrl(__dirname);
+    if (resolved.url) process.env.GROKHUB_URL = resolved.url;
+    bootMark("ui-ready", { ok: Boolean(resolved.ok), url: resolved.url || null });
+    if (!resolved.ok && resolved.error) {
+      console.error("[GrokHub]", resolved.error);
+      appLog.error?.("ui-bootstrap", { error: resolved.error });
+    }
+  } catch (e) {
+    console.error("[GrokHub] UI bootstrap failed", e);
+    appLog.error?.("ui-bootstrap", { error: String(e?.message || e) });
+    resolved = { ok: false, url: process.env.GROKHUB_URL || "", error: String(e) };
+  }
+  startupLog("backend-ready", { ok: Boolean(resolved?.ok), url: resolved?.url || null });
+
+  createWindow({
+    startUrl: String(resolved?.url || process.env.GROKHUB_URL || "").replace(/\/$/, ""),
+    backendReady: Boolean(resolved?.ok),
+  });
+  bootMark("window-created");
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.__ghUiBootstrapHold = false;
   }

@@ -71,11 +71,50 @@ function pickPort() {
   return Number.isFinite(n) && n > 0 ? n : 18765;
 }
 
-function probe(url, timeoutMs = 800) {
+/** Real HTML from Nitro/Vite — a bare 200 is not "fully loaded". */
+const HEALTHY_BODY_RE = /GrokHub|<!DOCTYPE html>|tanstack|\/assets\//i;
+
+function isHealthyBody(body) {
+  return HEALTHY_BODY_RE.test(String(body || ""));
+}
+
+/**
+ * Probe the UI server.
+ * Default: require a real HTML body (fully loaded).
+ * `{ listeningOnly: true }` is status-only (port is bound).
+ */
+function probe(url, timeoutMs = 1200, opts = {}) {
+  const listeningOnly = Boolean(opts && opts.listeningOnly);
   return new Promise((resolve) => {
     const req = http.get(url, { timeout: timeoutMs }, (res) => {
-      res.resume();
-      resolve(res.statusCode && res.statusCode < 500);
+      const code = res.statusCode || 0;
+      if (code < 200 || code >= 500) {
+        res.resume();
+        resolve(false);
+        return;
+      }
+      if (listeningOnly) {
+        res.resume();
+        resolve(true);
+        return;
+      }
+      const chunks = [];
+      let n = 0;
+      res.on("data", (c) => {
+        chunks.push(c);
+        n += c.length;
+        if (n > 16384) {
+          try {
+            req.destroy();
+          } catch {
+            /* ignore */
+          }
+        }
+      });
+      res.on("end", () => {
+        resolve(isHealthyBody(Buffer.concat(chunks).toString("utf8")));
+      });
+      res.on("error", () => resolve(false));
     });
     req.on("error", () => resolve(false));
     req.on("timeout", () => {
@@ -87,6 +126,16 @@ function probe(url, timeoutMs = 800) {
       resolve(false);
     });
   });
+}
+
+async function waitUntilHealthy(url, timeoutMs = 30_000, intervalMs = 200) {
+  const deadline = Date.now() + timeoutMs;
+  const target = String(url || "").replace(/\/$/, "") + "/";
+  while (Date.now() < deadline) {
+    if (await probe(target)) return true;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
 }
 
 function runtimeDir() {
@@ -492,6 +541,9 @@ module.exports = {
   resolveStartUrl,
   appRootFrom,
   pickPort,
+  probe,
+  waitUntilHealthy,
+  isHealthyBody,
   isOurUiPidSync,
   killOurUiPid,
   rotateDiagLog,

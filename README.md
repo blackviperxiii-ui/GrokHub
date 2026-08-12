@@ -2,7 +2,7 @@
 
 > **Scope:** GrokHub **Linux desktop** (Arch/CachyOS + Electron). Windows is a separate repository.
 
-**v1.1.17** — Grok-native agent control plane for **Arch Linux / CachyOS**.
+**v1.1.18** — Grok-native agent control plane for **Arch Linux / CachyOS**.
 
 Adaptive modes (including **Max / Grok 4.6** flagship) · Imagine · skills · automations · **Devices LAN hub** (pair computers, sync chats/memory, remote tasks — separate from Grok login) · unsandboxed desktop host (CLI · files · apps).
 
@@ -10,8 +10,8 @@ Adaptive modes (including **Max / Grok 4.6** flagship) · Imagine · skills · a
 
 | Platform | Repository | Latest |
 |----------|------------|--------|
-| **Linux** (this) | [Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub) | **v1.1.17** |
-| **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | **v1.1.16** (parity track) |
+| **Linux** (this) | [Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub) | **v1.1.18** |
+| **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | **v1.1.17** (parity track) |
 
 > Windows builds and Setup.exe updates live only in **Grok-Hub-Windows**. This repo is Linux-focused (Arch / CachyOS packaging, AUR, user tarball, and in-app updates).
 
@@ -46,9 +46,9 @@ UI: **Settings → Autonomy**. Optional agent: `./scripts/sync-user-integration.
 
 ## GrokHub 1.1 (Linux desktop)
 
-Stable track for **Arch / CachyOS + system Electron** (**v1.1.17**). Windows parity: [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows).
+Stable track for **Arch / CachyOS + system Electron** (**v1.1.18**). Windows parity: [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows).
 
-**Install (user):** in-app update, or extract `grokhub-desktop-v1.1.17.tar.gz` to `~/.local/lib/grokhub`.
+**Install (user):** in-app update, or extract `grokhub-desktop-v1.1.18.tar.gz` to `~/.local/lib/grokhub`.
 
 **Data:** `~/.config/GrokHub` (chats, secrets, memory) — not touched by updates.
 
