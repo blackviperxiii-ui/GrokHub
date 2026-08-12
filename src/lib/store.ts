@@ -7357,6 +7357,32 @@ if (!cmds.length) {
       skipHydration: true,
       onRehydrateStorage: () => (state, err) => {
         if (err || !state) return;
+        // Drop OpenClaw import if the workspace path is gone (avoids huge dead context after uninstall)
+        try {
+          const oc = state.openClawWorkspace as { root?: string } | null | undefined;
+          const root = oc?.root;
+          if (
+            root &&
+            typeof root === "string" &&
+            typeof window !== "undefined" &&
+            window.grokhubDesktop?.host?.listDir
+          ) {
+            void window.grokhubDesktop.host
+              .listDir(root)
+              .then(() => {
+                /* path still exists */
+              })
+              .catch(() => {
+                try {
+                  useGrokHub.getState().clearOpenClawWorkspace();
+                } catch {
+                  /* ignore */
+                }
+              });
+          }
+        } catch {
+          /* ignore */
+        }
         // Create ~/.config/GrokHub/memory/* and mirror learning STATUS.md
         void ensureFileMemory().then(() => {
           try {
