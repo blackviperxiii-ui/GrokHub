@@ -86,9 +86,7 @@ export function AutomationsView() {
         <CardContent className="flex flex-wrap items-center gap-3 py-3 text-xs text-[var(--color-muted)]">
           <HeartPulse className="h-4 w-4 text-[var(--color-info)]" />
           <span>
-            Heartbeat <RelativeTime ts={heartbeatAt} /> · runs{" "}
-            <span className="font-medium text-[var(--color-fg)]">heartbeat</span> automations
-            and the clock scheduler (every 30s while open).
+            Last check <RelativeTime ts={heartbeatAt} /> · scheduled tasks run while the app is open.
           </span>
           <Badge variant="info">
             {automations.filter((a) => a.enabled && a.schedule === "heartbeat").length} on heartbeat
