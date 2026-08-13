@@ -71,11 +71,168 @@ assert.doesNotMatch(
   "must not create the Electron window in parallel with backend boot",
 );
 assert.match(mainSrc, /waiting-backend/, "main must wait for backend before createWindow");
+assert.match(mainSrc, /function startupLog\s*\(/, "startupLog helper must be defined");
+assert.ok(
+  mainSrc.indexOf("function startupLog") < mainSrc.indexOf('startupLog("waiting-backend")'),
+  "startupLog must be defined before boot calls it",
+);
 assert.match(mainSrc, /createWindow\(\{\s*startUrl:/s, "createWindow only after resolveStartUrl");
 assert.ok(
   mainSrc.indexOf("waiting-backend") < mainSrc.indexOf("createWindow({"),
   "wait for backend before first createWindow",
 );
+assert.match(mainSrc, /loadURL\(startUrl\)/, "createWindow starts the first UI load");
+{
+  const afterWindow = mainSrc.slice(mainSrc.indexOf("bootMark(\"window-created\")"));
+  assert.doesNotMatch(
+    afterWindow,
+    /await mainWindow\.loadURL\(current\)/,
+    "must not immediately loadURL the same URL again after createWindow (Electron 37 stack overflow)",
+  );
+  assert.match(
+    mainSrc,
+    /__ghUiShowingError/,
+    "showLoadError must guard against re-entrant loadURL",
+  );
+  assert.match(
+    mainSrc,
+    /disable-dev-shm-usage/,
+    "Linux must set disable-dev-shm-usage (noexec /dev/shm kills Chromium)",
+  );
+  assert.match(mainSrc, /appendSwitch\("no-zygote"\)/, "Linux no-sandbox must also disable zygote");
+  assert.doesNotMatch(
+    mainSrc,
+    /createFromPath\([^)]*svg/i,
+    "nativeImage.createFromPath must not be given SVG (Electron NativeImage warning)",
+  );
+  assert.doesNotMatch(
+    mainSrc.slice(mainSrc.indexOf("function loadAppIcon"), mainSrc.indexOf("function createWindow")),
+    /grokhub\.svg/,
+    "window icon candidates must be raster (png/ico), not svg",
+  );
+  assert.ok(
+    fs.existsSync(path.join(process.cwd(), "desktop/icons/icon.png")),
+    "desktop/icons/icon.png required so NativeImage gets a real raster path",
+  );
+}
+
+const appShellSrc = fs.readFileSync(
+  path.join(process.cwd(), "src/components/AppShell.tsx"),
+  "utf8",
+);
+assert.match(appShellSrc, /id: "queue"/, "Queue must be a first-class nav item");
+assert.match(appShellSrc, /AgentQueueView/, "AppShell must render the real agent queue");
+assert.match(appShellSrc, /data-hydrated/, "AppShell must mark persist rehydrate so e2e does not click stale nav");
+assert.doesNotMatch(
+  appShellSrc,
+  /DesktopHostView/,
+  "dead Desktop tab must not stay wired in AppShell — host UI lives in Settings",
+);
+assert.doesNotMatch(
+  fs.readFileSync(path.join(process.cwd(), "src/components/views/AgentsView.tsx"), "utf8"),
+  /UI-only/,
+  "AgentsView must not advertise a fake multi-agent roster",
+);
+
+assert.ok(
+  fs.existsSync(path.join(process.cwd(), "src/lib/settings-nav.ts")),
+  "settings-nav helper required so Connect/Devices open the right Settings pane",
+);
+{
+  const settingsNav = fs.readFileSync(path.join(process.cwd(), "src/lib/settings-nav.ts"), "utf8");
+  assert.match(settingsNav, /export function openSettingsSection/, "openSettingsSection must be exported");
+  assert.match(settingsNav, /grokhub:settings-section/, "must use a window event Settings can consume after mount");
+}
+assert.match(
+  fs.readFileSync(path.join(process.cwd(), "src/components/views/ChatView.tsx"), "utf8"),
+  /data-connect-grok/,
+  "empty chat must offer a Connect Grok CTA when disconnected",
+);
+assert.match(
+  fs.readFileSync(path.join(process.cwd(), "src/components/views/ChatView.tsx"), "utf8"),
+  /beginGrokOAuthFromUi/,
+  "Connect Grok CTA must start OAuth, not only open Settings",
+);
+assert.match(appShellSrc, /data-queue-count/, "Queue nav must show an attention count");
+assert.match(mainSrc, /setVersion/, "Electron must set app version (Linux logs No version found otherwise)");
+assert.match(
+  mainSrc,
+  /Content-Security-Policy/,
+  "packaged Electron session must set CSP (skip Vite :8080 which needs eval)",
+);
+assert.match(
+  mainSrc,
+  /Queue \(\$\{due\} waiting\)/,
+  "tray must label Queue with waiting job count",
+);
+assert.match(
+  fs.readFileSync(path.join(process.cwd(), "src/components/views/AgentQueueView.tsx"), "utf8"),
+  /data-next-up/,
+  "Queue must show what will run next (or that it is paused/empty)",
+);
+assert.match(
+  fs.readFileSync(path.join(process.cwd(), "src/components/views/SettingsView.tsx"), "utf8"),
+  /DesktopHostView/,
+  "Settings must host the real Desktop host CLI/files/apps UI",
+);
+assert.match(
+  fs.readFileSync(path.join(process.cwd(), "src/components/views/ImagineView.tsx"), "utf8"),
+  /not an xAI/,
+  "Imagine must say local preview is not an xAI image when disconnected",
+);
+assert.match(
+  fs.readFileSync(path.join(process.cwd(), "src/components/CommandPalette.tsx"), "utf8"),
+  /openSettingsSection\(\s*["']devices["']/,
+  "Devices palette item must open the Devices settings category",
+);
+
+const storeSrc = fs.readFileSync(path.join(process.cwd(), "src/lib/store.ts"), "utf8");
+assert.doesNotMatch(
+  storeSrc,
+  /dead = new Set\(\[[^\]]*["']queue["']/,
+  "queue nav must not be treated as a dead/removed surface",
+);
+
+assert.ok(
+  fs.existsSync(path.join(process.cwd(), "scripts/smoke-electron-boot.mjs")),
+  "Electron boot smoke required so window-open regressions fail CI",
+);
+{
+  const bootSmoke = fs.readFileSync(
+    path.join(process.cwd(), "scripts/smoke-electron-boot.mjs"),
+    "utf8",
+  );
+  assert.match(bootSmoke, /boot-complete/, "Electron smoke must wait for boot-complete");
+  assert.match(
+    bootSmoke,
+    /startupLog is not defined/,
+    "Electron smoke must fail on the tray-only startupLog crash",
+  );
+}
+assert.ok(
+  fs.existsSync(path.join(process.cwd(), "e2e/smoke.spec.ts")),
+  "Playwright smoke spec required for chat + host flows",
+);
+assert.ok(
+  fs.existsSync(path.join(process.cwd(), "playwright.config.ts")),
+  "Playwright config required for chat + host e2e",
+);
+{
+  const e2e = fs.readFileSync(path.join(process.cwd(), "e2e/smoke.spec.ts"), "utf8");
+  assert.match(e2e, /data-composer/, "e2e must cover the chat composer");
+  assert.match(e2e, /\/api\/host/, "e2e must cover host info/exec");
+  assert.doesNotMatch(
+    e2e,
+    /getByRole\(["']button["'],\s*\{\s*name:\s*["']Send["']\s*\}\)\.click/,
+    "e2e must not click Send (no live xAI)",
+  );
+}
+{
+  const ci = fs.readFileSync(path.join(process.cwd(), ".github/workflows/ci.yml"), "utf8");
+  assert.match(ci, /test:electron-boot/, "CI must run Electron boot smoke");
+  assert.match(ci, /test:e2e/, "CI must run Playwright e2e");
+  assert.match(ci, /xvfb-run/, "Electron boot smoke needs xvfb on Ubuntu");
+}
 
 const uiSrc = fs.readFileSync(path.join(process.cwd(), "desktop/ui-server.cjs"), "utf8");
 assert.match(uiSrc, /HEALTHY_BODY_RE/, "probe must require a real HTML body");

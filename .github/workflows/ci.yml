@@ -25,11 +25,17 @@ jobs:
         env:
           GROKHUB_DESKTOP: "1"
         run: npm run desktop:build
-      - name: HTTP smoke
+      - name: OS deps for Electron + Playwright
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0 libnss3 libxss1 libasound2t64 libgbm1 libxshmfence1 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libx11-xcb1 libnotify4 libxtst6
+      - name: HTTP + Electron + Playwright smoke
         run: |
           export PORT=18765 NITRO_PORT=18765 HOST=127.0.0.1 NITRO_HOST=127.0.0.1
           node .output/server/index.mjs > /tmp/ui.log 2>&1 &
           echo $! > /tmp/ui.pid
+          cleanup() { kill "$(cat /tmp/ui.pid)" 2>/dev/null || true; }
+          trap cleanup EXIT
           ok=0
           for i in $(seq 1 60); do
             if curl -sf http://127.0.0.1:18765/ | grep -qi GrokHub; then ok=1; break; fi
@@ -39,7 +45,12 @@ jobs:
             echo "smoke failed"; tail -n 80 /tmp/ui.log; exit 1
           fi
           curl -sf -o /dev/null http://127.0.0.1:18765/assets/ || true
-          kill "$(cat /tmp/ui.pid)" 2>/dev/null || true
+          echo "http smoke ok"
+          export GROKHUB_URL=http://127.0.0.1:18765
+          export GROKHUB_DISABLE_GPU=1 GROKHUB_WAYLAND=0
+          xvfb-run -a npm run test:electron-boot
+          npx playwright install chromium
+          PLAYWRIGHT_BASE_URL=http://127.0.0.1:18765 npm run test:e2e
           echo "smoke ok"
 
   windows-package:

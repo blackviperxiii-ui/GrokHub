@@ -1185,6 +1185,14 @@ function pruneToCoreConnectors(list: Connector[]): Connector[] {
     .filter(Boolean);
 }
 
+/** Removed surfaces remap; Queue is a real nav target. */
+export function canonicalizeNav(nav: unknown): NavId {
+  const id = String(nav || "chat");
+  if (id === "agents") return "queue";
+  if (id === "desktop" || id === "connectors" || id === "roster") return "settings";
+  return (id as NavId) || "chat";
+}
+
 export const useGrokHub = create<State>()(
   persist(
     (set, get) => ({
@@ -1270,10 +1278,8 @@ export const useGrokHub = create<State>()(
       grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
 
       setNav: (nav) => {
-        // Removed surfaces — keep navigation recoverable
-        const dead = new Set(["desktop", "connectors", "agents", "queue", "roster"]);
-        const next = dead.has(String(nav)) ? "settings" : nav;
-        set({ nav: next as typeof nav, modeMenuOpen: false });
+        const next = canonicalizeNav(nav);
+        set({ nav: next, modeMenuOpen: false });
         scheduleSettingsPersist();
       },
       setMode: (mode) => {
@@ -7522,11 +7528,8 @@ if (!cmds.length) {
         toolsNavCollapsed: Boolean(s.toolsNavCollapsed),
         setupSyncMeta: s.setupSyncMeta || { autoPullOnLogin: true, autoPushOnChange: false },
         lastHubSyncAt: Number(s.lastHubSyncAt || 0),
-        // Restore last tab (connectors removed — remapped on hydrate)
-        nav:
-          s.nav === "connectors" || s.nav === "agents" || s.nav === "queue" || s.nav === "desktop"
-            ? "settings"
-            : s.nav || "chat",
+        // Restore last tab (removed surfaces remapped; queue is live)
+        nav: canonicalizeNav(s.nav),
         // Secrets stay in safeStorage (userData), not here
       }),
       version: 1,

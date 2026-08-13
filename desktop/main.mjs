@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, screen, dialog, globalShortcut } from "electron";
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -138,7 +139,11 @@ function iconCandidates(names) {
   return out;
 }
 
-function loadAppIcon() {
+function isRasterIconPath(file) {
+  return /\.(png|ico|jpe?g|webp)$/i.test(String(file || ""));
+}
+
+function loadAppIconPath() {
   const file = resolveIconPath(
     iconCandidates([
       "icon.ico",
@@ -147,33 +152,16 @@ function loadAppIcon() {
       "grokhub-256.png",
       "grokhub-128.png",
       "grokhub.png",
-      "grokhub.svg",
-    ]),
+    ]).filter(isRasterIconPath),
   );
+  return file && isRasterIconPath(file) ? file : null;
+}
+
+function loadAppIcon() {
+  const file = loadAppIconPath();
   if (!file) return nativeImage.createEmpty();
   const img = nativeImage.createFromPath(file);
   return img.isEmpty() ? nativeImage.createEmpty() : img;
-}
-
-function loadTrayIcon() {
-  const file = resolveIconPath(
-    iconCandidates([
-      "tray.png",
-      "grokhub-32.png",
-      "grokhub-48.png",
-      "icon.png",
-      "grokhub.png",
-    ]),
-  );
-  if (!file) return loadAppIcon();
-  let img = nativeImage.createFromPath(file);
-  if (img.isEmpty()) return loadAppIcon();
-  // Linux trays often want ~22–32px
-  const size = img.getSize();
-  if (size.width > 32) {
-    img = img.resize({ width: 32, height: 32, quality: "best" });
-  }
-  return img;
 }
 
 /** @type {BrowserWindow | null} */
@@ -210,6 +198,14 @@ try {
 // setName drives some Chromium paths; we still force --class separately.
 app.setName(APP_DISPLAY_NAME);
 try {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+  if (pkg.version && typeof app.setVersion === "function") {
+    app.setVersion(String(pkg.version));
+  }
+} catch {
+  /* unpackaged / missing package.json */
+}
+try {
   app.setDesktopName(APP_DESKTOP_FILE);
 } catch {
   /* older electron */
@@ -227,6 +223,24 @@ if (process.platform === "linux") {
     process.title = APP_WM_CLASS;
   } catch {
     /* ignore */
+  }
+}
+
+/** Boot milestones for launcher logs. Must never throw — a missing helper
+ *  previously aborted whenReady before createWindow (v1.1.18). */
+function startupLog(phase, extra) {
+  const payload =
+    extra && typeof extra === "object"
+      ? { phase: String(phase), ...extra }
+      : { phase: String(phase) };
+  try {
+    appLog.info?.("startup", payload);
+  } catch {
+    try {
+      console.log("[GrokHub] startup", payload);
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -411,7 +425,9 @@ function createWindow(opts = {}) {
   const saved = sanitizeBounds(loadWindowState());
   const display = screen.getPrimaryDisplay();
   const { x: dx, y: dy, width: aw, height: ah } = display.workArea;
-  const icon = loadAppIcon();
+  const iconPath = loadAppIconPath();
+  const icon = iconPath ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
+  const windowIcon = iconPath || (icon.isEmpty() ? undefined : icon);
 
   // Prefer remembered size/position; first run fills primary work area
   const initial = saved || {
@@ -432,7 +448,7 @@ function createWindow(opts = {}) {
     show: false,
     backgroundColor: "#090909",
     title: APP_DISPLAY_NAME,
-    icon: icon.isEmpty() ? undefined : icon,
+    icon: windowIcon,
     frame: false,
     titleBarStyle: "hidden",
     // Frameless + custom controls in AppShell (works on Windows/Linux)
@@ -465,13 +481,37 @@ function createWindow(opts = {}) {
       if (permission === "media" || permission === "microphone") return true;
       return false;
     });
+    const bootUrl = String(opts.startUrl || process.env.GROKHUB_URL || "");
+    let viteDev = false;
+    try {
+      viteDev = new URL(bootUrl).port === "8080";
+    } catch {
+      viteDev = /:8080\b/.test(bootUrl);
+    }
+    if (!viteDev) {
+      const csp = [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: blob: https:",
+        "media-src 'self' blob: data:",
+        "font-src 'self' data:",
+        "connect-src 'self' http: https: ws: wss:",
+        "frame-src 'none'",
+      ].join("; ");
+      ses.webRequest.onHeadersReceived((details, callback) => {
+        const headers = { ...(details.responseHeaders || {}) };
+        headers["Content-Security-Policy"] = [csp];
+        callback({ responseHeaders: headers });
+      });
+    }
   } catch {
     /* ignore */
   }
 
-  if (!icon.isEmpty()) {
+  if (iconPath) {
     try {
-      mainWindow.setIcon(icon);
+      mainWindow.setIcon(iconPath);
     } catch {
       /* ignore */
     }
@@ -519,10 +559,13 @@ function createWindow(opts = {}) {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     // Don't clobber a good page, and suppress while bootstrap is still bringing UI up
     if (mainWindow.__ghUiLoadOk) return;
+    // Re-entry: a failed data: error page must not loadURL again (stack overflow)
+    if (mainWindow.__ghUiShowingError) return;
     if (mainWindow.__ghUiBootstrapHold) {
       mainWindow.__ghUiLastError = String(msg || "unknown error");
       return;
     }
+    mainWindow.__ghUiShowingError = true;
     const html = `<!doctype html><html><body style="font-family:system-ui;background:#090909;color:#eee;padding:2rem;line-height:1.5">
       <h1 style="margin:0 0 1rem">GrokHub UI failed to load</h1>
       <p>${String(msg || "unknown error").replace(/</g, "&lt;")}</p>
@@ -565,6 +608,7 @@ function createWindow(opts = {}) {
     if (!isMain) return;
     // -3 ERR_ABORTED: superseded navigation (retry / second loadURL) — ignore
     if (code === -3 || Number(code) === -3) return;
+    if (String(url || "").startsWith("data:")) return;
     mainWindow.__ghUiLoadOk = false;
     mainWindow.__ghUiLoadPending = false;
     showLoadError(`${desc} (${code}) loading ${url}`);
@@ -589,9 +633,9 @@ function createWindow(opts = {}) {
   mainWindow.on("unmaximize", scheduleSave);
 
   mainWindow.once("ready-to-show", () => {
-    if (!icon.isEmpty()) {
+    if (iconPath) {
       try {
-        mainWindow?.setIcon(icon);
+        mainWindow?.setIcon(iconPath);
       } catch {
         /* ignore */
       }
@@ -696,19 +740,28 @@ function createWindow(opts = {}) {
 
 function createTray() {
   if (process.env.GROKHUB_TRAY === "0") return;
-  const icon = loadTrayIcon();
-  // Empty tray icons crash / are invisible on some DEs
-  if (icon.isEmpty()) {
-    // 1x1 dark pixel fallback so Tray still constructs
-    const fallback = nativeImage.createFromBuffer(
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
-        "base64",
-      ),
-    );
-    tray = new Tray(fallback);
+  // Linux Tray requires a filesystem path (in-memory NativeImage warns/fails).
+  const file = resolveIconPath(
+    iconCandidates(["tray.png", "grokhub-32.png", "grokhub-48.png", "icon.png", "grokhub.png"]).filter(
+      isRasterIconPath,
+    ),
+  );
+  if (file && isRasterIconPath(file)) {
+    tray = new Tray(file);
   } else {
-    tray = new Tray(icon);
+    const tmp = path.join(os.tmpdir(), "grokhub-tray.png");
+    try {
+      fs.writeFileSync(
+        tmp,
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+          "base64",
+        ),
+      );
+      tray = new Tray(tmp);
+    } catch {
+      return;
+    }
   }
   tray.setToolTip(APP_DISPLAY_NAME);
   function rebuildTrayMenu() {
@@ -756,7 +809,7 @@ function createTray() {
           },
         },
         {
-          label: due ? `Open app (${due} background jobs)` : "Open GrokHub",
+          label: due ? `Queue (${due} waiting)` : "Open GrokHub",
           click: () => {
             if (!mainWindow || mainWindow.isDestroyed()) createWindow();
             mainWindow?.show();
@@ -1419,11 +1472,19 @@ if (process.platform === "linux" && process.env.GROKHUB_WAYLAND !== "0") {
 // Host bridge stays unsandboxed either way — this only affects Chromium UI.
 if (process.platform === "linux" && process.env.GROKHUB_SANDBOX !== "1") {
   app.commandLine.appendSwitch("no-sandbox");
+  // Zygote + noexec shm/tmp in cloud/container VMs FATAL-crashes the renderer.
+  app.commandLine.appendSwitch("no-zygote");
   try {
     appLog?.warn?.("renderer no-sandbox (set GROKHUB_SANDBOX=1 to try sandbox)");
   } catch {
     /* log not ready */
   }
+}
+
+// Chromium needs X_OK on /dev/shm. Cloud/container tmpfs is often noexec and
+// FATAL-crashes the renderer. Use /tmp instead unless GROKHUB_DEV_SHM=1.
+if (process.platform === "linux" && process.env.GROKHUB_DEV_SHM !== "1") {
+  app.commandLine.appendSwitch("disable-dev-shm-usage");
 }
 
 
@@ -1646,68 +1707,11 @@ app.whenReady().then(async () => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.__ghUiBootstrapHold = false;
   }
-  if (resolved?.url && mainWindow && !mainWindow.isDestroyed()) {
-    const current = (process.env.GROKHUB_URL || resolved.url).replace(/\/$/, "");
-    process.env.GROKHUB_URL = current;
-    const needReload = () => {
-      if (!mainWindow || mainWindow.isDestroyed()) return false;
-      if (mainWindow.__ghUiLoadOk) {
-        try {
-          const u = mainWindow.webContents.getURL?.() || "";
-          return !/^https?:\/\//i.test(u) || u.startsWith("data:");
-        } catch {
-          return true;
-        }
-      }
-      return true;
-    };
-    if (needReload()) {
-      try {
-        appLog.info?.("ui-reload", { url: current, reason: "post-resolve" });
-      } catch {
-        /* ignore */
-      }
-      try {
-        mainWindow.__ghUiLoadOk = false;
-        mainWindow.__ghUiLoadPending = true;
-        await mainWindow.loadURL(current);
-      } catch (e) {
-        // One more retry after a short wait (Nitro sometimes binds a beat late)
-        await new Promise((r) => setTimeout(r, 400));
-        try {
-          await mainWindow.loadURL(current);
-        } catch (e2) {
-          const msg = e2 instanceof Error ? e2.message : String(e2 || e);
-          try {
-            mainWindow.__ghUiBootstrapHold = false;
-            if (typeof mainWindow.webContents?.loadURL === "function") {
-              // fall through to did-fail-load / explicit error
-            }
-          } catch {
-            /* ignore */
-          }
-          appLog.error?.("ui-reload-failed", { error: msg });
-        }
-      }
-    }
-    // If still not ok, surface the deferred error
-    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.__ghUiLoadOk) {
-      mainWindow.__ghUiBootstrapHold = false;
-      if (mainWindow.__ghUiLastError) {
-        // trigger show via failed flag — force one last load attempt already done
-        try {
-          const html = `<!doctype html><html><body style="font-family:system-ui;background:#090909;color:#eee;padding:2rem">
-            <h1>GrokHub UI failed to load</h1>
-            <p>${String(mainWindow.__ghUiLastError).replace(/</g, "&lt;")}</p>
-            <p>Tried: <code>${current}</code></p>
-          </body></html>`;
-          void mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
-        } catch {
-          /* ignore */
-        }
-      }
-    }
+  if (resolved?.url) {
+    process.env.GROKHUB_URL = String(resolved.url).replace(/\/$/, "");
   }
+  // createWindow already called loadURL(startUrl). A second in-flight loadURL
+  // of the same URL stack-overflows Electron 37's browser_init on Linux.
   bootMark("ui-load");
 
   // Defer non-critical work until after first paint opportunity (once)

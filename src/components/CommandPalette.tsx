@@ -19,10 +19,12 @@ import {
   Square,
   Keyboard,
   FileDown,
+  ListTodo,
   Monitor,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useGrokHub } from "@/lib/store";
+import { openSettingsSection } from "@/lib/settings-nav";
 import type { GrokModeId, NavId } from "@/lib/types";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { cn } from "@/lib/utils";
@@ -134,6 +136,14 @@ export function CommandPalette({
         run: () => go("command"),
       },
       {
+        id: "nav-queue",
+        label: "Queue",
+        hint: "Agent jobs",
+        group: "Navigate",
+        icon: ListTodo,
+        run: () => go("queue"),
+      },
+      {
         id: "nav-settings",
         label: "Settings",
         group: "Navigate",
@@ -146,7 +156,10 @@ export function CommandPalette({
         hint: "LAN sync",
         group: "Navigate",
         icon: Monitor,
-        run: () => go("settings"),
+        run: () => {
+          go("settings");
+          openSettingsSection("devices", "sec-hub");
+        },
       },
       {
         id: "act-sync-hub",

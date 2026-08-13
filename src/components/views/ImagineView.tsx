@@ -180,7 +180,9 @@ export function ImagineView() {
             Imagine
           </h2>
           <p className="text-xs text-[var(--color-muted)]">
-            Website-style composer · image & video · speed / quality · aspect · reference
+            {grokConnected
+              ? "Website-style composer · image & video · speed / quality · aspect · reference"
+              : "Not connected — Generate uses a local SVG preview, not an xAI image. Connect Grok in Settings for live Imagine."}
           </p>
         </div>
         <div className="flex gap-1.5">
