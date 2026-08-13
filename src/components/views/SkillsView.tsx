@@ -37,6 +37,9 @@ export function SkillsView() {
 
   return (
     <div className="space-y-5">
+      <p className="text-sm text-[var(--color-muted)]">
+        Reusable shortcuts Grok can run. Built-ins stay on unless you disable them.
+      </p>
       {openClawWorkspace && (
         <Card>
           <CardContent className="flex flex-wrap items-center justify-between gap-2 py-3">
@@ -110,7 +113,7 @@ export function SkillsView() {
               <Plus className="h-4 w-4" />
               New skill
             </CardTitle>
-            <CardDescription>Custom slash skill for this workspace.</CardDescription>
+            <CardDescription>A named shortcut Grok can run from chat.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <Input

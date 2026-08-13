@@ -88,6 +88,17 @@ const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string 
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
+const STAGE_SUBTITLE: Partial<Record<NavId, string>> = {
+  history: "Past chats",
+  imagine: "Images and video",
+  workboard: "Pinned tasks",
+  skills: "Reusable shortcuts",
+  automations: "Scheduled tasks",
+  command: "Overview",
+  queue: "Background jobs",
+  settings: "Preferences",
+};
+
 function RecentThreadRow({
   id,
   title,
@@ -614,13 +625,18 @@ export function AppShell() {
       return (t.messages || []).some((m) => (m.content || "").toLowerCase().includes(q));
     })
     .slice(0, sidebarQ.trim() ? 20 : 10);
-  const showOffline = grokConnected === false && !oauth?.accessToken && !apiKey;
+  const hasGrokCreds = Boolean(oauth?.accessToken || apiKey);
+  const connKind: "live" | "setup" | "offline" = grokConnected === true
+    ? "live"
+    : !hasGrokCreds
+      ? "setup"
+      : "offline";
 
   const primaryNav = NAV.filter((item) =>
-    ["chat", "history", "imagine", "workboard"].includes(item.id),
+    ["chat", "history", "imagine", "workboard", "settings"].includes(item.id),
   );
   const toolsNav = NAV.filter((item) =>
-    ["skills", "automations", "command", "queue", "settings"].includes(item.id),
+    ["skills", "automations", "command", "queue"].includes(item.id),
   );
 
   const stageTitle =
@@ -634,8 +650,8 @@ export function AppShell() {
         ? "Working…"
         : accountConnected
           ? grokStatusDetail || "Ready"
-          : "Connect Grok in Settings"
-      : `GrokHub v${APP_VERSION}`;
+          : "Tap Setup to connect"
+      : (STAGE_SUBTITLE[nav] ?? `GrokHub v${APP_VERSION}`);
 
   function renderNavButton(item: (typeof NAV)[number], compact = false) {
     const Icon = item.icon;
@@ -689,28 +705,40 @@ export function AppShell() {
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  onClick={() => void probeGrok()}
-                  className="hidden items-center gap-1.5 rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] md:inline-flex"
+                  data-conn={connKind}
+                  onClick={() => {
+                    if (connKind === "setup") {
+                      void beginGrokOAuthFromUi();
+                      return;
+                    }
+                    void probeGrok();
+                  }}
+                  className="hidden items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium md:inline-flex"
+                  style={{
+                    borderColor:
+                      connKind === "live"
+                        ? "color-mix(in oklab, #22c55e 55%, transparent)"
+                        : connKind === "setup"
+                          ? "color-mix(in oklab, #eab308 55%, transparent)"
+                          : "color-mix(in oklab, #ef4444 55%, transparent)",
+                  }}
                   aria-label={grokStatusDetail || "Grok connection"}
                 >
                   <span
-                    className={cn(
-                      "inline-block h-1.5 w-1.5 rounded-full",
-                      grokConnected === true
-                        ? "bg-[var(--color-success)]"
-                        : grokConnected === false
-                          ? "bg-[var(--color-danger)]"
-                          : "bg-[var(--color-subtle)]",
-                    )}
+                    className="inline-block h-1.5 w-1.5 rounded-full"
+                    style={{
+                      backgroundColor:
+                        connKind === "live" ? "#22c55e" : connKind === "setup" ? "#eab308" : "#ef4444",
+                    }}
                   />
-                  {grokConnected === true
-                    ? "Live"
-                    : grokConnected === false
-                      ? "Offline"
-                      : "…"}
+                  {connKind === "live" ? "Live" : connKind === "setup" ? "Setup" : "Offline"}
                 </button>
               </TooltipTrigger>
-              <TooltipContent>{grokStatusDetail || "Probe Grok connection"}</TooltipContent>
+              <TooltipContent>
+                {connKind === "setup"
+                  ? "Connect Grok to chat"
+                  : grokStatusDetail || "Probe Grok connection"}
+              </TooltipContent>
             </Tooltip>
           </div>
           <div className="flex min-w-0 items-center gap-1.5" style={noDrag}>
@@ -771,7 +799,7 @@ export function AppShell() {
               <div className="hidden scale-90 sm:block">
                 <UserButton />
               </div>
-            ) : (
+            ) : connKind === "setup" ? null : (
               <button
                 type="button"
                 onClick={() => setNav("settings")}
@@ -811,27 +839,12 @@ export function AppShell() {
           </div>
         </div>
 
-        {showOffline ? (
-          <div className="shrink-0 border-b border-[color-mix(in_oklab,var(--color-warn)_28%,var(--color-border))] bg-[color-mix(in_oklab,var(--color-warn)_14%,var(--color-surface))] px-3 py-1.5 text-center text-[11px] text-[var(--color-fg)]">
-            <span className="text-[var(--color-warn)]">Offline</span>
-            <span className="text-[var(--color-muted)]"> — connect OAuth or API key to chat. </span>
-            <button
-              type="button"
-              className="font-medium text-[var(--color-fg)] underline decoration-[var(--color-warn)] underline-offset-2 hover:text-[var(--color-warn)]"
-              onClick={() => void beginGrokOAuthFromUi()}
-            >
-              Connect Grok
-            </button>
-          </div>
-        ) : null}
-
         <div className="app-frame flex min-h-0 w-full flex-1 overflow-hidden">
           <aside className="sidebar-rail hidden shrink-0 flex-col overflow-hidden md:flex">
             <div className="shrink-0 space-y-2 p-3 pb-1">
               <Button size="sm" className="w-full gap-1.5 font-semibold" onClick={() => newThread()} title="New chat (Ctrl+N)">
                 <MessageSquarePlus className="h-4 w-4" />
                 New chat
-                <kbd className="ml-auto font-mono text-[10px] opacity-60">Ctrl+N</kbd>
               </Button>
               <button
                 type="button"
@@ -937,7 +950,7 @@ export function AppShell() {
               <div className="flex shrink-0 items-center gap-1.5">
                 <Button
                   size="sm"
-                  className="hidden gap-1.5 sm:inline-flex"
+                  className="hidden gap-1.5 sm:inline-flex md:hidden"
                   onClick={() => newThread()}
                   title="New chat (Ctrl+N)"
                 >

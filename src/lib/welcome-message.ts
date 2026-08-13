@@ -21,16 +21,15 @@ export function emptyWelcomeFallback(opts?: {
   const name = (opts?.displayName || "").trim().split(/\s+/)[0] || "";
   const habit = opts?.habits?.[0];
   const interest = opts?.interests?.[0];
-  let body =
-    "Ask anything, run $ shell commands, or try /help for slash commands.";
+  let body = "Type a message below to talk with Grok.";
   if (habit && interest) {
     body = `Last time you leaned into “${habit}”. Want to continue that, dig into ${interest}, or start something new?`;
   } else if (habit) {
-    body = `Ready when you are — pick up “${habit}”, open the desktop host, or just ask.`;
+    body = `Ready when you are — pick up “${habit}”, or start something new.`;
   } else if (interest) {
-    body = `Curious about ${interest}? Ask me anything, or jump in with a shell command.`;
+    body = `Curious about ${interest}? Ask anything.`;
   } else if (name) {
-    body = `Hey ${name} — what are we building or fixing today?`;
+    body = `Hey ${name} — what are we working on today?`;
   }
   return {
     headline: name ? `Welcome back, ${name}` : "What's next?",

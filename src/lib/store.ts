@@ -1275,7 +1275,7 @@ export const useGrokHub = create<State>()(
       grokConnected: null,
       uiTheme: "dark" as const,
       toolsNavCollapsed: false,
-      grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
+      grokStatusDetail: "Not connected — tap Setup to connect",
 
       setNav: (nav) => {
         const next = canonicalizeNav(nav);
@@ -7425,7 +7425,7 @@ if (!cmds.length) {
           modeMenuOpen: false,
           usage: createUsage("pro"),
           grokConnected: null,
-          grokStatusDetail: "Not connected — Connect with Grok OAuth in Settings",
+          grokStatusDetail: "Not connected — tap Setup to connect",
           oauth: null,
           oauthPending: null,
           ssoCookie: "",

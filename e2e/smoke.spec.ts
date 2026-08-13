@@ -11,6 +11,10 @@ test.describe("GrokHub smoke", () => {
     await expect(composer).toHaveValue("e2e smoke — do not send");
     await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
     await expect(page.locator("[data-connect-grok]")).toBeVisible();
+    await expect(page.getByText("Bind folder")).toHaveCount(0);
+    await expect(page.getByText(/connect OAuth or API key/i)).toHaveCount(0);
+    await expect(page.getByText("$ shell")).toHaveCount(0);
+    await expect(page.locator("[data-conn]").first()).toHaveAttribute("data-conn", /setup|offline|live/);
   });
 
   test("Agent, Queue, and Settings nav", async ({ page }) => {
@@ -35,7 +39,7 @@ test.describe("GrokHub smoke", () => {
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
     await page
       .getByRole("navigation", { name: "Settings categories" })
-      .getByRole("button", { name: /Proactive behavior/ })
+      .getByRole("button", { name: /^Agent/ })
       .click();
     await expect(page.getByText("Host tools (HOST_CMD)")).toBeVisible();
     await expect(page.getByText("Host CLI / files / apps", { exact: true })).toBeVisible();
