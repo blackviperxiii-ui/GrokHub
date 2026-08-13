@@ -31,8 +31,9 @@ import { contextFingerprint } from "@/lib/quick-assist-llm";
 import { streamStatusPill } from "@/lib/tool-status";
 import { estimateThreadContextPercent } from "@/lib/context-manager";
 import { useGrokHub } from "@/lib/store";
+import { beginGrokOAuthFromUi } from "@/lib/begin-grok-oauth";
 import { cn } from "@/lib/utils";
-import type { ChatMessage, ChatRole } from "@/lib/types";
+import type { ChatMessage, ChatRole, NavId } from "@/lib/types";
 import { RelativeTime } from "../RelativeTime";
 import { HostGatewayBanner } from "../HostGatewayBanner";
 import { EmojiPicker } from "../EmojiPicker";
@@ -525,6 +526,8 @@ export function ChatView() {
   const recordUsage = useGrokHub((s) => s.recordUsage);
   const usage = useGrokHub((s) => s.usage);
   const grokConnected = useGrokHub((s) => s.grokConnected);
+  const apiKey = useGrokHub((s) => s.apiKey);
+  const oauth = useGrokHub((s) => s.oauth);
   const newThread = useGrokHub((s) => s.newThread);
   const activity = useGrokHub((s) => s.activity);
   const threads = useGrokHub((s) => s.threads);
@@ -1049,11 +1052,11 @@ export function ChatView() {
     recordQuickAssistChip(chip);
     if (chip.kind === "nav" && chip.value.startsWith("__nav:")) {
       let dest = chip.value.slice("__nav:".length);
-      // Desktop tab removed — host controls live in Settings
-      if (dest === "desktop" || dest === "connectors" || dest === "queue" || dest === "agents") {
-        dest = "settings";
-      }
-      setNav(dest as "settings" | "imagine" | "history" | "command" | "chat");
+      // Desktop/connectors removed — host controls live in Settings.
+      // Queue is live; the old Agents roster aliases to it.
+      if (dest === "desktop" || dest === "connectors") dest = "settings";
+      if (dest === "agents") dest = "queue";
+      setNav(dest as NavId);
       return;
     }
     if (chip.kind === "mode" && chip.value.startsWith("__mode:")) {
@@ -1599,6 +1602,16 @@ export function ChatView() {
                     <p className="text-[10px] text-[var(--color-subtle)]">Personal welcome · Fast</p>
                   )}
                 </div>
+                {!grokConnected && !oauth?.accessToken && !apiKey ? (
+                  <Button
+                    data-connect-grok
+                    onClick={() => {
+                      void beginGrokOAuthFromUi();
+                    }}
+                  >
+                    Connect Grok
+                  </Button>
+                ) : null}
               </div>
             )}
             {hiddenCount > 0 && (

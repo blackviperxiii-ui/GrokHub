@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   ExternalLink,
   FolderInput,
@@ -106,6 +106,12 @@ import {
   selfModSnapshot,
 } from "@/lib/self-mod-client";
 import { AUTONOMY_HINT, AUTONOMY_LABEL } from "@/lib/agent-jobs";
+import { startGrokOAuthAndOpenBrowser } from "@/lib/begin-grok-oauth";
+import {
+  settingsSectionEventName,
+  takePendingSettingsSection,
+  type SettingsCat,
+} from "@/lib/settings-nav";
 import { useGrokHub } from "@/lib/store";
 import type { UpdateStatus } from "@/lib/update";
 import { learningSummaryLine } from "@/lib/learning";
@@ -117,6 +123,10 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Input } from "../ui/input";
+
+const DesktopHostView = lazy(() =>
+  import("./DesktopHostView").then((m) => ({ default: m.DesktopHostView })),
+);
 
 export function SettingsView() {
   const desktop = useGrokHub((s) => s.desktop);
@@ -152,7 +162,6 @@ export function SettingsView() {
   const profile = useGrokHub((s) => s.profile);
   const oauth = useGrokHub((s) => s.oauth);
   const oauthPending = useGrokHub((s) => s.oauthPending);
-  const startGrokOAuth = useGrokHub((s) => s.startGrokOAuth);
   const pollGrokOAuth = useGrokHub((s) => s.pollGrokOAuth);
   const clearGrokOAuth = useGrokHub((s) => s.clearGrokOAuth);
   const importOpenClawWorkspace = useGrokHub((s) => s.importOpenClawWorkspace);
@@ -258,13 +267,7 @@ export function SettingsView() {
     setOauthErr("");
     setOauthBusy(true);
     try {
-      await startGrokOAuth();
-      const pending = useGrokHub.getState().oauthPending;
-      if (pending?.verificationUriComplete) {
-        window.open(pending.verificationUriComplete, "_blank", "noopener,noreferrer");
-      } else if (pending?.verificationUri) {
-        window.open(pending.verificationUri, "_blank", "noopener,noreferrer");
-      }
+      await startGrokOAuthAndOpenBrowser();
     } catch (e) {
       setOauthErr(e instanceof Error ? e.message : "Could not start OAuth");
       setOauthBusy(false);
@@ -391,6 +394,28 @@ export function SettingsView() {
   const [factoryPhrase, setFactoryPhrase] = useState("");
   const [settingsCat, setSettingsCat] =
     useState<(typeof SETTINGS_CATEGORIES)[number]["id"]>("account");
+
+  useEffect(() => {
+    const apply = (intent: { cat: SettingsCat; sectionId?: string }) => {
+      setSettingsCat(intent.cat);
+      setSettingsQ("");
+      if (!intent.sectionId) return;
+      window.requestAnimationFrame(() => {
+        document.getElementById(intent.sectionId!)?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      });
+    };
+    const pending = takePendingSettingsSection();
+    if (pending) apply(pending);
+    const onEvt = (e: Event) => {
+      const d = (e as CustomEvent<{ cat?: SettingsCat; sectionId?: string }>).detail;
+      if (d?.cat) apply({ cat: d.cat, sectionId: d.sectionId });
+    };
+    window.addEventListener(settingsSectionEventName(), onEvt);
+    return () => window.removeEventListener(settingsSectionEventName(), onEvt);
+  }, []);
 
   const qNorm = settingsQ.trim().toLowerCase();
   const searching = qNorm.length > 0;
@@ -1279,6 +1304,19 @@ export function SettingsView() {
             match the desktop file). After updating, unpin + re-pin once if you still see a second
             icon.
           </p>
+          <div className="border-t border-[var(--color-border)] pt-3">
+            <div className="mb-2 text-sm font-medium">Host CLI / files / apps</div>
+            <p className="mb-3 text-xs text-[var(--color-muted)]">
+              Same desktop bridge as HOST_CMD — not a separate runtime.
+            </p>
+            <Suspense
+              fallback={
+                <p className="text-xs text-[var(--color-subtle)]">Loading host tools…</p>
+              }
+            >
+              <DesktopHostView />
+            </Suspense>
+          </div>
         </CardContent>
       </Card>
 

@@ -22,6 +22,11 @@ dist-release/
 
 .tmp-router*.mjs
 
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
 # Sandbox / app-builder (never ship)
 .grok/
 .vercel/

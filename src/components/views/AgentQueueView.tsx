@@ -30,6 +30,9 @@ export function AgentQueueView() {
   const cancelAgentJob = useGrokHub((s) => s.cancelAgentJob);
   const approveAgentJob = useGrokHub((s) => s.approveAgentJob);
   const claimWorkboardJobs = useGrokHub((s) => s.claimWorkboardJobs);
+  const personas = useGrokHub((s) => s.agents);
+  const pendingHostConfirm = useGrokHub((s) => s.pendingHostConfirm);
+  const setNav = useGrokHub((s) => s.setNav);
 
   const stats = useMemo(() => queueStats(queue), [queue]);
   const jobs = useMemo(
@@ -39,6 +42,10 @@ export function AgentQueueView() {
         return order.indexOf(a.status) - order.indexOf(b.status) || b.createdAt - a.createdAt;
       }),
     [queue.jobs],
+  );
+  const nextUp = useMemo(
+    () => jobs.find((j) => ["running", "waiting_user", "queued"].includes(j.status)) || null,
+    [jobs],
   );
 
   return (
@@ -73,6 +80,42 @@ export function AgentQueueView() {
           )}
         </div>
       </div>
+
+      <Card data-next-up>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">Next up</CardTitle>
+          <CardDescription>
+            {autonomy.paused
+              ? "Autonomy paused — Drain queue and new jobs wait until you Resume."
+              : nextUp
+                ? `${nextUp.status} · ${nextUp.title}`
+                : "Queue empty — nothing will run until a job lands."}
+          </CardDescription>
+        </CardHeader>
+        {(pendingHostConfirm || nextUp) && (
+          <CardContent className="flex flex-wrap gap-2 pt-0">
+            {pendingHostConfirm ? (
+              <Button
+                size="sm"
+                onClick={() => setNav("chat")}
+              >
+                <ShieldAlert className="mr-1 h-3.5 w-3.5" />
+                HOST_CMD waiting in Agent chat
+              </Button>
+            ) : null}
+            {nextUp && (nextUp.status === "waiting_user" || (nextUp.needsApproval && nextUp.approval !== "granted")) ? (
+              <>
+                <Button size="sm" onClick={() => approveAgentJob(nextUp.id, true)}>
+                  Allow {nextUp.title}
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => approveAgentJob(nextUp.id, false)}>
+                  Deny
+                </Button>
+              </>
+            ) : null}
+          </CardContent>
+        )}
+      </Card>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {(
@@ -212,6 +255,34 @@ export function AgentQueueView() {
           ))}
         </CardContent>
       </Card>
+
+      {personas.length > 0 ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Personas</CardTitle>
+            <CardDescription>
+              Imported names and roles (OpenClaw / workspace). Labels on this queue — not separate
+              Grok runtimes.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-2 sm:grid-cols-2">
+            {personas.map((a) => (
+              <div
+                key={a.id}
+                className="flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1.5 text-xs"
+              >
+                <div className="min-w-0">
+                  <div className="truncate font-medium text-[var(--color-fg)]">{a.name}</div>
+                  <div className="truncate text-[var(--color-muted)]">{a.role}</div>
+                </div>
+                <span className="shrink-0 font-mono text-[10px] text-[var(--color-subtle)]">
+                  {a.model}
+                </span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }

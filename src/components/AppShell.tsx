@@ -20,11 +20,14 @@ import { ClipboardList,
   Trash2,
   X,
   Download,
+  ListTodo,
   Wand2,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
-import { useGrokHub } from "@/lib/store";
+import { canonicalizeNav, useGrokHub } from "@/lib/store";
+import { beginGrokOAuthFromUi } from "@/lib/begin-grok-oauth";
+import { queueStats } from "@/lib/agent-jobs";
 import type { NavId } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "@/lib/version";
@@ -55,9 +58,6 @@ const ChatView = lazy(() =>
 const CommandView = lazy(() =>
   import("./views/CommandView").then((m) => ({ default: m.CommandView })),
 );
-const DesktopHostView = lazy(() =>
-  import("./views/DesktopHostView").then((m) => ({ default: m.DesktopHostView })),
-);
 const HistoryView = lazy(() =>
   import("./views/HistoryView").then((m) => ({ default: m.HistoryView })),
 );
@@ -73,6 +73,9 @@ const SkillsView = lazy(() =>
 const WorkboardView = lazy(() =>
   import("./views/WorkboardView").then((m) => ({ default: m.WorkboardView })),
 );
+const AgentQueueView = lazy(() =>
+  import("./views/AgentQueueView").then((m) => ({ default: m.AgentQueueView })),
+);
 const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { id: "chat", label: "Agent", icon: MessageSquare },
   { id: "history", label: "History", icon: History },
@@ -81,6 +84,7 @@ const NAV: { id: NavId; label: string; icon: ComponentType<{ className?: string 
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "automations", label: "Automations", icon: TimerReset },
   { id: "command", label: "Command", icon: Command },
+  { id: "queue", label: "Queue", icon: ListTodo },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
@@ -246,13 +250,20 @@ export function AppShell() {
   const updateBanner = useGrokHub((s) => s.updateBanner);
   const checkUpdateQuiet = useGrokHub((s) => s.checkUpdateQuiet);
   const setUpdateBanner = useGrokHub((s) => s.setUpdateBanner);
+  const agentQueue = useGrokHub((s) => s.agentQueue);
+  const pendingHostConfirm = useGrokHub((s) => s.pendingHostConfirm);
   const { user, isPending } = useCurrentUserState();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sidebarQ, setSidebarQ] = useState("");
+  const [navReady, setNavReady] = useState(false);
   const modeMeta = getMode(mode);
+  const queueAttention = useMemo(() => {
+    const s = queueStats(agentQueue);
+    return s.queued + s.running + s.waiting + (pendingHostConfirm ? 1 : 0);
+  }, [agentQueue, pendingHostConfirm]);
 
   const activeThread = useMemo(
     () => threads.find((t) => t.id === activeThreadId) || null,
@@ -292,15 +303,7 @@ export function AppShell() {
     const p = useGrokHub.persist.rehydrate();
     Promise.resolve(p).finally(() => {
       const restored = useGrokHub.getState().nav;
-      const safeNav =
-        !restored
-          ? "chat"
-          : restored === "connectors" ||
-              restored === "agents" ||
-              restored === "queue" ||
-              restored === "desktop"
-            ? "settings"
-            : restored;
+      const safeNav = canonicalizeNav(restored || "chat");
       useGrokHub.setState({
         nav: safeNav,
         running: false,
@@ -308,6 +311,7 @@ export function AppShell() {
         streamingMessageId: null,
         pendingHostConfirm: null,
       });
+      setNavReady(true);
       try {
         void useGrokHub.getState().syncWebsiteConnectors();
       } catch {
@@ -480,7 +484,7 @@ export function AppShell() {
     }).grokhubDesktop;
     const onCmd = (e: Event) => {
       const d = (e as CustomEvent).detail || {};
-      if (d.type === "open-queue") setNav("settings");
+      if (d.type === "open-queue") setNav("queue");
       if (d.type === "new-chat") useGrokHub.getState().newThread();
       if (d.type === "set-paused") useGrokHub.getState().pauseAutonomy(Boolean(d.paused));
       if (d.type === "focus-composer") {
@@ -616,15 +620,13 @@ export function AppShell() {
     ["chat", "history", "imagine", "workboard"].includes(item.id),
   );
   const toolsNav = NAV.filter((item) =>
-    ["skills", "automations", "command", "settings"].includes(item.id),
+    ["skills", "automations", "command", "queue", "settings"].includes(item.id),
   );
 
   const stageTitle =
     nav === "chat"
       ? activeThread?.title || "New chat"
-      : nav === "desktop"
-        ? "Desktop host"
-        : (NAV.find((n) => n.id === nav)?.label ?? "GrokHub");
+      : (NAV.find((n) => n.id === nav)?.label ?? "GrokHub");
 
   const stageSubtitle =
     nav === "chat"
@@ -643,6 +645,13 @@ export function AppShell() {
         key={item.id}
         type="button"
         onClick={() => setNav(item.id)}
+        data-nav={item.id}
+        data-queue-count={item.id === "queue" ? String(queueAttention) : undefined}
+        aria-label={
+          item.id === "queue" && queueAttention > 0
+            ? `Queue, ${queueAttention} waiting`
+            : undefined
+        }
         className={cn(
           "flex h-9 shrink-0 items-center gap-2.5 rounded-[var(--radius-sm)] px-3 text-sm transition-colors",
           compact && "h-11",
@@ -653,13 +662,21 @@ export function AppShell() {
       >
         <Icon className="h-4 w-4 shrink-0 opacity-80" />
         {item.label}
+        {item.id === "queue" && queueAttention > 0 ? (
+          <span className="ml-auto font-mono text-[10px] tabular text-[var(--color-fg)]">
+            {queueAttention}
+          </span>
+        ) : null}
       </button>
     );
   }
 
   return (
     <TooltipProvider delayDuration={350}>
-      <div className="flex h-dvh max-h-dvh w-full max-w-none flex-col overflow-hidden bg-[var(--color-bg)] text-[var(--color-fg)]">
+      <div
+        className="flex h-dvh max-h-dvh w-full max-w-none flex-col overflow-hidden bg-[var(--color-bg)] text-[var(--color-fg)]"
+        data-hydrated={navReady ? "1" : "0"}
+      >
         <div
           className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3"
           style={drag}
@@ -801,7 +818,7 @@ export function AppShell() {
             <button
               type="button"
               className="font-medium text-[var(--color-fg)] underline decoration-[var(--color-warn)] underline-offset-2 hover:text-[var(--color-warn)]"
-              onClick={() => setNav("settings")}
+              onClick={() => void beginGrokOAuthFromUi()}
             >
               Connect Grok
             </button>
@@ -973,7 +990,7 @@ export function AppShell() {
                     {nav === "automations" && <AutomationsView />}
                                         {nav === "workboard" && <WorkboardView />}
                                         {nav === "imagine" && <ImagineView />}
-                    {nav === "desktop" && <DesktopHostView />}
+                    {nav === "queue" && <AgentQueueView />}
                     {nav === "settings" && <SettingsView />}
                   </div>
                 )}
