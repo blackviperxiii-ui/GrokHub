@@ -1,4 +1,4 @@
-import { FolderOpen,
+import {
   Loader2,
   Download,
   Pencil,
@@ -444,72 +444,6 @@ function ContextBudgetChip() {
 }
 
 
-function ProjectBar() {
-  const project = useGrokHub((s) => s.projectWorkspace);
-  const bindProjectWorkspace = useGrokHub((s) => s.bindProjectWorkspace);
-  const clearProjectWorkspace = useGrokHub((s) => s.clearProjectWorkspace);
-  const pushActivity = useGrokHub((s) => s.pushActivity);
-  const [busy, setBusy] = useState(false);
-
-  async function bind() {
-    setBusy(true);
-    try {
-      let path = "";
-      const desk = window.grokhubDesktop;
-      if (desk?.pickFolder) {
-        const r = await desk.pickFolder();
-        if (r?.canceled) return;
-        if (r?.ok && r.path) path = r.path;
-      }
-      if (!path) {
-        path = window.prompt("Project folder path", project?.path || "") || "";
-      }
-      path = path.trim();
-      if (!path) return;
-      const res = await bindProjectWorkspace(path);
-      pushActivity({
-        kind: "desktop",
-        title: res.ok ? "Project bound" : "Bind failed",
-        detail: res.detail,
-        status: res.ok ? "success" : "failed",
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-panel)]/80 px-3 py-1.5 text-[11px] md:px-4">
-      <FolderOpen className="h-3.5 w-3.5 shrink-0 text-[var(--color-muted)]" />
-      {project?.path ? (
-        <>
-          <span className="text-[var(--color-muted)]">Project</span>
-          <span className="max-w-[min(28rem,50vw)] truncate font-medium text-[var(--color-fg)]" title={project.path}>
-            {project.name}
-          </span>
-          <span className="hidden font-mono text-[10px] text-[var(--color-subtle)] sm:inline">
-            {project.path}
-          </span>
-          <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-[11px]" disabled={busy} onClick={() => void bind()}>
-            Change
-          </Button>
-          <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-[11px]" disabled={busy} onClick={() => clearProjectWorkspace()}>
-            Unbind
-          </Button>
-        </>
-      ) : (
-        <>
-          <span className="text-[var(--color-muted)]">No project bound</span>
-          <Button type="button" size="sm" variant="secondary" className="h-7 px-2 text-[11px]" disabled={busy} onClick={() => void bind()}>
-            Bind folder
-          </Button>
-          <span className="text-[10px] text-[var(--color-subtle)]">or <span className="font-mono">/project bind</span></span>
-        </>
-      )}
-    </div>
-  );
-}
-
 export function ChatView() {
   const chat = useGrokHub((s) => s.chat);
   const sendChat = useGrokHub((s) => s.sendChat);
@@ -528,6 +462,7 @@ export function ChatView() {
   const grokConnected = useGrokHub((s) => s.grokConnected);
   const apiKey = useGrokHub((s) => s.apiKey);
   const oauth = useGrokHub((s) => s.oauth);
+  const needsGrokConnect = !grokConnected && !oauth?.accessToken && !apiKey;
   const newThread = useGrokHub((s) => s.newThread);
   const activity = useGrokHub((s) => s.activity);
   const threads = useGrokHub((s) => s.threads);
@@ -727,9 +662,9 @@ export function ChatView() {
   }, [chipsOpen, chat.length, activeThreadId, busy, refreshQuickAssistLlm]);
 
 
-  // Open suggestions for empty chats so the primary chip is obvious
+  // Keep suggestion chips collapsed on empty chats — Connect Grok is the primary CTA
   useEffect(() => {
-    if (chat.length === 0) setChipsOpen(true);
+    if (chat.length === 0) setChipsOpen(false);
   }, [chat.length, activeThreadId]);
 
   // Adaptive welcome for empty chat pages
@@ -1361,8 +1296,6 @@ export function ChatView() {
   return (
     <div className="chat-stage mx-auto flex h-full min-h-0 w-full flex-col">
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--color-bg)]">
-        {/* Project workspace bar */}
-        <ProjectBar />
         {/* Slim toolbar — context budget + export */}
         {findOpen && (
           <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-panel)] px-4 py-1.5 md:px-6">
@@ -1402,6 +1335,7 @@ export function ChatView() {
             </Button>
           </div>
         )}
+        {chat.length > 0 ? (
         <div className="chat-meta-bar flex shrink-0 items-center justify-between gap-2 px-4 py-1 md:px-6">
           <ContextBudgetChip />
           <div className="flex items-center gap-1">
@@ -1442,6 +1376,7 @@ export function ChatView() {
             </Button>
           </div>
         </div>
+        ) : null}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="shrink-0 space-y-2 px-4 pt-3 md:px-6 3xl:px-8">
             {proactiveNotice ? (
@@ -1588,21 +1523,13 @@ export function ChatView() {
                       : welcomeMessage?.headline || "What's next?"}
                   </p>
                   <p className="text-sm leading-relaxed text-[var(--color-muted)]">
-                    {welcomeMessage?.body || (
-                      <>
-                        Ask anything, run{" "}
-                        <span className="font-mono text-[var(--color-fg)]">$ shell</span> commands,
-                        or try{" "}
-                        <span className="font-mono text-[var(--color-fg)]">/help</span> for slash
-                        commands.
-                      </>
-                    )}
+                    {welcomeMessage?.body || "Type a message below to talk with Grok."}
                   </p>
                   {welcomeMessage?.source === "llm" && (
                     <p className="text-[10px] text-[var(--color-subtle)]">Personal welcome · Fast</p>
                   )}
                 </div>
-                {!grokConnected && !oauth?.accessToken && !apiKey ? (
+                {needsGrokConnect ? (
                   <Button
                     data-connect-grok
                     onClick={() => {
@@ -1688,7 +1615,7 @@ export function ChatView() {
               </div>
             )}
 
-            {!busy && (
+            {!busy && !(chat.length === 0 && needsGrokConnect) && (
               <div className="mx-auto w-full max-w-[min(56rem,100%)] 3xl:max-w-[min(64rem,100%)] uw:max-w-[min(72rem,100%)]">
                 <div className="mb-1 flex flex-wrap items-center justify-center gap-2">
                   {/* Live predictive primary — updates as you type */}
@@ -2029,7 +1956,7 @@ export function ChatView() {
                 placeholder={
                   busy
                     ? "Agent running — press Stop to interrupt…"
-                    : "Message Grok…  type / for commands · Enter send · $ shell"
+                    : "Message Grok…"
                 }
                 rows={1}
                 className="max-h-40 min-h-[2.5rem] flex-1 resize-none overflow-hidden leading-5"
@@ -2121,9 +2048,7 @@ export function ChatView() {
             </form>
             {!busy && (
               <div className="mx-auto w-full max-w-[min(56rem,100%)] text-center text-[10px] text-[var(--color-subtle)]">
-                <span className="font-mono">/help</span> · <span className="font-mono">Ctrl+K</span> palette ·{" "}
-                <span className="font-mono">Ctrl+N</span> new · <span className="font-mono">Ctrl+L</span> focus · paste
-                images
+                Enter to send · Shift+Enter for a new line
               </div>
             )}
           </div>

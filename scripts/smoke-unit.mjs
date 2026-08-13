@@ -153,6 +153,32 @@ assert.match(
   /beginGrokOAuthFromUi/,
   "Connect Grok CTA must start OAuth, not only open Settings",
 );
+assert.doesNotMatch(
+  fs.readFileSync(path.join(process.cwd(), "src/components/views/ChatView.tsx"), "utf8"),
+  /No project bound/,
+  "chat chrome must not show the project-bind status bar (novice clutter; /project bind stays)",
+);
+assert.doesNotMatch(
+  fs.readFileSync(path.join(process.cwd(), "src/components/views/ChatView.tsx"), "utf8"),
+  /\$ shell/,
+  "empty chat / placeholder must not push $ shell at novices",
+);
+assert.doesNotMatch(
+  appShellSrc,
+  /connect OAuth or API key/,
+  "must not duplicate the Setup pill with an Offline banner",
+);
+assert.doesNotMatch(
+  appShellSrc,
+  /\["skills", "automations", "command", "queue", "settings"\]/,
+  "Settings must stay visible when Tools is collapsed",
+);
+assert.match(
+  appShellSrc,
+  /\["chat", "history", "imagine", "workboard", "settings"\]/,
+  "Settings belongs in Workspace so first-run connect is one click away",
+);
+assert.match(appShellSrc, /data-conn/, "Live pill must expose connection kind for green/yellow/red");
 assert.match(appShellSrc, /data-queue-count/, "Queue nav must show an attention count");
 assert.match(mainSrc, /setVersion/, "Electron must set app version (Linux logs No version found otherwise)");
 assert.match(

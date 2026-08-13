@@ -188,7 +188,7 @@ export function HistoryView() {
               History
             </CardTitle>
             <CardDescription>
-              Search, pin, and folder chats. Select to resume exactly where you left off.
+              Search and reopen past chats. Pin or folder the ones you want to keep handy.
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">

@@ -107,9 +107,7 @@ export function WorkboardView() {
             Workboard
           </h1>
           <p className="mt-1 max-w-xl text-sm text-[var(--color-muted)]">
-            Agent-pinned tasks you can approve, stage, track, or dismiss. Click a card then press{" "}
-            <span className="font-mono text-xs">A</span>/<span className="font-mono text-xs">S</span>/
-            <span className="font-mono text-xs">D</span> to approve/stage/dismiss.
+            Pin tasks for Grok to pick up. Drag cards between columns as they move.
           </p>
         </div>
         <div className="flex gap-2">

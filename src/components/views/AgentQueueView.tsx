@@ -57,7 +57,7 @@ export function AgentQueueView() {
             Agent queue
           </h1>
           <p className="mt-1 max-w-xl text-sm text-[var(--color-muted)]">
-            Always-on job lane — automations, workboard, chats, and goal steps. Pause anytime.
+            Jobs from chat, automations, and the workboard. Pause anytime.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -100,7 +100,7 @@ export function AgentQueueView() {
                 onClick={() => setNav("chat")}
               >
                 <ShieldAlert className="mr-1 h-3.5 w-3.5" />
-                HOST_CMD waiting in Agent chat
+                Desktop command waiting in chat
               </Button>
             ) : null}
             {nextUp && (nextUp.status === "waiting_user" || (nextUp.needsApproval && nextUp.approval !== "granted")) ? (

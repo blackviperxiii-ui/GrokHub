@@ -71,7 +71,7 @@ export function CommandView() {
           <CardHeader>
             <CardTitle>Grok modes</CardTitle>
             <CardDescription>
-              Adaptive, Fast, Balanced, Max (Grok 4.6), and Build. Adaptive uses a permanent map.
+              Pick how Grok thinks. Adaptive is the default.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">

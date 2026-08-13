@@ -18,31 +18,31 @@ const SETTINGS_CATEGORIES = [
   {
     id: "account",
     label: "Account",
-    hint: "Sign-in, usage & keys",
+    hint: "Sign in to Grok",
     sections: ["sec-wizard", "sec-oauth", "sec-setup", "sec-api"],
   },
   {
     id: "devices",
     label: "Devices",
-    hint: "LAN pair, sync & remote tasks",
+    hint: "Phones and other computers",
     sections: ["sec-hub", "sec-hub-join", "sec-hub-sync"],
   },
   {
     id: "agent",
     label: "Agent",
-    hint: "Proactive behavior, tools & desktop",
+    hint: "How Grok works on its own",
     sections: ["sec-autonomy", "sec-agent", "sec-desktop", "sec-project"],
   },
   {
     id: "memory",
     label: "Memory",
-    hint: "Learning, files & self-mod",
+    hint: "What Grok remembers",
     sections: ["sec-memory", "sec-learning", "sec-selfmod"],
   },
   {
     id: "app",
     label: "App",
-    hint: "Theme, updates & danger",
+    hint: "Theme, updates, reset",
     sections: ["sec-appearance", "sec-updates", "sec-diagnostics", "sec-danger"],
   },
 ] as const;
@@ -571,20 +571,20 @@ export function SettingsView() {
       
       <Card id="sec-wizard" data-settings-cat="account" data-hit={sectionHit("sec-wizard") ? "1" : "0"} className="border-[color-mix(in_oklab,var(--color-info)_30%,var(--color-border))]">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm">First-run connect</CardTitle>
+          <CardTitle className="text-sm">Get started</CardTitle>
           <CardDescription>
-            Recommended order: Grok OAuth (or API key) → optional GitHub PAT → bind a project folder → install menu entry.
+            Sign in with Grok first. An API key and a project folder are optional.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2 pt-0">
           <Button size="sm" onClick={() => document.getElementById("sec-oauth")?.scrollIntoView({ behavior: "smooth" })}>
-            1. Grok OAuth
+            1. Connect Grok
           </Button>
           <Button size="sm" variant="secondary" onClick={() => document.getElementById("sec-api")?.scrollIntoView({ behavior: "smooth" })}>
             2. API key (optional)
           </Button>
           <Button size="sm" variant="secondary" onClick={() => document.getElementById("sec-project")?.scrollIntoView({ behavior: "smooth" })}>
-            3. Project folder
+            3. Project folder (optional)
           </Button>
         </CardContent>
       </Card>
@@ -594,9 +594,7 @@ export function SettingsView() {
         <CardHeader>
           <CardTitle className="text-sm">Connect to Grok (xAI OAuth)</CardTitle>
           <CardDescription>
-            Sign in with your <strong>SuperGrok</strong> or <strong>X Premium+</strong> account
-            via xAI device code — same flow as OpenClaw / Grok CLI. No API key required for
-            subscription access.
+            Sign in with SuperGrok or X Premium+. No API key required for subscription access.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
