@@ -75,6 +75,10 @@ const uiServer = safeRequire("ui-server", "./ui-server.cjs") || {
   waitUntilHealthy: async () => false,
 };
 const appLog = safeRequire("log", "./log.cjs") || { info: () => {}, error: () => {} };
+const { packagedSessionCsp } = safeRequire("csp", "./csp.cjs") || {
+  packagedSessionCsp: () =>
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: data:; font-src 'self' data:; connect-src 'self' http: https: ws: wss:; worker-src 'self' blob:; frame-src 'none'",
+};
 const perfUtil = safeRequire("perf-util", "./perf-util.cjs") || {
   parseTrace: () => ({ debug: false, boot: false, ipc: false, stream: false, host: false }),
   createBootTimeline: () => ({ mark: () => ({}), snapshot: () => ({ phases: [] }) }),
@@ -489,16 +493,7 @@ function createWindow(opts = {}) {
       viteDev = /:8080\b/.test(bootUrl);
     }
     if (!viteDev) {
-      const csp = [
-        "default-src 'self'",
-        "script-src 'self'",
-        "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' data: blob: https:",
-        "media-src 'self' blob: data:",
-        "font-src 'self' data:",
-        "connect-src 'self' http: https: ws: wss:",
-        "frame-src 'none'",
-      ].join("; ");
+      const csp = packagedSessionCsp();
       ses.webRequest.onHeadersReceived((details, callback) => {
         const headers = { ...(details.responseHeaders || {}) };
         headers["Content-Security-Policy"] = [csp];

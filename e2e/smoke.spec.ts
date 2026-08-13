@@ -1,4 +1,10 @@
+import { createRequire } from "node:module";
 import { expect, test } from "@playwright/test";
+
+const require = createRequire(import.meta.url);
+const { packagedSessionCsp } = require("../desktop/csp.cjs") as {
+  packagedSessionCsp: () => string;
+};
 
 test.describe("GrokHub smoke", () => {
   test("chat composer is present and is not sent to xAI", async ({ page }) => {
@@ -51,6 +57,22 @@ test.describe("GrokHub smoke", () => {
     await page.locator('[data-nav="imagine"]').first().click();
     await expect(page.getByRole("heading", { name: "Imagine" })).toBeVisible();
     await expect(page.getByText(/not an xAI image/)).toBeVisible();
+  });
+
+  test("packaged Electron CSP still hydrates the UI", async ({ page, baseURL }) => {
+    const port = new URL(baseURL || "http://127.0.0.1:18765").port;
+    test.skip(port === "8080", "Vite :8080 is not the packaged CSP path");
+    const csp = packagedSessionCsp();
+    await page.route("**/*", async (route) => {
+      const response = await route.fetch();
+      const headers = { ...response.headers() };
+      headers["content-security-policy"] = csp;
+      const body = await response.body();
+      await route.fulfill({ status: response.status(), headers, body });
+    });
+    await page.goto("/");
+    await expect(page.locator('[data-hydrated="1"]')).toBeVisible();
+    await expect(page.locator("[data-composer]")).toBeVisible();
   });
 
   test("host info and exec via /api/host", async ({ request }) => {
