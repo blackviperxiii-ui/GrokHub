@@ -15,6 +15,11 @@ assert.equal(typeof bridge.applyRollback, "function");
 assert.equal(typeof bridge.postUpdateSelfTest, "function");
 assert.equal(typeof bridge.scheduleAppRestart, "function");
 assert.equal(typeof bridge.factoryReinstall, "function", "factoryReinstall must be defined (system install crash)");
+assert.equal(typeof bridge.versionNewer, "function", "versionNewer must be exported for updater tests");
+assert.equal(bridge.versionNewer("1.1.20", "1.1.19"), true);
+assert.equal(bridge.versionNewer("1.1.19", "1.1.20"), false);
+assert.equal(bridge.versionNewer("1.1.19", "1.1.19"), false);
+assert.equal(bridge.versionNewer("v1.1.20", "1.1.19"), true);
 
 const bridgeSrc = fs.readFileSync(
   path.join(process.cwd(), "desktop/grok-bridge.cjs"),
@@ -22,6 +27,16 @@ const bridgeSrc = fs.readFileSync(
 );
 assert.match(bridgeSrc, /async function factoryReinstall/);
 assert.match(bridgeSrc, /isGrokHubUiPid/);
+assert.match(
+  bridgeSrc,
+  /Skipping GitHub release/,
+  "updater must skip a latest release that is not newer than the install",
+);
+assert.match(
+  bridgeSrc,
+  /usedReleaseTag \|\| branch/,
+  "VERSION stamp must follow the tarball we actually installed, not always main HEAD",
+);
 const liveFuser = bridgeSrc
   .split("\n")
   .filter((l) => /fuser\s+-k/.test(l))
