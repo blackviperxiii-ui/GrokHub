@@ -203,6 +203,16 @@ assert.match(
 );
 assert.match(
   mainSrc,
+  /packagedSessionCsp/,
+  "Electron CSP must come from desktop/csp.cjs so hydration policy cannot drift",
+);
+assert.match(
+  fs.readFileSync(path.join(process.cwd(), "desktop/csp.cjs"), "utf8"),
+  /script-src 'self' 'unsafe-inline'/,
+  "TanStack SSR hydrates via inline scripts — script-src 'self' alone blanks the Electron window",
+);
+assert.match(
+  mainSrc,
   /Queue \(\$\{due\} waiting\)/,
   "tray must label Queue with waiting job count",
 );
