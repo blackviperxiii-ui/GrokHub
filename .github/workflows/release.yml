@@ -1,0 +1,32 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  linux-bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts || npm install --ignore-scripts
+      - run: npm run assert:versions
+      - run: npm run release:bundle
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-release/grokhub-desktop-*.tar.gz
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ## Install
+            Settings → Updates → **Install latest**, or extract `grokhub-desktop-${{ github.ref_name }}.tar.gz` to `~/.local/lib/grokhub`.

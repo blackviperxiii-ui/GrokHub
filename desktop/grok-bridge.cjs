@@ -25,6 +25,28 @@ function shaMatch(a, b) {
   return x.slice(0, n) === y.slice(0, n);
 }
 
+/** Compare dotted versions; true when `a` is strictly newer than `b`. */
+function versionNewer(a, b) {
+  const parts = (v) =>
+    String(v || "")
+      .replace(/^v/i, "")
+      .split(/[.+-]/)
+      .map((p) => {
+        const n = parseInt(p, 10);
+        return Number.isFinite(n) ? n : 0;
+      });
+  const pa = parts(a);
+  const pb = parts(b);
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const da = pa[i] || 0;
+    const db = pb[i] || 0;
+    if (da > db) return true;
+    if (da < db) return false;
+  }
+  return false;
+}
+
 function sleepMs(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -876,7 +898,19 @@ async function checkForUpdate(opts = {}) {
   if (token) headers.authorization = `Bearer ${token}`;
   let remoteSha = null;
   let remoteMessage = null;
+  let latestRelease = null;
   let detail = "";
+  try {
+    const relRes = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+      headers,
+    });
+    if (relRes.ok) {
+      const rel = await relRes.json();
+      latestRelease = String(rel.tag_name || "").replace(/^v/i, "") || null;
+    }
+  } catch {
+    /* ignore — SHA check still runs */
+  }
   try {
     const res = await fetch(
       `https://api.github.com/repos/${repo}/commits/${encodeURIComponent(branch)}`,
@@ -889,11 +923,15 @@ async function checkForUpdate(opts = {}) {
       if (shaMatch(local.sha, remoteSha)) {
         if (local.uiStale) {
           detail = `UI build stale (app v${local.version}, UI v${local.uiVersion || "?"}) — reinstall recommended`;
+        } else if (latestRelease && versionNewer(latestRelease, local.version)) {
+          detail = `Update available · v${local.version} → v${latestRelease}`;
         } else {
           detail = `Up to date · v${local.version} · ${(local.sha || "").slice(0, 12)}`;
         }
       } else if (!local.sha) {
         detail = "Local VERSION missing — install recommended.";
+      } else if (latestRelease && !versionNewer(latestRelease, local.version)) {
+        detail = `Up to date · v${local.version} (latest GitHub release). main is at ${String(remoteSha).slice(0, 12)}.`;
       } else {
         detail = `Update available · ${local.sha.slice(0, 12)} → ${String(remoteSha).slice(0, 12)}`;
       }
@@ -962,6 +1000,8 @@ async function checkForUpdate(opts = {}) {
     detail = (detail ? detail + " · " : "")
       + "Dual install: user + system trees present — launcher prefers user. Remove /usr/lib/grokhub when ready.";
   }
+  const releaseNewer = Boolean(latestRelease && versionNewer(latestRelease, local.version));
+  const shaAhead = Boolean(remoteSha && !shaMatch(local.sha, remoteSha));
   return {
     currentVersion: local.version,
     uiVersion: local.uiVersion,
@@ -969,10 +1009,10 @@ async function checkForUpdate(opts = {}) {
     currentSha: localShort,
     remoteSha: remoteShort,
     remoteMessage,
-    // Treat stale UI as needing update even when git SHA matches
-    updateAvailable: Boolean(
-      (remoteSha && !shaMatch(local.sha, remoteSha)) || local.uiStale,
-    ),
+    latestRelease,
+    // Packaged installs update from GitHub Releases. A SHA-only signal used to
+    // claim "update available" then reinstall the same old release tarball.
+    updateAvailable: Boolean(releaseNewer || local.uiStale || (shaAhead && !latestRelease)),
     repo,
     branch,
     installRoot,
@@ -1196,28 +1236,39 @@ async function applyUpdate(opts = {}) {
     };
     if (token) headers.authorization = `Bearer ${token}`;
 
-    // Prefer published release bundles (include prebuilt .output) over source tarball
+    // Prefer a GitHub release tarball only when it is newer than the install.
+    // Otherwise we used to reinstall v1.1.19 and stamp main's SHA on it, which
+    // hid the Update button while the UI stayed old.
     const urls = [];
+    let usedReleaseTag = null;
     try {
       const relRes = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
         headers,
       });
       if (relRes.ok) {
         const rel = await relRes.json();
-        const assets = Array.isArray(rel.assets) ? rel.assets : [];
-        for (const a of assets) {
-          const name = String(a.name || "");
-          if (/grokhub.*\.(tar\.gz|tgz)$/i.test(name) || /desktop.*bundle/i.test(name) || /with-output/i.test(name)) {
-            if (a.browser_download_url) {
-              urls.push(a.browser_download_url);
-              steps.push(`Release asset: ${name}`);
+        const relVer = String(rel.tag_name || "").replace(/^v/i, "");
+        const local = await readLocalVersion(targetRoot);
+        if (relVer && versionNewer(relVer, local.version)) {
+          usedReleaseTag = String(rel.tag_name || "") || null;
+          const assets = Array.isArray(rel.assets) ? rel.assets : [];
+          for (const a of assets) {
+            const name = String(a.name || "");
+            if (/grokhub.*\.(tar\.gz|tgz)$/i.test(name) || /desktop.*bundle/i.test(name) || /with-output/i.test(name)) {
+              if (a.browser_download_url) {
+                urls.push(a.browser_download_url);
+                steps.push(`Release asset: ${name}`);
+              }
             }
           }
-        }
-        // Also try a conventional asset name
-        if (rel.tag_name) {
-          urls.push(
-            `https://github.com/${repo}/releases/download/${rel.tag_name}/grokhub-desktop-${rel.tag_name}.tar.gz`,
+          if (usedReleaseTag) {
+            urls.push(
+              `https://github.com/${repo}/releases/download/${usedReleaseTag}/grokhub-desktop-${usedReleaseTag}.tar.gz`,
+            );
+          }
+        } else {
+          steps.push(
+            `Skipping GitHub release v${relVer || "?"} — not newer than installed v${local.version}`,
           );
         }
       }
@@ -1473,9 +1524,10 @@ async function applyUpdate(opts = {}) {
     // Version stamps in stage (so elevated copy installs them atomically)
     let newSha;
     let newVersion = APP_VERSION;
+    const shaRef = usedReleaseTag || branch;
     try {
       const res = await fetch(
-        `https://api.github.com/repos/${repo}/commits/${encodeURIComponent(branch)}`,
+        `https://api.github.com/repos/${repo}/commits/${encodeURIComponent(shaRef)}`,
         { headers },
       );
       if (res.ok) {
@@ -2606,4 +2658,5 @@ module.exports = {
   oauthStart,
   oauthPoll,
   oauthEnsure,
+  versionNewer,
 };

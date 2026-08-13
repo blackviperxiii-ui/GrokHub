@@ -210,11 +210,15 @@ git pull
 grokhub
 ```
 
+The in-app updater installs the **latest GitHub Release** (`grokhub-desktop-v*.tar.gz`), not a `git pull` of `main`. Merging a PR does not change the running desktop app until that release exists.
+
 Build a release tarball **with** `.output` (for GitHub Releases / updater):
 
 ```bash
 npm run release:bundle
-# upload dist-release/grokhub-desktop-v*.tar.gz as a release asset
+git tag vX.Y.Z
+git push origin vX.Y.Z
+# CI publishes dist-release/grokhub-desktop-vX.Y.Z.tar.gz
 ```
 
 ---
