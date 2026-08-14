@@ -198,6 +198,13 @@ import {
   planFreeRoamChores,
   canFreeRoam,
 } from "./proactive";
+import {
+  LOAD_BUDGET,
+  toolRoundBudget,
+  finishNudgeBudget,
+  shouldSelfImproveThisTurn,
+  mapPool,
+} from "./load-budget";
 import { runHealthPass, formatHealthMarkdown } from "./health-pass";
 import { resolveModeArg, slashHelpMarkdown } from "./slash-commands";
 import {
@@ -5908,29 +5915,16 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
               }
             }
             let rounds = 0;
-            // Max/Heavy/Build get deeper tool loops for real debug/agent work
-            const maxRounds =
-              mode === "max" || routed === "max"
-                ? 14
-                : mode === "heavy" || routed === "heavy"
-                  ? 12
-                  : mode === "build" || routed === "build"
-                    ? 12
-                    : 8;
+            const maxRounds = toolRoundBudget(mode === "auto" ? routed : mode);
             let hostNudges = 0;
-            const maxHostNudges = 5;
+            const maxHostNudges = LOAD_BUDGET.maxHostNudges;
             const jobKind = detectJobKind(trimmed, {
               hostToolsEnabled: get().agentPrefs.hostToolsEnabled,
             });
             const jobContract = jobContractPrompt(jobKind);
             let triedStrategies: LoopRetryStrategy[] = [];
             let finishNudges = 0;
-            const maxFinishNudges =
-              mode === "max" || routed === "max" || mode === "heavy" || routed === "heavy"
-                ? 5
-                : mode === "build" || routed === "build" || mode === "auto"
-                  ? 4
-                  : 3;
+            const maxFinishNudges = finishNudgeBudget(mode === "auto" ? routed : mode);
             let usedAnyTools = false;
             let computerTurnSteps: ComputerStep[] = [];
             let computerTurnScreen = { width: 0, height: 0 };
@@ -6662,7 +6656,7 @@ if (!cmds.length && !compCmds.length) {
                 const { boundHostScanCommand, hostTimeoutMs, clipHostOutput } = await import("./host-scan");
                 const outputs: string[] = [];
                 // Allow a few more cmds for multi-step scans; still cap to keep turns sane
-                const hostCmdList = cmds.slice(0, 5);
+                const hostCmdList = cmds.slice(0, LOAD_BUDGET.maxHostCmdsPerRound);
                 const isReadOnlyCmd = (c: string) =>
                   /^(ls|ll|pwd|whoami|uname|cat |head |tail |wc |file |stat |find |rg |grep |ps |df |du |free |id |env |printenv |hostname |date |which |type |realpath |readlink |test |\[|echo |journalctl |systemctl --user status|ip |ss |uptime)/i.test(
                     c.trim(),
@@ -6780,8 +6774,10 @@ if (!cmds.length && !compCmds.length) {
                     }),
                     { streaming: true },
                   );
-                  const results = await Promise.all(
-                    hostCmdList.map((c, i) => runOneHost(c, i + 1, hostCmdList.length)),
+                  const results = await mapPool(
+                    hostCmdList,
+                    LOAD_BUDGET.maxParallelHost,
+                    (c, i) => runOneHost(c, i + 1, hostCmdList.length),
                   );
                   if (results.some((r) => r.aborted)) aborted = true;
                   for (const r of results) {
@@ -7235,7 +7231,7 @@ if (!cmds.length && !compCmds.length) {
                     status: "success",
                   });
                 }
-                if (turn.learning.totalTurns > 0 && turn.learning.totalTurns % 12 === 0) {
+                if (shouldSelfImproveThisTurn(turn.learning.totalTurns)) {
                   void get().runSelfImprove().catch(() => {});
                 }
               } catch {
@@ -7583,6 +7579,9 @@ if (!cmds.length && !compCmds.length) {
         if (!proactiveEnabled(st.autonomy)) {
           return { ok: true, detail: "Proactive mode off or paused", fixed: 0 };
         }
+        if (st.running || st.streamingMessageId) {
+          return { ok: true, detail: "Skipped while a turn is running", fixed: 0 };
+        }
         // Don't interrupt an active turn with auto-continue
         const actions = scanProactiveIssues({
           autonomy: st.autonomy,
@@ -7714,7 +7713,7 @@ if (!cmds.length && !compCmds.length) {
         void get().tickAutomations({ heartbeatOnly: true });
         // Proactive self-heal ~every 18s
         const now = Date.now();
-        if (now - lastProactiveAt > 18_000) {
+        if (now - lastProactiveAt > LOAD_BUDGET.housekeepingMinMs) {
           lastProactiveAt = now;
           void get().runProactiveHousekeeping();
         }
