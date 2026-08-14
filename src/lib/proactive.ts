@@ -5,6 +5,7 @@
 import type { ChatMessage, ChatThread } from "./types";
 import { looksLikeIncompleteAgentTurn } from "./agent-finish";
 import type { AutonomyConfig } from "./agent-jobs";
+import { LOAD_BUDGET } from "./load-budget";
 
 export type ProactiveAction = {
   id: string;
@@ -36,7 +37,6 @@ export type ProactiveScanInput = {
   now?: number;
 };
 
-const STUCK_STREAM_MS = 90_000;
 const AUTO_CONTINUE_COOLDOWN_MS = 5 * 60_000;
 const lastAutoContinue = new Map<string, number>();
 
@@ -94,24 +94,9 @@ export function scanProactiveIssues(input: ProactiveScanInput): ProactiveAction[
     }
   }
 
-  // Long-running stream with no progress marker (best-effort)
-  if (
-    input.running &&
-    input.streamingMessageId &&
-    input.streamStartedAt &&
-    now - input.streamStartedAt > STUCK_STREAM_MS &&
-    canAggressiveHeal(cfg)
-  ) {
-    actions.push({
-      id: `stuck-${input.streamingMessageId}`,
-      kind: "finalize_stuck_stream",
-      title: "Unstick long stream",
-      detail: "Stream ran unusually long with no completion — finalize so you can keep chatting.",
-      auto: true,
-      threadId: tid,
-      messageId: input.streamingMessageId,
-    });
-  }
+  // Never finalize a live turn. Max-mode tool loops routinely exceed 90s;
+  // killing them mid-stream is what felt like a lockup/crash. Orphan
+  // cleanup above already runs once `running` is false.
 
   // Empty / incomplete assistant when turn is idle (even if stream flags still stuck)
   if (!input.running) {
@@ -273,8 +258,7 @@ export function planFreeRoamChores(
     });
   }
 
-  // Cap: don't invent a storm
-  return out.slice(0, cfg.level >= 4 ? 3 : 2);
+  return out.slice(0, LOAD_BUDGET.maxFreeRoamChores);
 }
 
 export function markChoreDone(id: string, now = Date.now()) {
