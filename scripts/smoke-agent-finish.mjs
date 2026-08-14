@@ -54,4 +54,15 @@ assert.equal(
 assert.equal(userWantsHostInvestigation("do a deep dive on the install"), true);
 assert.equal(userWantsHostInvestigation("what is 2+2"), false);
 
+assert.equal(
+  looksLikePlanningStall("I'll check the install.\n\n**On your computer**\nLooking at files — `ls`"),
+  false,
+  "live tool trail must not look like a stall",
+);
+assert.equal(
+  looksLikeDeferredHostWork("Checked your machine.\n**On your computer**\n- Looking at files — `ls` — done"),
+  false,
+  "visible host trail is real work, not deferred",
+);
+
 console.log("smoke-agent-finish OK");
