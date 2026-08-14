@@ -20,6 +20,37 @@ assert.equal(bridge.versionNewer("1.1.20", "1.1.19"), true);
 assert.equal(bridge.versionNewer("1.1.19", "1.1.20"), false);
 assert.equal(bridge.versionNewer("1.1.19", "1.1.19"), false);
 assert.equal(bridge.versionNewer("v1.1.20", "1.1.19"), true);
+assert.equal(typeof bridge.updateIsAvailable, "function");
+assert.equal(
+  bridge.updateIsAvailable({ releaseNewer: false, shaAhead: true, uiStale: false }),
+  true,
+  "main ahead of the install must offer an update",
+);
+assert.equal(
+  bridge.updateIsAvailable({ releaseNewer: false, shaAhead: false, uiStale: false }),
+  false,
+);
+assert.equal(
+  bridge.updateIsAvailable({ releaseNewer: true, shaAhead: false, uiStale: false }),
+  true,
+);
+assert.equal(typeof bridge.shouldUseGithubRelease, "function");
+assert.equal(bridge.shouldUseGithubRelease("1.1.21", "1.1.21"), false);
+assert.equal(bridge.shouldUseGithubRelease("1.1.22", "1.1.21"), true);
+assert.equal(typeof bridge.updateInstallSucceeded, "function");
+assert.equal(
+  bridge.updateInstallSucceeded({ usedRelease: false, rebuiltUi: false, staleUi: true }),
+  false,
+  "source tarball + old UI is not a successful install",
+);
+assert.equal(
+  bridge.updateInstallSucceeded({ usedRelease: true, rebuiltUi: false, staleUi: false }),
+  true,
+);
+assert.equal(
+  bridge.updateInstallSucceeded({ usedRelease: false, rebuiltUi: true, staleUi: false }),
+  true,
+);
 
 const bridgeSrc = fs.readFileSync(
   path.join(process.cwd(), "desktop/grok-bridge.cjs"),
@@ -36,6 +67,16 @@ assert.match(
   bridgeSrc,
   /usedReleaseTag \|\| branch/,
   "VERSION stamp must follow the tarball we actually installed, not always main HEAD",
+);
+assert.match(
+  bridgeSrc,
+  /could not build the UI/i,
+  "source-tarball install must fail instead of keeping the old UI",
+);
+assert.match(
+  bridgeSrc,
+  /npm ci --ignore-scripts \|\| npm install --ignore-scripts/,
+  "source rebuild must install dependencies when node_modules is missing",
 );
 const liveFuser = bridgeSrc
   .split("\n")
