@@ -43,12 +43,16 @@ test.describe("GrokHub smoke", () => {
 
     await page.getByRole("button", { name: "Settings" }).first().click();
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-    await page
-      .getByRole("navigation", { name: "Settings categories" })
-      .getByRole("button", { name: /^Agent/ })
-      .click();
-    await expect(page.getByText("Host tools (HOST_CMD)")).toBeVisible();
-    await expect(page.getByText("Host CLI / files / apps", { exact: true })).toBeVisible();
+    const cats = page.getByRole("navigation", { name: "Settings categories" });
+    await expect(cats.getByRole("button", { name: /^Account/ })).toBeVisible();
+    await expect(cats.getByRole("button", { name: /^Devices/ })).toBeVisible();
+    await expect(cats.getByRole("button", { name: /^App/ })).toBeVisible();
+    await expect(cats.getByRole("button", { name: /^Agent/ })).toHaveCount(0);
+    await cats.getByRole("button", { name: /^App/ }).click();
+    await expect(page.getByText("Appearance")).toBeVisible();
+    await expect(page.getByText("Updates (GitHub)")).toBeVisible();
+    await cats.getByRole("button", { name: /^Account/ }).click();
+    await expect(page.getByText("Setup sync (Grok account)")).toBeVisible();
   });
 
   test("Imagine local preview is honest when disconnected", async ({ page }) => {
@@ -64,10 +68,20 @@ test.describe("GrokHub smoke", () => {
     test.skip(port === "8080", "Vite :8080 is not the packaged CSP path");
     const csp = packagedSessionCsp();
     await page.route("**/*", async (route) => {
+      if (route.request().resourceType() !== "document") {
+        await route.continue();
+        return;
+      }
       const response = await route.fetch();
+      let body: Buffer;
+      try {
+        body = await response.body();
+      } catch {
+        await route.continue();
+        return;
+      }
       const headers = { ...response.headers() };
       headers["content-security-policy"] = csp;
-      const body = await response.body();
       await route.fulfill({ status: response.status(), headers, body });
     });
     await page.goto("/");
