@@ -1,6 +1,7 @@
 //! GrokHub native cabin. No Electron. No Tauri.
 
 mod app;
+mod cards;
 mod theme;
 mod cli;
 mod config;

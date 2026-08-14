@@ -30,7 +30,7 @@ pub const WORKSPACE: &[(&str, &str)] = &[
 ];
 
 pub const TOOLS: &[(&str, &str)] = &[
-    ("skills", "Skills"),
+    ("skills", "Skills and Connectors"),
     ("automations", "Automations"),
     ("command", "Command"),
     ("queue", "Queue"),
@@ -45,7 +45,7 @@ pub fn stage_subtitle(id: &str) -> &'static str {
         "history" => "Past chats",
         "imagine" => "Images and video",
         "workboard" => "Pinned tasks",
-        "skills" => "Reusable shortcuts",
+        "skills" => "Personal skills and connectors",
         "automations" => "Scheduled tasks",
         "command" => "Overview",
         "queue" => "Background jobs",

@@ -16,3 +16,5 @@ Chips sit **above** the composer pill and change as the user types, as the threa
 - Composer is a dark pill: placeholder **Ask anything**, plus, Auto/mode, mic, white send.
 
 Do not clone grok.com’s game tree or website sidebar. Keep the Electron-look rail and titlebar.
+
+Automations and Skills steal the Grok catalog chrome: large title, white pill action, rounded cards, Suggested / Personal grids. Skills and Connectors share one page with tabs. Suggested automations must parse as real night jobs.
