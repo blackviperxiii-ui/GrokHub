@@ -20,13 +20,15 @@ GrokHub can drive the Linux desktop when **Settings → Agent → Computer use**
 screenshot or portal app. Playwright stays test-only.
 
 ```bash
-# X11 / XWayland (recommended — same as Cursor computer use)
-sudo pacman -S --needed ffmpeg xdotool
+# Wayland (KDE/GNOME) — required on CachyOS Plasma
+sudo pacman -S --needed ydotool grim xdotool ffmpeg
+# or: ./scripts/provision-computer-use.sh
 
-# Native Wayland
-sudo pacman -S --needed grim ydotool
-# ydotool needs write access to /dev/uinput (typically the `input` group)
+# X11-only session
+sudo pacman -S --needed ffmpeg xdotool
 ```
+
+See [COMPUTER_USE.md](../COMPUTER_USE.md). Multi-monitor clicks use the full virtual desktop (`xdpyinfo` / `xrandr` if xdotool is missing). `/dev/uinput` must be writable for ydotool (KDE `uaccess` ACL is often enough).
 
 Computer use sends screenshots to Grok as vision, so it needs **Grok OAuth or an xAI API key**.
 The website-free fallback cannot see the screen.
