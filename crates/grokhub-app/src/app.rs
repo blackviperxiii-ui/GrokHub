@@ -2564,7 +2564,12 @@ impl eframe::App for Cabin {
         crate::theme::apply(ctx);
         self.ui_titlebar(ctx);
         self.ui_sidebar(ctx);
-        self.ui_stage_header(ctx);
+        if !matches!(
+            self.nav,
+            Nav::Skills | Nav::Connectors | Nav::Night | Nav::Imagine | Nav::Workboard
+        ) {
+            self.ui_stage_header(ctx);
+        }
 
         match self.nav {
             Nav::Chat => self.ui_chat(ctx),
@@ -3146,7 +3151,7 @@ impl Cabin {
                     .inner_margin(egui::Margin::same(12.0)),
             )
             .show(ctx, |ui| {
-            if needs_auth_banner(self.has_key()) {
+            if needs_auth_banner(self.has_key()) && !self.messages.is_empty() {
                 ui.horizontal(|ui| {
                     ui.colored_label(crate::theme::SETUP, "Connect Grok in Settings");
                     if ui.button("Settings").clicked() {
@@ -3222,28 +3227,8 @@ impl Cabin {
                     }
                 });
             }
-            ui.horizontal(|ui| {
-                let proj = if self.cfg.project_dir.trim().is_empty() {
-                    "unbound".into()
-                } else {
-                    grokhub_core::project_name_from_path(&self.cfg.project_dir)
-                };
-                ui.label(RichText::new(proj).small().color(crate::theme::SUBTLE));
-                ui.label(RichText::new(if self.cfg.yolo {
-                    "YOLO"
-                } else if self.approve_risky_only {
-                    "risky"
-                } else {
-                    "supervised"
-                }).small().color(crate::theme::SUBTLE));
-                ui.label(
-                    RichText::new(if self.cfg.host_on { "host" } else { "host off" })
-                        .small()
-                        .color(crate::theme::SUBTLE),
-                );
-            });
             let chips = self.visible_chips.clone();
-            if !chips.is_empty() {
+            if !chips.is_empty() && !self.messages.is_empty() {
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
@@ -3407,13 +3392,34 @@ impl Cabin {
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
                     if self.messages.is_empty() {
+                        ui.add_space(56.0);
                         ui.vertical_centered(|ui| {
-                            ui.add_space(48.0);
                             ui.label(
-                                RichText::new("You sit down in the cabin. It already knows the night.")
-                                    .italics()
-                                    .color(crate::theme::SUBTLE),
+                                RichText::new("What do you want to know?")
+                                    .size(32.0)
+                                    .strong()
+                                    .color(crate::theme::FG),
                             );
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new("The cabin already knows the night.")
+                                    .size(15.0)
+                                    .color(crate::theme::MUTED),
+                            );
+                        });
+                        ui.add_space(28.0);
+                        let tiles = self.visible_chips.clone();
+                        let n = tiles.len().min(4);
+                        crate::cards::tile_row(ui, n, |ui, i| {
+                            let c = &tiles[i];
+                            if crate::cards::empty_prompt_tile(
+                                ui,
+                                crate::cards::chip_glyph(&c.label),
+                                &c.label,
+                                if c.hint.is_empty() { "Suggested" } else { &c.hint },
+                            ) {
+                                self.apply_chip(c.clone());
+                            }
                         });
                     }
                     for m in &self.messages {
@@ -3686,17 +3692,6 @@ impl Cabin {
                 self.auto_compose = true;
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.label(
-                RichText::new(format!(
-                    "Used {} / {} today · quiet {}–{} · inherit YOLO / supervised",
-                    self.daily_auto_used,
-                    self.cfg.daily_auto_cap,
-                    self.cfg.quiet_start,
-                    self.cfg.quiet_end
-                ))
-                .small()
-                .color(crate::theme::MUTED),
-            );
             if self.auto_compose {
                 ui.add_space(12.0);
                 egui::Frame::none()
@@ -3734,61 +3729,48 @@ impl Cabin {
                         });
                     });
             }
-            ui.add_space(16.0);
-            ui.label(RichText::new("Active").small().color(crate::theme::SUBTLE));
             ui.add_space(8.0);
+            crate::cards::section_label(ui, "Active");
             let mut drop: Option<usize> = None;
             if self.automations.is_empty() {
-                ui.label(RichText::new("None yet — add one, or pick a suggestion.").color(crate::theme::MUTED));
-            }
-            for (i, a) in self.automations.iter_mut().enumerate() {
-                egui::Frame::none()
-                    .fill(crate::theme::ELEVATED)
-                    .rounding(12.0)
-                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
-                    .inner_margin(egui::Margin::same(14.0))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut a.enabled, "");
-                            ui.vertical(|ui| {
-                                ui.label(
-                                    RichText::new(a.name.chars().take(48).collect::<String>())
-                                        .strong()
-                                        .color(crate::theme::FG),
-                                );
-                                ui.label(
-                                    RichText::new(format!(
-                                        "{} {} · runs {} · {}",
-                                        a.schedule,
-                                        a.time,
-                                        a.run_count,
-                                        a.instructions.chars().take(80).collect::<String>()
-                                    ))
-                                    .small()
-                                    .color(crate::theme::MUTED),
-                                );
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button("drop").clicked() {
-                                    drop = Some(i);
-                                }
-                                if ui.small_button("run").clicked() {
-                                    drop = Some(usize::MAX - i);
-                                }
-                            });
-                        });
+                ui.label(
+                    RichText::new("None yet — pick a suggestion or New Automation.")
+                        .color(crate::theme::MUTED),
+                );
+                ui.add_space(16.0);
+            } else {
+                let n = self.automations.len();
+                crate::cards::tile_row(ui, n, |ui, i| {
+                    let a = &mut self.automations[i];
+                    let title = a.name.chars().take(40).collect::<String>();
+                    let body = format!("{} {} · {} runs", a.schedule, a.time, a.run_count);
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut a.enabled, "");
                     });
-                ui.add_space(8.0);
-            }
-            ui.add_space(12.0);
-            ui.label(RichText::new("Suggested").small().color(crate::theme::SUBTLE));
-            ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
-                for s in crate::cards::SUGGESTED_AUTOS {
-                    if crate::cards::suggestion_card(ui, s.title, s.body) {
-                        self.add_automation_seed(s.seed);
+                    if crate::cards::grok_tile(ui, "●", &title, &body, Some("Run"), false)
+                        == crate::cards::TileHit::Add
+                    {
+                        drop = Some(usize::MAX - i);
                     }
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("Remove").small().color(crate::theme::MUTED))
+                                .fill(egui::Color32::TRANSPARENT),
+                        )
+                        .clicked()
+                    {
+                        drop = Some(i);
+                    }
+                });
+                ui.add_space(20.0);
+            }
+            crate::cards::section_label(ui, "Suggested");
+            crate::cards::tile_row(ui, crate::cards::SUGGESTED_AUTOS.len(), |ui, i| {
+                let s = crate::cards::SUGGESTED_AUTOS[i];
+                if crate::cards::grok_tile(ui, s.glyph, s.title, s.body, Some("Add"), false)
+                    == crate::cards::TileHit::Add
+                {
+                    self.add_automation_seed(s.seed);
                 }
             });
             if let Some(i) = drop {
@@ -3843,8 +3825,10 @@ impl Cabin {
     }
 
     fn ui_board(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Workboard");
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .show(ctx, |ui| {
+            let _ = crate::cards::page_header(ui, "Workboard", "New card");
             ui.horizontal(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.board_title)
@@ -3889,19 +3873,31 @@ impl Cabin {
     }
 
     fn ui_imagine(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Imagine");
-            ui.label(format!(
-                "Dedicated model {}",
-                dedicated_imagine_model(&self.cfg.imagine_model)
-            ));
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .show(ctx, |ui| {
+            let gen = crate::cards::page_header(ui, "Imagine", "Generate");
+            ui.label(
+                RichText::new("Still images · grok-2-image")
+                    .size(14.0)
+                    .color(crate::theme::MUTED),
+            );
+            ui.add_space(12.0);
             ui.add(
                 egui::TextEdit::multiline(&mut self.imagine_prompt)
-                    .desired_rows(3)
+                    .desired_rows(4)
                     .desired_width(f32::INFINITY)
                     .hint_text("a cabin at night"),
             );
-            if ui.button("Generate").clicked() {
+            ui.add_space(8.0);
+            if gen || ui
+                .add(
+                    egui::Button::new(RichText::new("Generate").strong().color(crate::theme::BG))
+                        .fill(crate::theme::FG)
+                        .rounding(16.0),
+                )
+                .clicked()
+            {
                 self.kick_imagine();
             }
             if !self.imagine_last.is_empty() {
@@ -3935,11 +3931,7 @@ impl Cabin {
                     self.nav = Nav::Connectors;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.skill_q)
-                            .hint_text("Search…")
-                            .desired_width(220.0),
-                    );
+                    crate::cards::search_field(ui, &mut self.skill_q);
                     if ui.small_button("Reload").clicked() {
                         self.skill_list = skills::list_skills();
                     }
@@ -3948,53 +3940,55 @@ impl Cabin {
             ui.add_space(16.0);
             egui::ScrollArea::vertical().show(ui, |ui| {
             if self.skills_tab_connectors {
-                ui.label(RichText::new("Live").small().color(crate::theme::SUBTLE));
-                ui.add_space(8.0);
+                crate::cards::section_label(ui, "Live");
                 ui.label(
                     RichText::new("GitHub is the only live connector. No Outlook, Gmail, or Drive — those are not wired.")
-                        .small()
                         .color(crate::theme::MUTED),
                 );
-                ui.add_space(8.0);
+                ui.add_space(12.0);
                 let has_pat = !self.secrets.github_token.trim().is_empty();
                 let mut gh_tool: Option<&'static str> = None;
                 for c in crate::cards::LIVE_CONNECTORS {
                     if !crate::cards::is_cabin_catalog(c.id) {
                         continue;
                     }
-                    egui::Frame::none()
-                        .fill(crate::theme::ELEVATED)
-                        .rounding(12.0)
-                        .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
-                        .inner_margin(egui::Margin::same(14.0))
-                        .show(ui, |ui| {
-                            ui.label(RichText::new(c.title).strong().size(15.0));
-                            ui.label(
-                                RichText::new(if has_pat {
-                                    "PAT present (never shown). These buttons hit api.github.com."
-                                } else {
-                                    "No PAT — set one in Settings, then these buttons work."
-                                })
-                                .small()
-                                .color(crate::theme::MUTED),
-                            );
-                            ui.add_space(6.0);
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.github_args)
-                                    .hint_text("repo:owner/name  or  query:…  (issues / search)")
-                                    .desired_width(f32::INFINITY),
-                            );
-                            ui.horizontal_wrapped(|ui| {
-                                for (label, tool) in c.tools {
-                                    if ui.button(*label).clicked() {
-                                        gh_tool = Some(*tool);
-                                    }
-                                }
-                                if ui.button("Settings").clicked() {
-                                    self.nav = Nav::Settings;
-                                }
-                            });
-                        });
+                    let body = if has_pat {
+                        "PAT present (never shown). These buttons hit api.github.com."
+                    } else {
+                        "No PAT — set one in Settings, then these buttons work."
+                    };
+                    crate::cards::grok_tile(ui, c.glyph, c.title, body, None, false);
+                    ui.add_space(10.0);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.github_args)
+                            .hint_text("repo:owner/name  or  query:…  (issues / search)")
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.add_space(8.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for (label, tool) in c.tools {
+                            if ui
+                                .add(
+                                    egui::Button::new(RichText::new(*label).color(crate::theme::FG))
+                                        .fill(crate::theme::ELEVATED)
+                                        .rounding(14.0),
+                                )
+                                .clicked()
+                            {
+                                gh_tool = Some(*tool);
+                            }
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new("Settings").color(crate::theme::BG))
+                                    .fill(crate::theme::FG)
+                                    .rounding(14.0),
+                            )
+                            .clicked()
+                        {
+                            self.nav = Nav::Settings;
+                        }
+                    });
                 }
                 if let Some(tool) = gh_tool {
                     let args = self.github_args.clone();
@@ -4002,28 +3996,28 @@ impl Cabin {
                     self.run_connector("github", tool, &args);
                 }
             } else {
-            ui.label(RichText::new("Suggested").small().color(crate::theme::SUBTLE));
-            ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
-                for s in crate::cards::SUGGESTED_SKILLS {
-                    if self.skill_list.iter().any(|e| e.name == s.name) {
-                        continue;
-                    }
-                    if crate::cards::suggestion_card(ui, s.title, s.body) {
-                        let sk = crate::cards::skill_from_suggested(s);
-                        if skills::save_skill(&sk).is_ok() {
-                            self.skill_list = skills::list_skills();
-                            self.skill_name = sk.name.clone();
-                            self.skill_body = grokhub_core::render_skill_md(&sk);
-                            self.status = format!("Wrote skill {}", sk.name);
-                        }
+            crate::cards::section_label(ui, "Suggested");
+            let pending: Vec<_> = crate::cards::SUGGESTED_SKILLS
+                .iter()
+                .copied()
+                .filter(|s| !self.skill_list.iter().any(|e| e.name == s.name))
+                .collect();
+            crate::cards::tile_row(ui, pending.len(), |ui, i| {
+                let s = pending[i];
+                if crate::cards::grok_tile(ui, s.glyph, s.title, s.body, Some("Add"), false)
+                    == crate::cards::TileHit::Add
+                {
+                    let sk = crate::cards::skill_from_suggested(&s);
+                    if skills::save_skill(&sk).is_ok() {
+                        self.skill_list = skills::list_skills();
+                        self.skill_name = sk.name.clone();
+                        self.skill_body = grokhub_core::render_skill_md(&sk);
+                        self.status = format!("Wrote skill {}", sk.name);
                     }
                 }
             });
-            ui.add_space(12.0);
-            ui.label(RichText::new("Personal").small().color(crate::theme::SUBTLE));
-            ui.add_space(8.0);
+            ui.add_space(20.0);
+            crate::cards::section_label(ui, "Personal");
             let q = self.skill_q.clone();
             let list: Vec<_> = self
                 .skill_list
@@ -4049,13 +4043,10 @@ impl Cabin {
                     })
                     .collect();
                 let mut pick: Option<String> = None;
-                ui.columns(2, |cols| {
-                    for (i, (name, body, selected)) in names.iter().enumerate() {
-                        let col = i % 2;
-                        if crate::cards::catalog_card(&mut cols[col], name, body, *selected) {
-                            pick = Some(name.clone());
-                        }
-                        cols[col].add_space(8.0);
+                crate::cards::tile_row(ui, names.len(), |ui, i| {
+                    let (name, body, selected) = &names[i];
+                    if crate::cards::catalog_card(ui, name, body, *selected) {
+                        pick = Some(name.clone());
                     }
                 });
                 if let Some(name) = pick {
