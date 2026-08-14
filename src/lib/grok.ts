@@ -2,6 +2,7 @@ import type { GrokModeId } from "./types";
 import { modelIdForMode, resolveMode } from "./modes";
 import { sanitizeChatModel } from "./models-catalog";
 import { parseRateLimitHeaders } from "./usage";
+import { hasToolTrailEvidence } from "./tool-status";
 
 export const XAI_BASE = "https://api.x.ai/v1";
 
@@ -610,8 +611,7 @@ export function stripHostCommands(text: string): string {
 export function looksLikeDeferredHostWork(text: string): boolean {
   // Keep aligned with agent-finish.looksLikePlanningStall
   const s = text || "";
-  if (/HOST_CMD\s*:/i.test(s) || /CONNECTOR_CMD\s*:/i.test(s) || /COMPUTER_CMD\s*:/i.test(s)) return false;
-  if (/HOST_RESULT|COMPUTER_RESULT|### 🖥️/i.test(s)) return false;
+  if (hasToolTrailEvidence(s)) return false;
   const plan =
     /\b(i('ll| will)|let me|i can|i should|i'm going to|i am going to|going to)\b.{0,60}\b(check|probe|inspect|investigate|scan|look|run|start|continue|dig|examine|verify|read|list|fetch|audit|diagnose)\b/i.test(
       s,

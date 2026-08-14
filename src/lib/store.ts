@@ -3,7 +3,14 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import { persistentStorage } from "./persistent-storage";
 import { redactSecrets } from "./redact";
 import { friendlyAssistantError, formatUserError } from "./format-error";
-import { toolResultMarkdown, toolRunningMarkdown, toolLoopWaitMarkdown } from "./tool-status";
+import {
+  toolResultMarkdown,
+  toolRunningMarkdown,
+  toolLoopWaitMarkdown,
+  toolParallelMarkdown,
+  humanizeHostCommand,
+  humanizeComputerCommand,
+} from "./tool-status";
 import {
   buildContext,
   compactMessages,
@@ -5591,7 +5598,9 @@ if (cmd === "tools") {
         const recentHost = recentChat
           .slice(-6)
           .some((c) =>
-            /HOST_CMD|Desktop host|host ok|host failed|### 🖥️/i.test(c.content || ""),
+            /HOST_CMD|Desktop host|host ok|host failed|### 🖥️|\*\*On your computer\*\*|Checked your machine/i.test(
+              c.content || "",
+            ),
           );
         const lastFailed =
           /could not reach|connection error|timed out|request failed|multi agent|not allowed on chat/i.test(
@@ -6424,7 +6433,7 @@ while (rounds < maxRounds && !aborted) {
                     set({ streamStatus: `Connector: ${label}…` });
                     get().pushActivity({
                       kind: "connector",
-                      title: `Running ${cc.connectorId}:${cc.tool}`,
+                      title: `Using ${cc.connectorId}`,
                       detail: label.slice(0, 160),
                       status: "running",
                     });
@@ -6558,6 +6567,37 @@ while (rounds < maxRounds && !aborted) {
                         aborted = true;
                         break;
                       }
+                      let selfLabel: string;
+                      switch (sc.kind) {
+                        case "list":
+                          selfLabel = `list ${sc.path}`;
+                          break;
+                        case "read":
+                          selfLabel = `read ${sc.path}`;
+                          break;
+                        case "write":
+                          selfLabel = `write ${sc.path}`;
+                          break;
+                        case "patch":
+                          selfLabel = `patch ${sc.path}`;
+                          break;
+                        case "snapshot":
+                          selfLabel = `snapshot ${sc.note || ""}`;
+                          break;
+                        default: {
+                          const _never: never = sc;
+                          selfLabel = _never;
+                        }
+                      }
+                      set({ streamStatus: `Self-mod: ${selfLabel}…` });
+                      patchBot(
+                        toolRunningMarkdown({
+                          kind: "selfmod",
+                          command: selfLabel,
+                          preface: visible || "Changing the app…",
+                        }),
+                        { streaming: true },
+                      );
                       try {
                         if (sc.kind === "list") {
                           const r = await selfModList(sc.path);
@@ -6627,15 +6667,12 @@ while (rounds < maxRounds && !aborted) {
                       ].join("\n"),
                     });
                     patchBot(
-                      [
-                        visible || "Applied self-mod steps.",
-                        "",
-                        "```",
-                        outputs.join("\n\n").slice(0, 3000),
-                        "```",
-                        "",
-                        "_Summarizing…_",
-                      ].join("\n"),
+                      toolResultMarkdown({
+                        kind: "selfmod",
+                        preface: visible || "Changed the app.",
+                        outputs,
+                        summarizing: true,
+                      }),
                       { streaming: true },
                     );
                     // If also host/computer cmds, continue to those below
@@ -6702,7 +6739,7 @@ if (!cmds.length && !compCmds.length) {
                   const timeoutMs = hostTimeoutMs(cmd, 90_000);
                   get().pushActivity({
                     kind: "desktop",
-                    title: "Host command",
+                    title: humanizeHostCommand(rawCmd),
                     detail: (bounded.note ? `[${bounded.note}] ` : "") + rawCmd.slice(0, 140),
                     status: "running",
                   });
@@ -6763,10 +6800,10 @@ if (!cmds.length && !compCmds.length) {
                     get().pushActivity({
                       kind: "desktop",
                       title: r.ok
-                        ? "Host ok"
+                        ? `${humanizeHostCommand(rawCmd)} — done`
                         : /timed out/i.test(r.stderr || "")
-                          ? "Host timeout"
-                          : "Host failed",
+                          ? `${humanizeHostCommand(rawCmd)} — timed out`
+                          : `${humanizeHostCommand(rawCmd)} — failed`,
                       detail: rawCmd.slice(0, 120),
                       status: r.ok ? "success" : "failed",
                     });
@@ -6775,7 +6812,7 @@ if (!cmds.length && !compCmds.length) {
                     clearInterval(hostTick);
                     get().pushActivity({
                       kind: "desktop",
-                      title: "Host error",
+                      title: `${humanizeHostCommand(rawCmd)} — failed`,
                       detail: e instanceof Error ? e.message : "failed",
                       status: "failed",
                     });
@@ -6793,8 +6830,11 @@ if (!cmds.length && !compCmds.length) {
                     streamStatus: `Host: running ${hostCmdList.length} read-only cmds in parallel…`,
                   });
                   patchBot(
-                    (visible || "Working on your machine…") +
-                      `\n\n_Running ${hostCmdList.length} safe host commands in parallel…_`,
+                    toolParallelMarkdown({
+                      kind: "host",
+                      preface: visible || "Working on your machine…",
+                      commands: hostCmdList,
+                    }),
                     { streaming: true },
                   );
                   const results = await Promise.all(
@@ -6920,7 +6960,7 @@ if (!cmds.length && !compCmds.length) {
                       );
                       get().pushActivity({
                         kind: "desktop",
-                        title: "Computer use",
+                        title: humanizeComputerCommand(cmdLabel),
                         detail: cmdLabel.slice(0, 140),
                         status: "running",
                       });
@@ -6948,7 +6988,9 @@ if (!cmds.length && !compCmds.length) {
                       outputs.push(formatComputerResult(step, r));
                       get().pushActivity({
                         kind: "desktop",
-                        title: r.ok ? "Computer ok" : "Computer failed",
+                        title: r.ok
+                          ? `${humanizeComputerCommand(cmdLabel)} — done`
+                          : `${humanizeComputerCommand(cmdLabel)} — failed`,
                         detail: cmdLabel.slice(0, 120),
                         status: r.ok ? "success" : "failed",
                       });
