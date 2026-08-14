@@ -22,6 +22,11 @@ export type ComputerInfo = {
   previewing?: boolean;
   capture?: string;
   captureTools?: string[];
+  geometry?: { width: number; height: number; scaleFactor?: number; source?: string };
+  missingTools?: string[];
+  uinput?: { path: string; exists: boolean; writable: boolean };
+  ydotoold?: string | null;
+  vendorDir?: string | null;
 };
 
 export type ComputerFrame = {
