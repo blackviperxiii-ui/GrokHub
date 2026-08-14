@@ -584,8 +584,27 @@ export function DesktopHostView() {
               {compInfo?.capture && (
                 <Badge variant="success">{compInfo.capture}</Badge>
               )}
+              {compInfo?.geometry?.width ? (
+                <Badge className="font-mono">
+                  {compInfo.geometry.width}×{compInfo.geometry.height}
+                  {compInfo.geometry.source ? ` · ${compInfo.geometry.source}` : ""}
+                </Badge>
+              ) : null}
+              {compInfo?.uinput && (
+                <Badge variant={compInfo.uinput.writable ? "success" : "warn"}>
+                  {compInfo.uinput.writable ? "uinput rw" : "uinput blocked"}
+                </Badge>
+              )}
               {previewing && <Badge variant="info">live view</Badge>}
             </div>
+            {compInfo?.missingTools && compInfo.missingTools.length > 0 && (
+              <p className="text-xs text-[var(--color-warn)]">
+                Missing tools: {compInfo.missingTools.join(", ")}. On Arch/CachyOS run{" "}
+                <span className="font-mono">./scripts/provision-computer-use.sh</span>
+                {" "}or{" "}
+                <span className="font-mono">pacman -S --needed ydotool grim xdotool ffmpeg</span>.
+              </p>
+            )}
             {compInfo?.hint && (
               <p className="text-xs text-[var(--color-muted)]">{compInfo.hint}</p>
             )}
