@@ -111,8 +111,19 @@ assert.equal(
   "xdotool",
 );
 assert.equal(typeof computer.silentCaptureTools, "function");
+assert.equal(typeof computer.ffmpegX11grabArgs, "function");
+const ffArgs = computer.ffmpegX11grabArgs(":0", "OUT", { width: 1920, height: 1080 });
+assert.ok(ffArgs.includes("x11grab"), "Cursor-style capture is ffmpeg x11grab, not a screenshot app");
+assert.ok(ffArgs.includes("-frames:v"));
+assert.equal(
+  ffArgs.some((a) => /spectacle|flameshot|gnome-screenshot/i.test(String(a))),
+  false,
+);
+
 const tools = computer.silentCaptureTools("wayland", {
   grim: "/usr/bin/grim",
+  ffmpeg: "/usr/bin/ffmpeg",
+  display: ":0",
   maim: "/usr/bin/maim",
   scrot: "/usr/bin/scrot",
   "gnome-screenshot": "/usr/bin/gnome-screenshot",
@@ -120,10 +131,39 @@ const tools = computer.silentCaptureTools("wayland", {
   flameshot: "/usr/bin/flameshot",
 });
 assert.equal(tools[0]?.name, "grim");
+assert.ok(tools.some((t) => t.name === "ffmpeg-x11grab"));
 assert.equal(
-  tools.some((t) => t.name === "spectacle" || t.name === "flameshot"),
+  tools.some((t) =>
+    /spectacle|flameshot|gnome-screenshot|desktopCapturer/i.test(t.name),
+  ),
   false,
-  "must not launch interactive screenshot apps",
+  "must not launch interactive screenshot apps or Electron portal picker",
+);
+
+const x11tools = computer.silentCaptureTools("x11", {
+  ffmpeg: "/usr/bin/ffmpeg",
+  display: ":1",
+  "gnome-screenshot": "/usr/bin/gnome-screenshot",
+});
+assert.equal(x11tools[0]?.name, "ffmpeg-x11grab");
+assert.deepEqual(computer.silentCaptureTools("unknown", {}), []);
+
+assert.equal(typeof computer.splitJpegFrames, "function");
+const jpegFrames = [];
+const pushJpeg = computer.splitJpegFrames((j) => jpegFrames.push(j));
+const oneJpeg = Buffer.concat([
+  Buffer.from([0xff, 0xd8]),
+  Buffer.from("frame"),
+  Buffer.from([0xff, 0xd9]),
+]);
+pushJpeg(Buffer.concat([Buffer.from("xx"), oneJpeg, oneJpeg]));
+assert.equal(jpegFrames.length, 2, "MJPEG pipe must split concatenated JPEGs");
+
+assert.equal(computer.previewAllowsDesktopCapturer(), false);
+assert.doesNotMatch(
+  fs.readFileSync(path.join(process.cwd(), "desktop/computer-bridge.cjs"), "utf8"),
+  /desktopCapturer\.getSources/,
+  "must not call Electron portal capture (opens a screenshot app every frame)",
 );
 assert.match(
   computerPromptBlock(true),
@@ -138,25 +178,33 @@ const info = computer.info();
 assert.equal(info.ok, true);
 assert.ok(info.session === "wayland" || info.session === "x11" || info.session === "unknown");
 assert.ok(Array.isArray(info.captureTools), "info must list silent capture tools");
-assert.ok(typeof info.capture === "string");
-assert.match(String(info.hint), /xdotool|ydotool|grim|maim/i);
+assert.ok(info.capture === null || typeof info.capture === "string");
+assert.match(String(info.hint), /xdotool|ydotool|grim|maim|ffmpeg/i);
 
 const started = computer.startPreview(400, "user");
-assert.equal(started.ok, true);
-assert.equal(started.previewing, true);
-assert.equal(started.owner, "user");
-assert.equal(computer.isPreviewing(), true);
-const sessionStart = await computer.beginSession();
-assert.equal(sessionStart.previewing, true);
-const sessionEnd = computer.endSession();
-assert.equal(sessionEnd.previewing, true, "user live view must survive an agent session");
-assert.equal(computer.isPreviewing(), true);
-const stopped = computer.stopPreview({ force: true });
-assert.equal(stopped.previewing, false);
-assert.equal(computer.isPreviewing(), false);
+if (started.ok) {
+  assert.equal(started.previewing, true);
+  assert.equal(started.owner, "user");
+  assert.equal(computer.isPreviewing(), true);
+  const sessionStart = await computer.beginSession();
+  assert.equal(sessionStart.previewing, true);
+  const sessionEnd = computer.endSession();
+  assert.equal(sessionEnd.previewing, true, "user live view must survive an agent session");
+  assert.equal(computer.isPreviewing(), true);
+  const stopped = computer.stopPreview({ force: true });
+  assert.equal(stopped.previewing, false);
+  assert.equal(computer.isPreviewing(), false);
+} else {
+  assert.match(String(started.error), /ffmpeg|grim|silent/i);
+  assert.equal(computer.isPreviewing(), false);
+}
 const shot = await computer.act({ op: "screenshot" });
-assert.equal(shot.ok, false);
-assert.match(String(shot.error), /Electron|desktop/i);
+if (shot.ok) {
+  assert.ok(String(shot.dataUrl || "").startsWith("data:image/"));
+  assert.notEqual(shot.capture, "desktopCapturer");
+} else {
+  assert.match(String(shot.error), /silent|ffmpeg|grim/i);
+}
 
 const computerPrefs = hostAllowPrefixesFromConfirm("computer", [
   "click 10 20",
