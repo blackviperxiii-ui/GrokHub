@@ -12,8 +12,9 @@ use crate::xai::{grok_chat, grok_chat_stream, grok_imagine, grok_stt, grok_tts, 
 use eframe::egui::{self, Color32, RichText};
 use grokhub_core::{
     approved_cmds, apply_work_update, auth_bearer, automation_blocked_by_policy, build_hub_snapshot,
-    build_windshield, bump_skill_run, cabin_eyes_for_turn, can_inhabit, can_mark_done,
-    bump_usage, catalog_line, compact_keep_pin, context_percent, daily_units_blocked,
+    build_quick_chips, build_windshield, bump_skill_run, cabin_eyes_for_turn, can_inhabit, can_mark_done,
+    bump_usage, catalog_line, chip_suggest_prompt, compact_keep_pin, context_fingerprint,
+    context_percent, daily_units_blocked,
     dedicated_imagine_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
     extract_work_pins, filter_palette, format_consult_reply,
@@ -22,19 +23,23 @@ use grokhub_core::{
     import_memory_file, insight_pin, is_openclaw_workspace,
     host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
-    match_skill, model_for_mode, move_step, needs_auth_banner, next_goal_prompt,
+    match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
+    needs_auth_banner, next_goal_prompt,
     now_ms, on_wheel_grab, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
     parse_nl_automation, parse_recipe, parse_slash, passenger_label, plan_from_text, plan_room,
     presence_orb_state, presence_should_stream, propose_skill_from_turn, quiet_hours_active,
-    record_turn, reduce_voice_state, roll_usage_day,
+    parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
+    remember_chip_outcome, remember_typed_prompt, roll_usage_day,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     rewind_dest, save_hub_state, screen_from_extents, search_corpus, should_attach_cabin_frame,
-    should_auto_compact, should_keep_frame, shortcut_help,
+    should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     skip_automation, slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
+    top_habit_labels,
     unified_diff_cite, usage_line,
     transcribe_route, uid, update_cmds, update_wipes_config, voice_session_url, Automation, BoardCard,
-    BoardStatus, ComputerOp, DeviceCodeStart, HeyGrokAction, HostPlanStep, HostRisk, HubMemoryFile,
+    BoardStatus, ChipInput, ChipKind, ChipMemory, ComputerOp, DeviceCodeStart, HeyGrokAction,
+    HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, Recipe, ReplayOp, RewindRecord,
     SkillMd, Slash, TranscribeRoute, UsageDay, VoiceEvent, VoiceState, CONTEXT_BUDGET_TOKENS,
     DEFAULT_CONNECTOR_HOSTS, DEFAULT_MODEL, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS,
@@ -209,6 +214,14 @@ pub struct Cabin {
     hotkey_halt: u32,
     tools_collapsed: bool,
     sidebar_q: String,
+    chip_memory: ChipMemory,
+    chip_dismissed: Vec<String>,
+    llm_chips: Vec<QuickChip>,
+    visible_chips: Vec<QuickChip>,
+    chip_rx: Option<mpsc::Receiver<Vec<QuickChip>>>,
+    chip_busy: bool,
+    chip_fp: String,
+    chip_llm_at: u64,
 }
 
 impl Cabin {
@@ -338,6 +351,14 @@ impl Cabin {
             hotkey_halt: 0,
             tools_collapsed: false,
             sidebar_q: String::new(),
+            chip_memory: crate::store::load_chips(),
+            chip_dismissed: vec![],
+            llm_chips: vec![],
+            visible_chips: vec![],
+            chip_rx: None,
+            chip_busy: false,
+            chip_fp: String::new(),
+            chip_llm_at: 0,
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
             let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
@@ -370,6 +391,7 @@ impl Cabin {
         let _ = crate::night::save_rewinds(&self.rewind_rows);
         let _ = crate::store::save_learning(&self.learning);
         let _ = crate::store::save_usage(&self.usage);
+        let _ = crate::store::save_chips(&self.chip_memory);
         let _ = config::save(&self.cfg);
         if let Ok(st) = self.hub.lock() {
             let _ = save_hub_state(&config::hub_state_path(), &st);
@@ -386,6 +408,188 @@ impl Cabin {
 
     fn has_key(&self) -> bool {
         has_auth(&self.cfg.api_key, &secrets::access_token(&self.secrets))
+    }
+
+    fn chat_pairs(&self) -> Vec<(String, String)> {
+        self.messages
+            .iter()
+            .map(|m| (m.role.clone(), m.content.clone()))
+            .collect()
+    }
+
+    fn chip_hour() -> u8 {
+        Self::local_clock().hour as u8
+    }
+
+    fn poll_chips(&mut self) {
+        let Some(rx) = self.chip_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(chips) => {
+                self.chip_busy = false;
+                self.llm_chips = chips
+                    .into_iter()
+                    .filter(|c| is_plain_text(&c.label) && is_plain_text(&c.value))
+                    .collect();
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.chip_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.chip_busy = false;
+            }
+        }
+    }
+
+    fn refresh_chips(&mut self) {
+        let chat = self.chat_pairs();
+        let hour = Self::chip_hour();
+        let title = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.title.clone())
+            .unwrap_or_default();
+        let last_failed = self.last_receipt_ok == Some(false);
+        let input = ChipInput {
+            chat: &chat,
+            draft: &self.composer,
+            grok_connected: self.has_key(),
+            host_on: self.cfg.host_on,
+            mode: if self.cfg.mode.trim().is_empty() {
+                "auto"
+            } else {
+                self.cfg.mode.as_str()
+            },
+            thread_title: &title,
+            usage_messages: self.usage.messages,
+            usage_cap: self.cfg.daily_auto_cap,
+            memory: &self.chip_memory,
+            dismissed: &self.chip_dismissed,
+            llm_chips: &self.llm_chips,
+            last_failed,
+            hour,
+            now_ms: now_ms(),
+            max: 5,
+        };
+        self.visible_chips = build_quick_chips(input);
+        let fp = context_fingerprint(&chat, &self.composer, last_failed, hour);
+        if should_refresh_llm(
+            &self.chip_fp,
+            &fp,
+            self.chip_llm_at,
+            now_ms(),
+            self.has_key(),
+            self.chip_busy,
+        ) {
+            self.chip_fp = fp;
+            self.chip_llm_at = now_ms();
+            self.spawn_chip_llm();
+        }
+    }
+
+    fn spawn_chip_llm(&mut self) {
+        if self.chip_busy {
+            return;
+        }
+        let key = self.bearer();
+        if key.trim().is_empty() {
+            return;
+        }
+        let chat = self.chat_pairs();
+        let title = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.title.clone())
+            .unwrap_or_default();
+        let habits = top_habit_labels(&self.chip_memory, 6);
+        let prompt = chip_suggest_prompt(
+            &chat,
+            &title,
+            &self.composer,
+            &habits,
+            &self.chip_dismissed,
+        );
+        let model = model_for_mode("fast").to_string();
+        let (tx, rx) = mpsc::channel();
+        self.chip_rx = Some(rx);
+        self.chip_busy = true;
+        std::thread::spawn(move || {
+            let chips = grok_chat(&key, &model, &[("user".into(), prompt)], None)
+                .map(|t| parse_llm_chips(&t))
+                .unwrap_or_default();
+            let _ = tx.send(chips);
+        });
+    }
+
+    fn apply_chip(&mut self, chip: QuickChip) {
+        let hour = Self::chip_hour();
+        let tag = context_fingerprint(
+            &self.chat_pairs(),
+            &self.composer,
+            self.last_receipt_ok == Some(false),
+            hour,
+        );
+        remember_chip_click(&mut self.chip_memory, &chip, Some(&tag), now_ms(), hour);
+        let _ = crate::store::save_chips(&self.chip_memory);
+        match chip.kind {
+            ChipKind::Nav => {
+                if let Some(id) = nav_from_chip_value(&chip.value) {
+                    self.nav = Self::nav_from_id(id);
+                }
+            }
+            ChipKind::Mode => {
+                if let Some(mode) = mode_from_chip_value(&chip.value) {
+                    self.run_slash(Slash::Mode(mode.to_string()));
+                }
+            }
+            ChipKind::Shell => {
+                let cmd = chip.value.trim().trim_start_matches('$').trim();
+                let cmd = cmd.strip_prefix("/sh ").unwrap_or(cmd);
+                self.run_slash(Slash::Sh(cmd.to_string()));
+            }
+            ChipKind::Chat => {
+                if chip.value.starts_with('/') {
+                    if let Some(slash) = parse_slash(&chip.value) {
+                        self.run_slash(slash);
+                        return;
+                    }
+                }
+                self.composer.clear();
+                self.send_chat(chip.value);
+            }
+        }
+    }
+
+    fn dismiss_chip(&mut self, chip: QuickChip) {
+        remember_chip_dismiss(&mut self.chip_memory, &chip, now_ms(), Self::chip_hour());
+        self.chip_dismissed.push(chip.id);
+        self.chip_dismissed.push(chip.value);
+        let _ = crate::store::save_chips(&self.chip_memory);
+    }
+
+    fn nav_from_id(id: &str) -> Nav {
+        match id {
+            "settings" => Nav::Settings,
+            "imagine" => Nav::Imagine,
+            "history" => Nav::History,
+            "workboard" => Nav::Workboard,
+            "skills" => Nav::Skills,
+            "night" => Nav::Night,
+            "command" => Nav::Command,
+            "agents" => Nav::Agents,
+            "chat" => Nav::Chat,
+            _ => Nav::Chat,
+        }
+    }
+
+    fn mode_label(mode: &str) -> &'static str {
+        match mode {
+            "max" | "deep" | "heavy" => "Max",
+            "balanced" | "build" | "expert" => "Think",
+            "fast" => "Fast",
+            _ => "Auto",
+        }
     }
 
     fn bearer(&mut self) -> String {
@@ -469,6 +673,12 @@ impl Cabin {
             self.status = "Redirected".into();
         }
         self.touch();
+        remember_typed_prompt(
+            &mut self.chip_memory,
+            &text,
+            now_ms(),
+            Self::local_clock().hour as u8,
+        );
         if let Some(slash) = parse_slash(&text) {
             self.run_slash(slash);
             return;
@@ -1462,6 +1672,7 @@ impl Cabin {
                 self.running = false;
                 self.voice_orb = "idle".into();
                 self.status.clear();
+                remember_chip_outcome(&mut self.chip_memory, true, now_ms());
                 record_turn(&mut self.learning);
                 bump_usage(&mut self.usage, "message");
                 let replace_last = self.messages.last().map(|m| m.role == "assistant").unwrap_or(false);
@@ -1680,6 +1891,7 @@ impl Cabin {
             Ok(JobOut::Err(e)) => {
                 self.running = false;
                 self.voice_orb = "idle".into();
+                remember_chip_outcome(&mut self.chip_memory, false, now_ms());
                 self.status = e;
             }
             Err(mpsc::TryRecvError::Empty) => {
@@ -2246,6 +2458,8 @@ impl Cabin {
 impl eframe::App for Cabin {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
+        self.poll_chips();
+        self.refresh_chips();
         self.drain_inbox();
         self.poll_tray(ctx);
         self.poll_voice();
@@ -2304,7 +2518,8 @@ impl eframe::App for Cabin {
         if self.last_persist.elapsed() > Duration::from_secs(2) {
             self.persist();
         }
-        if self.running || self.hub_on || !self.window_visible || self.tray.is_some() {
+        if self.running || self.chip_busy || self.hub_on || !self.window_visible || self.tray.is_some()
+        {
             ctx.request_repaint_after(Duration::from_millis(80));
         }
 
@@ -2985,26 +3200,64 @@ impl Cabin {
                 } else {
                     grokhub_core::project_name_from_path(&self.cfg.project_dir)
                 };
-                ui.label(RichText::new(proj).small());
+                ui.label(RichText::new(proj).small().color(crate::theme::SUBTLE));
                 ui.label(RichText::new(if self.cfg.yolo {
                     "YOLO"
                 } else if self.approve_risky_only {
                     "risky"
                 } else {
                     "supervised"
-                }).small());
-                ui.label(RichText::new(if self.cfg.host_on { "host" } else { "host off" }).small());
-                if ui.small_button("clipboard").clicked() {
-                    if let Some(clip) = crate::desktop::clipboard_once() {
-                        if !self.composer.is_empty() && !self.composer.ends_with('\n') {
-                            self.composer.push('\n');
-                        }
-                        self.composer.push_str(&clip);
-                    } else {
-                        self.status = "clipboard empty — install wl-paste or xclip".into();
-                    }
-                }
+                }).small().color(crate::theme::SUBTLE));
+                ui.label(
+                    RichText::new(if self.cfg.host_on { "host" } else { "host off" })
+                        .small()
+                        .color(crate::theme::SUBTLE),
+                );
             });
+            let chips = self.visible_chips.clone();
+            if !chips.is_empty() {
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    for chip in chips {
+                        let fill = if chip.primary {
+                            crate::theme::ELEVATED
+                        } else {
+                            crate::theme::SURFACE
+                        };
+                        let clicked = ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(&chip.label).size(12.0).color(crate::theme::FG),
+                                )
+                                .fill(fill)
+                                .rounding(16.0)
+                                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER)),
+                            )
+                            .on_hover_text(&chip.hint)
+                            .clicked();
+                        if clicked {
+                            self.apply_chip(chip);
+                            return;
+                        }
+                        let gone = ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("×").size(11.0).color(crate::theme::MUTED),
+                                )
+                                .fill(egui::Color32::TRANSPARENT)
+                                .rounding(10.0)
+                                .min_size(egui::vec2(18.0, 18.0)),
+                            )
+                            .on_hover_text("Dismiss")
+                            .clicked();
+                        if gone {
+                            self.dismiss_chip(chip);
+                            return;
+                        }
+                    }
+                });
+            }
             let hits = filter_slash_commands(&self.composer);
             if !hits.is_empty() {
                 ui.label(RichText::new("Tab accepts · type /").small());
@@ -3019,38 +3272,105 @@ impl Cabin {
                     }
                 }
             }
-            ui.horizontal(|ui| {
-                let edit = ui.add(
-                    egui::TextEdit::multiline(&mut self.composer)
-                        .desired_width(ui.available_width() - 168.0)
-                        .desired_rows(2)
-                        .hint_text("Message Grok  ·  / for slash"),
-                );
-                if edit.has_focus() && !hits.is_empty() && ui.input(|i| i.key_pressed(egui::Key::Tab))
-                {
-                    let pick = hits[self.slash_pick.min(hits.len() - 1)];
-                    self.composer = pick.insert.to_string();
-                    if pick.run_on_pick {
-                        let t = std::mem::take(&mut self.composer);
-                        self.send_chat(t);
-                    }
-                }
-                if ui.button("Hey Grok").clicked() {
-                    self.listen_voice();
-                }
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("Send").strong().color(crate::theme::BG))
-                            .fill(crate::theme::FG),
-                    )
-                    .clicked()
-                    || (edit.has_focus()
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command))
-                {
-                    let t = std::mem::take(&mut self.composer);
-                    self.send_chat(t);
-                }
-            });
+            ui.add_space(4.0);
+            egui::Frame::none()
+                .fill(crate::theme::ELEVATED)
+                .rounding(24.0)
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG))
+                .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new("+").size(16.0).color(crate::theme::MUTED))
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .rounding(16.0)
+                                    .min_size(egui::vec2(28.0, 28.0)),
+                            )
+                            .on_hover_text("Paste clipboard")
+                            .clicked()
+                        {
+                            if let Some(clip) = crate::desktop::clipboard_once() {
+                                if !self.composer.is_empty() && !self.composer.ends_with('\n') {
+                                    self.composer.push('\n');
+                                }
+                                self.composer.push_str(&clip);
+                            } else {
+                                self.status = "clipboard empty — install wl-paste or xclip".into();
+                            }
+                        }
+                        let edit = ui.add(
+                            egui::TextEdit::multiline(&mut self.composer)
+                                .desired_width(ui.available_width() - 188.0)
+                                .desired_rows(2)
+                                .frame(false)
+                                .hint_text("Ask anything"),
+                        );
+                        if edit.has_focus()
+                            && !hits.is_empty()
+                            && ui.input(|i| i.key_pressed(egui::Key::Tab))
+                        {
+                            let pick = hits[self.slash_pick.min(hits.len() - 1)];
+                            self.composer = pick.insert.to_string();
+                            if pick.run_on_pick {
+                                let t = std::mem::take(&mut self.composer);
+                                self.send_chat(t);
+                            }
+                        }
+                        let mut mode = if self.cfg.mode.trim().is_empty() {
+                            "auto".to_string()
+                        } else {
+                            self.cfg.mode.clone()
+                        };
+                        let mode_now = mode.clone();
+                        egui::ComboBox::from_id_salt("composer-mode")
+                            .selected_text(Self::mode_label(&mode_now))
+                            .width(64.0)
+                            .show_ui(ui, |ui| {
+                                for (id, label) in [
+                                    ("auto", "Auto"),
+                                    ("fast", "Fast"),
+                                    ("balanced", "Think"),
+                                    ("max", "Max"),
+                                ] {
+                                    ui.selectable_value(&mut mode, id.to_string(), label);
+                                }
+                            });
+                        if mode != mode_now {
+                            self.run_slash(Slash::Mode(mode));
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("mic").small().color(crate::theme::MUTED),
+                                )
+                                .fill(egui::Color32::TRANSPARENT)
+                                .rounding(16.0),
+                            )
+                            .on_hover_text("Hey Grok")
+                            .clicked()
+                        {
+                            self.listen_voice();
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("Send").strong().color(crate::theme::BG),
+                                )
+                                .fill(crate::theme::FG)
+                                .rounding(16.0),
+                            )
+                            .clicked()
+                            || (edit.has_focus()
+                                && ui.input(|i| {
+                                    i.key_pressed(egui::Key::Enter) && i.modifiers.command
+                                }))
+                        {
+                            let t = std::mem::take(&mut self.composer);
+                            self.send_chat(t);
+                        }
+                    });
+                });
         });
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(20.0)))
