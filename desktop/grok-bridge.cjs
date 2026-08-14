@@ -7,6 +7,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
 const { cleanInstallOutput } = require("./clean-output.cjs");
+const { detachLinkedNodeModules, nodeModulesOverlayPlan } = require("./node-modules-overlay.cjs");
 const visionMessages = require("./vision-messages.cjs");
 
 const execAsync = promisify(execCb);
@@ -1086,6 +1087,8 @@ async function checkForUpdate(opts = {}) {
  * Avoids half-written trees and mid-run file nukes that crash Electron/Nitro.
  */
 async function installStagedTree(stageRoot, destRoot, steps) {
+  const detached = detachLinkedNodeModules(stageRoot);
+  if (detached.detached) steps.push("Detached stage node_modules symlink before atomic install");
   const shBody = `#!/bin/bash
 set -euo pipefail
 STAGE=${JSON.stringify(stageRoot)}
@@ -1099,6 +1102,13 @@ if [ -d "$DEST" ]; then
   cp -a "$DEST"/. "$NEW"/ 2>/dev/null || true
 fi
 # 2) Overlay staged files (complete packages only — never partial renames of live dirs)
+# A UI-rebuild symlink must not replace the real node_modules directory seeded from DEST.
+if [ -L "$STAGE/node_modules" ]; then
+  rm -f "$STAGE/node_modules"
+fi
+if [ -d "$STAGE/node_modules" ]; then
+  rm -rf "$NEW/node_modules"
+fi
 cp -a "$STAGE"/. "$NEW"/
 # 3) Guarantee a bootable UI
 if [ ! -f "$NEW/.output/server/index.mjs" ]; then
@@ -1515,6 +1525,9 @@ async function applyUpdate(opts = {}) {
       } catch (e) {
         steps.push(`UI rebuild failed: ${e instanceof Error ? e.message : e}`);
         return false;
+      } finally {
+        const detached = detachLinkedNodeModules(workRoot);
+        if (detached.detached) steps.push("Detached rebuild node_modules symlink");
       }
     }
 
@@ -2714,4 +2727,7 @@ module.exports = {
   uiRebuildHasToolchain,
   uiRebuildInstallEnv,
   UI_REBUILD_PACKAGES,
+  nodeModulesOverlayPlan,
+  detachLinkedNodeModules,
+  installStagedTree,
 };

@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 const require = createRequire(import.meta.url);
@@ -97,6 +98,68 @@ assert.notEqual(
   "NODE_ENV=production makes npm omit vite/plugin-react/nitro",
 );
 assert.equal(instEnv.NPM_CONFIG_PRODUCTION, "false");
+
+assert.equal(typeof bridge.nodeModulesOverlayPlan, "function");
+assert.equal(
+  bridge.nodeModulesOverlayPlan({ stageIsSymlink: true, stageIsDir: true }),
+  "skip",
+  "rebuild symlink must not overlay a real node_modules directory",
+);
+assert.equal(bridge.nodeModulesOverlayPlan({ stageIsSymlink: false, stageIsDir: true }), "replace");
+assert.equal(bridge.nodeModulesOverlayPlan({ stageIsSymlink: false, stageIsDir: false }), "keep");
+assert.equal(typeof bridge.detachLinkedNodeModules, "function");
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gh-nm-detach-"));
+  const realNm = path.join(tmp, "real-nm");
+  const stage = path.join(tmp, "stage");
+  fs.mkdirSync(path.join(realNm, "vite"), { recursive: true });
+  fs.mkdirSync(stage);
+  fs.symlinkSync(realNm, path.join(stage, "node_modules"));
+  const detached = bridge.detachLinkedNodeModules(stage);
+  assert.equal(detached.detached, true);
+  assert.equal(fs.existsSync(path.join(stage, "node_modules")), false);
+  assert.ok(fs.existsSync(path.join(realNm, "vite")), "unlink must not delete the live install node_modules");
+  const keep = path.join(tmp, "keep");
+  fs.mkdirSync(path.join(keep, "node_modules", "vite"), { recursive: true });
+  assert.equal(bridge.detachLinkedNodeModules(keep).detached, false);
+  assert.ok(fs.existsSync(path.join(keep, "node_modules", "vite")));
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+assert.match(
+  bridgeSrc,
+  /\[ -L "\$STAGE\/node_modules" \]/,
+  "atomic install must drop a stage node_modules symlink before cp -a",
+);
+assert.match(
+  fs.readFileSync(path.join(process.cwd(), "scripts/desktop-build.mjs"), "utf8"),
+  /detachLinkedNodeModules/,
+  "desktop:build must detach the updater symlink so a shipped 1.1.23 installer can finish",
+);
+assert.equal(typeof bridge.installStagedTree, "function");
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gh-atomic-nm-"));
+  const dest = path.join(tmp, "grokhub");
+  const stage = path.join(tmp, "stage");
+  fs.mkdirSync(path.join(dest, "node_modules", "vite"), { recursive: true });
+  fs.writeFileSync(path.join(dest, "node_modules", "vite", "ok"), "live");
+  fs.mkdirSync(path.join(dest, "desktop"), { recursive: true });
+  fs.writeFileSync(path.join(dest, "desktop", "main.mjs"), "old");
+  fs.mkdirSync(path.join(dest, ".output", "server"), { recursive: true });
+  fs.writeFileSync(path.join(dest, ".output", "server", "index.mjs"), "ui");
+  fs.mkdirSync(path.join(stage, "desktop"), { recursive: true });
+  fs.writeFileSync(path.join(stage, "desktop", "main.mjs"), "new");
+  fs.writeFileSync(path.join(stage, "APP_VERSION"), "1.1.24\n");
+  fs.symlinkSync(path.join(dest, "node_modules"), path.join(stage, "node_modules"));
+  const steps = [];
+  const r = await bridge.installStagedTree(stage, dest, steps);
+  assert.equal(r.ok, true, steps.join("\n"));
+  assert.equal(fs.readFileSync(path.join(dest, "APP_VERSION"), "utf8").trim(), "1.1.24");
+  assert.equal(fs.readFileSync(path.join(dest, "desktop", "main.mjs"), "utf8"), "new");
+  assert.equal(fs.lstatSync(path.join(dest, "node_modules")).isSymbolicLink(), false);
+  assert.equal(fs.readFileSync(path.join(dest, "node_modules", "vite", "ok"), "utf8"), "live");
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 const pkgJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
 for (const name of ["vite", "@vitejs/plugin-react", "nitro"]) {
   assert.ok(
