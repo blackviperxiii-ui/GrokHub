@@ -3,6 +3,7 @@ import {
   ChevronRight,
   Folder,
   FolderOpen,
+  Monitor,
   Play,
   RefreshCw,
   ShieldAlert,
@@ -10,6 +11,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostApp, HostExecResult, HostFileEntry, HostInfo } from "@/lib/host-types";
+import { computerInfo, type ComputerInfo } from "@/lib/computer-client";
 import { useGrokHub } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { HostGatewayBanner } from "../HostGatewayBanner";
@@ -18,7 +20,7 @@ import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Input } from "../ui/input";
 
-type Tab = "cli" | "files" | "apps";
+type Tab = "cli" | "files" | "apps" | "computer";
 
 type HostApi = typeof import("@/lib/host-client");
 
@@ -33,6 +35,9 @@ const QUICK_CMDS = [
 export function DesktopHostView() {
   const recordUsage = useGrokHub((s) => s.recordUsage);
   const pushShellHistory = useGrokHub((s) => s.pushShellHistory);
+  const computerUseEnabled = useGrokHub((s) => s.agentPrefs.computerUseEnabled);
+  const setAgentPrefs = useGrokHub((s) => s.setAgentPrefs);
+  const lastShot = useGrokHub((s) => s.computerSession.lastScreenshotDataUrl);
   const [api, setApi] = useState<HostApi | null>(null);
   const [tab, setTab] = useState<Tab>("cli");
   const [info, setInfo] = useState<HostInfo | null>(null);
@@ -54,6 +59,8 @@ export function DesktopHostView() {
   const [appQ, setAppQ] = useState("");
   const [isShell, setIsShell] = useState(false);
   const probed = useRef(false);
+  const [compInfo, setCompInfo] = useState<ComputerInfo | null>(null);
+  const [compBusy, setCompBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -256,6 +263,7 @@ export function DesktopHostView() {
             ["cli", "CLI", Terminal],
             ["files", "Files", FolderOpen],
             ["apps", "Apps", AppWindow],
+            ["computer", "Computer", Monitor],
           ] as const
         ).map(([id, label, Icon]) => (
           <button
@@ -483,6 +491,78 @@ export function DesktopHostView() {
                 <p className="text-sm text-[var(--color-muted)]">No .desktop apps found yet.</p>
               )}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {tab === "computer" && (
+        <Card>
+          <CardHeader className="gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <CardTitle className="text-sm">Computer use</CardTitle>
+              <CardDescription>
+                Screenshot + mouse/keyboard. Off by default. Ask Grok in chat after enabling.
+              </CardDescription>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={compBusy}
+                onClick={() => {
+                  setCompBusy(true);
+                  void computerInfo()
+                    .then((r) => setCompInfo(r))
+                    .finally(() => setCompBusy(false));
+                }}
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Probe
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-3">
+              <div>
+                <div className="text-sm font-medium">Enable computer use</div>
+                <div className="text-xs text-[var(--color-muted)]">
+                  Same toggle as Settings → Agent. Needs OAuth or API key.
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-[var(--color-fg)]"
+                checked={computerUseEnabled}
+                onChange={(e) => setAgentPrefs({ computerUseEnabled: e.target.checked })}
+              />
+            </label>
+            <div className="flex flex-wrap gap-2 text-xs">
+              <Badge variant={computerUseEnabled ? "success" : "default"}>
+                {computerUseEnabled ? "enabled" : "disabled"}
+              </Badge>
+              {compInfo?.session && <Badge className="font-mono">{compInfo.session}</Badge>}
+              {compInfo?.injector && <Badge variant="info">{compInfo.injector}</Badge>}
+              {!compInfo?.injector && compInfo && (
+                <Badge variant="warn">no injector</Badge>
+              )}
+            </div>
+            {compInfo?.hint && (
+              <p className="text-xs text-[var(--color-muted)]">{compInfo.hint}</p>
+            )}
+            {compInfo?.error && (
+              <p className="text-xs text-[var(--color-danger)]">{compInfo.error}</p>
+            )}
+            {lastShot ? (
+              <img
+                src={lastShot}
+                alt="Last computer-use screenshot"
+                className="max-h-56 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] object-contain"
+              />
+            ) : (
+              <p className="text-xs text-[var(--color-subtle)]">
+                Last screenshot appears here after a COMPUTER_CMD: screenshot in chat.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}

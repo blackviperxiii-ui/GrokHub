@@ -2042,6 +2042,22 @@ function AgentPrefsPanel() {
       </div>
       <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-3">
         <div>
+          <div className="text-sm font-medium">Computer use (screen + mouse)</div>
+          <div className="text-xs text-[var(--color-muted)]">
+            Let the agent screenshot the desktop and click/type. Off by default. Needs Grok OAuth
+            or an xAI API key. Install <span className="font-mono">xdotool</span> (X11) or{" "}
+            <span className="font-mono">ydotool</span> (Wayland, uinput group).
+          </div>
+        </div>
+        <input
+          type="checkbox"
+          className="h-4 w-4 accent-[var(--color-fg)]"
+          checked={Boolean(agentPrefs.computerUseEnabled)}
+          onChange={(e) => setAgentPrefs({ computerUseEnabled: e.target.checked })}
+        />
+      </label>
+      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-3">
+        <div>
           <div className="text-sm font-medium">GitHub tool commands</div>
           <div className="text-xs text-[var(--color-muted)]">
             Allow CONNECTOR_CMD for GitHub when a token is set

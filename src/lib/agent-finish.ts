@@ -9,8 +9,9 @@ export function looksLikePlanningStall(text: string): boolean {
   if (!s) return true;
   if (/HOST_CMD\s*:/i.test(s)) return false;
   if (/CONNECTOR_CMD\s*:/i.test(s)) return false;
+  if (/COMPUTER_CMD\s*:/i.test(s)) return false;
   // Real tool evidence already in the message
-  if (/HOST_RESULT|### 🖥️|exit code|```host\b/i.test(s)) return false;
+  if (/HOST_RESULT|COMPUTER_RESULT|### 🖥️|exit code|```host\b/i.test(s)) return false;
 
   const plan =
     /\b(i('ll| will)|let me|i can|i should|i'm going to|i am going to|going to)\b.{0,60}\b(check|probe|inspect|investigate|scan|look|run|start|continue|dig|examine|verify|read|open|list|fetch|pull|search|find|try|audit|diagnose)\b/i.test(

@@ -7,7 +7,7 @@ export type ToolRisk = "read" | "write" | "network" | "destructive" | "selfmod";
 export type ToolDef = {
   id: string;
   name: string;
-  group: "host" | "github" | "website" | "selfmod" | "memory" | "workboard";
+  group: "host" | "github" | "website" | "selfmod" | "memory" | "workboard" | "computer";
   risk: ToolRisk;
   live: boolean;
   description: string;
@@ -41,6 +41,15 @@ export const TOOL_REGISTRY: ToolDef[] = [
     live: true,
     description: "Write files via host bridge",
     protocol: "HOST_CMD: …",
+  },
+  {
+    id: "computer.act",
+    name: "Computer use",
+    group: "computer",
+    risk: "write",
+    live: true,
+    description: "Screenshot + mouse/keyboard on the Linux desktop (opt-in)",
+    protocol: "COMPUTER_CMD: screenshot|click|type|key|…",
   },
   {
     id: "github.*",

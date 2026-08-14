@@ -22,6 +22,7 @@ import {
   ThumbsDown,
   Search,
   RotateCcw,
+  MousePointer2,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getMode } from "@/lib/modes";
@@ -470,6 +471,9 @@ export function ChatView() {
   const connectors = useGrokHub((s) => s.connectors);
   const pendingHostConfirm = useGrokHub((s) => s.pendingHostConfirm);
   const resolveHostConfirm = useGrokHub((s) => s.resolveHostConfirm);
+  const computerSession = useGrokHub((s) => s.computerSession);
+  const saveComputerSkill = useGrokHub((s) => s.saveComputerSkill);
+  const dismissComputerSave = useGrokHub((s) => s.dismissComputerSave);
   const quickAssistMemory = useGrokHub((s) => s.quickAssistMemory);
   const recordQuickAssistChip = useGrokHub((s) => s.recordQuickAssistChip);
   const recordQuickAssistTyped = useGrokHub((s) => s.recordQuickAssistTyped);
@@ -511,9 +515,14 @@ export function ChatView() {
     };
     window.addEventListener("grokhub:focus-composer", focus);
     window.addEventListener("grokhub:new-chat", focus);
+    const onComputerStop = () => {
+      useGrokHub.getState().stopChat();
+    };
+    window.addEventListener("grokhub:computer-stop", onComputerStop);
     return () => {
       window.removeEventListener("grokhub:focus-composer", focus);
       window.removeEventListener("grokhub:new-chat", focus);
+      window.removeEventListener("grokhub:computer-stop", onComputerStop);
     };
   }, []);
 
@@ -1746,6 +1755,53 @@ export function ChatView() {
               </div>
             )}
 
+            {computerSession.active && (
+              <div className="mx-auto flex w-full max-w-[min(56rem,100%)] items-center gap-3 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-2 shadow-sm">
+                <MousePointer2 className="h-4 w-4 shrink-0 text-[var(--color-fg)]" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium">Controlling this computer</div>
+                  <div className="text-[11px] text-[var(--color-muted)]">
+                    {streamStatus || "Screenshot + mouse/keyboard"}
+                  </div>
+                </div>
+                {computerSession.lastScreenshotDataUrl ? (
+                  <img
+                    src={computerSession.lastScreenshotDataUrl}
+                    alt="Last screenshot"
+                    className="h-12 w-20 rounded object-cover"
+                  />
+                ) : null}
+                <Button size="sm" variant="secondary" onClick={() => stopChat()}>
+                  <Square className="h-3.5 w-3.5" />
+                  Stop
+                </Button>
+              </div>
+            )}
+
+            {computerSession.pendingSave && !computerSession.active && !running && (
+              <div className="mx-auto flex w-full max-w-[min(56rem,100%)] flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] p-3">
+                <div className="min-w-0 flex-1 text-sm">
+                  Save this desktop run as a skill?{" "}
+                  <span className="text-[var(--color-muted)]">
+                    {computerSession.pendingSave.steps.length} steps
+                  </span>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    const prompt = computerSession.pendingSave?.prompt || "Desktop task";
+                    const name = prompt.replace(/\s+/g, " ").trim().slice(0, 40);
+                    saveComputerSkill({ name: name || "Desktop recipe" });
+                  }}
+                >
+                  Save as skill
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => dismissComputerSave()}>
+                  Dismiss
+                </Button>
+              </div>
+            )}
+
             {pendingHostConfirm && (
               <div
                 role="alertdialog"
@@ -1759,7 +1815,7 @@ export function ChatView() {
                   className="mb-2 flex items-center gap-2 text-sm font-medium text-[var(--color-fg)]"
                 >
                   <ShieldAlert className="h-4 w-4 text-[var(--color-warn)]" />
-                  Allow host commands?
+                  Allow {pendingHostConfirm.kind === "computer" ? "computer control" : "host commands"}?
                 </div>
                 <ul className="mb-3 max-h-28 space-y-1 overflow-y-auto font-mono text-xs text-[var(--color-muted)]">
                   {pendingHostConfirm.cmds.map((c, i) => (
@@ -1767,7 +1823,7 @@ export function ChatView() {
                       <span className="text-[var(--color-subtle)]">
                         [{pendingHostConfirm.risks[i] || "run"}]
                       </span>{" "}
-                      $ {c}
+                      {pendingHostConfirm.kind === "computer" ? c : `$ ${c}`}
                     </li>
                   ))}
                 </ul>

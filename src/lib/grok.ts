@@ -79,6 +79,8 @@ CRITICAL — no fake progress / no stalling (this is a hard rule):
 
 ## Tools (keep simple)
 - Desktop host: HOST_CMD for shell/files/apps
+- Optional computer use: COMPUTER_CMD for screenshot / mouse / keyboard when enabled
+- Optional GitHub: CONNECTOR_CMD: github … when GitHub token is set and live
 - Optional GitHub: CONNECTOR_CMD: github … when GitHub token is set and live
 - Grok chat/models/Imagine via the signed-in account
 Do not invent connector results. Do not promise Gmail/Notion/Drive tools from this desktop app.
@@ -149,6 +151,8 @@ export function connectorContextBlock(
 export type GrokChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
+  /** Optional vision frames (data URLs). Hydrated to image_url parts in grok-bridge. */
+  images?: string[];
 };
 
 export type GrokChatRequest = {
@@ -574,6 +578,7 @@ export function stripHostCommands(text: string): string {
     .filter(
       (line) =>
         !/^\s*HOST_CMD:\s*/i.test(line) &&
+        !/^\s*COMPUTER_CMD:\s*/i.test(line) &&
         !/^\s*WORK_PIN:\s*/i.test(line) &&
         !/^\s*WORK_UPDATE:\s*/i.test(line) &&
         !/^\s*MEMORY_NOTE:\s*/i.test(line) &&
@@ -581,6 +586,7 @@ export function stripHostCommands(text: string): string {
     )
     .join("\n");
   out = out.replace(/\s*HOST_CMD:\s*.+$/gim, "");
+  out = out.replace(/\s*COMPUTER_CMD:\s*.+$/gim, "");
   out = out.replace(/\s*WORK_PIN:\s*.+$/gim, "");
   out = out.replace(/\s*WORK_UPDATE:\s*.+$/gim, "");
   out = out.replace(/\s*MEMORY_NOTE:\s*.+$/gim, "");
@@ -604,8 +610,8 @@ export function stripHostCommands(text: string): string {
 export function looksLikeDeferredHostWork(text: string): boolean {
   // Keep aligned with agent-finish.looksLikePlanningStall
   const s = text || "";
-  if (/HOST_CMD\s*:/i.test(s) || /CONNECTOR_CMD\s*:/i.test(s)) return false;
-  if (/HOST_RESULT|### 🖥️/i.test(s)) return false;
+  if (/HOST_CMD\s*:/i.test(s) || /CONNECTOR_CMD\s*:/i.test(s) || /COMPUTER_CMD\s*:/i.test(s)) return false;
+  if (/HOST_RESULT|COMPUTER_RESULT|### 🖥️/i.test(s)) return false;
   const plan =
     /\b(i('ll| will)|let me|i can|i should|i'm going to|i am going to|going to)\b.{0,60}\b(check|probe|inspect|investigate|scan|look|run|start|continue|dig|examine|verify|read|list|fetch|audit|diagnose)\b/i.test(
       s,

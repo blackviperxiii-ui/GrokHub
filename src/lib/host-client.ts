@@ -304,6 +304,16 @@ export type DesktopBridge = {
       candidates?: string[];
     }>;
   };
+  computer?: {
+    info: () => Promise<import("./computer-client").ComputerInfo>;
+    screenshot: () => Promise<import("./computer-client").ComputerActResult>;
+    act: (
+      step: import("./computer-protocol").ComputerStep,
+    ) => Promise<import("./computer-client").ComputerActResult>;
+    beginSession: () => Promise<import("./computer-client").ComputerInfo>;
+    endSession: () => Promise<{ ok: boolean }>;
+    stop: () => Promise<{ ok: boolean }>;
+  };
   grok?: DesktopGrokBridge;
   hub?: {
     status: () => Promise<import("./hub-client").HubStatus>;

@@ -26,6 +26,14 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     openApp: (opts) => ipcRenderer.invoke("host:openApp", opts),
     readOpenClawWorkspace: (p) => ipcRenderer.invoke("host:readOpenClawWorkspace", p),
   },
+  computer: {
+    info: () => ipcRenderer.invoke("computer:info"),
+    screenshot: () => ipcRenderer.invoke("computer:screenshot"),
+    act: (step) => ipcRenderer.invoke("computer:act", step),
+    beginSession: () => ipcRenderer.invoke("computer:beginSession"),
+    endSession: () => ipcRenderer.invoke("computer:endSession"),
+    stop: () => ipcRenderer.invoke("computer:userStop"),
+  },
   grok: {
     chat: (payload) => ipcRenderer.invoke("grok:chat", payload),
     /**
@@ -177,6 +185,13 @@ try {
   ipcRenderer.on("agent:due", (_e, payload) => {
     try {
       window.dispatchEvent(new CustomEvent("grokhub:agent-due", { detail: payload || {} }));
+    } catch {
+      /* ignore */
+    }
+  });
+  ipcRenderer.on("computer:userStop", () => {
+    try {
+      window.dispatchEvent(new CustomEvent("grokhub:computer-stop"));
     } catch {
       /* ignore */
     }
