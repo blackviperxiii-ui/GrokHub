@@ -60,12 +60,26 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         instructions: "Write one tight image prompt for Imagine (grok-2-image). No people faces. Stay in the bound project.",
         verify: "echo VERIFY_OK",
     },
+    SuggestedSkill {
+        name: "github-pulse",
+        title: "GitHub pulse",
+        body: "Who am I plus recent repos via CONNECTOR_CMD (needs a PAT).",
+        trigger: "github pulse",
+        instructions: "Emit CONNECTOR_CMD: github user then CONNECTOR_CMD: github list_repos. After CONNECTOR_RESULT, summarize in four lines. No secrets.",
+        verify: "echo VERIFY_OK",
+    },
 ];
 
 pub const LIVE_CONNECTORS: &[LiveConnector] = &[LiveConnector {
     id: "github",
     title: "GitHub",
-    tools: &[("Who am I", "user"), ("List repos", "list_repos")],
+    tools: &[
+        ("Who am I", "user"),
+        ("List repos", "list_repos"),
+        ("List issues", "list_issues"),
+        ("Search code", "search_code"),
+        ("Search issues", "search_issues"),
+    ],
 }];
 
 pub fn is_cabin_catalog(name: &str) -> bool {
@@ -258,7 +272,8 @@ mod tests {
             let real = blob.contains("host_cmd")
                 || blob.contains("workboard")
                 || blob.contains("imagine")
-                || blob.contains("verify");
+                || blob.contains("verify")
+                || blob.contains("connector_cmd");
             assert!(real, "skill {} is not a cabin verb", s.name);
             let md = skill_from_suggested(s);
             assert_eq!(md.name, s.name);
@@ -268,8 +283,18 @@ mod tests {
         assert_eq!(LIVE_CONNECTORS[0].id, "github");
         assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *l == "Who am I" && *t == "user"));
         assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *t == "list_repos"));
+        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *t == "list_issues"));
+        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *t == "search_code"));
+        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *t == "search_issues"));
+        assert!(!LIVE_CONNECTORS[0].tools.iter().any(|(_, t)| *t == "create_pr_comment"));
         assert!(!is_cabin_catalog("outlook"));
         assert!(!is_cabin_catalog("gmail"));
         assert!(is_cabin_catalog("github"));
+        use grokhub_core::github_api_path;
+        assert!(github_api_path("user", "").is_ok());
+        assert!(github_api_path("list_repos", "").is_ok());
+        assert!(github_api_path("list_issues", "repo:owner/name").is_ok());
+        assert!(github_api_path("search_code", "query:foo").is_ok());
+        assert!(github_api_path("search_issues", "query:foo").is_ok());
     }
 }

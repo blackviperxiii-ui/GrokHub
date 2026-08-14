@@ -224,6 +224,7 @@ pub struct Cabin {
     chip_llm_at: u64,
     skills_tab_connectors: bool,
     skill_q: String,
+    github_args: String,
     auto_compose: bool,
 }
 
@@ -364,6 +365,7 @@ impl Cabin {
             chip_llm_at: 0,
             skills_tab_connectors: false,
             skill_q: String::new(),
+            github_args: String::new(),
             auto_compose: false,
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
@@ -3924,6 +3926,9 @@ impl Cabin {
                 let has_pat = !self.secrets.github_token.trim().is_empty();
                 let mut gh_tool: Option<&'static str> = None;
                 for c in crate::cards::LIVE_CONNECTORS {
+                    if !crate::cards::is_cabin_catalog(c.id) {
+                        continue;
+                    }
                     egui::Frame::none()
                         .fill(crate::theme::ELEVATED)
                         .rounding(12.0)
@@ -3933,14 +3938,20 @@ impl Cabin {
                             ui.label(RichText::new(c.title).strong().size(15.0));
                             ui.label(
                                 RichText::new(if has_pat {
-                                    "PAT present (never shown). Who am I and List repos hit api.github.com."
+                                    "PAT present (never shown). These buttons hit api.github.com."
                                 } else {
                                     "No PAT — set one in Settings, then these buttons work."
                                 })
                                 .small()
                                 .color(crate::theme::MUTED),
                             );
-                            ui.horizontal(|ui| {
+                            ui.add_space(6.0);
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.github_args)
+                                    .hint_text("repo:owner/name  or  query:…  (issues / search)")
+                                    .desired_width(f32::INFINITY),
+                            );
+                            ui.horizontal_wrapped(|ui| {
                                 for (label, tool) in c.tools {
                                     if ui.button(*label).clicked() {
                                         gh_tool = Some(*tool);
@@ -3953,8 +3964,9 @@ impl Cabin {
                         });
                 }
                 if let Some(tool) = gh_tool {
+                    let args = self.github_args.clone();
                     self.nav = Nav::Chat;
-                    self.run_connector("github", tool, "");
+                    self.run_connector("github", tool, &args);
                 }
                 return;
             }
