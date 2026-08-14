@@ -172,6 +172,7 @@ import {
   type ComputerRecipe,
   type ComputerStep,
 } from "./computer-protocol";
+import { appendAssistantOnce } from "./agent-tool-history";
 import { capHistoryImages } from "./grok-vision";
 import type { GrokChatMessage } from "./grok";
 import { buildGoalStepPrompt, parseGoalOutcome } from "./goal-loop";
@@ -4650,9 +4651,8 @@ syncWebsiteConnectors: async () => {
         for (const killId of [...new Set(killIds)]) {
           void import("./host-client").then(({ hostKillExec }) => hostKillExec(killId)).catch(() => {});
         }
-        void import("./computer-client").then(({ computerStop, computerEndSession }) => {
+        void import("./computer-client").then(({ computerStop }) => {
           void computerStop();
-          void computerEndSession();
         }).catch(() => {});
         try {
           void window.grokhubDesktop?.grok?.stopChatStream?.();
@@ -6492,7 +6492,7 @@ while (rounds < maxRounds && !aborted) {
                     "",
                     "Summarize for the user. Only emit another CONNECTOR_CMD if needed.",
                   ].join("\n");
-                  history.push({ role: "assistant", content: full });
+                  appendAssistantOnce(history, full);
                   history.push({ role: "user", content: toolBlock });
                   set({ streamStatus: "Summarizing connector results…" });
                   patchBot(
@@ -6514,7 +6514,7 @@ while (rounds < maxRounds && !aborted) {
                 let selfCmds = extractSelfModCommands(full);
                 if (selfCmds.length) {
                   if (!get().desktop.selfModifyEnabled) {
-                    history.push({ role: "assistant", content: full });
+                    appendAssistantOnce(history, full);
                     history.push({
                       role: "user",
                       content:
@@ -6612,7 +6612,7 @@ while (rounds < maxRounds && !aborted) {
                       }
                     }
                     if (aborted) break;
-                    history.push({ role: "assistant", content: full });
+                    appendAssistantOnce(history, full);
                     history.push({
                       role: "user",
                       content: [
@@ -6824,7 +6824,7 @@ if (!cmds.length && !compCmds.length) {
                   });
                 }
 
-                history.push({ role: "assistant", content: full });
+                appendAssistantOnce(history, full);
                 history.push({ role: "user", content: toolBlock });
                 set({ streamStatus: "Summarizing host results…" });
                 // Show intermediate host output (sanitized) while model continues
@@ -6848,7 +6848,7 @@ if (!cmds.length && !compCmds.length) {
                     computerAvailable,
                   } = await import("./computer-client");
                   if (!computerAvailable()) {
-                    history.push({ role: "assistant", content: full });
+                    appendAssistantOnce(history, full);
                     history.push({
                       role: "user",
                       content:
@@ -6861,7 +6861,7 @@ if (!cmds.length && !compCmds.length) {
                     continue;
                   }
                   if (!hasVisionAuth) {
-                    history.push({ role: "assistant", content: full });
+                    appendAssistantOnce(history, full);
                     history.push({
                       role: "user",
                       content:
@@ -6962,7 +6962,7 @@ if (!cmds.length && !compCmds.length) {
                       ? "A screenshot image is attached. Use it to choose the next COMPUTER_CMD clicks, or summarize if the task is done."
                       : "No screenshot in this round. Emit COMPUTER_CMD: screenshot if you need to see the screen.",
                   ].join("\n");
-                  history.push({ role: "assistant", content: full });
+                  appendAssistantOnce(history, full);
                   history.push({
                     role: "user",
                     content: resultText,
