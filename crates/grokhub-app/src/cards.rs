@@ -33,7 +33,7 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         title: "Morning brief",
         body: "Summarize the workboard, last host receipt, and pinned goal.",
         trigger: "morning brief",
-        instructions: "Summarize the workboard and last HOST_RESULT. List open cards and the next concrete step. No secrets.",
+        instructions: "Summarize the Workboard and last HOST_RESULT from the system context. List open cards and the next concrete step. If the board is empty, say so. No secrets.",
         verify: "echo VERIFY_OK",
     },
     SuggestedSkill {
@@ -49,15 +49,15 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         title: "Workboard triage",
         body: "Pull open tasks from this thread onto the workboard.",
         trigger: "triage the board",
-        instructions: "Extract open tasks from this thread onto the workboard. One card per task. Do not mark done without VERIFY_OK.",
+        instructions: "Extract open tasks from this thread. For each task emit one line exactly: WORK_PIN: short title | one-line detail | priority=med. Do not emit WORK_UPDATE done without VERIFY_OK.",
         verify: "echo VERIFY_OK",
     },
     SuggestedSkill {
         name: "imagine-scene",
         title: "Imagine a scene",
-        body: "Write a tight image prompt and open Imagine (images only).",
+        body: "Write a tight image prompt; cabin generates the still.",
         trigger: "imagine this",
-        instructions: "Write one tight image prompt for Imagine (grok-2-image). No people faces. Stay in the bound project.",
+        instructions: "Write one tight still-image prompt (grok-2-image, no faces). Emit one line exactly: IMAGINE_PROMPT: <prompt>. Stay in the bound project.",
         verify: "echo VERIFY_OK",
     },
     SuggestedSkill {
@@ -65,7 +65,7 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         title: "GitHub pulse",
         body: "Who am I plus recent repos via CONNECTOR_CMD (needs a PAT).",
         trigger: "github pulse",
-        instructions: "Emit CONNECTOR_CMD: github user then CONNECTOR_CMD: github list_repos. After CONNECTOR_RESULT, summarize in four lines. No secrets.",
+        instructions: "Emit these two lines exactly, each on its own line:\nCONNECTOR_CMD: github user\nCONNECTOR_CMD: github list_repos\nAfter both CONNECTOR_RESULT blocks, summarize in four lines. No secrets.",
         verify: "echo VERIFY_OK",
     },
 ];
@@ -290,6 +290,15 @@ mod tests {
         assert!(!is_cabin_catalog("outlook"));
         assert!(!is_cabin_catalog("gmail"));
         assert!(is_cabin_catalog("github"));
+        let pulse = SUGGESTED_SKILLS.iter().find(|s| s.name == "github-pulse").unwrap();
+        let cmds = grokhub_core::extract_connector_cmds(pulse.instructions);
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(cmds[0].tool, "user");
+        assert_eq!(cmds[1].tool, "list_repos");
+        let triage = SUGGESTED_SKILLS.iter().find(|s| s.name == "workboard-triage").unwrap();
+        assert!(triage.instructions.contains("WORK_PIN:"));
+        let img = SUGGESTED_SKILLS.iter().find(|s| s.name == "imagine-scene").unwrap();
+        assert!(img.instructions.contains("IMAGINE_PROMPT:"));
         use grokhub_core::github_api_path;
         assert!(github_api_path("user", "").is_ok());
         assert!(github_api_path("list_repos", "").is_ok());

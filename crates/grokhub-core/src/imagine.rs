@@ -53,6 +53,20 @@ pub fn parse_imagine_url(body: &Value) -> Option<String> {
         })
 }
 
+/// Assistant verb that kicks Imagine. Distinct from `IMAGINE: <url>` receipts.
+pub fn extract_imagine_prompt(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("IMAGINE_PROMPT:") else {
+            continue;
+        };
+        let p = rest.trim();
+        if !p.is_empty() {
+            return Some(p.chars().take(400).collect());
+        }
+    }
+    None
+}
+
 pub fn imagine_dest(project: Option<&str>) -> String {
     match project.filter(|s| !s.is_empty()) {
         Some(p) => format!("{p}/imagine"),
@@ -76,5 +90,10 @@ mod tests {
         let reply = json!({ "data": [{ "url": "https://img/x.png" }] });
         assert_eq!(parse_imagine_url(&reply).as_deref(), Some("https://img/x.png"));
         assert_eq!(imagine_dest(None), "GrokHub-Work/imagine");
+        assert_eq!(
+            extract_imagine_prompt("ok\nIMAGINE_PROMPT: a cabin at night\n").as_deref(),
+            Some("a cabin at night")
+        );
+        assert!(extract_imagine_prompt("IMAGINE: https://img/x.png").is_none());
     }
 }

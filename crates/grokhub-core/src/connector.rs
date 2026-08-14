@@ -119,7 +119,13 @@ pub fn github_api_path(tool: &str, args: &str) -> Result<String, String> {
         "user" | "me" => Ok("/user".into()),
         "list_repos" | "repos" => Ok("/user/repos?per_page=20&sort=updated".into()),
         "list_issues" | "issues" => {
-            let repo = arg_of(&a, &["repo", "repository", "q"]);
+            let mut repo = arg_of(&a, &["repo", "repository"]);
+            if !repo.contains('/') {
+                let q = arg_of(&a, &["q", "query"]);
+                if q.contains('/') {
+                    repo = q;
+                }
+            }
             if !repo.contains('/') {
                 return Err(
                     "Need repo:owner/name  e.g. CONNECTOR_CMD: github list_issues repo:vercel/next.js"
@@ -139,10 +145,13 @@ pub fn github_api_path(tool: &str, args: &str) -> Result<String, String> {
         "search_issues" => {
             let q = arg_of(&a, &["q", "query"]);
             let q = if q.is_empty() { args.trim().to_string() } else { q };
+            if q.is_empty() {
+                return Err("Need query:… for search_issues".into());
+            }
             Ok(format!("/search/issues?q={}&per_page=10", urlencode(&q)))
         }
         "create_pr_comment" | "comment" => Err(
-            "create_pr_comment requires repo + issue/PR number + body — use GitHub web for writes unless repo: issue: body: are all provided.".into(),
+            "GitHub writes are not wired. Use user, list_repos, list_issues, search_code, search_issues.".into(),
         ),
         _ => Err(format!(
             "Unknown GitHub tool \"{tool}\". Try: user, list_repos, list_issues, search_code, search_issues"
@@ -216,6 +225,9 @@ mod tests {
             .unwrap()
             .contains("/repos/vercel/next.js/issues"));
         assert!(github_api_path("list_issues", "").is_err());
+        assert!(github_api_path("list_issues", "query:owner/name").is_ok());
+        assert!(github_api_path("search_issues", "").is_err());
+        assert!(github_api_path("create_pr_comment", "repo:a/b issue:1 body:hi").is_err());
         assert_eq!(arg_of(&parse_connector_args("query:foo language:ts"), &["query"]), "foo");
     }
 }

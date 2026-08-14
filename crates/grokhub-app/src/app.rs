@@ -17,7 +17,7 @@ use grokhub_core::{
     context_percent, daily_units_blocked,
     dedicated_imagine_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
-    extract_work_pins, filter_palette, format_consult_reply,
+    extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
     forget_topic, greet_from_last_job, has_auth, has_goal_complete, has_verify_ok, hey_grok_on_press,
     import_memory_file, insight_pin, is_openclaw_workspace,
@@ -225,6 +225,7 @@ pub struct Cabin {
     skills_tab_connectors: bool,
     skill_q: String,
     github_args: String,
+    pending_connectors: Vec<(String, String, String)>,
     auto_compose: bool,
 }
 
@@ -366,6 +367,7 @@ impl Cabin {
             skills_tab_connectors: false,
             skill_q: String::new(),
             github_args: String::new(),
+            pending_connectors: vec![],
             auto_compose: false,
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
@@ -1601,6 +1603,22 @@ impl Cabin {
             sys.push_str("GOAL PIN: ");
             sys.push_str(&self.cfg.goal_pin);
         }
+        if !self.board.is_empty() {
+            if !sys.is_empty() {
+                sys.push_str("\n\n");
+            }
+            sys.push_str("Workboard:\n");
+            for c in self.board.iter().take(8) {
+                sys.push_str(&format!("- [{}] {}\n", c.status.as_str(), c.title));
+            }
+        }
+        if let Some(h) = self.last_host.last() {
+            if !sys.is_empty() {
+                sys.push_str("\n\n");
+            }
+            sys.push_str("Last HOST_RESULT (tail):\n");
+            sys.push_str(&h.chars().take(400).collect::<String>());
+        }
         let pin = insight_pin(&self.learning);
         if !pin.is_empty() {
             if !sys.is_empty() {
@@ -1735,6 +1753,11 @@ impl Cabin {
                 for c in extract_connector_cmds(&text) {
                     self.run_connector(&c.connector_id, &c.tool, &c.args);
                 }
+                if let Some(p) = extract_imagine_prompt(&text) {
+                    self.imagine_prompt = p;
+                    self.nav = Nav::Imagine;
+                    self.kick_imagine();
+                }
                 if let Some(mut a) = parse_nl_automation(&text) {
                     if a.id.is_empty() {
                         a.id = uid("auto");
@@ -1859,7 +1882,12 @@ impl Cabin {
                     content: format!("CONNECTOR_RESULT (facts only):\n{detail}"),
                 });
                 self.persist();
-                self.kick_model();
+                if !self.pending_connectors.is_empty() {
+                    let (id, tool, args) = self.pending_connectors.remove(0);
+                    self.run_connector(&id, &tool, &args);
+                } else {
+                    self.kick_model();
+                }
             }
             Ok(JobOut::Imagine(url)) => {
                 self.running = false;
@@ -1990,28 +2018,30 @@ impl Cabin {
     }
 
     fn run_connector(&mut self, id: &str, tool: &str, args: &str) {
-        if id == "github" {
-            if self.running {
-                return;
-            }
-            self.running = true;
-            self.status = format!("GitHub {tool}…");
-            let token = self.secrets.github_token.clone();
-            let tool = tool.to_string();
-            let args = args.to_string();
-            let (tx, rx) = mpsc::channel();
-            self.rx = Some(rx);
-            std::thread::spawn(move || {
-                let detail = crate::github::run_github_tool(&tool, &args, &token);
-                let _ = tx.send(JobOut::Connector(detail));
+        if id != "github" {
+            self.messages.push(Msg {
+                role: "user".into(),
+                content: format!(
+                    "CONNECTOR_RESULT (facts only):\n{id} {tool} — not wired. GitHub is the only live connector."
+                ),
             });
             return;
         }
-        self.messages.push(Msg {
-            role: "user".into(),
-            content: format!(
-                "CONNECTOR_RESULT (facts only):\n{id} {tool} — website connector — status only unless a local token exists"
-            ),
+        if self.running {
+            self.pending_connectors
+                .push((id.to_string(), tool.to_string(), args.to_string()));
+            return;
+        }
+        self.running = true;
+        self.status = format!("GitHub {tool}…");
+        let token = self.secrets.github_token.clone();
+        let tool = tool.to_string();
+        let args = args.to_string();
+        let (tx, rx) = mpsc::channel();
+        self.rx = Some(rx);
+        std::thread::spawn(move || {
+            let detail = crate::github::run_github_tool(&tool, &args, &token);
+            let _ = tx.send(JobOut::Connector(detail));
         });
     }
 
@@ -3918,7 +3948,7 @@ impl Cabin {
                 ui.label(RichText::new("Live").small().color(crate::theme::SUBTLE));
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new("Website hosts are an allowlist for CONNECTOR_CMD, not apps. No Outlook, Gmail, or Drive here.")
+                    RichText::new("GitHub is the only live connector. No Outlook, Gmail, or Drive — those are not wired.")
                         .small()
                         .color(crate::theme::MUTED),
                 );
