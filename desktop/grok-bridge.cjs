@@ -1564,24 +1564,6 @@ async function applyUpdate(opts = {}) {
       );
     }
 
-    // Stamp UI build so we can detect mismatch later
-    try {
-      if (await stageHasOutput()) {
-        const stamp = {
-          version: newVersion,
-          builtAt: new Date().toISOString(),
-          source: "update",
-        };
-        // newVersion not set yet — write after version resolve below
-        await fs.writeFile(
-          path.join(stageRoot, ".output", "GROKHUB_BUILD.json"),
-          JSON.stringify({ pending: true }, null, 2),
-        );
-      }
-    } catch {
-      /* ignore */
-    }
-
     // Version stamps in stage (so elevated copy installs them atomically)
     let newSha;
     let newVersion = APP_VERSION;
