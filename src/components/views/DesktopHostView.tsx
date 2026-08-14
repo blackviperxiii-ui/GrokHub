@@ -11,7 +11,13 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostApp, HostExecResult, HostFileEntry, HostInfo } from "@/lib/host-types";
-import { computerInfo, type ComputerInfo } from "@/lib/computer-client";
+import {
+  computerAct,
+  computerInfo,
+  computerStartPreview,
+  computerStopPreview,
+  type ComputerInfo,
+} from "@/lib/computer-client";
 import { useGrokHub } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { HostGatewayBanner } from "../HostGatewayBanner";
@@ -38,6 +44,8 @@ export function DesktopHostView() {
   const computerUseEnabled = useGrokHub((s) => s.agentPrefs.computerUseEnabled);
   const setAgentPrefs = useGrokHub((s) => s.setAgentPrefs);
   const lastShot = useGrokHub((s) => s.computerSession.lastScreenshotDataUrl);
+  const lastShotSize = useGrokHub((s) => s.computerSession.lastScreenshotSize);
+  const previewing = useGrokHub((s) => s.computerSession.previewing);
   const [api, setApi] = useState<HostApi | null>(null);
   const [tab, setTab] = useState<Tab>("cli");
   const [info, setInfo] = useState<HostInfo | null>(null);
@@ -519,6 +527,29 @@ export function DesktopHostView() {
                 <RefreshCw className="h-3.5 w-3.5" />
                 Probe
               </Button>
+              <Button
+                size="sm"
+                variant={previewing ? "secondary" : "default"}
+                disabled={compBusy}
+                onClick={() => {
+                  setCompBusy(true);
+                  void (async () => {
+                    if (previewing) {
+                      await computerStopPreview();
+                      useGrokHub.setState((s) => ({
+                        computerSession: { ...s.computerSession, previewing: false },
+                      }));
+                      return;
+                    }
+                    const r = await computerStartPreview(450);
+                    useGrokHub.setState((s) => ({
+                      computerSession: { ...s.computerSession, previewing: Boolean(r.ok) },
+                    }));
+                  })().finally(() => setCompBusy(false));
+                }}
+              >
+                {previewing ? "Stop live view" : "Start live view"}
+              </Button>
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -545,6 +576,12 @@ export function DesktopHostView() {
               {!compInfo?.injector && compInfo && (
                 <Badge variant="warn">no injector</Badge>
               )}
+              {compInfo?.capture && (
+                <Badge variant={compInfo.capture === "desktopCapturer" ? "warn" : "success"}>
+                  {compInfo.capture}
+                </Badge>
+              )}
+              {previewing && <Badge variant="info">live view</Badge>}
             </div>
             {compInfo?.hint && (
               <p className="text-xs text-[var(--color-muted)]">{compInfo.hint}</p>
@@ -553,14 +590,32 @@ export function DesktopHostView() {
               <p className="text-xs text-[var(--color-danger)]">{compInfo.error}</p>
             )}
             {lastShot ? (
-              <img
-                src={lastShot}
-                alt="Last computer-use screenshot"
-                className="max-h-56 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] object-contain"
-              />
+              <button
+                type="button"
+                className="block w-full overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] p-0"
+                title="Click the picture to click that spot on the desktop"
+                onClick={(e) => {
+                  const img = (e.currentTarget.querySelector("img") || e.currentTarget) as HTMLElement;
+                  const rect = img.getBoundingClientRect();
+                  const w = lastShotSize?.width || rect.width;
+                  const h = lastShotSize?.height || rect.height;
+                  if (!rect.width || !rect.height) return;
+                  const x = Math.round(((e.clientX - rect.left) / rect.width) * w);
+                  const y = Math.round(((e.clientY - rect.top) / rect.height) * h);
+                  void computerAct({ op: "click", x, y });
+                }}
+              >
+                <img
+                  src={lastShot}
+                  alt="Live desktop view"
+                  className="max-h-72 w-full object-contain"
+                  draggable={false}
+                />
+              </button>
             ) : (
               <p className="text-xs text-[var(--color-subtle)]">
-                Last screenshot appears here after a COMPUTER_CMD: screenshot in chat.
+                Start live view for a picture loop, or ask in chat after enabling computer use.
+                Click the picture to click that desktop spot.
               </p>
             )}
           </CardContent>

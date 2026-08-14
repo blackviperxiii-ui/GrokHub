@@ -193,7 +193,7 @@ Secrets and chat history stay on the device; clean installs do not ship personal
 | **Connectors** | Website-linked status · tools where available |
 | **Skills / Automations** | Heartbeat schedules · multi-time runs |
 | **Desktop host** | Unsandboxed shell · files · apps (bash) |
-| **Computer use** | Opt-in screenshot + mouse/keyboard (`COMPUTER_CMD`) · save a successful run as a Skill |
+| **Computer use** | Opt-in live picture loop + mouse/keyboard (`COMPUTER_CMD`) · save a successful run as a Skill |
 | **Usage** | Plan meter · poll from grok.com every minute |
 | **Updates** | Check / install / rollback / self-test from this GitHub repo |
 | **Command palette** | `Ctrl+K` — jump to views, modes, recent chats |
