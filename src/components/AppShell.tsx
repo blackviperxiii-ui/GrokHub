@@ -31,6 +31,7 @@ import { queueStats } from "@/lib/agent-jobs";
 import type { NavId } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "@/lib/version";
+import { onComputerFrame } from "@/lib/computer-client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { UserButton } from "@/lib/auth/gates";
 import { ShortcutsDialog } from "./ShortcutsDialog";
@@ -293,6 +294,21 @@ export function AppShell() {
   const accountConnected = Boolean(
     oauth?.accessToken || (user && !user.isDevFallback) || grokConnected,
   );
+
+  useEffect(() => {
+    return onComputerFrame((frame) => {
+      if (!frame?.dataUrl) return;
+      useGrokHub.setState((s) => ({
+        computerSession: {
+          ...s.computerSession,
+          lastScreenshotDataUrl: frame.dataUrl || null,
+          lastScreenshotSize: frame.screenshot
+            ? { width: frame.screenshot.width, height: frame.screenshot.height }
+            : s.computerSession.lastScreenshotSize,
+        },
+      }));
+    });
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
