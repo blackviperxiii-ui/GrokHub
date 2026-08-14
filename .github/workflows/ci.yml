@@ -49,7 +49,7 @@ jobs:
           curl -sf -o /dev/null http://127.0.0.1:18765/assets/ || true
           echo "http smoke ok"
           export GROKHUB_URL=http://127.0.0.1:18765
-          export GROKHUB_DISABLE_GPU=1 GROKHUB_WAYLAND=0
+          export GROKHUB_DISABLE_GPU=1 GROKHUB_WAYLAND=0 ELECTRON_DISABLE_SANDBOX=1
           xvfb-run -a npm run test:electron-boot
           npx playwright install chromium
           PLAYWRIGHT_BASE_URL=http://127.0.0.1:18765 npm run test:e2e
