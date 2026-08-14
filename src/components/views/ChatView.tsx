@@ -45,6 +45,7 @@ import { Textarea } from "../ui/textarea";
 import { MarkdownBody } from "@/lib/markdown";
 import { looksLikeIncompleteAgentTurn } from "@/lib/agent-finish";
 import { hostAllowPrefixesFromConfirm } from "@/lib/host-safety";
+import { shouldStopOnSubmit } from "@/lib/follow-up";
 
 function chipIcon(kind: QuickChip["kind"]) {
   if (kind === "shell") return Terminal;
@@ -449,6 +450,7 @@ function ContextBudgetChip() {
 export function ChatView() {
   const chat = useGrokHub((s) => s.chat);
   const sendChat = useGrokHub((s) => s.sendChat);
+  const enqueueFollowUp = useGrokHub((s) => s.enqueueFollowUp);
   const proactiveNotice = useGrokHub((s) => s.proactiveNotice);
   const dismissProactiveNotice = useGrokHub((s) => s.dismissProactiveNotice);
   const stopChat = useGrokHub((s) => s.stopChat);
@@ -1015,6 +1017,10 @@ export function ChatView() {
       return;
     }
     setText("");
+    if (busy) {
+      enqueueFollowUp(chip.value);
+      return;
+    }
     setPendingBusy(true);
     await sendChat(chip.value);
     setPendingBusy(false);
@@ -1238,7 +1244,6 @@ export function ChatView() {
   );
 
   async function onSend(value?: string) {
-    if (busy) return;
     stickToBottomRef.current = true;
     setShowJumpLatest(false);
     let payload = (value ?? text).trim();
@@ -1278,6 +1283,10 @@ export function ChatView() {
     }
     if (payload.startsWith("$") || payload.startsWith("/sh ")) {
       await runShell(payload);
+      return;
+    }
+    if (busy) {
+      enqueueFollowUp(payload);
       return;
     }
     setPendingBusy(true);
@@ -1788,9 +1797,11 @@ export function ChatView() {
             {computerSession.pendingSave && !computerSession.active && !running && (
               <div className="mx-auto flex w-full max-w-[min(56rem,100%)] flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] p-3">
                 <div className="min-w-0 flex-1 text-sm">
-                  Save this desktop run as a skill?{" "}
+                  Save this run as a skill?{" "}
                   <span className="text-[var(--color-muted)]">
-                    {computerSession.pendingSave.steps.length} steps
+                    {computerSession.pendingSave.steps.length
+                      ? `${computerSession.pendingSave.steps.length} desktop steps`
+                      : "host work from this turn"}
                   </span>
                 </div>
                 <Button
@@ -1932,7 +1943,7 @@ export function ChatView() {
               onSubmit={(e) => {
                 e.preventDefault();
                 if (pendingHostConfirm) return;
-                if (busy) {
+                if (shouldStopOnSubmit(busy, text)) {
                   onStop();
                   return;
                 }
@@ -2003,8 +2014,7 @@ export function ChatView() {
                     inputRef.current?.focus();
                     resizeComposer();
                     if (s.runOnPick) {
-                      void sendChat(ins.trim());
-                      setText("");
+                      void onSend(ins.trim());
                     }
                   });
                 }}
@@ -2022,7 +2032,7 @@ export function ChatView() {
                 }}
                 placeholder={
                   busy
-                    ? "Agent running — press Stop to interrupt…"
+                    ? "Agent running — type a follow-up or press Escape to stop…"
                     : "Message Grok…"
                 }
                 rows={1}
