@@ -1,15 +1,12 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ExternalLink,
   FolderInput,
-  HardDrive,
   Moon,
   RefreshCw,
   Sun,
   Monitor,
   UserRound,
-  Bot,
-  Brain,
   AppWindow,
   Search,
 } from "lucide-react";
@@ -28,18 +25,6 @@ const SETTINGS_CATEGORIES = [
     sections: ["sec-hub", "sec-hub-join", "sec-hub-sync"],
   },
   {
-    id: "agent",
-    label: "Agent",
-    hint: "How Grok works on its own",
-    sections: ["sec-autonomy", "sec-agent", "sec-desktop", "sec-project"],
-  },
-  {
-    id: "memory",
-    label: "Memory",
-    hint: "What Grok remembers",
-    sections: ["sec-memory", "sec-learning", "sec-selfmod"],
-  },
-  {
     id: "app",
     label: "App",
     hint: "Theme, updates, reset",
@@ -55,13 +40,6 @@ const SECTION_CAT: Record<string, (typeof SETTINGS_CATEGORIES)[number]["id"]> = 
   "sec-hub": "devices",
   "sec-hub-join": "devices",
   "sec-hub-sync": "devices",
-  "sec-autonomy": "agent",
-  "sec-agent": "agent",
-  "sec-desktop": "agent",
-  "sec-project": "agent",
-  "sec-memory": "memory",
-  "sec-learning": "memory",
-  "sec-selfmod": "memory",
   "sec-appearance": "app",
   "sec-updates": "app",
   "sec-diagnostics": "app",
@@ -76,13 +54,6 @@ const SECTION_SEARCH: Record<string, string> = {
   "sec-hub": "devices pair hub share lan sync remote computer",
   "sec-hub-join": "join pair code address wifi",
   "sec-hub-sync": "sync history memory remote task send",
-  "sec-autonomy": "autonomy always-on queue daemon agent",
-  "sec-agent": "temperature tools host github agent",
-  "sec-desktop": "desktop shell arch confirm safe",
-  "sec-project": "project workspace openclaw path",
-  "sec-memory": "memory files user.md learnings",
-  "sec-learning": "learning reflect self-improve",
-  "sec-selfmod": "self-mod factory restore",
   "sec-appearance": "theme dark light appearance",
   "sec-updates": "update github release install",
   "sec-diagnostics": "diagnostics debug export",
@@ -91,30 +62,15 @@ const SECTION_SEARCH: Record<string, string> = {
 
 import { applyUpdate, checkUpdate, applyRollback, postUpdateSelfTest } from "@/lib/grok-client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { exportMemory, importMemory, memoryInfo } from "@/lib/persistent-storage";
-import {
-  memoryFsInfo,
-  memoryList,
-  memoryRead,
-  memoryWrite,
-  type MemoryFileInfo,
-} from "@/lib/file-memory";
-import {
-  factoryReinstall,
-  selfModInfo,
-  selfModRestore,
-  selfModSnapshot,
-} from "@/lib/self-mod-client";
-import { AUTONOMY_HINT, AUTONOMY_LABEL } from "@/lib/agent-jobs";
 import { startGrokOAuthAndOpenBrowser } from "@/lib/begin-grok-oauth";
 import {
   settingsSectionEventName,
   takePendingSettingsSection,
   type SettingsCat,
 } from "@/lib/settings-nav";
+import { resolveSettingsCat } from "@/lib/locked-settings";
 import { useGrokHub } from "@/lib/store";
 import type { UpdateStatus } from "@/lib/update";
-import { learningSummaryLine } from "@/lib/learning";
 import { cn } from "@/lib/utils";
 import { ProfileAvatar } from "../ProfileAvatar";
 import { HostGatewayBanner } from "../HostGatewayBanner";
@@ -124,33 +80,11 @@ import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Input } from "../ui/input";
 
-const DesktopHostView = lazy(() =>
-  import("./DesktopHostView").then((m) => ({ default: m.DesktopHostView })),
-);
-
 export function SettingsView() {
-  const desktop = useGrokHub((s) => s.desktop);
-  const setDesktop = useGrokHub((s) => s.setDesktop);
   const setNav = useGrokHub((s) => s.setNav);
   const resetDemo = useGrokHub((s) => s.resetDemo);
   const clearQuickAssistMemory = useGrokHub((s) => s.clearQuickAssistMemory);
   const quickAssistMemory = useGrokHub((s) => s.quickAssistMemory);
-  const [memInfo, setMemInfo] = useState<{
-    path?: string;
-    userData?: string;
-    bytes?: number;
-    updatedAt?: number;
-  } | null>(null);
-  const [memMsg, setMemMsg] = useState("");
-  const importRef = useRef<HTMLInputElement>(null);
-  const [selfMsg, setSelfMsg] = useState("");
-  const [selfBusy, setSelfBusy] = useState(false);
-  const [selfInfo, setSelfInfo] = useState<Awaited<ReturnType<typeof selfModInfo>> | null>(null);
-
-  useEffect(() => {
-    void memoryInfo().then(setMemInfo);
-    void selfModInfo().then(setSelfInfo);
-  }, []);
   const apiKey = useGrokHub((s) => s.apiKey);
   const setApiKey = useGrokHub((s) => s.setApiKey);
   const githubToken = useGrokHub((s) => s.githubToken);
@@ -397,7 +331,7 @@ export function SettingsView() {
 
   useEffect(() => {
     const apply = (intent: { cat: SettingsCat; sectionId?: string }) => {
-      setSettingsCat(intent.cat);
+      setSettingsCat(resolveSettingsCat(intent.cat));
       setSettingsQ("");
       if (!intent.sectionId) return;
       window.requestAnimationFrame(() => {
@@ -441,8 +375,6 @@ export function SettingsView() {
   const catIcon = (id: string) => {
     if (id === "account") return UserRound;
     if (id === "devices") return Monitor;
-    if (id === "agent") return Bot;
-    if (id === "memory") return Brain;
     return AppWindow;
   };
 
@@ -523,20 +455,6 @@ export function SettingsView() {
             .settings-stack > [data-settings-cat] { display: none !important; }
             .settings-stack > [data-settings-cat][data-hit="1"] { display: flex !important; flex-direction: column; }
           `}</style>
-      <Card id="sec-autonomy" data-settings-cat="agent" data-hit={sectionHit("sec-autonomy") ? "1" : "0"}>
-        <CardHeader>
-          <CardTitle className="text-sm">Proactive behavior</CardTitle>
-          <CardDescription>
-            Default is Aware (self-heal only). Raise for unsolicited caretaking: stuck streams, incomplete answers,
-            session/host refresh, tidy memory. Level 3+ invents small safe chores on its own.
-            Pause anytime for fully manual.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <AutonomySettingsPanel />
-        </CardContent>
-      </Card>
-
       <Card id="sec-appearance" data-settings-cat="app" data-hit={sectionHit("sec-appearance") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="text-sm">Appearance</CardTitle>
@@ -573,7 +491,7 @@ export function SettingsView() {
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">Get started</CardTitle>
           <CardDescription>
-            Sign in with Grok first. An API key and a project folder are optional.
+            Sign in with Grok first. An API key is optional.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2 pt-0">
@@ -582,9 +500,6 @@ export function SettingsView() {
           </Button>
           <Button size="sm" variant="secondary" onClick={() => document.getElementById("sec-api")?.scrollIntoView({ behavior: "smooth" })}>
             2. API key (optional)
-          </Button>
-          <Button size="sm" variant="secondary" onClick={() => document.getElementById("sec-project")?.scrollIntoView({ behavior: "smooth" })}>
-            3. Project folder (optional)
           </Button>
         </CardContent>
       </Card>
@@ -1124,488 +1039,12 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <Card id="sec-agent" data-settings-cat="agent" data-hit={sectionHit("sec-agent") ? "1" : "0"}>
-        <CardHeader>
-          <CardTitle className="text-sm">Agent controls</CardTitle>
-          <CardDescription>
-            Temperature, tools, and persistent memory notes (survive restarts).
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <AgentPrefsPanel />
-        </CardContent>
-      </Card>
-
-      <HostGatewayBanner variant="card" />
-
-      <Card id="sec-desktop" data-settings-cat="agent" data-hit={sectionHit("sec-desktop") ? "1" : "0"}>
-        <CardHeader>
-          <CardTitle className="text-sm">Arch Linux shell preferences</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
-            <div className="text-sm font-medium">Host approval mode</div>
-            <div className="mb-2 text-xs text-[var(--color-muted)]">
-              What to ask before the agent runs shell on your machine. Slash:{" "}
-              <span className="font-mono">/approve off|risky|all</span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {(
-                [
-                  ["off", "Auto-run", "No prompts (still safe-mode blocked)"],
-                  ["risky", "Confirm risky", "ls/cat free; rm/sudo need OK"],
-                  ["all", "Confirm all", "Every HOST_CMD needs OK"],
-                ] as const
-              ).map(([id, label, hint]) => {
-                const active =
-                  id === "off"
-                    ? !desktop.confirmHostCommands
-                    : id === "risky"
-                      ? desktop.confirmHostCommands && desktop.confirmDestructiveOnly
-                      : desktop.confirmHostCommands && !desktop.confirmDestructiveOnly;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    title={hint}
-                    className={`rounded-[var(--radius-md)] border px-3 py-1.5 text-left text-xs transition-colors ${
-                      active
-                        ? "border-[var(--color-info)] bg-[color-mix(in_oklab,var(--color-info)_12%,transparent)] text-[var(--color-fg)]"
-                        : "border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-muted)]"
-                    }`}
-                    onClick={() => {
-                      if (id === "off") setDesktop({ confirmHostCommands: false });
-                      else if (id === "risky")
-                        setDesktop({ confirmHostCommands: true, confirmDestructiveOnly: true });
-                      else setDesktop({ confirmHostCommands: true, confirmDestructiveOnly: false });
-                    }}
-                  >
-                    <div className="font-medium">{label}</div>
-                    <div className="text-[10px] opacity-80">{hint}</div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
-            <div className="text-sm font-medium">Global hotkey</div>
-            <div className="mb-2 text-xs text-[var(--color-muted)]">
-              Focus GrokHub + chat input from anywhere (Electron). Empty or{" "}
-              <span className="font-mono">off</span> disables. Examples:{" "}
-              <span className="font-mono">Super+Space</span>,{" "}
-              <span className="font-mono">CommandOrControl+Shift+Space</span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Input
-                value={desktop.globalHotkey || ""}
-                onChange={(e) => setDesktop({ globalHotkey: e.target.value })}
-                placeholder="Super+Space"
-                className="max-w-xs font-mono text-xs"
-              />
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                onClick={() => {
-                  void window.grokhubDesktop?.setGlobalHotkey?.(desktop.globalHotkey || "off").then((r) => {
-                    setSelfMsg(
-                      r?.registered
-                        ? `Hotkey registered: ${desktop.globalHotkey}`
-                        : r?.error || (r?.ok ? "Hotkey cleared" : "Hotkey not registered"),
-                    );
-                  });
-                }}
-              >
-                Apply hotkey
-              </Button>
-            </div>
-          </div>
-          {(
-            [
-              ["wayland", "Prefer Wayland", "Ozone flags"],
-              ["tray", "System tray", "Minimize to tray"],
-              ["launchOnLogin", "Launch on login", "Writes ~/.config/autostart/grokhub.desktop"],
-              ["startMinimized", "Start minimized", "Tray only"],
-              [
-                "selfModifyEnabled",
-                "Allow self-modification",
-                "Agent may edit install files (src/, desktop/, …). Use Factory reinstall if something breaks.",
-              ],
-              [
-                "hostSafeMode",
-                "Host safe mode",
-                "Block dangerous shell patterns (rm -rf, sudo, pipe-to-shell, …)",
-              ],
-            ] as const
-          ).map(([key, label, hint]) => (
-            <label
-              key={key}
-              className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3"
-            >
-              <div>
-                <div className="text-sm font-medium">{label}</div>
-                <div className="text-xs text-[var(--color-muted)]">{hint}</div>
-              </div>
-              <input
-                type="checkbox"
-                className="h-4 w-4 accent-[var(--color-fg)]"
-                checked={Boolean(desktop[key])}
-                onChange={(e) => {
-                  const on = e.target.checked;
-                  setDesktop({ [key]: on });
-                  if (key === "launchOnLogin") {
-                    void window.grokhubDesktop?.desktopEntry?.autostart(on);
-                  }
-                }}
-              />
-            </label>
-          ))}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => {
-                void window.grokhubDesktop?.desktopEntry?.install().then((r) => {
-                  setSelfMsg(
-                    r?.ok
-                      ? r.detail || `Menu entry installed: ${r.path}`
-                      : r?.error || "Menu install needs the desktop app",
-                  );
-                });
-              }}
-            >
-              Install app menu entry
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => {
-                void window.grokhubDesktop?.desktopEntry?.status().then((r) => {
-                  setSelfMsg(
-                    r?.ok
-                      ? `Menu: ${r.menuInstalled ? "yes" : "no"} · Autostart: ${
-                          r.autostartInstalled ? "yes" : "no"
-                        } · exec ${r.exec || "?"}`
-                      : "Status unavailable outside desktop",
-                  );
-                });
-              }}
-            >
-              Check menu status
-            </Button>
-          </div>
-          <p className="text-[11px] leading-relaxed text-[var(--color-subtle)]">
-            <strong className="text-[var(--color-muted)]">Taskbar pin:</strong> install the menu
-            entry, then pin <em>GrokHub</em> from the app launcher — not a generic Electron icon.
-            Pins use <span className="font-mono">/usr/bin/grokhub</span> so they still work after
-            you quit. Window class / app id is <span className="font-mono">grokhub</span> (must
-            match the desktop file). After updating, unpin + re-pin once if you still see a second
-            icon.
-          </p>
-          <div className="border-t border-[var(--color-border)] pt-3">
-            <div className="mb-2 text-sm font-medium">Host CLI / files / apps</div>
-            <p className="mb-3 text-xs text-[var(--color-muted)]">
-              Same desktop bridge as HOST_CMD — not a separate runtime.
-            </p>
-            <Suspense
-              fallback={
-                <p className="text-xs text-[var(--color-subtle)]">Loading host tools…</p>
-              }
-            >
-              <DesktopHostView />
-            </Suspense>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card id="sec-selfmod" data-settings-cat="memory" data-hit={sectionHit("sec-selfmod") ? "1" : "0"}>
-        <CardHeader>
-          <CardTitle className="text-sm">Self-mod & factory restore</CardTitle>
-          <CardDescription>
-            The agent can change GrokHub’s install files when self-modification is enabled. Local
-            snapshots and a full GitHub factory reinstall let you roll back. Your chats live in user
-            data and survive code reinstall unless you wipe memory.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {selfInfo?.ok && (
-            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-2 font-mono text-[11px] text-[var(--color-muted)]">
-              <div className="truncate">install: {selfInfo.root || "—"}</div>
-              <div className="truncate">snapshots: {selfInfo.selfModDir || "—"}</div>
-              <div>
-                saved points: {(selfInfo.snapshots || []).length}
-                {desktop.selfModifyEnabled ? " · self-mod ON" : " · self-mod OFF"}
-              </div>
-            </div>
-          )}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={selfBusy}
-              onClick={() => {
-                setSelfBusy(true);
-                setSelfMsg("Creating snapshot…");
-                void selfModSnapshot("manual settings").then((r) => {
-                  setSelfBusy(false);
-                  setSelfMsg(
-                    r.ok
-                      ? `Snapshot ${(r as { id?: string }).id} (${(r as { fileCount?: number }).fileCount || 0} files)`
-                      : (r as { error?: string }).error || "Snapshot failed",
-                  );
-                  void selfModInfo().then(setSelfInfo);
-                });
-              }}
-            >
-              Snapshot install tree
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={selfBusy || !(selfInfo?.snapshots && selfInfo.snapshots[0])}
-              onClick={() => {
-                const id = selfInfo?.snapshots?.[0]?.id;
-                if (!id) return;
-                if (
-                  !window.confirm(
-                    `Restore snapshot ${id}? App code will be rolled back; restart after.`,
-                  )
-                )
-                  return;
-                setSelfBusy(true);
-                void selfModRestore(id).then((r) => {
-                  setSelfBusy(false);
-                  setSelfMsg(
-                    r.ok
-                      ? "Snapshot restored — restart GrokHub to load it"
-                      : (r as { error?: string }).error || "Restore failed",
-                  );
-                });
-              }}
-            >
-              Restore latest snapshot
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={selfBusy}
-              onClick={() => {
-                if (
-                  !window.confirm(
-                    "Factory reinstall from GitHub? Stock app code replaces local install. Chats/settings are KEPT.",
-                  )
-                )
-                  return;
-                setSelfBusy(true);
-                setSelfMsg("Factory reinstall…");
-                setUpdateLog("Factory reinstall from GitHub…\n");
-                void factoryReinstall({ wipeMemory: false, clearSelfMod: true }).then((r) => {
-                  setSelfBusy(false);
-                  const steps = (r as { steps?: string[] }).steps || [];
-                  setUpdateLog((prev) => prev + steps.join("\n") + "\n");
-                  setSelfMsg(
-                    (r as { ok?: boolean }).ok !== false
-                      ? (r as { detail?: string }).detail || "Factory reinstall done"
-                      : (r as { error?: string }).error || "Factory reinstall failed",
-                  );
-                });
-              }}
-            >
-              Factory reinstall (keep memory)
-            </Button>
-            <div className="w-full space-y-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-danger)_35%,var(--color-border))] p-2">
-              <p className="text-[11px] text-[var(--color-muted)]">
-                Type <span className="font-mono text-[var(--color-danger)]">WIPE MEMORY</span> to enable full factory reset.
-              </p>
-              <Input
-                value={factoryPhrase}
-                onChange={(e) => setFactoryPhrase(e.target.value)}
-                placeholder="WIPE MEMORY"
-                className="h-8 font-mono text-xs"
-              />
-              <Button
-                variant="danger"
-                size="sm"
-                disabled={selfBusy || factoryPhrase.trim() !== "WIPE MEMORY"}
-                onClick={() => {
-                  if (
-                    !window.confirm(
-                      "FULL factory reset: reinstall from GitHub AND wipe chats, secrets, and local memory?",
-                    )
-                  )
-                    return;
-                  setSelfBusy(true);
-                  setSelfMsg("Full factory wipe…");
-                  void factoryReinstall({ wipeMemory: true, clearSelfMod: true }).then((r) => {
-                    setSelfBusy(false);
-                    setSelfMsg(
-                      (r as { ok?: boolean }).ok !== false
-                        ? "Full factory reset done"
-                        : (r as { error?: string }).error || "Failed",
-                    );
-                    if ((r as { ok?: boolean }).ok !== false) {
-                      resetDemo();
-                    }
-                    setFactoryPhrase("");
-                  });
-                }}
-              >
-                Factory + wipe memory
-              </Button>
-            </div>
-          </div>
-          {selfMsg && <p className="text-xs text-[var(--color-muted)]">{selfMsg}</p>}
-          {(selfInfo?.snapshots || []).slice(0, 5).map((s) => (
-            <div
-              key={s.id}
-              className="flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1.5 text-[11px]"
-            >
-              <span className="truncate font-mono text-[var(--color-muted)]">
-                {s.id}
-                {s.note ? ` · ${s.note}` : ""}
-              </span>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 shrink-0 text-xs"
-                disabled={selfBusy}
-                onClick={() => {
-                  if (!window.confirm(`Restore ${s.id}?`)) return;
-                  setSelfBusy(true);
-                  void selfModRestore(s.id).then((r) => {
-                    setSelfBusy(false);
-                    setSelfMsg(r.ok ? "Restored — restart app" : "Restore failed");
-                  });
-                }}
-              >
-                Restore
-              </Button>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      <Card id="sec-memory" data-settings-cat="memory" data-hit={sectionHit("sec-memory") ? "1" : "0"}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <HardDrive className="h-4 w-4 text-[var(--color-muted)]" />
-            Memory
-          </CardTitle>
-          <CardDescription>
-            File memory (USER.md, MEMORY.md, daily notes) lives under your user data folder and is
-            pinned into every chat under a budget. App state backup is separate. Updates never wipe
-            this folder.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <FileMemoryPanel />
-          {memInfo && (
-            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-2 font-mono text-[11px] text-[var(--color-muted)]">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-subtle)]">
-                App state backup
-              </div>
-              <div className="truncate">path: {memInfo.path || "—"}</div>
-              {memInfo.userData && (
-                <div className="truncate">userData: {memInfo.userData}</div>
-              )}
-              <div>
-                size:{" "}
-                {typeof memInfo.bytes === "number"
-                  ? `${(memInfo.bytes / 1024).toFixed(1)} KB`
-                  : "—"}
-                {memInfo.updatedAt
-                  ? ` · saved ${new Date(memInfo.updatedAt).toLocaleString()}`
-                  : ""}
-              </div>
-            </div>
-          )}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                void exportMemory().then((r) => {
-                  if (!r.ok || !r.json) {
-                    setMemMsg(r.error || "Export failed");
-                    return;
-                  }
-                  const blob = new Blob([r.json], { type: "application/json" });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = `grokhub-memory-${new Date().toISOString().slice(0, 10)}.json`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                  setMemMsg("App state exported");
-                  void memoryInfo().then(setMemInfo);
-                });
-              }}
-            >
-              Export backup
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => importRef.current?.click()}
-            >
-              Import backup
-            </Button>
-            <input
-              ref={importRef}
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = () => {
-                  void importMemory(String(reader.result || "")).then((r) => {
-                    setMemMsg(
-                      r.ok
-                        ? "Import OK — reload the app to apply"
-                        : r.error || "Import failed",
-                    );
-                    if (r.ok) {
-                      void useGrokHub.persist.rehydrate();
-                      void memoryInfo().then(setMemInfo);
-                    }
-                  });
-                };
-                reader.readAsText(file);
-                e.target.value = "";
-              }}
-            />
-          </div>
-          {memMsg && <p className="text-xs text-[var(--color-muted)]">{memMsg}</p>}
-        </CardContent>
-      </Card>
-
-      <Card id="sec-project" data-settings-cat="agent" data-hit={sectionHit("sec-project") ? "1" : "0"}>
-        <CardHeader>
-          <CardTitle className="text-sm">Project workspace</CardTitle>
-          <CardDescription>
-            Bind a local folder so the agent prefers HOST_CMD and file work under that tree.
-            Summary is refreshed on bind (README, package.json, AGENTS.md when present).
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ProjectWorkspacePanel />
-        </CardContent>
-      </Card>
-
-      <Card id="sec-learning" data-settings-cat="memory" data-hit={sectionHit("sec-learning") ? "1" : "0"}>
-        <CardHeader>
-          <CardTitle className="text-sm">Learning & self-improvement</CardTitle>
-          <CardDescription>
-            GrokHub learns from successful turns, your 👍/👎 on replies, and explicit prefs. Insights
-            pin into chat context and gently bias Adaptive routing. Reflect writes LEARNINGS.md.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <LearningPanel />
-        </CardContent>
-      </Card>
+      <div
+        data-settings-cat="account"
+        data-hit={sectionHit("sec-oauth") || settingsCat === "account" ? "1" : "0"}
+      >
+        <HostGatewayBanner variant="card" />
+      </div>
 
       <Card id="sec-diagnostics" data-settings-cat="app" data-hit={sectionHit("sec-diagnostics") ? "1" : "0"}>
         <CardHeader>
@@ -1666,56 +1105,6 @@ export function SettingsView() {
 }
 
 
-function ProjectWorkspacePanel() {
-  const project = useGrokHub((s) => s.projectWorkspace);
-  const bind = useGrokHub((s) => s.bindProjectWorkspace);
-  const clear = useGrokHub((s) => s.clearProjectWorkspace);
-  const [path, setPath] = useState(project?.path || "");
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  return (
-    <div className="space-y-2">
-      {project ? (
-        <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-2 text-xs">
-          <div className="font-medium text-[var(--color-fg)]">{project.name}</div>
-          <div className="truncate font-mono text-[10px] text-[var(--color-muted)]">{project.path}</div>
-          <div className="mt-1 text-[10px] text-[var(--color-subtle)]">
-            Bound {new Date(project.boundAt).toLocaleString()}
-          </div>
-        </div>
-      ) : (
-        <p className="text-xs text-[var(--color-muted)]">No project bound.</p>
-      )}
-      <div className="flex flex-wrap gap-2">
-        <input
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-          placeholder="/home/you/projects/app"
-          className="min-w-[16rem] flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-1.5 font-mono text-xs"
-        />
-        <Button
-          size="sm"
-          disabled={busy || !path.trim()}
-          onClick={() => {
-            setBusy(true);
-            void bind(path.trim())
-              .then((r) => setMsg(r.detail))
-              .finally(() => setBusy(false));
-          }}
-        >
-          {busy ? "Binding…" : "Bind"}
-        </Button>
-        {project ? (
-          <Button size="sm" variant="ghost" onClick={() => clear()}>
-            Clear
-          </Button>
-        ) : null}
-      </div>
-      {msg ? <p className="text-[11px] text-[var(--color-muted)]">{msg}</p> : null}
-    </div>
-  );
-}
-
 function DiagnosticsPanel() {
   const exportDiagnostics = useGrokHub((s) => s.exportDiagnostics);
   const [msg, setMsg] = useState<string | null>(null);
@@ -1733,447 +1122,6 @@ function DiagnosticsPanel() {
         Copy diagnostics
       </Button>
       {msg ? <p className="text-[11px] text-[var(--color-muted)]">{msg}</p> : null}
-    </div>
-  );
-}
-
-function LearningPanel() {
-  const learning = useGrokHub((s) => s.learning);
-  const runSelfImprove = useGrokHub((s) => s.runSelfImprove);
-  const clearLearning = useGrokHub((s) => s.clearLearning);
-  const flushLearningToDisk = useGrokHub((s) => s.flushLearningToDisk);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [memRoot, setMemRoot] = useState<string>("");
-  useEffect(() => {
-    void import("@/lib/file-memory").then(({ memoryFsInfo, ensureFileMemory }) => {
-      void ensureFileMemory().then(() =>
-        memoryFsInfo().then((i) => {
-          if (i.root) setMemRoot(i.root);
-        }),
-      );
-    });
-    void flushLearningToDisk();
-  }, [flushLearningToDisk]);
-  const top = [...(learning?.insights || [])]
-    .sort((a, b) => b.confidence * b.hits - a.confidence * a.hits)
-    .slice(0, 8);
-  const routes = Object.entries(learning?.routeStats || {});
-
-  return (
-    <div className="space-y-3">
-      <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-2 text-xs text-[var(--color-muted)]">
-        {learningSummaryLine(learning || { insights: [], totalTurns: 0, totalFeedback: 0 } as never)}
-        {memRoot ? (
-          <div className="mt-1 truncate font-mono text-[10px] text-[var(--color-subtle)]" title={memRoot}>
-            disk: {memRoot}
-          </div>
-        ) : null}
-        {learning?.lastReflectionAt ? (
-          <div className="mt-1 text-[10px] text-[var(--color-subtle)]">
-            Last reflect · {new Date(learning.lastReflectionAt).toLocaleString()}
-          </div>
-        ) : null}
-      </div>
-      {routes.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {routes.map(([tier, st]) =>
-            st ? (
-              <span
-                key={tier}
-                className="rounded-full border border-[var(--color-border)] px-2 py-0.5 font-mono text-[10px] text-[var(--color-muted)]"
-              >
-                {tier} {st.success}↑ {st.fail}↓
-              </span>
-            ) : null,
-          )}
-        </div>
-      )}
-      {top.length > 0 ? (
-        <ul className="space-y-1 text-xs text-[var(--color-fg)]">
-          {top.map((i) => (
-            <li key={i.id} className="flex gap-2">
-              <span className="shrink-0 font-mono text-[10px] text-[var(--color-subtle)]">
-                {Math.round(i.confidence * 100)}%
-              </span>
-              <span className="text-[var(--color-muted)]">{i.text}</span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="text-xs text-[var(--color-muted)]">
-          No insights yet. Chat normally, rate replies, or run Reflect.
-        </p>
-      )}
-      <div className="flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          disabled={busy}
-          onClick={() => {
-            setBusy(true);
-            void runSelfImprove()
-              .then((r) => setMsg(r.detail))
-              .finally(() => setBusy(false));
-          }}
-        >
-          {busy ? "Reflecting…" : "Reflect & improve"}
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => {
-            if (typeof window !== "undefined" && window.confirm("Clear all learning history?")) {
-              clearLearning();
-              setMsg("Learning cleared");
-            }
-          }}
-        >
-          Clear learning
-        </Button>
-      </div>
-      {msg ? <p className="text-[11px] text-[var(--color-muted)]">{msg}</p> : null}
-      <p className="text-[11px] text-[var(--color-subtle)]">
-        Chat: <span className="font-mono">/learn</span> ·{" "}
-        <span className="font-mono">/learn reflect</span> ·{" "}
-        <span className="font-mono">/learn note …</span>
-      </p>
-    </div>
-  );
-}
-
-function FileMemoryPanel() {
-  const [files, setFiles] = useState<MemoryFileInfo[]>([]);
-  const [root, setRoot] = useState<string>("");
-  const [active, setActive] = useState("MEMORY.md");
-  const [body, setBody] = useState("");
-  const [status, setStatus] = useState<string | null>(null);
-  const [dirty, setDirty] = useState(false);
-
-  const reload = useCallback(() => {
-    void memoryFsInfo().then((info) => {
-      if (info.root) setRoot(info.root);
-    });
-    void memoryList().then((list) => setFiles(list));
-  }, []);
-
-  useEffect(() => {
-    reload();
-  }, [reload]);
-
-  useEffect(() => {
-    void memoryRead(active).then((r) => {
-      setBody(r.content || "");
-      setDirty(false);
-    });
-  }, [active]);
-
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs font-medium text-[var(--color-fg)]">File memory</div>
-        {root ? (
-          <div className="max-w-[min(100%,20rem)] truncate font-mono text-[10px] text-[var(--color-subtle)]" title={root}>
-            {root}
-          </div>
-        ) : null}
-      </div>
-      <div className="flex flex-wrap gap-1">
-        {(["USER.md", "MEMORY.md", "today"] as const).map((id) => (
-          <button
-            key={id}
-            type="button"
-            className={cn(
-              "rounded-full border px-2.5 py-0.5 text-[11px] font-medium",
-              active === id || (id === "today" && active.startsWith("daily/"))
-                ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]"
-                : "border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-border-strong)]",
-            )}
-            onClick={() => setActive(id === "today" ? "today" : id)}
-          >
-            {id === "today" ? "Today" : id}
-          </button>
-        ))}
-        {files
-          .filter((f) => f.kind === "daily")
-          .slice(0, 5)
-          .map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              className={cn(
-                "rounded-full border px-2 py-0.5 font-mono text-[10px]",
-                active === f.id
-                  ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)]"
-                  : "border-[var(--color-border)] text-[var(--color-subtle)]",
-              )}
-              onClick={() => setActive(f.id)}
-            >
-              {f.name.replace(/\.md$/, "")}
-            </button>
-          ))}
-      </div>
-      <textarea
-        value={body}
-        onChange={(e) => {
-          setBody(e.target.value);
-          setDirty(true);
-        }}
-        rows={10}
-        spellCheck={false}
-        className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] p-2 font-mono text-xs leading-relaxed"
-        placeholder="# Memory…"
-      />
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          disabled={!dirty}
-          onClick={() => {
-            void memoryWrite(active, body).then((r) => {
-              setStatus(r.ok ? "Saved" : r.error || "Save failed");
-              setDirty(!r.ok);
-              reload();
-            });
-          }}
-        >
-          Save file
-        </Button>
-        <Button size="sm" variant="ghost" onClick={reload}>
-          Reload
-        </Button>
-        {status ? (
-          <span className="text-[11px] text-[var(--color-muted)]">{status}</span>
-        ) : null}
-      </div>
-      <p className="text-[11px] text-[var(--color-muted)]">
-        Chat: <span className="font-mono">/memory note</span> ·{" "}
-        <span className="font-mono">/memory show</span> ·{" "}
-        <span className="font-mono">/memory user …</span> ·{" "}
-        <span className="font-mono">/memory today …</span>
-      </p>
-    </div>
-  );
-}
-
-function AgentPrefsPanel() {
-  const agentPrefs = useGrokHub((s) => s.agentPrefs);
-  const setAgentPrefs = useGrokHub((s) => s.setAgentPrefs);
-  const hostAllowlist = useGrokHub((s) => s.hostAllowlist);
-  const removeHostAllow = useGrokHub((s) => s.removeHostAllow);
-  const addHostAllow = useGrokHub((s) => s.addHostAllow);
-  const [notes, setNotes] = useState(agentPrefs.memoryNotes || "");
-  const [allowDraft, setAllowDraft] = useState("");
-  return (
-    <div className="space-y-4">
-      <label className="block space-y-1.5">
-        <div className="flex items-center justify-between text-sm">
-          <span>Temperature</span>
-          <span className="font-mono text-xs text-[var(--color-subtle)]">
-            {agentPrefs.temperature.toFixed(2)}
-          </span>
-        </div>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.05}
-          value={agentPrefs.temperature}
-          onChange={(e) => setAgentPrefs({ temperature: Number(e.target.value) })}
-          className="w-full accent-[var(--color-info)]"
-        />
-        <p className="text-[11px] text-[var(--color-muted)]">
-          Lower = focused · Higher = creative
-        </p>
-      </label>
-      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-3">
-        <div>
-          <div className="text-sm font-medium">Host tools (HOST_CMD)</div>
-          <div className="text-xs text-[var(--color-muted)]">
-            Let the agent run shell on this machine
-          </div>
-        </div>
-        <input
-          type="checkbox"
-          className="h-4 w-4 accent-[var(--color-fg)]"
-          checked={agentPrefs.hostToolsEnabled}
-          onChange={(e) => setAgentPrefs({ hostToolsEnabled: e.target.checked })}
-        />
-      </label>
-      <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] p-3 space-y-2">
-        <div className="text-sm font-medium">Always-allow host prefixes</div>
-        <p className="text-xs text-[var(--color-muted)]">
-          Matching commands skip the approval prompt (still blocked by safe mode).
-        </p>
-        <div className="flex flex-wrap gap-1">
-          {(hostAllowlist || []).map((p) => (
-            <button
-              key={p}
-              type="button"
-              className="rounded-full border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 py-0.5 font-mono text-[10px] hover:border-[var(--color-danger)]"
-              title="Remove"
-              onClick={() => removeHostAllow(p)}
-            >
-              {p} ×
-            </button>
-          ))}
-          {!hostAllowlist?.length && (
-            <span className="text-[11px] text-[var(--color-subtle)]">None yet</span>
-          )}
-        </div>
-        <div className="flex gap-2">
-          <Input
-            value={allowDraft}
-            onChange={(e) => setAllowDraft(e.target.value)}
-            placeholder="e.g. ls or git status"
-            className="h-8 font-mono text-xs"
-          />
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => {
-              if (allowDraft.trim()) {
-                addHostAllow(allowDraft.trim());
-                setAllowDraft("");
-              }
-            }}
-          >
-            Add
-          </Button>
-        </div>
-      </div>
-      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-3">
-        <div>
-          <div className="text-sm font-medium">Computer use (screen + mouse)</div>
-          <div className="text-xs text-[var(--color-muted)]">
-            Let the agent see a silent live feed and click/type. Off by default. Needs Grok OAuth
-            or an xAI API key. On KDE/GNOME Wayland install{" "}
-            <span className="font-mono">ydotool</span> + <span className="font-mono">grim</span>{" "}
-            (and <span className="font-mono">xdotool</span> for XWayland geometry). X11:{" "}
-            <span className="font-mono">ffmpeg</span> + <span className="font-mono">xdotool</span>.
-            Multi-monitor clicks use the full virtual desktop, not the primary only.
-          </div>
-        </div>
-        <input
-          type="checkbox"
-          className="h-4 w-4 accent-[var(--color-fg)]"
-          checked={Boolean(agentPrefs.computerUseEnabled)}
-          onChange={(e) => setAgentPrefs({ computerUseEnabled: e.target.checked })}
-        />
-      </label>
-      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-3">
-        <div>
-          <div className="text-sm font-medium">GitHub tool commands</div>
-          <div className="text-xs text-[var(--color-muted)]">
-            Allow CONNECTOR_CMD for GitHub when a token is set
-          </div>
-        </div>
-        <input
-          type="checkbox"
-          className="h-4 w-4 accent-[var(--color-fg)]"
-          checked={agentPrefs.connectorToolsEnabled}
-          onChange={(e) => setAgentPrefs({ connectorToolsEnabled: e.target.checked })}
-        />
-      </label>
-      <label className="block space-y-1.5">
-        <div className="text-sm font-medium">Legacy sticky notes</div>
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          onBlur={() => setAgentPrefs({ memoryNotes: notes })}
-          rows={3}
-          placeholder="Also mirrored into MEMORY.md on next chat…"
-          className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-elevated)] p-2 text-sm"
-        />
-        <p className="text-[11px] text-[var(--color-muted)]">
-          Prefer Settings → Memory files or <span className="font-mono">/memory</span>
-        </p>
-      </label>
-    </div>
-  );
-}
-
-
-function AutonomySettingsPanel() {
-  const autonomy = useGrokHub((s) => s.autonomy);
-  const setAutonomy = useGrokHub((s) => s.setAutonomy);
-  const pauseAutonomy = useGrokHub((s) => s.pauseAutonomy);
-  const runProactiveHousekeeping = useGrokHub((s) => s.runProactiveHousekeeping);
-  const [lastRun, setLastRun] = useState<string>("");
-  return (
-    <div className="space-y-3">
-      <div className="grid gap-2 sm:grid-cols-1">
-        {([0, 1, 2, 3, 4] as const).map((lv) => {
-          const active = autonomy.level === lv;
-          return (
-            <button
-              key={lv}
-              type="button"
-              onClick={() => setAutonomy({ level: lv })}
-              className={
-                "rounded-[var(--radius-md)] border px-3 py-2 text-left transition-colors " +
-                (active
-                  ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)]"
-                  : "border-[var(--color-border)] hover:bg-[var(--color-elevated)]/50")
-              }
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium text-[var(--color-fg)]">
-                  {lv} · {AUTONOMY_LABEL[lv]}
-                </span>
-                {active ? (
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-info)]">
-                    Active
-                  </span>
-                ) : null}
-              </div>
-              <p className="mt-0.5 text-xs text-[var(--color-muted)]">{AUTONOMY_HINT[lv]}</p>
-            </button>
-          );
-        })}
-      </div>
-      <label className="flex items-center justify-between gap-3 text-sm">
-        <span>Pause proactive behavior</span>
-        <input
-          type="checkbox"
-          checked={autonomy.paused}
-          onChange={(e) => pauseAutonomy(e.target.checked)}
-        />
-      </label>
-      <label className="flex items-center justify-between gap-3 text-sm">
-        <span>Pin workboard tasks may auto-start (level 4)</span>
-        <input
-          type="checkbox"
-          checked={autonomy.autoClaimWorkboard}
-          onChange={(e) => setAutonomy({ autoClaimWorkboard: e.target.checked })}
-        />
-      </label>
-      <label className="flex items-center justify-between gap-3 text-sm">
-        <span>Resume multi-step goals (level 4)</span>
-        <input
-          type="checkbox"
-          checked={autonomy.autoGoalResume}
-          onChange={(e) => setAutonomy({ autoGoalResume: e.target.checked })}
-        />
-      </label>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() => {
-            void runProactiveHousekeeping().then((r) => {
-              setLastRun(r.detail || (r.ok ? "OK" : "Nothing to do"));
-            });
-          }}
-        >
-          Run self-check now
-        </Button>
-        {lastRun ? (
-          <span className="text-[11px] text-[var(--color-muted)]">{lastRun}</span>
-        ) : null}
-      </div>
-      <p className="text-[11px] text-[var(--color-subtle)]">
-        Level 3–4 also free-roams: refresh OAuth before expiry, re-probe desktop host,
-        prune stale learnings. Large or destructive work still waits for you.
-      </p>
     </div>
   );
 }
