@@ -1,0 +1,35 @@
+# Maintainer: GrokHub contributors
+pkgname=grokhub
+pkgver=2.0.0
+pkgrel=1
+pkgdesc="Grok-native Linux cabin — Rust binary, no Electron"
+arch=('x86_64')
+url="https://github.com/blackviperxiii-ui/Grok-Hub"
+license=('MIT')
+depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme')
+makedepends=('cargo' 'rust' 'pkgconf' 'git')
+options=('!debug')
+install=grokhub.install
+source=("${pkgname}::git+https://github.com/blackviperxiii-ui/Grok-Hub.git#tag=v${pkgver}")
+sha256sums=('SKIP')
+
+build() {
+  cd "${srcdir}/${pkgname}"
+  cargo build --release --locked -p grokhub-app -p grokhub-hub
+}
+
+package() {
+  cd "${srcdir}/${pkgname}"
+  install -Dm755 target/release/grokhub "${pkgdir}/usr/bin/grokhub"
+  install -Dm755 target/release/grokhub-hub "${pkgdir}/usr/bin/grokhub-hub"
+  install -Dm644 packaging/grokhub.desktop \
+    "${pkgdir}/usr/share/applications/grokhub.desktop"
+  install -Dm644 packaging/grokhub.svg \
+    "${pkgdir}/usr/share/icons/hicolor/scalable/apps/grokhub.svg"
+  if [[ -d packaging/icons/hicolor ]]; then
+    cp -a packaging/icons/hicolor/. "${pkgdir}/usr/share/icons/hicolor/"
+  fi
+  install -Dm644 packaging/systemd/grokhub-hub.service \
+    "${pkgdir}/usr/lib/systemd/user/grokhub-hub.service"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/grokhub/LICENSE"
+}

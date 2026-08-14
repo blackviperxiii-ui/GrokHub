@@ -1,0 +1,12 @@
+[package]
+name = "grokhub-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "C ABI for Android / Windows — same grokhub-core"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+grokhub-core = { path = "../grokhub-core" }

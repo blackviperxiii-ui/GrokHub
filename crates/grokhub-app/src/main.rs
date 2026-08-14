@@ -1,0 +1,184 @@
+//! GrokHub native cabin. No Electron. No Tauri.
+
+mod app;
+mod theme;
+mod cli;
+mod config;
+mod desktop;
+mod github;
+mod host;
+mod markdown;
+mod night;
+mod notify;
+mod store;
+mod voice_ws;
+mod oauth;
+mod secrets;
+mod skills;
+mod threads;
+mod tray;
+mod update;
+mod xai;
+
+use app::Cabin;
+use cli::{parse_args, Launch};
+use eframe::egui;
+use grokhub_core::{
+    doctor_lines, doctor_ok, load_hub_state, save_hub_state, HubState, DEFAULT_PORT, HUB_KIND,
+};
+use grokhub_hub::serve;
+use std::env;
+use std::sync::{Arc, Mutex};
+
+fn main() {
+    match parse_args(&env::args().collect::<Vec<_>>()) {
+        Launch::Version => {
+            println!("{}", env!("CARGO_PKG_VERSION"));
+        }
+        Launch::Help => {
+            eprint!(
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  git pull + install.sh --user\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                env!("CARGO_PKG_VERSION")
+            );
+        }
+        Launch::Doctor => run_doctor(),
+        Launch::Oauth => run_oauth_cli(),
+        Launch::Update => run_update_cli(),
+        Launch::Hub => run_hub(),
+        Launch::Agent => {
+            if let Err(e) = run_cabin(true) {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+        Launch::Cabin => {
+            if let Err(e) = run_cabin(false) {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+fn run_oauth_cli() {
+    match oauth::start_device() {
+        Ok(start) => {
+            println!("Grok OAuth user code: {}", start.user_code);
+            println!("{}", start.verification_uri);
+            if let Some(u) = &start.verification_uri_complete {
+                println!("{u}");
+                let _ = oauth::open_browser(u);
+            } else {
+                let _ = oauth::open_browser(&start.verification_uri);
+            }
+            match oauth::poll_until_ready(&start.device_code, start.interval) {
+                Ok(tokens) => {
+                    let mut s = secrets::load();
+                    s.oauth = Some(tokens.clone());
+                    if let Err(e) = secrets::save(&s) {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                    println!(
+                        "connected {}",
+                        tokens.email.or(tokens.name).unwrap_or_else(|| "grok".into())
+                    );
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_doctor() {
+    let cfg = config::load();
+    let sec = secrets::load();
+    let mem_ok = std::fs::create_dir_all(config::memory_dir()).is_ok();
+    let authed = grokhub_core::has_auth(&cfg.api_key, &secrets::access_token(&sec));
+    let mut lines = doctor_lines(authed, mem_ok, HUB_KIND);
+    lines.extend(grokhub_core::doctor_extras(None, crate::skills::list_skills().len()));
+    for l in &lines {
+        println!("{} {}", if l.ok { "ok " } else { "ERR" }, l.text);
+    }
+    if !doctor_ok(&lines) {
+        std::process::exit(1);
+    }
+}
+
+fn run_update_cli() {
+    let cfg = config::load();
+    let Some(src) = update::resolve_source(&cfg.source_dir) else {
+        eprintln!("no GrokHub source tree — set GROKHUB_SRC or Settings → source");
+        std::process::exit(1);
+    };
+    match update::run_update(&src) {
+        Ok(out) => print!("{out}"),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_hub() {
+    let port = env::var("GROKHUB_HUB_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_PORT);
+    let path = config::hub_state_path();
+    let mut state = load_hub_state(&path).unwrap_or_else(HubState::empty);
+    state.port = port;
+    state.sharing = true;
+    if state.pair.is_none() {
+        state.rotate_pair();
+    }
+    let code = state
+        .pair
+        .as_ref()
+        .map(|p| p.code.clone())
+        .unwrap_or_default();
+    eprintln!(
+        "grokhub {} hub on :{port}  pair {code}  kind {HUB_KIND}",
+        env!("CARGO_PKG_VERSION")
+    );
+    let shared = Arc::new(Mutex::new(state));
+    {
+        let st = shared.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            if let Ok(g) = st.lock() {
+                let _ = save_hub_state(&path, &g);
+            }
+        });
+    }
+    if let Err(e) = serve(shared, port) {
+        eprintln!("hub failed: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn run_cabin(hidden: bool) -> eframe::Result<()> {
+    let opts = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1100.0, 720.0])
+            .with_min_inner_size([720.0, 480.0])
+            .with_title("GrokHub")
+            .with_app_id("grokhub")
+            .with_decorations(false)
+            .with_visible(!hidden),
+        persist_window: true,
+        ..Default::default()
+    };
+    eframe::run_native(
+        "GrokHub",
+        opts,
+        Box::new(move |_cc| Ok(Box::new(Cabin::new(hidden)))),
+    )
+}

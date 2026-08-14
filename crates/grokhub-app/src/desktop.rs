@@ -1,0 +1,295 @@
+use grokhub_core::{
+    jpeg_data_url, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, AtspiRow, RECORDERS,
+    TRANSCRIBERS,
+};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const ATSPI_PY: &str = r#"
+import sys
+try:
+    import pyatspi
+except Exception:
+    sys.exit(2)
+def walk(acc, n=0):
+    if n > 5:
+        return
+    try:
+        name = (acc.name or "").replace(" ", "_")
+        role = (acc.getRoleName() or "object").replace(" ", "-")
+        ext = acc.queryComponent().getExtents(0)
+        print(f"role={role} name={name} x={int(ext.x)} y={int(ext.y)} w={int(ext.width)} h={int(ext.height)}")
+    except Exception:
+        pass
+    try:
+        for i in range(acc.childCount):
+            walk(acc.getChildAtIndex(i), n + 1)
+    except Exception:
+        pass
+walk(pyatspi.Registry.getDesktop(0))
+"#;
+
+pub fn which(name: &str) -> bool {
+    Command::new("which")
+        .arg(name)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+pub fn first_bin(names: &[&str]) -> Option<String> {
+    names.iter().find(|n| which(n)).map(|s| (*s).to_string())
+}
+
+pub fn collect_rows() -> Vec<AtspiRow> {
+    let mut rows = Vec::new();
+    if let Ok(out) = Command::new("python3").args(["-c", ATSPI_PY]).output() {
+        if out.status.success() {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                if let Some(r) = parse_atspi_line(line) {
+                    rows.push(r);
+                }
+            }
+        }
+    }
+    if rows.is_empty() {
+        if let Ok(out) = Command::new("wmctrl").args(["-lG"]).output() {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                if let Some(r) = parse_wmctrl_line(line) {
+                    rows.push(r);
+                }
+            }
+        }
+    }
+    if let Ok(out) = Command::new("xdotool").args(["getmouselocation"]).output() {
+        if let Some(r) = parse_xdotool_mouse(&String::from_utf8_lossy(&out.stdout)) {
+            rows.push(r);
+        }
+    }
+    rows
+}
+
+pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let dest = path.to_string_lossy().to_string();
+    let ok = if which("grim") {
+        Command::new("grim").arg(&dest).status().map(|s| s.success()).unwrap_or(false)
+    } else if which("ffmpeg") && std::env::var("DISPLAY").is_ok() {
+        let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
+        Command::new("ffmpeg")
+            .args([
+                "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "x11grab", "-video_size", "1280x720", "-i", &display,
+                "-frames:v", "1", "-q:v", "5", &dest,
+            ])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    } else if which("scrot") {
+        Command::new("scrot").args(["-o", &dest]).status().map(|s| s.success()).unwrap_or(false)
+    } else {
+        false
+    };
+    if !ok {
+        return Err("no grim/ffmpeg/scrot for a desktop frame".into());
+    }
+    std::fs::read(path).map_err(|e| e.to_string())
+}
+
+pub fn capture_data_url() -> Result<String, String> {
+    let path = std::env::temp_dir().join("grokhub-desk.jpg");
+    let bytes = capture_jpeg(&path)?;
+    let _ = std::fs::remove_file(&path);
+    if bytes.len() < 32 {
+        return Err("empty frame".into());
+    }
+    Ok(jpeg_data_url(&bytes))
+}
+
+pub const PLAYERS: &[&str] = &["ffplay", "mpv", "paplay"];
+
+pub fn record_once() -> Result<PathBuf, String> {
+    let wav = std::env::temp_dir().join("grokhub-voice.wav");
+    record_wav(&wav)?;
+    Ok(wav)
+}
+
+pub fn transcribe_local(wav: &Path) -> Result<String, String> {
+    transcribe(wav)
+}
+
+pub fn play_audio(path: &Path) -> Result<(), String> {
+    let dest = path.to_str().ok_or("audio path")?;
+    match first_bin(PLAYERS).as_deref() {
+        Some("ffplay") => run_ok("ffplay", &["-nodisp", "-autoexit", "-loglevel", "error", dest]),
+        Some("mpv") => run_ok("mpv", &["--no-video", "--really-quiet", dest]),
+        Some("paplay") => run_ok("paplay", &[dest]),
+        _ => Err("no ffplay/mpv/paplay to speak".into()),
+    }
+}
+
+fn record_wav(path: &Path) -> Result<(), String> {
+    let dest = path.to_str().ok_or("wav path")?;
+    match first_bin(RECORDERS).as_deref() {
+        Some("arecord") => run_ok(
+            "arecord",
+            &["-q", "-d", "4", "-f", "cd", "-t", "wav", dest],
+        ),
+        Some("ffmpeg") => run_ok(
+            "ffmpeg",
+            &[
+                "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "pulse", "-i", "default", "-t", "4", "-ac", "1", "-ar", "16000", dest,
+            ],
+        ),
+        Some("sox") | Some("rec") => run_ok("rec", &[dest, "trim", "0", "4"]),
+        _ => Err("no arecord/ffmpeg/sox — install alsa-utils or ffmpeg".into()),
+    }
+}
+
+fn transcribe(wav: &Path) -> Result<String, String> {
+    let dest = wav.to_str().ok_or("wav")?;
+    let bin = first_bin(TRANSCRIBERS).ok_or("install whisper (openai-whisper or whisper.cpp)")?;
+    let out_dir = std::env::temp_dir();
+    let status = match bin.as_str() {
+        "whisper-cli" | "whisper.cpp" => Command::new(&bin)
+            .args([dest, "-otxt", "-of", out_dir.join("grokhub-voice").to_str().unwrap_or("/tmp/grokhub-voice")])
+            .status(),
+        _ => Command::new(&bin)
+            .args([
+                dest,
+                "--output_format",
+                "txt",
+                "--output_dir",
+                out_dir.to_str().unwrap_or("/tmp"),
+            ])
+            .status(),
+    }
+    .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err(format!("{bin} failed"));
+    }
+    let txt = wav.with_extension("txt");
+    let alt = out_dir.join("grokhub-voice.txt");
+    std::fs::read_to_string(&txt)
+        .or_else(|_| std::fs::read_to_string(alt))
+        .map_err(|e| e.to_string())
+}
+
+fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {
+    let st = Command::new(bin).args(args).status().map_err(|e| e.to_string())?;
+    if st.success() {
+        Ok(())
+    } else {
+        Err(format!("{bin} failed"))
+    }
+}
+
+pub fn imagine_save_path(slug: &str) -> PathBuf {
+    crate::config::imagine_dir().join(format!("{slug}.png"))
+}
+
+pub fn capture_webcam() -> Result<String, String> {
+    if !std::path::Path::new("/dev/video0").exists() {
+        return Err("no /dev/video0".into());
+    }
+    if !which("ffmpeg") {
+        return Err("ffmpeg missing for webcam".into());
+    }
+    let path = std::env::temp_dir().join("grokhub-cam.jpg");
+    let dest = path.to_string_lossy().to_string();
+    let ok = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "v4l2",
+            "-i",
+            "/dev/video0",
+            "-frames:v",
+            "1",
+            "-q:v",
+            "6",
+            &dest,
+        ])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        return Err("webcam capture failed".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&path);
+    if bytes.len() < 32 {
+        return Err("empty webcam frame".into());
+    }
+    Ok(jpeg_data_url(&bytes))
+}
+
+/// Short PCM chunks for the realtime socket. Empty iterator if no recorder.
+pub fn record_pcm_chunks() -> Vec<Vec<u8>> {
+    let dest = std::env::temp_dir().join("grokhub-voice-live.wav");
+    let path = dest.to_string_lossy().to_string();
+    let ok = match first_bin(RECORDERS).as_deref() {
+        Some("arecord") => Command::new("arecord")
+            .args(["-q", "-d", "1", "-f", "S16_LE", "-r", "24000", "-c", "1", "-t", "wav", &path])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false),
+        Some("ffmpeg") => Command::new("ffmpeg")
+            .args([
+                "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "pulse", "-i", "default", "-t", "1", "-ac", "1", "-ar", "24000",
+                "-f", "s16le", &path,
+            ])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false),
+        _ => false,
+    };
+    if !ok {
+        return vec![];
+    }
+    let bytes = std::fs::read(&dest).unwrap_or_default();
+    let _ = std::fs::remove_file(&dest);
+    if bytes.len() < 64 {
+        vec![]
+    } else {
+        vec![bytes]
+    }
+}
+
+pub fn clipboard_once() -> Option<String> {
+    for (bin, args) in [
+        ("wl-paste", &[] as &[&str]),
+        ("xclip", &["-o", "-selection", "clipboard"]),
+        ("xsel", &["-ob"]),
+    ] {
+        if let Ok(o) = Command::new(bin).args(args).output() {
+            if o.status.success() {
+                let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !s.is_empty() {
+                    return Some(s);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bins_are_named() {
+        assert!(RECORDERS.contains(&"arecord"));
+        assert!(TRANSCRIBERS.contains(&"whisper"));
+        assert!(PLAYERS.contains(&"ffplay"));
+        assert!(first_bin(&["definitely-not-a-bin-grokhub"]).is_none());
+    }
+}

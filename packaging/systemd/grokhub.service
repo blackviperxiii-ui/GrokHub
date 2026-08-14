@@ -1,0 +1,14 @@
+[Unit]
+Description=GrokHub cabin (tray)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/grokhub --agent
+Restart=on-failure
+RestartSec=5
+Environment=GROKHUB_TRAY=1
+
+[Install]
+WantedBy=graphical-session.target
