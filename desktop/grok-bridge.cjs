@@ -13,7 +13,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "1.1.21";
+const APP_VERSION = "1.1.22";
 let updateInProgress = false;
 
 function lastUserText(messages) {
@@ -66,6 +66,20 @@ function versionNewer(a, b) {
     if (da < db) return false;
   }
   return false;
+}
+
+function shouldUseGithubRelease(relVer, localVer) {
+  return versionNewer(relVer, localVer);
+}
+
+function updateIsAvailable({ releaseNewer, shaAhead, uiStale }) {
+  return Boolean(releaseNewer || shaAhead || uiStale);
+}
+
+function updateInstallSucceeded({ usedRelease, rebuiltUi, staleUi }) {
+  if (staleUi) return false;
+  if (usedRelease) return true;
+  return Boolean(rebuiltUi);
 }
 
 function sleepMs(ms) {
@@ -946,7 +960,7 @@ async function checkForUpdate(opts = {}) {
         }
       } else if (!local.sha) {
         detail = "Local VERSION missing — install recommended.";
-      } else if (latestRelease && !versionNewer(latestRelease, local.version)) {
+      } else if (latestRelease && !versionNewer(latestRelease, local.version) && shaMatch(local.sha, remoteSha)) {
         detail = `Up to date · v${local.version} (latest GitHub release). main is at ${String(remoteSha).slice(0, 12)}.`;
       } else {
         detail = `Update available · ${local.sha.slice(0, 12)} → ${String(remoteSha).slice(0, 12)}`;
@@ -1026,9 +1040,14 @@ async function checkForUpdate(opts = {}) {
     remoteSha: remoteShort,
     remoteMessage,
     latestRelease,
-    // Packaged installs update from GitHub Releases. A SHA-only signal used to
-    // claim "update available" then reinstall the same old release tarball.
-    updateAvailable: Boolean(releaseNewer || local.uiStale || (shaAhead && !latestRelease)),
+    // Offer an update when a newer release exists, main is ahead, or the UI
+    // build is stale. applyUpdate must rebuild from source when the latest
+    // release tarball is not newer — never keep the old UI and claim success.
+    updateAvailable: updateIsAvailable({
+      releaseNewer,
+      shaAhead,
+      uiStale: local.uiStale,
+    }),
     repo,
     branch,
     installRoot,
@@ -1265,7 +1284,7 @@ async function applyUpdate(opts = {}) {
         const rel = await relRes.json();
         const relVer = String(rel.tag_name || "").replace(/^v/i, "");
         const local = await readLocalVersion(targetRoot);
-        if (relVer && versionNewer(relVer, local.version)) {
+        if (relVer && shouldUseGithubRelease(relVer, local.version)) {
           usedReleaseTag = String(rel.tag_name || "") || null;
           const assets = Array.isArray(rel.assets) ? rel.assets : [];
           for (const a of assets) {
@@ -1440,8 +1459,24 @@ async function applyUpdate(opts = {}) {
         }
       }
       if (!hasNm) {
-        steps.push("No node_modules available for UI rebuild");
-        return false;
+        steps.push("Installing npm dependencies for UI rebuild…");
+        try {
+          await execAsync(
+            `cd ${JSON.stringify(workRoot)} && (npm ci --ignore-scripts || npm install --ignore-scripts)`,
+            {
+              timeout: 300000,
+              maxBuffer: 20 * 1024 * 1024,
+              shell: "/bin/bash",
+              env: { ...process.env, GROKHUB_DESKTOP: "1", NODE_ENV: "production" },
+            },
+          );
+          await fs.stat(path.join(workRoot, "node_modules", "vite"));
+          hasNm = true;
+          steps.push("npm install OK");
+        } catch (e) {
+          steps.push(`npm install failed: ${e instanceof Error ? e.message : e}`);
+          return false;
+        }
       }
       steps.push(`Rebuilding UI (${label})…`);
       try {
@@ -1463,10 +1498,13 @@ async function applyUpdate(opts = {}) {
       }
     }
 
+    let rebuiltUi = false;
     if (!(await stageHasOutput())) {
       // 1) Rebuild inside stage from staged source
       const rebuilt = await tryRebuildUi(stageRoot, "stage");
-      if (!rebuilt) {
+      if (rebuilt) {
+        rebuiltUi = true;
+      } else {
         // 2) Rebuild in extract tree then copy
         const rebuilt2 = await tryRebuildUi(extracted, "extract");
         if (rebuilt2) {
@@ -1475,48 +1513,22 @@ async function applyUpdate(opts = {}) {
             { timeout: 180000, shell: "/bin/bash" },
           );
           steps.push("Staged rebuilt .output from extract");
+          rebuiltUi = true;
         }
       }
     }
 
-    if (!(await stageHasOutput())) {
-      // Last resort only: keep old UI but mark it so we don't lie about being fully updated
-      const existingOut = path.join(targetRoot, ".output");
-      try {
-        await fs.stat(path.join(existingOut, "server", "index.mjs"));
-        await execAsync(
-          `cp -a ${JSON.stringify(existingOut)} ${JSON.stringify(path.join(stageRoot, ".output"))}`,
-          { timeout: 180000, shell: "/bin/bash" },
-        );
-        steps.push(
-          "WARNING: Using previous .output — UI may be stale. Install release asset grokhub-desktop-v*.tar.gz or rebuild with npm run desktop:build",
-        );
-        await fs.writeFile(
-          path.join(stageRoot, ".output", "STALE_UI"),
-          "archive lacked .output and rebuild failed\n",
-        );
-      } catch {
-        // Never seed user installs from a possibly stale /usr tree
-        const sysOut = path.join("/usr/lib/grokhub", ".output");
-        const allowSysSeed =
-          isSystemInstall(targetRoot) || process.env.GROKHUB_ALLOW_SYSTEM === "1";
-        if (allowSysSeed) {
-          try {
-            await fs.stat(path.join(sysOut, "server", "index.mjs"));
-            await execAsync(
-              `cp -a ${JSON.stringify(sysOut)} ${JSON.stringify(path.join(stageRoot, ".output"))}`,
-              { timeout: 180000, shell: "/bin/bash" },
-            );
-            steps.push("WARNING: Seeded .output from /usr/lib/grokhub");
-          } catch {
-            steps.push("ERROR: no UI build available — app window may not load until desktop:build");
-          }
-        } else {
-          steps.push(
-            "ERROR: release archive missing .output and rebuild failed — re-download grokhub-desktop-v*.tar.gz (not seeding from /usr)",
-          );
-        }
-      }
+    const staleUi = !(await stageHasOutput());
+    if (
+      !updateInstallSucceeded({
+        usedRelease: Boolean(usedReleaseTag),
+        rebuiltUi: rebuiltUi || Boolean(usedReleaseTag && !staleUi),
+        staleUi,
+      })
+    ) {
+      throw new Error(
+        "Update downloaded source but could not build the UI. The previous app was left in place. Run: git pull && ./scripts/repair-install.sh",
+      );
     }
 
     // Stamp UI build so we can detect mismatch later
@@ -1659,7 +1671,12 @@ async function applyUpdate(opts = {}) {
     let status;
     try {
       status = await checkForUpdate({ repo, branch, token });
-      if (status.updateAvailable && newSha && shaMatch(newSha, status.remoteSha)) {
+      if (
+        status.updateAvailable &&
+        newSha &&
+        shaMatch(newSha, status.remoteSha) &&
+        !status.uiStale
+      ) {
         status.updateAvailable = false;
         status.currentSha = String(newSha).slice(0, 12);
         status.currentVersion = newVersion;
@@ -2671,4 +2688,7 @@ module.exports = {
   oauthPoll,
   oauthEnsure,
   versionNewer,
+  shouldUseGithubRelease,
+  updateIsAvailable,
+  updateInstallSucceeded,
 };
