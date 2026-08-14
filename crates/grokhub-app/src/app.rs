@@ -222,6 +222,9 @@ pub struct Cabin {
     chip_busy: bool,
     chip_fp: String,
     chip_llm_at: u64,
+    skills_tab_connectors: bool,
+    skill_q: String,
+    auto_compose: bool,
 }
 
 impl Cabin {
@@ -359,6 +362,9 @@ impl Cabin {
             chip_busy: false,
             chip_fp: String::new(),
             chip_llm_at: 0,
+            skills_tab_connectors: false,
+            skill_q: String::new(),
+            auto_compose: false,
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
             let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
@@ -2668,24 +2674,8 @@ impl Cabin {
     }
 
     fn ui_connectors(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Connectors");
-            ui.label("GitHub CONNECTOR_CMD runs against the PAT. Website connectors stay status-only.");
-            let gh = if self.secrets.github_token.trim().is_empty() {
-                "GitHub PAT missing — set it in Settings"
-            } else {
-                "GitHub PAT present (never shown)"
-            };
-            ui.label(gh);
-            ui.separator();
-            ui.label(RichText::new("Website (status only)").small());
-            for host in DEFAULT_CONNECTOR_HOSTS {
-                ui.label(format!("{host} — status only"));
-            }
-            if ui.button("Settings").clicked() {
-                self.nav = Nav::Settings;
-            }
-        });
+        self.skills_tab_connectors = true;
+        self.ui_skills(ctx);
     }
 
     fn ui_agents(&mut self, ctx: &egui::Context) {
@@ -2749,14 +2739,20 @@ impl Cabin {
             "imagine" => Nav::Imagine,
             "workboard" => Nav::Workboard,
             "settings" => Nav::Settings,
-            "skills" => Nav::Skills,
+            "skills" => {
+                self.skills_tab_connectors = false;
+                Nav::Skills
+            }
             "automations" => Nav::Night,
             "command" => Nav::Command,
             "queue" => Nav::Agents,
             "devices" => Nav::Devices,
             "memory" => Nav::Memory,
             "eyes" => Nav::Eyes,
-            "connectors" => Nav::Connectors,
+            "connectors" => {
+                self.skills_tab_connectors = true;
+                Nav::Connectors
+            }
             _ => Nav::Chat,
         };
     }
@@ -3639,48 +3635,129 @@ impl Cabin {
         });
     }
 
+    fn add_automation_seed(&mut self, seed: &str) {
+        if let Some(mut a) = parse_nl_automation(seed) {
+            a.id = uid("auto");
+            self.automations.push(a);
+            let _ = crate::night::save(&self.automations);
+            self.status = "Automation added".into();
+        } else {
+            self.status = "Need “every weekday at 9…” or “heartbeat every 15 min…”".into();
+        }
+    }
+
     fn ui_night(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Night");
-            ui.label("Natural language. Inherit YOLO / supervised. Quiet hours skip destructive.");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.night_nl)
-                    .hint_text("every weekday at 9, summarize the workboard")
-                    .desired_width(f32::INFINITY),
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .show(ctx, |ui| {
+            if crate::cards::page_header(ui, "Automations", "New Automation") {
+                self.auto_compose = true;
+            }
+            ui.label(
+                RichText::new(format!(
+                    "Used {} / {} today · quiet {}–{} · inherit YOLO / supervised",
+                    self.daily_auto_used,
+                    self.cfg.daily_auto_cap,
+                    self.cfg.quiet_start,
+                    self.cfg.quiet_end
+                ))
+                .small()
+                .color(crate::theme::MUTED),
             );
-            if ui.button("Add").clicked() {
-                if let Some(mut a) = parse_nl_automation(&self.night_nl) {
-                    a.id = uid("auto");
-                    self.automations.push(a);
-                    self.night_nl.clear();
-                    let _ = crate::night::save(&self.automations);
-                } else {
-                    self.status = "Need “every weekday at 9…” or “heartbeat every 15 min…”".into();
-                }
+            if self.auto_compose {
+                ui.add_space(12.0);
+                egui::Frame::none()
+                    .fill(crate::theme::ELEVATED)
+                    .rounding(12.0)
+                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                    .inner_margin(egui::Margin::same(14.0))
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("New automation").strong());
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.night_nl)
+                                .hint_text("every weekday at 9, summarize the workboard")
+                                .desired_width(f32::INFINITY),
+                        );
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("Add").strong().color(crate::theme::BG),
+                                    )
+                                    .fill(crate::theme::FG)
+                                    .rounding(12.0),
+                                )
+                                .clicked()
+                            {
+                                let seed = std::mem::take(&mut self.night_nl);
+                                self.add_automation_seed(&seed);
+                                if self.status == "Automation added" {
+                                    self.auto_compose = false;
+                                }
+                            }
+                            if ui.button("Cancel").clicked() {
+                                self.auto_compose = false;
+                            }
+                        });
+                    });
             }
-            ui.label(format!(
-                "Used {} / {} today · quiet {}–{}",
-                self.daily_auto_used, self.cfg.daily_auto_cap, self.cfg.quiet_start, self.cfg.quiet_end
-            ));
+            ui.add_space(16.0);
+            ui.label(RichText::new("Active").small().color(crate::theme::SUBTLE));
+            ui.add_space(8.0);
             let mut drop: Option<usize> = None;
-            for (i, a) in self.automations.iter_mut().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut a.enabled, "");
-                    ui.label(format!(
-                        "{} · {} {} · runs {}",
-                        a.name.chars().take(40).collect::<String>(),
-                        a.schedule,
-                        a.time,
-                        a.run_count
-                    ));
-                    if ui.small_button("run").clicked() {
-                        drop = Some(usize::MAX - i);
-                    }
-                    if ui.small_button("drop").clicked() {
-                        drop = Some(i);
-                    }
-                });
+            if self.automations.is_empty() {
+                ui.label(RichText::new("None yet — add one, or pick a suggestion.").color(crate::theme::MUTED));
             }
+            for (i, a) in self.automations.iter_mut().enumerate() {
+                egui::Frame::none()
+                    .fill(crate::theme::ELEVATED)
+                    .rounding(12.0)
+                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                    .inner_margin(egui::Margin::same(14.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut a.enabled, "");
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    RichText::new(a.name.chars().take(48).collect::<String>())
+                                        .strong()
+                                        .color(crate::theme::FG),
+                                );
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} {} · runs {} · {}",
+                                        a.schedule,
+                                        a.time,
+                                        a.run_count,
+                                        a.instructions.chars().take(80).collect::<String>()
+                                    ))
+                                    .small()
+                                    .color(crate::theme::MUTED),
+                                );
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button("drop").clicked() {
+                                    drop = Some(i);
+                                }
+                                if ui.small_button("run").clicked() {
+                                    drop = Some(usize::MAX - i);
+                                }
+                            });
+                        });
+                    });
+                ui.add_space(8.0);
+            }
+            ui.add_space(12.0);
+            ui.label(RichText::new("Suggested").small().color(crate::theme::SUBTLE));
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
+                for s in crate::cards::SUGGESTED_AUTOS {
+                    if crate::cards::suggestion_card(ui, s.title, s.body) {
+                        self.add_automation_seed(s.seed);
+                    }
+                }
+            });
             if let Some(i) = drop {
                 if i < self.automations.len() {
                     self.automations.remove(i);
@@ -3801,57 +3878,148 @@ impl Cabin {
     }
 
     fn ui_skills(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Skills");
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .show(ctx, |ui| {
+            if crate::cards::page_header(ui, "Skills and Connectors", "New Skill") {
+                self.skills_tab_connectors = false;
+                let stub = crate::cards::starter_skill("new-skill");
+                self.skill_name = stub.name.clone();
+                self.skill_body = grokhub_core::render_skill_md(&stub);
+            }
             if !self.verify_chip.is_empty() {
                 ui.label(RichText::new(&self.verify_chip).strong());
             }
+            ui.add_space(10.0);
             ui.horizontal(|ui| {
-                for s in self.skill_list.clone() {
-                    if ui.selectable_label(self.skill_name == s.name, &s.name).clicked() {
+                if crate::cards::tab_pill(ui, "Skills", !self.skills_tab_connectors) {
+                    self.skills_tab_connectors = false;
+                    self.nav = Nav::Skills;
+                }
+                if crate::cards::tab_pill(ui, "Connectors", self.skills_tab_connectors) {
+                    self.skills_tab_connectors = true;
+                    self.nav = Nav::Connectors;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.skill_q)
+                            .hint_text("Search…")
+                            .desired_width(220.0),
+                    );
+                    if ui.small_button("Reload").clicked() {
+                        self.skill_list = skills::list_skills();
+                    }
+                });
+            });
+            ui.add_space(16.0);
+            if self.skills_tab_connectors {
+                ui.label(RichText::new("Connectors").small().color(crate::theme::SUBTLE));
+                ui.add_space(8.0);
+                ui.columns(2, |cols| {
+                    let gh = if self.secrets.github_token.trim().is_empty() {
+                        "GitHub PAT missing — set it in Settings. CONNECTOR_CMD stays off."
+                    } else {
+                        "GitHub PAT present (never shown). CONNECTOR_CMD runs against it."
+                    };
+                    if crate::cards::catalog_card(&mut cols[0], "GitHub", gh, false) {
+                        self.nav = Nav::Settings;
+                    }
+                    cols[1].vertical(|ui| {
+                        ui.label(RichText::new("Website (status only)").small().color(crate::theme::SUBTLE));
+                        for host in DEFAULT_CONNECTOR_HOSTS {
+                            crate::cards::catalog_card(ui, host, "Status only — no fetch from this pane.", false);
+                        }
+                    });
+                });
+                return;
+            }
+            ui.label(RichText::new("Personal").small().color(crate::theme::SUBTLE));
+            ui.add_space(8.0);
+            let q = self.skill_q.clone();
+            let list: Vec<_> = self
+                .skill_list
+                .iter()
+                .filter(|s| crate::cards::skill_matches(&s.name, &s.description, &q))
+                .cloned()
+                .collect();
+            if list.is_empty() {
+                ui.label(
+                    RichText::new("No skills yet — New Skill writes a SKILL.md you can edit.")
+                        .color(crate::theme::MUTED),
+                );
+            } else {
+                let names: Vec<(String, String, bool)> = list
+                    .iter()
+                    .map(|s| {
+                        let body = if s.description.trim().is_empty() {
+                            s.instructions.chars().take(90).collect()
+                        } else {
+                            s.description.clone()
+                        };
+                        (s.name.clone(), body, self.skill_name == s.name)
+                    })
+                    .collect();
+                let mut pick: Option<String> = None;
+                ui.columns(2, |cols| {
+                    for (i, (name, body, selected)) in names.iter().enumerate() {
+                        let col = i % 2;
+                        if crate::cards::catalog_card(&mut cols[col], name, body, *selected) {
+                            pick = Some(name.clone());
+                        }
+                        cols[col].add_space(8.0);
+                    }
+                });
+                if let Some(name) = pick {
+                    if let Some(s) = self.skill_list.iter().find(|s| s.name == name).cloned() {
                         self.skill_name = s.name.clone();
                         self.skill_body = grokhub_core::render_skill_md(&s);
                     }
                 }
-                if ui.button("Reload").clicked() {
-                    self.skill_list = skills::list_skills();
-                }
-            });
-            ui.add(
-                egui::TextEdit::multiline(&mut self.skill_body)
-                    .desired_rows(16)
-                    .desired_width(f32::INFINITY)
-                    .font(egui::TextStyle::Monospace),
-            );
-            if ui.button("Save SKILL.md").clicked() {
-                let parsed = grokhub_core::parse_skill_md(&self.skill_body);
-                match skills::save_skill(&parsed) {
-                    Ok(p) => {
-                        self.skill_list = skills::list_skills();
-                        self.status = format!("Wrote {}", p.display());
-                    }
-                    Err(e) => self.status = e,
-                }
             }
-            ui.horizontal(|ui| {
-                if ui.button("Use in chat").clicked() && !self.skill_name.is_empty() {
-                    let name = self.skill_name.clone();
-                    if let Some(s) = self.skill_list.iter().find(|s| s.name == name) {
-                        if let Some(r) = parse_recipe(&s.instructions) {
-                            self.last_recipe = Some(r);
+            if !self.skill_body.is_empty() {
+                ui.add_space(12.0);
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.skill_body)
+                        .desired_rows(12)
+                        .desired_width(f32::INFINITY)
+                        .font(egui::TextStyle::Monospace),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Save SKILL.md").clicked() {
+                        let parsed = grokhub_core::parse_skill_md(&self.skill_body);
+                        match skills::save_skill(&parsed) {
+                            Ok(p) => {
+                                self.skill_list = skills::list_skills();
+                                self.status = format!("Wrote {}", p.display());
+                            }
+                            Err(e) => self.status = e,
                         }
                     }
-                    self.nav = Nav::Chat;
-                    self.send_chat(format!("Follow skill {name}"));
-                }
-                if ui.button("Run verify").clicked() && !self.skill_name.is_empty() {
-                    self.run_skill_verify();
-                    if self.verify_ok_turn {
-                        self.status = format!("verify pass · {} runs", 
-                            self.skill_list.iter().find(|s| s.name == self.skill_name).map(|s| s.runs).unwrap_or(0));
+                    if ui.button("Use in chat").clicked() && !self.skill_name.is_empty() {
+                        let name = self.skill_name.clone();
+                        if let Some(s) = self.skill_list.iter().find(|s| s.name == name) {
+                            if let Some(r) = parse_recipe(&s.instructions) {
+                                self.last_recipe = Some(r);
+                            }
+                        }
+                        self.nav = Nav::Chat;
+                        self.send_chat(format!("Follow skill {name}"));
                     }
-                }
-            });
+                    if ui.button("Run verify").clicked() && !self.skill_name.is_empty() {
+                        self.run_skill_verify();
+                        if self.verify_ok_turn {
+                            self.status = format!(
+                                "verify pass · {} runs",
+                                self.skill_list
+                                    .iter()
+                                    .find(|s| s.name == self.skill_name)
+                                    .map(|s| s.runs)
+                                    .unwrap_or(0)
+                            );
+                        }
+                    }
+                });
+            }
         });
     }
 
