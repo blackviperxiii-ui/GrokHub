@@ -13,7 +13,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "1.1.22";
+const APP_VERSION = "1.1.23";
 let updateInProgress = false;
 
 function lastUserText(messages) {
@@ -80,6 +80,28 @@ function updateInstallSucceeded({ usedRelease, rebuiltUi, staleUi }) {
   if (staleUi) return false;
   if (usedRelease) return true;
   return Boolean(rebuiltUi);
+}
+
+/** Packages vite.config.ts imports — must exist after a production npm install. */
+const UI_REBUILD_PACKAGES = ["vite", "@vitejs/plugin-react", "nitro"];
+
+function uiRebuildHasToolchain(nmDir) {
+  if (!nmDir) return false;
+  const fss = require("node:fs");
+  for (const name of UI_REBUILD_PACKAGES) {
+    try {
+      if (!fss.existsSync(path.join(nmDir, name))) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function uiRebuildInstallEnv(base) {
+  const env = { ...(base || process.env), GROKHUB_DESKTOP: "1", NPM_CONFIG_PRODUCTION: "false" };
+  delete env.NODE_ENV;
+  return env;
 }
 
 function sleepMs(ms) {
@@ -1443,34 +1465,32 @@ async function applyUpdate(opts = {}) {
       ];
       let hasNm = false;
       for (const nm of nmCandidates) {
-        try {
-          await fs.stat(path.join(nm, "vite"));
-          if (path.resolve(nm) !== path.resolve(workRoot, "node_modules")) {
-            await execAsync(
-              `rm -rf ${JSON.stringify(path.join(workRoot, "node_modules"))}; ln -s ${JSON.stringify(nm)} ${JSON.stringify(path.join(workRoot, "node_modules"))}`,
-              { timeout: 60000, shell: "/bin/bash" },
-            );
-            steps.push(`Linked node_modules from ${nm}`);
-          }
-          hasNm = true;
-          break;
-        } catch {
-          /* next */
+        if (!uiRebuildHasToolchain(nm)) continue;
+        if (path.resolve(nm) !== path.resolve(workRoot, "node_modules")) {
+          await execAsync(
+            `rm -rf ${JSON.stringify(path.join(workRoot, "node_modules"))}; ln -s ${JSON.stringify(nm)} ${JSON.stringify(path.join(workRoot, "node_modules"))}`,
+            { timeout: 60000, shell: "/bin/bash" },
+          );
+          steps.push(`Linked node_modules from ${nm}`);
         }
+        hasNm = true;
+        break;
       }
       if (!hasNm) {
         steps.push("Installing npm dependencies for UI rebuild…");
         try {
           await execAsync(
-            `cd ${JSON.stringify(workRoot)} && (npm ci --ignore-scripts || npm install --ignore-scripts)`,
+            `cd ${JSON.stringify(workRoot)} && (npm ci --ignore-scripts --include=dev || npm install --ignore-scripts --include=dev)`,
             {
               timeout: 300000,
               maxBuffer: 20 * 1024 * 1024,
               shell: "/bin/bash",
-              env: { ...process.env, GROKHUB_DESKTOP: "1", NODE_ENV: "production" },
+              env: uiRebuildInstallEnv(process.env),
             },
           );
-          await fs.stat(path.join(workRoot, "node_modules", "vite"));
+          if (!uiRebuildHasToolchain(path.join(workRoot, "node_modules"))) {
+            throw new Error("npm install finished without vite / @vitejs/plugin-react / nitro");
+          }
           hasNm = true;
           steps.push("npm install OK");
         } catch (e) {
@@ -2691,4 +2711,7 @@ module.exports = {
   shouldUseGithubRelease,
   updateIsAvailable,
   updateInstallSucceeded,
+  uiRebuildHasToolchain,
+  uiRebuildInstallEnv,
+  UI_REBUILD_PACKAGES,
 };
