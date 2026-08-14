@@ -370,10 +370,10 @@ assert.match(
   /data-next-up/,
   "Queue must show what will run next (or that it is paused/empty)",
 );
-assert.match(
+assert.doesNotMatch(
   fs.readFileSync(path.join(process.cwd(), "src/components/views/SettingsView.tsx"), "utf8"),
-  /DesktopHostView/,
-  "Settings must host the real Desktop host CLI/files/apps UI",
+  /DesktopHostView|id="sec-autonomy"|label: "Agent"/,
+  "Settings must not show advanced agent/desktop knobs",
 );
 assert.match(
   fs.readFileSync(path.join(process.cwd(), "src/components/views/ImagineView.tsx"), "utf8"),

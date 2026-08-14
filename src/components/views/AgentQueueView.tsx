@@ -8,15 +8,9 @@ import {
   XCircle,
 } from "lucide-react";
 import { useMemo } from "react";
-import {
-  AUTONOMY_HINT,
-  AUTONOMY_LABEL,
-  queueStats,
-  type AutonomyLevel,
-} from "@/lib/agent-jobs";
+import { queueStats } from "@/lib/agent-jobs";
 import { TOOL_REGISTRY } from "@/lib/tool-registry";
 import { useGrokHub } from "@/lib/store";
-import { cn } from "@/lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
@@ -24,7 +18,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui
 export function AgentQueueView() {
   const autonomy = useGrokHub((s) => s.autonomy);
   const queue = useGrokHub((s) => s.agentQueue);
-  const setAutonomy = useGrokHub((s) => s.setAutonomy);
   const pauseAutonomy = useGrokHub((s) => s.pauseAutonomy);
   const processAgentQueue = useGrokHub((s) => s.processAgentQueue);
   const cancelAgentJob = useGrokHub((s) => s.cancelAgentJob);
@@ -134,33 +127,6 @@ export function AgentQueueView() {
           </Card>
         ))}
       </div>
-
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Autonomy level</CardTitle>
-          <CardDescription>
-            {AUTONOMY_LABEL[autonomy.level]} — {AUTONOMY_HINT[autonomy.level]}
-            {autonomy.paused ? " · PAUSED" : ""}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
-          {([0, 1, 2, 3, 4] as AutonomyLevel[]).map((lv) => (
-            <button
-              key={lv}
-              type="button"
-              onClick={() => setAutonomy({ level: lv })}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                autonomy.level === lv
-                  ? "border-[var(--color-border-strong)] bg-[var(--color-elevated)] text-[var(--color-fg)]"
-                  : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-fg)]",
-              )}
-            >
-              {lv} · {AUTONOMY_LABEL[lv]}
-            </button>
-          ))}
-        </CardContent>
-      </Card>
 
       <Card>
         <CardHeader className="pb-2">

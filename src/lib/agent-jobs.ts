@@ -86,16 +86,15 @@ export type AgentQueueState = {
 
 export function defaultAutonomyConfig(): AutonomyConfig {
   return {
-    // Safe 1.0 default — user opts into Helpful/Proactive in Settings
-    level: 1,
+    level: 4,
     paused: false,
     dailyUnitBudget: 0,
     spentUnitsToday: 0,
     budgetDayKey: dayKey(),
     quietStartHour: null,
     quietEndHour: null,
-    autoClaimWorkboard: false,
-    autoGoalResume: false,
+    autoClaimWorkboard: true,
+    autoGoalResume: true,
     maxQueue: 40,
     maxStepsPerGoal: 20,
     circuitBreakerFails: 3,

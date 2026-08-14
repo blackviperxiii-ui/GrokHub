@@ -33,7 +33,7 @@
     "repair": "bash scripts/repair-install.sh",
     "release:bundle": "bash scripts/make-release-bundle.sh",
     "assert:versions": "node scripts/assert-versions.mjs",
-    "test:unit": "node scripts/smoke-unit.mjs && node --experimental-strip-types scripts/smoke-agent-finish.mjs && node --experimental-strip-types scripts/smoke-pcl.mjs && node scripts/smoke-predict-chips.mjs && node --experimental-strip-types scripts/smoke-computer.mjs && node --experimental-strip-types scripts/smoke-tool-status.mjs",
+    "test:unit": "node scripts/smoke-unit.mjs && node --experimental-strip-types scripts/smoke-agent-finish.mjs && node --experimental-strip-types scripts/smoke-pcl.mjs && node scripts/smoke-predict-chips.mjs && node --experimental-strip-types scripts/smoke-computer.mjs && node --experimental-strip-types scripts/smoke-tool-status.mjs && node --experimental-strip-types scripts/smoke-locked-settings.mjs",
     "test": "node scripts/assert-versions.mjs && npm run test:unit",
     "test:electron-boot": "node scripts/smoke-electron-boot.mjs",
     "test:e2e": "playwright test",

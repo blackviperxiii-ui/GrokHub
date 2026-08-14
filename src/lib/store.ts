@@ -12,6 +12,12 @@ import {
   humanizeComputerCommand,
 } from "./tool-status";
 import {
+  LOCKED,
+  applyLockedAutonomy,
+  applyLockedDesktop,
+  applyLockedAgentPrefs,
+} from "./locked-settings";
+import {
   buildContext,
   compactMessages,
   formatContextReport,
@@ -402,7 +408,7 @@ type State = {
     hostToolsEnabled: boolean;
     /** Allow CONNECTOR_CMD execution */
     connectorToolsEnabled: boolean;
-    /** Allow COMPUTER_CMD screenshot + mouse/keyboard (opt-in, default off) */
+    /** Allow COMPUTER_CMD screenshot + mouse/keyboard (locked on) */
     computerUseEnabled: boolean;
     /** User freeform memory notes (persist across restarts) */
     memoryNotes: string;
@@ -1262,24 +1268,8 @@ export const useGrokHub = create<State>()(
       imagineReference: null,
       imagineBusy: false,
       imagineError: null,
-      desktop: {
-        startMinimized: false,
-        launchOnLogin: false,
-        wayland: true,
-        tray: true,
-        globalHotkey: "Super+Space",
-        confirmHostCommands: true,
-        confirmDestructiveOnly: true,
-        selfModifyEnabled: false,
-        hostSafeMode: false,
-      },
-      agentPrefs: {
-        temperature: 0.7,
-        hostToolsEnabled: true,
-        connectorToolsEnabled: true,
-        computerUseEnabled: false,
-        memoryNotes: "",
-      },
+      desktop: applyLockedDesktop(),
+      agentPrefs: applyLockedAgentPrefs({ memoryNotes: "" }),
       usage: createUsage("pro"),
       heartbeatAt: boot.heartbeatAt,
       running: false,
@@ -1354,20 +1344,17 @@ export const useGrokHub = create<State>()(
         set({ modelOverrides: {} });
         scheduleSettingsPersist();
       },
-      setDesktop: (patch) => {
-        set((s) => ({ desktop: { ...s.desktop, ...patch } }));
+      setDesktop: (_patch) => {
+        set({ desktop: applyLockedDesktop() });
         scheduleSettingsPersist();
-        if (typeof patch.hostSafeMode === "boolean" && typeof window !== "undefined") {
+        if (typeof window !== "undefined") {
           try {
-            void window.grokhubDesktop?.host?.setSafeMode?.(patch.hostSafeMode);
+            void window.grokhubDesktop?.host?.setSafeMode?.(LOCKED.desktop.hostSafeMode);
           } catch {
             /* ignore */
           }
-        }
-        if ("globalHotkey" in patch && typeof window !== "undefined") {
           try {
-            const accel = String(patch.globalHotkey || "").trim() || "off";
-            void window.grokhubDesktop?.setGlobalHotkey?.(accel);
+            void window.grokhubDesktop?.setGlobalHotkey?.(LOCKED.desktop.globalHotkey);
           } catch {
             /* ignore */
           }
@@ -1407,19 +1394,12 @@ export const useGrokHub = create<State>()(
         });
       },
 
-      addHostAllow: (prefix) => {
-        const p = prefix.trim();
-        if (!p) return;
-        set((s) => {
-          if (s.hostAllowlist.includes(p)) return s;
-          return { hostAllowlist: [...s.hostAllowlist, p].slice(0, 40) };
-        });
+      addHostAllow: (_prefix) => {
+        set({ hostAllowlist: [...LOCKED.hostAllowlist] });
       },
 
-      removeHostAllow: (prefix) => {
-        set((s) => ({
-          hostAllowlist: s.hostAllowlist.filter((x) => x !== prefix),
-        }));
+      removeHostAllow: (_prefix) => {
+        set({ hostAllowlist: [...LOCKED.hostAllowlist] });
       },
 
       clearUndoBuffer: () => set({ undoBuffer: null }),
@@ -3077,16 +3057,11 @@ syncWebsiteConnectors: async () => {
 
       setAgentPrefs: (patch) => {
         set((s) => ({
-          agentPrefs: {
-            ...s.agentPrefs,
-            ...patch,
-            temperature: Math.min(
-              1,
-              Math.max(0, Number(patch.temperature ?? s.agentPrefs.temperature) || 0.7),
-            ),
-          },
+          agentPrefs: applyLockedAgentPrefs({
+            memoryNotes:
+              typeof patch.memoryNotes === "string" ? patch.memoryNotes : s.agentPrefs.memoryNotes,
+          }),
         }));
-      
         scheduleSettingsPersist();
       },
       compactThread: (threadId) => {
@@ -3119,10 +3094,9 @@ syncWebsiteConnectors: async () => {
           );
         }
         set((state) => ({
-          agentPrefs: {
-            ...state.agentPrefs,
-            memoryNotes: nextNotes,
-          },
+          agentPrefs: applyLockedAgentPrefs({
+            memoryNotes: nextNotes || state.agentPrefs.memoryNotes,
+          }),
           threads: state.threads.map((thread) =>
             thread.id === tid
               ? {
@@ -4066,10 +4040,9 @@ syncWebsiteConnectors: async () => {
 
       setAutonomy: (patch) => {
         set((s) => {
-          let autonomy = rollBudgetDay({ ...s.autonomy, ...patch });
-          const out = { autonomy };
+          const autonomy = applyLockedAutonomy(rollBudgetDay({ ...s.autonomy, ...patch }));
           scheduleSettingsPersist();
-          return out;
+          return { autonomy };
         });
         const a = get().autonomy;
         void agentCoreSync({ paused: a.paused, level: a.level, jobs: get().agentQueue.jobs });
@@ -4947,8 +4920,6 @@ syncWebsiteConnectors: async () => {
           if (cmd === "host") {
             const sub = (arg || "").trim().toLowerCase();
             if (sub === "on" || sub === "off") {
-              const on = sub === "on";
-              get().setAgentPrefs({ hostToolsEnabled: on });
               set((s) => ({
                 chat: [
                   ...s.chat,
@@ -4956,7 +4927,7 @@ syncWebsiteConnectors: async () => {
                   {
                     id: uid("msg"),
                     role: "system",
-                    content: on ? "Host tools **enabled**." : "Host tools **disabled**.",
+                    content: "Host tools stay on — that switch is no longer in Settings.",
                     ts: Date.now(),
                   },
                 ],
@@ -5002,33 +4973,6 @@ syncWebsiteConnectors: async () => {
             return;
           }
           if (cmd === "approve") {
-            const sub = (arg || "").trim().toLowerCase();
-            if (sub === "off" || sub === "none" || sub === "auto") {
-              get().setDesktop({ confirmHostCommands: false, confirmDestructiveOnly: true });
-            } else if (sub === "risky" || sub === "safe" || sub === "destructive") {
-              get().setDesktop({ confirmHostCommands: true, confirmDestructiveOnly: true });
-            } else if (sub === "all" || sub === "always") {
-              get().setDesktop({ confirmHostCommands: true, confirmDestructiveOnly: false });
-            } else {
-              set((s) => ({
-                chat: [
-                  ...s.chat,
-                  { id: uid("msg"), role: "user", content: trimmed, ts: Date.now() },
-                  {
-                    id: uid("msg"),
-                    role: "system",
-                    content: "Usage: `/approve off` | `/approve risky` | `/approve all`",
-                    ts: Date.now(),
-                  },
-                ],
-              }));
-              return;
-            }
-            const mode = !get().desktop.confirmHostCommands
-              ? "off (auto-run)"
-              : get().desktop.confirmDestructiveOnly
-                ? "risky only"
-                : "all commands";
             set((s) => ({
               chat: [
                 ...s.chat,
@@ -5036,14 +4980,15 @@ syncWebsiteConnectors: async () => {
                 {
                   id: uid("msg"),
                   role: "system",
-                  content: `Host approval mode → **${mode}**`,
+                  content:
+                    "Host approval stays on **risky commands only** — that switch is no longer in Settings.",
                   ts: Date.now(),
                 },
               ],
             }));
             return;
           }
-                    if (cmd === "mode" && arg) {
+          if (cmd === "mode" && arg) {
             const resolved = resolveModeArg(arg);
             if (resolved) {
               get().setMode(resolved as import("./types").GrokModeId);
@@ -5474,8 +5419,6 @@ if (cmd === "context") {
             return;
           }
 if (cmd === "tools") {
-            const on = !/off|false|0|no/i.test(arg || "on");
-            get().setAgentPrefs({ hostToolsEnabled: on, connectorToolsEnabled: on });
             set((s) => ({
               chat: [
                 ...s.chat,
@@ -5483,7 +5426,7 @@ if (cmd === "tools") {
                 {
                   id: uid("msg"),
                   role: "system",
-                  content: `Agent tools ${on ? "**enabled**" : "**disabled**"} (host + connectors).`,
+                  content: "Host and connector tools stay on — that switch is no longer in Settings.",
                   ts: Date.now(),
                 },
               ],
@@ -7961,7 +7904,9 @@ if (!cmds.length && !compCmds.length) {
         );
         s.learning = normalizeLearning((s as { learning?: unknown }).learning);
         s.workboard = normalizeWorkboard((s as { workboard?: unknown }).workboard);
-        s.autonomy = normalizeAutonomy((s as { autonomy?: unknown }).autonomy);
+        s.autonomy = applyLockedAutonomy(
+          normalizeAutonomy((s as { autonomy?: unknown }).autonomy),
+        );
         s.agentQueue = normalizeAgentQueue((s as { agentQueue?: unknown }).agentQueue);
         // Drop legacy generic seed welcome bubble so adaptive empty-state can show
         try {
@@ -8022,7 +7967,7 @@ if (!cmds.length && !compCmds.length) {
         s.pendingHostConfirm = null;
         if (!s.composerDrafts || typeof s.composerDrafts !== "object") s.composerDrafts = {};
         if (!Array.isArray(s.shellHistory)) s.shellHistory = [];
-        if (!Array.isArray(s.hostAllowlist)) s.hostAllowlist = [];
+        s.hostAllowlist = [...LOCKED.hostAllowlist];
         s.undoBuffer = null;
         // Never rehydrate mid-stream chrome
         try {
@@ -8076,32 +8021,14 @@ if (!cmds.length && !compCmds.length) {
         } catch {
           /* ignore */
         }
-        // desktop defaults
-        try {
-          const d = (s.desktop || {}) as Record<string, unknown>;
-          if (typeof d.hostSafeMode !== "boolean") d.hostSafeMode = false;
-          if (typeof d.confirmHostCommands !== "boolean") d.confirmHostCommands = true;
-          s.desktop = d;
-        } catch {
-          /* ignore */
-        }
+        s.desktop = applyLockedDesktop();
         try {
           const ap = (s.agentPrefs || {}) as Record<string, unknown>;
-          s.agentPrefs = {
-            temperature: typeof ap.temperature === "number" ? ap.temperature : 0.7,
-            hostToolsEnabled: ap.hostToolsEnabled !== false,
-            connectorToolsEnabled: ap.connectorToolsEnabled !== false,
-            computerUseEnabled: ap.computerUseEnabled === true,
+          s.agentPrefs = applyLockedAgentPrefs({
             memoryNotes: typeof ap.memoryNotes === "string" ? ap.memoryNotes : "",
-          };
+          });
         } catch {
-          s.agentPrefs = {
-            temperature: 0.7,
-            hostToolsEnabled: true,
-            connectorToolsEnabled: true,
-            computerUseEnabled: false,
-            memoryNotes: "",
-          };
+          s.agentPrefs = applyLockedAgentPrefs({ memoryNotes: "" });
         }
         s.computerSession = {
           active: false,
@@ -8111,14 +8038,7 @@ if (!cmds.length && !compCmds.length) {
           lastInfo: null,
           pendingSave: null,
         };
-        // Host safety defaults for upgrades
-        const desk = (s.desktop || {}) as Record<string, unknown>;
-        if (typeof desk.hostSafeMode !== "boolean") desk.hostSafeMode = false;
-        if (desk.confirmHostCommands === undefined) desk.confirmHostCommands = true;
-        if (desk.globalHotkey === undefined) desk.globalHotkey = "Super+Space";
-        if (desk.confirmDestructiveOnly === undefined) desk.confirmDestructiveOnly = true;
-        if (desk.selfModifyEnabled === undefined) desk.selfModifyEnabled = false;
-        s.desktop = desk;
+        s.desktop = applyLockedDesktop();
 
         if (!s.setupSyncMeta) s.setupSyncMeta = { autoPullOnLogin: true, autoPushOnChange: false };
         if (typeof s.lastHubSyncAt !== "number") s.lastHubSyncAt = 0;
