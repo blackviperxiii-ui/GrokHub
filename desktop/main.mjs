@@ -7,6 +7,23 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const host = require("./host-bridge.cjs");
+const computer = safeRequireComputer();
+function safeRequireComputer() {
+  try {
+    return require("./computer-bridge.cjs");
+  } catch (e) {
+    console.error("[GrokHub] failed to load computer-bridge.cjs", e && e.message ? e.message : e);
+    return {
+      setMainWindow: () => {},
+      info: () => ({ ok: false, error: "computer-bridge missing" }),
+      act: async () => ({ ok: false, error: "computer-bridge missing" }),
+      screenshot: async () => ({ ok: false, error: "computer-bridge missing" }),
+      beginSession: async () => ({ ok: false, error: "computer-bridge missing" }),
+      endSession: () => ({ ok: false }),
+      userStop: () => ({ ok: true }),
+    };
+  }
+}
 let grokBridge;
 try {
   grokBridge = require("./grok-bridge.cjs");
@@ -470,6 +487,11 @@ function createWindow(opts = {}) {
     },
   });
 
+  try {
+    computer.setMainWindow?.(mainWindow);
+  } catch {
+    /* ignore */
+  }
 
   // Mic / media for voice chat (Grok STT)
   try {
@@ -720,6 +742,12 @@ function createWindow(opts = {}) {
   });
 
   mainWindow.on("closed", () => {
+    try {
+      computer.setMainWindow?.(null);
+      computer.endSession?.();
+    } catch {
+      /* ignore */
+    }
     if (saveTimer) clearTimeout(saveTimer);
     screen.removeListener("display-metrics-changed", reflow);
     screen.removeListener("display-added", reflow);
@@ -1035,6 +1063,13 @@ function registerIpc() {
     "host:readOpenClawWorkspace",
     wrap((_e, p) => host.readOpenClawWorkspace(p)),
   );
+
+  safeHandle("computer:info", wrap(() => computer.info()));
+  safeHandle("computer:screenshot", wrap(() => computer.screenshot()));
+  safeHandle("computer:act", wrap((_e, step) => computer.act(step || {})));
+  safeHandle("computer:beginSession", wrap(() => computer.beginSession()));
+  safeHandle("computer:endSession", wrap(() => computer.endSession()));
+  safeHandle("computer:userStop", wrap(() => computer.userStop()));
 
   safeHandle("grok:chat", (_e, payload) => grokBridge.callXaiChat(payload || {}));
   safeHandle("grok:imagine", (_e, payload) => grokBridge.callXaiImagine(payload || {}));
