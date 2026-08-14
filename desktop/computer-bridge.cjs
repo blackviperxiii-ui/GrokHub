@@ -60,9 +60,26 @@ function ydotoolScrollArgs(direction, amount) {
   return ["mousemove", "--wheel", "-x", "0", "-y", String(y)];
 }
 
-function whichSync(bin) {
-  const dirs = String(process.env.PATH || "/usr/bin:/bin").split(":");
+function vendorBinDirs() {
+  const dirs = [
+    path.join(__dirname, "..", "vendor", "linux-x64"),
+    path.join(process.cwd(), "vendor", "linux-x64"),
+  ];
+  try {
+    if (process.resourcesPath) dirs.unshift(path.join(process.resourcesPath, "vendor", "linux-x64"));
+  } catch {
+    /* ignore */
+  }
+  return dirs;
+}
+
+function whichSync(bin, extraDirs) {
+  const dirs = [...(Array.isArray(extraDirs) ? extraDirs : []), ...vendorBinDirs()];
+  for (const d of String(process.env.PATH || "/usr/bin:/bin").split(":")) dirs.push(d);
+  const seen = new Set();
   for (const d of dirs) {
+    if (!d || seen.has(d)) continue;
+    seen.add(d);
     try {
       const p = path.join(d, bin);
       if (fs.existsSync(p)) return p;
@@ -372,20 +389,49 @@ async function runTool(bin, args, timeoutMs = 8000) {
   }
 }
 
+function probeUinput() {
+  const p = "/dev/uinput";
+  try {
+    const st = fs.statSync(p);
+    let writable = false;
+    try {
+      fs.accessSync(p, fs.constants.R_OK | fs.constants.W_OK);
+      writable = true;
+    } catch {
+      writable = false;
+    }
+    return { path: p, exists: true, writable, mode: st.mode };
+  } catch {
+    return { path: p, exists: false, writable: false };
+  }
+}
+
+function missingComputerTools(session, bins) {
+  const missing = [];
+  if (session === "wayland") {
+    if (!bins.ydotool) missing.push("ydotool");
+    if (!bins.grim) missing.push("grim");
+    if (!bins.xdotool) missing.push("xdotool");
+  } else {
+    if (!bins.xdotool) missing.push("xdotool");
+    if (!bins.ffmpeg && !bins.grim) missing.push("ffmpeg");
+  }
+  if (!bins.ffmpeg) missing.push("ffmpeg");
+  return [...new Set(missing)];
+}
+
 function info() {
   const inj = pickInjector();
   const electron = Boolean(electronApis());
-  let screenSize = null;
-  try {
-    const e = electronApis();
-    if (e && e.screen) {
-      const b = e.screen.getPrimaryDisplay().bounds;
-      screenSize = { width: b.width, height: b.height, scaleFactor: e.screen.getPrimaryDisplay().scaleFactor };
-    }
-  } catch {
-    /* ignore */
-  }
-  const plans = silentCaptureTools(inj.session, captureToolBins());
+  const geo = liveGeometry();
+  const bins = captureToolBins();
+  const plans = silentCaptureTools(inj.session, bins);
+  const missingTools = missingComputerTools(inj.session, {
+    ydotool: whichSync("ydotool"),
+    xdotool: whichSync("xdotool"),
+    grim: bins.grim,
+    ffmpeg: bins.ffmpeg,
+  });
   return {
     ok: true,
     platform: process.platform,
@@ -395,39 +441,72 @@ function info() {
     display: process.env.DISPLAY || null,
     waylandDisplay: process.env.WAYLAND_DISPLAY || null,
     electron,
-    screen: screenSize,
+    screen: geo.width
+      ? { width: geo.width, height: geo.height, scaleFactor: geo.scaleFactor || 1 }
+      : null,
+    geometry: geo,
     lastScreenshot: lastShotMeta,
     capture: plans[0]?.name || null,
     captureTools: plans.map((p) => p.name),
+    missingTools,
+    uinput: probeUinput(),
+    ydotoold: whichSync("ydotoold") || null,
+    vendorDir: vendorBinDirs()[0] || null,
     previewing: isPreviewing(),
-    hint: buildHint(inj, plans),
+    hint: buildHint(inj, plans, missingTools),
   };
 }
 
-let x11SizeCache = { width: 0, height: 0, at: 0 };
+let x11SizeCache = { width: 0, height: 0, at: 0, source: "" };
+
+function readCliDimensions(bin, args, parse) {
+  const exe = whichSync(bin);
+  if (!exe) return { width: 0, height: 0 };
+  try {
+    const out = execFileSync(exe, args, {
+      encoding: "utf8",
+      timeout: 2000,
+      env: process.env,
+    });
+    return parse(out);
+  } catch {
+    return { width: 0, height: 0 };
+  }
+}
 
 function x11PixelSize() {
   if (x11SizeCache.width && Date.now() - x11SizeCache.at < 5000) {
-    return { width: x11SizeCache.width, height: x11SizeCache.height };
+    return { width: x11SizeCache.width, height: x11SizeCache.height, source: x11SizeCache.source };
   }
-  try {
-    const xdotool = whichSync("xdotool");
-    if (xdotool) {
+  const tries = [
+    () => {
+      const xdotool = whichSync("xdotool");
+      if (!xdotool) return { width: 0, height: 0 };
       const out = execFileSync(xdotool, ["getdisplaygeometry"], {
         encoding: "utf8",
         timeout: 2000,
         env: process.env,
       });
       const m = String(out).trim().match(/^(\d+)\s+(\d+)/);
-      if (m) {
-        x11SizeCache = { width: Number(m[1]), height: Number(m[2]), at: Date.now() };
-        return { width: x11SizeCache.width, height: x11SizeCache.height };
+      return m
+        ? { width: Number(m[1]), height: Number(m[2]), source: "xdotool" }
+        : { width: 0, height: 0 };
+    },
+    () => ({ ...readCliDimensions("xdpyinfo", [], parseXdpyinfoDimensions), source: "xdpyinfo" }),
+    () => ({ ...readCliDimensions("xrandr", [], parseXrandrCurrentDimensions), source: "xrandr" }),
+  ];
+  for (const tryOne of tries) {
+    try {
+      const sz = tryOne();
+      if (sz.width > 0 && sz.height > 0) {
+        x11SizeCache = { width: sz.width, height: sz.height, at: Date.now(), source: sz.source || "" };
+        return { width: sz.width, height: sz.height, source: sz.source || "" };
       }
+    } catch {
+      /* next probe */
     }
-  } catch {
-    /* ignore */
   }
-  return { width: 0, height: 0 };
+  return { width: 0, height: 0, source: "" };
 }
 
 function captureToolBins() {
@@ -444,38 +523,81 @@ function captureToolBins() {
   };
 }
 
-function buildHint(inj, plans) {
+function buildHint(inj, plans, missingTools) {
   const bits = [];
+  const missing = Array.isArray(missingTools) ? missingTools : [];
   if (inj.kind === "ydotool") {
-    bits.push("ydotool found — user may need to be in the input group (uinput).");
+    bits.push("ydotool found — /dev/uinput must be writable (KDE uaccess ACL or input group).");
   } else if (inj.kind === "xdotool") {
     bits.push(
       inj.session === "wayland"
-        ? "xdotool on Wayland only moves XWayland apps. Install ydotool + uinput for native windows."
+        ? "xdotool on Wayland only moves XWayland apps. Install ydotool + grim for native windows."
         : "xdotool found.",
     );
   } else {
-    bits.push("Install xdotool (X11/XWayland) or ydotool (Wayland) to inject mouse/keyboard.");
+    bits.push(
+      inj.session === "wayland"
+        ? "Install ydotool (and grim) for this Wayland session: pacman -S --needed ydotool grim xdotool ffmpeg"
+        : "Install xdotool (X11/XWayland) or ydotool (Wayland) to inject mouse/keyboard.",
+    );
   }
   if (!plans.length) {
     bits.push(
-      "Install ffmpeg (X11, same silent grab Cursor uses) or grim (Wayland). GrokHub will not open a screenshot app.",
+      "Install grim (Wayland) or ffmpeg (X11). GrokHub will not open a screenshot app.",
     );
   } else if (plans[0].name === "ffmpeg-x11grab") {
-    bits.push("Live view uses ffmpeg x11grab (no screenshot picker).");
+    bits.push(
+      inj.session === "wayland"
+        ? "Live view is ffmpeg x11grab (XWayland). Install grim for the native Wayland framebuffer."
+        : "Live view uses ffmpeg x11grab (no screenshot picker).",
+    );
   } else if (plans[0].name === "grim") {
     bits.push("Live view uses grim (no screenshot picker).");
   }
+  if (missing.length) bits.push(`Missing: ${missing.join(", ")}.`);
   return bits.join(" ");
+}
+
+function parseXdpyinfoDimensions(text) {
+  const m = String(text || "").match(/dimensions:\s+(\d+)x(\d+)\s+pixels/i);
+  if (!m) return { width: 0, height: 0 };
+  return { width: Number(m[1]), height: Number(m[2]) };
+}
+
+function parseXrandrCurrentDimensions(text) {
+  const m = String(text || "").match(/current\s+(\d+)\s+x\s+(\d+)/i);
+  if (!m) return { width: 0, height: 0 };
+  return { width: Number(m[1]), height: Number(m[2]) };
+}
+
+function unionDisplayBounds(displays) {
+  const boxes = (Array.isArray(displays) ? displays : [])
+    .map((d) => d && d.bounds)
+    .filter((b) => b && Number(b.width) > 0 && Number(b.height) > 0);
+  if (!boxes.length) return { x: 0, y: 0, width: 0, height: 0 };
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const b of boxes) {
+    const x = Number(b.x) || 0;
+    const y = Number(b.y) || 0;
+    const w = Number(b.width);
+    const h = Number(b.height);
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x + w);
+    maxY = Math.max(maxY, y + h);
+  }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
 function injectorScreenSize(opts) {
   const o = opts || {};
-  const injector = o.injector || "";
   const x11 = o.x11 || { width: 0, height: 0 };
   const electron = o.electron || { width: 0, height: 0, scaleFactor: 1 };
   const sf = Number(electron.scaleFactor) > 0 ? Number(electron.scaleFactor) : 1;
-  if (injector === "xdotool" && x11.width > 0 && x11.height > 0) {
+  if (x11.width > 0 && x11.height > 0) {
     return { width: Math.round(x11.width), height: Math.round(x11.height) };
   }
   if (electron.width > 0 && electron.height > 0) {
@@ -484,29 +606,44 @@ function injectorScreenSize(opts) {
       height: Math.round(electron.height * sf),
     };
   }
-  if (x11.width > 0 && x11.height > 0) {
-    return { width: Math.round(x11.width), height: Math.round(x11.height) };
-  }
   return { width: 0, height: 0 };
 }
 
-function liveInjectorScreenSize() {
-  const inj = pickInjector();
-  let electron = { width: 0, height: 0, scaleFactor: 1 };
+function electronVirtualScreen() {
   try {
     const e = electronApis();
-    if (e && e.screen) {
-      const d = e.screen.getPrimaryDisplay();
-      electron = {
-        width: d.bounds.width,
-        height: d.bounds.height,
-        scaleFactor: d.scaleFactor || 1,
-      };
+    if (!e || !e.screen) return { width: 0, height: 0, scaleFactor: 1 };
+    const displays = typeof e.screen.getAllDisplays === "function" ? e.screen.getAllDisplays() : [];
+    const union = unionDisplayBounds(displays);
+    const primary = e.screen.getPrimaryDisplay();
+    const sf = (primary && primary.scaleFactor) || 1;
+    if (union.width > 0 && union.height > 0) {
+      return { width: union.width, height: union.height, scaleFactor: sf };
     }
+    const b = primary && primary.bounds;
+    if (b && b.width) return { width: b.width, height: b.height, scaleFactor: sf };
   } catch {
     /* ignore */
   }
-  return injectorScreenSize({ injector: inj.kind, x11: x11PixelSize(), electron });
+  return { width: 0, height: 0, scaleFactor: 1 };
+}
+
+function liveGeometry() {
+  const x11 = x11PixelSize();
+  const electron = electronVirtualScreen();
+  const size = injectorScreenSize({ x11, electron });
+  const source = x11.source || (electron.width ? "electron-virtual" : "");
+  return {
+    width: size.width,
+    height: size.height,
+    scaleFactor: electron.scaleFactor || 1,
+    source,
+  };
+}
+
+function liveInjectorScreenSize() {
+  const geo = liveGeometry();
+  return { width: geo.width, height: geo.height };
 }
 
 function shotMetaForMapping(shot, screen) {
@@ -606,17 +743,10 @@ async function maybeHideGrokHubForClick(x, y) {
 }
 
 function screenBounds() {
-  try {
-    const e = electronApis();
-    if (e && e.screen) {
-      const d = e.screen.getPrimaryDisplay();
-      return { width: d.bounds.width, height: d.bounds.height, scaleFactor: d.scaleFactor || 1 };
-    }
-  } catch {
-    /* ignore */
+  const geo = liveGeometry();
+  if (geo.width && geo.height) {
+    return { width: geo.width, height: geo.height, scaleFactor: geo.scaleFactor || 1 };
   }
-  const px = x11PixelSize();
-  if (px.width && px.height) return { width: px.width, height: px.height, scaleFactor: 1 };
   return { width: lastShotMeta?.screenWidth || 0, height: lastShotMeta?.screenHeight || 0, scaleFactor: 1 };
 }
 
@@ -1054,4 +1184,9 @@ module.exports = {
   previewStartVerdict,
   nextPreviewPlan,
   filterCapturePlans,
+  whichSync,
+  vendorBinDirs,
+  parseXdpyinfoDimensions,
+  parseXrandrCurrentDimensions,
+  unionDisplayBounds,
 };

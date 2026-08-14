@@ -2,6 +2,7 @@
 /** Computer-use protocol + vision hydrate (no display / injector required). */
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 
@@ -238,6 +239,58 @@ assert.deepEqual(
   }),
   { width: 1920, height: 1080 },
 );
+assert.deepEqual(
+  computer.injectorScreenSize({
+    injector: "ydotool",
+    x11: { width: 7280, height: 1440 },
+    electron: { width: 3440, height: 1440, scaleFactor: 1 },
+  }),
+  { width: 7280, height: 1440 },
+  "3-monitor virtual desktop must win over Electron primary-only bounds",
+);
+
+assert.equal(typeof computer.parseXdpyinfoDimensions, "function");
+assert.deepEqual(
+  computer.parseXdpyinfoDimensions("dimensions:    7280x1440 pixels (1931x382 millimeters)"),
+  { width: 7280, height: 1440 },
+);
+assert.deepEqual(computer.parseXdpyinfoDimensions("nope"), { width: 0, height: 0 });
+assert.equal(typeof computer.parseXrandrCurrentDimensions, "function");
+assert.deepEqual(
+  computer.parseXrandrCurrentDimensions(
+    "Screen 0: minimum 16 x 16, current 7280 x 1440, maximum 32767 x 32767",
+  ),
+  { width: 7280, height: 1440 },
+);
+assert.equal(typeof computer.unionDisplayBounds, "function");
+assert.deepEqual(
+  computer.unionDisplayBounds([
+    { bounds: { x: 0, y: 219, width: 1920, height: 1080 } },
+    { bounds: { x: 1920, y: 0, width: 3440, height: 1440 } },
+    { bounds: { x: 5360, y: 219, width: 1920, height: 1080 } },
+  ]),
+  { x: 0, y: 0, width: 7280, height: 1440 },
+  "KDE 3-output span is 7280×1440, not the 3440×1440 primary",
+);
+
+assert.equal(typeof computer.whichSync, "function");
+{
+  const vendor = fs.mkdtempSync(path.join(os.tmpdir(), "gh-vendor-"));
+  const fake = path.join(vendor, "ydotool");
+  fs.writeFileSync(fake, "#!/bin/sh\n");
+  fs.chmodSync(fake, 0o755);
+  assert.equal(computer.whichSync("ydotool", [vendor]), fake);
+  fs.rmSync(vendor, { recursive: true, force: true });
+}
+
+const ffSized = computer.ffmpegX11grabArgs(":0", "OUT", { width: 7280, height: 1440 });
+assert.ok(ffSized.includes("-video_size"));
+assert.ok(ffSized.includes("7280x1440"), "ffmpeg must get the full virtual desktop size");
+
+const doctor = computer.info();
+assert.ok(Array.isArray(doctor.missingTools), "info() must list missing capture/inject tools");
+assert.ok(doctor.geometry && typeof doctor.geometry === "object");
+assert.ok(doctor.uinput && typeof doctor.uinput.exists === "boolean");
 
 const hidpiMeta = computer.shotMetaForMapping(
   { width: 1280, height: 720 },

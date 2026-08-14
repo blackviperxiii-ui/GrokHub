@@ -2044,11 +2044,12 @@ function AgentPrefsPanel() {
         <div>
           <div className="text-sm font-medium">Computer use (screen + mouse)</div>
           <div className="text-xs text-[var(--color-muted)]">
-            Let the agent see a silent live feed and click/type (ffmpeg x11grab + xdotool, same
-            as Cursor). Off by default. Needs Grok OAuth or an xAI API key. Install{" "}
-            <span className="font-mono">ffmpeg</span> + <span className="font-mono">xdotool</span>{" "}
-            (X11) or <span className="font-mono">grim</span> +{" "}
-            <span className="font-mono">ydotool</span> (Wayland, uinput group).
+            Let the agent see a silent live feed and click/type. Off by default. Needs Grok OAuth
+            or an xAI API key. On KDE/GNOME Wayland install{" "}
+            <span className="font-mono">ydotool</span> + <span className="font-mono">grim</span>{" "}
+            (and <span className="font-mono">xdotool</span> for XWayland geometry). X11:{" "}
+            <span className="font-mono">ffmpeg</span> + <span className="font-mono">xdotool</span>.
+            Multi-monitor clicks use the full virtual desktop, not the primary only.
           </div>
         </div>
         <input
