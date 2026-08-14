@@ -29,7 +29,7 @@ import { getMode } from "@/lib/modes";
 import { tierMeta } from "@/lib/models-catalog";
 import { buildQuickChips, type QuickChip } from "@/lib/quick-assistant";
 import { contextFingerprint } from "@/lib/quick-assist-llm";
-import { streamStatusPill } from "@/lib/tool-status";
+import { humanizeStreamStatus, streamStatusPill } from "@/lib/tool-status";
 import { estimateThreadContextPercent } from "@/lib/context-manager";
 import { useGrokHub } from "@/lib/store";
 import { beginGrokOAuthFromUi } from "@/lib/begin-grok-oauth";
@@ -226,7 +226,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           {showStreaming && (
             <span
               className="inline-flex max-w-[min(100%,18rem)] items-center gap-1 rounded border border-[color-mix(in_oklab,var(--color-info)_40%,transparent)] px-1.5 py-px font-mono normal-case text-[var(--color-info)]"
-              title={streamStatus || "Working…"}
+              title={humanizeStreamStatus(streamStatus)}
             >
               <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin" />
               <span className="truncate">{streamStatusPill(streamStatus)}</span>
@@ -273,7 +273,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                   aria-live="polite"
                 >
                   <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[var(--color-info)]" />
-                  <span className="min-w-0 truncate font-mono">{streamStatus}</span>
+                  <span className="min-w-0 truncate">{humanizeStreamStatus(streamStatus)}</span>
                 </div>
               ) : null}
             </>
@@ -284,7 +284,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--color-info)] opacity-60" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--color-info)]" />
             </span>
-            {streamStatus || "Thinking…"}
+            {humanizeStreamStatus(streamStatus)}
           </span>
         ) : (
           ""
@@ -1763,8 +1763,8 @@ export function ChatView() {
                   <div className="text-sm font-medium">Controlling this computer</div>
                   <div className="text-[11px] text-[var(--color-muted)]">
                     {computerSession.previewing
-                      ? "Live picture loop · clicks use this frame"
-                      : streamStatus || "Screenshot + mouse/keyboard"}
+                      ? "Watching your screen — clicks use this picture"
+                      : humanizeStreamStatus(streamStatus)}
                   </div>
                 </div>
                 {computerSession.lastScreenshotDataUrl ? (
