@@ -41,6 +41,7 @@ export type ComputerActResult = {
   injector?: string;
   mapped?: { x: number; y: number; mapped?: boolean };
   ms?: number;
+  capture?: string;
 };
 
 type ComputerBridge = {
@@ -106,7 +107,9 @@ export async function computerStop(): Promise<void> {
   }
 }
 
-export async function computerStartPreview(intervalMs = 450): Promise<{ ok: boolean }> {
+export async function computerStartPreview(
+  intervalMs = 450,
+): Promise<{ ok: boolean; error?: string; capture?: string }> {
   const e = electronComputer();
   if (e?.startPreview) return e.startPreview(intervalMs);
   return { ok: false };
