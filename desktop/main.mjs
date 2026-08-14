@@ -1070,6 +1070,8 @@ function registerIpc() {
   safeHandle("computer:beginSession", wrap(() => computer.beginSession()));
   safeHandle("computer:endSession", wrap(() => computer.endSession()));
   safeHandle("computer:userStop", wrap(() => computer.userStop()));
+  safeHandle("computer:startPreview", wrap((_e, ms) => computer.startPreview(ms)));
+  safeHandle("computer:stopPreview", wrap(() => computer.stopPreview()));
 
   safeHandle("grok:chat", (_e, payload) => grokBridge.callXaiChat(payload || {}));
   safeHandle("grok:imagine", (_e, payload) => grokBridge.callXaiImagine(payload || {}));

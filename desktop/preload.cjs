@@ -33,6 +33,15 @@ contextBridge.exposeInMainWorld("grokhubDesktop", {
     beginSession: () => ipcRenderer.invoke("computer:beginSession"),
     endSession: () => ipcRenderer.invoke("computer:endSession"),
     stop: () => ipcRenderer.invoke("computer:userStop"),
+    startPreview: (ms) => ipcRenderer.invoke("computer:startPreview", ms),
+    stopPreview: () => ipcRenderer.invoke("computer:stopPreview"),
+    onFrame: (cb) => {
+      const fn = (_e, payload) => {
+        if (typeof cb === "function") cb(payload);
+      };
+      ipcRenderer.on("computer:frame", fn);
+      return () => ipcRenderer.removeListener("computer:frame", fn);
+    },
   },
   grok: {
     chat: (payload) => ipcRenderer.invoke("grok:chat", payload),
@@ -192,6 +201,13 @@ try {
   ipcRenderer.on("computer:userStop", () => {
     try {
       window.dispatchEvent(new CustomEvent("grokhub:computer-stop"));
+    } catch {
+      /* ignore */
+    }
+  });
+  ipcRenderer.on("computer:frame", (_e, payload) => {
+    try {
+      window.dispatchEvent(new CustomEvent("grokhub:computer-frame", { detail: payload || {} }));
     } catch {
       /* ignore */
     }

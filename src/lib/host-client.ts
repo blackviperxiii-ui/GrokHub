@@ -311,8 +311,11 @@ export type DesktopBridge = {
       step: import("./computer-protocol").ComputerStep,
     ) => Promise<import("./computer-client").ComputerActResult>;
     beginSession: () => Promise<import("./computer-client").ComputerInfo>;
-    endSession: () => Promise<{ ok: boolean }>;
+    endSession: () => Promise<{ ok: boolean; previewing?: boolean }>;
     stop: () => Promise<{ ok: boolean }>;
+    startPreview?: (ms?: number) => Promise<{ ok: boolean; previewing?: boolean }>;
+    stopPreview?: () => Promise<{ ok: boolean }>;
+    onFrame?: (cb: (frame: import("./computer-client").ComputerFrame) => void) => () => void;
   };
   grok?: DesktopGrokBridge;
   hub?: {

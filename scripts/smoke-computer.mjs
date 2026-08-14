@@ -16,6 +16,7 @@ const {
   classifyComputerStep,
   needsComputerConfirm,
   isComputerWriteOp,
+  computerPromptBlock,
 } = await import("../src/lib/computer-protocol.ts");
 const { hostAllowPrefixesFromConfirm, isHostAllowlisted } = await import(
   "../src/lib/host-safety.ts"
@@ -99,9 +100,60 @@ assert.equal(typeof hydrated[0].content, "string", "oldest screenshot stripped t
 const computer = require("../desktop/computer-bridge.cjs");
 assert.equal(typeof computer.info, "function");
 assert.equal(typeof computer.act, "function");
+assert.equal(typeof computer.preferredInjectorKind, "function");
+assert.equal(
+  computer.preferredInjectorKind("wayland", { xdotool: "/usr/bin/xdotool", ydotool: "/usr/bin/ydotool" }),
+  "ydotool",
+  "Wayland must prefer ydotool — xdotool cannot click native Wayland apps",
+);
+assert.equal(
+  computer.preferredInjectorKind("x11", { xdotool: "/usr/bin/xdotool", ydotool: "/usr/bin/ydotool" }),
+  "xdotool",
+);
+assert.equal(typeof computer.silentCaptureTools, "function");
+const tools = computer.silentCaptureTools("wayland", {
+  grim: "/usr/bin/grim",
+  maim: "/usr/bin/maim",
+  scrot: "/usr/bin/scrot",
+  "gnome-screenshot": "/usr/bin/gnome-screenshot",
+  spectacle: "/usr/bin/spectacle",
+  flameshot: "/usr/bin/flameshot",
+});
+assert.equal(tools[0]?.name, "grim");
+assert.equal(
+  tools.some((t) => t.name === "spectacle" || t.name === "flameshot"),
+  false,
+  "must not launch interactive screenshot apps",
+);
+assert.match(
+  computerPromptBlock(true),
+  /picture loop/i,
+  "agent prompt must tell the model to use the live frame",
+);
+
+assert.equal(typeof computer.startPreview, "function");
+assert.equal(typeof computer.stopPreview, "function");
+assert.equal(typeof computer.isPreviewing, "function");
 const info = computer.info();
 assert.equal(info.ok, true);
 assert.ok(info.session === "wayland" || info.session === "x11" || info.session === "unknown");
+assert.ok(Array.isArray(info.captureTools), "info must list silent capture tools");
+assert.ok(typeof info.capture === "string");
+assert.match(String(info.hint), /xdotool|ydotool|grim|maim/i);
+
+const started = computer.startPreview(400, "user");
+assert.equal(started.ok, true);
+assert.equal(started.previewing, true);
+assert.equal(started.owner, "user");
+assert.equal(computer.isPreviewing(), true);
+const sessionStart = await computer.beginSession();
+assert.equal(sessionStart.previewing, true);
+const sessionEnd = computer.endSession();
+assert.equal(sessionEnd.previewing, true, "user live view must survive an agent session");
+assert.equal(computer.isPreviewing(), true);
+const stopped = computer.stopPreview({ force: true });
+assert.equal(stopped.previewing, false);
+assert.equal(computer.isPreviewing(), false);
 const shot = await computer.act({ op: "screenshot" });
 assert.equal(shot.ok, false);
 assert.match(String(shot.error), /Electron|desktop/i);

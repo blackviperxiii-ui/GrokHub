@@ -19,6 +19,16 @@ export type ComputerInfo = {
   } | null;
   hint?: string;
   error?: string;
+  previewing?: boolean;
+  capture?: string;
+  captureTools?: string[];
+};
+
+export type ComputerFrame = {
+  dataUrl?: string;
+  screen?: { width: number; height: number; scaleFactor?: number };
+  screenshot?: { width: number; height: number };
+  capture?: string;
 };
 
 export type ComputerActResult = {
@@ -40,6 +50,9 @@ type ComputerBridge = {
   beginSession: () => Promise<ComputerInfo>;
   endSession: () => Promise<{ ok: boolean }>;
   stop: () => Promise<{ ok: boolean }>;
+  startPreview?: (ms?: number) => Promise<{ ok: boolean; previewing?: boolean }>;
+  stopPreview?: () => Promise<{ ok: boolean }>;
+  onFrame?: (cb: (frame: ComputerFrame) => void) => () => void;
 };
 
 function electronComputer(): ComputerBridge | undefined {
@@ -73,13 +86,15 @@ export async function computerBeginSession(): Promise<ComputerInfo> {
   return computerInfo();
 }
 
-export async function computerEndSession(): Promise<void> {
+export async function computerEndSession(): Promise<{ ok: boolean; previewing?: boolean }> {
   const e = electronComputer();
   try {
-    await e?.endSession?.();
+    const r = await e?.endSession?.();
+    if (r && typeof r === "object") return r;
   } catch {
     /* ignore */
   }
+  return { ok: true, previewing: false };
 }
 
 export async function computerStop(): Promise<void> {
@@ -89,6 +104,35 @@ export async function computerStop(): Promise<void> {
   } catch {
     /* ignore */
   }
+}
+
+export async function computerStartPreview(intervalMs = 450): Promise<{ ok: boolean }> {
+  const e = electronComputer();
+  if (e?.startPreview) return e.startPreview(intervalMs);
+  return { ok: false };
+}
+
+export async function computerStopPreview(): Promise<void> {
+  const e = electronComputer();
+  try {
+    await e?.stopPreview?.();
+  } catch {
+    /* ignore */
+  }
+}
+
+export function onComputerFrame(cb: (frame: ComputerFrame) => void): () => void {
+  const e = electronComputer();
+  if (e?.onFrame) return e.onFrame(cb);
+  const fn = (ev: Event) => {
+    const detail = (ev as CustomEvent<ComputerFrame>).detail;
+    if (detail) cb(detail);
+  };
+  if (typeof window !== "undefined") {
+    window.addEventListener("grokhub:computer-frame", fn);
+    return () => window.removeEventListener("grokhub:computer-frame", fn);
+  }
+  return () => {};
 }
 
 export async function computerAct(step: ComputerStep): Promise<ComputerActResult> {
