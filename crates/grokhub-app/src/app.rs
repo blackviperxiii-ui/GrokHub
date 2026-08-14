@@ -3767,9 +3767,10 @@ impl Cabin {
             crate::cards::section_label(ui, "Suggested");
             crate::cards::tile_row(ui, crate::cards::SUGGESTED_AUTOS.len(), |ui, i| {
                 let s = crate::cards::SUGGESTED_AUTOS[i];
-                if crate::cards::grok_tile(ui, s.glyph, s.title, s.body, Some("Add"), false)
-                    == crate::cards::TileHit::Add
-                {
+                if matches!(
+                    crate::cards::grok_tile(ui, s.glyph, s.title, s.body, Some("Add"), false),
+                    crate::cards::TileHit::Add | crate::cards::TileHit::Body
+                ) {
                     self.add_automation_seed(s.seed);
                 }
             });
@@ -4004,9 +4005,10 @@ impl Cabin {
                 .collect();
             crate::cards::tile_row(ui, pending.len(), |ui, i| {
                 let s = pending[i];
-                if crate::cards::grok_tile(ui, s.glyph, s.title, s.body, Some("Add"), false)
-                    == crate::cards::TileHit::Add
-                {
+                if matches!(
+                    crate::cards::grok_tile(ui, s.glyph, s.title, s.body, Some("Add"), false),
+                    crate::cards::TileHit::Add | crate::cards::TileHit::Body
+                ) {
                     let sk = crate::cards::skill_from_suggested(&s);
                     if skills::save_skill(&sk).is_ok() {
                         self.skill_list = skills::list_skills();
