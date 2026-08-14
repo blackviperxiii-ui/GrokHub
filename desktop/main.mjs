@@ -1524,6 +1524,12 @@ if (process.platform === "linux" && process.env.GROKHUB_DEV_SHM !== "1") {
 // Set GROKHUB_KEEP_UI=1 to leave the backend running for multi-instance.
 app.on("will-quit", () => {
   try {
+    computer.stopPreview?.({ force: true });
+    computer.endSession?.();
+  } catch {
+    /* ignore */
+  }
+  try {
     globalShortcut.unregisterAll();
   } catch {
     /* ignore */

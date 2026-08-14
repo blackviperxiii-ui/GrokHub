@@ -18,6 +18,7 @@ import {
   computerStopPreview,
   type ComputerInfo,
 } from "@/lib/computer-client";
+import { mapContainedImageClick } from "@/lib/computer-geometry";
 import { useGrokHub } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { HostGatewayBanner } from "../HostGatewayBanner";
@@ -600,14 +601,14 @@ export function DesktopHostView() {
                 className="block w-full overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] p-0"
                 title="Click the picture to click that spot on the desktop"
                 onClick={(e) => {
-                  const img = (e.currentTarget.querySelector("img") || e.currentTarget) as HTMLElement;
+                  const img = e.currentTarget.querySelector("img");
+                  if (!img) return;
                   const rect = img.getBoundingClientRect();
-                  const w = lastShotSize?.width || rect.width;
-                  const h = lastShotSize?.height || rect.height;
-                  if (!rect.width || !rect.height) return;
-                  const x = Math.round(((e.clientX - rect.left) / rect.width) * w);
-                  const y = Math.round(((e.clientY - rect.top) / rect.height) * h);
-                  void computerAct({ op: "click", x, y });
+                  const w = lastShotSize?.width || img.naturalWidth || 0;
+                  const h = lastShotSize?.height || img.naturalHeight || 0;
+                  const mapped = mapContainedImageClick(e.clientX, e.clientY, rect, w, h);
+                  if (!mapped) return;
+                  void computerAct({ op: "click", x: mapped.x, y: mapped.y });
                 }}
               >
                 <img

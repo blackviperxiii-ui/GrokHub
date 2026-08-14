@@ -131,13 +131,34 @@ const tools = computer.silentCaptureTools("wayland", {
   flameshot: "/usr/bin/flameshot",
 });
 assert.equal(tools[0]?.name, "grim");
-assert.ok(tools.some((t) => t.name === "ffmpeg-x11grab"));
+assert.equal(
+  tools.some((t) => t.name === "ffmpeg-x11grab"),
+  false,
+  "Wayland + grim must not x11grab the XWayland root",
+);
 assert.equal(
   tools.some((t) =>
     /spectacle|flameshot|gnome-screenshot|desktopCapturer/i.test(t.name),
   ),
   false,
   "must not launch interactive screenshot apps or Electron portal picker",
+);
+assert.equal(
+  computer.previewCaptureKind("wayland", {
+    grim: "/usr/bin/grim",
+    ffmpeg: "/usr/bin/ffmpeg",
+    display: ":0",
+  }),
+  "grim",
+  "live view must follow grim-first, not DISPLAY+ffmpeg",
+);
+assert.equal(
+  computer.silentCaptureTools("wayland", {
+    ffmpeg: "/usr/bin/ffmpeg",
+    display: ":0",
+  })[0]?.name,
+  "ffmpeg-x11grab",
+  "x11grab is only a Wayland fallback when grim is missing",
 );
 
 const x11tools = computer.silentCaptureTools("x11", {
@@ -158,6 +179,140 @@ const oneJpeg = Buffer.concat([
 ]);
 pushJpeg(Buffer.concat([Buffer.from("xx"), oneJpeg, oneJpeg]));
 assert.equal(jpegFrames.length, 2, "MJPEG pipe must split concatenated JPEGs");
+
+const decoy = [];
+const pushDecoy = computer.splitJpegFrames((j) => decoy.push(j));
+const comJpeg = Buffer.from([
+  0xff, 0xd8, 0xff, 0xfe, 0x00, 0x04, 0xff, 0xd9, 0xff, 0xd9,
+]);
+pushDecoy(comJpeg);
+assert.equal(decoy.length, 1, "FF D9 inside a COM segment is not end-of-image");
+assert.equal(decoy[0].length, comJpeg.length);
+
+const splitSoi = [];
+const pushSplit = computer.splitJpegFrames((j) => splitSoi.push(j));
+pushSplit(Buffer.from([0xff]));
+pushSplit(Buffer.from([0xd8, 0x00, 0xff, 0xd9]));
+assert.equal(splitSoi.length, 1, "SOI split across chunks must not be dropped");
+
+assert.equal(typeof computer.mapToScreen, "function");
+assert.equal(
+  computer.mapToScreen(100, 50, { width: 1280, height: 800, screenWidth: 0, screenHeight: 0 }).mapped,
+  false,
+  "zero screen size must not map clicks to 0,0",
+);
+assert.equal(
+  computer.mapToScreen(640, 400, {
+    width: 1280,
+    height: 800,
+    screenWidth: 1920,
+    screenHeight: 1200,
+  }).x,
+  960,
+);
+
+assert.equal(typeof computer.injectorScreenSize, "function");
+assert.deepEqual(
+  computer.injectorScreenSize({
+    injector: "xdotool",
+    x11: { width: 3840, height: 2160 },
+    electron: { width: 1920, height: 1080, scaleFactor: 2 },
+  }),
+  { width: 3840, height: 2160 },
+  "xdotool clicks in X11 pixels, not Electron DIP",
+);
+assert.deepEqual(
+  computer.injectorScreenSize({
+    injector: "ydotool",
+    x11: { width: 0, height: 0 },
+    electron: { width: 1920, height: 1080, scaleFactor: 2 },
+  }),
+  { width: 3840, height: 2160 },
+  "ydotool on HiDPI must use physical pixels (DIP × scale)",
+);
+assert.deepEqual(
+  computer.injectorScreenSize({
+    injector: "xdotool",
+    x11: { width: 1920, height: 1080 },
+    electron: { width: 1920, height: 1080, scaleFactor: 1 },
+  }),
+  { width: 1920, height: 1080 },
+);
+
+const hidpiMeta = computer.shotMetaForMapping(
+  { width: 1280, height: 720 },
+  computer.injectorScreenSize({
+    injector: "xdotool",
+    x11: { width: 3840, height: 2160 },
+    electron: { width: 1920, height: 1080, scaleFactor: 2 },
+  }),
+);
+assert.equal(computer.mapToScreen(640, 360, hidpiMeta).x, 1920, "center of 1280 shot → center of 3840 screen");
+assert.equal(computer.mapToScreen(640, 360, hidpiMeta).y, 1080);
+
+assert.equal(typeof computer.pointHitsScaledBounds, "function");
+assert.equal(
+  computer.pointHitsScaledBounds(400, 400, { x: 100, y: 100, width: 800, height: 600 }, 2),
+  true,
+  "pixel click vs DIP window must scale the window",
+);
+assert.equal(
+  computer.pointHitsScaledBounds(150, 150, { x: 100, y: 100, width: 800, height: 600 }, 2),
+  false,
+  "DIP-space point must not hit a window that lives at 2× pixels",
+);
+
+assert.equal(typeof computer.previewStartVerdict, "function");
+assert.equal(computer.previewStartVerdict({ gotFrame: true, procAlive: true, elapsedMs: 10, waitMs: 1500 }), "ready");
+assert.equal(
+  computer.previewStartVerdict({ gotFrame: false, procAlive: false, elapsedMs: 40, waitMs: 1500 }),
+  "dead",
+  "ffmpeg that exits before a frame is a failed live view",
+);
+assert.equal(
+  computer.previewStartVerdict({ gotFrame: false, procAlive: true, elapsedMs: 80, waitMs: 1500 }),
+  "wait",
+);
+assert.equal(
+  computer.previewStartVerdict({ gotFrame: false, procAlive: true, elapsedMs: 1600, waitMs: 1500 }),
+  "timeout-alive",
+);
+assert.equal(typeof computer.nextPreviewPlan, "function");
+assert.equal(
+  computer.nextPreviewPlan(
+    [
+      { name: "ffmpeg-x11grab" },
+      { name: "grim" },
+    ],
+    "ffmpeg-x11grab",
+  )?.name,
+  "grim",
+);
+assert.deepEqual(
+  computer.filterCapturePlans(
+    [{ name: "ffmpeg-x11grab" }, { name: "grim" }, { name: "maim" }],
+    "ffmpeg-x11grab",
+  ).map((p) => p.name),
+  ["grim", "maim"],
+  "dead ffmpeg must not be retried on every grim/maim tick",
+);
+
+const { mapContainedImageClick } = await import("../src/lib/computer-geometry.ts");
+const letterbox = {
+  left: 0,
+  top: 0,
+  width: 800,
+  height: 400,
+};
+// 1280×800 in an 800×400 box: scale=0.5, drawn 640×400, x-offset 80
+assert.equal(
+  mapContainedImageClick(40, 200, letterbox, 1280, 800),
+  null,
+  "click on the side letterbox must not fire a desktop click",
+);
+assert.deepEqual(mapContainedImageClick(80, 0, letterbox, 1280, 800), { x: 0, y: 0 });
+assert.deepEqual(mapContainedImageClick(80 + 320, 200, letterbox, 1280, 800), { x: 640, y: 400 });
+assert.equal(mapContainedImageClick(100, 50, { left: 0, top: 0, width: 0, height: 0 }, 1280, 800), null);
 
 assert.equal(computer.previewAllowsDesktopCapturer(), false);
 assert.doesNotMatch(
@@ -181,7 +336,7 @@ assert.ok(Array.isArray(info.captureTools), "info must list silent capture tools
 assert.ok(info.capture === null || typeof info.capture === "string");
 assert.match(String(info.hint), /xdotool|ydotool|grim|maim|ffmpeg/i);
 
-const started = computer.startPreview(400, "user");
+const started = await computer.startPreview(400, "user");
 if (started.ok) {
   assert.equal(started.previewing, true);
   assert.equal(started.owner, "user");
@@ -198,6 +353,19 @@ if (started.ok) {
   assert.match(String(started.error), /ffmpeg|grim|silent/i);
   assert.equal(computer.isPreviewing(), false);
 }
+computer.stopPreview({ force: true });
+computer.resetAbort();
+const sessionPreview = await computer.startPreview(400, "session");
+if (sessionPreview.ok) {
+  computer.userStop();
+  assert.equal(
+    computer.isPreviewing(),
+    false,
+    "Stop must end a session-owned live view",
+  );
+}
+computer.resetAbort();
+computer.stopPreview({ force: true });
 const shot = await computer.act({ op: "screenshot" });
 if (shot.ok) {
   assert.ok(String(shot.dataUrl || "").startsWith("data:image/"));
@@ -269,5 +437,15 @@ const chatSrc = fs.readFileSync(
   "utf8",
 );
 assert.match(chatSrc, /hostAllowPrefixesFromConfirm/);
+
+const hostViewSrc = fs.readFileSync(
+  path.join(process.cwd(), "src/components/views/DesktopHostView.tsx"),
+  "utf8",
+);
+assert.match(
+  hostViewSrc,
+  /mapContainedImageClick/,
+  "live-view clicks must account for object-contain letterboxing",
+);
 
 console.log("smoke-computer OK");
