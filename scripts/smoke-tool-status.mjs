@@ -61,6 +61,7 @@ assert.match(running, /Looking at files/);
 assert.doesNotMatch(running, /stream is live/i);
 assert.doesNotMatch(running, /### 🖥️/);
 assert.doesNotMatch(running, /Running now/i);
+assert.doesNotMatch(running, /`ls/);
 
 const results = toolResultMarkdown({
   kind: "host",
@@ -77,6 +78,7 @@ assert.match(results, /done|ok/i);
 assert.match(results, /failed|couldn't/i);
 assert.doesNotMatch(results, /```shell/);
 assert.doesNotMatch(results, /stream is live/i);
+assert.doesNotMatch(results, /`ls/);
 assert.match(results, /Reading the results/);
 
 const wait = toolLoopWaitMarkdown("Almost there.", 2);
@@ -105,6 +107,7 @@ assert.match(parallel, /On your computer/);
 assert.match(parallel, /at once/);
 assert.match(parallel, /Looking at files/);
 assert.doesNotMatch(parallel, /safe host commands/i);
+assert.doesNotMatch(parallel, /`ls/);
 
 assert.equal(hasToolTrailEvidence("**On your computer**\nLooking at files — `ls`"), true);
 assert.equal(hasToolTrailEvidence("Checked your machine.\n**On your computer**"), true);

@@ -17,6 +17,7 @@ import {
   applyLockedDesktop,
   applyLockedAgentPrefs,
 } from "./locked-settings";
+import { enqueueFollowUp, takeFollowUp } from "./follow-up";
 import {
   buildContext,
   compactMessages,
@@ -697,6 +698,8 @@ type State = {
     heartbeatEveryMin?: number;
   }) => void;
   sendChat: (text: string) => Promise<boolean | void>;
+  pendingFollowUps: string[];
+  enqueueFollowUp: (text: string) => void;
   stopChat: () => void;
   refreshModels: (opts?: { force?: boolean }) => Promise<void>;
   setImaginePrompt: (v: string) => void;
@@ -1284,6 +1287,7 @@ export const useGrokHub = create<State>()(
       streamingMessageId: null,
       proactiveNotice: null,
       pendingHostConfirm: null,
+      pendingFollowUps: [],
       computerSession: {
         active: false,
         previewing: false,
@@ -1482,7 +1486,15 @@ export const useGrokHub = create<State>()(
       },
 
       regenerateLast: async () => {
-        if (get().running) return;
+        if (get().running) {
+          get().pushActivity({
+            kind: "chat",
+            title: "Still working",
+            detail: "Stop or wait — then regenerate",
+            status: "failed",
+          });
+          return;
+        }
         const chat = get().chat;
         let userIdx = -1;
         for (let i = chat.length - 1; i >= 0; i--) {
@@ -2380,7 +2392,10 @@ syncWebsiteConnectors: async () => {
         set((st) => ({
           mode: (merged.mode as typeof st.mode) || st.mode,
           desktop: merged.desktop
-            ? { ...st.desktop, ...(merged.desktop as object) }
+            ? applyLockedDesktop({
+                ...st.desktop,
+                ...(merged.desktop as Partial<State["desktop"]>),
+              })
             : st.desktop,
           agents: merged.agents || st.agents,
           skills: merged.skills || st.skills,
@@ -3461,7 +3476,10 @@ syncWebsiteConnectors: async () => {
         await get().sendChat(prompt);
       },
       keepGoingChat: async () => {
-        if (get().running) return;
+        if (get().running) {
+          get().enqueueFollowUp("Continue from where you left off.");
+          return;
+        }
         const chat = get().chat;
         const lastAsst = [...chat].reverse().find((m) => m.role === "assistant");
         const lastUser = [...chat].reverse().find((m) => m.role === "user");
@@ -3847,27 +3865,35 @@ syncWebsiteConnectors: async () => {
 
       saveComputerSkill: (input) => {
         const pending = get().computerSession.pendingSave;
-        if (!pending?.steps.length) return;
+        if (!pending) return;
         const name = input.name.trim() || pending.prompt.slice(0, 40) || "Desktop recipe";
         const slash =
           input.slash?.trim() ||
           `/${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "desktop-recipe"}`;
-        const recipe: ComputerRecipe = {
-          version: 1,
-          screen: pending.screen,
-          steps: pending.steps,
-          summary: pending.summary || pending.prompt.slice(0, 240),
-        };
+        const recipe: ComputerRecipe | undefined = pending.steps.length
+          ? {
+              version: 1,
+              screen: pending.screen,
+              steps: pending.steps,
+              summary: pending.summary || pending.prompt.slice(0, 240),
+            }
+          : undefined;
         get().addSkill({
           name,
           slash,
-          description: input.description?.trim() || recipe.summary || "Trained desktop recipe",
+          description:
+            input.description?.trim() ||
+            recipe?.summary ||
+            pending.summary ||
+            "Trained from a successful run",
           instructions: [
-            recipe.summary || pending.prompt,
+            pending.summary || pending.prompt,
             "",
-            "Replay the captured desktop steps. If replay fails, use COMPUTER_CMD to finish the task.",
+            recipe
+              ? "Replay the captured desktop steps. If replay fails, use COMPUTER_CMD to finish the task."
+              : "Replay this successful run. Use HOST_CMD and COMPUTER_CMD as needed to finish the same task.",
           ].join("\n"),
-          computerRecipe: recipe,
+          ...(recipe ? { computerRecipe: recipe } : {}),
         });
         set((s) => ({
           computerSession: { ...s.computerSession, pendingSave: null },
@@ -4732,8 +4758,21 @@ syncWebsiteConnectors: async () => {
           status: "failed",
         });
         void gen;
+        set({ pendingFollowUps: [] });
         queueMicrotask(() => {
           void get().processAgentQueue();
+        });
+      },
+
+      enqueueFollowUp: (text) => {
+        const next = enqueueFollowUp(get().pendingFollowUps || [], text);
+        if (next === get().pendingFollowUps) return;
+        set({ pendingFollowUps: next });
+        get().pushActivity({
+          kind: "chat",
+          title: "Queued follow-up",
+          detail: text.trim().slice(0, 100),
+          status: "success",
         });
       },
 
@@ -5214,7 +5253,7 @@ syncWebsiteConnectors: async () => {
                     ? "\n### Legacy app notes\n" + legacy.slice(0, 1000)
                     : "",
                   "",
-                  "_Write: `/memory note` · `/memory user …` · `/memory today …` · Settings → Memory_",
+                  "_Write: `/memory note` · `/memory user …` · `/memory today …` · files in `~/.config/GrokHub/memory`_",
                 ].join("\n");
               } else if (kind === "user") {
                 const user = await memoryRead("USER.md");
@@ -5999,7 +6038,7 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
                 ? hasVisionAuth
                   ? "- Computer use: LIVE — screenshot + mouse/keyboard via COMPUTER_CMD (opt-in)."
                   : "- Computer use: enabled in settings but needs Grok OAuth or an xAI API key for vision."
-                : "- Computer use: DISABLED (Settings → Agent). Do not emit COMPUTER_CMD.",
+                : "- Computer use: off on this session. Do not emit COMPUTER_CMD.",
               stTurn.agentPrefs?.connectorToolsEnabled === false
                 ? "- Connector tools: DISABLED."
                 : "- Connector tools: ONLY connectors marked liveTools (Grok, Desktop Host, GitHub with PAT).",
@@ -7021,8 +7060,14 @@ if (!cmds.length && !compCmds.length) {
                 ),
               );
             }
+            if (!aborted && rounds >= maxRounds) {
+              const note = "_Reached the tool-round limit. Ask me to continue if you want more._";
+              if (!finalAnswer.includes("tool-round limit")) {
+                finalAnswer = `${(finalAnswer || "").trim()}\n\n${note}`.trim();
+              }
+            }
 
-            if (!aborted && computerTurnSteps.length) {
+            if (!aborted && (computerTurnSteps.length || usedAnyTools)) {
               set((s) => ({
                 computerSession: {
                   ...s.computerSession,
@@ -7342,6 +7387,13 @@ if (!cmds.length && !compCmds.length) {
         } // end finally
         } finally {
           sendChatBusy = false;
+        }
+        const follow = takeFollowUp(get().pendingFollowUps || []);
+        if (follow.next) {
+          set({ pendingFollowUps: follow.rest });
+          queueMicrotask(() => {
+            void get().sendChat(follow.next!);
+          });
         }
       },
 

@@ -14,6 +14,7 @@ import os from "node:os";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import { APP_VERSION as BUILTIN_VERSION } from "./version";
+import { versionNewer } from "./version-compare";
 
 const execFileAsync = promisify(execFileCb);
 
@@ -220,11 +221,33 @@ export async function checkForUpdate(opts?: {
     "";
   const installRoot = await findInstallRoot();
   const local = await readLocalVersion(installRoot);
+  const headers: Record<string, string> = {
+    accept: "application/vnd.github+json",
+    "user-agent": "GrokHub-Updater",
+  };
+  if (token) headers.authorization = `Bearer ${token}`;
+  let latestRelease: string | null = null;
+  try {
+    const relRes = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+      headers,
+    });
+    if (relRes.ok) {
+      const rel = (await relRes.json()) as { tag_name?: string };
+      latestRelease = String(rel.tag_name || "").replace(/^v/i, "") || null;
+    }
+  } catch {
+    /* SHA check still runs */
+  }
   let remote: { sha: string; message: string } | null = null;
   let detail = "";
   try {
     remote = await fetchRemoteHead(repo, branch, token || undefined);
-    if (!remote) {
+    const releaseNewer = Boolean(latestRelease && versionNewer(latestRelease, local.version));
+    if (releaseNewer) {
+      detail = `Update available · v${local.version} → v${latestRelease}`;
+    } else if (latestRelease) {
+      detail = `Up to date · v${local.version} (latest GitHub release)`;
+    } else if (!remote) {
       detail = token
         ? "Could not read remote commit (check repo access / token scopes)."
         : "Could not read remote commit (private repo needs a GitHub token).";
@@ -241,7 +264,9 @@ export async function checkForUpdate(opts?: {
 
   const remoteShort = remote?.sha ? remote.sha.slice(0, 12) : null;
   const localShort = local.sha ? local.sha.slice(0, 12) : null;
-  const updateAvailable = Boolean(remote && !shaMatch(local.sha, remote.sha));
+  const updateAvailable = latestRelease
+    ? versionNewer(latestRelease, local.version)
+    : Boolean(remote && !shaMatch(local.sha, remote.sha));
 
   return {
     currentVersion: local.version,

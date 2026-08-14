@@ -3,6 +3,7 @@ import { modelIdForMode, resolveMode } from "./modes";
 import { sanitizeChatModel } from "./models-catalog";
 import { parseRateLimitHeaders } from "./usage";
 import { hasToolTrailEvidence } from "./tool-status";
+import { stripToolProtocolForUser } from "./strip-tool-protocol";
 
 export const XAI_BASE = "https://api.x.ai/v1";
 
@@ -601,7 +602,7 @@ export function stripHostCommands(text: string): string {
     if (lines.length <= 6 && String(body || "").length <= 600) return "";
     return block;
   });
-  return out.replace(/\n{3,}/g, "\n\n").trim();
+  return stripToolProtocolForUser(out.replace(/\n{3,}/g, "\n\n").trim());
 }
 
 /**

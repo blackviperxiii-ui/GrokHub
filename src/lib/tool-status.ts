@@ -218,7 +218,7 @@ function kindTitle(kind: "host" | "connector" | "selfmod" | "computer"): string 
 function whyLine(kind: "host" | "connector" | "selfmod" | "computer", command: string): string {
   switch (kind) {
     case "host":
-      return `${humanizeHostCommand(command)} — \`${shortenCmd(command)}\``;
+      return humanizeHostCommand(command);
     case "computer":
       return humanizeComputerCommand(command);
     case "connector":
@@ -318,7 +318,7 @@ export function toolResultMarkdown(opts: {
 }): string {
   const lines = (opts.outputs || []).map((raw) => {
     const s = summarizeToolOutput(raw);
-    return `- ${s.label}${s.command && s.label !== s.command ? ` — \`${s.command}\`` : ""} — ${s.ok ? "done" : "failed"}`;
+    return `- ${s.label} — ${s.ok ? "done" : "failed"}`;
   });
   return [
     (opts.preface || "").trim(),
@@ -339,7 +339,7 @@ export function toolParallelMarkdown(opts: {
   commands: string[];
 }): string {
   const cmds = opts.commands || [];
-  const lines = cmds.map((c) => `- ${humanizeHostCommand(c)} — \`${shortenCmd(c)}\``);
+  const lines = cmds.map((c) => `- ${humanizeHostCommand(c)}`);
   return [
     (opts.preface || "").trim(),
     "",
