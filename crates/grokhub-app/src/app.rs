@@ -42,7 +42,7 @@ use grokhub_core::{
     HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, Recipe, ReplayOp, RewindRecord,
     SkillMd, Slash, TranscribeRoute, UsageDay, VoiceEvent, VoiceState, CONTEXT_BUDGET_TOKENS,
-    DEFAULT_CONNECTOR_HOSTS, DEFAULT_MODEL, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS,
+    DEFAULT_MODEL, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS,
     PRESENCE_RING_MS, TRANSCRIBERS,
 };
 use grokhub_hub::serve_lan;
@@ -3913,26 +3913,71 @@ impl Cabin {
             });
             ui.add_space(16.0);
             if self.skills_tab_connectors {
-                ui.label(RichText::new("Connectors").small().color(crate::theme::SUBTLE));
+                ui.label(RichText::new("Live").small().color(crate::theme::SUBTLE));
                 ui.add_space(8.0);
-                ui.columns(2, |cols| {
-                    let gh = if self.secrets.github_token.trim().is_empty() {
-                        "GitHub PAT missing — set it in Settings. CONNECTOR_CMD stays off."
-                    } else {
-                        "GitHub PAT present (never shown). CONNECTOR_CMD runs against it."
-                    };
-                    if crate::cards::catalog_card(&mut cols[0], "GitHub", gh, false) {
-                        self.nav = Nav::Settings;
-                    }
-                    cols[1].vertical(|ui| {
-                        ui.label(RichText::new("Website (status only)").small().color(crate::theme::SUBTLE));
-                        for host in DEFAULT_CONNECTOR_HOSTS {
-                            crate::cards::catalog_card(ui, host, "Status only — no fetch from this pane.", false);
-                        }
-                    });
-                });
+                ui.label(
+                    RichText::new("Website hosts are an allowlist for CONNECTOR_CMD, not apps. No Outlook, Gmail, or Drive here.")
+                        .small()
+                        .color(crate::theme::MUTED),
+                );
+                ui.add_space(8.0);
+                let has_pat = !self.secrets.github_token.trim().is_empty();
+                let mut gh_tool: Option<&'static str> = None;
+                for c in crate::cards::LIVE_CONNECTORS {
+                    egui::Frame::none()
+                        .fill(crate::theme::ELEVATED)
+                        .rounding(12.0)
+                        .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                        .inner_margin(egui::Margin::same(14.0))
+                        .show(ui, |ui| {
+                            ui.label(RichText::new(c.title).strong().size(15.0));
+                            ui.label(
+                                RichText::new(if has_pat {
+                                    "PAT present (never shown). Who am I and List repos hit api.github.com."
+                                } else {
+                                    "No PAT — set one in Settings, then these buttons work."
+                                })
+                                .small()
+                                .color(crate::theme::MUTED),
+                            );
+                            ui.horizontal(|ui| {
+                                for (label, tool) in c.tools {
+                                    if ui.button(*label).clicked() {
+                                        gh_tool = Some(*tool);
+                                    }
+                                }
+                                if ui.button("Settings").clicked() {
+                                    self.nav = Nav::Settings;
+                                }
+                            });
+                        });
+                }
+                if let Some(tool) = gh_tool {
+                    self.nav = Nav::Chat;
+                    self.run_connector("github", tool, "");
+                }
                 return;
             }
+            ui.label(RichText::new("Suggested").small().color(crate::theme::SUBTLE));
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
+                for s in crate::cards::SUGGESTED_SKILLS {
+                    if self.skill_list.iter().any(|e| e.name == s.name) {
+                        continue;
+                    }
+                    if crate::cards::suggestion_card(ui, s.title, s.body) {
+                        let sk = crate::cards::skill_from_suggested(s);
+                        if skills::save_skill(&sk).is_ok() {
+                            self.skill_list = skills::list_skills();
+                            self.skill_name = sk.name.clone();
+                            self.skill_body = grokhub_core::render_skill_md(&sk);
+                            self.status = format!("Wrote skill {}", sk.name);
+                        }
+                    }
+                }
+            });
+            ui.add_space(12.0);
             ui.label(RichText::new("Personal").small().color(crate::theme::SUBTLE));
             ui.add_space(8.0);
             let q = self.skill_q.clone();
