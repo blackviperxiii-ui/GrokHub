@@ -2566,7 +2566,7 @@ impl eframe::App for Cabin {
         self.ui_sidebar(ctx);
         if !matches!(
             self.nav,
-            Nav::Skills | Nav::Connectors | Nav::Night | Nav::Imagine | Nav::Workboard
+            Nav::Chat | Nav::Skills | Nav::Connectors | Nav::Night | Nav::Imagine | Nav::Workboard
         ) {
             self.ui_stage_header(ctx);
         }
@@ -3146,9 +3146,13 @@ impl Cabin {
         egui::TopBottomPanel::bottom("composer")
             .frame(
                 egui::Frame::none()
-                    .fill(crate::theme::PANEL)
-                    .stroke(egui::Stroke::new(1.0, crate::theme::BORDER))
-                    .inner_margin(egui::Margin::same(12.0)),
+                    .fill(crate::theme::BG)
+                    .inner_margin(egui::Margin {
+                        left: 48.0,
+                        right: 48.0,
+                        top: 10.0,
+                        bottom: 22.0,
+                    }),
             )
             .show(ctx, |ui| {
             if needs_auth_banner(self.has_key()) && !self.messages.is_empty() {
@@ -3288,9 +3292,9 @@ impl Cabin {
             ui.add_space(4.0);
             egui::Frame::none()
                 .fill(crate::theme::ELEVATED)
-                .rounding(24.0)
-                .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG))
-                .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+                .rounding(28.0)
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                .inner_margin(egui::Margin::symmetric(14.0, 10.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if ui
@@ -3355,10 +3359,11 @@ impl Cabin {
                         if ui
                             .add(
                                 egui::Button::new(
-                                    RichText::new("mic").small().color(crate::theme::MUTED),
+                                    RichText::new("o").size(14.0).color(crate::theme::MUTED),
                                 )
                                 .fill(egui::Color32::TRANSPARENT)
-                                .rounding(16.0),
+                                .rounding(16.0)
+                                .min_size(egui::vec2(28.0, 28.0)),
                             )
                             .on_hover_text("Hey Grok")
                             .clicked()
@@ -3396,7 +3401,7 @@ impl Cabin {
                         ui.vertical_centered(|ui| {
                             ui.label(
                                 RichText::new("What do you want to know?")
-                                    .size(32.0)
+                                    .size(36.0)
                                     .strong()
                                     .color(crate::theme::FG),
                             );
@@ -3410,16 +3415,23 @@ impl Cabin {
                         ui.add_space(28.0);
                         let tiles = self.visible_chips.clone();
                         let n = tiles.len().min(4);
+                        let max_w = 880.0_f32.min(ui.available_width());
+                        let pad = ((ui.available_width() - max_w) * 0.5).max(0.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(pad);
+                            ui.allocate_ui(egui::vec2(max_w, 0.0), |ui| {
                         crate::cards::tile_row(ui, n, |ui, i| {
                             let c = &tiles[i];
                             if crate::cards::empty_prompt_tile(
                                 ui,
-                                crate::cards::chip_glyph(&c.label),
+                                crate::cards::chip_icon(&c.label),
                                 &c.label,
                                 if c.hint.is_empty() { "Suggested" } else { &c.hint },
                             ) {
                                 self.apply_chip(c.clone());
                             }
+                        });
+                            });
                         });
                     }
                     for m in &self.messages {
@@ -3747,7 +3759,7 @@ impl Cabin {
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut a.enabled, "");
                     });
-                    if crate::cards::grok_tile(ui, "●", &title, &body, Some("Run"), false)
+                    if crate::cards::grok_tile(ui, crate::icons::TileIcon::Bolt, &title, &body, Some("Run"), false)
                         == crate::cards::TileHit::Add
                     {
                         drop = Some(usize::MAX - i);
@@ -3768,7 +3780,7 @@ impl Cabin {
             crate::cards::tile_row(ui, crate::cards::SUGGESTED_AUTOS.len(), |ui, i| {
                 let s = crate::cards::SUGGESTED_AUTOS[i];
                 if matches!(
-                    crate::cards::grok_tile(ui, s.glyph, s.title, s.body, Some("Add"), false),
+                    crate::cards::grok_tile(ui, s.icon, s.title, s.body, Some("Add"), false),
                     crate::cards::TileHit::Add | crate::cards::TileHit::Body
                 ) {
                     self.add_automation_seed(s.seed);
@@ -3842,26 +3854,46 @@ impl Cabin {
                     self.persist();
                 }
             });
+            ui.add_space(16.0);
+            crate::cards::section_label(ui, "Open");
             let mut bump: Option<(usize, BoardStatus)> = None;
-            for (i, c) in self.board.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{} · {} · {}", c.status.as_str(), c.title, c.detail));
-                    if ui.small_button("approve").clicked() {
-                        bump = Some((i, BoardStatus::Approved));
-                    }
-                    if ui.small_button("start").clicked() {
-                        bump = Some((i, BoardStatus::InProgress));
-                    }
-                    if ui.small_button("done").clicked() {
-                        if can_mark_done(self.verify_ok_turn, false) {
-                            bump = Some((i, BoardStatus::Done));
-                        } else {
-                            self.status = "Need VERIFY_OK or a passing verify.sh".into();
+            if self.board.is_empty() {
+                ui.label(RichText::new("No cards yet.").color(crate::theme::MUTED));
+            } else {
+                let n = self.board.len();
+                crate::cards::tile_row(ui, n, |ui, i| {
+                    let c = &self.board[i];
+                    let body = if c.detail.is_empty() {
+                        c.status.as_str().to_string()
+                    } else {
+                        format!("{} · {}", c.status.as_str(), c.detail.chars().take(72).collect::<String>())
+                    };
+                    crate::cards::grok_tile(
+                        ui,
+                        crate::icons::TileIcon::Board,
+                        &c.title,
+                        &body,
+                        None,
+                        false,
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.small_button("approve").clicked() {
+                            bump = Some((i, BoardStatus::Approved));
                         }
-                    }
-                    if ui.small_button("dismiss").clicked() {
-                        bump = Some((i, BoardStatus::Dismissed));
-                    }
+                        if ui.small_button("start").clicked() {
+                            bump = Some((i, BoardStatus::InProgress));
+                        }
+                        if ui.small_button("done").clicked() {
+                            if can_mark_done(self.verify_ok_turn, false) {
+                                bump = Some((i, BoardStatus::Done));
+                            } else {
+                                self.status = "Need VERIFY_OK or a passing verify.sh".into();
+                            }
+                        }
+                        if ui.small_button("dismiss").clicked() {
+                            bump = Some((i, BoardStatus::Dismissed));
+                        }
+                    });
                 });
             }
             if let Some((i, st)) = bump {
@@ -3933,9 +3965,6 @@ impl Cabin {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     crate::cards::search_field(ui, &mut self.skill_q);
-                    if ui.small_button("Reload").clicked() {
-                        self.skill_list = skills::list_skills();
-                    }
                 });
             });
             ui.add_space(16.0);
@@ -3958,7 +3987,7 @@ impl Cabin {
                     } else {
                         "No PAT — set one in Settings, then these buttons work."
                     };
-                    crate::cards::grok_tile(ui, c.glyph, c.title, body, None, false);
+                    crate::cards::grok_tile(ui, c.icon, c.title, body, None, false);
                     ui.add_space(10.0);
                     ui.add(
                         egui::TextEdit::singleline(&mut self.github_args)
@@ -4006,7 +4035,7 @@ impl Cabin {
             crate::cards::tile_row(ui, pending.len(), |ui, i| {
                 let s = pending[i];
                 if matches!(
-                    crate::cards::grok_tile(ui, s.glyph, s.title, s.body, Some("Add"), false),
+                    crate::cards::grok_tile(ui, s.icon, s.title, s.body, Some("Add"), false),
                     crate::cards::TileHit::Add | crate::cards::TileHit::Body
                 ) {
                     let sk = crate::cards::skill_from_suggested(&s);

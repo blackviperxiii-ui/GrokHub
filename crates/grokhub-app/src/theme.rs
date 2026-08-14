@@ -1,8 +1,10 @@
 //! Electron visual system — true black / gray / white. No warm cabin brown.
 
 use eframe::egui::{
-    self, Color32, ColorImage, FontFamily, FontId, Stroke, TextStyle, TextureHandle, TextureOptions,
+    self, Color32, ColorImage, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
+    TextureHandle, TextureOptions,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const BG: Color32 = Color32::from_rgb(0x09, 0x09, 0x09);
 pub const SURFACE: Color32 = Color32::from_rgb(0x11, 0x11, 0x11);
@@ -57,7 +59,32 @@ pub fn stage_subtitle(id: &str) -> &'static str {
     }
 }
 
+fn install_inter(ctx: &egui::Context) {
+    let mut fonts = FontDefinitions::default();
+    if let Ok(regular) = std::fs::read("/usr/share/fonts/truetype/macos/Inter-Regular.ttf") {
+        fonts
+            .font_data
+            .insert("inter".into(), FontData::from_owned(regular));
+        if let Some(fam) = fonts.families.get_mut(&FontFamily::Proportional) {
+            fam.insert(0, "inter".into());
+        }
+    }
+    if let Ok(mono) = std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf") {
+        fonts
+            .font_data
+            .insert("mono".into(), FontData::from_owned(mono));
+        if let Some(fam) = fonts.families.get_mut(&FontFamily::Monospace) {
+            fam.insert(0, "mono".into());
+        }
+    }
+    ctx.set_fonts(fonts);
+}
+
 pub fn apply(ctx: &egui::Context) {
+    static FONTS: AtomicBool = AtomicBool::new(false);
+    if !FONTS.swap(true, Ordering::SeqCst) {
+        install_inter(ctx);
+    }
     let mut visuals = egui::Visuals::dark();
     visuals.dark_mode = true;
     visuals.override_text_color = Some(FG);

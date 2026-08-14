@@ -1,11 +1,12 @@
 //! Grok catalog chrome — huge title, white pills, 3-column icon tiles.
 
-use eframe::egui::{self, Align2, Color32, FontId, RichText, Sense, Stroke, Vec2};
+use crate::icons::{self, TileIcon};
+use eframe::egui::{self, Color32, RichText, Sense, Stroke};
 use grokhub_core::SkillMd;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SuggestedAuto {
-    pub glyph: &'static str,
+    pub icon: TileIcon,
     pub title: &'static str,
     pub body: &'static str,
     pub seed: &'static str,
@@ -13,7 +14,7 @@ pub struct SuggestedAuto {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SuggestedSkill {
-    pub glyph: &'static str,
+    pub icon: TileIcon,
     pub name: &'static str,
     pub title: &'static str,
     pub body: &'static str,
@@ -24,7 +25,7 @@ pub struct SuggestedSkill {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiveConnector {
-    pub glyph: &'static str,
+    pub icon: TileIcon,
     pub id: &'static str,
     pub title: &'static str,
     pub tools: &'static [(&'static str, &'static str)],
@@ -39,7 +40,7 @@ pub enum TileHit {
 
 pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
     SuggestedSkill {
-        glyph: "☀",
+        icon: TileIcon::Sun,
         name: "morning-brief",
         title: "Morning brief",
         body: "Summarize the workboard, last host receipt, and pinned goal.",
@@ -48,7 +49,7 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         verify: "echo VERIFY_OK",
     },
     SuggestedSkill {
-        glyph: "⌘",
+        icon: TileIcon::Host,
         name: "host-snapshot",
         title: "Host snapshot",
         body: "Read-only uname / whoami / pwd via HOST_CMD.",
@@ -57,7 +58,7 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         verify: "echo VERIFY_OK",
     },
     SuggestedSkill {
-        glyph: "☰",
+        icon: TileIcon::List,
         name: "workboard-triage",
         title: "Workboard triage",
         body: "Pull open tasks from this thread onto the workboard.",
@@ -66,7 +67,7 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         verify: "echo VERIFY_OK",
     },
     SuggestedSkill {
-        glyph: "◈",
+        icon: TileIcon::Image,
         name: "imagine-scene",
         title: "Imagine a scene",
         body: "Write a tight still-image prompt; the cabin generates it.",
@@ -75,7 +76,7 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         verify: "echo VERIFY_OK",
     },
     SuggestedSkill {
-        glyph: "⌥",
+        icon: TileIcon::Github,
         name: "github-pulse",
         title: "GitHub pulse",
         body: "Who am I plus recent repos via CONNECTOR_CMD (needs a PAT).",
@@ -84,7 +85,7 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         verify: "echo VERIFY_OK",
     },
     SuggestedSkill {
-        glyph: "✓",
+        icon: TileIcon::Check,
         name: "verify-last",
         title: "Verify last turn",
         body: "Run verify.sh and hold done until VERIFY_OK.",
@@ -93,7 +94,7 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         verify: "echo VERIFY_OK",
     },
     SuggestedSkill {
-        glyph: "◎",
+        icon: TileIcon::Board,
         name: "board-status",
         title: "Board status",
         body: "List open workboard cards and the next concrete step.",
@@ -102,7 +103,7 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         verify: "echo VERIFY_OK",
     },
     SuggestedSkill {
-        glyph: "⌁",
+        icon: TileIcon::Bolt,
         name: "host-health",
         title: "Host health",
         body: "Richer read-only snapshot: load, disk, and grokhub paths.",
@@ -113,7 +114,7 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
 ];
 
 pub const LIVE_CONNECTORS: &[LiveConnector] = &[LiveConnector {
-    glyph: "G",
+    icon: TileIcon::Github,
     id: "github",
     title: "GitHub",
     tools: &[
@@ -127,37 +128,37 @@ pub const LIVE_CONNECTORS: &[LiveConnector] = &[LiveConnector {
 
 pub const SUGGESTED_AUTOS: &[SuggestedAuto] = &[
     SuggestedAuto {
-        glyph: "☀",
+        icon: TileIcon::Sun,
         title: "Morning brief",
         body: "Weekdays at 09:00 — workboard and last host receipt.",
         seed: "every weekday at 9, summarize the workboard",
     },
     SuggestedAuto {
-        glyph: "⌁",
+        icon: TileIcon::Bolt,
         title: "Host heartbeat",
         body: "Every 60 min — read-only snapshot, then a short note.",
         seed: "heartbeat every 60 min, run a read-only host snapshot and summarize",
     },
     SuggestedAuto {
-        glyph: "☰",
+        icon: TileIcon::List,
         title: "Task extractor",
         body: "Weekdays at 18:00 — pull today's open tasks onto the board.",
         seed: "every weekday at 18, extract open tasks onto the workboard",
     },
     SuggestedAuto {
-        glyph: "⌘",
+        icon: TileIcon::Host,
         title: "Dawn snapshot",
         body: "Weekdays at 08:00 — read-only host snapshot before the day.",
         seed: "every weekday at 8, run a read-only host snapshot and summarize",
     },
     SuggestedAuto {
-        glyph: "◎",
+        icon: TileIcon::Board,
         title: "Midday board",
         body: "Weekdays at 12:00 — summarize the workboard.",
         seed: "every weekday at 12, summarize the workboard",
     },
     SuggestedAuto {
-        glyph: "☾",
+        icon: TileIcon::Moon,
         title: "Nightly triage",
         body: "Every day at 21:00 — extract leftover tasks onto the board.",
         seed: "every day at 21, extract open tasks onto the workboard",
@@ -207,7 +208,7 @@ pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
     let mut clicked = false;
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(title).size(36.0).strong().color(crate::theme::FG));
+        ui.label(RichText::new(title).size(40.0).strong().color(crate::theme::FG));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             clicked = ui
                 .add(
@@ -270,23 +271,9 @@ pub fn search_field(ui: &mut egui::Ui, q: &mut String) {
         });
 }
 
-fn glyph_circle(ui: &mut egui::Ui, glyph: &str) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::hover());
-    let painter = ui.painter();
-    painter.circle_filled(rect.center(), 20.0, crate::theme::SURFACE);
-    painter.circle_stroke(rect.center(), 20.0, Stroke::new(1.0, crate::theme::BORDER_STRONG));
-    painter.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        glyph,
-        FontId::proportional(16.0),
-        crate::theme::FG,
-    );
-}
-
 pub fn grok_tile(
     ui: &mut egui::Ui,
-    glyph: &str,
+    icon: TileIcon,
     title: &str,
     body: &str,
     add: Option<&str>,
@@ -296,7 +283,7 @@ pub fn grok_tile(
     let mut add_clicked = false;
     let resp = egui::Frame::none()
         .fill(crate::theme::ELEVATED)
-        .rounding(16.0)
+        .rounding(18.0)
         .stroke(Stroke::new(
             1.0_f32,
             if selected {
@@ -307,14 +294,15 @@ pub fn grok_tile(
         ))
         .inner_margin(egui::Margin::same(16.0))
         .show(ui, |ui| {
-            ui.set_min_height(118.0);
+            ui.set_min_height(128.0);
             ui.horizontal(|ui| {
-                glyph_circle(ui, glyph);
-                ui.add_space(10.0);
+                icons::paint_icon(ui, icon, 44.0);
+                ui.add_space(12.0);
                 ui.vertical(|ui| {
                     ui.label(RichText::new(title).size(16.0).strong().color(crate::theme::FG));
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(body).size(13.0).color(crate::theme::MUTED));
+                    ui.add_space(6.0);
+                    let clipped: String = body.chars().take(92).collect();
+                    ui.label(RichText::new(clipped).size(13.0).color(crate::theme::MUTED));
                 });
                 if let Some(label) = add {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
@@ -325,7 +313,7 @@ pub fn grok_tile(
                                 )
                                 .fill(crate::theme::FG)
                                 .rounding(14.0)
-                                .min_size(egui::vec2(52.0, 28.0)),
+                                .min_size(egui::vec2(56.0, 30.0)),
                             )
                             .clicked();
                     });
@@ -342,7 +330,7 @@ pub fn grok_tile(
     if resp.hovered() {
         ui.painter().rect_stroke(
             resp.rect,
-            16.0,
+            18.0,
             Stroke::new(1.0, crate::theme::BORDER_STRONG),
         );
     }
@@ -376,34 +364,44 @@ pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui,
 }
 
 pub fn suggestion_card(ui: &mut egui::Ui, title: &str, body: &str) -> bool {
-    grok_tile(ui, chip_glyph(title), title, body, Some("Add"), false) == TileHit::Add
+    grok_tile(ui, icons::icon_for_label(title), title, body, Some("Add"), false) == TileHit::Add
 }
 
 pub fn catalog_card(ui: &mut egui::Ui, title: &str, body: &str, selected: bool) -> bool {
-    grok_tile(ui, chip_glyph(title), title, body, None, selected) == TileHit::Body
+    grok_tile(ui, icons::icon_for_label(title), title, body, None, selected) == TileHit::Body
 }
 
-pub fn empty_prompt_tile(ui: &mut egui::Ui, glyph: &str, title: &str, hint: &str) -> bool {
-    grok_tile(ui, glyph, title, hint, None, false) == TileHit::Body
-}
-
-pub fn chip_glyph(label: &str) -> &'static str {
-    let l = label.to_ascii_lowercase();
-    if l.contains("connect") {
-        "●"
-    } else if l.contains("host") || l.contains("machine") {
-        "⌘"
-    } else if l.contains("imagine") || l.contains("draw") {
-        "◈"
-    } else if l.contains("think") || l.contains("harder") {
-        "✦"
-    } else if l.contains("help") || l.contains("what can") {
-        "?"
-    } else if l.contains("fix") || l.contains("debug") {
-        "✗"
-    } else {
-        "→"
+pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &str) -> bool {
+    let mut hit = false;
+    let resp = egui::Frame::none()
+        .fill(crate::theme::ELEVATED)
+        .rounding(18.0)
+        .stroke(Stroke::new(1.0_f32, crate::theme::BORDER))
+        .inner_margin(egui::Margin::same(18.0))
+        .show(ui, |ui| {
+            ui.set_min_height(132.0);
+            ui.vertical_centered(|ui| {
+                icons::paint_icon(ui, icon, 40.0);
+                ui.add_space(10.0);
+                ui.label(RichText::new(title).size(15.0).strong().color(crate::theme::FG));
+                ui.add_space(4.0);
+                ui.label(RichText::new(hint).size(12.0).color(crate::theme::MUTED));
+            });
+        })
+        .response
+        .interact(Sense::click());
+    if resp.clicked() {
+        hit = true;
     }
+    if resp.hovered() {
+        ui.painter()
+            .rect_stroke(resp.rect, 18.0, Stroke::new(1.0, crate::theme::BORDER_STRONG));
+    }
+    hit
+}
+
+pub fn chip_icon(label: &str) -> TileIcon {
+    icons::icon_for_label(label)
 }
 
 #[cfg(test)]
@@ -418,7 +416,7 @@ mod tests {
             let a = parse_nl_automation(s.seed).expect(s.title);
             assert!(!a.instructions.is_empty());
             assert!(a.enabled);
-            assert!(!s.glyph.is_empty());
+            let _ = s.icon;
         }
     }
 
@@ -457,7 +455,7 @@ mod tests {
             let md = skill_from_suggested(s);
             assert_eq!(md.name, s.name);
             assert!(!md.instructions.is_empty());
-            assert!(!s.glyph.is_empty());
+            let _ = s.icon;
         }
         assert_eq!(LIVE_CONNECTORS.len(), 1);
         assert_eq!(LIVE_CONNECTORS[0].id, "github");
