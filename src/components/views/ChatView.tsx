@@ -44,6 +44,7 @@ import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { MarkdownBody } from "@/lib/markdown";
 import { looksLikeIncompleteAgentTurn } from "@/lib/agent-finish";
+import { hostAllowPrefixesFromConfirm } from "@/lib/host-safety";
 
 function chipIcon(kind: QuickChip["kind"]) {
   if (kind === "shell") return Terminal;
@@ -1827,24 +1828,28 @@ export function ChatView() {
                     </li>
                   ))}
                 </ul>
-                <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-[var(--color-muted)]">
-                  <input
-                    type="checkbox"
-                    checked={alwaysAllowHost}
-                    onChange={(e) => setAlwaysAllowHost(e.target.checked)}
-                    className="rounded border-[var(--color-border)]"
-                  />
-                  Always allow these command prefixes
-                </label>
+                {pendingHostConfirm.kind !== "computer" && (
+                  <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-[var(--color-muted)]">
+                    <input
+                      type="checkbox"
+                      checked={alwaysAllowHost}
+                      onChange={(e) => setAlwaysAllowHost(e.target.checked)}
+                      className="rounded border-[var(--color-border)]"
+                    />
+                    Always allow these command prefixes
+                  </label>
+                )}
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     size="sm"
                     autoFocus
                     onClick={() => {
                       if (alwaysAllowHost && pendingHostConfirm) {
-                        for (const c of pendingHostConfirm.cmds) {
-                          const pref = c.trim().split(/\s+/)[0];
-                          if (pref) addHostAllow(pref);
+                        for (const pref of hostAllowPrefixesFromConfirm(
+                          pendingHostConfirm.kind,
+                          pendingHostConfirm.cmds,
+                        )) {
+                          addHostAllow(pref);
                         }
                       }
                       resolveHostConfirm(true);

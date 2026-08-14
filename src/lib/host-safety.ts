@@ -119,6 +119,25 @@ export function riskLabel(risk: HostRisk): string {
 }
 
 
+/** Prefixes to persist from "Always allow" — never for computer-use confirms. */
+export function hostAllowPrefixesFromConfirm(
+  kind: "host" | "computer" | undefined,
+  cmds: string[],
+): string[] {
+  if (kind === "computer") return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const c of cmds) {
+    const pref = String(c || "")
+      .trim()
+      .split(/\s+/)[0];
+    if (!pref || seen.has(pref)) continue;
+    seen.add(pref);
+    out.push(pref);
+  }
+  return out;
+}
+
 /** True if command matches a user "always allow" prefix or exact entry. */
 export function isHostAllowlisted(cmd: string, allowlist: string[] | undefined | null): boolean {
   if (!allowlist?.length) return false;

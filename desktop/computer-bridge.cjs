@@ -29,6 +29,28 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, Math.max(0, ms)));
 }
 
+async function sleepAbortable(ms) {
+  const end = Date.now() + Math.max(0, ms);
+  while (!aborted && Date.now() < end) {
+    await sleep(Math.min(50, end - Date.now()));
+  }
+}
+
+function restoreHiddenWindow(win) {
+  if (!win || (typeof win.isDestroyed === "function" && win.isDestroyed())) return;
+  if (typeof win.showInactive === "function") {
+    win.showInactive();
+    return;
+  }
+  if (typeof win.show === "function") win.show();
+}
+
+function ydotoolScrollArgs(direction, amount) {
+  const n = Math.max(1, Math.min(20, Number(amount) || 1));
+  const y = direction === "up" ? n : -n;
+  return ["mousemove", "--wheel", "-x", "0", "-y", String(y)];
+}
+
 function whichSync(bin) {
   const dirs = String(process.env.PATH || "/usr/bin:/bin").split(":");
   for (const d of dirs) {
@@ -311,9 +333,7 @@ async function captureScreenshot() {
   } finally {
     if (hidden) {
       try {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.showInactive?.() || mainWindow.show();
-        }
+        restoreHiddenWindow(mainWindow);
       } catch {
         /* ignore */
       }
@@ -365,9 +385,7 @@ async function injectYdotool(bin, step, mapped) {
     return runTool(bin, ["click", "0xC0"]);
   }
   if (op === "scroll") {
-    const n = Math.max(1, Math.min(20, Number(step.amount) || 1));
-    const code = step.direction === "up" ? "0xC8" : "0xC9";
-    return runTool(bin, ["click", "--repeat", String(n), code]);
+    return runTool(bin, ydotoolScrollArgs(step.direction, step.amount));
   }
   if (op === "type") {
     const text = String(step.text || "").slice(0, MAX_TYPE_CHARS);
@@ -386,7 +404,8 @@ async function act(step) {
   if (!op) return { ok: false, error: "Missing op" };
   if (op === "wait") {
     const ms = Math.max(0, Math.min(15_000, Number(step.ms) || 400));
-    await sleep(ms);
+    await sleepAbortable(ms);
+    if (aborted) return { ok: false, error: "Computer use stopped." };
     return { ok: true, op, ms };
   }
   if (op === "screenshot") {
@@ -451,7 +470,6 @@ async function beginSession() {
 
 function endSession() {
   hideStopBar();
-  aborted = false;
   return { ok: true };
 }
 
@@ -466,4 +484,6 @@ module.exports = {
   resetAbort,
   isAborted,
   pickInjector,
+  restoreHiddenWindow,
+  ydotoolScrollArgs,
 };

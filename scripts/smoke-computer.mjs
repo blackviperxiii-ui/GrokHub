@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /** Computer-use protocol + vision hydrate (no display / injector required). */
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -15,6 +17,10 @@ const {
   needsComputerConfirm,
   isComputerWriteOp,
 } = await import("../src/lib/computer-protocol.ts");
+const { hostAllowPrefixesFromConfirm, isHostAllowlisted } = await import(
+  "../src/lib/host-safety.ts"
+);
+const { appendAssistantOnce } = await import("../src/lib/agent-tool-history.ts");
 
 const click = parseComputerCommand("click 412 880");
 assert.ok(click);
@@ -99,5 +105,69 @@ assert.ok(info.session === "wayland" || info.session === "x11" || info.session =
 const shot = await computer.act({ op: "screenshot" });
 assert.equal(shot.ok, false);
 assert.match(String(shot.error), /Electron|desktop/i);
+
+const computerPrefs = hostAllowPrefixesFromConfirm("computer", [
+  "click 10 20",
+  "type hello",
+  "key ctrl+t",
+]);
+assert.deepEqual(computerPrefs, [], "computer confirm must not mint host allow prefixes");
+const hostPrefs = hostAllowPrefixesFromConfirm("host", ["ls -la", "  cat /etc/os-release"]);
+assert.deepEqual(hostPrefs, ["ls", "cat"]);
+assert.equal(isHostAllowlisted("type script.sh", ["type"]), true);
+
+const hist = [];
+appendAssistantOnce(hist, "full turn");
+appendAssistantOnce(hist, "full turn");
+hist.push({ role: "user", content: "HOST_RESULT: ok" });
+appendAssistantOnce(hist, "full turn");
+hist.push({ role: "user", content: "COMPUTER_RESULT: ok" });
+assert.equal(hist.filter((m) => m.role === "assistant").length, 1);
+assert.equal(hist.length, 3);
+
+assert.equal(typeof computer.restoreHiddenWindow, "function");
+const restoreCalls = [];
+computer.restoreHiddenWindow({
+  showInactive() {
+    restoreCalls.push("inactive");
+  },
+  show() {
+    restoreCalls.push("show");
+  },
+});
+assert.deepEqual(restoreCalls, ["inactive"], "showInactive must not fall through to show()");
+const restoreFallback = [];
+computer.restoreHiddenWindow({
+  show() {
+    restoreFallback.push("show");
+  },
+});
+assert.deepEqual(restoreFallback, ["show"]);
+
+assert.equal(typeof computer.ydotoolScrollArgs, "function");
+const scrollDown = computer.ydotoolScrollArgs("down", 3);
+assert.equal(scrollDown[0], "mousemove");
+assert.ok(scrollDown.includes("--wheel") || scrollDown.includes("-w"));
+assert.equal(scrollDown.includes("click"), false);
+const scrollUp = computer.ydotoolScrollArgs("up", 1);
+assert.ok(scrollUp.includes("--wheel") || scrollUp.includes("-w"));
+
+computer.resetAbort();
+const waitStarted = Date.now();
+const waitP = computer.act({ op: "wait", ms: 4000 });
+await new Promise((r) => setTimeout(r, 40));
+computer.userStop();
+computer.endSession();
+const waitR = await waitP;
+assert.equal(waitR.ok, false, "Stop during wait must fail the step");
+assert.match(String(waitR.error), /stop/i);
+assert.ok(Date.now() - waitStarted < 1500, "wait must abort without sleeping the full delay");
+computer.resetAbort();
+
+const chatSrc = fs.readFileSync(
+  path.join(process.cwd(), "src/components/views/ChatView.tsx"),
+  "utf8",
+);
+assert.match(chatSrc, /hostAllowPrefixesFromConfirm/);
 
 console.log("smoke-computer OK");
