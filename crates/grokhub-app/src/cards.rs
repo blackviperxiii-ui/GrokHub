@@ -1,7 +1,7 @@
 //! Grok-style page chrome — large titles, white pills, suggestion cards.
 
 use eframe::egui::{self, Color32, RichText, Stroke};
-use grokhub_core::{parse_nl_automation, SkillMd};
+use grokhub_core::SkillMd;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SuggestedAuto {
@@ -141,6 +141,7 @@ pub fn catalog_card(ui: &mut egui::Ui, title: &str, body: &str, selected: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use grokhub_core::parse_nl_automation;
 
     #[test]
     fn suggested_autos_parse() {
