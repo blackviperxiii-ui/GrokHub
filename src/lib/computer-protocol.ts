@@ -265,7 +265,7 @@ export function computerPromptBlock(enabled: boolean): string {
     "COMPUTER_CMD: key ctrl+t",
     "COMPUTER_CMD: scroll down 3",
     "COMPUTER_CMD: wait 400",
-    "Always screenshot before clicking if you have not seen the current screen. Map clicks to the screenshot size, not a guessed resolution.",
+    "A live picture loop is attached after each click/type/key. Use the latest frame for the next click. Map clicks to the screenshot size, not a guessed resolution.",
     "Do not click the GrokHub window. Prefer the user's other apps (browser, terminals, files).",
     "Requires xAI API key or Grok OAuth (vision). Website-free fallback cannot see the screen.",
     "After COMPUTER_RESULT, continue with more COMPUTER_CMD or summarize. Do not announce control without emitting COMPUTER_CMD in the same reply.",
