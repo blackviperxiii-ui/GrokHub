@@ -2044,10 +2044,10 @@ function AgentPrefsPanel() {
         <div>
           <div className="text-sm font-medium">Computer use (screen + mouse)</div>
           <div className="text-xs text-[var(--color-muted)]">
-            Let the agent see a live picture loop and click/type. Off by default. Needs Grok OAuth
-            or an xAI API key. Install <span className="font-mono">grim</span> (Wayland) or{" "}
-            <span className="font-mono">maim</span>/<span className="font-mono">scrot</span> (X11)
-            so capture stays silent, plus <span className="font-mono">xdotool</span> (X11) or{" "}
+            Let the agent see a silent live feed and click/type (ffmpeg x11grab + xdotool, same
+            as Cursor). Off by default. Needs Grok OAuth or an xAI API key. Install{" "}
+            <span className="font-mono">ffmpeg</span> + <span className="font-mono">xdotool</span>{" "}
+            (X11) or <span className="font-mono">grim</span> +{" "}
             <span className="font-mono">ydotool</span> (Wayland, uinput group).
           </div>
         </div>

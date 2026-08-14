@@ -1,10 +1,10 @@
 /**
- * Linux desktop computer-use: silent picture loop (grim/maim/scrot) +
- * mouse/keyboard via ydotool (Wayland) or xdotool (X11/XWayland).
- * Electron desktopCapturer is a last-resort fallback (may open a portal picker).
+ * Linux desktop computer-use — same stack Cursor uses:
+ * ffmpeg x11grab (or grim on Wayland) + xdotool/ydotool.
+ * Never opens a screenshot/portal app.
  * Safe to require without Electron — screenshot/input then return errors.
  */
-const { execFile, spawn } = require("node:child_process");
+const { execFile, execFileSync, spawn } = require("node:child_process");
 const { promisify } = require("node:util");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -27,6 +27,8 @@ let lastShotMeta = null;
 let lastInjector = "";
 let previewTimer = null;
 let previewBusy = false;
+/** @type {import('node:child_process').ChildProcess | null} */
+let previewProc = null;
 /** @type {"user" | "session" | null} */
 let previewOwner = null;
 
@@ -101,18 +103,109 @@ function pickInjector() {
   return { kind: "", path: "", session: sess };
 }
 
+/** Same grab Cursor uses: ffmpeg x11grab → one JPEG, no screenshot GUI. */
+function ffmpegX11grabArgs(display, out, opts) {
+  const args = ["-y", "-hide_banner", "-loglevel", "error", "-f", "x11grab"];
+  const w = opts && Number(opts.width);
+  const h = opts && Number(opts.height);
+  if (w > 0 && h > 0) args.push("-video_size", `${Math.round(w)}x${Math.round(h)}`);
+  args.push(
+    "-i",
+    display || ":0",
+    "-frames:v",
+    "1",
+    "-vf",
+    `scale=${SCREENSHOT_MAX_WIDTH}:-1`,
+    "-q:v",
+    "5",
+    out,
+  );
+  return args;
+}
+
+function ffmpegMjpegArgs(display, opts) {
+  const args = ["-hide_banner", "-loglevel", "error", "-f", "x11grab"];
+  const w = opts && Number(opts.width);
+  const h = opts && Number(opts.height);
+  if (w > 0 && h > 0) args.push("-video_size", `${Math.round(w)}x${Math.round(h)}`);
+  args.push(
+    "-i",
+    display || ":0",
+    "-vf",
+    `fps=2,scale=${SCREENSHOT_MAX_WIDTH}:-1`,
+    "-f",
+    "image2pipe",
+    "-vcodec",
+    "mjpeg",
+    "-q:v",
+    "5",
+    "pipe:1",
+  );
+  return args;
+}
+
+/** Split concatenated JPEGs from an ffmpeg image2pipe. */
+function splitJpegFrames(onJpeg) {
+  let buf = Buffer.alloc(0);
+  return (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
+    while (true) {
+      const soi = buf.indexOf(Buffer.from([0xff, 0xd8]));
+      if (soi < 0) {
+        buf = Buffer.alloc(0);
+        return;
+      }
+      if (soi > 0) buf = buf.subarray(soi);
+      const eoi = buf.indexOf(Buffer.from([0xff, 0xd9]), 2);
+      if (eoi < 0) return;
+      onJpeg(buf.subarray(0, eoi + 2));
+      buf = buf.subarray(eoi + 2);
+    }
+  };
+}
+
+function jpegSize(buf) {
+  let i = 2;
+  while (i < buf.length - 8) {
+    if (buf[i] !== 0xff) {
+      i += 1;
+      continue;
+    }
+    const marker = buf[i + 1];
+    if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2) {
+      return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+    }
+    if (marker === 0xd8 || marker === 0xd9) {
+      i += 2;
+      continue;
+    }
+    const len = buf.readUInt16BE(i + 2);
+    i += 2 + len;
+  }
+  return { width: SCREENSHOT_MAX_WIDTH, height: 0 };
+}
+
+function previewAllowsDesktopCapturer() {
+  return false;
+}
+
 /** Full-screen capture tools that do not open a picker / screenshot GUI. */
 function silentCaptureTools(session, bins) {
   const b = bins || {};
   const out = [];
   if ((session === "wayland" || b.wayland) && b.grim) {
-    out.push({ name: "grim", bin: b.grim, args: ["OUT"] });
+    out.push({ name: "grim", bin: b.grim, args: ["OUT"], ext: ".png" });
   }
-  if (b.maim) out.push({ name: "maim", bin: b.maim, args: ["-u", "OUT"] });
-  if (b.scrot) out.push({ name: "scrot", bin: b.scrot, args: ["-o", "-z", "OUT"] });
-  if (b["gnome-screenshot"]) {
-    out.push({ name: "gnome-screenshot-file", bin: b["gnome-screenshot"], args: ["-f", "OUT"] });
+  if (b.ffmpeg && (b.display || session === "x11")) {
+    out.push({
+      name: "ffmpeg-x11grab",
+      bin: b.ffmpeg,
+      args: ffmpegX11grabArgs(b.display || ":0", "OUT", { width: b.width, height: b.height }),
+      ext: ".jpg",
+    });
   }
+  if (b.maim) out.push({ name: "maim", bin: b.maim, args: ["-u", "OUT"], ext: ".png" });
+  if (b.scrot) out.push({ name: "scrot", bin: b.scrot, args: ["-o", "-z", "OUT"], ext: ".png" });
   return out;
 }
 
@@ -248,19 +341,23 @@ function info() {
     electron,
     screen: screenSize,
     lastScreenshot: lastShotMeta,
-    capture: plans[0]?.name || "desktopCapturer",
+    capture: plans[0]?.name || null,
     captureTools: plans.map((p) => p.name),
-    previewing: Boolean(previewTimer),
+    previewing: isPreviewing(),
     hint: buildHint(inj, plans),
   };
 }
 
 function captureToolBins() {
+  const bounds = screenBounds();
   return {
     grim: whichSync("grim"),
+    ffmpeg: whichSync("ffmpeg"),
+    display: process.env.DISPLAY || "",
+    width: bounds.width,
+    height: bounds.height,
     maim: whichSync("maim"),
     scrot: whichSync("scrot"),
-    "gnome-screenshot": whichSync("gnome-screenshot"),
   };
 }
 
@@ -279,8 +376,12 @@ function buildHint(inj, plans) {
   }
   if (!plans.length) {
     bits.push(
-      "Install grim (Wayland) or maim/scrot (X11) so capture stays silent. Electron desktopCapturer opens a screenshot picker.",
+      "Install ffmpeg (X11, same silent grab Cursor uses) or grim (Wayland). GrokHub will not open a screenshot app.",
     );
+  } else if (plans[0].name === "ffmpeg-x11grab") {
+    bits.push("Live view uses ffmpeg x11grab (no screenshot picker).");
+  } else if (plans[0].name === "grim") {
+    bits.push("Live view uses grim (no screenshot picker).");
   }
   return bits.join(" ");
 }
@@ -337,6 +438,20 @@ function screenBounds() {
   } catch {
     /* ignore */
   }
+  try {
+    const xdotool = whichSync("xdotool");
+    if (xdotool) {
+      const out = execFileSync(xdotool, ["getdisplaygeometry"], {
+        encoding: "utf8",
+        timeout: 2000,
+        env: process.env,
+      });
+      const m = String(out).trim().match(/^(\d+)\s+(\d+)/);
+      if (m) return { width: Number(m[1]), height: Number(m[2]), scaleFactor: 1 };
+    }
+  } catch {
+    /* ignore */
+  }
   return { width: lastShotMeta?.screenWidth || 0, height: lastShotMeta?.screenHeight || 0, scaleFactor: 1 };
 }
 
@@ -356,9 +471,11 @@ function encodeShotFile(filePath) {
     };
   }
   const buf = fs.readFileSync(filePath);
+  const isJpeg = buf.length > 2 && buf[0] === 0xff && buf[1] === 0xd8;
+  const size = isJpeg ? jpegSize(buf) : { width: lastShotMeta?.width || 0, height: lastShotMeta?.height || 0 };
   return {
-    dataUrl: `data:image/png;base64,${buf.toString("base64")}`,
-    screenshot: { width: lastShotMeta?.width || 0, height: lastShotMeta?.height || 0 },
+    dataUrl: `data:image/${isJpeg ? "jpeg" : "png"};base64,${buf.toString("base64")}`,
+    screenshot: { width: size.width || lastShotMeta?.width || 0, height: size.height || lastShotMeta?.height || 0 },
   };
 }
 
@@ -375,8 +492,9 @@ function emitFrame(payload) {
 async function captureViaCli() {
   const sess = sessionType();
   const plans = silentCaptureTools(sess, captureToolBins());
-  const tmp = path.join(os.tmpdir(), `grokhub-cap-${process.pid}-${Date.now()}.png`);
   for (const plan of plans) {
+    const ext = plan.ext || ".png";
+    const tmp = path.join(os.tmpdir(), `grokhub-cap-${process.pid}-${Date.now()}${ext}`);
     const args = plan.args.map((a) => (a === "OUT" ? tmp : a));
     const r = await runTool(plan.bin, args, 12000);
     if (!r.ok) continue;
@@ -403,55 +521,14 @@ async function captureViaCli() {
         capture: plan.name,
       };
     } catch {
-      /* try next tool */
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        /* ignore */
+      }
     }
   }
-  try {
-    fs.unlinkSync(tmp);
-  } catch {
-    /* ignore */
-  }
   return null;
-}
-
-async function captureViaDesktopCapturer() {
-  const electron = electronApis();
-  if (!electron || !electron.desktopCapturer) return null;
-  const { desktopCapturer, screen, nativeImage } = electron;
-  const display = screen.getPrimaryDisplay();
-  const bounds = display.bounds;
-  const sf = display.scaleFactor || 1;
-  const thumbW = Math.max(1, Math.round(bounds.width * sf));
-  const thumbH = Math.max(1, Math.round(bounds.height * sf));
-  const sources = await desktopCapturer.getSources({
-    types: ["screen"],
-    thumbnailSize: { width: thumbW, height: thumbH },
-  });
-  const src = sources.find((s) => String(s.id).includes(String(display.id))) || sources[0];
-  if (!src || !src.thumbnail) return null;
-  let img = src.thumbnail;
-  if (typeof img.toJPEG !== "function" && nativeImage && nativeImage.createFromDataURL) {
-    img = nativeImage.createFromDataURL(img.toDataURL());
-  }
-  const size = img.getSize();
-  if (size.width > SCREENSHOT_MAX_WIDTH) {
-    img = img.resize({ width: SCREENSHOT_MAX_WIDTH, quality: "better" });
-  }
-  const jpeg = img.toJPEG(72);
-  const shot = img.getSize();
-  lastShotMeta = {
-    width: shot.width,
-    height: shot.height,
-    screenWidth: bounds.width,
-    screenHeight: bounds.height,
-  };
-  return {
-    ok: true,
-    dataUrl: `data:image/jpeg;base64,${Buffer.from(jpeg).toString("base64")}`,
-    screen: { width: bounds.width, height: bounds.height, scaleFactor: sf },
-    screenshot: { width: shot.width, height: shot.height },
-    capture: "desktopCapturer",
-  };
 }
 
 async function captureScreenshot() {
@@ -460,36 +537,74 @@ async function captureScreenshot() {
     emitFrame(cli);
     return cli;
   }
-  try {
-    const cap = await captureViaDesktopCapturer();
-    if (cap && cap.ok) {
-      emitFrame(cap);
-      return cap;
-    }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
-  }
   return {
     ok: false,
     error:
-      "Screenshot failed. Install grim (Wayland) or maim/scrot (X11). Electron desktopCapturer may open a portal picker.",
+      "Silent capture failed. Install ffmpeg (X11) or grim (Wayland). GrokHub will not open a screenshot app.",
   };
 }
 
 function isPreviewing() {
-  return Boolean(previewTimer);
+  return Boolean(previewTimer || previewProc);
+}
+
+function stopFfmpegPreview() {
+  if (!previewProc) return;
+  try {
+    previewProc.kill("SIGTERM");
+  } catch {
+    /* ignore */
+  }
+  previewProc = null;
+}
+
+function emitJpegFrame(jpeg, capture) {
+  const shot = jpegSize(jpeg);
+  const bounds = screenBounds();
+  lastShotMeta = {
+    width: shot.width || SCREENSHOT_MAX_WIDTH,
+    height: shot.height || lastShotMeta?.height || bounds.height,
+    screenWidth: bounds.width,
+    screenHeight: bounds.height,
+  };
+  emitFrame({
+    ok: true,
+    dataUrl: `data:image/jpeg;base64,${jpeg.toString("base64")}`,
+    screen: bounds,
+    screenshot: { width: lastShotMeta.width, height: lastShotMeta.height },
+    capture,
+  });
+}
+
+function startFfmpegPreview(display) {
+  const bins = captureToolBins();
+  const child = spawn("ffmpeg", ffmpegMjpegArgs(display, bins), {
+    env: { ...process.env, DISPLAY: display },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const onJpeg = splitJpegFrames((jpeg) => emitJpegFrame(jpeg, "ffmpeg-x11grab"));
+  child.stdout.on("data", onJpeg);
+  child.on("error", () => {
+    if (previewProc === child) previewProc = null;
+  });
+  child.on("exit", () => {
+    if (previewProc === child) previewProc = null;
+  });
+  previewProc = child;
+  return child;
 }
 
 function stopPreview(opts) {
   const reason = opts && opts.reason;
   const force = Boolean(opts && opts.force);
   if (!force && reason === "session" && previewOwner === "user") {
-    return { ok: true, previewing: Boolean(previewTimer), owner: previewOwner };
+    return { ok: true, previewing: isPreviewing(), owner: previewOwner };
   }
   if (previewTimer) {
     clearInterval(previewTimer);
     previewTimer = null;
   }
+  stopFfmpegPreview();
   previewOwner = null;
   return { ok: true, previewing: false };
 }
@@ -497,11 +612,26 @@ function stopPreview(opts) {
 function startPreview(intervalMs, owner) {
   const ms = Math.max(250, Math.min(2000, Number(intervalMs) || 450));
   const who = owner === "session" ? "session" : "user";
-  if (previewTimer && previewOwner === "user" && who === "session") {
+  if (isPreviewing() && previewOwner === "user" && who === "session") {
     return { ok: true, previewing: true, intervalMs: ms, owner: previewOwner };
   }
   stopPreview({ force: true });
+  const plans = silentCaptureTools(sessionType(), captureToolBins());
+  if (!plans.length) {
+    return {
+      ok: false,
+      previewing: false,
+      error:
+        "No silent capture tool. Install ffmpeg (pacman -S ffmpeg) or grim. Live view will not open a screenshot app.",
+    };
+  }
   previewOwner = who;
+  const display = process.env.DISPLAY || "";
+  const ffmpeg = whichSync("ffmpeg");
+  if (ffmpeg && display && plans.some((p) => p.name === "ffmpeg-x11grab")) {
+    startFfmpegPreview(display);
+    return { ok: true, previewing: true, intervalMs: ms, owner: previewOwner, capture: "ffmpeg-x11grab" };
+  }
   const tick = async () => {
     if (previewBusy) return;
     previewBusy = true;
@@ -513,7 +643,7 @@ function startPreview(intervalMs, owner) {
   };
   void tick();
   previewTimer = setInterval(() => void tick(), ms);
-  return { ok: true, previewing: true, intervalMs: ms, owner: previewOwner };
+  return { ok: true, previewing: true, intervalMs: ms, owner: previewOwner, capture: plans[0].name };
 }
 
 async function injectXdotool(bin, step, mapped) {
@@ -592,6 +722,7 @@ async function act(step) {
       dataUrl: shot.dataUrl,
       screen: shot.screen,
       screenshot: shot.screenshot,
+      capture: shot.capture,
     };
   }
   const inj = pickInjector();
@@ -650,14 +781,14 @@ async function act(step) {
 async function beginSession() {
   aborted = false;
   showStopBar();
-  if (!previewTimer) startPreview(450, "session");
-  return { ok: true, ...info(), previewing: Boolean(previewTimer) };
+  if (!isPreviewing()) startPreview(450, "session");
+  return { ok: true, ...info(), previewing: isPreviewing() };
 }
 
 function endSession() {
   stopPreview({ reason: "session" });
   hideStopBar();
-  return { ok: true, previewing: Boolean(previewTimer) };
+  return { ok: true, previewing: isPreviewing() };
 }
 
 module.exports = {
@@ -678,4 +809,8 @@ module.exports = {
   startPreview,
   stopPreview,
   isPreviewing,
+  ffmpegX11grabArgs,
+  ffmpegMjpegArgs,
+  splitJpegFrames,
+  previewAllowsDesktopCapturer,
 };

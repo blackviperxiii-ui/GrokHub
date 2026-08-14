@@ -15,21 +15,17 @@ See [aur/README.md](./aur/README.md) for PKGBUILD options.
 ## Optional: computer use (screenshot + mouse/keyboard)
 
 GrokHub can drive the Linux desktop when **Settings → Agent → Computer use** is enabled
-(off by default). It uses a silent picture loop (`grim` / `maim` / `scrot`) plus
-mouse/keyboard injectors — Playwright is **not** used for this (it remains a test-only
-dependency). Electron `desktopCapturer` is a last-resort fallback and may open a
-screenshot picker on Wayland.
+(off by default). Capture is the same silent stack Cursor uses: **ffmpeg x11grab**
+(or **grim** on native Wayland) plus **xdotool** / **ydotool**. It will not open a
+screenshot or portal app. Playwright stays test-only.
 
 ```bash
-# Silent capture (avoids the portal / screenshot app)
-sudo pacman -S --needed grim      # Wayland
-# sudo pacman -S --needed maim    # X11 alternative
+# X11 / XWayland (recommended — same as Cursor computer use)
+sudo pacman -S --needed ffmpeg xdotool
 
-# X11 or XWayland clicks
-sudo pacman -S --needed xdotool
-
-# Native Wayland clicks (user must be able to write /dev/uinput — typically the `input` group)
-sudo pacman -S --needed ydotool
+# Native Wayland
+sudo pacman -S --needed grim ydotool
+# ydotool needs write access to /dev/uinput (typically the `input` group)
 ```
 
 Computer use sends screenshots to Grok as vision, so it needs **Grok OAuth or an xAI API key**.

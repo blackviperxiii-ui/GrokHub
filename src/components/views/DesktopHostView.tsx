@@ -69,6 +69,7 @@ export function DesktopHostView() {
   const probed = useRef(false);
   const [compInfo, setCompInfo] = useState<ComputerInfo | null>(null);
   const [compBusy, setCompBusy] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -509,7 +510,8 @@ export function DesktopHostView() {
             <div>
               <CardTitle className="text-sm">Computer use</CardTitle>
               <CardDescription>
-                Screenshot + mouse/keyboard. Off by default. Ask Grok in chat after enabling.
+                Silent ffmpeg/grim grab + mouse/keyboard (same stack as Cursor computer use).
+                Will not open a screenshot app.
               </CardDescription>
             </div>
             <div className="flex gap-2">
@@ -536,12 +538,14 @@ export function DesktopHostView() {
                   void (async () => {
                     if (previewing) {
                       await computerStopPreview();
+                      setPreviewError(null);
                       useGrokHub.setState((s) => ({
                         computerSession: { ...s.computerSession, previewing: false },
                       }));
                       return;
                     }
                     const r = await computerStartPreview(450);
+                    setPreviewError(r.ok ? null : r.error || "Live view failed");
                     useGrokHub.setState((s) => ({
                       computerSession: { ...s.computerSession, previewing: Boolean(r.ok) },
                     }));
@@ -577,9 +581,7 @@ export function DesktopHostView() {
                 <Badge variant="warn">no injector</Badge>
               )}
               {compInfo?.capture && (
-                <Badge variant={compInfo.capture === "desktopCapturer" ? "warn" : "success"}>
-                  {compInfo.capture}
-                </Badge>
+                <Badge variant="success">{compInfo.capture}</Badge>
               )}
               {previewing && <Badge variant="info">live view</Badge>}
             </div>
@@ -588,6 +590,9 @@ export function DesktopHostView() {
             )}
             {compInfo?.error && (
               <p className="text-xs text-[var(--color-danger)]">{compInfo.error}</p>
+            )}
+            {previewError && (
+              <p className="text-xs text-[var(--color-danger)]">{previewError}</p>
             )}
             {lastShot ? (
               <button
@@ -614,8 +619,8 @@ export function DesktopHostView() {
               </button>
             ) : (
               <p className="text-xs text-[var(--color-subtle)]">
-                Start live view for a picture loop, or ask in chat after enabling computer use.
-                Click the picture to click that desktop spot.
+                Start live view for a silent ffmpeg/grim feed, then click the picture to click
+                that desktop spot. Install ffmpeg (X11) or grim (Wayland) if this stays empty.
               </p>
             )}
           </CardContent>
