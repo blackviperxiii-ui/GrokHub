@@ -410,7 +410,9 @@ type State = {
   /** Live computer-use session (screenshots are ephemeral; not persisted) */
   computerSession: {
     active: boolean;
+    previewing: boolean;
     lastScreenshotDataUrl: string | null;
+    lastScreenshotSize: { width: number; height: number } | null;
     lastInfo: import("./computer-client").ComputerInfo | null;
     pendingSave: {
       prompt: string;
@@ -1280,7 +1282,9 @@ export const useGrokHub = create<State>()(
       pendingHostConfirm: null,
       computerSession: {
         active: false,
+        previewing: false,
         lastScreenshotDataUrl: null,
+        lastScreenshotSize: null,
         lastInfo: null,
         pendingSave: null,
       },
@@ -6890,7 +6894,7 @@ if (!cmds.length && !compCmds.length) {
                     }
                   }
                   set((s) => ({
-                    computerSession: { ...s.computerSession, active: true },
+                    computerSession: { ...s.computerSession, active: true, previewing: true },
                     streamStatus: "Controlling the desktop…",
                   }));
                   await computerBeginSession();
@@ -6934,6 +6938,9 @@ if (!cmds.length && !compCmds.length) {
                             ...s.computerSession,
                             active: true,
                             lastScreenshotDataUrl: r.dataUrl || null,
+                            lastScreenshotSize: r.screenshot
+                              ? { width: r.screenshot.width, height: r.screenshot.height }
+                              : s.computerSession.lastScreenshotSize,
                           },
                         }));
                       }
@@ -6948,9 +6955,13 @@ if (!cmds.length && !compCmds.length) {
                       if (!r.ok && step.op !== "screenshot") break;
                     }
                   } finally {
-                    await computerEndSession();
+                    const ended = await computerEndSession();
                     set((s) => ({
-                      computerSession: { ...s.computerSession, active: false },
+                      computerSession: {
+                        ...s.computerSession,
+                        active: false,
+                        previewing: Boolean(ended.previewing),
+                      },
                     }));
                   }
                   if (aborted) break;
@@ -7789,7 +7800,9 @@ if (!cmds.length && !compCmds.length) {
           pendingHostConfirm: null,
           computerSession: {
             active: false,
+            previewing: false,
             lastScreenshotDataUrl: null,
+            lastScreenshotSize: null,
             lastInfo: null,
             pendingSave: null,
           },
@@ -8050,7 +8063,9 @@ if (!cmds.length && !compCmds.length) {
         }
         s.computerSession = {
           active: false,
+          previewing: false,
           lastScreenshotDataUrl: null,
+          lastScreenshotSize: null,
           lastInfo: null,
           pendingSave: null,
         };

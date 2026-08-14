@@ -15,14 +15,20 @@ See [aur/README.md](./aur/README.md) for PKGBUILD options.
 ## Optional: computer use (screenshot + mouse/keyboard)
 
 GrokHub can drive the Linux desktop when **Settings → Agent → Computer use** is enabled
-(off by default). The agent takes screenshots via Electron and injects input with
-system tools — Playwright is **not** used for this (it remains a test-only dependency).
+(off by default). It uses a silent picture loop (`grim` / `maim` / `scrot`) plus
+mouse/keyboard injectors — Playwright is **not** used for this (it remains a test-only
+dependency). Electron `desktopCapturer` is a last-resort fallback and may open a
+screenshot picker on Wayland.
 
 ```bash
-# X11 or XWayland
+# Silent capture (avoids the portal / screenshot app)
+sudo pacman -S --needed grim      # Wayland
+# sudo pacman -S --needed maim    # X11 alternative
+
+# X11 or XWayland clicks
 sudo pacman -S --needed xdotool
 
-# Native Wayland (user must be able to write /dev/uinput — typically the `input` group)
+# Native Wayland clicks (user must be able to write /dev/uinput — typically the `input` group)
 sudo pacman -S --needed ydotool
 ```
 

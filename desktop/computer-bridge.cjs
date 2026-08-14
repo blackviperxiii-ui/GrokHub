@@ -1,6 +1,7 @@
 /**
- * Linux desktop computer-use: screenshot (Electron desktopCapturer) +
- * mouse/keyboard via xdotool (X11/XWayland) or ydotool (Wayland).
+ * Linux desktop computer-use: silent picture loop (grim/maim/scrot) +
+ * mouse/keyboard via ydotool (Wayland) or xdotool (X11/XWayland).
+ * Electron desktopCapturer is a last-resort fallback (may open a portal picker).
  * Safe to require without Electron — screenshot/input then return errors.
  */
 const { execFile, spawn } = require("node:child_process");
@@ -24,6 +25,10 @@ let lastActAt = 0;
 /** @type {{ width: number, height: number, screenWidth: number, screenHeight: number } | null} */
 let lastShotMeta = null;
 let lastInjector = "";
+let previewTimer = null;
+let previewBusy = false;
+/** @type {"user" | "session" | null} */
+let previewOwner = null;
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, Math.max(0, ms)));
@@ -72,24 +77,43 @@ function sessionType() {
   return "unknown";
 }
 
+function preferredInjectorKind(session, bins) {
+  const x = bins && bins.xdotool;
+  const y = bins && bins.ydotool;
+  if (session === "wayland") {
+    if (y) return "ydotool";
+    if (x) return "xdotool";
+    return "";
+  }
+  if (x) return "xdotool";
+  if (y) return "ydotool";
+  return "";
+}
+
 function pickInjector() {
   const sess = sessionType();
   const xdotool = whichSync("xdotool");
   const ydotool = whichSync("ydotool");
-  if (xdotool && (sess === "x11" || process.env.DISPLAY)) {
-    lastInjector = "xdotool";
-    return { kind: "xdotool", path: xdotool, session: sess };
-  }
-  if (ydotool) {
-    lastInjector = "ydotool";
-    return { kind: "ydotool", path: ydotool, session: sess };
-  }
-  if (xdotool) {
-    lastInjector = "xdotool";
-    return { kind: "xdotool", path: xdotool, session: sess };
-  }
-  lastInjector = "";
+  const kind = preferredInjectorKind(sess, { xdotool, ydotool });
+  lastInjector = kind;
+  if (kind === "ydotool") return { kind, path: ydotool, session: sess };
+  if (kind === "xdotool") return { kind, path: xdotool, session: sess };
   return { kind: "", path: "", session: sess };
+}
+
+/** Full-screen capture tools that do not open a picker / screenshot GUI. */
+function silentCaptureTools(session, bins) {
+  const b = bins || {};
+  const out = [];
+  if ((session === "wayland" || b.wayland) && b.grim) {
+    out.push({ name: "grim", bin: b.grim, args: ["OUT"] });
+  }
+  if (b.maim) out.push({ name: "maim", bin: b.maim, args: ["-u", "OUT"] });
+  if (b.scrot) out.push({ name: "scrot", bin: b.scrot, args: ["-o", "-z", "OUT"] });
+  if (b["gnome-screenshot"]) {
+    out.push({ name: "gnome-screenshot-file", bin: b["gnome-screenshot"], args: ["-f", "OUT"] });
+  }
+  return out;
 }
 
 function electronApis() {
@@ -212,6 +236,7 @@ function info() {
   } catch {
     /* ignore */
   }
+  const plans = silentCaptureTools(inj.session, captureToolBins());
   return {
     ok: true,
     platform: process.platform,
@@ -223,13 +248,41 @@ function info() {
     electron,
     screen: screenSize,
     lastScreenshot: lastShotMeta,
-    hint:
-      inj.kind
-        ? inj.kind === "ydotool"
-          ? "ydotool found — user may need to be in the input group (uinput)."
-          : "xdotool found."
-        : "Install xdotool (X11/XWayland) or ydotool (Wayland) to inject mouse/keyboard.",
+    capture: plans[0]?.name || "desktopCapturer",
+    captureTools: plans.map((p) => p.name),
+    previewing: Boolean(previewTimer),
+    hint: buildHint(inj, plans),
   };
+}
+
+function captureToolBins() {
+  return {
+    grim: whichSync("grim"),
+    maim: whichSync("maim"),
+    scrot: whichSync("scrot"),
+    "gnome-screenshot": whichSync("gnome-screenshot"),
+  };
+}
+
+function buildHint(inj, plans) {
+  const bits = [];
+  if (inj.kind === "ydotool") {
+    bits.push("ydotool found — user may need to be in the input group (uinput).");
+  } else if (inj.kind === "xdotool") {
+    bits.push(
+      inj.session === "wayland"
+        ? "xdotool on Wayland only moves XWayland apps. Install ydotool + uinput for native windows."
+        : "xdotool found.",
+    );
+  } else {
+    bits.push("Install xdotool (X11/XWayland) or ydotool (Wayland) to inject mouse/keyboard.");
+  }
+  if (!plans.length) {
+    bits.push(
+      "Install grim (Wayland) or maim/scrot (X11) so capture stays silent. Electron desktopCapturer opens a screenshot picker.",
+    );
+  }
+  return bits.join(" ");
 }
 
 function mapToScreen(x, y) {
@@ -274,71 +327,193 @@ async function maybeHideGrokHubForClick(x, y) {
   return false;
 }
 
-async function captureScreenshot() {
-  const electron = electronApis();
-  if (!electron || !electron.desktopCapturer) {
-    return { ok: false, error: "Screenshot requires the Electron desktop shell." };
+function screenBounds() {
+  try {
+    const e = electronApis();
+    if (e && e.screen) {
+      const d = e.screen.getPrimaryDisplay();
+      return { width: d.bounds.width, height: d.bounds.height, scaleFactor: d.scaleFactor || 1 };
+    }
+  } catch {
+    /* ignore */
   }
+  return { width: lastShotMeta?.screenWidth || 0, height: lastShotMeta?.screenHeight || 0, scaleFactor: 1 };
+}
+
+function encodeShotFile(filePath) {
+  const electron = electronApis();
+  if (electron && electron.nativeImage) {
+    let img = electron.nativeImage.createFromPath(filePath);
+    const size = img.getSize();
+    if (size.width > SCREENSHOT_MAX_WIDTH) {
+      img = img.resize({ width: SCREENSHOT_MAX_WIDTH, quality: "better" });
+    }
+    const jpeg = img.toJPEG(72);
+    const shot = img.getSize();
+    return {
+      dataUrl: `data:image/jpeg;base64,${Buffer.from(jpeg).toString("base64")}`,
+      screenshot: { width: shot.width, height: shot.height },
+    };
+  }
+  const buf = fs.readFileSync(filePath);
+  return {
+    dataUrl: `data:image/png;base64,${buf.toString("base64")}`,
+    screenshot: { width: lastShotMeta?.width || 0, height: lastShotMeta?.height || 0 },
+  };
+}
+
+function emitFrame(payload) {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("computer:frame", payload);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+async function captureViaCli() {
+  const sess = sessionType();
+  const plans = silentCaptureTools(sess, captureToolBins());
+  const tmp = path.join(os.tmpdir(), `grokhub-cap-${process.pid}-${Date.now()}.png`);
+  for (const plan of plans) {
+    const args = plan.args.map((a) => (a === "OUT" ? tmp : a));
+    const r = await runTool(plan.bin, args, 12000);
+    if (!r.ok) continue;
+    try {
+      if (!fs.existsSync(tmp) || fs.statSync(tmp).size < 80) continue;
+      const encoded = encodeShotFile(tmp);
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        /* ignore */
+      }
+      const bounds = screenBounds();
+      lastShotMeta = {
+        width: encoded.screenshot.width || bounds.width,
+        height: encoded.screenshot.height || bounds.height,
+        screenWidth: bounds.width,
+        screenHeight: bounds.height,
+      };
+      return {
+        ok: true,
+        dataUrl: encoded.dataUrl,
+        screen: bounds,
+        screenshot: encoded.screenshot,
+        capture: plan.name,
+      };
+    } catch {
+      /* try next tool */
+    }
+  }
+  try {
+    fs.unlinkSync(tmp);
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+async function captureViaDesktopCapturer() {
+  const electron = electronApis();
+  if (!electron || !electron.desktopCapturer) return null;
   const { desktopCapturer, screen, nativeImage } = electron;
   const display = screen.getPrimaryDisplay();
   const bounds = display.bounds;
   const sf = display.scaleFactor || 1;
   const thumbW = Math.max(1, Math.round(bounds.width * sf));
   const thumbH = Math.max(1, Math.round(bounds.height * sf));
-  let hidden = false;
-  try {
-    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
-      mainWindow.hide();
-      hidden = true;
-      await sleep(80);
-    }
-  } catch {
-    /* ignore */
+  const sources = await desktopCapturer.getSources({
+    types: ["screen"],
+    thumbnailSize: { width: thumbW, height: thumbH },
+  });
+  const src = sources.find((s) => String(s.id).includes(String(display.id))) || sources[0];
+  if (!src || !src.thumbnail) return null;
+  let img = src.thumbnail;
+  if (typeof img.toJPEG !== "function" && nativeImage && nativeImage.createFromDataURL) {
+    img = nativeImage.createFromDataURL(img.toDataURL());
+  }
+  const size = img.getSize();
+  if (size.width > SCREENSHOT_MAX_WIDTH) {
+    img = img.resize({ width: SCREENSHOT_MAX_WIDTH, quality: "better" });
+  }
+  const jpeg = img.toJPEG(72);
+  const shot = img.getSize();
+  lastShotMeta = {
+    width: shot.width,
+    height: shot.height,
+    screenWidth: bounds.width,
+    screenHeight: bounds.height,
+  };
+  return {
+    ok: true,
+    dataUrl: `data:image/jpeg;base64,${Buffer.from(jpeg).toString("base64")}`,
+    screen: { width: bounds.width, height: bounds.height, scaleFactor: sf },
+    screenshot: { width: shot.width, height: shot.height },
+    capture: "desktopCapturer",
+  };
+}
+
+async function captureScreenshot() {
+  const cli = await captureViaCli();
+  if (cli && cli.ok) {
+    emitFrame(cli);
+    return cli;
   }
   try {
-    const sources = await desktopCapturer.getSources({
-      types: ["screen"],
-      thumbnailSize: { width: thumbW, height: thumbH },
-    });
-    const src =
-      sources.find((s) => String(s.id).includes(String(display.id))) || sources[0];
-    if (!src || !src.thumbnail) {
-      return { ok: false, error: "No screen source from desktopCapturer." };
+    const cap = await captureViaDesktopCapturer();
+    if (cap && cap.ok) {
+      emitFrame(cap);
+      return cap;
     }
-    let img = src.thumbnail;
-    if (typeof img.toJPEG !== "function" && nativeImage && nativeImage.createFromDataURL) {
-      img = nativeImage.createFromDataURL(img.toDataURL());
-    }
-    const size = img.getSize();
-    if (size.width > SCREENSHOT_MAX_WIDTH) {
-      img = img.resize({ width: SCREENSHOT_MAX_WIDTH, quality: "better" });
-    }
-    const jpeg = img.toJPEG(72);
-    const dataUrl = `data:image/jpeg;base64,${Buffer.from(jpeg).toString("base64")}`;
-    const shot = img.getSize();
-    lastShotMeta = {
-      width: shot.width,
-      height: shot.height,
-      screenWidth: bounds.width,
-      screenHeight: bounds.height,
-    };
-    return {
-      ok: true,
-      dataUrl,
-      screen: { width: bounds.width, height: bounds.height, scaleFactor: sf },
-      screenshot: { width: shot.width, height: shot.height },
-    };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
-  } finally {
-    if (hidden) {
-      try {
-        restoreHiddenWindow(mainWindow);
-      } catch {
-        /* ignore */
-      }
-    }
   }
+  return {
+    ok: false,
+    error:
+      "Screenshot failed. Install grim (Wayland) or maim/scrot (X11). Electron desktopCapturer may open a portal picker.",
+  };
+}
+
+function isPreviewing() {
+  return Boolean(previewTimer);
+}
+
+function stopPreview(opts) {
+  const reason = opts && opts.reason;
+  const force = Boolean(opts && opts.force);
+  if (!force && reason === "session" && previewOwner === "user") {
+    return { ok: true, previewing: Boolean(previewTimer), owner: previewOwner };
+  }
+  if (previewTimer) {
+    clearInterval(previewTimer);
+    previewTimer = null;
+  }
+  previewOwner = null;
+  return { ok: true, previewing: false };
+}
+
+function startPreview(intervalMs, owner) {
+  const ms = Math.max(250, Math.min(2000, Number(intervalMs) || 450));
+  const who = owner === "session" ? "session" : "user";
+  if (previewTimer && previewOwner === "user" && who === "session") {
+    return { ok: true, previewing: true, intervalMs: ms, owner: previewOwner };
+  }
+  stopPreview({ force: true });
+  previewOwner = who;
+  const tick = async () => {
+    if (previewBusy) return;
+    previewBusy = true;
+    try {
+      await captureScreenshot();
+    } finally {
+      previewBusy = false;
+    }
+  };
+  void tick();
+  previewTimer = setInterval(() => void tick(), ms);
+  return { ok: true, previewing: true, intervalMs: ms, owner: previewOwner };
 }
 
 async function injectXdotool(bin, step, mapped) {
@@ -454,23 +629,35 @@ async function act(step) {
       mapped,
     };
   }
+  let follow = null;
+  try {
+    await sleep(90);
+    follow = await captureScreenshot();
+  } catch {
+    follow = null;
+  }
   return {
     ok: true,
     op,
     injector: inj.kind,
     mapped: op === "type" || op === "key" || op === "scroll" ? undefined : mapped,
+    dataUrl: follow && follow.ok ? follow.dataUrl : undefined,
+    screen: follow && follow.ok ? follow.screen : undefined,
+    screenshot: follow && follow.ok ? follow.screenshot : undefined,
   };
 }
 
 async function beginSession() {
   aborted = false;
   showStopBar();
-  return { ok: true, ...info() };
+  if (!previewTimer) startPreview(450, "session");
+  return { ok: true, ...info(), previewing: Boolean(previewTimer) };
 }
 
 function endSession() {
+  stopPreview({ reason: "session" });
   hideStopBar();
-  return { ok: true };
+  return { ok: true, previewing: Boolean(previewTimer) };
 }
 
 module.exports = {
@@ -484,6 +671,11 @@ module.exports = {
   resetAbort,
   isAborted,
   pickInjector,
+  preferredInjectorKind,
+  silentCaptureTools,
   restoreHiddenWindow,
   ydotoolScrollArgs,
+  startPreview,
+  stopPreview,
+  isPreviewing,
 };
