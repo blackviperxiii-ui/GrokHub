@@ -1762,16 +1762,22 @@ export function ChatView() {
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium">Controlling this computer</div>
                   <div className="text-[11px] text-[var(--color-muted)]">
-                    {streamStatus || "Screenshot + mouse/keyboard"}
+                    {computerSession.previewing
+                      ? "Live picture loop · clicks use this frame"
+                      : streamStatus || "Screenshot + mouse/keyboard"}
                   </div>
                 </div>
                 {computerSession.lastScreenshotDataUrl ? (
                   <img
                     src={computerSession.lastScreenshotDataUrl}
-                    alt="Last screenshot"
+                    alt="Live desktop view"
                     className="h-12 w-20 rounded object-cover"
                   />
-                ) : null}
+                ) : (
+                  <div className="flex h-12 w-20 items-center justify-center rounded border border-dashed border-[var(--color-border)] text-[10px] text-[var(--color-subtle)]">
+                    starting
+                  </div>
+                )}
                 <Button size="sm" variant="secondary" onClick={() => stopChat()}>
                   <Square className="h-3.5 w-3.5" />
                   Stop
