@@ -127,4 +127,10 @@ mod tests {
         let s = run_github_tool("user", "", "");
         assert!(s.contains("No GitHub token"), "{s}");
     }
+
+    #[test]
+    fn issues_need_repo() {
+        let s = run_github_tool("list_issues", "", "dummy");
+        assert!(s.contains("Need repo:"), "{s}");
+    }
 }
