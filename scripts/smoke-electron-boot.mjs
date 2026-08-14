@@ -23,13 +23,19 @@ if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND
 }
 
 const timeoutMs = Number(process.env.GROKHUB_BOOT_TIMEOUT_MS || 45_000);
-const child = spawn(electronBin, ["desktop/main.mjs"], {
+// GHA chrome-sandbox is often root:4755; JS appendSwitch("no-sandbox") is too late.
+const sandboxOff = process.platform === "linux" && process.env.GROKHUB_SANDBOX !== "1";
+const electronArgs = sandboxOff
+  ? ["--no-sandbox", "--no-zygote", "--disable-dev-shm-usage", "desktop/main.mjs"]
+  : ["desktop/main.mjs"];
+const child = spawn(electronBin, electronArgs, {
   env: {
     ...process.env,
     GROKHUB_URL: url,
     GROKHUB_DISABLE_GPU: process.env.GROKHUB_DISABLE_GPU || "1",
     GROKHUB_WAYLAND: process.env.GROKHUB_WAYLAND || "0",
     ELECTRON_ENABLE_LOGGING: "1",
+    ...(sandboxOff ? { ELECTRON_DISABLE_SANDBOX: "1" } : {}),
   },
   stdio: ["ignore", "pipe", "pipe"],
 });

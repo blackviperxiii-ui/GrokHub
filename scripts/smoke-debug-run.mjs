@@ -83,5 +83,13 @@ assert.equal(
 
 const ciSrc = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
 assert.match(ciSrc, /node_modules\/electron\/install\.js/);
+assert.match(ciSrc, /ELECTRON_DISABLE_SANDBOX=1/);
+
+const bootSrc = fs.readFileSync(path.join(root, "scripts/smoke-electron-boot.mjs"), "utf8");
+assert.match(
+  bootSrc,
+  /"--no-sandbox"/,
+  "Electron boot smoke must pass --no-sandbox at spawn (JS appendSwitch is too late for SUID chrome-sandbox)",
+);
 
 console.log("smoke-debug-run OK");
