@@ -75,9 +75,35 @@ assert.match(
 );
 assert.match(
   bridgeSrc,
-  /npm ci --ignore-scripts \|\| npm install --ignore-scripts/,
+  /npm ci --ignore-scripts --include=dev \|\| npm install --ignore-scripts --include=dev/,
   "source rebuild must install dependencies when node_modules is missing",
 );
+assert.match(
+  bridgeSrc,
+  /--include=dev/,
+  "UI rebuild npm install must include devDependencies (vite plugins live there)",
+);
+assert.equal(typeof bridge.uiRebuildHasToolchain, "function");
+assert.equal(
+  bridge.uiRebuildHasToolchain("/tmp/grokhub-missing-nm"),
+  false,
+  "missing node_modules is not a UI toolchain",
+);
+assert.equal(typeof bridge.uiRebuildInstallEnv, "function");
+const instEnv = bridge.uiRebuildInstallEnv({ NODE_ENV: "production", PATH: "/usr/bin" });
+assert.notEqual(
+  instEnv.NODE_ENV,
+  "production",
+  "NODE_ENV=production makes npm omit vite/plugin-react/nitro",
+);
+assert.equal(instEnv.NPM_CONFIG_PRODUCTION, "false");
+const pkgJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+for (const name of ["vite", "@vitejs/plugin-react", "nitro"]) {
+  assert.ok(
+    pkgJson.dependencies?.[name],
+    `${name} must be a runtime dependency so the shipped 1.1.22 updater (NODE_ENV=production npm install) can rebuild the UI`,
+  );
+}
 const liveFuser = bridgeSrc
   .split("\n")
   .filter((l) => /fuser\s+-k/.test(l))
