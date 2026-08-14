@@ -1,6 +1,6 @@
 /** Build readable tool-run cards for chat + parse streamStatus for UI. */
 
-export type ToolKind = "host" | "connector" | "selfmod" | "summarize" | "stream" | "tool";
+export type ToolKind = "host" | "connector" | "selfmod" | "computer" | "summarize" | "stream" | "tool";
 
 export type ToolUiStatus = {
   kind: ToolKind;
@@ -14,6 +14,7 @@ export function streamStatusPill(status: string | null | undefined): string {
   if (!status) return "working";
   const s = status.trim();
   if (/^Host:/i.test(s) || /Running on your desktop/i.test(s)) return "tool · host";
+  if (/^Computer:/i.test(s) || /computer use/i.test(s)) return "tool · computer";
   if (/^Connector:/i.test(s) || /Running connector/i.test(s)) return "tool · connector";
   if (/Self-mod/i.test(s)) return "tool · self-mod";
   if (/Summariz/i.test(s)) return "summarizing";
@@ -34,6 +35,14 @@ export function parseStreamStatus(status: string | null | undefined): ToolUiStat
       kind: "host",
       title: "Desktop host",
       detail: s.replace(/^Host:\s*/i, "").replace(/…$/, "") || "Running command…",
+      phase: "running",
+    };
+  }
+  if (/^Computer:/i.test(s) || /computer use/i.test(s) || /Controlling (the )?desktop/i.test(s)) {
+    return {
+      kind: "computer",
+      title: "Computer use",
+      detail: s.replace(/^Computer:\s*/i, "") || "Driving the desktop…",
       phase: "running",
     };
   }
@@ -86,7 +95,7 @@ export function parseStreamStatus(status: string | null | undefined): ToolUiStat
 }
 
 export function toolRunningMarkdown(opts: {
-  kind: "host" | "connector" | "selfmod";
+  kind: "host" | "connector" | "selfmod" | "computer";
   command: string;
   preface?: string;
   /** Elapsed seconds while tool is running (keeps stream "alive") */
@@ -99,14 +108,21 @@ export function toolRunningMarkdown(opts: {
       ? "Desktop host"
       : opts.kind === "connector"
         ? "Connector tool"
-        : "Self-modification";
-  const icon = opts.kind === "host" ? "🖥️" : opts.kind === "connector" ? "🔌" : "🛠️";
+        : opts.kind === "computer"
+          ? "Computer use"
+          : "Self-modification";
+  const icon =
+    opts.kind === "host"
+      ? "🖥️"
+      : opts.kind === "connector"
+        ? "🔌"
+        : opts.kind === "computer"
+          ? "🖱️"
+          : "🛠️";
   const cmd =
     opts.kind === "host"
       ? `$ ${opts.command}`
-      : opts.kind === "connector"
-        ? opts.command
-        : opts.command;
+      : opts.command;
   const sec = Math.max(0, Math.floor(opts.elapsedSec || 0));
   const dots = ".".repeat((sec % 3) + 1).padEnd(3, " ");
   const stepBit =
@@ -134,7 +150,7 @@ export function toolRunningMarkdown(opts: {
 }
 
 export function toolResultMarkdown(opts: {
-  kind: "host" | "connector" | "selfmod";
+  kind: "host" | "connector" | "selfmod" | "computer";
   preface?: string;
   outputs: string[];
   summarizing?: boolean;
@@ -144,7 +160,9 @@ export function toolResultMarkdown(opts: {
       ? "Desktop results"
       : opts.kind === "connector"
         ? "Connector results"
-        : "Self-mod results";
+        : opts.kind === "computer"
+          ? "Computer-use results"
+          : "Self-mod results";
   const lang = opts.kind === "host" ? "shell" : "text";
   const body = opts.outputs.join("\n\n---\n\n") || "(no output)";
   return [
