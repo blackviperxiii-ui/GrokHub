@@ -7,6 +7,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
 const { cleanInstallOutput } = require("./clean-output.cjs");
+const visionMessages = require("./vision-messages.cjs");
 
 const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
@@ -14,6 +15,26 @@ const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
 const APP_VERSION = "1.1.21";
 let updateInProgress = false;
+
+function lastUserText(messages) {
+  const last = [...(messages || [])].reverse().find((m) => m && m.role === "user");
+  if (!last) return "";
+  if (typeof last.content === "string") return last.content;
+  if (Array.isArray(last.content)) {
+    return last.content
+      .filter((p) => p && p.type === "text")
+      .map((p) => String(p.text || ""))
+      .join("\n");
+  }
+  return "";
+}
+
+function hydrateChatMessages(req, sys) {
+  return visionMessages.hydrateForXai(
+    [{ role: "system", content: sys }, ...(req.messages || []).filter((m) => m.role !== "system")],
+    { maxImages: 2 },
+  );
+}
 
 function shaMatch(a, b) {
   if (!a || !b) return false;
@@ -556,9 +577,7 @@ async function callXaiChat(req = {}) {
     "";
   const freeTier = Boolean(req.freeTier);
   const mode = req.mode || "auto";
-  const lastUser = [...(req.messages || [])]
-    .reverse()
-    .find((m) => m.role === "user")?.content;
+  const lastUser = lastUserText(req.messages);
   const routed = freeTier
     ? (() => {
         const r = resolveMode(mode, lastUser || "");
@@ -578,10 +597,7 @@ async function callXaiChat(req = {}) {
     (req.workspaceContext && String(req.workspaceContext).trim()
       ? `\n\n## Imported OpenClaw workspace context\n${String(req.workspaceContext).trim().slice(0, 24000)}`
       : "");
-  const messages = [
-    { role: "system", content: sys },
-    ...(req.messages || []).filter((m) => m.role !== "system"),
-  ];
+  const messages = hydrateChatMessages(req, sys);
   const temperature =
     routed === "fast" ? 0.5 : routed === "build" ? 0.4 : routed === "heavy" ? 0.8 : 0.7;
   const max_tokens = freeTier
@@ -2462,8 +2478,7 @@ async function callXaiChatStream(req = {}, handlers = {}) {
     "";
   const freeTier = Boolean(req.freeTier);
   const mode = req.mode || "auto";
-  const lastUser =
-    [...(req.messages || [])].reverse().find((m) => m.role === "user")?.content || "";
+  const lastUser = lastUserText(req.messages);
   const model = sanitizeChatModel(
     req.model || modelForMode(mode, lastUser, { freeTier }),
     mode,
@@ -2473,10 +2488,7 @@ async function callXaiChatStream(req = {}, handlers = {}) {
     (req.workspaceContext && String(req.workspaceContext).trim()
       ? `\n\n## Imported OpenClaw workspace context\n${String(req.workspaceContext).trim().slice(0, 24000)}`
       : "");
-  const messages = [
-    { role: "system", content: sys },
-    ...(req.messages || []).filter((m) => m.role !== "system"),
-  ];
+  const messages = hydrateChatMessages(req, sys);
   const temperature = typeof req.temperature === "number" ? req.temperature : 0.6;
   // Higher caps so long tool-using turns don't get cut mid-stream
   const max_tokens = freeTier ? 2048 : 8192;

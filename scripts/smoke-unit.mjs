@@ -52,6 +52,12 @@ assert.ok(fs.existsSync(log.paths().logDir));
 
 const host = require("../desktop/host-bridge.cjs");
 assert.equal(typeof host.runExec, "function");
+const computer = require("../desktop/computer-bridge.cjs");
+assert.equal(typeof computer.info, "function");
+assert.equal(typeof computer.act, "function");
+assert.equal(typeof computer.userStop, "function");
+const vision = require("../desktop/vision-messages.cjs");
+assert.equal(typeof vision.hydrateForXai, "function");
 assert.equal(typeof host.setSafeMode, "function");
 assert.equal(typeof host.getSafeMode, "function");
 assert.equal(typeof host.killExec, "function");
@@ -196,6 +202,7 @@ assert.match(
 assert.match(appShellSrc, /data-conn/, "Live pill must expose connection kind for green/yellow/red");
 assert.match(appShellSrc, /data-queue-count/, "Queue nav must show an attention count");
 assert.match(mainSrc, /setVersion/, "Electron must set app version (Linux logs No version found otherwise)");
+assert.match(mainSrc, /computer:info/, "computer-use IPC must be registered");
 assert.match(
   mainSrc,
   /Content-Security-Policy/,
