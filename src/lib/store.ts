@@ -186,7 +186,7 @@ import {
   type ComputerStep,
 } from "./computer-protocol";
 import { appendAssistantOnce } from "./agent-tool-history";
-import { capHistoryImages } from "./grok-vision";
+import { capHistoryImagesInPlace } from "./grok-vision";
 import type { GrokChatMessage } from "./grok";
 import { buildGoalStepPrompt, parseGoalOutcome } from "./goal-loop";
 import { agentCoreEnqueue, agentCoreSetPaused, agentCoreSync } from "./agent-core-client";
@@ -696,7 +696,7 @@ type State = {
     times?: string[];
     heartbeatEveryMin?: number;
   }) => void;
-  sendChat: (text: string) => Promise<void>;
+  sendChat: (text: string) => Promise<boolean | void>;
   stopChat: () => void;
   refreshModels: (opts?: { force?: boolean }) => Promise<void>;
   setImaginePrompt: (v: string) => void;
@@ -1361,6 +1361,11 @@ export const useGrokHub = create<State>()(
             /* ignore */
           }
           try {
+            void window.grokhubDesktop?.desktopEntry?.autostart?.(LOCKED.desktop.launchOnLogin);
+          } catch {
+            /* ignore */
+          }
+          try {
             void window.grokhubDesktop?.setGlobalHotkey?.(LOCKED.desktop.globalHotkey);
           } catch {
             /* ignore */
@@ -1596,6 +1601,9 @@ export const useGrokHub = create<State>()(
       },
 
       runSelfImprove: async () => {
+        if (get().running || get().streamingMessageId) {
+          return { ok: false, detail: "Skipped while a turn is running" };
+        }
         const s = get();
         const online = Boolean(s.oauth?.accessToken || s.apiKey);
         let learning = s.learning;
@@ -4155,7 +4163,13 @@ syncWebsiteConnectors: async () => {
           } else {
             set({ nav: "chat" });
           }
-          await get().sendChat(job.prompt);
+          const accepted = await get().sendChat(job.prompt);
+          if (accepted === false) {
+            set((s) => ({
+              agentQueue: updateJob(s.agentQueue, job.id, { status: "queued" }),
+            }));
+            return;
+          }
           const last = [...get().chat].reverse().find((m) => m.role === "assistant");
           const text = last?.content || "";
           const outcome = parseGoalOutcome(text);
@@ -4718,15 +4732,20 @@ syncWebsiteConnectors: async () => {
           status: "failed",
         });
         void gen;
+        queueMicrotask(() => {
+          void get().processAgentQueue();
+        });
       },
 
       sendChat: async (text) => {
         let trimmed = text.trim();
-        if (!trimmed) return;
-        if (get().running) {
+        if (!trimmed) return false;
+        if (sendChatBusy || get().running) {
           // Already running — ignore new sends (use Stop first)
-          return;
+          return false;
         }
+        sendChatBusy = true;
+        try {
 
         // Slash commands (local, instant)
         const slash = trimmed.match(/^\/([a-zA-Z_-]+)(?:\s+([\s\S]*))?$/);
@@ -6046,9 +6065,10 @@ while (rounds < maxRounds && !aborted) {
               (globalThis as unknown as { __ghFirstTok?: boolean }).__ghFirstTok = false;
               let roundText = "";
               const stNow = get();
+              capHistoryImagesInPlace(history, 2);
               const result = await grokChatStream(
                 {
-                  messages: capHistoryImages(history, 2),
+                  messages: history,
                   mode: routed,
                   model: freeTier ? undefined : modelId,
                   apiKey: get().apiKey || undefined,
@@ -7320,6 +7340,9 @@ if (!cmds.length && !compCmds.length) {
           void get().processAgentQueue();
         }
         } // end finally
+        } finally {
+          sendChatBusy = false;
+        }
       },
 
       setImaginePrompt: (v) => set({ imaginePrompt: v }),
@@ -7565,7 +7588,7 @@ if (!cmds.length && !compCmds.length) {
             } else if (f.fix === "ensure_memory") {
               await ensureFileMemory();
             } else if (f.fix === "clear_stream") {
-              finalizeChatStream(set, st.streamingMessageId || "");
+              finalizeChatStream(set, st.streamingMessageId || "", { abortWork: true });
             }
           } catch {
             /* ignore */
@@ -7599,7 +7622,7 @@ if (!cmds.length && !compCmds.length) {
           if (!a.auto) continue;
           if (a.kind === "clear_orphan_stream" || a.kind === "finalize_stuck_stream") {
             const mid = a.messageId || st.streamingMessageId || "";
-            if (mid) finalizeChatStream(set, mid);
+            if (mid) finalizeChatStream(set, mid, { abortWork: true });
             streamStartedAt = null;
             fixed += 1;
             notes.push(a.title);
@@ -8144,12 +8167,37 @@ function wait(ms: number) {
  * Always clear streaming chrome for a finished/aborted/superseded turn.
  * Prevents assistant bubbles stuck with streaming:true forever.
  */
+function abortActiveChatWork() {
+  try {
+    activeChatAbort?.abort();
+  } catch {
+    /* ignore */
+  }
+  activeChatAbort = null;
+  const killIds = [...activeHostJobIds];
+  if (activeHostJobId) killIds.push(activeHostJobId);
+  activeHostJobIds.clear();
+  activeHostJobId = null;
+  for (const killId of [...new Set(killIds)]) {
+    void import("./host-client").then(({ hostKillExec }) => hostKillExec(killId)).catch(() => {});
+  }
+  void import("./computer-client").then(({ computerStop }) => {
+    void computerStop();
+  }).catch(() => {});
+  try {
+    void window.grokhubDesktop?.grok?.stopChatStream?.();
+  } catch {
+    /* ignore */
+  }
+}
+
 function finalizeChatStream(
   set: (fn: (s: any) => any) => void,
   botId: string,
-  opts?: { content?: string; markStopped?: boolean },
+  opts?: { content?: string; markStopped?: boolean; abortWork?: boolean },
 ) {
   streamStartedAt = null;
+  if (opts?.abortWork) abortActiveChatWork();
   if (!botId) {
     set((s) => ({
       running: false,
@@ -8208,6 +8256,7 @@ function endChatTurnPersist() {
 
 /** Active chat stream abort (module-level so Stop works across re-renders) */
 let activeChatAbort: AbortController | null = null;
+let sendChatBusy = false;
 let chatGeneration = 0;
 let streamStartedAt: number | null = null;
 let lastProactiveAt = 0;

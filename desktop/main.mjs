@@ -1263,6 +1263,23 @@ function registerIpc() {
   safeHandle("selfmod:journal", (_e, limit) => selfMod.listJournal(limit));
   safeHandle("update:factory", async (_e, opts) => {
     const r = await grokBridge.factoryReinstall({ ...(opts || {}), restart: true });
+    if (r?.ok && r?.restarting) {
+      setTimeout(() => {
+        try {
+          tray?.destroy();
+        } catch {
+          /* ignore */
+        }
+        try {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.hide();
+          }
+        } catch {
+          /* ignore */
+        }
+        app.exit(0);
+      }, 1600);
+    }
     return r;
   });
 

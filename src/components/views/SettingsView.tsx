@@ -16,7 +16,7 @@ const SETTINGS_CATEGORIES = [
     id: "account",
     label: "Account",
     hint: "Sign in to Grok",
-    sections: ["sec-wizard", "sec-oauth", "sec-setup", "sec-api"],
+    sections: ["sec-wizard", "sec-oauth", "sec-setup-sync", "sec-setup", "sec-api"],
   },
   {
     id: "devices",
@@ -35,6 +35,7 @@ const SETTINGS_CATEGORIES = [
 const SECTION_CAT: Record<string, (typeof SETTINGS_CATEGORIES)[number]["id"]> = {
   "sec-wizard": "account",
   "sec-oauth": "account",
+  "sec-setup-sync": "account",
   "sec-setup": "account",
   "sec-api": "account",
   "sec-hub": "devices",
@@ -49,6 +50,7 @@ const SECTION_CAT: Record<string, (typeof SETTINGS_CATEGORIES)[number]["id"]> = 
 const SECTION_SEARCH: Record<string, string> = {
   "sec-wizard": "first-run connect welcome setup",
   "sec-oauth": "oauth login sign in grok xai super",
+  "sec-setup-sync": "setup sync grok account profile models skills",
   "sec-setup": "sync pack export import",
   "sec-api": "api key token xai",
   "sec-hub": "devices pair hub share lan sync remote computer",
@@ -624,7 +626,7 @@ export function SettingsView() {
       </Card>
 
 
-      <Card>
+      <Card id="sec-setup-sync" data-settings-cat="account" data-hit={sectionHit("sec-setup-sync") ? "1" : "0"}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
             <RefreshCw className="h-4 w-4 text-[var(--color-muted)]" />

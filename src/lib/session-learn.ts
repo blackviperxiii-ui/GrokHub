@@ -213,9 +213,11 @@ export async function applyTurnLearning(
 
   // Full reflect on a cadence — not every Max turn (that OOMs the renderer)
   let didReflect = false;
+  let reflectMarkdown = "";
   if (shouldReflectThisTurn(learning.totalTurns)) {
     const r = reflectLearning(learning);
     learning = r.state;
+    reflectMarkdown = r.markdown;
     didReflect = true;
   }
 
@@ -248,8 +250,7 @@ export async function applyTurnLearning(
 
   try {
     if (didReflect) {
-      const { markdown } = reflectLearning(learning);
-      await memoryWrite("LEARNINGS.md", markdown);
+      await memoryWrite("LEARNINGS.md", reflectMarkdown);
       const tops = learning.insights.slice(0, 8).map((i) => i.text);
       if (tops.length) await memoryAppendFacts(tops, { target: "MEMORY.md" });
     }
