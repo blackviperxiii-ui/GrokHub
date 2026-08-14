@@ -14,7 +14,7 @@ const execAsync = promisify(execCb);
 const XAI_BASE = "https://api.x.ai/v1";
 const DEFAULT_REPO = "blackviperxiii-ui/Grok-Hub";
 const DEFAULT_BRANCH = "main";
-const APP_VERSION = "1.1.27";
+const APP_VERSION = "1.1.28";
 let updateInProgress = false;
 
 function lastUserText(messages) {
