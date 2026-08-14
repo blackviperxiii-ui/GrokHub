@@ -69,10 +69,15 @@ export function SkillsView() {
                       {sk.slash}
                     </CardDescription>
                   </div>
+                  <div className="flex flex-col items-end gap-1">
                   <Badge variant={sk.kind === "builtin" ? "info" : "default"}>
                     {sk.kind}
                     {sk.id.startsWith("ocskill") ? " · openclaw" : ""}
                   </Badge>
+                  {sk.computerRecipe ? (
+                    <Badge variant="success">recipe</Badge>
+                  ) : null}
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="mt-auto flex flex-1 flex-col gap-3">

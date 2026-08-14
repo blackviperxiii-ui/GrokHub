@@ -55,6 +55,8 @@ export type Skill = {
   slash: string;
   instructions: string;
   runs: number;
+  /** Replayable desktop computer-use steps captured from a successful run */
+  computerRecipe?: import("./computer-protocol").ComputerRecipe;
 };
 
 export type AutomationSchedule =
