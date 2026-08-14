@@ -2,6 +2,7 @@
 
 mod app;
 mod cards;
+mod icons;
 mod theme;
 mod cli;
 mod config;
