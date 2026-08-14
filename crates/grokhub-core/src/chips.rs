@@ -299,7 +299,7 @@ pub fn detect_chip_context(chat: &[(String, String)]) -> ChipContext {
                 "ps aux",
             ],
         ),
-        imagine: regexish(&blob, &["imagine", "generate a pic", "generate an image", "draw ", "video"]),
+        imagine: regexish(&blob, &["imagine", "generate a pic", "generate an image", "draw "]),
         error: regexish(
             &blob,
             &[
@@ -443,7 +443,7 @@ pub fn predict_intents(chat: &[(String, String)], draft: &str) -> BTreeMap<Predi
     if regexish(&blob, &["should i", "which", "options", "recommend", "tradeoff"]) {
         *scores.get_mut(&PredictedIntent::Decide).unwrap() += 0.4;
     }
-    if regexish(&blob, &["imagine", "image", "draw", "logo", "video", "generate"]) {
+    if regexish(&blob, &["imagine", "image", "draw", "logo", "generate an image"]) {
         *scores.get_mut(&PredictedIntent::Create).unwrap() += 0.5;
     }
     if regexish(&format!("{user} {draft_l}"), &["continue", "keep going", "go on", "resume", "next"]) {
@@ -1035,7 +1035,7 @@ fn apply_intent_boost(chips: &mut [QuickChip], intents: &BTreeMap<PredictedInten
                 PredictedIntent::Explain => regexish(&hay, &["explain", "simple", "plain", "takeaway"]),
                 PredictedIntent::Host => regexish(&hay, &["host", "system", "process", "shell", "machine", "scan"]),
                 PredictedIntent::Decide => regexish(&hay, &["recommend", "option", "pick", "best", "decide"]),
-                PredictedIntent::Create => regexish(&hay, &["imagine", "image", "draw", "logo", "video"]),
+                PredictedIntent::Create => regexish(&hay, &["imagine", "image", "draw", "logo"]),
                 PredictedIntent::Continue => regexish(&hay, &["continue", "keep", "resume", "next step"]),
                 PredictedIntent::Review => regexish(&hay, &["review", "bugs", "improve", "refactor", "test"]),
                 PredictedIntent::Chat => regexish(&hay, &["help", "what can"]),
@@ -1616,6 +1616,8 @@ pub fn chip_suggest_prompt(
         "- Avoid chips the user dismissed".into(),
         "- Prefer habits if they fit the current context".into(),
         "- No markdown fences, no commentary outside JSON".into(),
+        "- Cabin-real only: no video, SuperGrok, subscription, Outlook, Gmail, Drive, or Office".into(),
+        "- Imagine means still images (grok-2-image), never video".into(),
         String::new(),
         format!("Stage: {}", stage.as_str()),
         format!("Signals: {}", if flags.is_empty() { "none".into() } else { flags.join(", ") }),
@@ -1686,6 +1688,9 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
                 if !is_plain_text(&label) || !is_plain_text(&value) {
                     continue;
                 }
+                if !cabin_chip_copy_ok(&label, &value, "") {
+                    continue;
+                }
                 let mut kind = ChipKind::from_str(row.get("kind").and_then(|v| v.as_str()).unwrap_or("chat"));
                 if kind == ChipKind::Shell && !value.starts_with('$') && !value.starts_with("/sh") {
                     kind = ChipKind::Chat;
@@ -1716,6 +1721,9 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
                 if label.len() < 2 || value.len() < 4 || !is_plain_text(value) {
                     continue;
                 }
+                if !cabin_chip_copy_ok(label, value, "") {
+                    continue;
+                }
                 out.push(chip(
                     &format!("llm-{i}-{}", label.chars().take(12).collect::<String>()),
                     &label.chars().take(32).collect::<String>(),
@@ -1728,6 +1736,23 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
         }
     }
     out
+}
+
+fn cabin_chip_copy_ok(label: &str, value: &str, hint: &str) -> bool {
+    let blob = format!("{label} {value} {hint}").to_ascii_lowercase();
+    for w in [
+        "video",
+        "supergrok",
+        "subscription",
+        "outlook",
+        "gmail",
+        "google drive",
+    ] {
+        if blob.contains(w) {
+            return false;
+        }
+    }
+    true
 }
 
 pub fn nav_from_chip_value(value: &str) -> Option<&'static str> {
@@ -1922,6 +1947,14 @@ mod tests {
         assert_eq!(mode_from_chip_value("__mode:max"), Some("max"));
         assert_eq!(mode_from_chip_value("__mode:auto"), Some("auto"));
         assert_eq!(nav_from_chip_value("__nav:imagine"), Some("imagine"));
+    }
+
+    #[test]
+    fn llm_chips_drop_missing_products() {
+        let chips = parse_llm_chips(
+            r#"[{"label":"Make a video","value":"Generate a video of the cabin.","kind":"chat","hint":"x"}]"#,
+        );
+        assert!(chips.is_empty());
     }
 
     #[test]

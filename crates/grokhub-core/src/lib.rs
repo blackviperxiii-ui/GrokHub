@@ -62,8 +62,8 @@ pub use host_plan::{
 };
 pub use host_safety::{forbidden_reason, recall_hits};
 pub use imagine::{
-    dedicated_imagine_model, imagine_dest, imagine_request_body, imagine_slug, parse_imagine_url,
-    DEFAULT_IMAGINE_MODEL,
+    dedicated_imagine_model, extract_imagine_prompt, imagine_dest, imagine_request_body,
+    imagine_slug, parse_imagine_url, DEFAULT_IMAGINE_MODEL,
 };
 pub use inhabit::{can_inhabit, InhabitBundle};
 pub use recipe::{
