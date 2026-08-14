@@ -63,7 +63,7 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `memory/SOUL.md`, `USER.md`,
 
 Secrets stay in `app.json`. Never in markdown.
 
-Composer hint: **Message Grok**. Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash -lc`.
+Composer is a pill: **Ask anything**. Predictive quick chips sit above it — local habits plus Fast mode (`grok-3-mini-fast`) when the thread changes. Click sends or navigates; × dismisses. Habits live in `chips.json`, never secrets. Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash -lc`.
 
 ## Always-on hub
 
