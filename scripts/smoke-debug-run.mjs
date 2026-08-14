@@ -92,4 +92,10 @@ assert.match(
   "Electron boot smoke must pass --no-sandbox at spawn (JS appendSwitch is too late for SUID chrome-sandbox)",
 );
 
+const e2eSrc = fs.readFileSync(path.join(root, "e2e/smoke.spec.ts"), "utf8");
+assert.doesNotMatch(e2eSrc, /Host tools \(HOST_CMD\)/);
+assert.match(e2eSrc, /name: \/\^Account\//);
+assert.match(e2eSrc, /name: \/\^App\//);
+assert.match(e2eSrc, /Setup sync \(Grok account\)/);
+
 console.log("smoke-debug-run OK");
