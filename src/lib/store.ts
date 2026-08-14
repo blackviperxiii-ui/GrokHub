@@ -161,6 +161,20 @@ import {
   uidJob,
 } from "./agent-jobs";
 import { formatToolRegistryForPrompt } from "./tool-registry";
+import {
+  extractComputerCommands,
+  formatComputerCommand,
+  isComputerWriteOp,
+  needsComputerConfirm,
+  parseComputerRecipe,
+  computerPromptBlock,
+  stripComputerCommands,
+  type ComputerRecipe,
+  type ComputerStep,
+} from "./computer-protocol";
+import { appendAssistantOnce } from "./agent-tool-history";
+import { capHistoryImages } from "./grok-vision";
+import type { GrokChatMessage } from "./grok";
 import { buildGoalStepPrompt, parseGoalOutcome } from "./goal-loop";
 import { agentCoreEnqueue, agentCoreSetPaused, agentCoreSync } from "./agent-core-client";
 import {
@@ -263,6 +277,7 @@ function asSkills(rows: unknown[], fallback: Skill[]): Skill[] {
       slash: String(s.slash || ""),
       instructions: String(s.instructions || ""),
       runs: Number(s.runs || 0),
+      computerRecipe: parseComputerRecipe((s as Skill).computerRecipe) || undefined,
     });
   }
   return out.length ? out : fallback;
@@ -322,12 +337,13 @@ function requestHostConfirm(
   cmds: string[],
   risks: string[],
   botId: string,
+  kind: "host" | "computer" = "host",
 ): Promise<boolean> {
   return new Promise((resolve) => {
     hostConfirmWaiter = resolve;
     set({
-      pendingHostConfirm: { cmds, risks, botId },
-      streamStatus: "Waiting for host approval…",
+      pendingHostConfirm: { cmds, risks, botId, kind },
+      streamStatus: kind === "computer" ? "Waiting for computer-use approval…" : "Waiting for host approval…",
     });
   });
 }
@@ -379,6 +395,8 @@ type State = {
     hostToolsEnabled: boolean;
     /** Allow CONNECTOR_CMD execution */
     connectorToolsEnabled: boolean;
+    /** Allow COMPUTER_CMD screenshot + mouse/keyboard (opt-in, default off) */
+    computerUseEnabled: boolean;
     /** User freeform memory notes (persist across restarts) */
     memoryNotes: string;
   };
@@ -387,7 +405,22 @@ type State = {
     cmds: string[];
     risks: string[];
     botId: string;
+    kind?: "host" | "computer";
   } | null;
+  /** Live computer-use session (screenshots are ephemeral; not persisted) */
+  computerSession: {
+    active: boolean;
+    lastScreenshotDataUrl: string | null;
+    lastInfo: import("./computer-client").ComputerInfo | null;
+    pendingSave: {
+      prompt: string;
+      steps: ComputerStep[];
+      screen: { width: number; height: number };
+      summary: string;
+    } | null;
+  };
+  saveComputerSkill: (input: { name: string; slash?: string; description?: string }) => void;
+  dismissComputerSave: () => void;
   /** Per-thread composer drafts (survive chat switch + restart) */
   composerDrafts: Record<string, string>;
   setComposerDraft: (threadId: string | null, draft: string) => void;
@@ -571,7 +604,7 @@ type State = {
   continueInterruptedSession: () => Promise<void>;
   /** Resume a stalled/incomplete agent reply without waiting for interrupt banner */
   keepGoingChat: () => Promise<void>;
-  setAgentPrefs: (patch: Partial<{ temperature: number; hostToolsEnabled: boolean; connectorToolsEnabled: boolean; memoryNotes: string }>) => void;
+  setAgentPrefs: (patch: Partial<{ temperature: number; hostToolsEnabled: boolean; connectorToolsEnabled: boolean; computerUseEnabled: boolean; memoryNotes: string }>) => void;
   /** Compact older turns into a summary (API window); full chat kept */
   compactThread: (threadId?: string | null) => { ok: boolean; detail: string };
   /** Live context budget stats for active chat */
@@ -610,6 +643,7 @@ type State = {
     description: string;
     instructions: string;
     slash: string;
+    computerRecipe?: ComputerRecipe;
   }) => void;
   runSkill: (id: string) => Promise<void>;
   startWorkItem: (id: string) => Promise<void>;
@@ -1234,6 +1268,7 @@ export const useGrokHub = create<State>()(
         temperature: 0.7,
         hostToolsEnabled: true,
         connectorToolsEnabled: true,
+        computerUseEnabled: false,
         memoryNotes: "",
       },
       usage: createUsage("pro"),
@@ -1243,6 +1278,12 @@ export const useGrokHub = create<State>()(
       streamingMessageId: null,
       proactiveNotice: null,
       pendingHostConfirm: null,
+      computerSession: {
+        active: false,
+        lastScreenshotDataUrl: null,
+        lastInfo: null,
+        pendingSave: null,
+      },
       composerDrafts: {},
       shellHistory: [],
       hostAllowlist: [],
@@ -3793,6 +3834,7 @@ syncWebsiteConnectors: async () => {
           slash: input.slash.startsWith("/") ? input.slash : `/${input.slash}`,
           instructions: input.instructions,
           runs: 0,
+          computerRecipe: input.computerRecipe,
         };
         set((s) => ({ skills: [skill, ...s.skills] }));
         get().pushActivity({
@@ -3801,6 +3843,41 @@ syncWebsiteConnectors: async () => {
           detail: skill.slash,
           status: "success",
         });
+      },
+
+      saveComputerSkill: (input) => {
+        const pending = get().computerSession.pendingSave;
+        if (!pending?.steps.length) return;
+        const name = input.name.trim() || pending.prompt.slice(0, 40) || "Desktop recipe";
+        const slash =
+          input.slash?.trim() ||
+          `/${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "desktop-recipe"}`;
+        const recipe: ComputerRecipe = {
+          version: 1,
+          screen: pending.screen,
+          steps: pending.steps,
+          summary: pending.summary || pending.prompt.slice(0, 240),
+        };
+        get().addSkill({
+          name,
+          slash,
+          description: input.description?.trim() || recipe.summary || "Trained desktop recipe",
+          instructions: [
+            recipe.summary || pending.prompt,
+            "",
+            "Replay the captured desktop steps. If replay fails, use COMPUTER_CMD to finish the task.",
+          ].join("\n"),
+          computerRecipe: recipe,
+        });
+        set((s) => ({
+          computerSession: { ...s.computerSession, pendingSave: null },
+        }));
+      },
+
+      dismissComputerSave: () => {
+        set((s) => ({
+          computerSession: { ...s.computerSession, pendingSave: null },
+        }));
       },
 
       runSkill: async (id) => {
@@ -3827,12 +3904,97 @@ syncWebsiteConnectors: async () => {
           detail: `${skill.slash} · live agent`,
           status: "running",
         });
+        const recipe = parseComputerRecipe(skill.computerRecipe);
+        if (recipe && get().agentPrefs.computerUseEnabled) {
+          try {
+            const { replayComputerRecipe, computerAvailable } = await import("./computer-client");
+            if (computerAvailable()) {
+              const writeSteps = recipe.steps.filter((st) => isComputerWriteOp(st.op));
+              if (writeSteps.length) {
+                const desk = get().desktop;
+                const needs = needsComputerConfirm(recipe.steps, {
+                  confirmAll: Boolean(desk.confirmHostCommands) && !desk.confirmDestructiveOnly,
+                  confirmDestructive: Boolean(desk.confirmHostCommands),
+                });
+                if (needs) {
+                  const allowed = await requestHostConfirm(
+                    set,
+                    recipe.steps.map((st) => formatComputerCommand(st)),
+                    recipe.steps.map((st) => (isComputerWriteOp(st.op) ? "writes / side effects" : "read-only")),
+                    "skill-replay",
+                    "computer",
+                  );
+                  if (!allowed) {
+                    get().pushActivity({
+                      kind: "skill",
+                      title: `${skill.name} cancelled`,
+                      detail: "Computer-use replay not approved",
+                      status: "failed",
+                    });
+                    return;
+                  }
+                }
+              }
+              set((s) => ({
+                computerSession: { ...s.computerSession, active: true },
+                streamStatus: "Replaying desktop recipe…",
+                running: true,
+              }));
+              const replayed = await replayComputerRecipe(recipe);
+              set((s) => ({
+                computerSession: { ...s.computerSession, active: false },
+                streamStatus: null,
+                running: false,
+              }));
+              if (replayed.ok) {
+                get().pushActivity({
+                  kind: "skill",
+                  title: `${skill.name} replayed`,
+                  detail: `${recipe.steps.length} desktop steps`,
+                  status: "success",
+                });
+                await get().sendChat(
+                  [
+                    `[Skill: ${skill.name} ${skill.slash}]`,
+                    "The captured desktop recipe replayed successfully without the model.",
+                    recipe.summary || skill.instructions,
+                    "Give a short confirmation to the user. Do not re-run the steps unless they ask.",
+                  ].join("\n"),
+                );
+                return;
+              }
+              get().pushActivity({
+                kind: "skill",
+                title: `${skill.name} replay failed`,
+                detail: replayed.error || "falling back to agent",
+                status: "failed",
+              });
+            }
+          } catch (e) {
+            set((s) => ({
+              computerSession: { ...s.computerSession, active: false },
+              running: false,
+              streamStatus: null,
+            }));
+            get().pushActivity({
+              kind: "skill",
+              title: `${skill.name} replay error`,
+              detail: e instanceof Error ? e.message : "replay failed",
+              status: "failed",
+            });
+          }
+        }
         const prompt = [
           `[Skill: ${skill.name} ${skill.slash}]`,
           skill.instructions.trim(),
+          recipe
+            ? "A captured desktop recipe exists but replay failed or computer use is off. Use COMPUTER_CMD (screenshot first) to complete the task."
+            : "",
           "",
-          "Execute this skill fully. Use HOST_CMD / CONNECTOR_CMD when real data is needed. Do not invent connector data.",
-        ].join("\n");
+          "Execute this skill fully. Use HOST_CMD / CONNECTOR_CMD / COMPUTER_CMD when real data or GUI control is needed. Do not invent connector data.",
+        ]
+          .filter((line) => line !== "")
+          .join("\n");
         try {
           await get().sendChat(prompt);
           get().pushActivity({
@@ -4489,6 +4651,9 @@ syncWebsiteConnectors: async () => {
         for (const killId of [...new Set(killIds)]) {
           void import("./host-client").then(({ hostKillExec }) => hostKillExec(killId)).catch(() => {});
         }
+        void import("./computer-client").then(({ computerStop }) => {
+          void computerStop();
+        }).catch(() => {});
         try {
           void window.grokhubDesktop?.grok?.stopChatStream?.();
         } catch {
@@ -4528,6 +4693,10 @@ syncWebsiteConnectors: async () => {
             streamStatus: null,
             streamingMessageId: null,
             pendingHostConfirm: null,
+            computerSession: {
+              ...s.computerSession,
+              active: false,
+            },
             // Only interrupt creates the continue banner
             sessionResume:
               tid && pendingPrompt
@@ -4797,6 +4966,7 @@ syncWebsiteConnectors: async () => {
                 h?.homedir ? `- Home: \`${h.homedir}\`` : "",
                 proj?.path ? `- Project: \`${proj.path}\`` : "- Project: _(none)_",
                 `- Tools: ${get().agentPrefs.hostToolsEnabled ? "on" : "off"}`,
+                `- Computer use: ${get().agentPrefs.computerUseEnabled ? "on" : "off"}`,
                 `- Confirm: ${
                   !get().desktop.confirmHostCommands
                     ? "off"
@@ -5651,7 +5821,7 @@ if (cmd === "tools") {
           selfModSnapshot,
         } = await import("./self-mod-client");
         const scrubAssistant = (s: string) =>
-          stripSelfModCommands(stripConnectorCommands(stripHostCommands(s)));
+          stripComputerCommands(stripSelfModCommands(stripConnectorCommands(stripHostCommands(s))));
 
         try {
           
@@ -5760,7 +5930,7 @@ if (cmd === "tools") {
                 });
               }
             }
-            const history: Array<{ role: "user" | "assistant"; content: string }> =
+            const history: GrokChatMessage[] =
               ctxBuilt.messages;
             perfMark("context-ready");
 
@@ -5806,6 +5976,12 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
                   ? 4
                   : 3;
             let usedAnyTools = false;
+            let computerTurnSteps: ComputerStep[] = [];
+            let computerTurnScreen = { width: 0, height: 0 };
+            const computerEnabled = Boolean(get().agentPrefs.computerUseEnabled);
+            const hasVisionAuth = Boolean(
+              (get().apiKey || "").trim() || (get().oauth?.accessToken || "").trim(),
+            );
             // Sticky protocol reminder (reduces plan-only replies)
             if (get().agentPrefs.hostToolsEnabled) {
               history.push({
@@ -5850,6 +6026,11 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
               stTurn.agentPrefs?.hostToolsEnabled === false
                 ? "- Host shell tools: DISABLED."
                 : "- Host shell tools: available when Desktop Host is LIVE (use HOST_CMD).",
+              stTurn.agentPrefs?.computerUseEnabled
+                ? hasVisionAuth
+                  ? "- Computer use: LIVE — screenshot + mouse/keyboard via COMPUTER_CMD (opt-in)."
+                  : "- Computer use: enabled in settings but needs Grok OAuth or an xAI API key for vision."
+                : "- Computer use: DISABLED (Settings → Agent). Do not emit COMPUTER_CMD.",
               stTurn.agentPrefs?.connectorToolsEnabled === false
                 ? "- Connector tools: DISABLED."
                 : "- Connector tools: ONLY connectors marked liveTools (Grok, Desktop Host, GitHub with PAT).",
@@ -5871,6 +6052,7 @@ const modelId = modelIdForMode(mode, trimmed, catalog, routeCtx, overrides);
                 !stTurn.agentPrefs?.hostToolsEnabled
                   ? "NOTE: Host shell tools are DISABLED by user settings. Do not emit HOST_CMD."
                   : "",
+                computerPromptBlock(Boolean(stTurn.agentPrefs?.computerUseEnabled) && hasVisionAuth),
                 !stTurn.agentPrefs?.connectorToolsEnabled
                   ? "NOTE: Connector tools are DISABLED by user settings. Do not emit CONNECTOR_CMD."
                   : "",
@@ -5916,7 +6098,7 @@ while (rounds < maxRounds && !aborted) {
               const stNow = get();
               const result = await grokChatStream(
                 {
-                  messages: history,
+                  messages: capHistoryImages(history, 2),
                   mode: routed,
                   model: freeTier ? undefined : modelId,
                   apiKey: get().apiKey || undefined,
@@ -6104,9 +6286,11 @@ while (rounds < maxRounds && !aborted) {
 
                 let cmds = extractHostCommands(full);
                 let connCmds = extractConnectorCommands(full);
+                let compCmds = extractComputerCommands(full);
                 // Respect tool toggles
                 if (!get().agentPrefs.hostToolsEnabled) cmds = [];
                 if (!get().agentPrefs.connectorToolsEnabled) connCmds = [];
+                if (!computerEnabled || !hasVisionAuth) compCmds = [];
                 // First round: if user asked about local files and model forgot HOST_CMD, infer
                 if (!cmds.length && rounds === 1 && get().agentPrefs.hostToolsEnabled) {
                   cmds = inferHostCommandsFromUser(trimmed);
@@ -6122,6 +6306,7 @@ while (rounds < maxRounds && !aborted) {
                 if (
                   !cmds.length &&
                   !connCmds.length &&
+                  !compCmds.length &&
                   needsHost &&
                   hostNudges < maxHostNudges
                 ) {
@@ -6163,7 +6348,7 @@ while (rounds < maxRounds && !aborted) {
                     continue;
                   }
                 }
-                if (!cmds.length && !connCmds.length) {
+                if (!cmds.length && !connCmds.length && !compCmds.length) {
                   const candidate = visible || full;
                   const incomplete = looksLikeIncompleteAgentTurn(candidate, {
                     hadTools: usedAnyTools,
@@ -6307,7 +6492,7 @@ while (rounds < maxRounds && !aborted) {
                     "",
                     "Summarize for the user. Only emit another CONNECTOR_CMD if needed.",
                   ].join("\n");
-                  history.push({ role: "assistant", content: full });
+                  appendAssistantOnce(history, full);
                   history.push({ role: "user", content: toolBlock });
                   set({ streamStatus: "Summarizing connector results…" });
                   patchBot(
@@ -6320,7 +6505,8 @@ while (rounds < maxRounds && !aborted) {
                     { streaming: true },
                   );
                   // If also host cmds, continue to host below after connector round
-                  if (!cmds.length) continue;
+                  // If also host/computer cmds, continue to those below
+                  if (!cmds.length && !compCmds.length) continue;
                 }
 
                 
@@ -6328,7 +6514,7 @@ while (rounds < maxRounds && !aborted) {
                 let selfCmds = extractSelfModCommands(full);
                 if (selfCmds.length) {
                   if (!get().desktop.selfModifyEnabled) {
-                    history.push({ role: "assistant", content: full });
+                    appendAssistantOnce(history, full);
                     history.push({
                       role: "user",
                       content:
@@ -6339,7 +6525,8 @@ while (rounds < maxRounds && !aborted) {
                         "\n\n_Self-mod blocked (enable in Settings)._\n_Continuing…_",
                       { streaming: true },
                     );
-                    if (!cmds.length) continue;
+                    // If also host/computer cmds, continue to those below
+                  if (!cmds.length && !compCmds.length) continue;
                   } else {
                     set({ streamStatus: "Self-modifying app…" });
                     const outputs: string[] = [];
@@ -6425,7 +6612,7 @@ while (rounds < maxRounds && !aborted) {
                       }
                     }
                     if (aborted) break;
-                    history.push({ role: "assistant", content: full });
+                    appendAssistantOnce(history, full);
                     history.push({
                       role: "user",
                       content: [
@@ -6447,16 +6634,18 @@ while (rounds < maxRounds && !aborted) {
                       ].join("\n"),
                       { streaming: true },
                     );
-                    if (!cmds.length) continue;
+                    // If also host/computer cmds, continue to those below
+                  if (!cmds.length && !compCmds.length) continue;
                   }
                 }
 
-if (!cmds.length) {
+if (!cmds.length && !compCmds.length) {
                   finalAnswer = visible || full;
                   break;
                 }
 
                 // Execute host commands and feed results back
+                if (cmds.length) {
                 const { classifyHostCommand, needsHostConfirm, riskLabel } = await import("./host-safety");
                 const riskList = cmds.slice(0, 5).map((c) => riskLabel(classifyHostCommand(c)));
                 const desk = get().desktop;
@@ -6635,7 +6824,7 @@ if (!cmds.length) {
                   });
                 }
 
-                history.push({ role: "assistant", content: full });
+                appendAssistantOnce(history, full);
                 history.push({ role: "user", content: toolBlock });
                 set({ streamStatus: "Summarizing host results…" });
                 // Show intermediate host output (sanitized) while model continues
@@ -6647,8 +6836,148 @@ if (!cmds.length) {
                 });
                 patchBot(mid, { streaming: true });
                 accumulated = mid;
-                // continue loop for next model turn
-                continue;
+                if (!compCmds.length) continue;
+                }
+
+                if (compCmds.length) {
+                  const {
+                    computerAct,
+                    computerBeginSession,
+                    computerEndSession,
+                    formatComputerResult,
+                    computerAvailable,
+                  } = await import("./computer-client");
+                  if (!computerAvailable()) {
+                    appendAssistantOnce(history, full);
+                    history.push({
+                      role: "user",
+                      content:
+                        "COMPUTER_RESULT: blocked — computer use requires the Electron desktop shell. Relaunch GrokHub from the Arch package.",
+                    });
+                    patchBot(
+                      (visible || "") + "\n\n_Computer use needs the desktop app._\n_Continuing…_",
+                      { streaming: true },
+                    );
+                    continue;
+                  }
+                  if (!hasVisionAuth) {
+                    appendAssistantOnce(history, full);
+                    history.push({
+                      role: "user",
+                      content:
+                        "COMPUTER_RESULT: blocked — computer use needs Grok OAuth or an xAI API key so screenshots can be sent as vision.",
+                    });
+                    continue;
+                  }
+                  const deskC = get().desktop;
+                  const labels = compCmds.map((st) => formatComputerCommand(st));
+                  const risks = compCmds.map((st) =>
+                    isComputerWriteOp(st.op) ? "writes / side effects" : "read-only",
+                  );
+                  const needsComp =
+                    needsComputerConfirm(compCmds, {
+                      confirmAll: Boolean(deskC.confirmHostCommands) && !deskC.confirmDestructiveOnly,
+                      confirmDestructive: Boolean(deskC.confirmHostCommands),
+                    });
+                  if (needsComp) {
+                    const allowed = await requestHostConfirm(set, labels, risks, botId, "computer");
+                    if (!allowed) {
+                      finalAnswer =
+                        (visible || "") +
+                        "\n\n_Computer-use commands cancelled — not run on your machine._";
+                      patchBot(finalAnswer, { streaming: false });
+                      break;
+                    }
+                  }
+                  set((s) => ({
+                    computerSession: { ...s.computerSession, active: true },
+                    streamStatus: "Controlling the desktop…",
+                  }));
+                  await computerBeginSession();
+                  const outputs: string[] = [];
+                  let lastShot: string | undefined;
+                  try {
+                    for (let ci = 0; ci < compCmds.length; ci++) {
+                      if (abort.signal.aborted || gen !== chatGeneration) {
+                        aborted = true;
+                        break;
+                      }
+                      const step = compCmds[ci]!;
+                      const cmdLabel = formatComputerCommand(step);
+                      set({ streamStatus: `Computer: ${cmdLabel}…` });
+                      patchBot(
+                        toolRunningMarkdown({
+                          kind: "computer",
+                          command: cmdLabel,
+                          preface: visible || "Using the desktop…",
+                          step: { index: ci + 1, total: compCmds.length },
+                        }),
+                        { streaming: true },
+                      );
+                      get().pushActivity({
+                        kind: "desktop",
+                        title: "Computer use",
+                        detail: cmdLabel.slice(0, 140),
+                        status: "running",
+                      });
+                      const r = await computerAct(step);
+                      if (r.dataUrl) {
+                        lastShot = r.dataUrl;
+                        if (r.screenshot && r.screen) {
+                          computerTurnScreen = {
+                            width: r.screen.width,
+                            height: r.screen.height,
+                          };
+                        }
+                        set((s) => ({
+                          computerSession: {
+                            ...s.computerSession,
+                            active: true,
+                            lastScreenshotDataUrl: r.dataUrl || null,
+                          },
+                        }));
+                      }
+                      if (r.ok) computerTurnSteps.push(step);
+                      outputs.push(formatComputerResult(step, r));
+                      get().pushActivity({
+                        kind: "desktop",
+                        title: r.ok ? "Computer ok" : "Computer failed",
+                        detail: cmdLabel.slice(0, 120),
+                        status: r.ok ? "success" : "failed",
+                      });
+                      if (!r.ok && step.op !== "screenshot") break;
+                    }
+                  } finally {
+                    await computerEndSession();
+                    set((s) => ({
+                      computerSession: { ...s.computerSession, active: false },
+                    }));
+                  }
+                  if (aborted) break;
+                  const resultText = [
+                    "COMPUTER_RESULT (authoritative — coordinates are screenshot pixels):",
+                    outputs.join("\n\n---\n\n"),
+                    "",
+                    lastShot
+                      ? "A screenshot image is attached. Use it to choose the next COMPUTER_CMD clicks, or summarize if the task is done."
+                      : "No screenshot in this round. Emit COMPUTER_CMD: screenshot if you need to see the screen.",
+                  ].join("\n");
+                  appendAssistantOnce(history, full);
+                  history.push({
+                    role: "user",
+                    content: resultText,
+                    images: lastShot ? [lastShot] : undefined,
+                  });
+                  const midComp = toolResultMarkdown({
+                    kind: "computer",
+                    preface: visible || "Used the desktop.",
+                    outputs,
+                    summarizing: true,
+                  });
+                  patchBot(midComp, { streaming: true });
+                  accumulated = midComp;
+                  continue;
+                }
               }
 
               // Failed live call
@@ -6672,11 +7001,30 @@ if (!cmds.length) {
             }
 
             if (!finalAnswer && accumulated && !aborted) {
-              finalAnswer = stripHostCommands(
-                stripAssistantChrome(
-                  accumulated.replace(/\n_Working…_\s*$/, "").replace(/\n_Summarizing…_\s*$/, ""),
+              finalAnswer = stripComputerCommands(
+                stripHostCommands(
+                  stripAssistantChrome(
+                    accumulated.replace(/\n_Working…_\s*$/, "").replace(/\n_Summarizing…_\s*$/, ""),
+                  ),
                 ),
               );
+            }
+
+            if (!aborted && computerTurnSteps.length) {
+              set((s) => ({
+                computerSession: {
+                  ...s.computerSession,
+                  active: false,
+                  pendingSave: {
+                    prompt: trimmed,
+                    steps: computerTurnSteps,
+                    screen: computerTurnScreen.width
+                      ? computerTurnScreen
+                      : { width: 0, height: 0 },
+                    summary: scrubAssistant(finalAnswer || trimmed).slice(0, 280),
+                  },
+                },
+              }));
             }
           
         } catch (e) {
@@ -6809,7 +7157,7 @@ if (!cmds.length) {
             }
           });
         } else {
-          const answer = stripHostCommands(stripAssistantChrome(finalAnswer || ""));
+          const answer = stripComputerCommands(stripHostCommands(stripAssistantChrome(finalAnswer || "")));
           set((s) => {
             const chat = s.chat.map((row) =>
               row.id === botId
@@ -7439,6 +7787,12 @@ if (!cmds.length) {
           autonomy: defaultAutonomyConfig(),
           agentQueue: emptyAgentQueue(),
           pendingHostConfirm: null,
+          computerSession: {
+            active: false,
+            lastScreenshotDataUrl: null,
+            lastInfo: null,
+            pendingSave: null,
+          },
         });
       },
     }),
@@ -7682,6 +8036,7 @@ if (!cmds.length) {
             temperature: typeof ap.temperature === "number" ? ap.temperature : 0.7,
             hostToolsEnabled: ap.hostToolsEnabled !== false,
             connectorToolsEnabled: ap.connectorToolsEnabled !== false,
+            computerUseEnabled: ap.computerUseEnabled === true,
             memoryNotes: typeof ap.memoryNotes === "string" ? ap.memoryNotes : "",
           };
         } catch {
@@ -7689,9 +8044,16 @@ if (!cmds.length) {
             temperature: 0.7,
             hostToolsEnabled: true,
             connectorToolsEnabled: true,
+            computerUseEnabled: false,
             memoryNotes: "",
           };
         }
+        s.computerSession = {
+          active: false,
+          lastScreenshotDataUrl: null,
+          lastInfo: null,
+          pendingSave: null,
+        };
         // Host safety defaults for upgrades
         const desk = (s.desktop || {}) as Record<string, unknown>;
         if (typeof desk.hostSafeMode !== "boolean") desk.hostSafeMode = false;
