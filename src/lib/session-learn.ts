@@ -17,12 +17,12 @@ import type { RouteTier } from "./models-catalog";
 import {
   memoryAppend,
   memoryAppendFacts,
-  memoryRead,
   memoryWrite,
   ensureFileMemory,
   syncLearningToDisk,
   memoryFsInfo,
 } from "./file-memory";
+import { shouldReflectThisTurn } from "./load-budget";
 
 /** Skip meta complaints that bloat MEMORY and re-trigger mid-session. */
 const NOISE_TOPIC =
@@ -211,9 +211,9 @@ export async function applyTurnLearning(
     threadId: input.threadId,
   });
 
-  // Full reflect every turn when we have new insights/events (keeps LEARNINGS.md live)
+  // Full reflect on a cadence — not every Max turn (that OOMs the renderer)
   let didReflect = false;
-  if (learning.totalTurns > 0 && (learning.totalTurns % 2 === 0 || learning.insights.length > 0)) {
+  if (shouldReflectThisTurn(learning.totalTurns)) {
     const r = reflectLearning(learning);
     learning = r.state;
     didReflect = true;
@@ -246,16 +246,12 @@ export async function applyTurnLearning(
     }
   }
 
-  // Always rewrite LEARNINGS.md + STATUS.md every turn so host scans see live state
   try {
     if (didReflect) {
       const { markdown } = reflectLearning(learning);
       await memoryWrite("LEARNINGS.md", markdown);
       const tops = learning.insights.slice(0, 8).map((i) => i.text);
       if (tops.length) await memoryAppendFacts(tops, { target: "MEMORY.md" });
-    } else {
-      // Snapshot path (no full distill) — still updates file mtime + content
-      await memoryWrite("LEARNINGS.md", learningSnapshotMarkdown(learning));
     }
   } catch {
     /* ignore */
