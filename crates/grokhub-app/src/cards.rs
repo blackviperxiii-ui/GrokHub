@@ -321,11 +321,11 @@ pub fn grok_tile(
                         add_clicked = ui
                             .add(
                                 egui::Button::new(
-                                    RichText::new(label).size(12.0).strong().color(crate::theme::FG),
+                                    RichText::new(label).size(13.0).strong().color(crate::theme::BG),
                                 )
-                                .fill(crate::theme::SURFACE)
+                                .fill(crate::theme::FG)
                                 .rounding(14.0)
-                                .stroke(Stroke::new(1.0, crate::theme::BORDER_STRONG)),
+                                .min_size(egui::vec2(52.0, 28.0)),
                             )
                             .clicked();
                     });
@@ -350,25 +350,29 @@ pub fn grok_tile(
 }
 
 pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui, usize)) {
+    if n == 0 {
+        return;
+    }
     let w = ui.available_width();
-    let cols = if w >= 900.0 {
-        3.0
-    } else if w >= 560.0 {
-        2.0
+    let cols = if w >= 720.0 {
+        3
+    } else if w >= 480.0 {
+        2
     } else {
-        1.0
+        1
     };
-    let gap = 14.0;
-    let card_w = ((w - gap * (cols - 1.0)) / cols).max(240.0);
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(gap, gap);
-        for i in 0..n {
-            ui.allocate_ui(Vec2::new(card_w, 0.0), |ui| {
-                ui.set_width(card_w);
-                each(ui, i);
-            });
-        }
-    });
+    let rows = n.div_ceil(cols);
+    for r in 0..rows {
+        ui.columns(cols, |col_uis| {
+            for c in 0..cols {
+                let i = r * cols + c;
+                if i < n {
+                    each(&mut col_uis[c], i);
+                }
+            }
+        });
+        ui.add_space(14.0);
+    }
 }
 
 pub fn suggestion_card(ui: &mut egui::Ui, title: &str, body: &str) -> bool {
