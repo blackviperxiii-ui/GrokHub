@@ -1116,7 +1116,7 @@ fn stage_chips(stage: ChipStage) -> Vec<QuickChip> {
             chip(
                 "empty-help",
                 "What can you do?",
-                "In one short list: what can you help me with in GrokHub right now (chat, host tools, Imagine, connectors)?",
+                "In one short list: what can you help me with in GrokHub right now (chat, host tools, Imagine, GitHub if a PAT is set)?",
                 ChipKind::Chat,
                 70.0,
                 "New chat",
@@ -1135,7 +1135,7 @@ fn stage_chips(stage: ChipStage) -> Vec<QuickChip> {
                 "__nav:imagine",
                 ChipKind::Nav,
                 66.0,
-                "Create images / video",
+                "Create images",
             ),
             chip(
                 "empty-host",
@@ -1257,7 +1257,7 @@ fn default_chips(mode: &str) -> Vec<QuickChip> {
             "__nav:imagine",
             ChipKind::Nav,
             22.0,
-            "Images & video",
+            "Images",
         ),
     ]
 }
@@ -1331,17 +1331,6 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             "Host tools need the desktop bridge",
         ));
     }
-    if input.usage_cap > 0 && input.usage_messages * 100 / input.usage_cap >= 80 {
-        chips.push(chip(
-            "ctx-quota",
-            "Usage high — save units",
-            "What's my usage right now and how can I save units without losing quality?",
-            ChipKind::Chat,
-            100.0,
-            "Quota is high",
-        ));
-    }
-
     chips.extend(draft_prediction_chips(input.draft));
     chips.extend(learned_chips_from_memory(input.memory, input.now_ms).into_iter().map(|mut c| {
         if let Some(hit) = input.memory.hits.iter().find(|h| h.value == c.value) {
@@ -1433,7 +1422,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             "__nav:imagine",
             ChipKind::Nav,
             88.0,
-            "Conversation mentioned images/video",
+            "Conversation mentioned images",
         ));
     }
     if !input.thread_title.trim().is_empty() && input.thread_title != "Chat" && input.thread_title != "Scratch" {
@@ -1933,6 +1922,22 @@ mod tests {
         assert_eq!(mode_from_chip_value("__mode:max"), Some("max"));
         assert_eq!(mode_from_chip_value("__mode:auto"), Some("auto"));
         assert_eq!(nav_from_chip_value("__nav:imagine"), Some("imagine"));
+    }
+
+    #[test]
+    fn chips_do_not_advertise_missing_products() {
+        let mem = ChipMemory::default();
+        let mut inp = input(&[], "", &mem, &[], &[]);
+        inp.usage_messages = 40;
+        inp.usage_cap = 40;
+        let chips = build_quick_chips(inp);
+        assert!(!chips.iter().any(|c| c.id == "ctx-quota"));
+        for c in &chips {
+            let blob = format!("{} {} {}", c.label, c.value, c.hint).to_ascii_lowercase();
+            assert!(!blob.contains("video"), "{}", c.id);
+            assert!(!blob.contains("supergrok"), "{}", c.id);
+            assert!(!blob.contains("subscription"), "{}", c.id);
+        }
     }
 
     #[test]

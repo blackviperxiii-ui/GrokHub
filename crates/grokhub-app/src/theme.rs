@@ -37,13 +37,12 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("devices", "Devices"),
     ("memory", "Memory"),
     ("eyes", "Eyes"),
-    ("connectors", "Connectors"),
 ];
 
 pub fn stage_subtitle(id: &str) -> &'static str {
     match id {
         "history" => "Past chats",
-        "imagine" => "Images and video",
+        "imagine" => "Images",
         "workboard" => "Pinned tasks",
         "skills" => "Personal skills and connectors",
         "automations" => "Scheduled tasks",
@@ -53,7 +52,7 @@ pub fn stage_subtitle(id: &str) -> &'static str {
         "devices" => "Paired computers",
         "memory" => "SOUL / USER / MEMORY",
         "eyes" => "Windshield",
-        "connectors" => "GitHub and websites",
+        "connectors" => "GitHub",
         _ => "GrokHub",
     }
 }
@@ -135,6 +134,9 @@ mod tests {
         assert_eq!(WORKSPACE[0], ("chat", "Agent"));
         assert_eq!(TOOLS[1], ("automations", "Automations"));
         assert_eq!(TOOLS[3], ("queue", "Queue"));
+        assert!(TOOLS.iter().all(|(id, _)| *id != "connectors"));
         assert_eq!(stage_subtitle("history"), "Past chats");
+        assert_eq!(stage_subtitle("imagine"), "Images");
+        assert_eq!(stage_subtitle("connectors"), "GitHub");
     }
 }

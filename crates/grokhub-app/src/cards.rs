@@ -10,6 +10,82 @@ pub struct SuggestedAuto {
     pub seed: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SuggestedSkill {
+    pub name: &'static str,
+    pub title: &'static str,
+    pub body: &'static str,
+    pub trigger: &'static str,
+    pub instructions: &'static str,
+    pub verify: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveConnector {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub tools: &'static [(&'static str, &'static str)],
+}
+
+pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
+    SuggestedSkill {
+        name: "morning-brief",
+        title: "Morning brief",
+        body: "Summarize the workboard, last host receipt, and pinned goal.",
+        trigger: "morning brief",
+        instructions: "Summarize the workboard and last HOST_RESULT. List open cards and the next concrete step. No secrets.",
+        verify: "echo VERIFY_OK",
+    },
+    SuggestedSkill {
+        name: "host-snapshot",
+        title: "Host snapshot",
+        body: "Read-only uname / whoami / pwd via HOST_CMD.",
+        trigger: "host snapshot",
+        instructions: "Emit HOST_CMD: uname -a && whoami && pwd. After HOST_RESULT, summarize in four lines.",
+        verify: "echo VERIFY_OK",
+    },
+    SuggestedSkill {
+        name: "workboard-triage",
+        title: "Workboard triage",
+        body: "Pull open tasks from this thread onto the workboard.",
+        trigger: "triage the board",
+        instructions: "Extract open tasks from this thread onto the workboard. One card per task. Do not mark done without VERIFY_OK.",
+        verify: "echo VERIFY_OK",
+    },
+    SuggestedSkill {
+        name: "imagine-scene",
+        title: "Imagine a scene",
+        body: "Write a tight image prompt and open Imagine (images only).",
+        trigger: "imagine this",
+        instructions: "Write one tight image prompt for Imagine (grok-2-image). No people faces. Stay in the bound project.",
+        verify: "echo VERIFY_OK",
+    },
+];
+
+pub const LIVE_CONNECTORS: &[LiveConnector] = &[LiveConnector {
+    id: "github",
+    title: "GitHub",
+    tools: &[("Who am I", "user"), ("List repos", "list_repos")],
+}];
+
+pub fn is_cabin_catalog(name: &str) -> bool {
+    let k = name.trim().to_ascii_lowercase();
+    matches!(k.as_str(), "github" | "gh")
+}
+
+pub fn skill_from_suggested(s: &SuggestedSkill) -> SkillMd {
+    SkillMd {
+        name: s.name.into(),
+        description: s.body.into(),
+        slash: format!("/{}", s.name),
+        trigger: s.trigger.into(),
+        instructions: s.instructions.into(),
+        pitfalls: "Do not write secrets into markdown.".into(),
+        verify: s.verify.into(),
+        runs: 0,
+    }
+}
+
 pub const SUGGESTED_AUTOS: &[SuggestedAuto] = &[
     SuggestedAuto {
         title: "Morning brief",
@@ -159,5 +235,41 @@ mod tests {
         assert!(skill_matches("host-snapshot", "uname whoami", "whoami"));
         assert!(!skill_matches("morning-brief", "cabin brief", "pdf"));
         assert!(skill_matches("PDFs", "merge split", ""));
+    }
+
+    #[test]
+    fn catalog_is_cabin_real() {
+        let forbidden = [
+            "outlook", "gmail", "stock", "ticker", "docx", "xlsx", "pptx",
+            "powerpoint", "spreadsheet", "word document", "pdf", "video",
+        ];
+        for s in SUGGESTED_AUTOS {
+            let blob = format!("{} {} {}", s.title, s.body, s.seed).to_ascii_lowercase();
+            for w in forbidden {
+                assert!(!blob.contains(w), "auto {} mentions {w}", s.title);
+            }
+        }
+        assert!(!SUGGESTED_SKILLS.is_empty());
+        for s in SUGGESTED_SKILLS {
+            let blob = format!("{} {} {}", s.name, s.body, s.instructions).to_ascii_lowercase();
+            for w in forbidden {
+                assert!(!blob.contains(w), "skill {} mentions {w}", s.name);
+            }
+            let real = blob.contains("host_cmd")
+                || blob.contains("workboard")
+                || blob.contains("imagine")
+                || blob.contains("verify");
+            assert!(real, "skill {} is not a cabin verb", s.name);
+            let md = skill_from_suggested(s);
+            assert_eq!(md.name, s.name);
+            assert!(!md.instructions.is_empty());
+        }
+        assert_eq!(LIVE_CONNECTORS.len(), 1);
+        assert_eq!(LIVE_CONNECTORS[0].id, "github");
+        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *l == "Who am I" && *t == "user"));
+        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *t == "list_repos"));
+        assert!(!is_cabin_catalog("outlook"));
+        assert!(!is_cabin_catalog("gmail"));
+        assert!(is_cabin_catalog("github"));
     }
 }
