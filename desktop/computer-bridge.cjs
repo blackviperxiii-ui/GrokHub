@@ -31,6 +31,8 @@ let previewBusy = false;
 let previewProc = null;
 /** @type {"user" | "session" | null} */
 let previewOwner = null;
+let previewGotFrame = false;
+let previewSkipCapture = "";
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, Math.max(0, ms)));
@@ -144,22 +146,67 @@ function ffmpegMjpegArgs(display, opts) {
   return args;
 }
 
+/** End offset (exclusive) of a complete JPEG starting at `start`, or -1. */
+function jpegEndExclusive(buf, start) {
+  if (start + 2 > buf.length || buf[start] !== 0xff || buf[start + 1] !== 0xd8) return -1;
+  let i = start + 2;
+  while (i < buf.length - 1) {
+    if (buf[i] !== 0xff) {
+      i += 1;
+      continue;
+    }
+    while (i < buf.length && buf[i] === 0xff) i += 1;
+    if (i >= buf.length) return -1;
+    const marker = buf[i];
+    if (marker === 0xd9) return i + 1;
+    if (marker === 0xd8) continue;
+    if (marker === 0xda) {
+      i += 1;
+      while (i < buf.length - 1) {
+        if (buf[i] !== 0xff) {
+          i += 1;
+          continue;
+        }
+        const nxt = buf[i + 1];
+        if (nxt === 0x00 || nxt === 0xff) {
+          i += 1;
+          continue;
+        }
+        if (nxt === 0xd9) return i + 2;
+        if (nxt >= 0xd0 && nxt <= 0xd7) {
+          i += 2;
+          continue;
+        }
+        i += 2;
+      }
+      return -1;
+    }
+    if (marker >= 0xd0 && marker <= 0xd7) continue;
+    if (i + 2 >= buf.length) return -1;
+    const len = buf.readUInt16BE(i + 1);
+    if (len < 2) return -1;
+    i += 1 + len;
+  }
+  return -1;
+}
+
 /** Split concatenated JPEGs from an ffmpeg image2pipe. */
 function splitJpegFrames(onJpeg) {
   let buf = Buffer.alloc(0);
   return (chunk) => {
     buf = Buffer.concat([buf, chunk]);
+    if (buf.length > 8 * 1024 * 1024) buf = buf.subarray(-1024);
     while (true) {
       const soi = buf.indexOf(Buffer.from([0xff, 0xd8]));
       if (soi < 0) {
-        buf = Buffer.alloc(0);
+        buf = buf.length && buf[buf.length - 1] === 0xff ? buf.subarray(-1) : Buffer.alloc(0);
         return;
       }
       if (soi > 0) buf = buf.subarray(soi);
-      const eoi = buf.indexOf(Buffer.from([0xff, 0xd9]), 2);
-      if (eoi < 0) return;
-      onJpeg(buf.subarray(0, eoi + 2));
-      buf = buf.subarray(eoi + 2);
+      const end = jpegEndExclusive(buf, 0);
+      if (end < 0) return;
+      onJpeg(buf.subarray(0, end));
+      buf = buf.subarray(end);
     }
   };
 }
@@ -171,22 +218,29 @@ function jpegSize(buf) {
       i += 1;
       continue;
     }
-    const marker = buf[i + 1];
+    while (i < buf.length && buf[i] === 0xff) i += 1;
+    if (i >= buf.length) break;
+    const marker = buf[i];
     if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2) {
-      return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+      if (i + 6 >= buf.length) break;
+      return { height: buf.readUInt16BE(i + 4), width: buf.readUInt16BE(i + 6) };
     }
-    if (marker === 0xd8 || marker === 0xd9) {
-      i += 2;
-      continue;
-    }
-    const len = buf.readUInt16BE(i + 2);
-    i += 2 + len;
+    if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (marker === 0xda) break;
+    if (i + 2 >= buf.length) break;
+    const len = buf.readUInt16BE(i + 1);
+    if (len < 2) break;
+    i += 1 + len;
   }
-  return { width: SCREENSHOT_MAX_WIDTH, height: 0 };
+  return { width: 0, height: 0 };
 }
 
 function previewAllowsDesktopCapturer() {
   return false;
+}
+
+function previewCaptureKind(session, bins) {
+  return silentCaptureTools(session, bins)[0]?.name || "";
 }
 
 /** Full-screen capture tools that do not open a picker / screenshot GUI. */
@@ -196,7 +250,8 @@ function silentCaptureTools(session, bins) {
   if ((session === "wayland" || b.wayland) && b.grim) {
     out.push({ name: "grim", bin: b.grim, args: ["OUT"], ext: ".png" });
   }
-  if (b.ffmpeg && (b.display || session === "x11")) {
+  const waylandHasGrim = (session === "wayland" || b.wayland) && b.grim;
+  if (b.ffmpeg && !waylandHasGrim && (b.display || session === "x11")) {
     out.push({
       name: "ffmpeg-x11grab",
       bin: b.ffmpeg,
@@ -223,6 +278,7 @@ function setMainWindow(win) {
 
 function userStop() {
   aborted = true;
+  if (previewOwner === "session") stopPreview({ force: true });
   hideStopBar();
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -348,14 +404,41 @@ function info() {
   };
 }
 
+let x11SizeCache = { width: 0, height: 0, at: 0 };
+
+function x11PixelSize() {
+  if (x11SizeCache.width && Date.now() - x11SizeCache.at < 5000) {
+    return { width: x11SizeCache.width, height: x11SizeCache.height };
+  }
+  try {
+    const xdotool = whichSync("xdotool");
+    if (xdotool) {
+      const out = execFileSync(xdotool, ["getdisplaygeometry"], {
+        encoding: "utf8",
+        timeout: 2000,
+        env: process.env,
+      });
+      const m = String(out).trim().match(/^(\d+)\s+(\d+)/);
+      if (m) {
+        x11SizeCache = { width: Number(m[1]), height: Number(m[2]), at: Date.now() };
+        return { width: x11SizeCache.width, height: x11SizeCache.height };
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return { width: 0, height: 0 };
+}
+
 function captureToolBins() {
+  const px = x11PixelSize();
   const bounds = screenBounds();
   return {
     grim: whichSync("grim"),
     ffmpeg: whichSync("ffmpeg"),
     display: process.env.DISPLAY || "",
-    width: bounds.width,
-    height: bounds.height,
+    width: px.width || (bounds.scaleFactor > 1 ? Math.round(bounds.width * bounds.scaleFactor) : 0),
+    height: px.height || (bounds.scaleFactor > 1 ? Math.round(bounds.height * bounds.scaleFactor) : 0),
     maim: whichSync("maim"),
     scrot: whichSync("scrot"),
   };
@@ -386,15 +469,102 @@ function buildHint(inj, plans) {
   return bits.join(" ");
 }
 
-function mapToScreen(x, y) {
+function injectorScreenSize(opts) {
+  const o = opts || {};
+  const injector = o.injector || "";
+  const x11 = o.x11 || { width: 0, height: 0 };
+  const electron = o.electron || { width: 0, height: 0, scaleFactor: 1 };
+  const sf = Number(electron.scaleFactor) > 0 ? Number(electron.scaleFactor) : 1;
+  if (injector === "xdotool" && x11.width > 0 && x11.height > 0) {
+    return { width: Math.round(x11.width), height: Math.round(x11.height) };
+  }
+  if (electron.width > 0 && electron.height > 0) {
+    return {
+      width: Math.round(electron.width * sf),
+      height: Math.round(electron.height * sf),
+    };
+  }
+  if (x11.width > 0 && x11.height > 0) {
+    return { width: Math.round(x11.width), height: Math.round(x11.height) };
+  }
+  return { width: 0, height: 0 };
+}
+
+function liveInjectorScreenSize() {
+  const inj = pickInjector();
+  let electron = { width: 0, height: 0, scaleFactor: 1 };
+  try {
+    const e = electronApis();
+    if (e && e.screen) {
+      const d = e.screen.getPrimaryDisplay();
+      electron = {
+        width: d.bounds.width,
+        height: d.bounds.height,
+        scaleFactor: d.scaleFactor || 1,
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+  return injectorScreenSize({ injector: inj.kind, x11: x11PixelSize(), electron });
+}
+
+function shotMetaForMapping(shot, screen) {
+  return {
+    width: Number(shot && shot.width) || 0,
+    height: Number(shot && shot.height) || 0,
+    screenWidth: Number(screen && screen.width) || 0,
+    screenHeight: Number(screen && screen.height) || 0,
+  };
+}
+
+function pointHitsScaledBounds(x, y, bounds, scaleFactor) {
+  if (!bounds) return false;
+  const s = Number(scaleFactor) > 0 ? Number(scaleFactor) : 1;
+  const bx = bounds.x * s;
+  const by = bounds.y * s;
+  const bw = bounds.width * s;
+  const bh = bounds.height * s;
+  return x >= bx && x <= bx + bw && y >= by && y <= by + bh;
+}
+
+function previewStartVerdict(opts) {
+  const o = opts || {};
+  if (o.gotFrame) return "ready";
+  if (!o.procAlive) return "dead";
+  if (Number(o.elapsedMs) >= Number(o.waitMs)) return "timeout-alive";
+  return "wait";
+}
+
+function nextPreviewPlan(plans, failedName) {
+  const list = Array.isArray(plans) ? plans : [];
+  const i = list.findIndex((p) => p && p.name === failedName);
+  if (i < 0) return list[0] || null;
+  return list[i + 1] || null;
+}
+
+function filterCapturePlans(plans, skipName) {
+  const list = Array.isArray(plans) ? plans : [];
+  if (!skipName) return list;
+  return list.filter((p) => p && p.name !== skipName);
+}
+
+function mapToScreen(x, y, meta) {
+  const m = meta || lastShotMeta;
   const sx = Number(x);
   const sy = Number(y);
-  if (!lastShotMeta || !lastShotMeta.width || !lastShotMeta.height) {
+  if (
+    !m ||
+    !m.width ||
+    !m.height ||
+    !m.screenWidth ||
+    !m.screenHeight
+  ) {
     return { x: Math.round(sx), y: Math.round(sy), mapped: false };
   }
   return {
-    x: Math.round((sx * lastShotMeta.screenWidth) / lastShotMeta.width),
-    y: Math.round((sy * lastShotMeta.screenHeight) / lastShotMeta.height),
+    x: Math.round((sx * m.screenWidth) / m.width),
+    y: Math.round((sy * m.screenHeight) / m.height),
     mapped: true,
   };
 }
@@ -411,7 +581,14 @@ function grokhubBounds() {
 function pointHitsGrokHub(x, y) {
   const b = grokhubBounds();
   if (!b) return false;
-  return x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height;
+  let scale = 1;
+  try {
+    const e = electronApis();
+    if (e && e.screen) scale = e.screen.getPrimaryDisplay().scaleFactor || 1;
+  } catch {
+    /* ignore */
+  }
+  return pointHitsScaledBounds(x, y, b, scale);
 }
 
 async function maybeHideGrokHubForClick(x, y) {
@@ -438,20 +615,8 @@ function screenBounds() {
   } catch {
     /* ignore */
   }
-  try {
-    const xdotool = whichSync("xdotool");
-    if (xdotool) {
-      const out = execFileSync(xdotool, ["getdisplaygeometry"], {
-        encoding: "utf8",
-        timeout: 2000,
-        env: process.env,
-      });
-      const m = String(out).trim().match(/^(\d+)\s+(\d+)/);
-      if (m) return { width: Number(m[1]), height: Number(m[2]), scaleFactor: 1 };
-    }
-  } catch {
-    /* ignore */
-  }
+  const px = x11PixelSize();
+  if (px.width && px.height) return { width: px.width, height: px.height, scaleFactor: 1 };
   return { width: lastShotMeta?.screenWidth || 0, height: lastShotMeta?.screenHeight || 0, scaleFactor: 1 };
 }
 
@@ -480,6 +645,7 @@ function encodeShotFile(filePath) {
 }
 
 function emitFrame(payload) {
+  if (payload && payload.ok && payload.dataUrl) previewGotFrame = true;
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("computer:frame", payload);
@@ -491,36 +657,41 @@ function emitFrame(payload) {
 
 async function captureViaCli() {
   const sess = sessionType();
-  const plans = silentCaptureTools(sess, captureToolBins());
+  const plans = filterCapturePlans(silentCaptureTools(sess, captureToolBins()), previewSkipCapture);
   for (const plan of plans) {
     const ext = plan.ext || ".png";
-    const tmp = path.join(os.tmpdir(), `grokhub-cap-${process.pid}-${Date.now()}${ext}`);
+    const tmp = path.join(
+      os.tmpdir(),
+      `grokhub-cap-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`,
+    );
     const args = plan.args.map((a) => (a === "OUT" ? tmp : a));
     const r = await runTool(plan.bin, args, 12000);
-    if (!r.ok) continue;
     try {
-      if (!fs.existsSync(tmp) || fs.statSync(tmp).size < 80) continue;
+      if (!r.ok || !fs.existsSync(tmp) || fs.statSync(tmp).size < 80) continue;
       const encoded = encodeShotFile(tmp);
-      try {
-        fs.unlinkSync(tmp);
-      } catch {
-        /* ignore */
-      }
       const bounds = screenBounds();
-      lastShotMeta = {
-        width: encoded.screenshot.width || bounds.width,
-        height: encoded.screenshot.height || bounds.height,
-        screenWidth: bounds.width,
-        screenHeight: bounds.height,
-      };
+      const inj = liveInjectorScreenSize();
+      lastShotMeta = shotMetaForMapping(
+        {
+          width: encoded.screenshot.width || inj.width || bounds.width,
+          height: encoded.screenshot.height || inj.height || bounds.height,
+        },
+        inj,
+      );
       return {
         ok: true,
         dataUrl: encoded.dataUrl,
-        screen: bounds,
+        screen: {
+          width: inj.width || bounds.width,
+          height: inj.height || bounds.height,
+          scaleFactor: bounds.scaleFactor,
+        },
         screenshot: encoded.screenshot,
         capture: plan.name,
       };
     } catch {
+      /* try next tool */
+    } finally {
       try {
         fs.unlinkSync(tmp);
       } catch {
@@ -549,38 +720,54 @@ function isPreviewing() {
 }
 
 function stopFfmpegPreview() {
-  if (!previewProc) return;
+  const child = previewProc;
+  if (!child) return;
+  previewProc = null;
   try {
-    previewProc.kill("SIGTERM");
+    child.kill("SIGTERM");
   } catch {
     /* ignore */
   }
-  previewProc = null;
+  const killer = setTimeout(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* ignore */
+    }
+  }, 1000);
+  if (typeof killer.unref === "function") killer.unref();
 }
 
 function emitJpegFrame(jpeg, capture) {
   const shot = jpegSize(jpeg);
   const bounds = screenBounds();
-  lastShotMeta = {
-    width: shot.width || SCREENSHOT_MAX_WIDTH,
-    height: shot.height || lastShotMeta?.height || bounds.height,
-    screenWidth: bounds.width,
-    screenHeight: bounds.height,
-  };
+  const inj = liveInjectorScreenSize();
+  if (shot.width && shot.height) {
+    lastShotMeta = shotMetaForMapping(shot, {
+      width: inj.width || lastShotMeta?.screenWidth || 0,
+      height: inj.height || lastShotMeta?.screenHeight || 0,
+    });
+  }
   emitFrame({
     ok: true,
     dataUrl: `data:image/jpeg;base64,${jpeg.toString("base64")}`,
-    screen: bounds,
-    screenshot: { width: lastShotMeta.width, height: lastShotMeta.height },
+    screen: {
+      width: inj.width || bounds.width,
+      height: inj.height || bounds.height,
+      scaleFactor: bounds.scaleFactor,
+    },
+    screenshot: { width: shot.width || lastShotMeta?.width || 0, height: shot.height || lastShotMeta?.height || 0 },
     capture,
   });
 }
 
 function startFfmpegPreview(display) {
+  previewGotFrame = false;
   const bins = captureToolBins();
-  const child = spawn("ffmpeg", ffmpegMjpegArgs(display, bins), {
+  const bin = bins.ffmpeg || whichSync("ffmpeg") || "ffmpeg";
+  const child = spawn(bin, ffmpegMjpegArgs(display, bins), {
     env: { ...process.env, DISPLAY: display },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "ignore"],
   });
   const onJpeg = splitJpegFrames((jpeg) => emitJpegFrame(jpeg, "ffmpeg-x11grab"));
   child.stdout.on("data", onJpeg);
@@ -592,6 +779,40 @@ function startFfmpegPreview(display) {
   });
   previewProc = child;
   return child;
+}
+
+function waitForPreviewReady(waitMs) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const tick = () => {
+      const v = previewStartVerdict({
+        gotFrame: previewGotFrame,
+        procAlive: Boolean(previewProc),
+        elapsedMs: Date.now() - t0,
+        waitMs,
+      });
+      if (v === "wait") {
+        setTimeout(tick, 40);
+        return;
+      }
+      resolve(v);
+    };
+    tick();
+  });
+}
+
+function startTimerPreview(ms) {
+  const tick = async () => {
+    if (previewBusy) return;
+    previewBusy = true;
+    try {
+      await captureScreenshot();
+    } finally {
+      previewBusy = false;
+    }
+  };
+  void tick();
+  previewTimer = setInterval(() => void tick(), ms);
 }
 
 function stopPreview(opts) {
@@ -606,10 +827,12 @@ function stopPreview(opts) {
   }
   stopFfmpegPreview();
   previewOwner = null;
+  previewSkipCapture = "";
+  previewGotFrame = false;
   return { ok: true, previewing: false };
 }
 
-function startPreview(intervalMs, owner) {
+async function startPreview(intervalMs, owner) {
   const ms = Math.max(250, Math.min(2000, Number(intervalMs) || 450));
   const who = owner === "session" ? "session" : "user";
   if (isPreviewing() && previewOwner === "user" && who === "session") {
@@ -626,24 +849,34 @@ function startPreview(intervalMs, owner) {
     };
   }
   previewOwner = who;
-  const display = process.env.DISPLAY || "";
-  const ffmpeg = whichSync("ffmpeg");
-  if (ffmpeg && display && plans.some((p) => p.name === "ffmpeg-x11grab")) {
-    startFfmpegPreview(display);
-    return { ok: true, previewing: true, intervalMs: ms, owner: previewOwner, capture: "ffmpeg-x11grab" };
-  }
-  const tick = async () => {
-    if (previewBusy) return;
-    previewBusy = true;
-    try {
-      await captureScreenshot();
-    } finally {
-      previewBusy = false;
+  previewGotFrame = false;
+  const plan = plans[0];
+  if (plan.name === "ffmpeg-x11grab") {
+    startFfmpegPreview(process.env.DISPLAY || ":0");
+    const verdict = await waitForPreviewReady(1500);
+    if (previewOwner !== who) {
+      return { ok: true, previewing: isPreviewing(), owner: previewOwner };
     }
-  };
-  void tick();
-  previewTimer = setInterval(() => void tick(), ms);
-  return { ok: true, previewing: true, intervalMs: ms, owner: previewOwner, capture: plans[0].name };
+    if (verdict === "ready" || verdict === "timeout-alive") {
+      return { ok: true, previewing: true, intervalMs: ms, owner: previewOwner, capture: "ffmpeg-x11grab" };
+    }
+    stopFfmpegPreview();
+    const next = nextPreviewPlan(plans, "ffmpeg-x11grab");
+    if (next) {
+      previewSkipCapture = "ffmpeg-x11grab";
+      startTimerPreview(ms);
+      return { ok: true, previewing: true, intervalMs: ms, owner: previewOwner, capture: next.name };
+    }
+    previewOwner = null;
+    return {
+      ok: false,
+      previewing: false,
+      error:
+        "ffmpeg x11grab exited before the first frame. Install grim (Wayland) or check DISPLAY.",
+    };
+  }
+  startTimerPreview(ms);
+  return { ok: true, previewing: true, intervalMs: ms, owner: previewOwner, capture: plan.name };
 }
 
 async function injectXdotool(bin, step, mapped) {
@@ -781,7 +1014,7 @@ async function act(step) {
 async function beginSession() {
   aborted = false;
   showStopBar();
-  if (!isPreviewing()) startPreview(450, "session");
+  if (!isPreviewing()) await startPreview(450, "session");
   return { ok: true, ...info(), previewing: isPreviewing() };
 }
 
@@ -813,4 +1046,12 @@ module.exports = {
   ffmpegMjpegArgs,
   splitJpegFrames,
   previewAllowsDesktopCapturer,
+  previewCaptureKind,
+  mapToScreen,
+  injectorScreenSize,
+  shotMetaForMapping,
+  pointHitsScaledBounds,
+  previewStartVerdict,
+  nextPreviewPlan,
+  filterCapturePlans,
 };

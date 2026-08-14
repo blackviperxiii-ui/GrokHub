@@ -271,6 +271,11 @@ assert.match(appShellSrc, /data-queue-count/, "Queue nav must show an attention 
 assert.match(mainSrc, /setVersion/, "Electron must set app version (Linux logs No version found otherwise)");
 assert.match(mainSrc, /computer:info/, "computer-use IPC must be registered");
 assert.match(mainSrc, /computer:startPreview/, "live picture-loop IPC must be registered");
+assert.match(
+  mainSrc,
+  /will-quit[\s\S]{0,400}stopPreview/,
+  "quit must kill the ffmpeg live-view process",
+);
 assert.match(mainSrc, /computer:stopPreview/, "live picture-loop stop IPC must be registered");
 assert.match(
   fs.readFileSync(path.join(process.cwd(), "desktop/preload.cjs"), "utf8"),
