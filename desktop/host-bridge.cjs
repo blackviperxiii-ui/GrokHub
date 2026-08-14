@@ -21,7 +21,7 @@ const execAsync = promisify(exec);
 /** ~8MB stdout/stderr before clip — long greps/finds for agent debug */
 const MAX_STDOUT = 8_000_000;
 const MAX_TIMEOUT = 360_000;
-let safeMode = process.env.GROKHUB_HOST_SAFE === "1";
+let safeMode = process.env.GROKHUB_HOST_SAFE !== "0";
 /** @type {Map<string, import('node:child_process').ChildProcess>} */
 const runningJobs = new Map();
 

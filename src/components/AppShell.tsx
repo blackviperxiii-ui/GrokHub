@@ -393,10 +393,13 @@ export function AppShell() {
     });
     setIsDesktop(Boolean(window.grokhubDesktop));
     try {
-      const safe = useGrokHub.getState().desktop.hostSafeMode;
-      void window.grokhubDesktop?.host?.setSafeMode?.(Boolean(safe));
-      const hk = useGrokHub.getState().desktop.globalHotkey;
+      const desk = useGrokHub.getState().desktop;
+      void window.grokhubDesktop?.host?.setSafeMode?.(Boolean(desk.hostSafeMode));
+      const hk = desk.globalHotkey;
       if (hk) void window.grokhubDesktop?.setGlobalHotkey?.(hk);
+      if (desk.launchOnLogin) {
+        void window.grokhubDesktop?.desktopEntry?.autostart?.(true);
+      }
     } catch {
       /* ignore */
     }

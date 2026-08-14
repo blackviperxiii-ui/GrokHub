@@ -18,6 +18,8 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci --ignore-scripts || npm install --ignore-scripts
+      - name: Install Electron binary
+        run: node node_modules/electron/install.js
       - run: npm run typecheck
       - run: npm run assert:versions
       - run: npm run test:unit
