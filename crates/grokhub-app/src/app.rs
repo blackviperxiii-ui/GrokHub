@@ -3685,6 +3685,7 @@ impl Cabin {
             if crate::cards::page_header(ui, "Automations", "New Automation") {
                 self.auto_compose = true;
             }
+            egui::ScrollArea::vertical().show(ui, |ui| {
             ui.label(
                 RichText::new(format!(
                     "Used {} / {} today · quiet {}–{} · inherit YOLO / supervised",
@@ -3803,6 +3804,7 @@ impl Cabin {
                     }
                 }
             }
+            });
         });
     }
 
@@ -3944,6 +3946,7 @@ impl Cabin {
                 });
             });
             ui.add_space(16.0);
+            egui::ScrollArea::vertical().show(ui, |ui| {
             if self.skills_tab_connectors {
                 ui.label(RichText::new("Live").small().color(crate::theme::SUBTLE));
                 ui.add_space(8.0);
@@ -3998,8 +4001,7 @@ impl Cabin {
                     self.nav = Nav::Chat;
                     self.run_connector("github", tool, &args);
                 }
-                return;
-            }
+            } else {
             ui.label(RichText::new("Suggested").small().color(crate::theme::SUBTLE));
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
@@ -4107,6 +4109,8 @@ impl Cabin {
                     }
                 });
             }
+            }
+            });
         });
     }
 

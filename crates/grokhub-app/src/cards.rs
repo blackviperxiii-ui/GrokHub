@@ -189,7 +189,7 @@ pub fn suggestion_card(ui: &mut egui::Ui, title: &str, body: &str) -> bool {
         .stroke(Stroke::new(1.0_f32, crate::theme::BORDER))
         .inner_margin(egui::Margin::same(14.0))
         .show(ui, |ui| {
-            ui.set_min_width(200.0);
+            ui.set_width(248.0);
             ui.horizontal(|ui| {
                 ui.label(RichText::new(title).strong().color(crate::theme::FG));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
