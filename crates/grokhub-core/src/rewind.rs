@@ -1,0 +1,76 @@
+//! Snapshot / restore a bound project. Never snapshot $HOME unbound.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RewindRecord {
+    pub job_id: String,
+    pub path: String,
+    pub root: String,
+    pub created_at: u64,
+    pub method: String,
+}
+
+pub fn rewind_allowed(root: &str, home: &str) -> bool {
+    let r = normalize(root);
+    let h = normalize(home);
+    if r.is_empty() || r == "/" || r == h {
+        return false;
+    }
+    r.starts_with(&format!("{h}/")) || r.starts_with("/tmp/") || r == "/tmp"
+}
+
+pub fn rewind_dest(config_root: &str, job_id: &str) -> String {
+    let root = config_root.trim_end_matches('/');
+    format!("{root}/rewind/{job_id}")
+}
+
+pub fn keep_last_rewinds(rows: &[RewindRecord], max: usize) -> Vec<RewindRecord> {
+    let mut v = rows.to_vec();
+    v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    v.truncate(max.max(1));
+    v
+}
+
+fn normalize(p: &str) -> String {
+    let t = p.trim();
+    if t.is_empty() {
+        return String::new();
+    }
+    let out = t.trim_end_matches('/');
+    if out.is_empty() {
+        "/".into()
+    } else {
+        out.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refuse_home_and_keep_five() {
+        assert!(!rewind_allowed("/home/user", "/home/user"));
+        assert!(!rewind_allowed("/", "/home/user"));
+        assert!(rewind_allowed("/home/user/GrokHub-Work", "/home/user"));
+        assert!(rewind_allowed("/tmp/lab", "/home/user"));
+        assert_eq!(
+            rewind_dest("/home/user/.config/GrokHub/", "job-1"),
+            "/home/user/.config/GrokHub/rewind/job-1"
+        );
+        let rows = (0..7)
+            .map(|i| RewindRecord {
+                job_id: format!("j{i}"),
+                path: format!("/r/{i}"),
+                root: "/proj".into(),
+                created_at: i,
+                method: "copy".into(),
+            })
+            .collect::<Vec<_>>();
+        let kept = keep_last_rewinds(&rows, 5);
+        assert_eq!(kept.len(), 5);
+        assert_eq!(kept[0].job_id, "j6");
+    }
+}

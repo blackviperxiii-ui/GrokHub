@@ -1,0 +1,26 @@
+post_install() {
+  gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+  update-desktop-database /usr/share/applications 2>/dev/null || true
+
+  cat <<'EOF'
+
+  GrokHub 2.0.0 (native Rust)
+
+  Run:    grokhub
+  Hub:    grokhub-hub
+  Menu:   Applications → GrokHub
+
+  Config: ~/.config/GrokHub
+  Unsandboxed host — commands run as your user.
+
+EOF
+}
+
+post_upgrade() {
+  post_install
+}
+
+post_remove() {
+  gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+  update-desktop-database /usr/share/applications 2>/dev/null || true
+}
