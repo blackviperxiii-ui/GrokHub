@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const { cleanStaleServerManifests } = require("../desktop/clean-output.cjs");
+const { detachLinkedNodeModules } = require("../desktop/node-modules-overlay.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -272,6 +273,15 @@ try {
   console.log("[desktop-build] ACTIVE_UI.json", active.assets);
 } catch (e) {
   console.warn("[desktop-build] ACTIVE_UI.json skip", e);
+}
+
+{
+  const detached = detachLinkedNodeModules(root);
+  if (detached.detached) {
+    console.log(
+      "[desktop-build] detached rebuild node_modules symlink (must not overlay the live install)",
+    );
+  }
 }
 
 console.log("desktop:build OK");
