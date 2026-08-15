@@ -38,7 +38,11 @@ Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash
 
 Memory files live under `~/.config/GrokHub/memory/` (`SOUL.md`, `USER.md`, `MEMORY.md`). Config: `~/.config/GrokHub/app.json`. Project tree: `~/.config/GrokHub/projects.json`. Tokens: `~/.config/GrokHub/secrets.json` (mode 0600).
 
-Projects sit in the left rail. `+` creates a project under `~/GrokHub-Work/<slug>` or a one-level sidebar folder. Rename is the display name; the path stays. Folders do not move files. Click a project to bind it. Bound tree is the world. `/project bind|new|folder|rename|move|clear`.
+Projects sit in the left rail. `+` creates a project under `~/GrokHub-Work/<slug>` or a one-level sidebar folder. Rename is the display name; the path stays. Right-click rename or delete (delete drops the sidebar row, not the files). Folders do not move files. Click a project to bind it. Bound tree is the world. `/project bind|new|folder|rename|move|delete|clear`.
+
+History tabs: pin, rename (locks the title), delete. Fast names the tab from topics after each turn unless locked. `/pin` `/rename` `/delete`.
+
+Plus is Upload / Paste. Imagine toolbox docks mid-pane, then the floor. Appearance is Dark or System. OAuth paints the Grok profile photo in the footer. Settings → Update shows a percent bar on the Settings page. Chat shows thought / tool steps; host receipts stay off the bubble.
 
 Devices pane starts the in-process hub on `GROKHUB_HUB_PORT` or `18766` and shows the pair code.
 
