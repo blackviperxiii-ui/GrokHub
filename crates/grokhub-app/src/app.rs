@@ -3846,7 +3846,11 @@ fn titlebar_chrome_size() -> egui::Vec2 {
 }
 
 fn titlebar_chrome_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click());
+    let (_rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click());
+    let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
+    if wash.a() > 0 {
+        ui.painter().rect_filled(rect, 6.0, wash);
+    }
     let color = if resp.hovered() {
         crate::theme::fg()
     } else {
@@ -4418,7 +4422,8 @@ impl Cabin {
             crate::theme::muted()
         };
         let w = ui.available_width();
-        let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, crate::theme::NAV_ROW_H), egui::Sense::click());
+        let (_rect, resp) = ui.allocate_exact_size(egui::vec2(w, crate::theme::NAV_ROW_H), egui::Sense::click());
+        let (resp, rect, fill) = crate::theme::feel_response(ui, resp, fill);
         ui.painter().rect_filled(rect, 10.0, fill);
         if outline {
             ui.painter().rect_stroke(
@@ -4441,8 +4446,12 @@ impl Cabin {
     }
 
     fn cabin_avatar(ui: &mut egui::Ui, account: &str, email: &str) -> egui::Response {
-        let (rect, resp) =
+        let (_rect, resp) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), RAIL_FOOTER_H), egui::Sense::click());
+        let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
+        if wash.a() > 0 {
+            ui.painter().rect_filled(rect, 10.0, wash);
+        }
         let c = egui::pos2(rect.left() + 20.0, rect.center().y);
         ui.painter().circle_filled(c, 14.0, crate::theme::panel());
         ui.painter().circle_stroke(
@@ -5824,18 +5833,21 @@ impl Cabin {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    let (plus_r, plus) = ui.allocate_exact_size(
+                    let (_plus_r, plus) = ui.allocate_exact_size(
                         egui::vec2(crate::theme::IMAGINE_HIT, crate::theme::IMAGINE_HIT),
                         egui::Sense::click(),
                     );
+                    let (plus, plus_r, wash) =
+                        crate::theme::feel_response(ui, plus, crate::theme::panel());
                     ui.painter()
-                        .circle_filled(plus_r.center(), 18.0, crate::theme::panel());
+                        .circle_filled(plus_r.center(), plus_r.width() * 0.5, wash);
                     crate::icons::paint_plus_at(ui.painter(), plus_r, crate::theme::muted());
+                    let plus_pos = plus.rect.left_bottom();
                     if plus
                         .on_hover_text("Upload a file or paste clipboard")
                         .clicked()
                     {
-                        self.open_plus(PlusTarget::Imagine, plus_r.left_bottom());
+                        self.open_plus(PlusTarget::Imagine, plus_pos);
                     }
                     crate::cards::imagine_seg_track(ui, |ui| {
                         for kind in [
@@ -5978,6 +5990,12 @@ impl Cabin {
                         .response
                         .interact(egui::Sense::click())
                         .on_hover_text("Style — suffix on the still");
+                    let (style, felt, wash) =
+                        crate::theme::feel_response(ui, style, egui::Color32::TRANSPARENT);
+                    if wash.a() > 0 {
+                        ui.painter()
+                            .rect_filled(felt, crate::theme::IMAGINE_HIT, wash);
+                    }
                     if style.clicked() {
                         self.imagine_style_open = !self.imagine_style_open;
                         self.imagine_aspect_open = false;
@@ -6022,6 +6040,12 @@ impl Cabin {
                         .response
                         .interact(egui::Sense::click())
                         .on_hover_text(format!("{aspect} {aspect_name} · {model}"));
+                    let (aspect_hit, felt, wash) =
+                        crate::theme::feel_response(ui, aspect_hit, egui::Color32::TRANSPARENT);
+                    if wash.a() > 0 {
+                        ui.painter()
+                            .rect_filled(felt, crate::theme::IMAGINE_HIT, wash);
+                    }
                     if aspect_hit.clicked() {
                         self.imagine_aspect_open = !self.imagine_aspect_open;
                         self.imagine_style_open = false;
