@@ -73,7 +73,7 @@ pub fn save_projects(nodes: &[ProjectNode]) -> Result<(), String> {
     fs::create_dir_all(config::config_dir()).map_err(|e| e.to_string())?;
     fs::write(
         projects_path(),
-        serde_json::to_string_pretty(nodes).map_err(|e| e.to_string())?,
+        serde_json::to_string(nodes).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())
 }
@@ -152,6 +152,11 @@ mod tests {
         save_projects(&nodes).expect("save");
         let loaded = load_projects();
         assert_eq!(loaded[0].name, "GrokHub-Work");
+        let raw = fs::read_to_string(projects_path()).expect("raw");
+        assert!(
+            !raw.contains("\n  "),
+            "projects.json should stay compact so the 2s persist is cheap"
+        );
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
