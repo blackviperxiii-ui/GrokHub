@@ -412,6 +412,8 @@ pub struct Cabin {
     sidebar_q: String,
     rename_idx: Option<usize>,
     rename_buf: String,
+    rename_focus: bool,
+    rename_lock: Option<String>,
     chip_memory: ChipMemory,
     chip_dismissed: Vec<String>,
     llm_chips: Vec<QuickChip>,
@@ -652,6 +654,8 @@ impl Cabin {
             sidebar_q: String::new(),
             rename_idx: None,
             rename_buf: String::new(),
+            rename_focus: false,
+            rename_lock: None,
             chip_memory: crate::store::load_chips(),
             chip_dismissed: vec![],
             llm_chips: vec![],
@@ -1333,7 +1337,12 @@ impl Cabin {
         }
         let scratch = self.scratch();
         let user_turns = self.messages.iter().filter(|m| m.role == "user").count();
-        if !should_name_thread(scratch, user_turns) {
+        let locked = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.title_locked)
+            .unwrap_or(false);
+        if locked || !should_name_thread(scratch, user_turns) {
             self.goal_stale = false;
             return;
         }
@@ -1587,6 +1596,21 @@ impl Cabin {
         self.persist();
     }
 
+    fn begin_chat_rename(&mut self, idx: usize) {
+        self.rename_buf = self
+            .threads
+            .get(idx)
+            .map(|t| t.title.clone())
+            .unwrap_or_default();
+        self.rename_lock = if self.rename_buf.is_empty() {
+            None
+        } else {
+            Some(self.rename_buf.clone())
+        };
+        self.rename_idx = Some(idx);
+        self.rename_focus = true;
+    }
+
     fn rename_thread(&mut self, idx: usize, title: &str) {
         let Some(t) = self.threads.get_mut(idx) else {
             return;
@@ -1601,6 +1625,8 @@ impl Cabin {
             t.title_locked = true;
             self.status = format!("Renamed {}", t.title);
             self.rename_idx = None;
+            self.rename_focus = false;
+            self.rename_lock = None;
             self.persist();
         }
     }
@@ -3934,7 +3960,7 @@ impl eframe::App for Cabin {
         }
         if wants_live_repaint(
             self.running,
-            self.chip_busy,
+            self.chip_busy || self.goal_busy,
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -4639,13 +4665,28 @@ impl Cabin {
                                 let edit = ui.add(
                                     egui::TextEdit::singleline(&mut self.rename_buf)
                                         .desired_width(ui.available_width())
-                                        .hint_text("Name this chat"),
+                                        .hint_text("Name this chat")
+                                        .font(egui::FontId::proportional(13.0)),
                                 );
-                                edit.request_focus();
-                                if ui.input(|inp| inp.key_pressed(egui::Key::Enter)) {
-                                    act = Some(TabAct::CommitRename(i));
-                                } else if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+                                if self.rename_focus {
+                                    edit.request_focus();
+                                    if edit.has_focus() {
+                                        self.rename_focus = false;
+                                    }
+                                }
+                                if let Some(lock) = self.rename_lock.clone() {
+                                    if self.rename_buf == lock {
+                                        select_all_edit(ui, edit.id, &self.rename_buf);
+                                    } else {
+                                        self.rename_lock = None;
+                                    }
+                                }
+                                if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
                                     act = Some(TabAct::CancelRename);
+                                } else if ui.input(|inp| inp.key_pressed(egui::Key::Enter)) {
+                                    act = Some(TabAct::CommitRename(i));
+                                } else if edit.lost_focus() && !self.rename_focus {
+                                    act = Some(TabAct::CommitRename(i));
                                 }
                                 continue;
                             }
@@ -4661,11 +4702,10 @@ impl Cabin {
                                 &title,
                                 false,
                             );
-                            if resp.clicked() {
-                                act = Some(TabAct::Switch(i));
-                            }
                             if resp.double_clicked() {
                                 act = Some(TabAct::StartRename(i));
+                            } else if resp.clicked() {
+                                act = Some(TabAct::Switch(i));
                             }
                             let pinned = self.threads[i].pinned;
                             resp.context_menu(|ui| {
@@ -4689,20 +4729,15 @@ impl Cabin {
                                 self.nav = Nav::Chat;
                             }
                             Some(TabAct::Pin(i)) => self.pin_thread(i),
-                            Some(TabAct::StartRename(i)) => {
-                                self.rename_buf = self
-                                    .threads
-                                    .get(i)
-                                    .map(|t| t.title.clone())
-                                    .unwrap_or_default();
-                                self.rename_idx = Some(i);
-                            }
+                            Some(TabAct::StartRename(i)) => self.begin_chat_rename(i),
                             Some(TabAct::CommitRename(i)) => {
                                 let name = self.rename_buf.clone();
                                 self.rename_thread(i, &name);
                             }
                             Some(TabAct::CancelRename) => {
                                 self.rename_idx = None;
+                                self.rename_focus = false;
+                                self.rename_lock = None;
                             }
                             Some(TabAct::Delete(i)) => self.delete_thread_at(i),
                             None => {}
@@ -5581,6 +5616,92 @@ impl Cabin {
             for h in &self.history_hits {
                 ui.label(h);
             }
+            ui.add_space(16.0);
+            ui.label(RichText::new("Chats").size(12.0).color(crate::theme::SUBTLE));
+            ui.label(
+                RichText::new("Double-click to rename. Right-click to pin, rename, or delete.")
+                    .size(11.0)
+                    .color(crate::theme::SUBTLE),
+            );
+            egui::ScrollArea::vertical()
+                .id_salt("history-chats")
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    let pinned: Vec<bool> = self.threads.iter().map(|t| t.pinned).collect();
+                    let order = history_order(&pinned);
+                    let mut act: Option<TabAct> = None;
+                    for i in order {
+                        let title = self.threads[i].title.clone();
+                        if self.rename_idx == Some(i) {
+                            let edit = ui.add(
+                                egui::TextEdit::singleline(&mut self.rename_buf)
+                                    .id_salt(("page", i))
+                                    .desired_width(ui.available_width())
+                                    .hint_text("Name this chat"),
+                            );
+                            if self.rename_focus {
+                                edit.request_focus();
+                                if edit.has_focus() {
+                                    self.rename_focus = false;
+                                }
+                            }
+                            if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+                                act = Some(TabAct::CancelRename);
+                            } else if ui.input(|inp| inp.key_pressed(egui::Key::Enter)) {
+                                act = Some(TabAct::CommitRename(i));
+                            } else if edit.lost_focus() && !self.rename_focus {
+                                act = Some(TabAct::CommitRename(i));
+                            }
+                            continue;
+                        }
+                        let resp = ui.selectable_label(
+                            i == self.thread_idx && self.nav == Nav::Chat,
+                            &title,
+                        );
+                        if resp.double_clicked() {
+                            act = Some(TabAct::StartRename(i));
+                        } else if resp.clicked() {
+                            act = Some(TabAct::Switch(i));
+                        }
+                        let pinned_on = self.threads[i].pinned;
+                        resp.context_menu(|ui| {
+                            if ui
+                                .button(if pinned_on { "Unpin" } else { "Pin" })
+                                .clicked()
+                            {
+                                act = Some(TabAct::Pin(i));
+                                ui.close_menu();
+                            }
+                            if ui.button("Rename").clicked() {
+                                act = Some(TabAct::StartRename(i));
+                                ui.close_menu();
+                            }
+                            if ui.button("Delete").clicked() {
+                                act = Some(TabAct::Delete(i));
+                                ui.close_menu();
+                            }
+                        });
+                    }
+                    match act {
+                        Some(TabAct::Switch(i)) => {
+                            self.switch_thread(i);
+                            self.nav = Nav::Chat;
+                        }
+                        Some(TabAct::Pin(i)) => self.pin_thread(i),
+                        Some(TabAct::StartRename(i)) => self.begin_chat_rename(i),
+                        Some(TabAct::CommitRename(i)) => {
+                            let name = self.rename_buf.clone();
+                            self.rename_thread(i, &name);
+                        }
+                        Some(TabAct::CancelRename) => {
+                            self.rename_idx = None;
+                            self.rename_focus = false;
+                            self.rename_lock = None;
+                        }
+                        Some(TabAct::Delete(i)) => self.delete_thread_at(i),
+                        None => {}
+                    }
+                });
         });
     }
 
