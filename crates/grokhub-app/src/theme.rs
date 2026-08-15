@@ -1,4 +1,5 @@
-//! Electron visual system — true black / gray / white. No warm cabin brown.
+//! Cabin chrome measured from live grok.com dark (`scheme-dark`, 2026-08-15).
+//! Recreated in egui — no grok.com JS, no webview.
 
 use eframe::egui::{
     self, Color32, ColorImage, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
@@ -10,15 +11,26 @@ pub fn title_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("inter-bold".into()))
 }
 
-pub const BG: Color32 = Color32::from_rgb(0x00, 0x00, 0x00);
-pub const SURFACE: Color32 = Color32::from_rgb(0x0a, 0x0a, 0x0a);
-pub const PANEL: Color32 = Color32::from_rgb(0x14, 0x14, 0x14);
-pub const ELEVATED: Color32 = Color32::from_rgb(0x1c, 0x1c, 0x1c);
-pub const FG: Color32 = Color32::from_rgb(0xf5, 0xf5, 0xf5);
-pub const MUTED: Color32 = Color32::from_rgb(0xa3, 0xa3, 0xa3);
-pub const SUBTLE: Color32 = Color32::from_rgb(0x73, 0x73, 0x73);
-pub const BORDER: Color32 = Color32::from_rgb(0x2a, 0x2a, 0x2a);
-pub const BORDER_STRONG: Color32 = Color32::from_rgb(0x3a, 0x3a, 0x3a);
+/// `--surface-base` / body `rgb(5,5,5)`
+pub const BG: Color32 = Color32::from_rgb(0x05, 0x05, 0x05);
+/// `--surface-l1` `0 0% 8%`
+pub const SURFACE: Color32 = Color32::from_rgb(0x14, 0x14, 0x14);
+/// `--surface-l2` `0 0% 13%`
+pub const PANEL: Color32 = Color32::from_rgb(0x21, 0x21, 0x21);
+/// query-bar `oklab(0.193 / 0.75)` over base
+pub const ELEVATED: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x1a);
+/// `--fg-primary` `rgb(252,252,252)`
+pub const FG: Color32 = Color32::from_rgb(0xfc, 0xfc, 0xfc);
+/// `--fg-secondary` `0 0% 62%`
+pub const MUTED: Color32 = Color32::from_rgb(0x9e, 0x9e, 0x9e);
+/// `--fg-tertiary` `0 0% 52%`
+pub const SUBTLE: Color32 = Color32::from_rgb(0x85, 0x85, 0x85);
+/// `--border-l1` ~8% white on base
+pub const BORDER: Color32 = Color32::from_rgb(0x26, 0x26, 0x26);
+/// `--border-l2` ~14% white
+pub const BORDER_STRONG: Color32 = Color32::from_rgb(0x38, 0x38, 0x38);
+/// `--sidebar-accent` `240 5% 26%`
+pub const NAV_ACTIVE: Color32 = Color32::from_rgb(0x3f, 0x3f, 0x46);
 pub const BUBBLE_USER: Color32 = Color32::from_rgb(0x2a, 0x2a, 0x2a);
 pub const BUBBLE_ASSISTANT: Color32 = PANEL;
 pub const LIVE: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
@@ -26,6 +38,20 @@ pub const SETUP: Color32 = Color32::from_rgb(0xea, 0xb3, 0x08);
 pub const OFFLINE: Color32 = Color32::from_rgb(0xef, 0x44, 0x44);
 pub const SIDEBAR_W: f32 = 260.0;
 pub const TITLEBAR_H: f32 = 28.0;
+/// `.query-bar` measured max-width
+pub const QUERY_MAX_W: f32 = 800.0;
+/// `[data-testid=chat-input]` `min-h-[60px]`
+pub const QUERY_MIN_H: f32 = 60.0;
+/// `.query-bar` computed `border-radius: 160px`
+pub const QUERY_RADIUS: f32 = 160.0;
+/// Attach / Submit `h-10 w-10 rounded-full`
+pub const HIT: f32 = 40.0;
+/// Rail / chrome row (`h-10`, `--font-size-chrome`)
+pub const NAV_ROW_H: f32 = 40.0;
+pub const FONT_UI: f32 = 15.0;
+pub const FONT_CHROME: f32 = 14.0;
+pub const FONT_META: f32 = 13.0;
+pub const WORDMARK: f32 = 56.0;
 
 /// Live grok.com primary rail. Settings is an avatar menu, not a row.
 pub const GROK_NAV: &[(&str, &str)] = &[
@@ -150,8 +176,8 @@ pub fn apply(ctx: &egui::Context) {
     visuals.widgets.inactive.weak_bg_fill = ELEVATED;
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, FG);
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(0x2a, 0x2a, 0x2a);
-    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x2a, 0x2a, 0x2a);
+    visuals.widgets.hovered.bg_fill = Color32::from_rgb(0x29, 0x29, 0x29);
+    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x29, 0x29, 0x29);
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, FG);
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, BORDER_STRONG);
     visuals.widgets.active.bg_fill = ELEVATED;
@@ -169,10 +195,10 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_visuals(visuals);
 
     let mut style = (*ctx.style()).clone();
-    style.text_styles.insert(TextStyle::Small, FontId::new(11.0, FontFamily::Proportional));
-    style.text_styles.insert(TextStyle::Body, FontId::new(15.0, FontFamily::Proportional));
-    style.text_styles.insert(TextStyle::Button, FontId::new(13.0, FontFamily::Proportional));
-    style.text_styles.insert(TextStyle::Heading, FontId::new(15.0, FontFamily::Proportional));
+    style.text_styles.insert(TextStyle::Small, FontId::new(FONT_META, FontFamily::Proportional));
+    style.text_styles.insert(TextStyle::Body, FontId::new(FONT_UI, FontFamily::Proportional));
+    style.text_styles.insert(TextStyle::Button, FontId::new(FONT_CHROME, FontFamily::Proportional));
+    style.text_styles.insert(TextStyle::Heading, FontId::new(FONT_UI, FontFamily::Proportional));
     style.text_styles.insert(TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace));
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(10.0, 6.0);
@@ -198,11 +224,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn electron_palette() {
-        assert_eq!(BG, Color32::from_rgb(0, 0, 0));
-        assert_eq!(SURFACE, Color32::from_rgb(10, 10, 10));
-        assert_eq!(PANEL, Color32::from_rgb(20, 20, 20));
-        assert_eq!(FG, Color32::from_rgb(245, 245, 245));
+    fn grok_com_chrome_tokens() {
+        assert_eq!(BG, Color32::from_rgb(5, 5, 5));
+        assert_eq!(SURFACE, Color32::from_rgb(20, 20, 20));
+        assert_eq!(PANEL, Color32::from_rgb(33, 33, 33));
+        assert_eq!(FG, Color32::from_rgb(252, 252, 252));
+        assert_eq!(MUTED, Color32::from_rgb(158, 158, 158));
+        assert_eq!(QUERY_MAX_W, 800.0);
+        assert_eq!(QUERY_MIN_H, 60.0);
+        assert_eq!(QUERY_RADIUS, 160.0);
+        assert_eq!(HIT, 40.0);
+        assert_eq!(NAV_ROW_H, 40.0);
+        assert_eq!(FONT_UI, 15.0);
+        assert_eq!(FONT_CHROME, 14.0);
         assert_eq!(GROK_NAV[0], ("imagine", "Imagine"));
         assert!(GROK_NAV.iter().all(|(id, _)| *id != "settings"));
         assert_eq!(CABIN_MENU[0], ("settings", "Settings"));

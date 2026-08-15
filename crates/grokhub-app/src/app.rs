@@ -2942,9 +2942,15 @@ impl Cabin {
             });
     }
 
-    fn nav_button(ui: &mut egui::Ui, active: bool, label: &str) -> egui::Response {
+    fn nav_row(
+        ui: &mut egui::Ui,
+        active: bool,
+        icon: crate::icons::RailIcon,
+        label: &str,
+        outline: bool,
+    ) -> egui::Response {
         let fill = if active {
-            crate::theme::ELEVATED
+            crate::theme::NAV_ACTIVE
         } else {
             egui::Color32::TRANSPARENT
         };
@@ -2953,13 +2959,32 @@ impl Cabin {
         } else {
             crate::theme::MUTED
         };
-        ui.add_sized(
-            [ui.available_width(), 34.0],
-            egui::Button::new(RichText::new(label).color(color).size(14.0))
-                .fill(fill)
-                .rounding(10.0)
-                .stroke(egui::Stroke::NONE),
+        let w = ui.available_width();
+        ui.allocate_ui_with_layout(
+            egui::vec2(w, crate::theme::NAV_ROW_H),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                let rect = ui.max_rect();
+                ui.painter().rect_filled(rect, 10.0, fill);
+                if outline {
+                    ui.painter().rect_stroke(
+                        rect,
+                        10.0,
+                        egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG),
+                    );
+                }
+                ui.add_space(10.0);
+                crate::icons::paint_rail_icon(ui, icon, 20.0, color);
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(label)
+                        .size(crate::theme::FONT_CHROME)
+                        .color(color),
+                );
+            },
         )
+        .response
+        .interact(egui::Sense::click())
     }
 
     fn ui_sidebar(&mut self, ctx: &egui::Context) {
@@ -2986,17 +3011,11 @@ impl Cabin {
             .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(8.0)))
             .show(ctx, |ui| {
                 ui.add_space(4.0);
-                if Self::nav_button(ui, false, "Search").clicked() {
+                if Self::nav_row(ui, false, crate::icons::RailIcon::Search, "Search", false).clicked()
+                {
                     self.palette_open = true;
                 }
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 34.0],
-                        egui::Button::new(RichText::new("New chat").size(14.0).color(crate::theme::FG))
-                            .fill(egui::Color32::TRANSPARENT)
-                            .rounding(10.0)
-                            .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG)),
-                    )
+                if Self::nav_row(ui, false, crate::icons::RailIcon::Compose, "New chat", true)
                     .clicked()
                 {
                     self.new_thread(false);
@@ -3004,13 +3023,23 @@ impl Cabin {
                 ui.add_space(6.0);
                 let cur = self.nav_id();
                 for (id, label) in crate::theme::GROK_NAV {
-                    if Self::nav_button(ui, cur == *id, label).clicked() {
+                    if Self::nav_row(ui, cur == *id, crate::icons::rail_icon_for(id), label, false)
+                        .clicked()
+                    {
                         self.set_nav_id(id);
                     }
                 }
                 ui.add_space(10.0);
                 ui.label(RichText::new("Projects").size(12.0).color(crate::theme::SUBTLE));
-                if Self::nav_button(ui, cur == "workboard", &project).clicked() {
+                if Self::nav_row(
+                    ui,
+                    cur == "workboard",
+                    crate::icons::RailIcon::Folder,
+                    &project,
+                    false,
+                )
+                .clicked()
+                {
                     self.nav = Nav::Workboard;
                 }
                 ui.add_space(8.0);
@@ -3046,8 +3075,14 @@ impl Cabin {
                             if !q.is_empty() && !title.to_ascii_lowercase().contains(&q) {
                                 continue;
                             }
-                            if Self::nav_button(ui, i == self.thread_idx && self.nav == Nav::Chat, &title)
-                                .clicked()
+                            if Self::nav_row(
+                                ui,
+                                i == self.thread_idx && self.nav == Nav::Chat,
+                                crate::icons::RailIcon::Chat,
+                                &title,
+                                false,
+                            )
+                            .clicked()
                             {
                                 self.switch_thread(i);
                                 self.nav = Nav::Chat;
@@ -3055,17 +3090,25 @@ impl Cabin {
                         }
                     });
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                    let avatar = ui.add_sized(
-                        [ui.available_width(), 48.0],
-                        egui::Button::new(
-                            RichText::new(format!("{account}\n{email}"))
-                                .size(12.0)
-                                .color(crate::theme::FG),
-                        )
-                        .fill(egui::Color32::TRANSPARENT)
-                        .rounding(10.0),
+                    let avatar = ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), 48.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            let (dot, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
+                            ui.painter().circle_filled(dot.center(), 14.0, crate::theme::PANEL);
+                            ui.painter().circle_stroke(
+                                dot.center(),
+                                14.0,
+                                egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG),
+                            );
+                            ui.add_space(8.0);
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new(&account).size(crate::theme::FONT_META).color(crate::theme::FG));
+                                ui.label(RichText::new(&email).size(11.0).color(crate::theme::SUBTLE));
+                            });
+                        },
                     );
-                    if avatar.clicked() {
+                    if avatar.response.interact(egui::Sense::click()).clicked() {
                         self.settings_menu_open = !self.settings_menu_open;
                     }
                 });
@@ -3073,18 +3116,88 @@ impl Cabin {
     }
 
     fn ui_chat(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("composer")
-            .frame(
-                egui::Frame::none()
-                    .fill(crate::theme::BG)
-                    .inner_margin(egui::Margin {
-                        left: 32.0,
-                        right: 32.0,
-                        top: 10.0,
-                        bottom: 22.0,
-                    }),
-            )
+        let empty = self.messages.is_empty();
+        if !empty {
+            egui::TopBottomPanel::bottom("composer")
+                .frame(
+                    egui::Frame::none()
+                        .fill(crate::theme::BG)
+                        .inner_margin(egui::Margin {
+                            left: 32.0,
+                            right: 32.0,
+                            top: 10.0,
+                            bottom: 22.0,
+                        }),
+                )
+                .show(ctx, |ui| {
+                    self.ui_composer_stack(ui);
+                });
+        }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(20.0)))
             .show(ctx, |ui| {
+                if empty {
+                    self.ui_empty_home(ui);
+                    return;
+                }
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        for m in &self.messages {
+                            let user = m.role == "user";
+                            let fill = if user {
+                                crate::theme::BUBBLE_USER
+                            } else if m.role == "system" {
+                                crate::theme::PANEL
+                            } else {
+                                crate::theme::BUBBLE_ASSISTANT
+                            };
+                            ui.horizontal(|ui| {
+                                if user {
+                                    ui.add_space(ui.available_width() * 0.22);
+                                }
+                                egui::Frame::none()
+                                    .fill(fill)
+                                    .stroke(egui::Stroke::new(1.0, crate::theme::BORDER))
+                                    .rounding(12.0)
+                                    .inner_margin(egui::Margin::symmetric(14.0, 10.0))
+                                    .show(ui, |ui| {
+                                        ui.set_max_width(
+                                            ui.available_width() * if user { 1.0 } else { 0.78 },
+                                        );
+                                        if m.role == "assistant" {
+                                            crate::markdown::show(ui, &m.content);
+                                        } else {
+                                            ui.label(RichText::new(&m.content).color(crate::theme::FG));
+                                        }
+                                    });
+                            });
+                            ui.add_space(8.0);
+                        }
+                        if self.running {
+                            ui.label(RichText::new("Working…").italics().color(crate::theme::SUBTLE));
+                        }
+                    });
+            });
+    }
+
+    fn ui_empty_home(&mut self, ui: &mut egui::Ui) {
+        let block = crate::theme::WORDMARK + 28.0 + crate::theme::QUERY_MIN_H;
+        let lift = ((ui.available_height() - block) * 0.5).clamp(24.0, 320.0);
+        ui.add_space(lift);
+        ui.vertical_centered(|ui| {
+            ui.label(
+                RichText::new("GrokHub")
+                    .font(crate::theme::title_font(crate::theme::WORDMARK))
+                    .color(crate::theme::FG),
+            );
+            ui.add_space(28.0);
+            ui.set_max_width(crate::theme::QUERY_MAX_W);
+            self.ui_composer_stack(ui);
+        });
+    }
+
+    fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {
             if needs_auth_banner(self.has_key()) && !self.messages.is_empty() {
                 ui.horizontal(|ui| {
                     ui.colored_label(crate::theme::SETUP, "Connect Grok in Settings");
@@ -3176,12 +3289,15 @@ impl Cabin {
                 }
             }
             ui.add_space(6.0);
+            ui.vertical_centered(|ui| {
+            ui.set_max_width(crate::theme::QUERY_MAX_W);
             egui::Frame::none()
                 .fill(crate::theme::ELEVATED)
-                .rounding(28.0)
+                .rounding(crate::theme::QUERY_RADIUS)
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
-                .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                .inner_margin(egui::Margin::same(8.0))
                 .show(ui, |ui| {
+                    ui.set_min_height(crate::theme::QUERY_MIN_H - 16.0);
                     ui.horizontal(|ui| {
                         if crate::icons::paint_bar_icon(
                             ui,
@@ -3227,7 +3343,7 @@ impl Cabin {
                         let mode_now = mode.clone();
                         egui::ComboBox::from_id_salt("composer-mode")
                             .selected_text(Self::mode_label(&mode_now))
-                            .width(56.0)
+                            .width(72.0)
                             .show_ui(ui, |ui| {
                                 for (id, label) in [
                                     ("auto", "Auto"),
@@ -3252,11 +3368,20 @@ impl Cabin {
                         {
                             self.listen_voice();
                         }
+                        let ready = !self.composer.trim().is_empty();
                         let send = crate::icons::paint_bar_icon(
                             ui,
-                            crate::icons::BarIcon::Send,
-                            28.0,
-                            crate::theme::FG,
+                            if ready {
+                                crate::icons::BarIcon::Send
+                            } else {
+                                crate::icons::BarIcon::ArrowUp
+                            },
+                            if ready { 28.0 } else { 22.0 },
+                            if ready {
+                                crate::theme::FG
+                            } else {
+                                crate::theme::MUTED
+                            },
                         )
                         .on_hover_text("Send");
                         if send.clicked()
@@ -3270,58 +3395,7 @@ impl Cabin {
                         }
                     });
                 });
-        });
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(20.0)))
-            .show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    if self.messages.is_empty() {
-                        let lift = (ui.available_height() * 0.32).clamp(64.0, 180.0);
-                        ui.add_space(lift);
-                        ui.vertical_centered(|ui| {
-                            ui.label(
-                                RichText::new("GrokHub")
-                                    .font(crate::theme::title_font(44.0))
-                                    .color(crate::theme::FG),
-                            );
-                        });
-                    }
-                    for m in &self.messages {
-                        let user = m.role == "user";
-                        let fill = if user {
-                            crate::theme::BUBBLE_USER
-                        } else if m.role == "system" {
-                            crate::theme::PANEL
-                        } else {
-                            crate::theme::BUBBLE_ASSISTANT
-                        };
-                        ui.horizontal(|ui| {
-                            if user {
-                                ui.add_space(ui.available_width() * 0.22);
-                            }
-                            egui::Frame::none()
-                                .fill(fill)
-                                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER))
-                                .rounding(12.0)
-                                .inner_margin(egui::Margin::symmetric(14.0, 10.0))
-                                .show(ui, |ui| {
-                                    ui.set_max_width(ui.available_width() * if user { 1.0 } else { 0.78 });
-                                    if m.role == "assistant" {
-                                        crate::markdown::show(ui, &m.content);
-                                    } else {
-                                        ui.label(RichText::new(&m.content).color(crate::theme::FG));
-                                    }
-                                });
-                        });
-                        ui.add_space(8.0);
-                    }
-                    if self.running {
-                        ui.label(RichText::new("Working…").italics().color(crate::theme::SUBTLE));
-                    }
-                });
-        });
+            });
     }
 
     fn ui_devices(&mut self, ctx: &egui::Context) {
