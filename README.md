@@ -34,13 +34,15 @@ GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub
 
 Close on the window hides the cabin to the tray. Jobs, hub, and idle reflect keep running. Tray: **Show cabin**, **Halt hands**, **Quit**. `grokhub --agent` starts already hidden. `GROKHUB_TRAY=0` quits on close.
 
-Slash: `/help` · `/new` · `/scratch` · `/undo` · `/retry` · `/stop` · `/sh` · `/host` · `/project` · `/approve` · `/memory` · `/recall` · `/forget` · `/board` · `/imagine` · `/skill` · `/compact` · `/learn reflect` · `/update` · `/send` · `/hub` · `/inhabit` · `/rewind` · `/room` · `/export`.
+Slash: `/help` · `/new` · `/scratch` · `/clear` · `/undo` · `/retry` · `/stop` · `/sh` · `/host` · `/project` · `/approve` · `/memory` · `/recall` · `/forget` · `/board` · `/imagine` · `/skill` · `/compact` · `/learn reflect` · `/update` · `/send` · `/sync` · `/hub` · `/inhabit` · `/rewind` · `/room` · `/export` · `/mode` · `/dream` · `/palette`. Type `/help` in the cabin for the rest. `/project` also takes `bind`, `new`, `folder`, `rename`, `move`, `clear`.
+
+Projects sit in the left rail. `+` makes a project (`~/GrokHub-Work/<slug>`) or a one-level folder. Double-click or right-click to rename (display name only — the path stays). Right-click a project to add it to a folder or remove it. Folders are sidebar only; they do not move files. Click a project to bind it and open the Workboard. Bound tree is the world.
 
 Imagine always uses dedicated **`grok-2-image`** (chat model is ignored). Hey Grok records 4s (`arecord` / `ffmpeg` / `sox`), transcribes with xAI STT when a key is present (whisper fallback), and speaks the reply via xAI TTS. Eyes walks AT-SPI (`pyatspi`) then wmctrl + cursor. With Cabin eyes on, a JPEG is captured on each chat send, stored on the hub (not disk), and attached to that turn.
 
 Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is the sign-in. Device-code against `auth.x.ai` — same public client as Grok CLI. A console API key is optional. Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600), never in markdown.
 
-Settings → **Update install** (or `grokhub --update` / `/update`) does `git pull --ff-only` in the source clone, then `./scripts/install.sh --user`. Overlay only — config stays. Supervised unless YOLO.
+Settings → **Update** (or `grokhub --update` / `/update`) does `git pull --ff-only` in the source clone, then `./scripts/install.sh --user`. The clone must be on `main`. Overlay only — config stays. Supervised unless YOLO. Quit the tray and relaunch `grokhub` so the new binary is the one that runs.
 
 `HOST_PLAN` is an editable checklist. `scripts/verify.sh` gates **done** / `GOAL_COMPLETE`. A recipe whose `screen=` does not match the current desktop reshoots and skips coordinate clicks. Idle ≥ 10 minutes (or `/learn reflect`) does a surgical `MEMORY.md` edit with a diff and `.prev` restore.
 
@@ -52,18 +54,18 @@ Android / Windows: link `libgrokhub_ffi` and include `crates/grokhub-ffi/include
 | `grokhub-hub` | `crates/grokhub-hub` | Standalone LAN `/v1` hub (port **18766**) |
 | `libgrokhub_ffi` | `crates/grokhub-ffi` | C ABI for Android / Windows |
 
-Config and memory: `~/.config/GrokHub` (`app.json`, `memory/SOUL.md`, `USER.md`, `MEMORY.md`).
+Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `secrets.json` mode 0600, `memory/SOUL.md`, `USER.md`, `MEMORY.md`).
 
 ## First run
 
 1. Land in **chat**. Banner: **Connect Grok in Settings**.
-2. Settings → xAI API key from [console.x.ai](https://console.x.ai). Save.
+2. Settings → **Connect Grok OAuth** (or paste a console key from [console.x.ai](https://console.x.ai)). Save.
 3. Optional: Devices → **Start share** for the Android key-fob.
 4. YOLO is `/approve off` — host commands run without a prompt.
 
-Secrets stay in `app.json`. Never in markdown.
+Tokens stay in `secrets.json`. Never in markdown.
 
-Composer is a pill: **Ask anything**. Predictive quick chips sit above it — local habits plus Fast mode (`grok-3-mini-fast`) when the thread changes. Click sends or navigates; × dismisses. Habits live in `chips.json`, never secrets. Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash -lc`.
+Composer is a pill: **What do you want to know?** Predictive quick chips sit above it — local habits plus Fast mode (`grok-3-mini-fast`) when the thread changes. Click sends or navigates; × dismisses. Habits live in `chips.json`, never secrets. Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash -lc`.
 
 ## Always-on hub
 
@@ -97,7 +99,7 @@ Contract: [`docs/superpowers/plans/2026-08-14-dispatch-android-notes.md`](docs/s
 |------|------|
 | `~/.local/bin/grokhub` | User install (`./scripts/install.sh --user`) |
 | `/usr/bin/grokhub` | System / makepkg |
-| `~/.config/GrokHub` | User data |
+| `~/.config/GrokHub` | User data (`app.json`, `projects.json`, `secrets.json`, memory) |
 
 Release tarball: `grokhub-linux-v*.tar.gz` from `./scripts/make-release-bundle.sh`.
 

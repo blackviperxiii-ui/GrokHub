@@ -265,6 +265,13 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/rename", hint: "Rename chat…", insert: "/rename ", run_on_pick: false },
     SlashDef { cmd: "/remember", hint: "Save durable memory note", insert: "/remember ", run_on_pick: false },
     SlashDef { cmd: "/project", hint: "Show bound project", insert: "/project", run_on_pick: true },
+    SlashDef { cmd: "/project bind", hint: "Bind a folder as the world", insert: "/project bind ", run_on_pick: false },
+    SlashDef { cmd: "/project new", hint: "Create a project", insert: "/project new ", run_on_pick: false },
+    SlashDef { cmd: "/project folder", hint: "Create a sidebar folder", insert: "/project folder ", run_on_pick: false },
+    SlashDef { cmd: "/project rename", hint: "Rename the selected project", insert: "/project rename ", run_on_pick: false },
+    SlashDef { cmd: "/project move", hint: "Add the selected project to a folder", insert: "/project move ", run_on_pick: false },
+    SlashDef { cmd: "/board", hint: "Open the Workboard", insert: "/board", run_on_pick: true },
+    SlashDef { cmd: "/skill", hint: "Run a skill…", insert: "/skill ", run_on_pick: false },
     SlashDef { cmd: "/host", hint: "Desktop host status", insert: "/host", run_on_pick: true },
     SlashDef { cmd: "/approve off", hint: "YOLO — run without confirm", insert: "/approve off", run_on_pick: true },
     SlashDef { cmd: "/recall", hint: "Search chats and memory", insert: "/recall ", run_on_pick: false },
@@ -352,6 +359,8 @@ pub fn slash_help() -> String {
         "/project folder <name> — create a sidebar folder",
         "/project rename <name> — rename the selected project",
         "/project move <folder>|root — add the selected project to a folder",
+        "/board — open the Workboard",
+        "/skill <name> — run a skill",
         "/memory note <fact> — write MEMORY.md",
         "/recall <q> — search memory",
         "/forget <topic> — drop matching memory lines",
@@ -440,7 +449,12 @@ mod tests {
         assert_eq!(parse_slash("/palette"), Some(Slash::Palette));
         assert!(slash_help().contains("/import"));
         assert!(slash_help().contains("/consult"));
+        assert!(slash_help().contains("/project new"));
+        assert!(slash_help().contains("/project folder"));
+        assert!(slash_help().contains("/board"));
+        assert!(slash_help().contains("/skill"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
+        assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());
     }
 }
