@@ -1005,7 +1005,8 @@ impl Cabin {
     fn mode_label(mode: &str) -> &'static str {
         match mode {
             "max" | "deep" | "heavy" => "Max",
-            "balanced" | "build" | "expert" => "Think",
+            "think" | "build" | "expert" => "Think",
+            "balanced" | "balance" => "Balance",
             "fast" => "Fast",
             _ => "Auto",
         }
@@ -4203,7 +4204,7 @@ impl Cabin {
                         }
                         let edit = ui.add(
                             egui::TextEdit::multiline(&mut self.composer)
-                                .desired_width((ui.available_width() - 168.0).max(80.0))
+                                .desired_width((ui.available_width() - 180.0).max(80.0))
                                 .desired_rows(1)
                                 .frame(false)
                                 .hint_text("What do you want to know?"),
@@ -4216,12 +4217,13 @@ impl Cabin {
                         let mode_now = mode.clone();
                         egui::ComboBox::from_id_salt("composer-mode")
                             .selected_text(Self::mode_label(&mode_now))
-                            .width(72.0)
+                            .width(84.0)
                             .show_ui(ui, |ui| {
                                 for (id, label) in [
                                     ("auto", "Auto"),
                                     ("fast", "Fast"),
-                                    ("balanced", "Think"),
+                                    ("balanced", "Balance"),
+                                    ("think", "Think"),
                                     ("max", "Max"),
                                 ] {
                                     ui.selectable_value(&mut mode, id.to_string(), label);
@@ -4546,7 +4548,7 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Console key", "Optional. Never in markdown.", &mut self.cfg.api_key, true);
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
                                                             crate::cards::settings_field(ui, "Chat model", "Empty means the cabin default. Imagine never shares this.", &mut self.cfg.model, false);
-                                                            crate::cards::settings_field(ui, "Composer mode", "auto, fast, Think (Grok 4.6 high), or max (Grok 4.6 xhigh).", &mut self.cfg.mode, false);
+                                                            crate::cards::settings_field(ui, "Composer mode", "auto, fast, Balance (Grok 4.3), Think (Grok 4.6 high), or max (Grok 4.6 xhigh).", &mut self.cfg.mode, false);
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(ui, "The cabin is dark. Light and System stay on grok.com.");
