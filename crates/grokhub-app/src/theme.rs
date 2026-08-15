@@ -5,7 +5,10 @@ use eframe::egui::{
     self, Color32, ColorImage, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
     TextureHandle, TextureOptions,
 };
-use grokhub_core::os_prefers_dark;
+use grokhub_core::{
+    feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb, os_prefers_dark, HOVER_EXPANSION,
+    HOVER_SECS, PRESS_EXPANSION, PRESS_SECS,
+};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -337,13 +340,22 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     visuals.widgets.inactive.weak_bg_fill = elevated();
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, fg());
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, border());
+    let press = if dark {
+        Color32::from_rgb(0x1f, 0x1f, 0x1f)
+    } else {
+        Color32::from_rgb(0xc8, 0xc8, 0xcc)
+    };
+    visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
     visuals.widgets.hovered.bg_fill = hover;
     visuals.widgets.hovered.weak_bg_fill = hover;
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, fg());
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, border_strong());
-    visuals.widgets.active.bg_fill = elevated();
+    visuals.widgets.hovered.expansion = HOVER_EXPANSION;
+    visuals.widgets.active.bg_fill = press;
+    visuals.widgets.active.weak_bg_fill = press;
     visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, fg());
     visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, border_strong());
+    visuals.widgets.active.expansion = PRESS_EXPANSION;
     visuals.widgets.open.bg_fill = elevated();
     visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, fg());
     visuals.window_stroke = Stroke::new(1.0_f32, border());
@@ -365,6 +377,47 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     style.spacing.button_padding = egui::vec2(10.0, 6.0);
     style.visuals = ctx.style().visuals.clone();
     ctx.set_style(style);
+}
+
+pub fn pointing(resp: egui::Response) -> egui::Response {
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+pub fn lift_fill(fill: Color32, mix: f32) -> Color32 {
+    let toward_white = !USE_LIGHT.load(Ordering::Relaxed);
+    if fill.a() == 0 {
+        let a = hover_alpha(0, mix);
+        return if toward_white {
+            Color32::from_white_alpha(a)
+        } else {
+            Color32::from_black_alpha(a)
+        };
+    }
+    let (r, g, b) = lift_rgb(fill.r(), fill.g(), fill.b(), mix, toward_white);
+    Color32::from_rgba_unmultiplied(r, g, b, fill.a())
+}
+
+pub fn feel_response(
+    ui: &egui::Ui,
+    resp: egui::Response,
+    fill: Color32,
+) -> (egui::Response, egui::Rect, Color32) {
+    let hovered = resp.hovered();
+    let pressed = resp.is_pointer_button_down_on();
+    let id = resp.id;
+    let base = resp.rect;
+    let resp = pointing(resp);
+    let hover_t = ui
+        .ctx()
+        .animate_bool_with_time(id.with("feel-h"), hovered, HOVER_SECS);
+    let press_t = ui
+        .ctx()
+        .animate_bool_with_time(id.with("feel-p"), pressed, PRESS_SECS);
+    let scale = feel_scale(hover_t, press_t);
+    let mix = hover_mix(hover_t, press_t);
+    let (x, y, w, h) = felt_rect(base.min.x, base.min.y, base.width(), base.height(), scale);
+    let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+    (resp, rect, lift_fill(fill, mix))
 }
 
 #[allow(dead_code)]
@@ -423,5 +476,19 @@ mod tests {
         assert_eq!(fg(), LIGHT_FG);
         set_paint_dark(true);
         assert_eq!(bg(), BG);
+    }
+
+    #[test]
+    fn lift_fill_washes_transparent() {
+        set_paint_dark(true);
+        assert_eq!(lift_fill(Color32::TRANSPARENT, 0.0).a(), 0);
+        let hover = lift_fill(Color32::TRANSPARENT, 0.10);
+        assert!(hover.a() > 8);
+        let solid = lift_fill(Color32::from_rgb(20, 20, 20), 0.10);
+        assert!(solid.r() > 20);
+        set_paint_dark(false);
+        let light = lift_fill(Color32::from_rgb(244, 244, 245), 0.10);
+        assert!(light.r() < 244);
+        set_paint_dark(true);
     }
 }
