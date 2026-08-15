@@ -75,6 +75,12 @@ struct Msg {
     content: String,
 }
 
+#[derive(Default)]
+struct ImagineBarOut {
+    generate: bool,
+    go_settings: bool,
+}
+
 enum JobOut {
     Chat(String),
     ChatDelta(String),
@@ -229,6 +235,7 @@ pub struct Cabin {
     auto_compose: bool,
     board_compose: bool,
     settings_menu_open: bool,
+    imagine_want_focus: bool,
 }
 
 impl Cabin {
@@ -373,6 +380,7 @@ impl Cabin {
             auto_compose: false,
             board_compose: false,
             settings_menu_open: false,
+            imagine_want_focus: false,
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
             let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
@@ -788,6 +796,7 @@ impl Cabin {
             }
             Slash::Imagine(p) => {
                 self.nav = Nav::Imagine;
+                self.imagine_want_focus = true;
                 self.imagine_prompt = p;
                 self.kick_imagine();
             }
@@ -1183,6 +1192,7 @@ impl Cabin {
         );
         self.imagine_prompt = g.dream_prompt.clone();
         self.nav = Nav::Imagine;
+        self.imagine_want_focus = true;
         self.status = g
             .goal
             .clone()
@@ -1420,7 +1430,10 @@ impl Cabin {
             "nav:eyes" => self.nav = Nav::Eyes,
             "nav:skills" => self.nav = Nav::Skills,
             "nav:board" => self.nav = Nav::Workboard,
-            "nav:imagine" => self.nav = Nav::Imagine,
+            "nav:imagine" => {
+                self.imagine_want_focus = true;
+                self.nav = Nav::Imagine;
+            }
             "nav:memory" => self.nav = Nav::Memory,
             "nav:settings" => self.nav = Nav::Settings,
             "oauth" => self.start_oauth(),
@@ -1760,6 +1773,7 @@ impl Cabin {
                 if let Some(p) = extract_imagine_prompt(&text) {
                     self.imagine_prompt = p;
                     self.nav = Nav::Imagine;
+                    self.imagine_want_focus = true;
                     self.kick_imagine();
                 }
                 if let Some(mut a) = parse_nl_automation(&text) {
@@ -2670,13 +2684,19 @@ impl Cabin {
                     .inner_margin(egui::Margin::same(8.0)),
             )
             .show(ctx, |ui| {
-                ui.set_min_width(200.0);
+                ui.set_min_width(220.0);
+                ui.spacing_mut().item_spacing.y = 2.0;
                 for (id, label) in crate::theme::CABIN_MENU {
                     if ui
                         .add(
-                            egui::Button::new(RichText::new(*label).size(13.0).color(crate::theme::FG))
-                                .fill(egui::Color32::TRANSPARENT)
-                                .min_size(egui::vec2(184.0, 28.0)),
+                            egui::Button::new(
+                                RichText::new(*label)
+                                    .size(crate::theme::FONT_CHROME)
+                                    .color(crate::theme::FG),
+                            )
+                            .fill(egui::Color32::TRANSPARENT)
+                            .rounding(8.0)
+                            .min_size(egui::vec2(204.0, 36.0)),
                         )
                         .clicked()
                     {
@@ -2684,11 +2704,18 @@ impl Cabin {
                     }
                 }
                 ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
                 if ui
                     .add(
-                        egui::Button::new(RichText::new("Help").size(13.0).color(crate::theme::FG))
-                            .fill(egui::Color32::TRANSPARENT)
-                            .min_size(egui::vec2(184.0, 28.0)),
+                        egui::Button::new(
+                            RichText::new("Help")
+                                .size(crate::theme::FONT_CHROME)
+                                .color(crate::theme::FG),
+                        )
+                        .fill(egui::Color32::TRANSPARENT)
+                        .rounding(8.0)
+                        .min_size(egui::vec2(204.0, 36.0)),
                     )
                     .clicked()
                 {
@@ -2697,9 +2724,14 @@ impl Cabin {
                 let auth_label = if authed { "Sign out" } else { "Connect Grok" };
                 if ui
                     .add(
-                        egui::Button::new(RichText::new(auth_label).size(13.0).color(crate::theme::FG))
-                            .fill(egui::Color32::TRANSPARENT)
-                            .min_size(egui::vec2(184.0, 28.0)),
+                        egui::Button::new(
+                            RichText::new(auth_label)
+                                .size(crate::theme::FONT_CHROME)
+                                .color(crate::theme::FG),
+                        )
+                        .fill(egui::Color32::TRANSPARENT)
+                        .rounding(8.0)
+                        .min_size(egui::vec2(204.0, 36.0)),
                     )
                     .clicked()
                 {
@@ -2869,7 +2901,10 @@ impl Cabin {
     fn set_nav_id(&mut self, id: &str) {
         self.nav = match id {
             "history" => Nav::History,
-            "imagine" => Nav::Imagine,
+            "imagine" => {
+                self.imagine_want_focus = true;
+                Nav::Imagine
+            }
             "workboard" => Nav::Workboard,
             "settings" => Nav::Settings,
             "skills" => {
@@ -3490,140 +3525,283 @@ impl Cabin {
         });
     }
 
+    fn save_settings(&mut self) {
+        if let Ok(mut st) = self.hub.lock() {
+            if !self.cfg.device_name.trim().is_empty() {
+                st.device_name = self.cfg.device_name.clone();
+            }
+        }
+        let _ = secrets::save(&self.secrets);
+        match config::save(&self.cfg) {
+            Ok(()) => self.status = "Saved".into(),
+            Err(e) => self.status = e,
+        }
+    }
+
     fn ui_settings(&mut self, ctx: &egui::Context) {
+        let mut save = false;
+        let mut connect = false;
+        let mut disconnect = false;
+        let mut update = false;
+        let mut copy_diag = false;
+        let oauth_line = self.secrets.oauth.as_ref().map(|t| {
+            t.email
+                .clone()
+                .or(t.name.clone())
+                .unwrap_or_else(|| "connected".into())
+        });
+        let pending = self.oauth_pending.as_ref().map(|p| {
+            format!("Approve {} at {}", p.user_code, p.verification_uri)
+        });
+        let imagine_live = dedicated_imagine_model(&self.cfg.imagine_model);
+        let voice_live = dedicated_voice_model(&self.cfg.voice_model);
+        let passenger = passenger_label(self.cfg.autonomy);
+        let doctor = self.doctor_text();
+        let usage = usage_line(&self.usage);
+        let catalog = catalog_line();
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
-            let _ = crate::cards::page_header(ui, "Settings", "");
-            ui.label(RichText::new("Grok").size(16.0).strong().color(crate::theme::FG));
-            ui.label(RichText::new("Connect Grok OAuth (device code) — same public client as Grok CLI. SuperGrok / X Premium+ do not need a console key.").color(crate::theme::MUTED));
-            ui.add_space(8.0);
-            if let Some(t) = &self.secrets.oauth {
-                ui.label(format!(
-                    "OAuth: {}",
-                    t.email.clone().or(t.name.clone()).unwrap_or_else(|| "connected".into())
-                ));
-                if ui.button("Disconnect OAuth").clicked() {
-                    self.secrets.oauth = None;
-                    let _ = secrets::save(&self.secrets);
-                    self.status = "OAuth cleared".into();
-                }
-            } else if let Some(p) = &self.oauth_pending {
-                ui.label(format!("Approve code {} at {}", p.user_code, p.verification_uri));
+            if crate::cards::page_header(ui, "Settings", "Save") {
+                save = true;
             }
-            if ui.button("Connect Grok OAuth").clicked() {
-                self.start_oauth();
-            }
-            ui.add_space(8.0);
-            ui.label("Optional console API key — used instead of OAuth when set. Never in markdown.");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.cfg.api_key)
-                    .password(true)
-                    .desired_width(400.0)
-                    .hint_text("xai-…"),
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    crate::cards::settings_group(ui, "Grok", |ui| {
+                        let auth_title = if oauth_line.is_some() {
+                            "Connected"
+                        } else {
+                            "Connect Grok"
+                        };
+                        let auth_hint = oauth_line.as_deref().unwrap_or(
+                            "Device-code OAuth. Same public client as Grok CLI. SuperGrok / X Premium+ do not need a console key.",
+                        );
+                        if crate::cards::settings_action(
+                            ui,
+                            auth_title,
+                            auth_hint,
+                            if oauth_line.is_some() {
+                                "Sign out"
+                            } else {
+                                "Connect"
+                            },
+                        ) {
+                            if oauth_line.is_some() {
+                                disconnect = true;
+                            } else {
+                                connect = true;
+                            }
+                        }
+                        if let Some(p) = &pending {
+                            crate::cards::settings_note(ui, p);
+                        }
+                        crate::cards::settings_field(
+                            ui,
+                            "Console key",
+                            "Optional. Used instead of OAuth when set. Never in markdown.",
+                            &mut self.cfg.api_key,
+                            true,
+                        );
+                        crate::cards::settings_field(
+                            ui,
+                            "Chat model",
+                            "Empty means the cabin default. Imagine never shares this.",
+                            &mut self.cfg.model,
+                            false,
+                        );
+                        crate::cards::settings_field(
+                            ui,
+                            "Composer mode",
+                            "auto, fast, balanced, or max.",
+                            &mut self.cfg.mode,
+                            false,
+                        );
+                    });
+                    crate::cards::settings_group(ui, "Cabin", |ui| {
+                        crate::cards::settings_field(
+                            ui,
+                            "Device name",
+                            "How this box shows up on the hub.",
+                            &mut self.cfg.device_name,
+                            false,
+                        );
+                        crate::cards::settings_field(
+                            ui,
+                            "Bound project",
+                            "The world. Host, Imagine, and memory stay here.",
+                            &mut self.cfg.project_dir,
+                            false,
+                        );
+                        if crate::cards::settings_toggle(
+                            ui,
+                            "Close to tray",
+                            "The cabin keeps working in the background.",
+                            &mut self.cfg.close_to_tray,
+                        ) {
+                            save = true;
+                        }
+                        if crate::cards::settings_toggle(
+                            ui,
+                            "Cabin eyes",
+                            "Attach a room frame when seeing.",
+                            &mut self.cfg.cabin_eyes,
+                        ) {
+                            save = true;
+                        }
+                    });
+                    crate::cards::settings_group(ui, "Host", |ui| {
+                        if crate::cards::settings_toggle(
+                            ui,
+                            "Host tools",
+                            "Unsandboxed commands on this box.",
+                            &mut self.cfg.host_on,
+                        ) {
+                            save = true;
+                        }
+                        if crate::cards::settings_toggle(
+                            ui,
+                            "YOLO",
+                            "/approve off — host runs without a prompt.",
+                            &mut self.cfg.yolo,
+                        ) {
+                            save = true;
+                        }
+                        crate::cards::settings_note(ui, &format!("Passenger: {passenger}"));
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("Autonomy")
+                                    .size(15.0)
+                                    .color(crate::theme::FG),
+                            );
+                            ui.add(egui::Slider::new(&mut self.cfg.autonomy, 0..=4).show_value(true));
+                        });
+                        ui.add_space(8.0);
+                    });
+                    crate::cards::settings_group(ui, "Night", |ui| {
+                        crate::cards::settings_field(
+                            ui,
+                            "Quiet start",
+                            "Local time. Automations hold here.",
+                            &mut self.cfg.quiet_start,
+                            false,
+                        );
+                        crate::cards::settings_field(
+                            ui,
+                            "Quiet end",
+                            "Local time.",
+                            &mut self.cfg.quiet_end,
+                            false,
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("Daily cap")
+                                    .size(15.0)
+                                    .color(crate::theme::FG),
+                            );
+                            ui.add(egui::Slider::new(&mut self.cfg.daily_auto_cap, 0..=200));
+                        });
+                        ui.add_space(8.0);
+                    });
+                    crate::cards::settings_group(ui, "Imagine", |ui| {
+                        crate::cards::settings_note(
+                            ui,
+                            &format!("Live still model: {imagine_live}. Chat models never run here."),
+                        );
+                        crate::cards::settings_field(
+                            ui,
+                            "Imagine override",
+                            "Must contain “image” or the cabin keeps grok-2-image.",
+                            &mut self.cfg.imagine_model,
+                            false,
+                        );
+                    });
+                    crate::cards::settings_group(ui, "Voice", |ui| {
+                        crate::cards::settings_note(ui, &format!("Live voice model: {voice_live}."));
+                        crate::cards::settings_field(
+                            ui,
+                            "Voice override",
+                            "Must contain “voice” or “realtime”.",
+                            &mut self.cfg.voice_model,
+                            false,
+                        );
+                    });
+                    crate::cards::settings_group(ui, "GitHub", |ui| {
+                        crate::cards::settings_field(
+                            ui,
+                            "Personal access token",
+                            "CONNECTOR_CMD only. Never shown back. GitHub is the only live connector.",
+                            &mut self.secrets.github_token,
+                            true,
+                        );
+                    });
+                    crate::cards::settings_group(ui, "Update", |ui| {
+                        crate::cards::settings_note(
+                            ui,
+                            "Overlay only — git pull --ff-only then install.sh --user. Does not wipe ~/.config/GrokHub.",
+                        );
+                        crate::cards::settings_field(
+                            ui,
+                            "Source clone",
+                            "Empty uses GROKHUB_SRC or the install receipt.",
+                            &mut self.cfg.source_dir,
+                            false,
+                        );
+                        if crate::cards::settings_action(
+                            ui,
+                            "Install overlay",
+                            "Pulls this clone and runs the user install.",
+                            "Update",
+                        ) {
+                            update = true;
+                        }
+                    });
+                    crate::cards::settings_group(ui, "About", |ui| {
+                        crate::cards::settings_note(ui, &usage);
+                        crate::cards::settings_note(ui, &catalog);
+                        crate::cards::settings_note(ui, &doctor);
+                        if crate::cards::settings_action(
+                            ui,
+                            "Diagnostics",
+                            "Copy a redacted bundle. No secrets.",
+                            "Copy",
+                        ) {
+                            copy_diag = true;
+                        }
+                        crate::cards::settings_note(
+                            ui,
+                            "This is the Rust cabin. Not Electron. Not Tauri.",
+                        );
+                    });
+                });
+            });
+        if connect {
+            self.start_oauth();
+        }
+        if disconnect {
+            self.secrets.oauth = None;
+            let _ = secrets::save(&self.secrets);
+            self.status = "Signed out".into();
+        }
+        if update {
+            self.queue_update();
+        }
+        if copy_diag {
+            let bundle = diagnostics_bundle(
+                env!("CARGO_PKG_VERSION"),
+                self.has_key(),
+                HUB_KIND,
+                self.skill_list.len(),
+                self.last_receipt_ok,
+                self.board.len(),
+                &self.status,
             );
-            ui.horizontal(|ui| {
-                ui.label("Model");
-                ui.text_edit_singleline(&mut self.cfg.model);
-            });
-            ui.horizontal(|ui| {
-                ui.label("Device name");
-                ui.text_edit_singleline(&mut self.cfg.device_name);
-            });
-            ui.checkbox(&mut self.cfg.yolo, "YOLO — /approve off (host runs without a prompt)");
-            ui.checkbox(&mut self.cfg.host_on, "Host tools on");
-            ui.checkbox(
-                &mut self.cfg.close_to_tray,
-                "Close to tray — cabin keeps working in the background",
-            );
-            ui.checkbox(&mut self.cfg.cabin_eyes, "Cabin eyes — attach a room frame when seeing");
-            ui.label(format!("Passenger: {}", passenger_label(self.cfg.autonomy)));
-            ui.horizontal(|ui| {
-                ui.label("Mode");
-                ui.text_edit_singleline(&mut self.cfg.mode);
-            });
-            ui.horizontal(|ui| {
-                ui.label("Quiet hours");
-                ui.add(egui::TextEdit::singleline(&mut self.cfg.quiet_start).desired_width(60.0));
-                ui.label("–");
-                ui.add(egui::TextEdit::singleline(&mut self.cfg.quiet_end).desired_width(60.0));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Night daily cap");
-                ui.add(egui::Slider::new(&mut self.cfg.daily_auto_cap, 0..=200));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Bound project");
-                ui.text_edit_singleline(&mut self.cfg.project_dir);
-            });
-            ui.horizontal(|ui| {
-                ui.label("GitHub PAT (CONNECTOR_CMD)");
-                ui.add(egui::TextEdit::singleline(&mut self.secrets.github_token).password(true));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Autonomy 0–4");
-                ui.add(egui::Slider::new(&mut self.cfg.autonomy, 0..=4));
-            });
-            ui.label(format!(
-                "Imagine model (dedicated): {}",
-                dedicated_imagine_model(&self.cfg.imagine_model)
-            ));
-            ui.horizontal(|ui| {
-                ui.label("Imagine override (must contain “image”)");
-                ui.text_edit_singleline(&mut self.cfg.imagine_model);
-            });
-            ui.label(format!(
-                "Voice model (dedicated): {}",
-                dedicated_voice_model(&self.cfg.voice_model)
-            ));
-            ui.horizontal(|ui| {
-                ui.label("Voice override (must contain “voice” or “realtime”)");
-                ui.text_edit_singleline(&mut self.cfg.voice_model);
-            });
-            ui.add_space(12.0);
-            ui.heading("Update");
-            ui.label("Overlay only — git pull --ff-only then install.sh --user. Does not wipe ~/.config/GrokHub.");
-            ui.horizontal(|ui| {
-                ui.label("Source clone");
-                ui.text_edit_singleline(&mut self.cfg.source_dir);
-            });
-            if ui.button("Update install").clicked() {
-                self.queue_update();
-            }
-            if ui.button("Save").clicked() {
-                if let Ok(mut st) = self.hub.lock() {
-                    if !self.cfg.device_name.trim().is_empty() {
-                        st.device_name = self.cfg.device_name.clone();
-                    }
-                }
-                let _ = secrets::save(&self.secrets);
-                match config::save(&self.cfg) {
-                    Ok(()) => self.status = "Saved".into(),
-                    Err(e) => self.status = e,
-                }
-            }
-            ui.add_space(12.0);
-            ui.label(RichText::new(&self.doctor_text()).small());
-            ui.add_space(12.0);
-            ui.heading("Usage");
-            ui.label(usage_line(&self.usage));
-            ui.label(RichText::new(catalog_line()).small());
-            if ui.button("Copy diagnostics").clicked() {
-                let bundle = diagnostics_bundle(
-                    env!("CARGO_PKG_VERSION"),
-                    self.has_key(),
-                    HUB_KIND,
-                    self.skill_list.len(),
-                    self.last_receipt_ok,
-                    self.board.len(),
-                    &self.status,
-                );
-                ui.output_mut(|o| o.copied_text = bundle.clone());
-                self.status = bundle;
-            }
-            ui.add_space(8.0);
-            ui.label(RichText::new("This is the Rust cabin. Not Electron. Not Tauri.").small().color(crate::theme::SUBTLE));
-        });
+            ctx.output_mut(|o| o.copied_text = bundle.clone());
+            self.status = bundle;
+        }
+        if save {
+            self.save_settings();
+        }
     }
 
     fn add_automation_seed(&mut self, seed: &str) {
@@ -3867,6 +4045,7 @@ impl Cabin {
     fn ui_imagine(&mut self, ctx: &egui::Context) {
         let mut generate = false;
         let mut new_project = false;
+        let mut go_settings = false;
         let mut seed: Option<&'static str> = None;
         let word = crate::cards::imagine_word(now_ms());
         let selected = self.imagine_prompt.clone();
@@ -3891,7 +4070,9 @@ impl Cabin {
                     );
                     ui.add_space(crate::theme::IMAGINE_GAP);
                     ui.set_max_width(crate::theme::IMAGINE_BAR_W);
-                    generate = self.ui_imagine_bar(ui);
+                    let bar = self.ui_imagine_bar(ui);
+                    generate = bar.generate;
+                    go_settings = bar.go_settings;
                 });
                 ui.add_space(28.0);
                 egui::ScrollArea::vertical()
@@ -3906,34 +4087,71 @@ impl Cabin {
         if new_project {
             self.imagine_prompt.clear();
             self.imagine_last.clear();
+            self.imagine_want_focus = true;
         }
         if let Some(p) = seed {
             self.imagine_prompt = p.to_string();
+            self.imagine_want_focus = true;
+        }
+        if go_settings {
+            self.nav = Nav::Settings;
         }
         if generate {
             self.kick_imagine();
         }
     }
 
-    fn ui_imagine_bar(&mut self, ui: &mut egui::Ui) -> bool {
-        let mut generate = false;
+    fn ui_imagine_bar(&mut self, ui: &mut egui::Ui) -> ImagineBarOut {
+        let mut out = ImagineBarOut::default();
         let bar_w = ui.available_width().min(crate::theme::IMAGINE_BAR_W);
+        let focused = ui.memory(|m| m.has_focus(egui::Id::new("imagine-prompt")));
+        let stroke = if focused {
+            crate::theme::BORDER_STRONG
+        } else {
+            crate::theme::BORDER
+        };
+        let model = dedicated_imagine_model(&self.cfg.imagine_model);
+        let ready = !self.imagine_prompt.trim().is_empty();
+        let authed = self.has_key();
         egui::Frame::none()
             .fill(crate::theme::SURFACE)
             .rounding(crate::theme::IMAGINE_BAR_RADIUS)
-            .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
-            .inner_margin(egui::Margin::same(10.0))
+            .stroke(egui::Stroke::new(1.0_f32, stroke))
+            .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 ui.set_width(bar_w);
-                ui.set_min_height(crate::theme::IMAGINE_BAR_H - 20.0);
+                ui.set_min_height(crate::theme::IMAGINE_BAR_H - 24.0);
                 let edit = ui.add(
                     egui::TextEdit::multiline(&mut self.imagine_prompt)
+                        .id(egui::Id::new("imagine-prompt"))
                         .desired_width((ui.available_width() - 8.0).max(80.0))
-                        .desired_rows(1)
+                        .desired_rows(3)
                         .frame(false)
                         .hint_text("Type to imagine"),
                 );
-                ui.add_space(8.0);
+                if self.imagine_want_focus {
+                    edit.request_focus();
+                    self.imagine_want_focus = false;
+                }
+                if edit.has_focus()
+                    && ui.input(|i| {
+                        i.key_pressed(egui::Key::Enter) && !i.modifiers.shift && !i.modifiers.command
+                    })
+                {
+                    if self.imagine_prompt.ends_with('\n') {
+                        self.imagine_prompt.pop();
+                    }
+                    if ready {
+                        out.generate = true;
+                    }
+                }
+                if edit.has_focus()
+                    && ready
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command)
+                {
+                    out.generate = true;
+                }
+                ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     let (plus_r, plus) = ui.allocate_exact_size(
                         egui::vec2(crate::theme::IMAGINE_HIT, crate::theme::IMAGINE_HIT),
@@ -3942,13 +4160,15 @@ impl Cabin {
                     ui.painter()
                         .circle_filled(plus_r.center(), 18.0, crate::theme::PANEL);
                     crate::icons::paint_plus_at(ui.painter(), plus_r, crate::theme::MUTED);
-                    if plus.on_hover_text("Paste clipboard").clicked() {
+                    if plus.on_hover_text("Paste clipboard into the still").clicked() {
                         if let Some(clip) = crate::desktop::clipboard_once() {
                             if !self.imagine_prompt.is_empty() && !self.imagine_prompt.ends_with('\n')
                             {
                                 self.imagine_prompt.push('\n');
                             }
                             self.imagine_prompt.push_str(&clip);
+                        } else {
+                            self.status = "clipboard empty — install wl-paste or xclip".into();
                         }
                     }
                     ui.add_space(8.0);
@@ -3968,35 +4188,74 @@ impl Cabin {
                                 );
                             });
                         });
+                    ui.add_space(6.0);
+                    egui::Frame::none()
+                        .fill(crate::theme::PANEL)
+                        .rounding(crate::theme::IMAGINE_HIT)
+                        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+                        .show(ui, |ui| {
+                            ui.set_height(crate::theme::IMAGINE_HIT - 4.0);
+                            ui.label(
+                                RichText::new(&model)
+                                    .size(crate::theme::FONT_META)
+                                    .color(crate::theme::MUTED),
+                            );
+                        })
+                        .response
+                        .on_hover_text("Dedicated still model — chat models never run here");
+                    if !authed {
+                        ui.add_space(6.0);
+                        if crate::cards::ghost_pill(ui, "Connect Grok") {
+                            out.go_settings = true;
+                        }
+                    } else if self.running && self.nav == Nav::Imagine {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new("Imagining…")
+                                .size(crate::theme::FONT_META)
+                                .color(crate::theme::MUTED),
+                        );
+                    } else if !self.imagine_last.is_empty() {
+                        ui.add_space(6.0);
+                        if crate::cards::ghost_pill(ui, "Last still") {
+                            ui.output_mut(|o| o.copied_text = self.imagine_last.clone());
+                            self.status = format!("Copied {}", self.imagine_last);
+                        }
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let ready = !self.imagine_prompt.trim().is_empty();
                         let send = crate::icons::paint_bar_icon(
                             ui,
-                            if ready {
+                            if ready && !self.running {
                                 crate::icons::BarIcon::Send
                             } else {
                                 crate::icons::BarIcon::ArrowUp
                             },
                             crate::theme::IMAGINE_HIT,
-                            if ready {
+                            if ready && !self.running {
                                 crate::theme::FG
                             } else {
                                 crate::theme::MUTED
                             },
                         )
-                        .on_hover_text("Generate");
-                        if send.clicked()
-                            || (edit.has_focus()
-                                && ui.input(|i| {
-                                    i.key_pressed(egui::Key::Enter) && i.modifiers.command
-                                }))
-                        {
-                            generate = true;
+                        .on_hover_text(if self.running {
+                            "Imagining…"
+                        } else {
+                            "Generate still · Enter"
+                        });
+                        if send.clicked() && ready && !self.running {
+                            out.generate = true;
+                        }
+                        if ready {
+                            ui.add_space(4.0);
+                            if crate::cards::ghost_pill(ui, "Clear") {
+                                self.imagine_prompt.clear();
+                                self.imagine_want_focus = true;
+                            }
                         }
                     });
                 });
             });
-        generate
+        out
     }
 
     fn ui_skills(&mut self, ctx: &egui::Context) {
