@@ -30,9 +30,11 @@ use grokhub_core::{
     extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
     forget_topic, greet_from_last_job, has_auth, has_goal_complete, has_verify_ok, hey_grok_on_press,
     import_memory_file, insight_pin, is_openclaw_workspace,
-    add_to_folder, create_folder, create_project, drop_node, folder_choices, host_cmd_leaves_project,
-    host_hour_blocked, host_risk, host_status_line, is_hard_run, rename_node, seed_from_bound,
-    settle_project_path, stage_project, toggle_folder, upsert_bound, visible_tree, ProjectKind,
+    add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
+    host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
+    project_menu_acts, project_menu_label, rename_node, restore_bound_path, seed_from_bound,
+    settle_project_path, should_seed_sidebar, stage_project, toggle_folder, upsert_bound,
+    visible_tree, ProjectKind, ProjectMenuAct,
     ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
@@ -457,7 +459,6 @@ pub struct Cabin {
     pick_dir: String,
     projects: Vec<ProjectNode>,
     project_sel: Option<String>,
-    proj_menu: Option<String>,
     proj_menu_pos: egui::Pos2,
     proj_plus_open: bool,
     proj_plus_pos: egui::Pos2,
@@ -547,13 +548,14 @@ impl Cabin {
                 cfg.source_dir = src.display().to_string();
             }
         }
-        if cfg.project_dir.trim().is_empty() {
-            if let Ok(home) = std::env::var("HOME") {
-                cfg.project_dir = format!("{home}/GrokHub-Work");
-            }
-        }
         let mut projects = crate::store::load_projects();
-        if projects.is_empty() {
+        let sidebar_file = crate::store::projects_path().exists();
+        let work = std::env::var("HOME")
+            .ok()
+            .map(|home| format!("{home}/GrokHub-Work"))
+            .unwrap_or_default();
+        cfg.project_dir = restore_bound_path(&cfg.project_dir, &work, sidebar_file);
+        if should_seed_sidebar(sidebar_file, &projects) {
             projects = seed_from_bound(&cfg.project_dir);
         }
         let project_sel = projects
@@ -697,7 +699,6 @@ impl Cabin {
             pick_dir: std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()),
             projects,
             project_sel,
-            proj_menu: None,
             proj_menu_pos: egui::Pos2::ZERO,
             proj_plus_open: false,
             proj_plus_pos: egui::Pos2::ZERO,
@@ -1085,6 +1086,53 @@ impl Cabin {
                 self.status = format!("Project {}", self.projects[i].name);
             }
             Err(e) => self.status = e.into(),
+        }
+    }
+
+    fn remove_project_id(&mut self, id: &str) {
+        let bound = self.cfg.project_dir.clone();
+        let selected = self.project_sel.as_deref() == Some(id);
+        let out = drop_selected(&mut self.projects, id, &bound);
+        if !out.dropped {
+            self.status = "Project not found".into();
+            return;
+        }
+        if out.unbound {
+            self.cfg.project_dir.clear();
+        }
+        if selected {
+            self.project_sel = None;
+        }
+        self.touch_projects();
+        self.persist();
+        self.status = if out.unbound {
+            format!("Removed {} · unbound", out.name)
+        } else {
+            format!("Removed {}", out.name)
+        };
+    }
+
+    fn apply_project_menu(&mut self, id: String, act: ProjectMenuAct) {
+        match act {
+            ProjectMenuAct::Rename => {
+                if let Some(n) = self.projects.iter().find(|n| n.id == id) {
+                    self.begin_proj_rename(id, n.name.clone());
+                }
+            }
+            ProjectMenuAct::AddToFolder => {
+                self.proj_add_for = Some(id.clone());
+                self.project_sel = Some(id);
+                self.proj_ignore_close = true;
+            }
+            ProjectMenuAct::RemoveFromFolder => {
+                if add_to_folder(&mut self.projects, &id, None).is_ok() {
+                    self.status = "Moved to Projects".into();
+                    self.touch_projects();
+                    self.persist();
+                }
+            }
+            ProjectMenuAct::NewHere => self.stage_new_project(Some(&id)),
+            ProjectMenuAct::Delete => self.remove_project_id(&id),
         }
     }
 
@@ -1971,6 +2019,13 @@ impl Cabin {
                 }
             }
             Slash::ProjectMove(folder) => self.move_sel_to_folder_name(&folder),
+            Slash::ProjectDelete => {
+                let Some(id) = self.project_sel.clone() else {
+                    self.status = "Select a project first".into();
+                    return;
+                };
+                self.remove_project_id(&id);
+            }
             Slash::Send(task) => self.dispatch_send(task),
             Slash::Sync => self.sync_hub(),
             Slash::Hub => {
@@ -3712,72 +3767,6 @@ impl Cabin {
                 }
             }
         }
-        if let Some(id) = self.proj_menu.clone() {
-            let kind = self
-                .projects
-                .iter()
-                .find(|n| n.id == id)
-                .map(|n| n.kind);
-            let mut act: Option<&'static str> = None;
-            let mut menu_rect = egui::Rect::NOTHING;
-            egui::Area::new(egui::Id::new("proj-menu"))
-                .fixed_pos(self.proj_menu_pos + egui::vec2(0.0, 4.0))
-                .order(egui::Order::Foreground)
-                .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_min_width(168.0);
-                        if ui.selectable_label(false, "Rename").clicked() {
-                            act = Some("rename");
-                        }
-                        if kind == Some(ProjectKind::Project) {
-                            if ui.selectable_label(false, "Add to folder").clicked() {
-                                act = Some("add");
-                            }
-                            if ui.selectable_label(false, "Remove from folder").clicked() {
-                                act = Some("root");
-                            }
-                        }
-                        if kind == Some(ProjectKind::Folder)
-                            && ui.selectable_label(false, "New project here").clicked()
-                        {
-                            act = Some("new-here");
-                        }
-                        menu_rect = ui.min_rect();
-                    });
-                });
-            if let Some(a) = act {
-                self.proj_menu = None;
-                match a {
-                    "rename" => {
-                        if let Some(n) = self.projects.iter().find(|n| n.id == id) {
-                            self.begin_proj_rename(id, n.name.clone());
-                        }
-                    }
-                    "add" => {
-                        self.proj_add_for = Some(id.clone());
-                        self.project_sel = Some(id);
-                        self.proj_ignore_close = true;
-                    }
-                    "root" => {
-                        if add_to_folder(&mut self.projects, &id, None).is_ok() {
-                            self.status = "Moved to Projects".into();
-                            self.touch_projects();
-                            self.persist();
-                        }
-                    }
-                    "new-here" => self.stage_new_project(Some(&id)),
-                    _ => {}
-                }
-            } else if self.proj_ignore_close {
-                self.proj_ignore_close = false;
-            } else if ctx.input(|i| i.pointer.any_click()) {
-                if let Some(pos) = ctx.pointer_interact_pos() {
-                    if !menu_rect.expand(8.0).contains(pos) {
-                        self.proj_menu = None;
-                    }
-                }
-            }
-        }
         if let Some(pid) = self.proj_add_for.clone() {
             let folders = folder_choices(&self.projects);
             let mut picked: Option<Option<String>> = None;
@@ -4514,11 +4503,11 @@ impl Cabin {
                             self.proj_plus_open = true;
                             self.proj_plus_pos = plus_pos;
                             self.proj_ignore_close = true;
-                            self.proj_menu = None;
                         }
                     });
                 });
                 let tree = visible_tree(&self.projects);
+                let mut proj_act: Option<(String, ProjectMenuAct, egui::Pos2)> = None;
                 for (depth, idx) in tree {
                     let kind = self.projects[idx].kind;
                     let open = self.projects[idx].open;
@@ -4590,13 +4579,20 @@ impl Cabin {
                             ProjectKind::Project => self.bind_project_id(&id),
                         }
                     }
-                    if row.secondary_clicked() {
-                        self.proj_menu = Some(self.projects[idx].id.clone());
-                        self.proj_menu_pos = row.rect.left_bottom();
-                        self.proj_ignore_close = true;
-                        self.proj_plus_open = false;
-                        self.proj_add_for = None;
-                    }
+                    let nid = self.projects[idx].id.clone();
+                    let row_pos = row.rect.left_bottom();
+                    row.context_menu(|ui| {
+                        for a in project_menu_acts(kind) {
+                            if ui.button(project_menu_label(*a)).clicked() {
+                                proj_act = Some((nid.clone(), *a, row_pos));
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                }
+                if let Some((id, act, pos)) = proj_act {
+                    self.proj_menu_pos = pos;
+                    self.apply_project_menu(id, act);
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {

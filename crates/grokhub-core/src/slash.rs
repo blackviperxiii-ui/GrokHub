@@ -31,6 +31,7 @@ pub enum Slash {
     ProjectFolder(String),
     ProjectRename(String),
     ProjectMove(String),
+    ProjectDelete,
     Send(String),
     Sync,
     Hub,
@@ -159,6 +160,8 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
                 } else {
                     Some(Slash::ProjectRename(name.to_string()))
                 }
+            } else if rest.eq_ignore_ascii_case("delete") {
+                Some(Slash::ProjectDelete)
             } else if let Some(name) = rest.strip_prefix("move ") {
                 let name = name.trim();
                 if name.is_empty() {
@@ -219,6 +222,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::ProjectFolder(_) => "project_folder",
         Slash::ProjectRename(_) => "project_rename",
         Slash::ProjectMove(_) => "project_move",
+        Slash::ProjectDelete => "project_delete",
         Slash::Send(_) => "send",
         Slash::Sync => "sync",
         Slash::Hub => "hub",
@@ -278,6 +282,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/project folder", hint: "Create a sidebar folder", insert: "/project folder ", run_on_pick: false },
     SlashDef { cmd: "/project rename", hint: "Rename the selected project", insert: "/project rename ", run_on_pick: false },
     SlashDef { cmd: "/project move", hint: "Add the selected project to a folder", insert: "/project move ", run_on_pick: false },
+    SlashDef { cmd: "/project delete", hint: "Remove the selected project from the sidebar", insert: "/project delete", run_on_pick: true },
     SlashDef { cmd: "/board", hint: "Open the Workboard", insert: "/board", run_on_pick: true },
     SlashDef { cmd: "/skill", hint: "Run a skill…", insert: "/skill ", run_on_pick: false },
     SlashDef { cmd: "/host", hint: "Desktop host status", insert: "/host", run_on_pick: true },
@@ -368,6 +373,7 @@ pub fn slash_help() -> String {
         "/project folder <name> — create a sidebar folder",
         "/project rename <name> — rename the selected project",
         "/project move <folder>|root — add the selected project to a folder",
+        "/project delete — remove the selected project from the sidebar",
         "/board — open the Workboard",
         "/skill <name> — run a skill",
         "/memory note <fact> — write MEMORY.md",
@@ -442,6 +448,7 @@ mod tests {
         assert_eq!(parse_slash("/project folder Cabin"), Some(Slash::ProjectFolder("Cabin".into())));
         assert_eq!(parse_slash("/project rename Dawn"), Some(Slash::ProjectRename("Dawn".into())));
         assert_eq!(parse_slash("/project move Cabin"), Some(Slash::ProjectMove("Cabin".into())));
+        assert_eq!(parse_slash("/project delete"), Some(Slash::ProjectDelete));
         assert_eq!(parse_slash("/inhabit cabin-2"), Some(Slash::Inhabit("cabin-2".into())));
         assert_eq!(parse_slash("/send flash the pi"), Some(Slash::Send("flash the pi".into())));
         assert_eq!(slash_kind(&Slash::Update), "update");
@@ -468,6 +475,7 @@ mod tests {
         assert!(slash_help().contains("/consult"));
         assert!(slash_help().contains("/project new"));
         assert!(slash_help().contains("/project folder"));
+        assert!(slash_help().contains("/project delete"));
         assert!(slash_help().contains("/board"));
         assert!(slash_help().contains("/skill"));
         assert!(slash_help().contains("/mode auto|fast|balance|think|max"));
