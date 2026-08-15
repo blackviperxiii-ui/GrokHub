@@ -1,7 +1,7 @@
 //! Grok catalog chrome — huge title, white pills, 3-column icon tiles.
 
 use crate::icons::{self, TileIcon};
-use eframe::egui::{self, Color32, RichText, Sense, Stroke};
+use eframe::egui::{self, Color32, ColorImage, RichText, Sense, Stroke, TextureHandle, TextureOptions};
 use grokhub_core::SkillMd;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -452,47 +452,144 @@ pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui,
     }
 }
 
-pub fn imagine_scene_tile(ui: &mut egui::Ui, scene: &ImagineScene, selected: bool) -> bool {
-    let h = if scene.tall { 180.0 } else { 132.0 };
-    let mut hit = false;
-    let resp = egui::Frame::none()
-        .fill(crate::theme::PANEL)
-        .rounding(0.0)
-        .stroke(Stroke::new(
-            1.0_f32,
-            if selected {
-                crate::theme::FG
-            } else {
-                crate::theme::BORDER
-            },
-        ))
-        .inner_margin(egui::Margin::same(12.0))
-        .show(ui, |ui| {
-            ui.set_min_height(h);
-            ui.vertical(|ui| {
-                ui.add_space((h - 56.0).max(8.0) * 0.35);
-                ui.horizontal(|ui| {
-                    ui.add_space(4.0);
-                    icons::paint_icon(ui, scene.icon, 36.0);
-                });
-                ui.add_space(10.0);
-                ui.label(
-                    RichText::new(scene.title)
-                        .size(crate::theme::FONT_CHROME)
-                        .color(crate::theme::FG),
-                );
-            });
-        })
-        .response
-        .interact(Sense::click());
-    if resp.clicked() {
-        hit = true;
+fn still_jpeg(title: &str) -> &'static [u8] {
+    match title {
+        "Night cabin" => include_bytes!("../assets/imagine/night_cabin.jpg"),
+        "Bound project" => include_bytes!("../assets/imagine/bound_project.jpg"),
+        "Host desk" => include_bytes!("../assets/imagine/host_desk.jpg"),
+        "Workboard still" => include_bytes!("../assets/imagine/workboard.jpg"),
+        "Morning window" => include_bytes!("../assets/imagine/morning_window.jpg"),
+        "A scene" => include_bytes!("../assets/imagine/a_scene.jpg"),
+        other => {
+            let _ = other;
+            include_bytes!("../assets/imagine/a_scene.jpg")
+        }
     }
-    if resp.hovered() {
-        ui.painter()
-            .rect_stroke(resp.rect, 0.0, Stroke::new(1.0_f32, crate::theme::BORDER_STRONG));
+}
+
+fn imagine_still_tex(ctx: &egui::Context, title: &str) -> (TextureHandle, [usize; 2]) {
+    let id = egui::Id::new(("imagine-still", title));
+    if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
+        return hit;
     }
+    let img = image::load_from_memory(still_jpeg(title)).expect("imagine still");
+    let rgba = img.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let tex = ctx.load_texture(
+        format!("imagine-still-{title}"),
+        ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+        TextureOptions::LINEAR,
+    );
+    let hit = (tex, size);
+    ctx.data_mut(|d| d.insert_temp(id, hit.clone()));
     hit
+}
+
+fn cover_uv(iw: f32, ih: f32, dw: f32, dh: f32) -> egui::Rect {
+    let ia = iw / ih.max(1.0);
+    let da = dw / dh.max(1.0);
+    if ia > da {
+        let used = da / ia;
+        let pad = (1.0 - used) * 0.5;
+        egui::Rect::from_min_max(egui::pos2(pad, 0.0), egui::pos2(1.0 - pad, 1.0))
+    } else {
+        let used = ia / da;
+        let pad = (1.0 - used) * 0.5;
+        egui::Rect::from_min_max(egui::pos2(0.0, pad), egui::pos2(1.0, 1.0 - pad))
+    }
+}
+
+/// grok.com/imagine masonry: full-bleed stills, 1px gutters, caption over the photo.
+pub fn imagine_masonry(
+    ui: &mut egui::Ui,
+    selected: &str,
+    mut on_pick: impl FnMut(&'static str),
+) {
+    let w = ui.available_width();
+    if !w.is_finite() || w < 16.0 {
+        return;
+    }
+    let cols = if w >= 900.0 {
+        3
+    } else if w >= 420.0 {
+        2
+    } else {
+        1
+    };
+    let gap = 1.0;
+    let col_w = ((w - gap * (cols as f32 - 1.0)) / cols as f32).max(8.0);
+    let scale = (col_w / 345.0).clamp(0.62, 1.25);
+    let heights: Vec<f32> = IMAGINE_SCENES
+        .iter()
+        .map(|s| {
+            let base = if s.tall {
+                crate::theme::IMAGINE_TILE_TALL
+            } else {
+                crate::theme::IMAGINE_TILE_SHORT
+            };
+            base * scale
+        })
+        .collect();
+    let mut col_h = vec![0.0_f32; cols];
+    for (i, h) in heights.iter().enumerate() {
+        let c = i % cols;
+        if col_h[c] > 0.0 {
+            col_h[c] += gap;
+        }
+        col_h[c] += *h;
+    }
+    let total_h = col_h.into_iter().fold(0.0_f32, f32::max);
+    let (full, _) = ui.allocate_exact_size(egui::vec2(w, total_h), Sense::hover());
+    let mut ys: Vec<f32> = (0..cols).map(|_| full.top()).collect();
+    for (i, scene) in IMAGINE_SCENES.iter().enumerate() {
+        let c = i % cols;
+        let h = heights[i];
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(full.left() + c as f32 * (col_w + gap), ys[c]),
+            egui::vec2(col_w, h),
+        );
+        if imagine_photo_tile(ui, scene, selected == scene.prompt, rect, i) {
+            on_pick(scene.prompt);
+        }
+        ys[c] += h + gap;
+    }
+}
+
+fn imagine_photo_tile(
+    ui: &mut egui::Ui,
+    scene: &ImagineScene,
+    selected: bool,
+    rect: egui::Rect,
+    idx: usize,
+) -> bool {
+    let resp = ui.interact(rect, egui::Id::new(("imagine-tile", idx)), Sense::click());
+    let (tex, size) = imagine_still_tex(ui.ctx(), scene.title);
+    let uv = cover_uv(
+        size[0] as f32,
+        size[1] as f32,
+        rect.width(),
+        rect.height(),
+    );
+    ui.painter()
+        .image(tex.id(), rect, uv, Color32::WHITE);
+    let fade = egui::Rect::from_min_max(
+        egui::pos2(rect.left(), rect.bottom() - 42.0),
+        rect.max,
+    );
+    ui.painter()
+        .rect_filled(fade, 0.0, Color32::from_black_alpha(140));
+    ui.painter().text(
+        egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0),
+        egui::Align2::LEFT_BOTTOM,
+        scene.title,
+        egui::FontId::proportional(crate::theme::FONT_CHROME),
+        Color32::WHITE,
+    );
+    if selected || resp.hovered() {
+        ui.painter()
+            .rect_stroke(rect, 0.0, Stroke::new(1.0_f32, crate::theme::FG));
+    }
+    resp.clicked()
 }
 
 pub fn suggestion_card(ui: &mut egui::Ui, title: &str, body: &str) -> bool {
@@ -617,7 +714,14 @@ mod tests {
             assert!(!blob.contains("photo edit"));
             let _ = s.icon;
             let _ = s.tall;
+            let bytes = still_jpeg(s.title);
+            assert!(bytes.len() > 1000, "imagine still {} is empty", s.title);
+            let img = image::load_from_memory(bytes).expect(s.title);
+            assert!(img.width() >= 256);
+            assert!(img.height() >= 256);
         }
+        let uv = cover_uv(768.0, 512.0, 345.0, 230.0);
+        assert!(uv.width() > 0.4 && uv.height() > 0.9);
         assert!(is_cabin_catalog("github"));
         let pulse = SUGGESTED_SKILLS.iter().find(|s| s.name == "github-pulse").unwrap();
         let cmds = grokhub_core::extract_connector_cmds(pulse.instructions);

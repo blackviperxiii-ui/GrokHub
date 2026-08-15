@@ -3871,20 +3871,22 @@ impl Cabin {
         let word = crate::cards::imagine_word(now_ms());
         let selected = self.imagine_prompt.clone();
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(20.0)))
+            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::ZERO))
             .show(ctx, |ui| {
+                ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::cards::white_pill(ui, "New project") {
+                        ui.add_space(16.0);
+                        if crate::cards::white_pill(ui, "+ New project") {
                             new_project = true;
                         }
                     });
                 });
-                ui.add_space(48.0);
                 ui.vertical_centered(|ui| {
+                    ui.add_space(20.0);
                     ui.label(
                         RichText::new(format!("Imagine {word}"))
-                            .size(crate::theme::IMAGINE_TITLE)
+                            .font(crate::theme::title_font(crate::theme::IMAGINE_TITLE))
                             .color(crate::theme::FG),
                     );
                     ui.add_space(crate::theme::IMAGINE_GAP);
@@ -3892,43 +3894,14 @@ impl Cabin {
                     generate = self.ui_imagine_bar(ui);
                 });
                 ui.add_space(28.0);
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    if !self.imagine_last.is_empty() {
-                        egui::Frame::none()
-                            .fill(crate::theme::PANEL)
-                            .rounding(0.0)
-                            .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
-                            .inner_margin(egui::Margin::same(12.0))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new("Last still")
-                                        .size(crate::theme::FONT_CHROME)
-                                        .color(crate::theme::FG),
-                                );
-                                ui.label(
-                                    RichText::new(&self.imagine_last)
-                                        .size(crate::theme::FONT_META)
-                                        .color(crate::theme::MUTED),
-                                );
-                            });
-                        ui.add_space(12.0);
-                    }
-                    let n = crate::cards::IMAGINE_SCENES.len();
-                    crate::cards::tile_row(ui, n, |ui, i| {
-                        let scene = &crate::cards::IMAGINE_SCENES[i];
-                        if crate::cards::imagine_scene_tile(ui, scene, selected == scene.prompt) {
-                            seed = Some(scene.prompt);
-                        }
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                        crate::cards::imagine_masonry(ui, &selected, |p| {
+                            seed = Some(p);
+                        });
                     });
-                    ui.label(
-                        RichText::new(format!(
-                            "Still images · grok-2-image · {}",
-                            config::imagine_dir().display()
-                        ))
-                        .size(crate::theme::FONT_META)
-                        .color(crate::theme::SUBTLE),
-                    );
-                });
             });
         if new_project {
             self.imagine_prompt.clear();
@@ -3944,31 +3917,32 @@ impl Cabin {
 
     fn ui_imagine_bar(&mut self, ui: &mut egui::Ui) -> bool {
         let mut generate = false;
+        let bar_w = ui.available_width().min(crate::theme::IMAGINE_BAR_W);
         egui::Frame::none()
             .fill(crate::theme::SURFACE)
             .rounding(crate::theme::IMAGINE_BAR_RADIUS)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
             .inner_margin(egui::Margin::same(10.0))
             .show(ui, |ui| {
+                ui.set_width(bar_w);
                 ui.set_min_height(crate::theme::IMAGINE_BAR_H - 20.0);
                 let edit = ui.add(
                     egui::TextEdit::multiline(&mut self.imagine_prompt)
-                        .desired_width((ui.available_width() - 16.0).max(80.0))
+                        .desired_width((ui.available_width() - 8.0).max(80.0))
                         .desired_rows(1)
                         .frame(false)
                         .hint_text("Type to imagine"),
                 );
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if crate::icons::paint_bar_icon(
-                        ui,
-                        crate::icons::BarIcon::Plus,
-                        20.0,
-                        crate::theme::MUTED,
-                    )
-                    .on_hover_text("Paste clipboard")
-                    .clicked()
-                    {
+                    let (plus_r, plus) = ui.allocate_exact_size(
+                        egui::vec2(crate::theme::IMAGINE_HIT, crate::theme::IMAGINE_HIT),
+                        egui::Sense::click(),
+                    );
+                    ui.painter()
+                        .circle_filled(plus_r.center(), 18.0, crate::theme::PANEL);
+                    crate::icons::paint_plus_at(ui.painter(), plus_r, crate::theme::MUTED);
+                    if plus.on_hover_text("Paste clipboard").clicked() {
                         if let Some(clip) = crate::desktop::clipboard_once() {
                             if !self.imagine_prompt.is_empty() && !self.imagine_prompt.ends_with('\n')
                             {
@@ -3977,17 +3951,23 @@ impl Cabin {
                             self.imagine_prompt.push_str(&clip);
                         }
                     }
-                    ui.add_space(6.0);
-                    let _ = ui.add(
-                        egui::Button::new(
-                            RichText::new("Image")
-                                .size(crate::theme::FONT_CHROME)
-                                .color(crate::theme::FG),
-                        )
+                    ui.add_space(8.0);
+                    egui::Frame::none()
                         .fill(crate::theme::NAV_ACTIVE)
                         .rounding(crate::theme::IMAGINE_HIT)
-                        .min_size(egui::vec2(64.0, 31.0)),
-                    );
+                        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                        .show(ui, |ui| {
+                            ui.set_height(crate::theme::IMAGINE_HIT - 4.0);
+                            ui.horizontal_centered(|ui| {
+                                crate::icons::paint_image_mode(ui, 16.0, crate::theme::FG);
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new("Image")
+                                        .size(crate::theme::FONT_CHROME)
+                                        .color(crate::theme::FG),
+                                );
+                            });
+                        });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let ready = !self.imagine_prompt.trim().is_empty();
                         let send = crate::icons::paint_bar_icon(
@@ -3997,7 +3977,7 @@ impl Cabin {
                             } else {
                                 crate::icons::BarIcon::ArrowUp
                             },
-                            if ready { 28.0 } else { 20.0 },
+                            crate::theme::IMAGINE_HIT,
                             if ready {
                                 crate::theme::FG
                             } else {
