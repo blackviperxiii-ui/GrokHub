@@ -111,6 +111,65 @@ pub fn create_project(
     Ok(nodes.len() - 1)
 }
 
+pub fn stage_project(
+    nodes: &mut Vec<ProjectNode>,
+    id: &str,
+    name: &str,
+    parent: Option<&str>,
+) -> Result<usize, &'static str> {
+    let name = clean_project_name(name).ok_or("need a project name")?;
+    let parent = parent_is_folder(nodes, parent)?;
+    if nodes.iter().any(|n| n.id == id) {
+        return Err("id taken");
+    }
+    nodes.push(ProjectNode {
+        id: id.to_string(),
+        name,
+        kind: ProjectKind::Project,
+        path: String::new(),
+        parent,
+        open: false,
+    });
+    Ok(nodes.len() - 1)
+}
+
+pub fn settle_project_path(
+    nodes: &mut [ProjectNode],
+    id: &str,
+    work_root: &str,
+) -> Result<String, &'static str> {
+    let node = nodes.iter().find(|n| n.id == id).ok_or("not found")?;
+    if node.kind != ProjectKind::Project {
+        return Err("not a project");
+    }
+    if !node.path.trim().is_empty() {
+        return Ok(node.path.clone());
+    }
+    let name = node.name.clone();
+    let mut path = project_work_path(work_root, &name);
+    if nodes.iter().any(|n| n.id != id && n.path == path) {
+        path = format!("{path}-{}", nodes.len());
+    }
+    let node = nodes.iter_mut().find(|n| n.id == id).ok_or("not found")?;
+    node.path = path.clone();
+    Ok(path)
+}
+
+pub fn drop_node(nodes: &mut Vec<ProjectNode>, id: &str) -> bool {
+    let Some(idx) = nodes.iter().position(|n| n.id == id) else {
+        return false;
+    };
+    if nodes[idx].kind == ProjectKind::Folder {
+        for n in nodes.iter_mut() {
+            if n.parent.as_deref() == Some(id) {
+                n.parent = None;
+            }
+        }
+    }
+    nodes.retain(|n| n.id != id);
+    true
+}
+
 pub fn create_folder(
     nodes: &mut Vec<ProjectNode>,
     id: &str,
@@ -179,20 +238,31 @@ pub fn toggle_folder(nodes: &mut [ProjectNode], id: &str) -> bool {
 
 pub fn visible_tree(nodes: &[ProjectNode]) -> Vec<(u8, usize)> {
     let mut out = Vec::new();
+    let mut shown = vec![false; nodes.len()];
     for (i, n) in nodes.iter().enumerate() {
         if n.kind == ProjectKind::Folder {
             out.push((0, i));
+            shown[i] = true;
             if n.open {
                 for (j, c) in nodes.iter().enumerate() {
                     if c.kind == ProjectKind::Project && c.parent.as_deref() == Some(n.id.as_str()) {
                         out.push((1, j));
+                        shown[j] = true;
                     }
                 }
             }
         }
     }
     for (i, n) in nodes.iter().enumerate() {
-        if n.kind == ProjectKind::Project && n.parent.is_none() {
+        if shown[i] || n.kind != ProjectKind::Project {
+            continue;
+        }
+        let hidden = n.parent.as_ref().is_some_and(|pid| {
+            nodes
+                .iter()
+                .any(|f| f.id == *pid && f.kind == ProjectKind::Folder && !f.open)
+        });
+        if !hidden {
             out.push((0, i));
         }
     }
@@ -327,5 +397,38 @@ mod tests {
         assert_eq!(project_slug("Night watch"), "night-watch");
         assert_eq!(clean_project_name("  Dawn  ").as_deref(), Some("Dawn"));
         assert!(clean_project_name("   ").is_none());
+    }
+
+    #[test]
+    fn stage_rename_settles_path() {
+        let mut nodes = Vec::new();
+        assert_eq!(stage_project(&mut nodes, "p1", "Project", None).unwrap(), 0);
+        assert_eq!(nodes[0].name, "Project");
+        assert_eq!(nodes[0].path, "");
+        rename_node(&mut nodes, "p1", "Night watch").unwrap();
+        let path = settle_project_path(&mut nodes, "p1", "/home/j/GrokHub-Work").unwrap();
+        assert_eq!(path, "/home/j/GrokHub-Work/night-watch");
+        assert_eq!(nodes[0].path, path);
+        assert_eq!(nodes[0].name, "Night watch");
+        rename_node(&mut nodes, "p1", "Dawn").unwrap();
+        let again = settle_project_path(&mut nodes, "p1", "/home/j/GrokHub-Work").unwrap();
+        assert_eq!(again, "/home/j/GrokHub-Work/night-watch");
+        assert_eq!(nodes[0].name, "Dawn");
+        assert!(drop_node(&mut nodes, "p1"));
+        assert!(nodes.is_empty());
+    }
+
+    #[test]
+    fn orphans_still_show_and_folder_drop_unparents() {
+        let mut nodes = Vec::new();
+        create_folder(&mut nodes, "f1", "Cabin", None).unwrap();
+        create_project(&mut nodes, "p1", "Night watch", Some("f1"), "/home/j/GrokHub-Work").unwrap();
+        nodes[1].parent = Some("gone".into());
+        assert_eq!(visible_tree(&nodes), vec![(0, 0), (0, 1)]);
+        nodes[1].parent = Some("f1".into());
+        assert!(drop_node(&mut nodes, "f1"));
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].parent.is_none());
+        assert_eq!(visible_tree(&nodes), vec![(0, 0)]);
     }
 }
