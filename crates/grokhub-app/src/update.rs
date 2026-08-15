@@ -5,9 +5,10 @@ use grokhub_core::{
     update_wipes_config,
 };
 use std::env;
-#[cfg(unix)]
+#[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+#[cfg(test)]
 use std::process::Command;
 use std::time::Duration;
 
@@ -72,6 +73,7 @@ pub fn run_update_cmds_with_progress(
         if let Some(why) = forbidden_reason(c) {
             return Err(why.to_string());
         }
+        on_progress(update_progress_pct(i, total), update_step_label(c));
         let chunk = run_host(c, Duration::from_secs(900));
         out.push_str(&chunk);
         out.push('\n');
@@ -196,7 +198,11 @@ mod tests {
         .expect("ok");
         assert!(!out.contains("HOST_RESULT"), "{out}");
         let pcts: Vec<u8> = ticks.iter().map(|(p, _)| *p).collect();
-        assert_eq!(pcts, vec![0, 50, 100], "{ticks:?}");
+        let mut uniq = pcts.clone();
+        uniq.dedup();
+        assert_eq!(uniq, vec![0, 50, 100], "{ticks:?}");
+        assert_eq!(*pcts.first().unwrap(), 0);
+        assert_eq!(*pcts.last().unwrap(), 100);
         assert!(ticks.iter().all(|(_, m)| !m.contains("HOST_RESULT")), "{ticks:?}");
     }
 }
