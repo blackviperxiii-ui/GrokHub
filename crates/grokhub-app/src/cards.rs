@@ -284,6 +284,51 @@ pub fn imagine_quality_word(quality: bool) -> &'static str {
     }
 }
 
+/// Send + mic sit in a reserved right column so they never cover chips.
+pub fn imagine_send_cluster_w() -> f32 {
+    crate::theme::IMAGINE_HIT * 2.0 + 12.0
+}
+
+/// Prompt field is a fixed strip. A stretching `TextEdit` covers the chips
+/// and steals their clicks (I-beam over 720p / Video audio).
+pub fn imagine_prompt_h() -> f32 {
+    32.0
+}
+
+/// Gap between the pinned prompt strip and the selector chip row.
+pub fn imagine_prompt_chip_gap() -> f32 {
+    8.0
+}
+
+/// Two wrapping chip rows (hit + row gap).
+pub fn imagine_chip_stack_h() -> f32 {
+    (crate::theme::IMAGINE_HIT + 8.0) * 2.0
+}
+
+/// Inner width left for wrapping selector chips after send/mic are reserved.
+pub fn imagine_chip_row_w(bar_w: f32) -> f32 {
+    (bar_w - 24.0 - imagine_send_cluster_w()).max(crate::theme::IMAGINE_HIT * 4.0)
+}
+
+/// grok.com Imagine toolbox chips for the current kind. Aspect defaults to 2:3.
+pub fn imagine_toolbar_labels(kind: ImagineKind, authed: bool) -> Vec<&'static str> {
+    let mut out = vec!["Image", "Video", "Agent"];
+    match kind {
+        ImagineKind::Image | ImagineKind::Agent => {
+            out.extend(["Speed", "Quality (v2.0)"]);
+        }
+        ImagineKind::Video => {
+            out.extend(["480p", "720p", "6s", "10s", "15s", "Video audio"]);
+        }
+    }
+    out.push("Auto");
+    out.push("2:3");
+    if !authed {
+        out.push("Connect Grok");
+    }
+    out
+}
+
 /// Speed / Quality and aspect are still-prompt words. grok-2-image has no other lever.
 pub fn imagine_still_prompt(prompt: &str, aspect: &str, quality: bool) -> String {
     let q = imagine_quality_word(quality);
@@ -324,17 +369,24 @@ pub fn imagine_seg_chip(ui: &mut egui::Ui, selected: bool, add: impl FnOnce(&mut
     } else {
         Color32::TRANSPARENT
     };
-    egui::Frame::none()
+    let inner = egui::Frame::none()
         .fill(fill)
         .rounding(crate::theme::IMAGINE_HIT)
         .inner_margin(egui::Margin::symmetric(10.0, 4.0))
         .show(ui, |ui| {
+            ui.set_min_size(egui::vec2(
+                crate::theme::IMAGINE_HIT - 8.0,
+                crate::theme::IMAGINE_HIT - 8.0,
+            ));
             ui.set_height(crate::theme::IMAGINE_HIT - 8.0);
             ui.horizontal_centered(add);
-        })
-        .response
-        .interact(Sense::click())
-        .clicked()
+        });
+    ui.interact(
+        inner.response.rect,
+        inner.response.id.with("hit"),
+        Sense::click(),
+    )
+    .clicked()
 }
 
 pub fn imagine_frame_key(scene: &ImagineScene, now_ms: u64) -> &'static str {
@@ -1135,6 +1187,60 @@ mod tests {
         assert_eq!(grokhub_core::imagine_aspect_name(0), "Tall");
         assert_eq!(IMAGINE_BAR_CHIPS, ["Image", "Video", "Agent", "Speed", "Quality (v2.0)", "Auto"]);
         assert_eq!(IMAGINE_VIDEO_CHIPS, ["480p", "720p", "6s", "10s", "15s", "Video audio"]);
+        assert_eq!(
+            imagine_toolbar_labels(ImagineKind::Image, false),
+            [
+                "Image",
+                "Video",
+                "Agent",
+                "Speed",
+                "Quality (v2.0)",
+                "Auto",
+                "2:3",
+                "Connect Grok",
+            ]
+        );
+        assert_eq!(
+            imagine_toolbar_labels(ImagineKind::Video, true),
+            [
+                "Image",
+                "Video",
+                "Agent",
+                "480p",
+                "720p",
+                "6s",
+                "10s",
+                "15s",
+                "Video audio",
+                "Auto",
+                "2:3",
+            ]
+        );
+        assert!(
+            imagine_chip_row_w(crate::theme::IMAGINE_BAR_W)
+                > imagine_send_cluster_w() + crate::theme::IMAGINE_HIT * 3.0,
+            "chip row must leave a clickable strip beside send/mic"
+        );
+        assert_eq!(
+            imagine_send_cluster_w(),
+            crate::theme::IMAGINE_HIT * 2.0 + 12.0
+        );
+        let bar_inner = crate::theme::IMAGINE_BAR_H - 20.0;
+        assert_eq!(imagine_prompt_h(), 32.0);
+        assert_eq!(imagine_prompt_chip_gap(), 8.0);
+        assert_eq!(
+            imagine_chip_stack_h(),
+            (crate::theme::IMAGINE_HIT + 8.0) * 2.0
+        );
+        assert!(
+            imagine_prompt_h() < bar_inner,
+            "prompt must be pinned, not stretched to bar min-height {bar_inner}"
+        );
+        let chip_top = imagine_prompt_h() + imagine_prompt_chip_gap();
+        assert!(
+            bar_inner > chip_top,
+            "a stretching prompt of {bar_inner}px would cover chips starting at {chip_top}"
+        );
         assert_eq!(imagine_kind_label(ImagineKind::Image), "Image");
         assert_eq!(imagine_kind_label(ImagineKind::Video), "Video");
         assert_eq!(imagine_kind_label(ImagineKind::Agent), "Agent");

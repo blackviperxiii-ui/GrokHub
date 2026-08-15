@@ -232,29 +232,30 @@ struct ImagineBarOut {
     go_settings: bool,
 }
 
-fn imagine_choice_menu(
-    ui: &egui::Ui,
+fn imagine_popup(
+    ctx: &egui::Context,
     id: &'static str,
     anchor: egui::Rect,
-    rows: impl IntoIterator<Item = (impl Into<String>, bool)>,
-) -> Option<usize> {
-    let rows: Vec<(String, bool)> = rows.into_iter().map(|(l, on)| (l.into(), on)).collect();
+    rows: &[(String, bool)],
+) -> (Option<usize>, egui::Rect) {
     let mut picked = None;
+    let mut menu_rect = egui::Rect::NOTHING;
     egui::Area::new(egui::Id::new(id))
         .fixed_pos(anchor.left_bottom() + egui::vec2(0.0, 6.0))
         .order(egui::Order::Foreground)
-        .show(ui.ctx(), |ui| {
+        .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_min_width(anchor.width().max(148.0));
+                ui.set_min_width(anchor.width().max(168.0));
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (i, (label, on)) in rows.iter().enumerate() {
                     if ui.selectable_label(*on, label).clicked() {
                         picked = Some(i);
                     }
                 }
+                menu_rect = ui.min_rect();
             });
         });
-    picked
+    (picked, menu_rect)
 }
 
 enum TabAct {
@@ -443,6 +444,9 @@ pub struct Cabin {
     imagine_video_audio: bool,
     imagine_aspect_open: bool,
     imagine_style_open: bool,
+    imagine_menu_ignore: bool,
+    imagine_style_anchor: egui::Rect,
+    imagine_aspect_anchor: egui::Rect,
     goal_rx: Option<mpsc::Receiver<(String, String)>>,
     goal_busy: bool,
     goal_stale: bool,
@@ -685,6 +689,9 @@ impl Cabin {
             imagine_video_audio: true,
             imagine_aspect_open: false,
             imagine_style_open: false,
+            imagine_menu_ignore: false,
+            imagine_style_anchor: egui::Rect::NOTHING,
+            imagine_aspect_anchor: egui::Rect::NOTHING,
             goal_rx: None,
             goal_busy: false,
             goal_stale: false,
@@ -992,6 +999,67 @@ impl Cabin {
                 self.file_pick = None;
             }
         }
+    }
+
+    fn ui_imagine_overlays(&mut self, ctx: &egui::Context) {
+        if self.page_nav() != Nav::Imagine {
+            self.imagine_style_open = false;
+            self.imagine_aspect_open = false;
+            return;
+        }
+        let mut menu_rect = egui::Rect::NOTHING;
+        let mut trigger = egui::Rect::NOTHING;
+        if self.imagine_style_open {
+            let rows: Vec<(String, bool)> = IMAGINE_STYLES
+                .iter()
+                .enumerate()
+                .map(|(i, label)| ((*label).to_string(), self.imagine_style == i as u8))
+                .collect();
+            let (picked, rect) = imagine_popup(
+                ctx,
+                "imagine_style_menu",
+                self.imagine_style_anchor,
+                &rows,
+            );
+            menu_rect = rect;
+            trigger = self.imagine_style_anchor;
+            if let Some(i) = picked {
+                self.imagine_style = i as u8;
+                self.imagine_style_open = false;
+            }
+        } else if self.imagine_aspect_open {
+            let rows: Vec<(String, bool)> = IMAGINE_ASPECTS
+                .iter()
+                .enumerate()
+                .map(|(i, (ratio, name))| {
+                    (
+                        format!("{ratio}  {name}"),
+                        self.imagine_aspect == i as u8,
+                    )
+                })
+                .collect();
+            let (picked, rect) = imagine_popup(
+                ctx,
+                "imagine_aspect_menu",
+                self.imagine_aspect_anchor,
+                &rows,
+            );
+            menu_rect = rect;
+            trigger = self.imagine_aspect_anchor;
+            if let Some(i) = picked {
+                self.imagine_aspect = i as u8;
+                self.imagine_aspect_open = false;
+            }
+        }
+        let outside = ctx.input(|i| i.pointer.any_click())
+            && ctx.pointer_interact_pos().is_some_and(|pos| {
+                !menu_rect.expand(8.0).contains(pos) && !trigger.expand(4.0).contains(pos)
+            });
+        if cabin_menu_should_dismiss(self.imagine_menu_ignore, outside) {
+            self.imagine_style_open = false;
+            self.imagine_aspect_open = false;
+        }
+        self.imagine_menu_ignore = false;
     }
 
     fn ui_attach_chip(&mut self, ui: &mut egui::Ui, target: PlusTarget) {
@@ -4011,6 +4079,7 @@ impl eframe::App for Cabin {
                 });
         }
         self.ui_plus_overlays(ctx);
+        self.ui_imagine_overlays(ctx);
         self.ui_project_overlays(ctx);
     }
 }
@@ -5893,12 +5962,18 @@ impl Cabin {
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 ui.set_width(bar_w);
-                ui.set_min_height(crate::theme::IMAGINE_BAR_H - 20.0);
-                let edit = ui.add(
-                    egui::TextEdit::multiline(&mut self.imagine_prompt)
+                let prompt_w = (ui.available_width() - 8.0).max(80.0);
+                let prompt_h = crate::cards::imagine_prompt_h();
+                let (prompt_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(prompt_w, prompt_h),
+                    egui::Sense::hover(),
+                );
+                let edit = ui.put(
+                    prompt_rect,
+                    egui::TextEdit::singleline(&mut self.imagine_prompt)
                         .id(egui::Id::new("imagine-prompt"))
-                        .desired_width((ui.available_width() - 8.0).max(80.0))
-                        .desired_rows(1)
+                        .desired_width(prompt_w)
+                        .clip_text(true)
                         .frame(false)
                         .hint_text("Type to imagine"),
                 );
@@ -5924,269 +5999,274 @@ impl Cabin {
                 {
                     out.generate = true;
                 }
-                ui.add_space(8.0);
+                ui.add_space(crate::cards::imagine_prompt_chip_gap());
+                let send_w = crate::cards::imagine_send_cluster_w();
+                let chips_w = (ui.available_width() - send_w).max(crate::theme::IMAGINE_HIT * 4.0);
+                let chip_h = crate::cards::imagine_chip_stack_h();
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let (plus_r, plus) = ui.allocate_exact_size(
-                        egui::vec2(crate::theme::IMAGINE_HIT, crate::theme::IMAGINE_HIT),
-                        egui::Sense::click(),
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(chips_w, chip_h),
+                        egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
+                        |ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                            let (plus_r, plus) = ui.allocate_exact_size(
+                                egui::vec2(crate::theme::IMAGINE_HIT, crate::theme::IMAGINE_HIT),
+                                egui::Sense::click(),
+                            );
+                            ui.painter()
+                                .circle_filled(plus_r.center(), 18.0, crate::theme::PANEL);
+                            crate::icons::paint_plus_at(ui.painter(), plus_r, crate::theme::MUTED);
+                            if plus
+                                .on_hover_text("Upload a file or paste clipboard")
+                                .clicked()
+                            {
+                                self.open_plus(PlusTarget::Imagine, plus_r.left_bottom());
+                            }
+                            crate::cards::imagine_seg_track(ui, |ui| {
+                                for kind in [
+                                    ImagineKind::Image,
+                                    ImagineKind::Video,
+                                    ImagineKind::Agent,
+                                ] {
+                                    let on = self.imagine_kind == kind;
+                                    let label = crate::cards::imagine_kind_label(kind);
+                                    let ink = if on {
+                                        crate::theme::FG
+                                    } else {
+                                        crate::theme::MUTED
+                                    };
+                                    if crate::cards::imagine_seg_chip(ui, on, |ui| {
+                                        match kind {
+                                            ImagineKind::Image => {
+                                                crate::icons::paint_image_mode(ui, 16.0, ink);
+                                            }
+                                            ImagineKind::Video => {
+                                                crate::icons::paint_video_mode(ui, 16.0, ink);
+                                            }
+                                            ImagineKind::Agent => {
+                                                crate::icons::paint_agent_mode(ui, 16.0, ink);
+                                            }
+                                        }
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            RichText::new(label)
+                                                .size(crate::theme::FONT_CHROME)
+                                                .color(ink),
+                                        );
+                                    }) {
+                                        self.imagine_kind = kind;
+                                        self.status = match kind {
+                                            ImagineKind::Image => "Image still".into(),
+                                            ImagineKind::Video => {
+                                                "Video chips hint a storyboard still — cabin has no video file."
+                                                    .into()
+                                            }
+                                            ImagineKind::Agent => {
+                                                "Agent paints a character sprite still.".into()
+                                            }
+                                        };
+                                    }
+                                }
+                            });
+                            match self.imagine_kind {
+                                ImagineKind::Video => {
+                                    crate::cards::imagine_seg_track(ui, |ui| {
+                                        for (i, label) in ["480p", "720p"].into_iter().enumerate() {
+                                            let on = self.imagine_video_res == i as u8;
+                                            if crate::cards::imagine_seg_chip(ui, on, |ui| {
+                                                ui.label(
+                                                    RichText::new(label)
+                                                        .size(crate::theme::FONT_CHROME)
+                                                        .color(if on {
+                                                            crate::theme::FG
+                                                        } else {
+                                                            crate::theme::MUTED
+                                                        }),
+                                                );
+                                            }) {
+                                                self.imagine_video_res = i as u8;
+                                            }
+                                        }
+                                    });
+                                    crate::cards::imagine_seg_track(ui, |ui| {
+                                        for (i, label) in ["6s", "10s", "15s"].into_iter().enumerate()
+                                        {
+                                            let on = self.imagine_video_dur == i as u8;
+                                            if crate::cards::imagine_seg_chip(ui, on, |ui| {
+                                                ui.label(
+                                                    RichText::new(label)
+                                                        .size(crate::theme::FONT_CHROME)
+                                                        .color(if on {
+                                                            crate::theme::FG
+                                                        } else {
+                                                            crate::theme::MUTED
+                                                        }),
+                                                );
+                                            }) {
+                                                self.imagine_video_dur = i as u8;
+                                            }
+                                        }
+                                    });
+                                    let audio_on = self.imagine_video_audio;
+                                    if crate::cards::imagine_seg_chip(ui, audio_on, |ui| {
+                                        ui.label(
+                                            RichText::new("Video audio")
+                                                .size(crate::theme::FONT_CHROME)
+                                                .color(if audio_on {
+                                                    crate::theme::FG
+                                                } else {
+                                                    crate::theme::MUTED
+                                                }),
+                                        );
+                                    }) {
+                                        self.imagine_video_audio = !self.imagine_video_audio;
+                                    }
+                                }
+                                ImagineKind::Image | ImagineKind::Agent => {
+                                    crate::cards::imagine_seg_track(ui, |ui| {
+                                        for quality in [false, true] {
+                                            let on = self.imagine_quality == quality;
+                                            let label = crate::cards::imagine_quality_label(quality);
+                                            if crate::cards::imagine_seg_chip(ui, on, |ui| {
+                                                ui.label(
+                                                    RichText::new(label)
+                                                        .size(crate::theme::FONT_CHROME)
+                                                        .color(if on {
+                                                            crate::theme::FG
+                                                        } else {
+                                                            crate::theme::MUTED
+                                                        }),
+                                                );
+                                            }) {
+                                                self.imagine_quality = quality;
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                            let style_label = imagine_style_label(self.imagine_style);
+                            let style_inner = egui::Frame::none()
+                                .fill(crate::theme::PANEL)
+                                .rounding(crate::theme::IMAGINE_HIT)
+                                .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                                .show(ui, |ui| {
+                                    ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
+                                    ui.set_min_width(56.0);
+                                    ui.horizontal_centered(|ui| {
+                                        crate::icons::paint_style_auto(ui, 16.0, crate::theme::FG);
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            RichText::new(style_label)
+                                                .size(crate::theme::FONT_CHROME)
+                                                .color(crate::theme::FG),
+                                        );
+                                        ui.add_space(4.0);
+                                        crate::icons::paint_menu_caret(ui, crate::theme::MUTED);
+                                    });
+                                });
+                            let style = ui
+                                .interact(
+                                    style_inner.response.rect,
+                                    egui::Id::new("imagine-style-hit"),
+                                    egui::Sense::click(),
+                                )
+                                .on_hover_text("Style — suffix on the still");
+                            if style.clicked() {
+                                self.imagine_style_open = !self.imagine_style_open;
+                                self.imagine_aspect_open = false;
+                                self.imagine_style_anchor = style.rect;
+                                self.imagine_menu_ignore = true;
+                            }
+                            let aspect = imagine_aspect_label(self.imagine_aspect);
+                            let aspect_name = imagine_aspect_name(self.imagine_aspect);
+                            let aspect_inner = egui::Frame::none()
+                                .fill(crate::theme::PANEL)
+                                .rounding(crate::theme::IMAGINE_HIT)
+                                .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                                .show(ui, |ui| {
+                                    ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
+                                    ui.set_min_width(56.0);
+                                    ui.horizontal_centered(|ui| {
+                                        crate::icons::paint_aspect_rect(
+                                            ui,
+                                            self.imagine_aspect,
+                                            16.0,
+                                            crate::theme::FG,
+                                        );
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            RichText::new(aspect)
+                                                .size(crate::theme::FONT_CHROME)
+                                                .color(crate::theme::FG),
+                                        );
+                                        ui.add_space(4.0);
+                                        crate::icons::paint_menu_caret(ui, crate::theme::MUTED);
+                                    });
+                                });
+                            let aspect_hit = ui
+                                .interact(
+                                    aspect_inner.response.rect,
+                                    egui::Id::new("imagine-aspect-hit"),
+                                    egui::Sense::click(),
+                                )
+                                .on_hover_text(format!("{aspect} {aspect_name} · {model}"));
+                            if aspect_hit.clicked() {
+                                self.imagine_aspect_open = !self.imagine_aspect_open;
+                                self.imagine_style_open = false;
+                                self.imagine_aspect_anchor = aspect_hit.rect;
+                                self.imagine_menu_ignore = true;
+                            }
+                            if !authed && crate::cards::ghost_pill(ui, "Connect Grok") {
+                                out.go_settings = true;
+                            } else if self.running && self.page_nav() == Nav::Imagine {
+                                ui.label(
+                                    RichText::new("Imagining…")
+                                        .size(crate::theme::FONT_META)
+                                        .color(crate::theme::MUTED),
+                                );
+                            }
+                        },
                     );
-                    ui.painter()
-                        .circle_filled(plus_r.center(), 18.0, crate::theme::PANEL);
-                    crate::icons::paint_plus_at(ui.painter(), plus_r, crate::theme::MUTED);
-                    if plus
-                        .on_hover_text("Upload a file or paste clipboard")
-                        .clicked()
-                    {
-                        self.open_plus(PlusTarget::Imagine, plus_r.left_bottom());
-                    }
-                    crate::cards::imagine_seg_track(ui, |ui| {
-                        for kind in [
-                            ImagineKind::Image,
-                            ImagineKind::Video,
-                            ImagineKind::Agent,
-                        ] {
-                            let on = self.imagine_kind == kind;
-                            let label = crate::cards::imagine_kind_label(kind);
-                            let ink = if on {
-                                crate::theme::FG
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(send_w, chip_h),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            let send = crate::icons::paint_bar_icon(
+                                ui,
+                                if ready && !self.running {
+                                    crate::icons::BarIcon::Send
+                                } else {
+                                    crate::icons::BarIcon::ArrowUp
+                                },
+                                crate::theme::IMAGINE_HIT,
+                                if ready && !self.running {
+                                    crate::theme::FG
+                                } else {
+                                    crate::theme::MUTED
+                                },
+                            )
+                            .on_hover_text(if self.running {
+                                "Imagining…"
                             } else {
-                                crate::theme::MUTED
-                            };
-                            if crate::cards::imagine_seg_chip(ui, on, |ui| {
-                                match kind {
-                                    ImagineKind::Image => {
-                                        crate::icons::paint_image_mode(ui, 16.0, ink);
-                                    }
-                                    ImagineKind::Video => {
-                                        crate::icons::paint_video_mode(ui, 16.0, ink);
-                                    }
-                                    ImagineKind::Agent => {
-                                        crate::icons::paint_agent_mode(ui, 16.0, ink);
-                                    }
-                                }
-                                if on {
-                                    ui.add_space(4.0);
-                                    ui.label(
-                                        RichText::new(label)
-                                            .size(crate::theme::FONT_CHROME)
-                                            .color(ink),
-                                    );
-                                }
-                            }) {
-                                self.imagine_kind = kind;
-                                self.status = match kind {
-                                    ImagineKind::Image => "Image still".into(),
-                                    ImagineKind::Video => {
-                                        "Video chips hint a storyboard still — cabin has no video file."
-                                            .into()
-                                    }
-                                    ImagineKind::Agent => "Agent paints a character sprite still.".into(),
-                                };
+                                "Generate still · Enter"
+                            });
+                            if send.clicked() && ready && !self.running {
+                                out.generate = true;
                             }
-                        }
-                    });
-                    match self.imagine_kind {
-                        ImagineKind::Video => {
-                            crate::cards::imagine_seg_track(ui, |ui| {
-                                for (i, label) in ["480p", "720p"].into_iter().enumerate() {
-                                    let on = self.imagine_video_res == i as u8;
-                                    if crate::cards::imagine_seg_chip(ui, on, |ui| {
-                                        ui.label(
-                                            RichText::new(label)
-                                                .size(crate::theme::FONT_CHROME)
-                                                .color(if on {
-                                                    crate::theme::FG
-                                                } else {
-                                                    crate::theme::MUTED
-                                                }),
-                                        );
-                                    }) {
-                                        self.imagine_video_res = i as u8;
-                                    }
-                                }
-                            });
-                            crate::cards::imagine_seg_track(ui, |ui| {
-                                for (i, label) in ["6s", "10s", "15s"].into_iter().enumerate() {
-                                    let on = self.imagine_video_dur == i as u8;
-                                    if crate::cards::imagine_seg_chip(ui, on, |ui| {
-                                        ui.label(
-                                            RichText::new(label)
-                                                .size(crate::theme::FONT_CHROME)
-                                                .color(if on {
-                                                    crate::theme::FG
-                                                } else {
-                                                    crate::theme::MUTED
-                                                }),
-                                        );
-                                    }) {
-                                        self.imagine_video_dur = i as u8;
-                                    }
-                                }
-                            });
-                            let audio_on = self.imagine_video_audio;
-                            if crate::cards::imagine_seg_chip(ui, audio_on, |ui| {
-                                ui.label(
-                                    RichText::new("Video audio")
-                                        .size(crate::theme::FONT_CHROME)
-                                        .color(if audio_on {
-                                            crate::theme::FG
-                                        } else {
-                                            crate::theme::MUTED
-                                        }),
-                                );
-                            }) {
-                                self.imagine_video_audio = !self.imagine_video_audio;
+                            if crate::icons::paint_bar_icon(
+                                ui,
+                                crate::icons::BarIcon::Mic,
+                                crate::theme::IMAGINE_HIT,
+                                crate::theme::MUTED,
+                            )
+                            .on_hover_text("Hey Grok")
+                            .clicked()
+                            {
+                                self.listen_voice();
                             }
-                        }
-                        ImagineKind::Image | ImagineKind::Agent => {
-                            crate::cards::imagine_seg_track(ui, |ui| {
-                                for quality in [false, true] {
-                                    let on = self.imagine_quality == quality;
-                                    let label = crate::cards::imagine_quality_label(quality);
-                                    if crate::cards::imagine_seg_chip(ui, on, |ui| {
-                                        ui.label(
-                                            RichText::new(label)
-                                                .size(crate::theme::FONT_CHROME)
-                                                .color(if on {
-                                                    crate::theme::FG
-                                                } else {
-                                                    crate::theme::MUTED
-                                                }),
-                                        );
-                                    }) {
-                                        self.imagine_quality = quality;
-                                    }
-                                }
-                            });
-                        }
-                    }
-                    let style_label = imagine_style_label(self.imagine_style);
-                    let style = egui::Frame::none()
-                        .fill(crate::theme::PANEL)
-                        .rounding(crate::theme::IMAGINE_HIT)
-                        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
-                        .show(ui, |ui| {
-                            ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
-                            ui.horizontal_centered(|ui| {
-                                crate::icons::paint_style_auto(ui, 16.0, crate::theme::FG);
-                                ui.add_space(4.0);
-                                ui.label(
-                                    RichText::new(style_label)
-                                        .size(crate::theme::FONT_CHROME)
-                                        .color(crate::theme::FG),
-                                );
-                            });
-                        })
-                        .response
-                        .interact(egui::Sense::click())
-                        .on_hover_text("Style — suffix on the still");
-                    if style.clicked() {
-                        self.imagine_style_open = !self.imagine_style_open;
-                        self.imagine_aspect_open = false;
-                    }
-                    if self.imagine_style_open {
-                        if let Some(i) = imagine_choice_menu(
-                            ui,
-                            "imagine_style_menu",
-                            style.rect,
-                            IMAGINE_STYLES
-                                .iter()
-                                .enumerate()
-                                .map(|(i, label)| (*label, self.imagine_style == i as u8)),
-                        ) {
-                            self.imagine_style = i as u8;
-                            self.imagine_style_open = false;
-                        }
-                    }
-                    let aspect = imagine_aspect_label(self.imagine_aspect);
-                    let aspect_name = imagine_aspect_name(self.imagine_aspect);
-                    let aspect_hit = egui::Frame::none()
-                        .fill(crate::theme::PANEL)
-                        .rounding(crate::theme::IMAGINE_HIT)
-                        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
-                        .show(ui, |ui| {
-                            ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
-                            ui.horizontal_centered(|ui| {
-                                crate::icons::paint_aspect_rect(
-                                    ui,
-                                    self.imagine_aspect,
-                                    16.0,
-                                    crate::theme::FG,
-                                );
-                                ui.add_space(4.0);
-                                ui.label(
-                                    RichText::new(aspect)
-                                        .size(crate::theme::FONT_CHROME)
-                                        .color(crate::theme::FG),
-                                );
-                            });
-                        })
-                        .response
-                        .interact(egui::Sense::click())
-                        .on_hover_text(format!("{aspect} {aspect_name} · {model}"));
-                    if aspect_hit.clicked() {
-                        self.imagine_aspect_open = !self.imagine_aspect_open;
-                        self.imagine_style_open = false;
-                    }
-                    if self.imagine_aspect_open {
-                        if let Some(i) = imagine_choice_menu(
-                            ui,
-                            "imagine_aspect_menu",
-                            aspect_hit.rect,
-                            IMAGINE_ASPECTS.iter().enumerate().map(|(i, (ratio, name))| {
-                                (format!("{ratio}  {name}"), self.imagine_aspect == i as u8)
-                            }),
-                        ) {
-                            self.imagine_aspect = i as u8;
-                            self.imagine_aspect_open = false;
-                        }
-                    }
-                    if !authed && crate::cards::ghost_pill(ui, "Connect Grok") {
-                        out.go_settings = true;
-                    } else if self.running && self.page_nav() == Nav::Imagine {
-                        ui.label(
-                            RichText::new("Imagining…")
-                                .size(crate::theme::FONT_META)
-                                .color(crate::theme::MUTED),
-                        );
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        let send = crate::icons::paint_bar_icon(
-                            ui,
-                            if ready && !self.running {
-                                crate::icons::BarIcon::Send
-                            } else {
-                                crate::icons::BarIcon::ArrowUp
-                            },
-                            crate::theme::IMAGINE_HIT,
-                            if ready && !self.running {
-                                crate::theme::FG
-                            } else {
-                                crate::theme::MUTED
-                            },
-                        )
-                        .on_hover_text(if self.running {
-                            "Imagining…"
-                        } else {
-                            "Generate still · Enter"
-                        });
-                        if send.clicked() && ready && !self.running {
-                            out.generate = true;
-                        }
-                        if crate::icons::paint_bar_icon(
-                            ui,
-                            crate::icons::BarIcon::Mic,
-                            crate::theme::IMAGINE_HIT,
-                            crate::theme::MUTED,
-                        )
-                        .on_hover_text("Hey Grok")
-                        .clicked()
-                        {
-                            self.listen_voice();
-                        }
-                    });
+                        },
+                    );
                 });
             });
         out
