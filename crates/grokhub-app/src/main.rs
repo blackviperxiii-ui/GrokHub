@@ -181,6 +181,9 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
     eframe::run_native(
         "GrokHub",
         opts,
-        Box::new(move |_cc| Ok(Box::new(Cabin::new(hidden)))),
+        Box::new(move |cc| {
+            crate::theme::install_fonts(&cc.egui_ctx);
+            Ok(Box::new(Cabin::new(hidden)))
+        }),
     )
 }
