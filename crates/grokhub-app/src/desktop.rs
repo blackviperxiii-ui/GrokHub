@@ -2,6 +2,7 @@ use grokhub_core::{
     jpeg_data_url, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, AtspiRow, RECORDERS,
     TRANSCRIBERS,
 };
+use image::GenericImageView;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -189,6 +190,23 @@ fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {
 
 pub fn imagine_save_path(slug: &str) -> PathBuf {
     crate::config::imagine_dir().join(format!("{slug}.png"))
+}
+
+/// Second frame for a wall cover when the second Imagine call fails.
+pub fn sibling_still(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    let img = image::open(src).map_err(|e| e.to_string())?;
+    let (w, h) = img.dimensions();
+    let x = ((w as f32) * 0.05) as u32;
+    let y = ((h as f32) * 0.04) as u32;
+    let cw = w.saturating_sub(x + ((w as f32) * 0.02) as u32).max(8);
+    let ch = h.saturating_sub(y + ((h as f32) * 0.06) as u32).max(8);
+    let crop = img
+        .crop_imm(x, y, cw, ch)
+        .resize_exact(w, h, image::imageops::FilterType::Lanczos3);
+    if let Some(dir) = dest.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    crop.save(dest).map_err(|e| e.to_string())
 }
 
 pub fn capture_webcam() -> Result<String, String> {

@@ -1,4 +1,4 @@
-use grokhub_core::{empty_chip_memory, ChipMemory, LearningState, UsageDay};
+use grokhub_core::{empty_chip_memory, ChipMemory, ImagineWall, LearningState, UsageDay};
 use std::fs;
 
 use crate::config;
@@ -42,6 +42,24 @@ pub fn load_chips() -> ChipMemory {
     serde_json::from_str(&raw).unwrap_or_else(|_| empty_chip_memory())
 }
 
+pub fn wall_path() -> std::path::PathBuf {
+    config::config_dir().join("imagine-wall.json")
+}
+
+pub fn load_wall() -> ImagineWall {
+    let raw = fs::read_to_string(wall_path()).unwrap_or_default();
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+pub fn save_wall(w: &ImagineWall) -> Result<(), String> {
+    fs::create_dir_all(config::config_dir()).map_err(|e| e.to_string())?;
+    fs::write(
+        wall_path(),
+        serde_json::to_string_pretty(w).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}
+
 pub fn save_chips(s: &ChipMemory) -> Result<(), String> {
     fs::create_dir_all(config::config_dir()).map_err(|e| e.to_string())?;
     fs::write(chips_path(), serde_json::to_string_pretty(s).map_err(|e| e.to_string())?)
@@ -77,6 +95,31 @@ mod tests {
         s.total_events = 3;
         save_chips(&s).expect("save");
         assert_eq!(load_chips().total_events, 3);
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn wall_roundtrip() {
+        let _g = TEST_CONFIG_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("grokhub-wall-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut w = ImagineWall::default();
+        w.last_ms = 9;
+        w.gifs.push(grokhub_core::WallGif {
+            id: "a1".into(),
+            title: "Ember night".into(),
+            prompt: "still of embers, no people, no text".into(),
+            created_ms: 3,
+            path_a: "a.jpg".into(),
+            path_b: "b.jpg".into(),
+            tall: true,
+        });
+        save_wall(&w).expect("save");
+        let loaded = load_wall();
+        assert_eq!(loaded.last_ms, 9);
+        assert_eq!(loaded.gifs[0].title, "Ember night");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }

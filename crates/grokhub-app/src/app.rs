@@ -16,6 +16,8 @@ use grokhub_core::{
     bump_usage, catalog_line, chip_suggest_prompt, compact_keep_pin, context_fingerprint,
     context_percent, daily_units_blocked,
     dedicated_imagine_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
+    pick_fresh_seed, wall_can_paint, wall_evict, ImagineWall, WallGif, WALL_GIF_EVERY_MS,
+    WALL_GIF_MAX,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
@@ -268,6 +270,47 @@ pub struct Cabin {
     settings_sec: SettingsSec,
     settings_back: Nav,
     imagine_aspect: u8,
+    wall: ImagineWall,
+    wall_rx: Option<mpsc::Receiver<Result<WallGif, String>>>,
+    wall_busy: bool,
+}
+
+fn paint_wall_cover(
+    key: &str,
+    model: &str,
+    id: &str,
+    dir: &std::path::Path,
+    title: &str,
+    prompt: &str,
+    prompt_b: &str,
+    tall: bool,
+    created_ms: u64,
+) -> Result<WallGif, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let src_a = grok_imagine(key, model, prompt)?;
+    let path_a = dir.join(format!("{id}_a.png"));
+    std::fs::copy(&src_a, &path_a).map_err(|e| e.to_string())?;
+    let path_b = dir.join(format!("{id}_b.png"));
+    match grok_imagine(key, model, prompt_b) {
+        Ok(src_b) => {
+            if std::fs::copy(&src_b, &path_b).is_err() {
+                crate::desktop::sibling_still(&path_a, &path_b)?;
+            }
+        }
+        Err(_) => crate::desktop::sibling_still(&path_a, &path_b)?,
+    }
+    if !path_b.exists() {
+        crate::desktop::sibling_still(&path_a, &path_b)?;
+    }
+    Ok(WallGif {
+        id: id.into(),
+        title: title.into(),
+        prompt: prompt.into(),
+        created_ms,
+        path_a: path_a.display().to_string(),
+        path_b: path_b.display().to_string(),
+        tall,
+    })
 }
 
 impl Cabin {
@@ -416,6 +459,9 @@ impl Cabin {
             settings_sec: SettingsSec::Account,
             settings_back: Nav::Chat,
             imagine_aspect: 1,
+            wall: crate::store::load_wall(),
+            wall_rx: None,
+            wall_busy: false,
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
             let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
@@ -449,6 +495,7 @@ impl Cabin {
         let _ = crate::store::save_learning(&self.learning);
         let _ = crate::store::save_usage(&self.usage);
         let _ = crate::store::save_chips(&self.chip_memory);
+        let _ = crate::store::save_wall(&self.wall);
         let _ = config::save(&self.cfg);
         if let Ok(st) = self.hub.lock() {
             let _ = save_hub_state(&config::hub_state_path(), &st);
@@ -1378,6 +1425,85 @@ impl Cabin {
         self.status = format!("Night: {}", a.name);
         self.nav = Nav::Chat;
         self.send_chat(a.instructions);
+    }
+
+    fn poll_wall(&mut self) {
+        let Some(rx) = self.wall_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(gif)) => {
+                self.wall_busy = false;
+                self.wall.last_ms = now_ms();
+                self.wall.gifs.push(gif.clone());
+                let (kept, evicted) = wall_evict(std::mem::take(&mut self.wall.gifs), WALL_GIF_MAX);
+                self.wall.gifs = kept;
+                for old in evicted {
+                    let _ = std::fs::remove_file(&old.path_a);
+                    let _ = std::fs::remove_file(&old.path_b);
+                }
+                self.status = format!("New cover on the wall — {}", gif.title);
+                self.persist();
+            }
+            Ok(Err(e)) => {
+                self.wall_busy = false;
+                self.wall.last_ms = now_ms()
+                    .saturating_sub(WALL_GIF_EVERY_MS)
+                    .saturating_add(15 * 60 * 1000);
+                self.status = format!("Wall cover held — {e}");
+                let _ = crate::store::save_wall(&self.wall);
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.wall_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.wall_busy = false;
+            }
+        }
+    }
+
+    fn tick_wall(&mut self) {
+        let clock = Self::local_clock();
+        let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
+        if !wall_can_paint(
+            self.has_key(),
+            self.cfg.imagine_wall,
+            self.wall_busy,
+            self.running,
+            quiet,
+            self.wall.last_ms,
+            now_ms(),
+        ) {
+            return;
+        }
+        self.kick_wall();
+    }
+
+    fn kick_wall(&mut self) {
+        if self.wall_busy {
+            return;
+        }
+        let taken: Vec<String> = self.wall.gifs.iter().map(|g| g.title.clone()).collect();
+        let taken_ref: Vec<&str> = taken.iter().map(|s| s.as_str()).collect();
+        let seed = pick_fresh_seed(now_ms(), &taken_ref);
+        let id = format!("{:x}", now_ms());
+        let dir = config::wall_dir();
+        let key = self.bearer();
+        let model = dedicated_imagine_model(&self.cfg.imagine_model);
+        let title = seed.title.to_string();
+        let prompt = seed.prompt.to_string();
+        let prompt_b = seed.prompt_b.to_string();
+        let tall = seed.tall;
+        let created_ms = now_ms();
+        let (tx, rx) = mpsc::channel();
+        self.wall_rx = Some(rx);
+        self.wall_busy = true;
+        self.status = format!("Painting a wall cover — {title}");
+        std::thread::spawn(move || {
+            let _ = tx.send(paint_wall_cover(
+                &key, &model, &id, &dir, &title, &prompt, &prompt_b, tall, created_ms,
+            ));
+        });
     }
 
     fn import_openclaw(&mut self) {
@@ -2562,6 +2688,8 @@ impl eframe::App for Cabin {
         self.poll_voice();
         self.poll_global_hotkeys();
         self.tick_night();
+        self.poll_wall();
+        self.tick_wall();
         self.live_room();
         self.roll_today();
         if self.messages.is_empty() {
@@ -3813,6 +3941,21 @@ impl Cabin {
                                                         SettingsSec::Imagine => {
                                                             crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
                                                             crate::cards::settings_field(ui, "Imagine override", "Must contain “image” or the cabin keeps grok-2-image.", &mut self.cfg.imagine_model, false);
+                                                            if crate::cards::settings_toggle(
+                                                                ui,
+                                                                "Living wall",
+                                                                "Every few hours the cabin paints a new cover. Twenty live. Oldest leaves first. Random seat.",
+                                                                &mut self.cfg.imagine_wall,
+                                                            ) {
+                                                                save = true;
+                                                            }
+                                                            crate::cards::settings_note(
+                                                                ui,
+                                                                &format!(
+                                                                    "{} of {WALL_GIF_MAX} covers on the wall.",
+                                                                    self.wall.gifs.len()
+                                                                ),
+                                                            );
                                                         }
                                                         SettingsSec::Voice => {
                                                             crate::cards::settings_note(ui, &format!("Live voice model: {voice_live}."));
@@ -4132,7 +4275,7 @@ impl Cabin {
         let mut generate = false;
         let mut new_project = false;
         let mut go_settings = false;
-        let mut seed: Option<&'static str> = None;
+        let mut seed: Option<String> = None;
         let word = crate::cards::imagine_word(now_ms());
         let selected = self.imagine_prompt.clone();
         let panel = egui::CentralPanel::default()
@@ -4142,7 +4285,7 @@ impl Cabin {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                        crate::cards::imagine_masonry(ui, &selected, now_ms(), |p| {
+                        crate::cards::imagine_masonry(ui, &selected, now_ms(), &self.wall.gifs, |p| {
                             seed = Some(p);
                         });
                     });
@@ -4191,7 +4334,7 @@ impl Cabin {
             self.imagine_want_focus = true;
         }
         if let Some(p) = seed {
-            self.imagine_prompt = p.to_string();
+            self.imagine_prompt = p;
             self.imagine_want_focus = true;
         }
         if go_settings {
