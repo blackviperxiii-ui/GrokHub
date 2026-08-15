@@ -270,6 +270,7 @@ pub struct Cabin {
     settings_sec: SettingsSec,
     settings_back: Nav,
     imagine_aspect: u8,
+    imagine_quality: bool,
     wall: ImagineWall,
     wall_rx: Option<mpsc::Receiver<Result<WallGif, String>>>,
     wall_busy: bool,
@@ -459,6 +460,7 @@ impl Cabin {
             settings_sec: SettingsSec::Account,
             settings_back: Nav::Chat,
             imagine_aspect: 1,
+            imagine_quality: true,
             wall: crate::store::load_wall(),
             wall_rx: None,
             wall_busy: false,
@@ -4399,8 +4401,9 @@ impl Cabin {
                 {
                     out.generate = true;
                 }
-                ui.add_space(10.0);
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
                     let (plus_r, plus) = ui.allocate_exact_size(
                         egui::vec2(crate::theme::IMAGINE_HIT, crate::theme::IMAGINE_HIT),
                         egui::Sense::click(),
@@ -4408,7 +4411,7 @@ impl Cabin {
                     ui.painter()
                         .circle_filled(plus_r.center(), 18.0, crate::theme::PANEL);
                     crate::icons::paint_plus_at(ui.painter(), plus_r, crate::theme::MUTED);
-                    if plus.on_hover_text("Paste clipboard into the still").clicked() {
+                    if plus.on_hover_text("Upload — paste clipboard into the still").clicked() {
                         if let Some(clip) = crate::desktop::clipboard_once() {
                             if !self.imagine_prompt.is_empty() && !self.imagine_prompt.ends_with('\n')
                             {
@@ -4419,48 +4422,111 @@ impl Cabin {
                             self.status = "clipboard empty — install wl-paste or xclip".into();
                         }
                     }
-                    ui.add_space(8.0);
-                    egui::Frame::none()
-                        .fill(crate::theme::NAV_ACTIVE)
-                        .rounding(crate::theme::IMAGINE_HIT)
-                        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
-                        .show(ui, |ui| {
-                            ui.set_height(crate::theme::IMAGINE_HIT - 4.0);
-                            ui.horizontal_centered(|ui| {
-                                crate::icons::paint_image_mode(ui, 16.0, crate::theme::FG);
-                                ui.add_space(6.0);
+                    crate::cards::imagine_seg_track(ui, |ui| {
+                        for kind in [
+                            crate::cards::ImagineKind::Image,
+                            crate::cards::ImagineKind::Video,
+                            crate::cards::ImagineKind::Agent,
+                        ] {
+                            let on = kind == crate::cards::ImagineKind::Image;
+                            let label = crate::cards::imagine_kind_label(kind);
+                            if crate::cards::imagine_seg_chip(ui, on, |ui| {
+                                match kind {
+                                    crate::cards::ImagineKind::Image => {
+                                        crate::icons::paint_image_mode(ui, 16.0, crate::theme::FG);
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            RichText::new(label)
+                                                .size(crate::theme::FONT_CHROME)
+                                                .color(crate::theme::FG),
+                                        );
+                                    }
+                                    crate::cards::ImagineKind::Video => {
+                                        crate::icons::paint_video_mode(ui, 16.0, crate::theme::MUTED);
+                                    }
+                                    crate::cards::ImagineKind::Agent => {
+                                        crate::icons::paint_agent_mode(ui, 16.0, crate::theme::MUTED);
+                                    }
+                                }
+                            }) && kind != crate::cards::ImagineKind::Image
+                            {
+                                self.status =
+                                    "Cabin stills only — Video and Agent stay on grok.com.".into();
+                            }
+                        }
+                    });
+                    crate::cards::imagine_seg_track(ui, |ui| {
+                        for quality in [false, true] {
+                            let on = self.imagine_quality == quality;
+                            let label = crate::cards::imagine_quality_label(quality);
+                            if crate::cards::imagine_seg_chip(ui, on, |ui| {
                                 ui.label(
-                                    RichText::new("Image")
+                                    RichText::new(label)
+                                        .size(crate::theme::FONT_CHROME)
+                                        .color(if on {
+                                            crate::theme::FG
+                                        } else {
+                                            crate::theme::MUTED
+                                        }),
+                                );
+                            }) {
+                                self.imagine_quality = quality;
+                            }
+                        }
+                    });
+                    let style = egui::Frame::none()
+                        .fill(crate::theme::PANEL)
+                        .rounding(crate::theme::IMAGINE_HIT)
+                        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                        .show(ui, |ui| {
+                            ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
+                            ui.horizontal_centered(|ui| {
+                                crate::icons::paint_style_auto(ui, 16.0, crate::theme::FG);
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new("Auto")
                                         .size(crate::theme::FONT_CHROME)
                                         .color(crate::theme::FG),
                                 );
                             });
-                        });
-                    ui.add_space(6.0);
+                        })
+                        .response
+                        .interact(egui::Sense::click())
+                        .on_hover_text("Style Auto — the cabin still");
+                    if style.clicked() {
+                        self.status = "Auto is the cabin still.".into();
+                    }
                     let aspect = crate::cards::imagine_aspect_label(self.imagine_aspect);
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new(aspect)
-                                    .size(crate::theme::FONT_CHROME)
-                                    .color(crate::theme::FG),
-                            )
-                            .fill(crate::theme::PANEL)
-                            .rounding(crate::theme::IMAGINE_HIT)
-                            .min_size(egui::vec2(56.0, crate::theme::IMAGINE_HIT)),
-                        )
-                        .on_hover_text(format!("Still frame {aspect} · {model}"))
-                        .clicked()
-                    {
+                    let aspect_hit = egui::Frame::none()
+                        .fill(crate::theme::PANEL)
+                        .rounding(crate::theme::IMAGINE_HIT)
+                        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                        .show(ui, |ui| {
+                            ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
+                            ui.horizontal_centered(|ui| {
+                                crate::icons::paint_aspect_rect(
+                                    ui,
+                                    self.imagine_aspect,
+                                    16.0,
+                                    crate::theme::FG,
+                                );
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(aspect)
+                                        .size(crate::theme::FONT_CHROME)
+                                        .color(crate::theme::FG),
+                                );
+                            });
+                        })
+                        .response
+                        .interact(egui::Sense::click())
+                        .on_hover_text(format!("Still frame {aspect} · {model}"));
+                    if aspect_hit.clicked() {
                         self.imagine_aspect = (self.imagine_aspect + 1) % 3;
                     }
-                    if !authed {
-                        ui.add_space(6.0);
-                        if crate::cards::ghost_pill(ui, "Connect Grok") {
-                            out.go_settings = true;
-                        }
-                    } else if self.running && self.nav == Nav::Imagine {
-                        ui.add_space(6.0);
+                    if !authed && crate::cards::ghost_pill(ui, "Connect Grok") {
+                        out.go_settings = true;
+                    } else if self.running && self.page_nav() == Nav::Imagine {
                         ui.label(
                             RichText::new("Imagining…")
                                 .size(crate::theme::FONT_META)
@@ -4468,6 +4534,7 @@ impl Cabin {
                         );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
                         let send = crate::icons::paint_bar_icon(
                             ui,
                             if ready && !self.running {
@@ -4489,6 +4556,17 @@ impl Cabin {
                         });
                         if send.clicked() && ready && !self.running {
                             out.generate = true;
+                        }
+                        if crate::icons::paint_bar_icon(
+                            ui,
+                            crate::icons::BarIcon::Mic,
+                            crate::theme::IMAGINE_HIT,
+                            crate::theme::MUTED,
+                        )
+                        .on_hover_text("Hey Grok")
+                        .clicked()
+                        {
+                            self.listen_voice();
                         }
                     });
                 });

@@ -544,6 +544,81 @@ pub fn paint_image_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
     );
 }
 
+pub fn paint_video_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    let painter = ui.painter();
+    let stroke = Stroke::new(1.4_f32, color);
+    let body = egui::Rect::from_center_size(
+        Pos2::new(rect.center().x - size * 0.08, rect.center().y),
+        Vec2::new(size * 0.52, size * 0.40),
+    );
+    painter.rect_stroke(body, 2.0, stroke);
+    painter.line_segment(
+        [
+            Pos2::new(body.right(), body.top() + 2.0),
+            Pos2::new(rect.right() - 2.0, body.top() - 1.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            Pos2::new(body.right(), body.bottom() - 2.0),
+            Pos2::new(rect.right() - 2.0, body.bottom() + 1.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            Pos2::new(rect.right() - 2.0, body.top() - 1.0),
+            Pos2::new(rect.right() - 2.0, body.bottom() + 1.0),
+        ],
+        stroke,
+    );
+}
+
+pub fn paint_agent_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    let painter = ui.painter();
+    let stroke = Stroke::new(1.4_f32, color);
+    let c = rect.center();
+    painter.circle_stroke(Pos2::new(c.x, c.y - size * 0.06), size * 0.22, stroke);
+    painter.circle_filled(Pos2::new(c.x - size * 0.07, c.y - size * 0.08), 1.2, color);
+    painter.circle_filled(Pos2::new(c.x + size * 0.07, c.y - size * 0.08), 1.2, color);
+    painter.line_segment(
+        [
+            Pos2::new(c.x - size * 0.06, c.y + size * 0.02),
+            Pos2::new(c.x + size * 0.06, c.y + size * 0.02),
+        ],
+        stroke,
+    );
+}
+
+pub fn paint_style_auto(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    let painter = ui.painter();
+    let stroke = Stroke::new(1.3_f32, color);
+    let r = rect.shrink(size * 0.12);
+    painter.rect_stroke(r, 2.0, stroke);
+    let inset = r.shrink(size * 0.10);
+    painter.rect_stroke(inset, 1.0, Stroke::new(1.0_f32, color));
+}
+
+pub fn paint_aspect_rect(ui: &mut egui::Ui, aspect: u8, size: f32, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    let painter = ui.painter();
+    let stroke = Stroke::new(1.4_f32, color);
+    let (w, h) = match aspect % 3 {
+        0 => (size * 0.42, size * 0.42),
+        1 => (size * 0.28, size * 0.46),
+        2 => (size * 0.50, size * 0.28),
+        other => {
+            let _ = other;
+            (size * 0.42, size * 0.42)
+        }
+    };
+    painter.rect_stroke(egui::Rect::from_center_size(rect.center(), Vec2::new(w, h)), 1.5, stroke);
+}
+
 pub fn paint_plus_at(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let c = rect.center();
     let w = rect.width();
@@ -579,6 +654,10 @@ mod tests {
         assert_ne!(RailIcon::Search, RailIcon::Compose);
         assert_ne!(RailIcon::Imagine, RailIcon::Grid);
         let _ = paint_image_mode;
+        let _ = paint_video_mode;
+        let _ = paint_agent_mode;
+        let _ = paint_style_auto;
+        let _ = paint_aspect_rect;
         let _ = paint_plus_at;
     }
 }
