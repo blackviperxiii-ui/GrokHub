@@ -447,9 +447,15 @@ pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     .clicked()
 }
 
-pub fn section_label(ui: &mut egui::Ui, label: &str) {
-    ui.label(RichText::new(label).size(13.0).strong().color(crate::theme::SUBTLE));
+pub fn section_label(ui: &mut egui::Ui, label: &str) -> bool {
+    let hit = ui
+        .add(
+            egui::Label::new(RichText::new(label).size(13.0).strong().color(crate::theme::SUBTLE))
+                .sense(egui::Sense::click()),
+        )
+        .clicked();
     ui.add_space(10.0);
+    hit
 }
 
 pub fn settings_group(ui: &mut egui::Ui, title: &str, mut body: impl FnMut(&mut egui::Ui)) {

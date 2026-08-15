@@ -89,6 +89,35 @@ enum SettingsSec {
     About,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsGroup {
+    General,
+    Cabin,
+    Data,
+    About,
+}
+
+fn settings_group_home(group: SettingsGroup) -> SettingsSec {
+    match group {
+        SettingsGroup::General => SettingsSec::Account,
+        SettingsGroup::Cabin => SettingsSec::Host,
+        SettingsGroup::Data => SettingsSec::Github,
+        SettingsGroup::About => SettingsSec::Update,
+    }
+}
+
+fn slash_pick_step(pick: usize, len: usize, dir: i8) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let clamped = pick.min(len - 1);
+    match dir {
+        1 => (clamped + 1).min(len - 1),
+        -1 => clamped.saturating_sub(1),
+        _ => clamped,
+    }
+}
+
 fn settings_sec_title(sec: SettingsSec) -> &'static str {
     match sec {
         SettingsSec::Account => "Account",
@@ -1254,6 +1283,8 @@ impl Cabin {
                 self.rx = None;
                 self.running = false;
                 self.voice_orb = "idle".into();
+                self.nav = Nav::Settings;
+                self.settings_sec = health_settings_sec();
                 self.status = self.doctor_text();
             }
             Slash::Remember(note) => self.run_slash(Slash::MemoryNote(note)),
@@ -4011,7 +4042,7 @@ impl Cabin {
             }
             let hits = filter_slash_commands(&self.composer);
             if !hits.is_empty() {
-                ui.label(RichText::new("Tab accepts · type /").small());
+                ui.label(RichText::new("↑↓ · Tab accepts · type /").small());
                 egui::ScrollArea::vertical()
                     .max_height(148.0)
                     .auto_shrink([false, true])
@@ -4027,6 +4058,13 @@ impl Cabin {
                             }
                         }
                     });
+                self.slash_pick = slash_pick_step(self.slash_pick, hits.len(), 0);
+                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
+                    self.slash_pick = slash_pick_step(self.slash_pick, hits.len(), 1);
+                } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp))
+                {
+                    self.slash_pick = slash_pick_step(self.slash_pick, hits.len(), -1);
+                }
             }
             ui.add_space(6.0);
             ui.vertical_centered(|ui| {
@@ -4294,7 +4332,9 @@ impl Cabin {
                                             .show(ui, |ui| {
                                                 ui.set_width(196.0);
                                                 ui.set_min_height(modal.height() - 24.0);
-                                                crate::cards::section_label(ui, "General");
+                                                if crate::cards::section_label(ui, "General") {
+                                                    next_sec = Some(settings_group_home(SettingsGroup::General));
+                                                }
                                                 for (s, label) in [
                                                     (SettingsSec::Account, "Account"),
                                                     (SettingsSec::Appearance, "Appearance"),
@@ -4305,7 +4345,9 @@ impl Cabin {
                                                     }
                                                 }
                                                 ui.add_space(10.0);
-                                                crate::cards::section_label(ui, "Cabin");
+                                                if crate::cards::section_label(ui, "Cabin") {
+                                                    next_sec = Some(settings_group_home(SettingsGroup::Cabin));
+                                                }
                                                 for (s, label) in [
                                                     (SettingsSec::Host, "Host"),
                                                     (SettingsSec::Imagine, "Imagine"),
@@ -4317,12 +4359,16 @@ impl Cabin {
                                                     }
                                                 }
                                                 ui.add_space(10.0);
-                                                crate::cards::section_label(ui, "Data");
+                                                if crate::cards::section_label(ui, "Data") {
+                                                    next_sec = Some(settings_group_home(SettingsGroup::Data));
+                                                }
                                                 if crate::cards::settings_nav(ui, "GitHub", sec == SettingsSec::Github) {
                                                     next_sec = Some(SettingsSec::Github);
                                                 }
                                                 ui.add_space(10.0);
-                                                crate::cards::section_label(ui, "About");
+                                                if crate::cards::section_label(ui, "About") {
+                                                    next_sec = Some(settings_group_home(SettingsGroup::About));
+                                                }
                                                 for (s, label) in [
                                                     (SettingsSec::Update, "Update"),
                                                     (SettingsSec::About, "About"),
@@ -5402,5 +5448,29 @@ mod tests {
     #[test]
     fn health_opens_the_about_page() {
         assert_eq!(super::health_settings_sec(), super::SettingsSec::About);
+    }
+
+    #[test]
+    fn about_section_opens_update() {
+        assert_eq!(
+            super::settings_group_home(super::SettingsGroup::About),
+            super::SettingsSec::Update
+        );
+    }
+
+    #[test]
+    fn general_section_opens_account() {
+        assert_eq!(
+            super::settings_group_home(super::SettingsGroup::General),
+            super::SettingsSec::Account
+        );
+    }
+
+    #[test]
+    fn slash_arrows_move_and_clamp() {
+        assert_eq!(super::slash_pick_step(0, 5, 1), 1);
+        assert_eq!(super::slash_pick_step(0, 5, -1), 0);
+        assert_eq!(super::slash_pick_step(4, 5, 1), 4);
+        assert_eq!(super::slash_pick_step(9, 3, 0), 2);
     }
 }
