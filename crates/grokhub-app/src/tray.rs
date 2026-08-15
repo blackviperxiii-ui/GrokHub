@@ -15,6 +15,31 @@ pub fn tray_wanted() -> bool {
     std::env::var("GROKHUB_TRAY").ok().as_deref() != Some("0")
 }
 
+/// SNI while the cabin is visible shows up as a persistent desktop notification
+/// on GNOME. Only register the icon when the window starts hidden (`--agent`).
+pub fn tray_needed_at_launch(window_hidden: bool) -> bool {
+    window_hidden && tray_wanted()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HideAction {
+    Skip,
+    Hide,
+    HideAndPing,
+}
+
+/// Close-to-tray can fire every frame while `close_requested` sticks. Do not
+/// re-unmap or re-ping once the cabin is already hidden.
+pub fn hide_action(window_visible: bool, already_told: bool) -> HideAction {
+    if !window_visible {
+        HideAction::Skip
+    } else if already_told {
+        HideAction::Hide
+    } else {
+        HideAction::HideAndPing
+    }
+}
+
 pub fn should_hide_on_close(close_to_tray: bool, tray_alive: bool) -> bool {
     close_to_tray && (tray_alive || tray_wanted())
 }
@@ -167,6 +192,12 @@ pub fn spawn() -> Option<TrayHost> {
     }
 }
 
+impl Drop for TrayHost {
+    fn drop(&mut self) {
+        let _ = self._keep.shutdown();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +238,30 @@ mod tests {
         assert_eq!(prefer_x11_backend(None, true), Some("x11"));
         assert_eq!(prefer_x11_backend(Some("wayland"), true), None);
         assert_eq!(prefer_x11_backend(None, false), None);
+    }
+
+    #[test]
+    fn already_hidden_cabin_does_not_hide_again() {
+        assert_eq!(hide_action(false, false), HideAction::Skip);
+        assert_eq!(hide_action(false, true), HideAction::Skip);
+        assert_eq!(hide_action(true, false), HideAction::HideAndPing);
+        assert_eq!(hide_action(true, true), HideAction::Hide);
+    }
+
+    #[test]
+    fn visible_launch_does_not_need_a_tray_icon() {
+        let prev = std::env::var("GROKHUB_TRAY").ok();
+        std::env::remove_var("GROKHUB_TRAY");
+        assert!(
+            !tray_needed_at_launch(false),
+            "A visible cabin must not register StatusNotifierItem"
+        );
+        assert!(tray_needed_at_launch(true), "--agent starts hidden with a tray");
+        std::env::set_var("GROKHUB_TRAY", "0");
+        assert!(!tray_needed_at_launch(true));
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_TRAY", v),
+            None => std::env::remove_var("GROKHUB_TRAY"),
+        }
     }
 }

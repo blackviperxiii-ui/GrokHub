@@ -705,7 +705,11 @@ impl Cabin {
             host_hour_count: 0,
             host_hour_at: Instant::now(),
             approve_risky_only,
-            tray: crate::tray::spawn(),
+            tray: if crate::tray::tray_needed_at_launch(hidden) {
+                crate::tray::spawn()
+            } else {
+                None
+            },
             window_visible: !hidden,
             want_quit: false,
             told_tray: false,
@@ -3531,6 +3535,8 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let cap = self.cfg.host_hour_cap;
+        let clock = Self::local_clock();
+        let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
         std::thread::spawn(move || {
             let started = Instant::now();
             let mut inhibit = crate::notify::inhibit_sleep();
@@ -3555,7 +3561,12 @@ impl Cabin {
                 block.push_str("\n\n");
             }
             crate::notify::release_inhibit(&mut inhibit);
-            crate::notify::ping_if_long(started.elapsed(), "GrokHub", "Host job finished");
+            crate::notify::ping_if_long_quiet(
+                started.elapsed(),
+                quiet,
+                "GrokHub",
+                "Host job finished",
+            );
             let _ = tx.send(JobOut::HostDone(block));
         });
     }
@@ -3958,18 +3969,37 @@ impl Cabin {
     }
 
     fn hide_to_tray(&mut self, ctx: &egui::Context) {
+        match crate::tray::hide_action(self.window_visible, self.told_tray) {
+            crate::tray::HideAction::Skip => return,
+            crate::tray::HideAction::Hide => {
+                self.unmap_to_tray(ctx);
+            }
+            crate::tray::HideAction::HideAndPing => {
+                self.unmap_to_tray(ctx);
+                let clock = Self::local_clock();
+                let quiet =
+                    quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
+                if crate::notify::allow_ping(quiet) {
+                    crate::notify::ping("GrokHub", "Still running in the tray");
+                }
+                self.status = "In the tray — Show cabin to sit down".into();
+            }
+        }
+        self.told_tray = true;
+    }
+
+    fn unmap_to_tray(&mut self, ctx: &egui::Context) {
+        if self.tray.is_none() {
+            self.tray = crate::tray::spawn();
+        }
         self.window_visible = false;
         apply_tray_window(ctx, crate::tray::hide_to_tray_window());
-        if !self.told_tray {
-            self.told_tray = true;
-            crate::notify::ping("GrokHub", "Still running in the tray");
-            self.status = "In the tray — Show cabin to sit down".into();
-        }
     }
 
     fn show_from_tray(&mut self, ctx: &egui::Context) {
         self.window_visible = true;
         apply_tray_window(ctx, crate::tray::show_from_tray_window());
+        self.tray = None;
         ctx.request_repaint();
     }
 
