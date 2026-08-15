@@ -19,10 +19,8 @@ pub fn load() -> Vec<Automation> {
 }
 
 pub fn save(list: &[Automation]) -> Result<(), String> {
-    let dir = config::config_dir();
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let s = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
-    fs::write(path(), s).map_err(|e| e.to_string())
+    config::atomic_write(&path(), s.as_bytes())
 }
 
 pub fn rewind_index_path() -> std::path::PathBuf {
@@ -35,10 +33,8 @@ pub fn load_rewinds() -> Vec<grokhub_core::RewindRecord> {
 }
 
 pub fn save_rewinds(rows: &[grokhub_core::RewindRecord]) -> Result<(), String> {
-    let dir = config::config_dir();
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let s = serde_json::to_string_pretty(rows).map_err(|e| e.to_string())?;
-    fs::write(rewind_index_path(), s).map_err(|e| e.to_string())
+    config::atomic_write(&rewind_index_path(), s.as_bytes())
 }
 
 #[cfg(test)]

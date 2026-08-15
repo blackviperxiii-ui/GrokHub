@@ -1,7 +1,23 @@
 use grokhub_core::{is_plain_text, BoardCard};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Write then rename so a kill mid-persist cannot leave a truncated JSON.
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let dir = path.parent().ok_or_else(|| "atomic write needs a parent".to_string())?;
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "atomic write needs a file name".to_string())?;
+    let tmp = dir.join(format!(".{name}.tmp"));
+    fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        e.to_string()
+    })
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -111,11 +127,8 @@ pub fn load() -> AppConfig {
 }
 
 pub fn save(cfg: &AppConfig) -> Result<(), String> {
-    let dir = config_dir();
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join("app.json");
     let s = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
-    fs::write(path, s).map_err(|e| e.to_string())
+    atomic_write(&config_dir().join("app.json"), s.as_bytes())
 }
 
 pub fn read_memory(name: &str) -> String {
@@ -133,7 +146,7 @@ pub fn write_memory(name: &str, body: &str) -> Result<(), String> {
     if path.exists() {
         let _ = fs::copy(&path, dir.join(format!("{name}.prev")));
     }
-    fs::write(path, body).map_err(|e| e.to_string())
+    atomic_write(&path, body.as_bytes())
 }
 
 pub fn restore_memory(name: &str) -> Result<String, String> {
@@ -143,7 +156,7 @@ pub fn restore_memory(name: &str) -> Result<String, String> {
     }
     let dir = memory_dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    fs::write(dir.join(name), &prev).map_err(|e| e.to_string())?;
+    atomic_write(&dir.join(name), prev.as_bytes())?;
     Ok(prev)
 }
 
@@ -180,10 +193,8 @@ pub fn load_board() -> Vec<BoardCard> {
 }
 
 pub fn save_board(cards: &[BoardCard]) -> Result<(), String> {
-    let dir = config_dir();
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let s = serde_json::to_string_pretty(cards).map_err(|e| e.to_string())?;
-    fs::write(workboard_path(), s).map_err(|e| e.to_string())
+    atomic_write(&workboard_path(), s.as_bytes())
 }
 
 pub fn wall_dir() -> PathBuf {
@@ -198,10 +209,8 @@ pub fn imagine_dir() -> PathBuf {
 }
 
 pub fn save_chat(msgs: &[(String, String)]) -> Result<(), String> {
-    let dir = config_dir();
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let s = serde_json::to_string_pretty(msgs).map_err(|e| e.to_string())?;
-    fs::write(chat_path(), s).map_err(|e| e.to_string())
+    atomic_write(&chat_path(), s.as_bytes())
 }
 
 #[cfg(test)]
@@ -238,6 +247,10 @@ mod tests {
         let restored = restore_memory("MEMORY.md").expect("restore");
         assert!(restored.contains("prefer nvim"));
         assert!(write_memory("MEMORY.md", "token sk-abcdefghijklmnopqrstuv").is_err());
+        let dest = root.join("atomic.json");
+        atomic_write(&dest, br#"{"ok":true}"#).expect("atomic");
+        assert_eq!(fs::read_to_string(&dest).unwrap(), r#"{"ok":true}"#);
+        assert!(!root.join(".atomic.json.tmp").exists());
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
