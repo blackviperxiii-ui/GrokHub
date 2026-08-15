@@ -127,10 +127,11 @@ pub use organs::{
 };
 pub use rewind::{keep_last_rewinds, rewind_allowed, rewind_dest, RewindRecord};
 pub use oauth::{
-    auth_bearer, has_auth, parse_device_start, parse_poll_result, parse_token_json,
-    token_needs_refresh, trusted_xai_url, DeviceCodeStart, PollResult, PollStatus, XaiOAuthTokens,
+    apply_profile, auth_bearer, has_auth, merge_refreshed, parse_device_start, parse_poll_result,
+    parse_token_json, parse_userinfo_profile, token_needs_refresh, trusted_profile_photo_url,
+    trusted_xai_url, DeviceCodeStart, OAuthProfile, PollResult, PollStatus, XaiOAuthTokens,
     TOKEN_REFRESH_SKEW_MS, XAI_DEVICE_CODE_GRANT, XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY,
-    XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE,
+    XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE, XAI_OAUTH_USERINFO,
 };
 pub use project::{
     add_to_folder, clean_project_name, create_folder, create_project, drop_node, folder_choices,
