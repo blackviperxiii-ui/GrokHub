@@ -1,7 +1,7 @@
 //! Grok catalog chrome — huge title, white pills, 3-column icon tiles.
 
 use crate::icons::{self, TileIcon};
-use eframe::egui::{self, Color32, ColorImage, RichText, Sense, Stroke, TextureHandle, TextureOptions};
+use eframe::egui::{self, Align2, Color32, ColorImage, FontId, RichText, Sense, Stroke, TextureHandle, TextureOptions};
 use grokhub_core::{curate_wall, wall_curate_seed, SkillMd, WallGif, WallSlot};
 
 pub use grokhub_core::ImagineKind;
@@ -353,7 +353,7 @@ pub fn imagine_aspect_label(i: u8) -> &'static str {
 /// Dark track + selected chip — grok.com Image|Video|Agent and Speed|Quality.
 pub fn imagine_seg_track(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::none()
-        .fill(crate::theme::BG)
+        .fill(crate::theme::bg())
         .rounding(crate::theme::IMAGINE_HIT)
         .inner_margin(egui::Margin::same(2.0))
         .show(ui, |ui| {
@@ -365,7 +365,7 @@ pub fn imagine_seg_track(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
 
 pub fn imagine_seg_chip(ui: &mut egui::Ui, selected: bool, add: impl FnOnce(&mut egui::Ui)) -> bool {
     let fill = if selected {
-        crate::theme::PANEL
+        crate::theme::panel()
     } else {
         Color32::TRANSPARENT
     };
@@ -457,7 +457,7 @@ pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
         ui.label(
             RichText::new(title)
                 .font(crate::theme::title_font(36.0))
-                .color(crate::theme::FG),
+                .color(crate::theme::fg()),
         );
         if !action.is_empty() {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -475,9 +475,9 @@ pub fn white_pill(ui: &mut egui::Ui, label: &str) -> bool {
             RichText::new(label)
                 .size(crate::theme::FONT_CHROME)
                 .strong()
-                .color(crate::theme::BG),
+                .color(crate::theme::bg()),
         )
-        .fill(crate::theme::FG)
+        .fill(crate::theme::fg())
         .rounding(crate::theme::HIT)
         .min_size(egui::vec2(0.0, crate::theme::HIT)),
     )
@@ -486,10 +486,10 @@ pub fn white_pill(ui: &mut egui::Ui, label: &str) -> bool {
 
 pub fn ghost_pill(ui: &mut egui::Ui, label: &str) -> bool {
     ui.add(
-        egui::Button::new(RichText::new(label).size(12.0).color(crate::theme::MUTED))
+        egui::Button::new(RichText::new(label).size(12.0).color(crate::theme::muted()))
             .fill(egui::Color32::TRANSPARENT)
             .rounding(14.0)
-            .stroke(Stroke::new(1.0_f32, crate::theme::BORDER)),
+            .stroke(Stroke::new(1.0_f32, crate::theme::border())),
     )
     .clicked()
 }
@@ -497,12 +497,12 @@ pub fn ghost_pill(ui: &mut egui::Ui, label: &str) -> bool {
 pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     ui.add(
         egui::Button::new(RichText::new(label).size(13.0).strong().color(if active {
-            crate::theme::BG
+            crate::theme::bg()
         } else {
-            crate::theme::MUTED
+            crate::theme::muted()
         }))
         .fill(if active {
-            crate::theme::FG
+            crate::theme::fg()
         } else {
             Color32::TRANSPARENT
         })
@@ -511,9 +511,9 @@ pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
         .stroke(Stroke::new(
             1.0_f32,
             if active {
-                crate::theme::FG
+                crate::theme::fg()
             } else {
-                crate::theme::BORDER
+                crate::theme::border()
             },
         )),
     )
@@ -523,7 +523,7 @@ pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
 pub fn section_label(ui: &mut egui::Ui, label: &str) -> bool {
     let hit = ui
         .add(
-            egui::Label::new(RichText::new(label).size(13.0).strong().color(crate::theme::SUBTLE))
+            egui::Label::new(RichText::new(label).size(13.0).strong().color(crate::theme::subtle()))
                 .sense(egui::Sense::click()),
         )
         .clicked();
@@ -534,9 +534,9 @@ pub fn section_label(ui: &mut egui::Ui, label: &str) -> bool {
 pub fn settings_group(ui: &mut egui::Ui, title: &str, mut body: impl FnMut(&mut egui::Ui)) {
     section_label(ui, title);
     egui::Frame::none()
-        .fill(crate::theme::SURFACE)
+        .fill(crate::theme::surface())
         .rounding(16.0)
-        .stroke(Stroke::new(1.0_f32, crate::theme::BORDER))
+        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
         .inner_margin(egui::Margin::symmetric(16.0, 6.0))
         .show(ui, |ui| {
             body(ui);
@@ -549,9 +549,9 @@ pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.add_space(6.0);
-            ui.label(RichText::new(title).size(15.0).color(crate::theme::FG));
+            ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
             if !hint.is_empty() {
-                ui.label(RichText::new(hint).size(12.0).color(crate::theme::MUTED));
+                ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -568,14 +568,14 @@ pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool
 pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 24.0), Sense::click());
     let fill = if on {
-        crate::theme::FG
+        crate::theme::fg()
     } else {
-        crate::theme::PANEL
+        crate::theme::panel()
     };
     ui.painter().rect_filled(rect, 12.0, fill);
     if !on {
         ui.painter()
-            .rect_stroke(rect, 12.0, Stroke::new(1.0_f32, crate::theme::BORDER_STRONG));
+            .rect_stroke(rect, 12.0, Stroke::new(1.0_f32, crate::theme::border_strong()));
     }
     let knob_x = if on {
         rect.right() - 12.0
@@ -583,9 +583,9 @@ pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
         rect.left() + 12.0
     };
     let knob = if on {
-        crate::theme::BG
+        crate::theme::bg()
     } else {
-        crate::theme::MUTED
+        crate::theme::muted()
     };
     ui.painter()
         .circle_filled(egui::pos2(knob_x, rect.center().y), 8.0, knob);
@@ -600,15 +600,15 @@ pub fn settings_field(
     password: bool,
 ) {
     ui.add_space(4.0);
-    ui.label(RichText::new(title).size(15.0).color(crate::theme::FG));
+    ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
     if !hint.is_empty() {
-        ui.label(RichText::new(hint).size(12.0).color(crate::theme::MUTED));
+        ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
     }
     ui.add_space(6.0);
     egui::Frame::none()
-        .fill(crate::theme::ELEVATED)
+        .fill(crate::theme::elevated())
         .rounding(10.0)
-        .stroke(Stroke::new(1.0_f32, crate::theme::BORDER))
+        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
         .inner_margin(egui::Margin::symmetric(10.0, 8.0))
         .show(ui, |ui| {
             let mut edit = egui::TextEdit::singleline(value)
@@ -627,9 +627,9 @@ pub fn settings_action(ui: &mut egui::Ui, title: &str, hint: &str, action: &str)
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.add_space(4.0);
-            ui.label(RichText::new(title).size(15.0).color(crate::theme::FG));
+            ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
             if !hint.is_empty() {
-                ui.label(RichText::new(hint).size(12.0).color(crate::theme::MUTED));
+                ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -646,13 +646,13 @@ pub fn settings_nav(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
             RichText::new(label)
                 .size(crate::theme::FONT_CHROME)
                 .color(if active {
-                    crate::theme::FG
+                    crate::theme::fg()
                 } else {
-                    crate::theme::MUTED
+                    crate::theme::muted()
                 }),
         )
         .fill(if active {
-            crate::theme::NAV_ACTIVE
+            crate::theme::nav_active()
         } else {
             Color32::TRANSPARENT
         })
@@ -663,19 +663,49 @@ pub fn settings_nav(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
 }
 
 pub fn settings_note(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).size(13.0).color(crate::theme::MUTED));
+    ui.label(RichText::new(text).size(13.0).color(crate::theme::muted()));
     ui.add_space(8.0);
+}
+
+pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: Color32) -> bool {
+    let fill = if selected {
+        crate::theme::nav_active()
+    } else {
+        crate::theme::surface()
+    };
+    let stroke = if selected {
+        crate::theme::fg()
+    } else {
+        crate::theme::border()
+    };
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(108.0, 96.0), Sense::click());
+    ui.painter().rect_filled(rect, 12.0, fill);
+    ui.painter()
+        .rect_stroke(rect, 12.0, Stroke::new(1.0_f32, stroke));
+    let preview_rect = egui::Rect::from_min_size(
+        rect.min + egui::vec2(10.0, 10.0),
+        egui::vec2(88.0, 56.0),
+    );
+    ui.painter().rect_filled(preview_rect, 6.0, preview);
+    ui.painter().text(
+        egui::pos2(rect.center().x, rect.bottom() - 14.0),
+        Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(13.0),
+        crate::theme::fg(),
+    );
+    resp.clicked()
 }
 
 pub fn search_field(ui: &mut egui::Ui, q: &mut String) {
     egui::Frame::none()
-        .fill(crate::theme::ELEVATED)
+        .fill(crate::theme::elevated())
         .rounding(18.0)
-        .stroke(Stroke::new(1.0_f32, crate::theme::BORDER))
+        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
         .inner_margin(egui::Margin::symmetric(10.0, 5.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                icons::paint_bar_icon(ui, icons::BarIcon::Search, 16.0, crate::theme::SUBTLE);
+                icons::paint_bar_icon(ui, icons::BarIcon::Search, 16.0, crate::theme::subtle());
                 ui.add(
                     egui::TextEdit::singleline(q)
                         .hint_text("Search")
@@ -697,14 +727,14 @@ pub fn grok_tile(
     let mut hit = TileHit::None;
     let mut add_clicked = false;
     let resp = egui::Frame::none()
-        .fill(crate::theme::ELEVATED)
+        .fill(crate::theme::elevated())
         .rounding(18.0)
         .stroke(Stroke::new(
             1.0_f32,
             if selected {
-                crate::theme::FG
+                crate::theme::fg()
             } else {
-                crate::theme::BORDER
+                crate::theme::border()
             },
         ))
         .inner_margin(egui::Margin::same(14.0))
@@ -714,10 +744,10 @@ pub fn grok_tile(
                 icons::paint_icon(ui, icon, 40.0);
                 ui.add_space(10.0);
                 ui.vertical(|ui| {
-                    ui.label(RichText::new(title).size(15.0).strong().color(crate::theme::FG));
+                    ui.label(RichText::new(title).size(15.0).strong().color(crate::theme::fg()));
                     ui.add_space(4.0);
                     let clipped: String = body.chars().take(80).collect();
-                    ui.label(RichText::new(clipped).size(12.0).color(crate::theme::MUTED));
+                    ui.label(RichText::new(clipped).size(12.0).color(crate::theme::muted()));
                 });
                 if let Some(label) = add {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
@@ -737,7 +767,7 @@ pub fn grok_tile(
         ui.painter().rect_stroke(
             resp.rect,
             18.0,
-            Stroke::new(1.0, crate::theme::BORDER_STRONG),
+            Stroke::new(1.0, crate::theme::border_strong()),
         );
     }
     hit
@@ -973,7 +1003,7 @@ fn imagine_photo_tile(
     );
     if selected || resp.hovered() {
         ui.painter()
-            .rect_stroke(rect, 0.0, Stroke::new(1.0_f32, crate::theme::FG));
+            .rect_stroke(rect, 0.0, Stroke::new(1.0_f32, crate::theme::fg()));
     }
     resp.clicked()
 }
@@ -1066,7 +1096,7 @@ fn imagine_disk_tile(
     );
     if selected || resp.hovered() {
         ui.painter()
-            .rect_stroke(rect, 0.0, Stroke::new(1.0_f32, crate::theme::FG));
+            .rect_stroke(rect, 0.0, Stroke::new(1.0_f32, crate::theme::fg()));
     }
     resp.clicked()
 }
@@ -1083,18 +1113,18 @@ pub fn catalog_card(ui: &mut egui::Ui, title: &str, body: &str, selected: bool) 
 pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &str) -> bool {
     let mut hit = false;
     let resp = egui::Frame::none()
-        .fill(crate::theme::ELEVATED)
+        .fill(crate::theme::elevated())
         .rounding(18.0)
-        .stroke(Stroke::new(1.0_f32, crate::theme::BORDER))
+        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
         .inner_margin(egui::Margin::same(16.0))
         .show(ui, |ui| {
             ui.set_min_height(112.0);
             ui.vertical_centered(|ui| {
                 icons::paint_icon(ui, icon, 36.0);
                 ui.add_space(8.0);
-                ui.label(RichText::new(title).size(14.0).strong().color(crate::theme::FG));
+                ui.label(RichText::new(title).size(14.0).strong().color(crate::theme::fg()));
                 ui.add_space(4.0);
-                ui.label(RichText::new(hint).size(12.0).color(crate::theme::MUTED));
+                ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
             });
         })
         .response
@@ -1104,7 +1134,7 @@ pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &
     }
     if resp.hovered() {
         ui.painter()
-            .rect_stroke(resp.rect, 18.0, Stroke::new(1.0, crate::theme::BORDER_STRONG));
+            .rect_stroke(resp.rect, 18.0, Stroke::new(1.0, crate::theme::border_strong()));
     }
     hit
 }
