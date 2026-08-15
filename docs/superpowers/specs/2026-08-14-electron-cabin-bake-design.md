@@ -26,7 +26,7 @@ Eyes: windshield objects as an overlay, not only a text dump. Live JPEG while Ey
 
 Slash autocomplete while the composer starts with `/` or `$`. `/rename`, `/context`, `/health`, `/fix`, `/remember`, `/mode`, `/dream`, `/tools on|off`. `/host` alone is status.
 
-History search across threads. Goal pin survives compact. Send while a turn is running is interrupt-and-redirect. Assistant markdown is rendered (headers, bold, code, lists). Failover drops max → balanced → fast on 401/429/5xx.
+History search across threads. Goal pin survives compact. Send while a turn is running is interrupt-and-redirect. Assistant markdown is rendered (headers, bold, code, lists). Failover drops Grok 4.6 (Max / Think) → Grok 4.3 (Balance) → Fast (`grok-3-mini-fast`) on 401/403/429/5xx.
 
 ## Cabin organs
 
