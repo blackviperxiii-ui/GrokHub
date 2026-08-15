@@ -52,6 +52,18 @@ pub const FONT_UI: f32 = 15.0;
 pub const FONT_CHROME: f32 = 14.0;
 pub const FONT_META: f32 = 13.0;
 pub const WORDMARK: f32 = 56.0;
+/// grok.com/imagine `h1.text-[22px].leading-7`
+pub const IMAGINE_TITLE: f32 = 22.0;
+/// gap from h1 to `.query-bar` on /imagine
+pub const IMAGINE_GAP: f32 = 32.0;
+/// measured Imagine query-bar width
+pub const IMAGINE_BAR_W: f32 = 768.0;
+/// measured Imagine query-bar height (two rows)
+pub const IMAGINE_BAR_H: f32 = 94.0;
+/// Imagine `.query-bar` `border-radius: 20px` — not the chat pill
+pub const IMAGINE_BAR_RADIUS: f32 = 20.0;
+/// Imagine Upload / Submit `size-9`
+pub const IMAGINE_HIT: f32 = 36.0;
 
 /// Live grok.com primary rail. Settings is an avatar menu, not a row.
 pub const GROK_NAV: &[(&str, &str)] = &[
@@ -237,6 +249,13 @@ mod tests {
         assert_eq!(NAV_ROW_H, 40.0);
         assert_eq!(FONT_UI, 15.0);
         assert_eq!(FONT_CHROME, 14.0);
+        assert_eq!(IMAGINE_TITLE, 22.0);
+        assert_eq!(IMAGINE_GAP, 32.0);
+        assert_eq!(IMAGINE_BAR_W, 768.0);
+        assert_eq!(IMAGINE_BAR_H, 94.0);
+        assert_eq!(IMAGINE_BAR_RADIUS, 20.0);
+        assert_eq!(IMAGINE_HIT, 36.0);
+        assert_ne!(IMAGINE_BAR_RADIUS, QUERY_RADIUS);
         assert_eq!(GROK_NAV[0], ("imagine", "Imagine"));
         assert!(GROK_NAV.iter().all(|(id, _)| *id != "settings"));
         assert_eq!(CABIN_MENU[0], ("settings", "Settings"));

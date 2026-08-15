@@ -2560,9 +2560,18 @@ impl eframe::App for Cabin {
         if self.last_persist.elapsed() > Duration::from_secs(2) {
             self.persist();
         }
-        if self.running || self.chip_busy || self.hub_on || !self.window_visible || self.tray.is_some()
+        if self.running
+            || self.chip_busy
+            || self.hub_on
+            || !self.window_visible
+            || self.tray.is_some()
+            || self.nav == Nav::Imagine
         {
-            ctx.request_repaint_after(Duration::from_millis(80));
+            ctx.request_repaint_after(Duration::from_millis(if self.nav == Nav::Imagine {
+                400
+            } else {
+                80
+            }));
         }
 
         crate::theme::apply(ctx);
@@ -3856,39 +3865,165 @@ impl Cabin {
     }
 
     fn ui_imagine(&mut self, ctx: &egui::Context) {
+        let mut generate = false;
+        let mut new_project = false;
+        let mut seed: Option<&'static str> = None;
+        let word = crate::cards::imagine_word(now_ms());
+        let selected = self.imagine_prompt.clone();
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(20.0)))
             .show(ctx, |ui| {
-            let gen = crate::cards::page_header(ui, "Imagine", "Generate");
-            ui.label(
-                RichText::new("Still images · grok-2-image")
-                    .size(14.0)
-                    .color(crate::theme::MUTED),
-            );
-            ui.add_space(12.0);
-            egui::Frame::none()
-                .fill(crate::theme::ELEVATED)
-                .rounding(16.0)
-                .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
-                .inner_margin(egui::Margin::same(14.0))
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.imagine_prompt)
-                            .desired_rows(4)
-                            .desired_width(f32::INFINITY)
-                            .frame(false)
-                            .hint_text("a cabin at night"),
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::cards::white_pill(ui, "New project") {
+                            new_project = true;
+                        }
+                    });
+                });
+                ui.add_space(28.0);
+                ui.vertical_centered(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("Imagine")
+                                .size(crate::theme::IMAGINE_TITLE)
+                                .color(crate::theme::FG),
+                        );
+                        ui.label(
+                            RichText::new(word)
+                                .size(crate::theme::IMAGINE_TITLE)
+                                .color(crate::theme::FG),
+                        );
+                    });
+                    ui.add_space(crate::theme::IMAGINE_GAP);
+                    ui.set_max_width(crate::theme::IMAGINE_BAR_W);
+                    generate = self.ui_imagine_bar(ui);
+                });
+                ui.add_space(28.0);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    if !self.imagine_last.is_empty() {
+                        egui::Frame::none()
+                            .fill(crate::theme::PANEL)
+                            .rounding(0.0)
+                            .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                            .inner_margin(egui::Margin::same(12.0))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new("Last still")
+                                        .size(crate::theme::FONT_CHROME)
+                                        .color(crate::theme::FG),
+                                );
+                                ui.label(
+                                    RichText::new(&self.imagine_last)
+                                        .size(crate::theme::FONT_META)
+                                        .color(crate::theme::MUTED),
+                                );
+                            });
+                        ui.add_space(12.0);
+                    }
+                    let n = crate::cards::IMAGINE_SCENES.len();
+                    crate::cards::tile_row(ui, n, |ui, i| {
+                        let scene = &crate::cards::IMAGINE_SCENES[i];
+                        if crate::cards::imagine_scene_tile(ui, scene, selected == scene.prompt) {
+                            seed = Some(scene.prompt);
+                        }
+                    });
+                    ui.label(
+                        RichText::new(format!(
+                            "Still images · grok-2-image · {}",
+                            config::imagine_dir().display()
+                        ))
+                        .size(crate::theme::FONT_META)
+                        .color(crate::theme::SUBTLE),
                     );
                 });
-            ui.add_space(10.0);
-            if gen || crate::cards::white_pill(ui, "Generate") {
-                self.kick_imagine();
-            }
-            if !self.imagine_last.is_empty() {
-                ui.label(&self.imagine_last);
-            }
-            ui.label(RichText::new(format!("saves toward {}", config::imagine_dir().display())).small());
-        });
+            });
+        if new_project {
+            self.imagine_prompt.clear();
+            self.imagine_last.clear();
+        }
+        if let Some(p) = seed {
+            self.imagine_prompt = p.to_string();
+        }
+        if generate {
+            self.kick_imagine();
+        }
+    }
+
+    fn ui_imagine_bar(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut generate = false;
+        egui::Frame::none()
+            .fill(crate::theme::SURFACE)
+            .rounding(crate::theme::IMAGINE_BAR_RADIUS)
+            .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+            .inner_margin(egui::Margin::same(10.0))
+            .show(ui, |ui| {
+                ui.set_min_height(crate::theme::IMAGINE_BAR_H - 20.0);
+                let edit = ui.add(
+                    egui::TextEdit::multiline(&mut self.imagine_prompt)
+                        .desired_width((ui.available_width() - 16.0).max(80.0))
+                        .desired_rows(1)
+                        .frame(false)
+                        .hint_text("Type to imagine"),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if crate::icons::paint_bar_icon(
+                        ui,
+                        crate::icons::BarIcon::Plus,
+                        20.0,
+                        crate::theme::MUTED,
+                    )
+                    .on_hover_text("Paste clipboard")
+                    .clicked()
+                    {
+                        if let Some(clip) = crate::desktop::clipboard_once() {
+                            if !self.imagine_prompt.is_empty() && !self.imagine_prompt.ends_with('\n')
+                            {
+                                self.imagine_prompt.push('\n');
+                            }
+                            self.imagine_prompt.push_str(&clip);
+                        }
+                    }
+                    ui.add_space(6.0);
+                    let _ = ui.add(
+                        egui::Button::new(
+                            RichText::new("Image")
+                                .size(crate::theme::FONT_CHROME)
+                                .color(crate::theme::FG),
+                        )
+                        .fill(crate::theme::NAV_ACTIVE)
+                        .rounding(crate::theme::IMAGINE_HIT)
+                        .min_size(egui::vec2(64.0, 31.0)),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let ready = !self.imagine_prompt.trim().is_empty();
+                        let send = crate::icons::paint_bar_icon(
+                            ui,
+                            if ready {
+                                crate::icons::BarIcon::Send
+                            } else {
+                                crate::icons::BarIcon::ArrowUp
+                            },
+                            if ready { 28.0 } else { 20.0 },
+                            if ready {
+                                crate::theme::FG
+                            } else {
+                                crate::theme::MUTED
+                            },
+                        )
+                        .on_hover_text("Generate");
+                        if send.clicked()
+                            || (edit.has_focus()
+                                && ui.input(|i| {
+                                    i.key_pressed(egui::Key::Enter) && i.modifiers.command
+                                }))
+                        {
+                            generate = true;
+                        }
+                    });
+                });
+            });
+        generate
     }
 
     fn ui_skills(&mut self, ctx: &egui::Context) {
