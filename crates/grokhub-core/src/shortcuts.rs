@@ -45,7 +45,7 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
         ("Settings", "nav:settings"),
         ("New chat", "/new"),
         ("Doctor", "/health"),
-        ("Update install", "/update"),
+        ("Update", "/update"),
         ("Connect Grok OAuth", "oauth"),
         ("Copy diagnostics", "diag"),
         ("Import OpenClaw", "/import"),

@@ -13,7 +13,7 @@ Chips sit **above** the composer pill and change as the user types, as the threa
 - Visible cap 5, hard cap 8. Mix kinds (chat / shell / nav / mode). One mode chip max.
 - Click sends or navigates. × dismisses and soft-avoids. Typed prompts reinforce matching habits.
 - Secrets never persist in `chips.json`. `is_plain_text` gates every stored value.
-- Composer is a dark pill: placeholder **Ask anything**, plus, Auto/mode, mic, white send.
+- Composer is a dark pill: placeholder **What do you want to know?**, plus, Auto/mode, mic, white send.
 
 Do not clone grok.com’s game tree or website sidebar. Keep the Electron-look rail and titlebar.
 
