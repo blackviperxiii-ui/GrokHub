@@ -370,8 +370,12 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
 }
 
 pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::Color32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let (_rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
     let painter = ui.painter();
+    if wash.a() > 0 {
+        painter.circle_filled(rect.center(), rect.width() * 0.55, wash);
+    }
     let c = rect.center();
     let w = rect.width();
     let stroke = Stroke::new(1.6, color);
