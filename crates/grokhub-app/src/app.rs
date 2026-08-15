@@ -118,6 +118,16 @@ fn slash_pick_step(pick: usize, len: usize, dir: i8) -> usize {
     }
 }
 
+/// Tab / click accept. `Some` means run the command this frame.
+fn slash_pick_take(composer: &mut String, insert: &str, run_on_pick: bool) -> Option<String> {
+    *composer = insert.to_string();
+    if run_on_pick {
+        Some(std::mem::take(composer))
+    } else {
+        None
+    }
+}
+
 fn settings_sec_title(sec: SettingsSec) -> &'static str {
     match sec {
         SettingsSec::Account => "Account",
@@ -3389,6 +3399,9 @@ impl Cabin {
     fn ui_palette(&mut self, ctx: &egui::Context) {
         let mut close = false;
         let mut picked: Option<String> = None;
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            close = true;
+        }
         egui::Window::new("Palette")
             .collapsible(false)
             .resizable(false)
@@ -4050,9 +4063,11 @@ impl Cabin {
                         for (i, s) in hits.iter().enumerate() {
                             let row = format!("{} — {}", s.cmd, s.hint);
                             if ui.selectable_label(i == self.slash_pick, row).clicked() {
-                                self.composer = s.insert.to_string();
-                                if s.run_on_pick {
-                                    let t = std::mem::take(&mut self.composer);
+                                if let Some(t) = slash_pick_take(
+                                    &mut self.composer,
+                                    s.insert,
+                                    s.run_on_pick,
+                                ) {
                                     self.send_chat(t);
                                 }
                             }
@@ -4064,6 +4079,11 @@ impl Cabin {
                 } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp))
                 {
                     self.slash_pick = slash_pick_step(self.slash_pick, hits.len(), -1);
+                } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
+                    let s = hits[self.slash_pick.min(hits.len() - 1)];
+                    if let Some(t) = slash_pick_take(&mut self.composer, s.insert, s.run_on_pick) {
+                        self.send_chat(t);
+                    }
                 }
             }
             ui.add_space(6.0);
@@ -4102,17 +4122,6 @@ impl Cabin {
                                 .frame(false)
                                 .hint_text("What do you want to know?"),
                         );
-                        if edit.has_focus()
-                            && !hits.is_empty()
-                            && ui.input(|i| i.key_pressed(egui::Key::Tab))
-                        {
-                            let pick = hits[self.slash_pick.min(hits.len() - 1)];
-                            self.composer = pick.insert.to_string();
-                            if pick.run_on_pick {
-                                let t = std::mem::take(&mut self.composer);
-                                self.send_chat(t);
-                            }
-                        }
                         let mut mode = if self.cfg.mode.trim().is_empty() {
                             "auto".to_string()
                         } else {
@@ -5472,5 +5481,21 @@ mod tests {
         assert_eq!(super::slash_pick_step(0, 5, -1), 0);
         assert_eq!(super::slash_pick_step(4, 5, 1), 4);
         assert_eq!(super::slash_pick_step(9, 3, 0), 2);
+    }
+
+    #[test]
+    fn tab_accept_runs_on_pick() {
+        let mut composer = "/fi".into();
+        let run = super::slash_pick_take(&mut composer, "/fix", true);
+        assert_eq!(run.as_deref(), Some("/fix"));
+        assert!(composer.is_empty());
+    }
+
+    #[test]
+    fn tab_accept_stays_for_args() {
+        let mut composer = "/proj".into();
+        let run = super::slash_pick_take(&mut composer, "/project bind ", false);
+        assert!(run.is_none());
+        assert_eq!(composer, "/project bind ");
     }
 }
