@@ -280,6 +280,31 @@ pub fn imagine_quality_label(quality: bool) -> &'static str {
     }
 }
 
+pub fn imagine_quality_word(quality: bool) -> &'static str {
+    if quality {
+        "quality"
+    } else {
+        "speed"
+    }
+}
+
+/// Speed / Quality and aspect are still-prompt words. grok-2-image has no other lever.
+pub fn imagine_still_prompt(prompt: &str, aspect: &str, quality: bool) -> String {
+    let q = imagine_quality_word(quality);
+    let p = prompt.trim();
+    if p.is_empty() {
+        return String::new();
+    }
+    let has_aspect = p.contains(aspect);
+    let has_q = p.to_ascii_lowercase().contains(q);
+    match (has_aspect, has_q) {
+        (true, true) => p.to_string(),
+        (true, false) => format!("{p}, {q} still"),
+        (false, true) => format!("{p}, {aspect} still"),
+        (false, false) => format!("{p}, {aspect} {q} still"),
+    }
+}
+
 pub fn imagine_aspect_label(i: u8) -> &'static str {
     IMAGINE_ASPECTS[(i as usize) % IMAGINE_ASPECTS.len()]
 }
@@ -1110,6 +1135,17 @@ mod tests {
         assert_eq!(imagine_kind_label(ImagineKind::Agent), "Agent");
         assert_eq!(imagine_quality_label(false), "Speed");
         assert_eq!(imagine_quality_label(true), "Quality (v2.0)");
+        assert_eq!(imagine_quality_word(true), "quality");
+        assert_eq!(imagine_quality_word(false), "speed");
+        assert_eq!(
+            imagine_still_prompt("a night cabin", "2:3", true),
+            "a night cabin, 2:3 quality still"
+        );
+        assert_eq!(
+            imagine_still_prompt("a night cabin, 2:3 still", "2:3", false),
+            "a night cabin, 2:3 still, speed still"
+        );
+        assert_eq!(imagine_still_prompt("", "2:3", true), "");
         for s in IMAGINE_SCENES {
             let blob = format!("{} {}", s.title, s.prompt).to_ascii_lowercase();
             for w in forbidden {
