@@ -629,6 +629,20 @@ pub fn paint_aspect_rect(ui: &mut egui::Ui, aspect: u8, size: f32, color: egui::
     painter.rect_stroke(egui::Rect::from_center_size(rect.center(), Vec2::new(w, h)), 1.5, stroke);
 }
 
+pub fn paint_menu_caret(ui: &mut egui::Ui, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 10.0), Sense::hover());
+    let c = rect.center();
+    let stroke = Stroke::new(1.4_f32, color);
+    ui.painter().line_segment(
+        [Pos2::new(c.x - 3.0, c.y - 1.0), Pos2::new(c.x, c.y + 2.0)],
+        stroke,
+    );
+    ui.painter().line_segment(
+        [Pos2::new(c.x, c.y + 2.0), Pos2::new(c.x + 3.0, c.y - 1.0)],
+        stroke,
+    );
+}
+
 pub fn paint_plus_at(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let c = rect.center();
     let w = rect.width();
@@ -669,6 +683,7 @@ mod tests {
         let _ = paint_agent_mode;
         let _ = paint_style_auto;
         let _ = paint_aspect_rect;
+        let _ = paint_menu_caret;
         let _ = paint_plus_at;
     }
 }

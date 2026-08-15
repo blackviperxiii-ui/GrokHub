@@ -1,11 +1,11 @@
 ---
-description: When Jeremy says merge PRs, land them on main, delete leftovers, update docs.
+description: When Jeremy says update, land PRs on main, delete leftovers, sync docs.
 alwaysApply: true
 ---
 
-# Merge PRs
+# Update
 
-When Jeremy says **merge PRs**, that is the whole job:
+When Jeremy says **update** (or **merge PRs**), that is the whole job:
 
 1. Merge every remaining open PR into `main`.
 2. Delete each PR branch after it is on `main`.
@@ -17,4 +17,4 @@ Do not leave merged PR heads on the remote. GitHub will not delete them for us (
 
 If a PR is already superseded on `main` (duplicate cabin work, or an Electron-era branch that would restore deleted `src/` / `desktop/`), record it merged with `git merge -s ours` so the PR closes **without** reverting `main`. Then delete that branch too.
 
-Do not start this merge/cleanup pass unless he asked. While he says dev is still working, leave PRs and branches alone.
+Do not start this pass unless he said **update** (or **merge PRs**). "Don't do it now" means leave PRs and branches alone.
