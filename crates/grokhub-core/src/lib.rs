@@ -156,7 +156,10 @@ pub use state::{
     load_hub_state, save_hub_state, state_for_disk, HubState, PairError, DEFAULT_PORT, HUB_KIND,
 };
 pub use task::{HubTask, Receipt};
-pub use update::{discover_source, is_grokhub_source, update_cmds, update_wipes_config, walk_up_source};
+pub use update::{
+    discover_source, is_grokhub_source, update_cmds, update_plan_steps, update_wipes_config,
+    walk_up_source,
+};
 
 pub const PRESENCE_PUSH_MIN_MS: u64 = 400;
 
