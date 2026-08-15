@@ -180,6 +180,7 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
+#[allow(dead_code)]
 pub fn mark(ctx: &egui::Context) -> TextureHandle {
     let bytes = include_bytes!("../assets/grokhub-32.png");
     let img = image::load_from_memory(bytes).expect("grokhub mark");
