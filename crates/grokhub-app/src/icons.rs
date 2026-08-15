@@ -209,6 +209,7 @@ pub enum BarIcon {
     Mic,
     Send,
     Search,
+    Gear,
 }
 
 pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::Color32) -> egui::Response {
@@ -299,6 +300,19 @@ pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::
                 stroke,
             );
         }
+        BarIcon::Gear => {
+            painter.circle_stroke(c, w * 0.16, stroke);
+            for i in 0..6 {
+                let a = i as f32 * std::f32::consts::TAU / 6.0;
+                painter.line_segment(
+                    [
+                        c + Vec2::new(a.cos() * w * 0.18, a.sin() * w * 0.18),
+                        c + Vec2::new(a.cos() * w * 0.32, a.sin() * w * 0.32),
+                    ],
+                    stroke,
+                );
+            }
+        }
     }
     resp
 }
@@ -344,5 +358,6 @@ mod tests {
         assert_ne!(icon_for_label("Host snapshot"), icon_for_label("Morning brief"));
         assert_ne!(BarIcon::Mic, BarIcon::Send);
         assert_ne!(BarIcon::Plus, BarIcon::Search);
+        assert_ne!(BarIcon::Gear, BarIcon::Search);
     }
 }
