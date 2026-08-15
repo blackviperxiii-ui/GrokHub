@@ -285,6 +285,7 @@ pub struct Cabin {
     proj_add_for: Option<String>,
     proj_rename: Option<String>,
     proj_rename_buf: String,
+    proj_rename_focus: bool,
     proj_ignore_close: bool,
 }
 
@@ -494,6 +495,7 @@ impl Cabin {
             proj_add_for: None,
             proj_rename: None,
             proj_rename_buf: String::new(),
+            proj_rename_focus: false,
             proj_ignore_close: false,
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
@@ -582,6 +584,7 @@ impl Cabin {
                 let _ = std::fs::create_dir_all(&path);
                 self.proj_rename_buf = self.projects[i].name.clone();
                 self.proj_rename = Some(id.clone());
+                self.proj_rename_focus = true;
                 self.bind_project_id(&id);
                 self.status = format!("Project {}", self.projects[i].name);
             }
@@ -595,6 +598,7 @@ impl Cabin {
             Ok(i) => {
                 self.proj_rename_buf = self.projects[i].name.clone();
                 self.proj_rename = Some(id);
+                self.proj_rename_focus = true;
                 self.status = format!("Folder {}", self.projects[i].name);
                 self.persist();
             }
@@ -614,6 +618,7 @@ impl Cabin {
             Err(e) => self.status = e.into(),
         }
         self.proj_rename_buf.clear();
+        self.proj_rename_focus = false;
     }
 
     fn move_sel_to_folder_name(&mut self, folder: &str) {
@@ -2911,6 +2916,7 @@ impl Cabin {
                         if let Some(n) = self.projects.iter().find(|n| n.id == id) {
                             self.proj_rename_buf = n.name.clone();
                             self.proj_rename = Some(id);
+                            self.proj_rename_focus = true;
                         }
                     }
                     "add" => {
@@ -3557,9 +3563,10 @@ impl Cabin {
                     ui.label(RichText::new("Projects").size(12.0).color(crate::theme::SUBTLE));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let plus = ui.add(
-                            egui::Button::new(RichText::new("+").size(14.0).color(crate::theme::MUTED))
+                            egui::Button::new(RichText::new("+").size(16.0).color(crate::theme::MUTED))
                                 .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE),
+                                .stroke(egui::Stroke::NONE)
+                                .min_size(egui::vec2(22.0, 22.0)),
                         );
                         let plus_pos = plus.rect.left_bottom();
                         if plus.on_hover_text("New project or folder").clicked() {
@@ -3580,17 +3587,22 @@ impl Cabin {
                             let edit = ui.add(
                                 egui::TextEdit::singleline(&mut self.proj_rename_buf)
                                     .desired_width(ui.available_width() - 8.0)
-                                    .hint_text("Name"),
+                                    .hint_text("Name")
+                                    .font(egui::FontId::proportional(13.0)),
                             );
-                            if edit.lost_focus()
-                                && ui.input(|i| i.key_pressed(egui::Key::Enter) || !i.key_pressed(egui::Key::Escape))
-                            {
-                                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                    self.proj_rename = None;
-                                    self.proj_rename_buf.clear();
-                                } else {
-                                    self.finish_proj_rename();
+                            if self.proj_rename_focus {
+                                edit.request_focus();
+                                if edit.has_focus() {
+                                    self.proj_rename_focus = false;
                                 }
+                            }
+                            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                self.proj_rename = None;
+                                self.proj_rename_buf.clear();
+                                self.proj_rename_focus = false;
+                            } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) || edit.lost_focus()
+                            {
+                                self.finish_proj_rename();
                             }
                         });
                         continue;
@@ -3621,6 +3633,7 @@ impl Cabin {
                         if row.double_clicked() {
                             self.proj_rename_buf = node.name.clone();
                             self.proj_rename = Some(node.id.clone());
+                            self.proj_rename_focus = true;
                         }
                         if row.secondary_clicked() {
                             self.proj_menu = Some(node.id.clone());
