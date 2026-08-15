@@ -334,6 +334,120 @@ pub fn section_label(ui: &mut egui::Ui, label: &str) {
     ui.add_space(10.0);
 }
 
+pub fn settings_group(ui: &mut egui::Ui, title: &str, mut body: impl FnMut(&mut egui::Ui)) {
+    section_label(ui, title);
+    egui::Frame::none()
+        .fill(crate::theme::SURFACE)
+        .rounding(16.0)
+        .stroke(Stroke::new(1.0_f32, crate::theme::BORDER))
+        .inner_margin(egui::Margin::symmetric(16.0, 6.0))
+        .show(ui, |ui| {
+            body(ui);
+        });
+    ui.add_space(18.0);
+}
+
+pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool) -> bool {
+    let mut hit = false;
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.add_space(6.0);
+            ui.label(RichText::new(title).size(15.0).color(crate::theme::FG));
+            if !hint.is_empty() {
+                ui.label(RichText::new(hint).size(12.0).color(crate::theme::MUTED));
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if settings_switch(ui, *on) {
+                *on = !*on;
+                hit = true;
+            }
+        });
+    });
+    ui.add_space(10.0);
+    hit
+}
+
+pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 24.0), Sense::click());
+    let fill = if on {
+        crate::theme::FG
+    } else {
+        crate::theme::PANEL
+    };
+    ui.painter().rect_filled(rect, 12.0, fill);
+    if !on {
+        ui.painter()
+            .rect_stroke(rect, 12.0, Stroke::new(1.0_f32, crate::theme::BORDER_STRONG));
+    }
+    let knob_x = if on {
+        rect.right() - 12.0
+    } else {
+        rect.left() + 12.0
+    };
+    let knob = if on {
+        crate::theme::BG
+    } else {
+        crate::theme::MUTED
+    };
+    ui.painter()
+        .circle_filled(egui::pos2(knob_x, rect.center().y), 8.0, knob);
+    resp.clicked()
+}
+
+pub fn settings_field(
+    ui: &mut egui::Ui,
+    title: &str,
+    hint: &str,
+    value: &mut String,
+    password: bool,
+) {
+    ui.add_space(4.0);
+    ui.label(RichText::new(title).size(15.0).color(crate::theme::FG));
+    if !hint.is_empty() {
+        ui.label(RichText::new(hint).size(12.0).color(crate::theme::MUTED));
+    }
+    ui.add_space(6.0);
+    egui::Frame::none()
+        .fill(crate::theme::ELEVATED)
+        .rounding(10.0)
+        .stroke(Stroke::new(1.0_f32, crate::theme::BORDER))
+        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+        .show(ui, |ui| {
+            let mut edit = egui::TextEdit::singleline(value)
+                .desired_width(f32::INFINITY)
+                .frame(false);
+            if password {
+                edit = edit.password(true);
+            }
+            ui.add(edit);
+        });
+    ui.add_space(10.0);
+}
+
+pub fn settings_action(ui: &mut egui::Ui, title: &str, hint: &str, action: &str) -> bool {
+    let mut hit = false;
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.add_space(4.0);
+            ui.label(RichText::new(title).size(15.0).color(crate::theme::FG));
+            if !hint.is_empty() {
+                ui.label(RichText::new(hint).size(12.0).color(crate::theme::MUTED));
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            hit = white_pill(ui, action);
+        });
+    });
+    ui.add_space(10.0);
+    hit
+}
+
+pub fn settings_note(ui: &mut egui::Ui, text: &str) {
+    ui.label(RichText::new(text).size(13.0).color(crate::theme::MUTED));
+    ui.add_space(8.0);
+}
+
 pub fn search_field(ui: &mut egui::Ui, q: &mut String) {
     egui::Frame::none()
         .fill(crate::theme::ELEVATED)
