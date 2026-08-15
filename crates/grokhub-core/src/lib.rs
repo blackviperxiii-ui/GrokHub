@@ -35,6 +35,7 @@ pub mod slash;
 pub mod state;
 pub mod stream;
 pub mod task;
+pub mod thread_tab;
 pub mod update;
 pub mod usage;
 pub mod verify;
@@ -94,7 +95,11 @@ pub use context::{
     RECENT_MIN_MESSAGES,
 };
 pub use diagnostics::diagnostics_bundle;
-pub use goal::{compact_keep_pin, looks_incomplete, next_goal_prompt, parse_goal_outcome, GOAL_MAX_STEPS};
+pub use goal::{
+    blend_thread_goal, compact_keep_pin, looks_incomplete, next_goal_prompt, parse_fast_topics,
+    parse_goal_outcome, should_name_thread, thread_goal_prompt, ThreadGoal, GOAL_DROP_AFTER,
+    GOAL_MAX_STEPS,
+};
 pub use history::search_corpus;
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
 pub use learning::{insight_pin, record_turn, upsert_insight, LearningState};
@@ -157,6 +162,10 @@ pub use state::{
     load_hub_state, save_hub_state, state_for_disk, HubState, PairError, DEFAULT_PORT, HUB_KIND,
 };
 pub use task::{HubTask, Receipt};
+pub use thread_tab::{
+    apply_auto_title, apply_manual_rename, clean_tab_title, delete_thread, history_order, toggle_pin,
+    DeleteOutcome, ThreadTab,
+};
 pub use update::{
     discover_source, is_grokhub_source, update_cmds, update_plan_steps, update_wipes_config,
     walk_up_source,

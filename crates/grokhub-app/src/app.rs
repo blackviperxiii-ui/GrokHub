@@ -11,11 +11,13 @@ use crate::update::{remember_source, resolve_source};
 use crate::xai::{grok_chat, grok_chat_stream, grok_imagine, grok_stt, grok_tts, http_status_of};
 use eframe::egui::{self, Color32, RichText};
 use grokhub_core::{
-    approved_cmds, apply_work_update, auth_bearer, automation_blocked_by_policy, build_hub_snapshot,
+    approved_cmds, apply_auto_title, apply_manual_rename, apply_work_update, auth_bearer,
+    automation_blocked_by_policy, blend_thread_goal, build_hub_snapshot,
     build_quick_chips, build_windshield, bump_skill_run, cabin_eyes_for_turn, can_inhabit, can_mark_done,
     bump_usage, catalog_line, chip_suggest_prompt, compact_keep_pin, context_fingerprint,
     context_percent, daily_units_blocked,
-    dedicated_imagine_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
+    dedicated_imagine_model, dedicated_voice_model, default_openclaw_paths, delete_thread,
+    diagnostics_bundle,
     pick_fresh_seed, wall_can_paint, wall_evict, ImagineWall, WallGif, WALL_GIF_EVERY_MS,
     WALL_GIF_MAX,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
@@ -31,7 +33,7 @@ use grokhub_core::{
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
     resolve_chat_model, effective_chat_mode, settings_pin_blocks_auto,
-    needs_auth_banner, next_goal_prompt,
+    needs_auth_banner, next_goal_prompt, parse_fast_topics,
     now_ms, on_wheel_grab, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
     parse_nl_automation, parse_recipe, parse_slash, passenger_label, plan_from_text, plan_room,
     presence_orb_state, presence_should_stream, propose_skill_from_turn, quiet_hours_active,
@@ -41,15 +43,16 @@ use grokhub_core::{
     rewind_dest, save_hub_state, screen_from_extents, search_corpus, should_attach_cabin_frame,
     should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
-    slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
+    history_order, should_name_thread, slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
+    thread_goal_prompt, toggle_pin,
     top_habit_labels,
     unified_diff_cite, usage_line,
     transcribe_route, uid, update_cmds, update_plan_steps, update_wipes_config, voice_session_url, Automation, BoardCard,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ComputerOp, DeviceCodeStart, HeyGrokAction,
     HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, Recipe, ReplayOp, RewindRecord,
-    SkillMd, Slash, TranscribeRoute, UsageDay, VoiceEvent, VoiceState, CONTEXT_BUDGET_TOKENS,
-    GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS,
+    DeleteOutcome, SkillMd, Slash, ThreadTab, TranscribeRoute, UsageDay, VoiceEvent, VoiceState,
+    CONTEXT_BUDGET_TOKENS, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS,
     PRESENCE_RING_MS, TRANSCRIBERS,
 };
 use grokhub_hub::serve_lan;
@@ -220,6 +223,15 @@ struct ImagineBarOut {
     go_settings: bool,
 }
 
+enum TabAct {
+    Switch(usize),
+    Pin(usize),
+    StartRename(usize),
+    CommitRename(usize),
+    CancelRename,
+    Delete(usize),
+}
+
 enum JobOut {
     Chat(String),
     ChatDelta(String),
@@ -364,6 +376,16 @@ pub struct Cabin {
     hotkey_halt: u32,
     tools_collapsed: bool,
     sidebar_q: String,
+    rename_idx: Option<usize>,
+    rename_buf: String,
+    rename_focus: bool,
+    rename_lock: Option<String>,
+    chat_menu: Option<usize>,
+    chat_menu_pos: egui::Pos2,
+    chat_ignore_close: bool,
+    goal_rx: Option<mpsc::Receiver<(String, String)>>,
+    goal_busy: bool,
+    goal_stale: bool,
     chip_memory: ChipMemory,
     chip_dismissed: Vec<String>,
     llm_chips: Vec<QuickChip>,
@@ -584,6 +606,16 @@ impl Cabin {
             hotkey_halt: 0,
             tools_collapsed: false,
             sidebar_q: String::new(),
+            rename_idx: None,
+            rename_buf: String::new(),
+            rename_focus: false,
+            rename_lock: None,
+            chat_menu: None,
+            chat_menu_pos: egui::Pos2::ZERO,
+            chat_ignore_close: false,
+            goal_rx: None,
+            goal_busy: false,
+            goal_stale: false,
             chip_memory: crate::store::load_chips(),
             chip_dismissed: vec![],
             llm_chips: vec![],
@@ -911,6 +943,114 @@ impl Cabin {
         }
     }
 
+    fn poll_goals(&mut self) {
+        let Some(rx) = self.goal_rx.take() else {
+            if self.goal_stale {
+                self.spawn_thread_goal();
+            }
+            return;
+        };
+        match rx.try_recv() {
+            Ok((tid, reply)) => {
+                self.goal_busy = false;
+                self.apply_thread_goal(&tid, &reply);
+                if self.goal_stale {
+                    self.spawn_thread_goal();
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.goal_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.goal_busy = false;
+                if self.goal_stale {
+                    self.spawn_thread_goal();
+                }
+            }
+        }
+    }
+
+    fn apply_thread_goal(&mut self, tid: &str, reply: &str) {
+        let topics = parse_fast_topics(reply);
+        if topics.is_empty() {
+            return;
+        }
+        let current = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.id.clone())
+            .unwrap_or_default();
+        let Some(t) = self.threads.iter_mut().find(|t| t.id == tid) else {
+            return;
+        };
+        if t.scratch {
+            return;
+        }
+        t.goal = blend_thread_goal(&t.goal, &topics, GOAL_DROP_AFTER);
+        if !t.goal.label.is_empty() {
+            let mut tab = ThreadTab {
+                title: t.title.clone(),
+                pinned: t.pinned,
+                title_locked: t.title_locked,
+            };
+            if apply_auto_title(&mut tab, &t.goal.label) {
+                t.title = tab.title;
+            }
+            if tid == current {
+                self.cfg.goal_pin = t.goal.label.clone();
+            }
+        }
+        let _ = threads::save(&self.threads);
+        let _ = config::save(&self.cfg);
+    }
+
+    fn spawn_thread_goal(&mut self) {
+        if self.goal_busy {
+            self.goal_stale = true;
+            return;
+        }
+        let scratch = self.scratch();
+        let user_turns = self.messages.iter().filter(|m| m.role == "user").count();
+        let locked = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.title_locked)
+            .unwrap_or(false);
+        if locked || !should_name_thread(scratch, user_turns) {
+            self.goal_stale = false;
+            return;
+        }
+        if !self.has_key() {
+            self.goal_stale = false;
+            return;
+        }
+        let tid = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.id.clone())
+            .unwrap_or_default();
+        if tid.is_empty() {
+            self.goal_stale = false;
+            return;
+        }
+        let prompt = thread_goal_prompt(&self.chat_pairs());
+        let key = self.bearer();
+        if key.trim().is_empty() {
+            self.goal_stale = false;
+            return;
+        }
+        let model = model_for_mode("fast").to_string();
+        let (tx, rx) = mpsc::channel();
+        self.goal_rx = Some(rx);
+        self.goal_busy = true;
+        self.goal_stale = false;
+        std::thread::spawn(move || {
+            let reply =
+                grok_chat(&key, &model, &[("user".into(), prompt)], None, None).unwrap_or_default();
+            let _ = tx.send((tid, reply));
+        });
+    }
+
     fn refresh_chips(&mut self) {
         let chat = self.chat_pairs();
         let hour = Self::chip_hour();
@@ -1086,6 +1226,8 @@ impl Cabin {
                 .collect();
         }
         self.thread_idx = idx.min(self.threads.len().saturating_sub(1));
+        self.rename_idx = None;
+        self.chat_menu = None;
         self.messages = self
             .threads
             .get(self.thread_idx)
@@ -1120,6 +1262,120 @@ impl Cabin {
             "New chat".into()
         };
         self.persist();
+    }
+
+    fn begin_chat_rename(&mut self, idx: usize) {
+        self.rename_buf = self
+            .threads
+            .get(idx)
+            .map(|t| t.title.clone())
+            .unwrap_or_default();
+        self.rename_lock = if self.rename_buf.is_empty() {
+            None
+        } else {
+            Some(self.rename_buf.clone())
+        };
+        self.rename_idx = Some(idx);
+        self.rename_focus = true;
+        self.chat_menu = None;
+    }
+
+    fn rename_thread(&mut self, idx: usize, title: &str) {
+        let Some(t) = self.threads.get_mut(idx) else {
+            return;
+        };
+        let mut tab = ThreadTab {
+            title: t.title.clone(),
+            pinned: t.pinned,
+            title_locked: t.title_locked,
+        };
+        if apply_manual_rename(&mut tab, title) {
+            t.title = tab.title;
+            t.title_locked = true;
+            self.status = format!("Renamed {}", t.title);
+            self.rename_idx = None;
+            self.rename_focus = false;
+            self.rename_lock = None;
+            self.persist();
+        }
+    }
+
+    fn pin_thread(&mut self, idx: usize) {
+        let Some(t) = self.threads.get_mut(idx) else {
+            return;
+        };
+        t.pinned = toggle_pin(t.pinned);
+        self.status = if t.pinned {
+            format!("Pinned {}", t.title)
+        } else {
+            format!("Unpinned {}", t.title)
+        };
+        self.persist();
+    }
+
+    fn delete_thread_at(&mut self, idx: usize) {
+        let was_current = idx == self.thread_idx;
+        match delete_thread(self.threads.len(), idx, self.thread_idx) {
+            DeleteOutcome::ResetLast => {
+                self.threads.clear();
+                self.threads.push(ChatThread::new("Chat", false));
+                self.thread_idx = 0;
+                self.messages.clear();
+                self.cfg.goal_pin.clear();
+                self.goal_step = 0;
+                self.status = "Chat deleted".into();
+            }
+            DeleteOutcome::Removed { next } => {
+                let gone = self.threads.remove(idx);
+                self.thread_idx = next;
+                if was_current {
+                    self.messages = self
+                        .threads
+                        .get(next)
+                        .map(|t| {
+                            t.messages
+                                .iter()
+                                .map(|(role, content)| Msg {
+                                    role: role.clone(),
+                                    content: content.clone(),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    self.cfg.goal_pin = self
+                        .threads
+                        .get(next)
+                        .map(|t| t.goal.label.clone())
+                        .unwrap_or_default();
+                }
+                self.status = format!("Deleted {}", gone.title);
+            }
+        }
+        self.rename_idx = None;
+        self.chat_menu = None;
+        self.persist();
+    }
+
+    fn apply_tab_act(&mut self, act: Option<TabAct>) {
+        match act {
+            Some(TabAct::Switch(i)) => {
+                self.switch_thread(i);
+                self.nav = Nav::Chat;
+            }
+            Some(TabAct::Pin(i)) => self.pin_thread(i),
+            Some(TabAct::StartRename(i)) => self.begin_chat_rename(i),
+            Some(TabAct::CommitRename(i)) => {
+                let name = self.rename_buf.clone();
+                self.rename_thread(i, &name);
+            }
+            Some(TabAct::CancelRename) => {
+                self.rename_idx = None;
+                self.rename_focus = false;
+                self.rename_lock = None;
+            }
+            Some(TabAct::Delete(i)) => self.delete_thread_at(i),
+            None => {}
+        }
     }
 
     fn send_chat(&mut self, text: String) {
@@ -1338,13 +1594,9 @@ impl Cabin {
                 let _ = config::save(&self.cfg);
                 self.status = if on { "Host on".into() } else { "Host off".into() };
             }
-            Slash::Rename(title) => {
-                if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                    t.title = title.chars().take(80).collect();
-                    self.status = format!("Renamed {}", t.title);
-                    self.persist();
-                }
-            }
+            Slash::Rename(title) => self.rename_thread(self.thread_idx, &title),
+            Slash::Pin => self.pin_thread(self.thread_idx),
+            Slash::Delete => self.delete_thread_at(self.thread_idx),
             Slash::Context => {
                 let n = self.messages.len();
                 let tokens = estimate_messages(
@@ -2435,6 +2687,7 @@ impl Cabin {
                         context_percent(tokens, CONTEXT_BUDGET_TOKENS)
                     );
                 }
+                self.spawn_thread_goal();
             }
             Ok(JobOut::Consult(detail)) => {
                 self.running = false;
@@ -3281,6 +3534,57 @@ impl Cabin {
             }
         }
     }
+
+    fn ui_chat_overlays(&mut self, ctx: &egui::Context) {
+        let Some(idx) = self.chat_menu else {
+            return;
+        };
+        if idx >= self.threads.len() {
+            self.chat_menu = None;
+            return;
+        }
+        let pinned = self.threads[idx].pinned;
+        let mut act: Option<&'static str> = None;
+        let mut menu_rect = egui::Rect::NOTHING;
+        egui::Area::new(egui::Id::new("chat-menu"))
+            .fixed_pos(self.chat_menu_pos + egui::vec2(0.0, 4.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(168.0);
+                    if ui
+                        .selectable_label(false, if pinned { "Unpin" } else { "Pin" })
+                        .clicked()
+                    {
+                        act = Some("pin");
+                    }
+                    if ui.selectable_label(false, "Rename").clicked() {
+                        act = Some("rename");
+                    }
+                    if ui.selectable_label(false, "Delete").clicked() {
+                        act = Some("delete");
+                    }
+                    menu_rect = ui.min_rect();
+                });
+            });
+        if let Some(a) = act {
+            self.chat_menu = None;
+            match a {
+                "pin" => self.pin_thread(idx),
+                "rename" => self.begin_chat_rename(idx),
+                "delete" => self.delete_thread_at(idx),
+                _ => {}
+            }
+        } else if self.chat_ignore_close {
+            self.chat_ignore_close = false;
+        } else if ctx.input(|i| i.pointer.any_click()) {
+            if let Some(pos) = ctx.pointer_interact_pos() {
+                if !menu_rect.expand(8.0).contains(pos) {
+                    self.chat_menu = None;
+                }
+            }
+        }
+    }
 }
 
 fn apply_tray_window(ctx: &egui::Context, w: crate::tray::TrayWindow) {
@@ -3316,6 +3620,7 @@ impl eframe::App for Cabin {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
         self.poll_chips();
+        self.poll_goals();
         self.refresh_chips();
         self.drain_inbox();
         self.poll_tray(ctx);
@@ -3383,7 +3688,7 @@ impl eframe::App for Cabin {
         }
         if wants_live_repaint(
             self.running,
-            self.chip_busy,
+            self.chip_busy || self.goal_busy,
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -3434,6 +3739,7 @@ impl eframe::App for Cabin {
                 });
         }
         self.ui_project_overlays(ctx);
+        self.ui_chat_overlays(ctx);
     }
 }
 
@@ -3882,6 +4188,78 @@ impl Cabin {
         resp
     }
 
+    fn ui_thread_list(&mut self, ui: &mut egui::Ui, filter: &str, salt: &'static str) {
+        let pinned: Vec<bool> = self.threads.iter().map(|t| t.pinned).collect();
+        let order = history_order(&pinned);
+        let mut act: Option<TabAct> = None;
+        let mut menu: Option<(usize, egui::Pos2)> = None;
+        let q = filter.to_ascii_lowercase();
+        for i in order {
+            let title = self.threads[i].title.clone();
+            if !q.is_empty() && !title.to_ascii_lowercase().contains(&q) {
+                continue;
+            }
+            if self.rename_idx == Some(i) {
+                let edit = ui.add(
+                    egui::TextEdit::singleline(&mut self.rename_buf)
+                        .id_salt((salt, i))
+                        .desired_width(ui.available_width())
+                        .hint_text("Name this chat")
+                        .font(egui::FontId::proportional(13.0)),
+                );
+                if self.rename_focus {
+                    edit.request_focus();
+                    if edit.has_focus() {
+                        self.rename_focus = false;
+                    }
+                }
+                if let Some(lock) = self.rename_lock.clone() {
+                    if self.rename_buf == lock {
+                        select_all_edit(ui, edit.id, &self.rename_buf);
+                    } else {
+                        self.rename_lock = None;
+                    }
+                }
+                if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+                    act = Some(TabAct::CancelRename);
+                } else if ui.input(|inp| inp.key_pressed(egui::Key::Enter)) {
+                    act = Some(TabAct::CommitRename(i));
+                } else if edit.lost_focus() && !self.rename_focus {
+                    act = Some(TabAct::CommitRename(i));
+                }
+                continue;
+            }
+            let icon = if self.threads[i].pinned {
+                crate::icons::RailIcon::Pin
+            } else {
+                crate::icons::RailIcon::Chat
+            };
+            let resp = Self::nav_row(
+                ui,
+                i == self.thread_idx && self.nav == Nav::Chat,
+                icon,
+                &title,
+                false,
+            );
+            if resp.double_clicked() {
+                act = Some(TabAct::StartRename(i));
+            } else if resp.clicked() {
+                act = Some(TabAct::Switch(i));
+            }
+            if resp.secondary_clicked() {
+                menu = Some((i, resp.rect.left_bottom()));
+            }
+        }
+        if let Some((i, pos)) = menu {
+            self.chat_menu = Some(i);
+            self.chat_menu_pos = pos;
+            self.chat_ignore_close = true;
+            self.proj_menu = None;
+            self.proj_plus_open = false;
+        }
+        self.apply_tab_act(act);
+    }
+
     fn cabin_avatar(ui: &mut egui::Ui, account: &str, email: &str) -> egui::Response {
         let (rect, resp) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), RAIL_FOOTER_H), egui::Sense::click());
@@ -4074,26 +4452,8 @@ impl Cabin {
                     .auto_shrink([false, true])
                     .max_height(hist_h)
                     .show(ui, |ui| {
-                        let q = self.sidebar_q.to_ascii_lowercase();
-                        let n = self.threads.len();
-                        for i in 0..n {
-                            let title = self.threads[i].title.as_str();
-                            if !q.is_empty() && !title.to_ascii_lowercase().contains(&q) {
-                                continue;
-                            }
-                            if Self::nav_row(
-                                ui,
-                                i == self.thread_idx && self.nav == Nav::Chat,
-                                crate::icons::RailIcon::Chat,
-                                title,
-                                false,
-                            )
-                            .clicked()
-                            {
-                                self.switch_thread(i);
-                                self.nav = Nav::Chat;
-                            }
-                        }
+                        let q = self.sidebar_q.clone();
+                        self.ui_thread_list(ui, &q, "rail");
                     });
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     if Self::cabin_avatar(ui, &account, &email).clicked() {
@@ -4975,6 +5335,14 @@ impl Cabin {
             for h in &self.history_hits {
                 ui.label(h);
             }
+            ui.add_space(16.0);
+            ui.label(RichText::new("Chats").size(12.0).color(crate::theme::SUBTLE));
+            egui::ScrollArea::vertical()
+                .id_salt("history-chats")
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    self.ui_thread_list(ui, "", "page");
+                });
         });
     }
 

@@ -223,6 +223,7 @@ pub enum RailIcon {
     Grid,
     Folder,
     Chat,
+    Pin,
 }
 
 pub fn rail_icon_for(id: &str) -> RailIcon {
@@ -355,6 +356,13 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
                     Pos2::new(r.left() + 4.0, r.bottom()),
                     Pos2::new(r.left() + 2.0, r.bottom() + 3.0),
                 ],
+                stroke,
+            );
+        }
+        RailIcon::Pin => {
+            painter.circle_filled(Pos2::new(c.x, c.y - w * 0.10), w * 0.14, color);
+            painter.line_segment(
+                [Pos2::new(c.x, c.y - w * 0.02), Pos2::new(c.x, c.y + w * 0.28)],
                 stroke,
             );
         }
@@ -654,6 +662,7 @@ mod tests {
         assert_eq!(rail_icon_for("workboard"), RailIcon::Folder);
         assert_ne!(RailIcon::Search, RailIcon::Compose);
         assert_ne!(RailIcon::Imagine, RailIcon::Grid);
+        assert_ne!(RailIcon::Pin, RailIcon::Chat);
         let _ = paint_image_mode;
         let _ = paint_video_mode;
         let _ = paint_agent_mode;
