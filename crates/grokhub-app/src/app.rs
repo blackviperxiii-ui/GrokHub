@@ -2960,31 +2960,26 @@ impl Cabin {
             crate::theme::MUTED
         };
         let w = ui.available_width();
-        ui.allocate_ui_with_layout(
-            egui::vec2(w, crate::theme::NAV_ROW_H),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                let rect = ui.max_rect();
-                ui.painter().rect_filled(rect, 10.0, fill);
-                if outline {
-                    ui.painter().rect_stroke(
-                        rect,
-                        10.0,
-                        egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG),
-                    );
-                }
-                ui.add_space(10.0);
-                crate::icons::paint_rail_icon(ui, icon, 20.0, color);
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(label)
-                        .size(crate::theme::FONT_CHROME)
-                        .color(color),
-                );
-            },
-        )
-        .response
-        .interact(egui::Sense::click())
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, crate::theme::NAV_ROW_H), egui::Sense::click());
+        ui.painter().rect_filled(rect, 10.0, fill);
+        if outline {
+            ui.painter().rect_stroke(
+                rect,
+                10.0,
+                egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG),
+            );
+        }
+        let icon_c = egui::pos2(rect.left() + 20.0, rect.center().y);
+        let icon_rect = egui::Rect::from_center_size(icon_c, egui::vec2(20.0, 20.0));
+        crate::icons::paint_rail_icon_at(ui.painter(), icon_rect, icon, color);
+        ui.painter().text(
+            egui::pos2(rect.left() + 38.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(crate::theme::FONT_CHROME),
+            color,
+        );
+        resp
     }
 
     fn ui_sidebar(&mut self, ctx: &egui::Context) {
@@ -3019,6 +3014,7 @@ impl Cabin {
                     .clicked()
                 {
                     self.new_thread(false);
+                    self.nav = Nav::Chat;
                 }
                 ui.add_space(6.0);
                 let cur = self.nav_id();
