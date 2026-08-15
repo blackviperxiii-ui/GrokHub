@@ -1,4 +1,4 @@
-use grokhub_core::{empty_chip_memory, ChipMemory, ImagineWall, LearningState, UsageDay};
+use grokhub_core::{empty_chip_memory, ChipMemory, ImagineWall, LearningState, ProjectNode, UsageDay};
 use std::fs;
 
 use crate::config;
@@ -56,6 +56,24 @@ pub fn save_wall(w: &ImagineWall) -> Result<(), String> {
     fs::write(
         wall_path(),
         serde_json::to_string_pretty(w).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}
+
+pub fn projects_path() -> std::path::PathBuf {
+    config::config_dir().join("projects.json")
+}
+
+pub fn load_projects() -> Vec<ProjectNode> {
+    let raw = fs::read_to_string(projects_path()).unwrap_or_default();
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+pub fn save_projects(nodes: &[ProjectNode]) -> Result<(), String> {
+    fs::create_dir_all(config::config_dir()).map_err(|e| e.to_string())?;
+    fs::write(
+        projects_path(),
+        serde_json::to_string_pretty(nodes).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())
 }
@@ -120,6 +138,20 @@ mod tests {
         let loaded = load_wall();
         assert_eq!(loaded.last_ms, 9);
         assert_eq!(loaded.gifs[0].title, "Ember night");
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn projects_roundtrip() {
+        let _g = TEST_CONFIG_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("grokhub-proj-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let nodes = grokhub_core::seed_from_bound("/tmp/GrokHub-Work");
+        save_projects(&nodes).expect("save");
+        let loaded = load_projects();
+        assert_eq!(loaded[0].name, "GrokHub-Work");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }

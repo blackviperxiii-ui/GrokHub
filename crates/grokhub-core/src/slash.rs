@@ -27,6 +27,10 @@ pub enum Slash {
     ProjectBind(Option<String>),
     ProjectClear,
     ProjectShow,
+    ProjectNew(String),
+    ProjectFolder(String),
+    ProjectRename(String),
+    ProjectMove(String),
     Send(String),
     Sync,
     Hub,
@@ -130,6 +134,34 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
                 Some(Slash::ProjectClear)
             } else if rest.is_empty() || rest.eq_ignore_ascii_case("show") {
                 Some(Slash::ProjectShow)
+            } else if let Some(name) = rest.strip_prefix("new ") {
+                let name = name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectNew(name.to_string()))
+                }
+            } else if let Some(name) = rest.strip_prefix("folder ") {
+                let name = name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectFolder(name.to_string()))
+                }
+            } else if let Some(name) = rest.strip_prefix("rename ") {
+                let name = name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectRename(name.to_string()))
+                }
+            } else if let Some(name) = rest.strip_prefix("move ") {
+                let name = name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectMove(name.to_string()))
+                }
             } else {
                 let path = rest
                     .strip_prefix("bind")
@@ -179,6 +211,10 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::ProjectBind(_) => "project_bind",
         Slash::ProjectClear => "project_clear",
         Slash::ProjectShow => "project_show",
+        Slash::ProjectNew(_) => "project_new",
+        Slash::ProjectFolder(_) => "project_folder",
+        Slash::ProjectRename(_) => "project_rename",
+        Slash::ProjectMove(_) => "project_move",
         Slash::Send(_) => "send",
         Slash::Sync => "sync",
         Slash::Hub => "hub",
@@ -312,6 +348,10 @@ pub fn slash_help() -> String {
         "/sh <cmd> — run on this box",
         "/host on|off — host tools",
         "/project bind <path> — bound tree is the world",
+        "/project new <name> — create a project",
+        "/project folder <name> — create a sidebar folder",
+        "/project rename <name> — rename the selected project",
+        "/project move <folder>|root — add the selected project to a folder",
         "/memory note <fact> — write MEMORY.md",
         "/recall <q> — search memory",
         "/forget <topic> — drop matching memory lines",
@@ -378,6 +418,10 @@ mod tests {
         assert_eq!(parse_slash("/sh ls /tmp"), Some(Slash::Sh("ls /tmp".into())));
         assert_eq!(parse_slash("$ echo hi"), Some(Slash::Sh("echo hi".into())));
         assert_eq!(parse_slash("/project bind ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
+        assert_eq!(parse_slash("/project new Night watch"), Some(Slash::ProjectNew("Night watch".into())));
+        assert_eq!(parse_slash("/project folder Cabin"), Some(Slash::ProjectFolder("Cabin".into())));
+        assert_eq!(parse_slash("/project rename Dawn"), Some(Slash::ProjectRename("Dawn".into())));
+        assert_eq!(parse_slash("/project move Cabin"), Some(Slash::ProjectMove("Cabin".into())));
         assert_eq!(parse_slash("/inhabit cabin-2"), Some(Slash::Inhabit("cabin-2".into())));
         assert_eq!(parse_slash("/send flash the pi"), Some(Slash::Send("flash the pi".into())));
         assert_eq!(slash_kind(&Slash::Update), "update");
