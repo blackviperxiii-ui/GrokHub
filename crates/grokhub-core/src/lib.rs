@@ -71,11 +71,12 @@ pub use chat_view::{
     is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
 };
 pub use chips::{
-    build_quick_chips, chip_memory_key, chip_suggest_prompt, context_fingerprint, detect_chip_context,
-    detect_chip_stage, empty_chip_memory, mode_from_chip_value, nav_from_chip_value, parse_llm_chips,
-    predict_intents, remember_chip_click, remember_chip_dismiss, remember_chip_outcome,
-    remember_typed_prompt, should_refresh_llm, top_habit_labels, ChipInput, ChipKind, ChipMemory,
-    ChipStage, PredictedIntent, QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_VISIBLE_MAX,
+    build_quick_chips, chip_memory_key, chip_suggest_prompt, chip_thread_from_messages,
+    context_fingerprint, detect_chip_context, detect_chip_stage, empty_chip_memory,
+    mode_from_chip_value, nav_from_chip_value, parse_llm_chips, predict_intents, remember_chip_click,
+    remember_chip_dismiss, remember_chip_outcome, remember_typed_prompt, should_refresh_llm,
+    top_habit_labels, ChipInput, ChipKind, ChipMemory, ChipStage, ChipThread, PredictedIntent,
+    QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
 };
 pub use doctor::{doctor_extras, doctor_lines, doctor_ok, DoctorLine};
 pub use frame::{encode_b64, frame_bytes, jpeg_data_url, FrameGet, PresenceFrame};

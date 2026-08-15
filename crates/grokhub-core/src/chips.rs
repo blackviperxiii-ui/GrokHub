@@ -9,6 +9,7 @@ use crate::is_plain_text;
 pub const CHIP_VISIBLE_MAX: usize = 5;
 pub const CHIP_HARD_MAX: usize = 8;
 pub const CHIP_LLM_DEBOUNCE_MS: u64 = 1200;
+pub const CHIP_LLM_MODE: &str = "fast";
 const MAX_HITS: usize = 80;
 const MAX_TRANSITIONS: usize = 12;
 
@@ -186,6 +187,13 @@ pub struct ChipContext {
     pub incomplete: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChipThread {
+    pub title: String,
+    pub last_user: String,
+    pub last_assistant: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ChipInput<'a> {
     pub chat: &'a [(String, String)],
@@ -203,6 +211,7 @@ pub struct ChipInput<'a> {
     pub hour: u8,
     pub now_ms: u64,
     pub max: usize,
+    pub other_threads: &'a [ChipThread],
 }
 
 pub fn empty_chip_memory() -> ChipMemory {
@@ -633,6 +642,101 @@ fn chips_from_last_assistant(chat: &[(String, String)]) -> Vec<QuickChip> {
             76.0,
             "Action list",
         ));
+    }
+    out
+}
+
+pub fn chip_thread_from_messages(title: &str, messages: &[(String, String)]) -> Option<ChipThread> {
+    let title = title.trim();
+    if title.is_empty() {
+        return None;
+    }
+    let last_user_raw = last_of(messages, "user");
+    let last_assistant_raw = last_of(messages, "assistant");
+    let last_user = if is_plain_text(&last_user_raw) {
+        last_user_raw
+    } else {
+        String::new()
+    };
+    let last_assistant = if is_plain_text(&last_assistant_raw) {
+        last_assistant_raw
+    } else {
+        String::new()
+    };
+    if last_user.trim().is_empty() && last_assistant.trim().is_empty() {
+        return None;
+    }
+    Some(ChipThread {
+        title: title.to_string(),
+        last_user,
+        last_assistant,
+    })
+}
+
+fn skip_other_thread_title(title: &str) -> bool {
+    let t = title.trim();
+    t.is_empty() || t.eq_ignore_ascii_case("chat") || t.eq_ignore_ascii_case("scratch")
+}
+
+fn chips_from_other_threads(threads: &[ChipThread]) -> Vec<QuickChip> {
+    let mut out = vec![];
+    for (i, t) in threads.iter().enumerate() {
+        if skip_other_thread_title(&t.title) || !is_plain_text(&t.title) {
+            continue;
+        }
+        let last_user = t.last_user.trim();
+        let last_asst = t.last_assistant.trim();
+        if last_user.is_empty() && last_asst.is_empty() {
+            continue;
+        }
+        if !last_user.is_empty() && !is_plain_text(last_user) {
+            continue;
+        }
+        let label = shorten(&format!("Continue {}", t.title.trim()), 34);
+        let value = if !last_user.is_empty() {
+            format!(
+                "Continue the work from the chat \"{}\". Last ask: {}. Pick up where we left off and act now.",
+                t.title.trim(),
+                shorten(last_user, 160)
+            )
+        } else {
+            format!(
+                "Continue the work from the chat \"{}\". Pick up where we left off and act now.",
+                t.title.trim()
+            )
+        };
+        if !is_plain_text(&value) {
+            continue;
+        }
+        out.push(chip(
+            &format!("prev-{i}"),
+            &label,
+            &value,
+            ChipKind::Chat,
+            86.0 - (i as f32 * 3.0),
+            "From a previous chat",
+        ));
+        if i == 0 && last_asst.len() >= 24 && is_plain_text(last_asst) {
+            let follow = chips_from_last_assistant(&[("assistant".into(), last_asst.to_string())]);
+            if let Some(mut c) = follow.into_iter().next() {
+                c.id = format!("prev-act-{i}");
+                c.label = shorten(&format!("{} · {}", c.label, t.title.trim()), 34);
+                c.value = format!(
+                    "In the previous chat \"{}\": {}. {}",
+                    t.title.trim(),
+                    shorten(if last_user.is_empty() { last_asst } else { last_user }, 80),
+                    c.value
+                );
+                c.score = 84.0 - (i as f32);
+                c.hint = format!("From a previous reply in {}", t.title.trim());
+                if is_plain_text(&c.value) && is_plain_text(&c.label) {
+                    out.push(c);
+                }
+            }
+        }
+        if out.len() >= 2 {
+            break;
+        }
     }
     out
 }
@@ -1251,6 +1355,46 @@ fn default_chips(mode: &str) -> Vec<QuickChip> {
             22.0,
             "Images",
         ),
+        chip(
+            "def-brief",
+            "Cabin brief",
+            "Give me a short cabin brief: what's open, host health, and the next useful step.",
+            ChipKind::Chat,
+            21.0,
+            "Default",
+        ),
+        chip(
+            "def-night",
+            "Set a night job",
+            "Help me set a night automation. Ask one question, then propose a real schedule I can save.",
+            ChipKind::Chat,
+            20.0,
+            "Default",
+        ),
+        chip(
+            "def-board",
+            "Open workboard",
+            "__nav:workboard",
+            ChipKind::Nav,
+            19.0,
+            "Default",
+        ),
+        chip(
+            "def-history",
+            "Recent chats",
+            "__nav:history",
+            ChipKind::Nav,
+            18.0,
+            "Default",
+        ),
+        chip(
+            "def-github",
+            "GitHub whoami",
+            "If a GitHub PAT is set, run CONNECTOR_CMD github user and summarize who I am. If not, tell me how to add one in Settings.",
+            ChipKind::Chat,
+            17.0,
+            "Default",
+        ),
     ]
 }
 
@@ -1373,6 +1517,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
     }
 
     chips.extend(chips_from_last_assistant(input.chat));
+    chips.extend(chips_from_other_threads(input.other_threads));
     if ctx.incomplete {
         chips.push(chip(
             "ctx-incomplete",
@@ -1517,12 +1662,15 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         picked.push(c.clone());
         *kind_count.entry(kind_id(c.kind)).or_insert(0) += 1;
     }
-    if picked.len() < 3.min(max) {
+    if picked.len() < max {
         for c in &chips {
             if picked.len() >= max {
                 break;
             }
-            if picked.iter().any(|p| p.id == c.id) {
+            if picked
+                .iter()
+                .any(|p| p.id == c.id || p.value.eq_ignore_ascii_case(&c.value))
+            {
                 continue;
             }
             picked.push(c.clone());
@@ -1546,6 +1694,7 @@ pub fn chip_suggest_prompt(
     draft: &str,
     habits: &[String],
     dismissed: &[String],
+    other_threads: &[ChipThread],
 ) -> String {
     let ctx = detect_chip_context(chat);
     let stage = detect_chip_stage(chat, false);
@@ -1596,7 +1745,7 @@ pub fn chip_suggest_prompt(
         .join("\n");
     let mut lines = vec![
         "You generate quick-action chips for a Grok desktop agent chat.".into(),
-        "Return ONLY valid JSON array of 3 to 4 objects:".into(),
+        "Return ONLY valid JSON array of up to 5 objects:".into(),
         r#"[{"label":"≤28 chars","value":"full prompt to send","kind":"chat","hint":"why useful"}]"#.into(),
         String::new(),
         "Rules:".into(),
@@ -1605,6 +1754,7 @@ pub fn chip_suggest_prompt(
         "- Prefer next steps grounded in the transcript (not generic tips)".into(),
         "- Predict what the user will want NEXT, not a recap of what already happened".into(),
         "- If user is mid-typing (draft shown), align chips with that draft".into(),
+        "- Also use previous chats, habits, and actions taken on earlier replies".into(),
         "- Avoid chips the user dismissed".into(),
         "- Prefer habits if they fit the current context".into(),
         "- No markdown fences, no commentary outside JSON".into(),
@@ -1626,6 +1776,28 @@ pub fn chip_suggest_prompt(
     }
     if !dismissed.is_empty() {
         lines.push(format!("Dismissed (avoid): {}", dismissed.iter().take(8).cloned().collect::<Vec<_>>().join(" · ")));
+    }
+    let prev: Vec<String> = other_threads
+        .iter()
+        .filter(|t| !skip_other_thread_title(&t.title) && is_plain_text(&t.title))
+        .take(6)
+        .filter_map(|t| {
+            let ask: String = t.last_user.trim().chars().take(120).collect();
+            let reply: String = t.last_assistant.trim().chars().take(120).collect();
+            if !is_plain_text(&ask) || !is_plain_text(&reply) {
+                return None;
+            }
+            Some(format!(
+                "- {} · last ask: {} · last reply: {}",
+                t.title.trim(),
+                if ask.is_empty() { "(none)".into() } else { ask },
+                if reply.is_empty() { "(none)".into() } else { reply }
+            ))
+        })
+        .collect();
+    if !prev.is_empty() {
+        lines.push("Previous chats:".into());
+        lines.extend(prev);
     }
     lines.push(String::new());
     lines.push("Transcript:".into());
@@ -1655,7 +1827,7 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
     match parsed {
         Ok(arr) => {
             for (i, row) in arr.into_iter().enumerate() {
-                if out.len() >= 4 {
+                if out.len() >= CHIP_VISIBLE_MAX {
                     break;
                 }
                 let label = row
@@ -1706,7 +1878,7 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
             }
         }
         Err(_) => {
-            for (i, line) in raw.lines().map(str::trim).filter(|l| !l.is_empty()).take(4).enumerate() {
+            for (i, line) in raw.lines().map(str::trim).filter(|l| !l.is_empty()).take(CHIP_VISIBLE_MAX).enumerate() {
                 let parts: Vec<_> = line.split('|').map(str::trim).collect();
                 let label = parts[0].trim_start_matches(['-', '*', '1', '2', '3', '4', '.', ')', ' ']);
                 let value = if parts.len() > 1 { parts[1] } else { parts[0] };
@@ -1806,6 +1978,7 @@ mod tests {
             hour: 21,
             now_ms: 1_000_000,
             max: 5,
+            other_threads: &[],
         }
     }
 
@@ -1924,7 +2097,7 @@ mod tests {
     #[test]
     fn parse_llm_json_and_prompt_grounding() {
         let chat = [msg("user", "add tests"), msg("assistant", "I will add coverage next.")];
-        let prompt = chip_suggest_prompt(&chat, "Auth", "add tes", &["Check the machine".into()], &["Open Imagine".into()]);
+        let prompt = chip_suggest_prompt(&chat, "Auth", "add tes", &["Check the machine".into()], &["Open Imagine".into()], &[]);
         assert!(prompt.contains("Stage:"));
         assert!(prompt.contains("User is typing: add tes"));
         assert!(prompt.contains("User habits:"));
@@ -2013,5 +2186,149 @@ mod tests {
         assert_eq!(mem.hits.len(), 1);
         assert!(mem.hits[0].typed_uses >= 2);
         assert_eq!(top_habit_labels(&mem, 3)[0], shorten("morning brief for the cabin", 32));
+    }
+
+    fn labels(chips: &[QuickChip]) -> Vec<String> {
+        chips.iter().map(|c| c.label.clone()).collect()
+    }
+
+    #[test]
+    fn always_five_visible_chips() {
+        let mem = ChipMemory::default();
+        let empty = build_quick_chips(input(&[], "", &mem, &[], &[]));
+        assert_eq!(empty.len(), CHIP_VISIBLE_MAX, "empty {:?}", labels(&empty));
+
+        let chat = [
+            msg("user", "hi"),
+            msg("assistant", "Hello — what should we work on in the cabin tonight?"),
+        ];
+        let mid = build_quick_chips(input(&chat, "", &mem, &[], &[]));
+        assert_eq!(mid.len(), CHIP_VISIBLE_MAX, "mid {:?}", labels(&mid));
+
+        let dismissed: Vec<String> = empty
+            .iter()
+            .flat_map(|c| [c.id.clone(), c.value.clone()])
+            .collect();
+        let after = build_quick_chips(input(&[], "", &mem, &dismissed, &[]));
+        assert_eq!(
+            after.len(),
+            CHIP_VISIBLE_MAX,
+            "after dismissing the first row {:?}",
+            labels(&after)
+        );
+    }
+
+    #[test]
+    fn chip_suggest_prompt_asks_for_five() {
+        let prompt = chip_suggest_prompt(&[], "Chat", "", &[], &[], &[]);
+        assert!(
+            prompt.contains("up to 5") || prompt.contains("5 objects"),
+            "Fast chip prompt should ask for five chips: {prompt}"
+        );
+        assert!(
+            !prompt.contains("3 to 4"),
+            "Fast chip prompt still asks for 3 to 4: {prompt}"
+        );
+    }
+
+    #[test]
+    fn parse_llm_accepts_five() {
+        let chips = parse_llm_chips(
+            r#"[{"label":"Continue the wall","value":"Continue painting the cabin wall.","kind":"chat"},{"label":"Check the machine","value":"Run a read-only HOST_CMD snapshot.","kind":"chat"},{"label":"Think Harder","value":"__mode:think","kind":"mode"},{"label":"Open Imagine","value":"__nav:imagine","kind":"nav"},{"label":"Make a checklist","value":"Turn the last answer into a short checklist.","kind":"chat"}]"#,
+        );
+        assert_eq!(chips.len(), 5, "{:?}", labels(&chips));
+    }
+
+    #[test]
+    fn other_threads_seed_continue_chips() {
+        let mem = ChipMemory::default();
+        let others = [ChipThread {
+            title: "Night cabin".into(),
+            last_user: "paint the wall".into(),
+            last_assistant: "I can sketch the first coat next.".into(),
+        }];
+        let mut inp = input(&[], "", &mem, &[], &[]);
+        inp.other_threads = &others;
+        let chips = build_quick_chips(inp);
+        assert!(
+            chips.iter().any(|c| {
+                c.label.contains("Night cabin") || c.value.contains("paint the wall")
+            }),
+            "expected a continue chip from the other chat, got {:?}",
+            labels(&chips)
+        );
+    }
+
+    #[test]
+    fn scratch_and_empty_other_threads_are_skipped() {
+        let mem = ChipMemory::default();
+        let others = [
+            ChipThread {
+                title: "Scratch".into(),
+                last_user: "ignore me".into(),
+                last_assistant: String::new(),
+            },
+            ChipThread {
+                title: "Chat".into(),
+                last_user: "also ignore".into(),
+                last_assistant: String::new(),
+            },
+        ];
+        let mut inp = input(&[], "", &mem, &[], &[]);
+        inp.other_threads = &others;
+        let chips = build_quick_chips(inp);
+        let blob = chips
+            .iter()
+            .map(|c| format!("{} {}", c.label, c.value))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_ascii_lowercase();
+        assert!(!blob.contains("ignore me"), "{blob}");
+        assert!(!blob.contains("also ignore"), "{blob}");
+    }
+
+    #[test]
+    fn chip_suggest_prompt_includes_other_chats() {
+        let others = [ChipThread {
+            title: "Night cabin".into(),
+            last_user: "paint the wall".into(),
+            last_assistant: "First coat is ready.".into(),
+        }];
+        let prompt = chip_suggest_prompt(&[], "Chat", "", &["Check the machine".into()], &[], &others);
+        assert!(prompt.contains("Night cabin"), "{prompt}");
+        assert!(prompt.contains("paint the wall"), "{prompt}");
+        assert!(prompt.contains("Previous"), "{prompt}");
+    }
+
+    #[test]
+    fn chip_llm_is_fast_mode() {
+        assert_eq!(CHIP_LLM_MODE, "fast");
+        assert_eq!(crate::model_for_mode(CHIP_LLM_MODE), "grok-3-mini-fast");
+    }
+
+    #[test]
+    fn previous_reply_outcome_boosts_the_habit() {
+        let mut mem = ChipMemory::default();
+        let habit = chip(
+            "empty-host",
+            "Check the machine",
+            "Run a quick read-only system snapshot via HOST_CMD (uname, whoami, pwd). Summarize.",
+            ChipKind::Chat,
+            64.0,
+            "Desktop host",
+        );
+        remember_chip_click(&mut mem, &habit, Some("mid"), 3_000, 21);
+        remember_chip_outcome(&mut mem, true, 4_000);
+        remember_chip_outcome(&mut mem, true, 5_000);
+        let chat = [
+            msg("user", "hi"),
+            msg("assistant", "Hello — what should we work on in the cabin tonight?"),
+        ];
+        let ranked = build_quick_chips(input(&chat, "", &mem, &[], &[]));
+        assert!(
+            ranked.iter().any(|c| c.value.contains("HOST_CMD") || c.label.contains("machine")),
+            "{:?}",
+            labels(&ranked)
+        );
     }
 }
