@@ -59,9 +59,11 @@ pub fn should_failover_status(status: u16) -> bool {
     matches!(status, 401 | 403 | 429) || (500..600).contains(&status)
 }
 
+/// Permanent until Jeremy says otherwise: Think → Grok 4.3, Max → Grok 4.6.
 pub fn model_for_mode(mode: &str) -> &'static str {
     match mode {
-        "max" | "deep" | "heavy" => "grok-4-latest",
+        "max" | "deep" | "heavy" => "grok-4.6",
+        "thinking" | "think" => "grok-4.3",
         "balanced" | "build" | "expert" => "grok-3",
         "auto" => "grok-3-mini-fast",
         _ => DEFAULT_MODEL,
@@ -131,6 +133,18 @@ mod tests {
         assert!(should_failover_status(429));
         assert!(!should_failover_status(200));
         assert_eq!(failover_model("grok-4-latest"), Some("grok-3"));
+        assert_eq!(failover_model("grok-4.6"), Some("grok-3"));
         assert!(failover_model(DEFAULT_MODEL).is_none());
+    }
+
+    #[test]
+    fn thinking_is_grok_4_3_and_max_is_grok_4_6() {
+        assert_eq!(model_for_mode("thinking"), "grok-4.3");
+        assert_eq!(model_for_mode("think"), "grok-4.3");
+        assert_eq!(model_for_mode("max"), "grok-4.6");
+        assert_eq!(model_for_mode("deep"), "grok-4.6");
+        assert_eq!(model_for_mode("heavy"), "grok-4.6");
+        assert_ne!(model_for_mode("thinking"), model_for_mode("max"));
+        assert_ne!(model_for_mode("max"), "grok-4-latest");
     }
 }

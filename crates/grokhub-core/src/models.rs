@@ -10,6 +10,8 @@ pub struct ModelRow {
 pub const MODEL_CATALOG: &[ModelRow] = &[
     ModelRow { id: "grok-3-mini-fast", label: "Grok 3 Mini Fast", kind: "chat" },
     ModelRow { id: "grok-3", label: "Grok 3", kind: "chat" },
+    ModelRow { id: "grok-4.3", label: "Grok 4.3", kind: "chat" },
+    ModelRow { id: "grok-4.6", label: "Grok 4.6", kind: "chat" },
     ModelRow { id: "grok-4-latest", label: "Grok 4", kind: "chat" },
     ModelRow { id: "grok-4-1-fast-non-reasoning", label: "Grok 4.1 Fast", kind: "chat" },
     ModelRow { id: "grok-2-image", label: "Grok 2 Image", kind: "imagine" },
@@ -40,7 +42,11 @@ mod tests {
     #[test]
     fn catalog() {
         assert_eq!(sanitize_chat_model("grok-3"), "grok-3");
+        assert_eq!(sanitize_chat_model("grok-4.3"), "grok-4.3");
+        assert_eq!(sanitize_chat_model("grok-4.6"), "grok-4.6");
         assert_eq!(sanitize_chat_model("nope"), crate::DEFAULT_MODEL);
+        assert!(catalog_line().contains("grok-4.3"));
+        assert!(catalog_line().contains("grok-4.6"));
         assert!(catalog_line().contains("grok-voice-latest"));
     }
 }
