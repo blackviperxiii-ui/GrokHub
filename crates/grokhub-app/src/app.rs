@@ -22,15 +22,20 @@ use grokhub_core::{
     WallGif, WALL_GIF_EVERY_MS,
     WALL_GIF_MAX,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
+    night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     imagine_aspect_label, imagine_aspect_name, imagine_style_label, imagine_video_dur_label,
     imagine_video_res_label,
     extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
     forget_topic, greet_from_last_job, has_auth, has_goal_complete, has_verify_ok, hey_grok_on_press,
     import_memory_file, insight_pin, is_openclaw_workspace,
-    host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
+    add_to_folder, create_folder, create_project, drop_node, folder_choices, host_cmd_leaves_project,
+    host_hour_blocked, host_risk, host_status_line, is_hard_run, rename_node, seed_from_bound,
+    settle_project_path, stage_project, toggle_folder, upsert_bound, visible_tree, ProjectKind,
+    ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
+    resolve_chat_model, effective_chat_mode, settings_pin_blocks_auto,
     needs_auth_banner, next_goal_prompt, parse_fast_topics,
     now_ms, on_wheel_grab, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
     parse_nl_automation, parse_recipe, parse_slash, passenger_label, plan_from_text, plan_room,
@@ -46,7 +51,7 @@ use grokhub_core::{
     thread_goal_prompt, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
     unified_diff_cite, usage_line,
-    transcribe_route, uid, update_cmds, update_wipes_config, voice_session_url, Automation, BoardCard,
+    transcribe_route, uid, update_cmds, update_plan_steps, update_wipes_config, voice_session_url, Automation, BoardCard,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ComputerOp, DeviceCodeStart, HeyGrokAction,
     HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, Recipe, ReplayOp, RewindRecord,
@@ -80,7 +85,7 @@ enum Nav {
     Settings,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsSec {
     Account,
     Appearance,
@@ -93,6 +98,109 @@ enum SettingsSec {
     Update,
     About,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsGroup {
+    General,
+    Cabin,
+    Data,
+    About,
+}
+
+fn settings_group_home(group: SettingsGroup) -> SettingsSec {
+    match group {
+        SettingsGroup::General => SettingsSec::Account,
+        SettingsGroup::Cabin => SettingsSec::Host,
+        SettingsGroup::Data => SettingsSec::Github,
+        SettingsGroup::About => SettingsSec::Update,
+    }
+}
+
+fn slash_pick_step(pick: usize, len: usize, dir: i8) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let clamped = pick.min(len - 1);
+    match dir {
+        1 => (clamped + 1).min(len - 1),
+        -1 => clamped.saturating_sub(1),
+        _ => clamped,
+    }
+}
+
+/// Tab / click accept. `Some` means run the command this frame.
+fn slash_pick_take(composer: &mut String, insert: &str, run_on_pick: bool) -> Option<String> {
+    *composer = insert.to_string();
+    if run_on_pick {
+        Some(std::mem::take(composer))
+    } else {
+        None
+    }
+}
+
+fn slash_pick_retain(pick: usize, list_changed: bool, len: usize) -> usize {
+    if list_changed || len == 0 {
+        0
+    } else {
+        slash_pick_step(pick, len, 0)
+    }
+}
+
+fn next_maximized(currently: bool) -> bool {
+    !currently
+}
+
+fn cabin_menu_should_dismiss(ignore: bool, outside_click: bool) -> bool {
+    !ignore && outside_click
+}
+
+fn next_starter_skill_name(existing: &[String]) -> String {
+    if !existing.iter().any(|n| n == "new-skill") {
+        return "new-skill".into();
+    }
+    let mut i = 2_u32;
+    loop {
+        let name = format!("new-skill-{i}");
+        if !existing.iter().any(|n| n == &name) {
+            return name;
+        }
+        i = i.saturating_add(1);
+        if i > 99 {
+            return format!("new-skill-{i}");
+        }
+    }
+}
+
+fn wants_live_repaint(
+    running: bool,
+    chip_busy: bool,
+    hub_on: bool,
+    window_visible: bool,
+    imagine: bool,
+) -> bool {
+    let _ = window_visible;
+    running || chip_busy || hub_on || imagine
+}
+
+const HIDDEN_HEARTBEAT_MS: u64 = 400;
+
+fn night_host_check_blocks_ui() -> bool {
+    false
+}
+
+fn mode_status_line(mode: &str, pinned_model: &str) -> String {
+    if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
+        return "Mode auto — routes Fast / Balance / Think / Max".into();
+    }
+    let model = resolve_chat_model(mode, pinned_model);
+    match grokhub_core::reasoning_effort_for_mode(mode) {
+        Some(effort) => format!("Mode {mode} → {model} · {effort}"),
+        None => format!("Mode {mode} → {model}"),
+    }
+}
+
+const RAIL_FOOTER_H: f32 = 52.0;
+const PALETTE_LIST_H: f32 = 280.0;
 
 fn settings_sec_title(sec: SettingsSec) -> &'static str {
     match sec {
@@ -268,13 +376,18 @@ pub struct Cabin {
     daily_auto_used: u32,
     daily_auto_day: String,
     slash_pick: usize,
+    slash_filter_n: usize,
+    slash_filter_first: &'static str,
     last_window_title: String,
     voice_orb: String,
     last_night_tick: Instant,
+    night_check_rx: Option<(String, mpsc::Receiver<(String, i32)>)>,
     learning: LearningState,
     usage: UsageDay,
     palette_open: bool,
     palette_q: String,
+    palette_pick: usize,
+    palette_focus: bool,
     shortcuts_open: bool,
     pending_skill: Option<SkillMd>,
     goal_step: u32,
@@ -310,6 +423,8 @@ pub struct Cabin {
     auto_compose: bool,
     board_compose: bool,
     settings_menu_open: bool,
+    settings_menu_ignore: bool,
+    win_max: bool,
     imagine_want_focus: bool,
     settings_sec: SettingsSec,
     settings_back: Nav,
@@ -328,6 +443,20 @@ pub struct Cabin {
     wall: ImagineWall,
     wall_rx: Option<mpsc::Receiver<Result<WallGif, String>>>,
     wall_busy: bool,
+    projects: Vec<ProjectNode>,
+    project_sel: Option<String>,
+    proj_menu: Option<String>,
+    proj_menu_pos: egui::Pos2,
+    proj_plus_open: bool,
+    proj_plus_pos: egui::Pos2,
+    proj_add_for: Option<String>,
+    proj_rename: Option<String>,
+    proj_rename_buf: String,
+    proj_rename_focus: bool,
+    proj_rename_lock: Option<String>,
+    proj_staged: Option<String>,
+    proj_ignore_close: bool,
+    projects_dirty: bool,
 }
 
 fn paint_wall_cover(
@@ -411,6 +540,15 @@ impl Cabin {
                 cfg.project_dir = format!("{home}/GrokHub-Work");
             }
         }
+        let mut projects = crate::store::load_projects();
+        if projects.is_empty() {
+            projects = seed_from_bound(&cfg.project_dir);
+        }
+        let project_sel = projects
+            .iter()
+            .find(|n| n.kind == ProjectKind::Project && n.path == cfg.project_dir)
+            .or_else(|| projects.iter().find(|n| n.kind == ProjectKind::Project))
+            .map(|n| n.id.clone());
         let secrets = secrets::load();
         let approve_risky_only = cfg.approve_risky_only;
         let mut c = Self {
@@ -471,13 +609,18 @@ impl Cabin {
             daily_auto_used: 0,
             daily_auto_day: String::new(),
             slash_pick: 0,
+            slash_filter_n: 0,
+            slash_filter_first: "",
             last_window_title: String::new(),
             voice_orb: "idle".into(),
             last_night_tick: Instant::now(),
+            night_check_rx: None,
             learning: crate::store::load_learning(),
             usage: crate::store::load_usage(),
             palette_open: false,
             palette_q: String::new(),
+            palette_pick: 0,
+            palette_focus: false,
             shortcuts_open: false,
             pending_skill: None,
             goal_step: 0,
@@ -512,6 +655,8 @@ impl Cabin {
             auto_compose: false,
             board_compose: false,
             settings_menu_open: false,
+            settings_menu_ignore: false,
+            win_max: false,
             imagine_want_focus: false,
             settings_sec: SettingsSec::Account,
             settings_back: Nav::Chat,
@@ -530,6 +675,20 @@ impl Cabin {
             wall: crate::store::load_wall(),
             wall_rx: None,
             wall_busy: false,
+            projects,
+            project_sel,
+            proj_menu: None,
+            proj_menu_pos: egui::Pos2::ZERO,
+            proj_plus_open: false,
+            proj_plus_pos: egui::Pos2::ZERO,
+            proj_add_for: None,
+            proj_rename: None,
+            proj_rename_buf: String::new(),
+            proj_rename_focus: false,
+            proj_rename_lock: None,
+            proj_staged: None,
+            proj_ignore_close: false,
+            projects_dirty: false,
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
             let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
@@ -564,6 +723,7 @@ impl Cabin {
         let _ = crate::store::save_usage(&self.usage);
         let _ = crate::store::save_chips(&self.chip_memory);
         let _ = crate::store::save_wall(&self.wall);
+        self.flush_projects();
         let _ = config::save(&self.cfg);
         if let Ok(st) = self.hub.lock() {
             let _ = save_hub_state(&config::hub_state_path(), &st);
@@ -580,6 +740,209 @@ impl Cabin {
 
     fn has_key(&self) -> bool {
         has_auth(&self.cfg.api_key, &secrets::access_token(&self.secrets))
+    }
+
+    fn work_root(&self) -> String {
+        if let Ok(home) = std::env::var("HOME") {
+            format!("{home}/GrokHub-Work")
+        } else {
+            "GrokHub-Work".into()
+        }
+    }
+
+    fn touch_projects(&mut self) {
+        self.projects_dirty = true;
+    }
+
+    fn flush_projects(&mut self) {
+        if !self.projects_dirty {
+            return;
+        }
+        let _ = crate::store::save_projects(&self.projects);
+        self.projects_dirty = false;
+    }
+
+    fn bind_project_id(&mut self, id: &str) {
+        let Some(n) = self.projects.iter().find(|n| n.id == id && n.kind == ProjectKind::Project) else {
+            return;
+        };
+        let path = n.path.clone();
+        let name = n.name.clone();
+        if !path.trim().is_empty() {
+            if !std::path::Path::new(&path).is_dir() {
+                let _ = std::fs::create_dir_all(&path);
+            }
+            self.cfg.project_dir = path.clone();
+        }
+        let already = self.project_sel.as_deref() == Some(id);
+        self.project_sel = Some(id.to_string());
+        if click_project_opens_board(already) {
+            self.nav = Nav::Workboard;
+        }
+        self.status = format!("Bound {name}");
+        self.persist();
+    }
+
+    fn make_project(&mut self, name: &str, parent: Option<&str>) {
+        let id = uid("proj");
+        let root = self.work_root();
+        match create_project(&mut self.projects, &id, name, parent, &root) {
+            Ok(i) => {
+                let path = self.projects[i].path.clone();
+                if !std::path::Path::new(&path).is_dir() {
+                    let _ = std::fs::create_dir_all(&path);
+                }
+                self.touch_projects();
+                self.bind_project_id(&id);
+                self.status = format!("Project {}", self.projects[i].name);
+            }
+            Err(e) => self.status = e.into(),
+        }
+    }
+
+    fn stage_new_project(&mut self, parent: Option<&str>) {
+        let id = uid("proj");
+        match stage_project(&mut self.projects, &id, "Project", parent) {
+            Ok(_) => {
+                if let Some(pid) = parent {
+                    if let Some(f) = self.projects.iter_mut().find(|n| n.id == pid) {
+                        f.open = true;
+                    }
+                }
+                self.begin_proj_rename(id.clone(), String::new());
+                self.proj_staged = Some(id);
+                self.status = "Name this project".into();
+                self.touch_projects();
+                self.persist();
+            }
+            Err(e) => self.status = e.into(),
+        }
+    }
+
+    fn make_folder(&mut self, name: &str) {
+        let id = uid("fold");
+        match create_folder(&mut self.projects, &id, name, None) {
+            Ok(i) => {
+                self.status = format!("Folder {}", self.projects[i].name);
+                self.touch_projects();
+                self.persist();
+            }
+            Err(e) => self.status = e.into(),
+        }
+    }
+
+    fn stage_new_folder(&mut self) {
+        let id = uid("fold");
+        match create_folder(&mut self.projects, &id, "Folder", None) {
+            Ok(_) => {
+                self.begin_proj_rename(id.clone(), String::new());
+                self.proj_staged = Some(id);
+                self.status = "Name this folder".into();
+                self.touch_projects();
+                self.persist();
+            }
+            Err(e) => self.status = e.into(),
+        }
+    }
+
+    fn begin_proj_rename(&mut self, id: String, buf: String) {
+        self.proj_rename_lock = if buf.is_empty() { None } else { Some(buf.clone()) };
+        self.proj_rename_buf = buf;
+        self.proj_rename = Some(id);
+        self.proj_rename_focus = true;
+    }
+
+    fn cancel_proj_rename(&mut self) {
+        let id = self.proj_rename.take();
+        self.proj_rename_buf.clear();
+        self.proj_rename_focus = false;
+        self.proj_rename_lock = None;
+        if let Some(id) = id {
+            if self.proj_staged.as_deref() == Some(id.as_str()) {
+                drop_node(&mut self.projects, &id);
+                self.touch_projects();
+                self.persist();
+            }
+        }
+        self.proj_staged = None;
+    }
+
+    fn finish_proj_rename(&mut self) {
+        let Some(id) = self.proj_rename.take() else {
+            return;
+        };
+        let staged = self.proj_staged.as_deref() == Some(id.as_str());
+        match rename_node(&mut self.projects, &id, &self.proj_rename_buf) {
+            Ok(()) => {
+                self.status = format!("Renamed {}", self.proj_rename_buf.trim());
+                self.touch_projects();
+                let mut bound = false;
+                if staged {
+                    let root = self.work_root();
+                    if let Ok(path) = settle_project_path(&mut self.projects, &id, &root) {
+                        if !path.is_empty() {
+                            if !std::path::Path::new(&path).is_dir() {
+                                let _ = std::fs::create_dir_all(&path);
+                            }
+                            self.bind_project_id(&id);
+                            bound = true;
+                        }
+                    }
+                }
+                if !bound {
+                    self.persist();
+                }
+            }
+            Err(e) => {
+                if staged {
+                    drop_node(&mut self.projects, &id);
+                    self.touch_projects();
+                }
+                self.status = e.into();
+            }
+        }
+        self.proj_rename_buf.clear();
+        self.proj_rename_focus = false;
+        self.proj_rename_lock = None;
+        self.proj_staged = None;
+    }
+
+    fn move_sel_to_folder_name(&mut self, folder: &str) {
+        let Some(pid) = self.project_sel.clone() else {
+            self.status = "Select a project first".into();
+            return;
+        };
+        if folder.eq_ignore_ascii_case("root") {
+            match add_to_folder(&mut self.projects, &pid, None) {
+                Ok(()) => {
+                    self.status = "Moved to Projects".into();
+                    self.touch_projects();
+                    self.persist();
+                }
+                Err(e) => self.status = e.into(),
+            }
+            return;
+        }
+        let fid = self
+            .projects
+            .iter()
+            .find(|n| n.kind == ProjectKind::Folder && n.name.eq_ignore_ascii_case(folder))
+            .map(|n| n.id.clone());
+        let Some(fid) = fid else {
+            self.status = format!("No folder {folder}");
+            return;
+        };
+        match add_to_folder(&mut self.projects, &pid, Some(&fid)) {
+            Ok(()) => {
+                if let Some(f) = self.projects.iter_mut().find(|n| n.id == fid) {
+                    f.open = true;
+                }
+                self.status = format!("Added to {folder}");
+                self.touch_projects();
+                self.persist();
+            }
+            Err(e) => self.status = e.into(),
+        }
     }
 
     fn chat_pairs(&self) -> Vec<(String, String)> {
@@ -711,7 +1074,8 @@ impl Cabin {
         self.goal_busy = true;
         self.goal_stale = false;
         std::thread::spawn(move || {
-            let reply = grok_chat(&key, &model, &[("user".into(), prompt)], None).unwrap_or_default();
+            let reply = grok_chat(&key, &model, &[("user".into(), prompt)], None, None)
+                .unwrap_or_default();
             let _ = tx.send((tid, reply));
         });
     }
@@ -789,7 +1153,7 @@ impl Cabin {
         self.chip_rx = Some(rx);
         self.chip_busy = true;
         std::thread::spawn(move || {
-            let chips = grok_chat(&key, &model, &[("user".into(), prompt)], None)
+            let chips = grok_chat(&key, &model, &[("user".into(), prompt)], None, None)
                 .map(|t| parse_llm_chips(&t))
                 .unwrap_or_default();
             let _ = tx.send(chips);
@@ -860,7 +1224,8 @@ impl Cabin {
     fn mode_label(mode: &str) -> &'static str {
         match mode {
             "max" | "deep" | "heavy" => "Max",
-            "balanced" | "build" | "expert" => "Think",
+            "think" | "build" | "expert" => "Think",
+            "balanced" | "balance" => "Balance",
             "fast" => "Fast",
             _ => "Auto",
         }
@@ -1248,22 +1613,22 @@ impl Cabin {
             }
             Slash::Health => {
                 self.nav = Nav::Settings;
+                self.settings_sec = health_settings_sec();
                 self.status = self.doctor_text();
             }
             Slash::Fix => {
                 self.rx = None;
                 self.running = false;
                 self.voice_orb = "idle".into();
+                self.nav = Nav::Settings;
+                self.settings_sec = health_settings_sec();
                 self.status = self.doctor_text();
             }
             Slash::Remember(note) => self.run_slash(Slash::MemoryNote(note)),
             Slash::Mode(mode) => {
                 self.cfg.mode = mode.clone();
-                if self.cfg.model.trim().is_empty() || self.cfg.model == DEFAULT_MODEL {
-                    self.cfg.model = model_for_mode(&mode).to_string();
-                }
                 let _ = config::save(&self.cfg);
-                self.status = format!("Mode {mode} → {}", model_for_mode(&mode));
+                self.status = mode_status_line(&mode, &self.cfg.model);
             }
             Slash::Dream => self.run_dream(),
             Slash::Import => self.import_openclaw(),
@@ -1278,15 +1643,15 @@ impl Cabin {
                 });
                 self.persist();
             }
-            Slash::Palette => {
-                self.palette_open = true;
-            }
+            Slash::Palette => self.open_palette(),
             Slash::ProjectBind(path) => {
                 let p = path.unwrap_or_else(|| self.cfg.project_dir.clone());
                 let p = expand_home(&p);
                 self.cfg.project_dir = p.clone();
                 let _ = std::fs::create_dir_all(&p);
-                let _ = config::save(&self.cfg);
+                self.project_sel = upsert_bound(&mut self.projects, &p);
+                self.touch_projects();
+                self.persist();
                 self.status = format!("Bound {p}");
             }
             Slash::ProjectClear => {
@@ -1301,6 +1666,23 @@ impl Cabin {
                     format!("Project {}", self.cfg.project_dir)
                 };
             }
+            Slash::ProjectNew(name) => self.make_project(&name, None),
+            Slash::ProjectFolder(name) => self.make_folder(&name),
+            Slash::ProjectRename(name) => {
+                let Some(id) = self.project_sel.clone() else {
+                    self.status = "Select a project first".into();
+                    return;
+                };
+                match rename_node(&mut self.projects, &id, &name) {
+                    Ok(()) => {
+                        self.status = format!("Renamed {name}");
+                        self.touch_projects();
+                        self.persist();
+                    }
+                    Err(e) => self.status = e.into(),
+                }
+            }
+            Slash::ProjectMove(folder) => self.move_sel_to_folder_name(&folder),
             Slash::Send(task) => self.dispatch_send(task),
             Slash::Sync => self.sync_hub(),
             Slash::Hub => {
@@ -1315,7 +1697,9 @@ impl Cabin {
                 let p = format!("{home}/{}", plan.project_rel);
                 let _ = std::fs::create_dir_all(&p);
                 self.cfg.project_dir = p.clone();
-                let _ = config::save(&self.cfg);
+                self.project_sel = upsert_bound(&mut self.projects, &p);
+                self.touch_projects();
+                self.persist();
                 self.status = format!("Room {} → {p}", plan.slug);
                 self.queue_sh(plan.host_script);
             }
@@ -1648,18 +2032,61 @@ impl Cabin {
             .into_iter()
             .map(|a| ensure_automation_schedule(a, clock_copy))
             .collect();
+        if self.poll_night_check(clock.now_ms) {
+            return;
+        }
         let due = due_automations(&self.automations, clock.now_ms);
         let Some(a) = due.into_iter().next() else {
             return;
         };
-        if !a.check_command.trim().is_empty() {
-            let out = run_host(&a.check_command, Duration::from_secs(20));
-            let code = if out.contains("exit 0") { 0 } else { 1 };
-            if skip_automation(&out, code) {
-                self.mark_auto_ran(&a.id, clock.now_ms);
-                return;
-            }
+        if let Some(cmd) = night_check_command(&a.check_command) {
+            self.spawn_night_check(a.id.clone(), a.name.clone(), cmd.to_string());
+            return;
         }
+        self.fire_night(a, clock.now_ms);
+    }
+
+    fn poll_night_check(&mut self, now_ms: u64) -> bool {
+        let Some((id, rx)) = self.night_check_rx.take() else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok((out, _code)) => {
+                if skip_night_check_receipt(&out) {
+                    let name = self
+                        .automations
+                        .iter()
+                        .find(|a| a.id == id)
+                        .map(|a| a.name.clone())
+                        .unwrap_or_else(|| id.clone());
+                    self.mark_auto_ran(&id, now_ms);
+                    self.status = format!("Night skipped {name} (check)");
+                } else if let Some(a) = self.automations.iter().find(|x| x.id == id).cloned() {
+                    self.fire_night(a, now_ms);
+                }
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.night_check_rx = Some((id, rx));
+                true
+            }
+            Err(mpsc::TryRecvError::Disconnected) => false,
+        }
+    }
+
+    fn spawn_night_check(&mut self, id: String, name: String, cmd: String) {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let out = run_host(&cmd, Duration::from_secs(20));
+            let code = night_check_exit_code(&out);
+            let _ = tx.send((out, code));
+        });
+        self.night_check_rx = Some((id, rx));
+        self.status = format!("Night check: {name}");
+    }
+
+    fn fire_night(&mut self, a: Automation, now_ms: u64) {
+        let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
         let destructive = a.instructions.to_ascii_lowercase().contains("rm ")
             || host_risk(&a.instructions) == HostRisk::Destructive;
@@ -1667,7 +2094,7 @@ impl Cabin {
             self.status = format!("Night skipped {} (quiet/policy)", a.name);
             return;
         }
-        self.mark_auto_ran(&a.id, clock.now_ms);
+        self.mark_auto_ran(&a.id, now_ms);
         self.daily_auto_used = self.daily_auto_used.saturating_add(1);
         self.status = format!("Night: {}", a.name);
         self.nav = Nav::Chat;
@@ -1817,7 +2244,7 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let r = grok_chat(&key, &model, &[("user".into(), q.clone())], None);
+            let r = grok_chat(&key, &model, &[("user".into(), q.clone())], None, None);
             let _ = tx.send(match r {
                 Ok(t) => JobOut::Consult(format_consult_reply(&q, &t)),
                 Err(e) => JobOut::Err(e),
@@ -1825,8 +2252,17 @@ impl Cabin {
         });
     }
 
+    fn open_palette(&mut self) {
+        self.palette_open = true;
+        self.palette_focus = true;
+        self.palette_pick = 0;
+        self.palette_q.clear();
+        self.settings_menu_open = false;
+    }
+
     fn run_palette(&mut self, action: &str) {
         self.palette_open = false;
+        self.settings_menu_open = false;
         match action {
             "nav:chat" => self.nav = Nav::Chat,
             "nav:night" => self.nav = Nav::Night,
@@ -1995,12 +2431,19 @@ impl Cabin {
         self.running = true;
         self.status = "Thinking…".into();
         let key = self.bearer();
-        let model = if !self.cfg.mode.trim().is_empty() && self.cfg.model.trim().is_empty() {
-            model_for_mode(&self.cfg.mode).to_string()
-        } else if self.cfg.model.trim().is_empty() {
-            DEFAULT_MODEL.to_string()
+        let last_user = self
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+        let mode = effective_chat_mode(&self.cfg.mode, last_user, &self.cfg.model);
+        let model = resolve_chat_model(&mode, &self.cfg.model);
+        let effort = if model == "grok-4.6" {
+            grokhub_core::reasoning_effort_for_mode(&mode)
         } else {
-            self.cfg.model.clone()
+            None
         };
         let mut msgs: Vec<(String, String)> = self
             .messages
@@ -2070,14 +2513,14 @@ impl Cabin {
         self.stream_buf.clear();
         std::thread::spawn(move || {
             let tx_d = tx.clone();
-            let r = grok_chat_stream(&key, &model, &msgs, image.as_deref(), |d| {
+            let r = grok_chat_stream(&key, &model, &msgs, image.as_deref(), effort, |d| {
                 let _ = tx_d.send(JobOut::ChatDelta(d.to_string()));
             });
             let r = match r {
                 Err(e) => {
                     if http_status_of(&e).map(should_failover_status).unwrap_or(false) {
                         if let Some(next) = failover_model(&model) {
-                            grok_chat(&key, next, &msgs, image.as_deref())
+                            grok_chat(&key, next, &msgs, image.as_deref(), None)
                                 .map_err(|e2| format!("{e}; failover {next}: {e2}"))
                         } else {
                             Err(e)
@@ -2102,7 +2545,17 @@ impl Cabin {
                 self.rx = Some(rx);
                 self.stream_buf.push_str(&d);
                 self.status = format!("streaming… {}", self.stream_buf.chars().count());
-                if self.messages.last().map(|m| m.role == "assistant" && m.content == self.stream_buf[..self.stream_buf.len().saturating_sub(d.len())]).unwrap_or(false) {
+                let matches_prefix = {
+                    let prev = self
+                        .stream_buf
+                        .strip_suffix(d.as_str())
+                        .unwrap_or(self.stream_buf.as_str());
+                    self.messages
+                        .last()
+                        .map(|m| m.role == "assistant" && m.content == prev)
+                        .unwrap_or(false)
+                };
+                if matches_prefix {
                     if let Some(last) = self.messages.last_mut() {
                         last.content = self.stream_buf.clone();
                     }
@@ -2603,7 +3056,7 @@ impl Cabin {
         let _ = config::save(&self.cfg);
         match update_cmds(&src) {
             Ok(cmds) if !update_wipes_config(&cmds) => {
-                let plan: Vec<HostPlanStep> = cmds.into_iter().map(step_from_cmd).collect();
+                let plan: Vec<HostPlanStep> = update_plan_steps(cmds);
                 if self.cfg.yolo {
                     self.start_overlay_update(approved_cmds(&plan));
                 } else {
@@ -2841,7 +3294,7 @@ impl Cabin {
 
     fn hide_to_tray(&mut self, ctx: &egui::Context) {
         self.window_visible = false;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        apply_tray_window(ctx, crate::tray::hide_to_tray_window());
         if !self.told_tray {
             self.told_tray = true;
             crate::notify::ping("GrokHub", "Still running in the tray");
@@ -2851,8 +3304,7 @@ impl Cabin {
 
     fn show_from_tray(&mut self, ctx: &egui::Context) {
         self.window_visible = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        apply_tray_window(ctx, crate::tray::show_from_tray_window());
         ctx.request_repaint();
     }
 
@@ -2932,6 +3384,191 @@ impl Cabin {
             Err(e) => self.status = e,
         }
     }
+
+    fn ui_project_overlays(&mut self, ctx: &egui::Context) {
+        if self.proj_plus_open {
+            let mut pick: Option<&'static str> = None;
+            let mut menu_rect = egui::Rect::NOTHING;
+            egui::Area::new(egui::Id::new("proj-plus"))
+                .fixed_pos(self.proj_plus_pos + egui::vec2(0.0, 4.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(160.0);
+                        if ui.selectable_label(false, "New project").clicked() {
+                            pick = Some("project");
+                        }
+                        if ui.selectable_label(false, "New folder").clicked() {
+                            pick = Some("folder");
+                        }
+                        menu_rect = ui.min_rect();
+                    });
+                });
+            if let Some(kind) = pick {
+                self.proj_plus_open = false;
+                match kind {
+                    "project" => self.stage_new_project(None),
+                    "folder" => self.stage_new_folder(),
+                    _ => {}
+                }
+            } else if self.proj_ignore_close {
+                self.proj_ignore_close = false;
+            } else if ctx.input(|i| i.pointer.any_click()) {
+                if let Some(pos) = ctx.pointer_interact_pos() {
+                    if !menu_rect.expand(8.0).contains(pos) {
+                        self.proj_plus_open = false;
+                    }
+                }
+            }
+        }
+        if let Some(id) = self.proj_menu.clone() {
+            let kind = self
+                .projects
+                .iter()
+                .find(|n| n.id == id)
+                .map(|n| n.kind);
+            let mut act: Option<&'static str> = None;
+            let mut menu_rect = egui::Rect::NOTHING;
+            egui::Area::new(egui::Id::new("proj-menu"))
+                .fixed_pos(self.proj_menu_pos + egui::vec2(0.0, 4.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(168.0);
+                        if ui.selectable_label(false, "Rename").clicked() {
+                            act = Some("rename");
+                        }
+                        if kind == Some(ProjectKind::Project) {
+                            if ui.selectable_label(false, "Add to folder").clicked() {
+                                act = Some("add");
+                            }
+                            if ui.selectable_label(false, "Remove from folder").clicked() {
+                                act = Some("root");
+                            }
+                        }
+                        if kind == Some(ProjectKind::Folder)
+                            && ui.selectable_label(false, "New project here").clicked()
+                        {
+                            act = Some("new-here");
+                        }
+                        menu_rect = ui.min_rect();
+                    });
+                });
+            if let Some(a) = act {
+                self.proj_menu = None;
+                match a {
+                    "rename" => {
+                        if let Some(n) = self.projects.iter().find(|n| n.id == id) {
+                            self.begin_proj_rename(id, n.name.clone());
+                        }
+                    }
+                    "add" => {
+                        self.proj_add_for = Some(id.clone());
+                        self.project_sel = Some(id);
+                        self.proj_ignore_close = true;
+                    }
+                    "root" => {
+                        if add_to_folder(&mut self.projects, &id, None).is_ok() {
+                            self.status = "Moved to Projects".into();
+                            self.touch_projects();
+                            self.persist();
+                        }
+                    }
+                    "new-here" => self.stage_new_project(Some(&id)),
+                    _ => {}
+                }
+            } else if self.proj_ignore_close {
+                self.proj_ignore_close = false;
+            } else if ctx.input(|i| i.pointer.any_click()) {
+                if let Some(pos) = ctx.pointer_interact_pos() {
+                    if !menu_rect.expand(8.0).contains(pos) {
+                        self.proj_menu = None;
+                    }
+                }
+            }
+        }
+        if let Some(pid) = self.proj_add_for.clone() {
+            let folders = folder_choices(&self.projects);
+            let mut picked: Option<Option<String>> = None;
+            let mut menu_rect = egui::Rect::NOTHING;
+            egui::Area::new(egui::Id::new("proj-add"))
+                .fixed_pos(self.proj_menu_pos + egui::vec2(8.0, 8.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(168.0);
+                        ui.label(RichText::new("Add to folder").size(12.0).color(crate::theme::MUTED));
+                        if folders.is_empty() {
+                            ui.label("Create a folder first");
+                        }
+                        for (fid, name) in &folders {
+                            if ui.selectable_label(false, name).clicked() {
+                                picked = Some(Some(fid.clone()));
+                            }
+                        }
+                        if ui.selectable_label(false, "Projects (root)").clicked() {
+                            picked = Some(None);
+                        }
+                        menu_rect = ui.min_rect();
+                    });
+                });
+            if let Some(folder) = picked {
+                self.proj_add_for = None;
+                match add_to_folder(&mut self.projects, &pid, folder.as_deref()) {
+                    Ok(()) => {
+                        if let Some(fid) = folder {
+                            if let Some(f) = self.projects.iter_mut().find(|n| n.id == fid) {
+                                f.open = true;
+                            }
+                            self.status = "Added to folder".into();
+                        } else {
+                            self.status = "Moved to Projects".into();
+                        }
+                        self.touch_projects();
+                        self.persist();
+                    }
+                    Err(e) => self.status = e.into(),
+                }
+            } else if self.proj_ignore_close {
+                self.proj_ignore_close = false;
+            } else if ctx.input(|i| i.pointer.any_click()) {
+                if let Some(pos) = ctx.pointer_interact_pos() {
+                    if !menu_rect.expand(8.0).contains(pos) {
+                        self.proj_add_for = None;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn apply_tray_window(ctx: &egui::Context, w: crate::tray::TrayWindow) {
+    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(w.visible));
+    if w.visible {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(w.minimized));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+}
+
+fn titlebar_chrome_size() -> egui::Vec2 {
+    egui::vec2(36.0, crate::theme::TITLEBAR_H)
+}
+
+fn titlebar_chrome_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click());
+    let color = if resp.hovered() {
+        crate::theme::FG
+    } else {
+        crate::theme::MUTED
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(16.0),
+        color,
+    );
+    resp
 }
 
 impl eframe::App for Cabin {
@@ -2983,7 +3620,11 @@ impl eframe::App for Cabin {
             self.new_thread(false);
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K) && !i.modifiers.shift) {
-            self.palette_open = !self.palette_open;
+            if self.palette_open {
+                self.palette_open = false;
+            } else {
+                self.open_palette();
+            }
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Slash)) {
             self.shortcuts_open = !self.shortcuts_open;
@@ -3000,14 +3641,16 @@ impl eframe::App for Cabin {
         if self.last_persist.elapsed() > Duration::from_secs(2) {
             self.persist();
         }
-        if self.running
-            || self.chip_busy
-            || self.hub_on
-            || !self.window_visible
-            || self.tray.is_some()
-            || self.page_nav() == Nav::Imagine
-        {
+        if wants_live_repaint(
+            self.running,
+            self.chip_busy,
+            self.hub_on,
+            self.window_visible,
+            self.page_nav() == Nav::Imagine,
+        ) {
             ctx.request_repaint_after(Duration::from_millis(80));
+        } else if !self.window_visible {
+            ctx.request_repaint_after(Duration::from_millis(HIDDEN_HEARTBEAT_MS));
         }
 
         crate::theme::apply(ctx);
@@ -3037,13 +3680,20 @@ impl eframe::App for Cabin {
             self.ui_palette(ctx);
         }
         if self.shortcuts_open {
-            egui::Window::new("Shortcuts").collapsible(false).show(ctx, |ui| {
-                ui.label(shortcut_help());
-                if ui.button("Close").clicked() {
-                    self.shortcuts_open = false;
-                }
-            });
+            egui::Window::new("Shortcuts")
+                .collapsible(false)
+                .default_width(420.0)
+                .show(ctx, |ui| {
+                    ui.set_max_width(400.0);
+                    for line in shortcut_help().lines() {
+                        ui.label(line);
+                    }
+                    if ui.button("Close").clicked() {
+                        self.shortcuts_open = false;
+                    }
+                });
         }
+        self.ui_project_overlays(ctx);
     }
 }
 
@@ -3096,7 +3746,7 @@ impl Cabin {
         let mut disconnect = false;
         let mut help = false;
         let authed = self.has_key();
-        egui::Window::new("settings-menu")
+        let shown = egui::Window::new("settings-menu")
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
@@ -3167,6 +3817,7 @@ impl Cabin {
                     }
                 }
             });
+        let menu_rect = shown.map(|r| r.response.rect);
         if let Some(id) = pick {
             self.set_nav_id(id);
             self.settings_menu_open = false;
@@ -3185,26 +3836,66 @@ impl Cabin {
             self.status = "Signed out".into();
             self.settings_menu_open = false;
         }
+        let outside = ctx.input(|i| i.pointer.any_click())
+            && ctx.pointer_interact_pos().is_some_and(|pos| {
+                menu_rect.map(|r| !r.expand(8.0).contains(pos)).unwrap_or(true)
+            });
+        if cabin_menu_should_dismiss(self.settings_menu_ignore, outside) {
+            self.settings_menu_open = false;
+        }
+        self.settings_menu_ignore = false;
     }
 
     fn ui_palette(&mut self, ctx: &egui::Context) {
         let mut close = false;
         let mut picked: Option<String> = None;
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            close = true;
+        }
         egui::Window::new("Palette")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_TOP, [0.0, 48.0])
             .show(ctx, |ui| {
-                ui.add(
+                ui.set_min_width(360.0);
+                let edit = ui.add(
                     egui::TextEdit::singleline(&mut self.palette_q)
                         .hint_text("Go to…")
                         .desired_width(360.0),
                 );
-                for (label, action) in filter_palette(&self.palette_q) {
-                    if ui.selectable_label(false, label).clicked() {
-                        picked = Some(action.to_string());
+                if self.palette_focus {
+                    edit.request_focus();
+                    self.palette_focus = false;
+                }
+                let hits = filter_palette(&self.palette_q);
+                self.palette_pick = slash_pick_step(self.palette_pick, hits.len(), 0);
+                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
+                    self.palette_pick = slash_pick_step(self.palette_pick, hits.len(), 1);
+                } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp))
+                {
+                    self.palette_pick = slash_pick_step(self.palette_pick, hits.len(), -1);
+                } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                    if let Some((_, action)) = hits.get(self.palette_pick) {
+                        picked = Some((*action).to_string());
                     }
                 }
+                egui::ScrollArea::vertical()
+                    .max_height(PALETTE_LIST_H)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.set_min_width(360.0);
+                        for (i, (label, action)) in hits.iter().enumerate() {
+                            if ui
+                                .add_sized(
+                                    [ui.available_width(), 28.0],
+                                    egui::SelectableLabel::new(i == self.palette_pick, *label),
+                                )
+                                .clicked()
+                            {
+                                picked = Some((*action).to_string());
+                            }
+                        }
+                    });
                 if ui.button("Close").clicked() {
                     close = true;
                 }
@@ -3385,14 +4076,7 @@ impl Cabin {
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new("×").color(crate::theme::MUTED))
-                                    .fill(crate::theme::BG)
-                                    .stroke(egui::Stroke::NONE),
-                            )
-                            .clicked()
-                        {
+                        if titlebar_chrome_btn(ui, "×").clicked() {
                             let hide = crate::tray::should_hide_on_close(
                                 self.cfg.close_to_tray,
                                 self.tray.is_some(),
@@ -3403,24 +4087,14 @@ impl Cabin {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
                         }
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new("□").color(crate::theme::MUTED))
-                                    .fill(crate::theme::BG)
-                                    .stroke(egui::Stroke::NONE),
-                            )
-                            .clicked()
-                        {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+                        if titlebar_chrome_btn(ui, "□").clicked() {
+                            let currently = ctx
+                                .input(|i| i.viewport().maximized)
+                                .unwrap_or(self.win_max);
+                            self.win_max = next_maximized(currently);
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(self.win_max));
                         }
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new("–").color(crate::theme::MUTED))
-                                    .fill(crate::theme::BG)
-                                    .stroke(egui::Stroke::NONE),
-                            )
-                            .clicked()
-                        {
+                        if titlebar_chrome_btn(ui, "–").clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
                     });
@@ -3468,6 +4142,33 @@ impl Cabin {
         resp
     }
 
+    fn cabin_avatar(ui: &mut egui::Ui, account: &str, email: &str) -> egui::Response {
+        let (rect, resp) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), RAIL_FOOTER_H), egui::Sense::click());
+        let c = egui::pos2(rect.left() + 20.0, rect.center().y);
+        ui.painter().circle_filled(c, 14.0, crate::theme::PANEL);
+        ui.painter().circle_stroke(
+            c,
+            14.0,
+            egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG),
+        );
+        ui.painter().text(
+            egui::pos2(rect.left() + 42.0, rect.center().y - 8.0),
+            egui::Align2::LEFT_CENTER,
+            account,
+            egui::FontId::proportional(crate::theme::FONT_META),
+            crate::theme::FG,
+        );
+        ui.painter().text(
+            egui::pos2(rect.left() + 42.0, rect.center().y + 8.0),
+            egui::Align2::LEFT_CENTER,
+            email,
+            egui::FontId::proportional(11.0),
+            crate::theme::SUBTLE,
+        );
+        resp
+    }
+
     fn ui_sidebar(&mut self, ctx: &egui::Context) {
         let account = self
             .secrets
@@ -3481,11 +4182,6 @@ impl Cabin {
             .as_ref()
             .and_then(|t| t.email.clone())
             .unwrap_or_else(|| "Connect Grok".into());
-        let project = std::path::Path::new(&self.cfg.project_dir)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("GrokHub")
-            .to_string();
         egui::SidePanel::left("rail")
             .exact_width(crate::theme::SIDEBAR_W)
             .resizable(false)
@@ -3494,7 +4190,7 @@ impl Cabin {
                 ui.add_space(4.0);
                 if Self::nav_row(ui, false, crate::icons::RailIcon::Search, "Search", false).clicked()
                 {
-                    self.palette_open = true;
+                    self.open_palette();
                 }
                 if Self::nav_row(ui, false, crate::icons::RailIcon::Compose, "New chat", true)
                     .clicked()
@@ -3512,17 +4208,103 @@ impl Cabin {
                     }
                 }
                 ui.add_space(10.0);
-                ui.label(RichText::new("Projects").size(12.0).color(crate::theme::SUBTLE));
-                if Self::nav_row(
-                    ui,
-                    cur == "workboard",
-                    crate::icons::RailIcon::Folder,
-                    &project,
-                    false,
-                )
-                .clicked()
-                {
-                    self.nav = Nav::Workboard;
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Projects").size(12.0).color(crate::theme::SUBTLE));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let plus = ui.add(
+                            egui::Button::new(RichText::new("+").size(16.0).color(crate::theme::MUTED))
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(egui::Stroke::NONE)
+                                .min_size(egui::vec2(22.0, 22.0)),
+                        );
+                        let plus_pos = plus.rect.left_bottom();
+                        if plus.on_hover_text("New project or folder").clicked() {
+                            self.proj_plus_open = true;
+                            self.proj_plus_pos = plus_pos;
+                            self.proj_ignore_close = true;
+                            self.proj_menu = None;
+                        }
+                    });
+                });
+                let tree = visible_tree(&self.projects);
+                for (depth, idx) in tree {
+                    let kind = self.projects[idx].kind;
+                    let open = self.projects[idx].open;
+                    let indent = 20.0 * depth as f32;
+                    if self.proj_rename.as_deref() == Some(self.projects[idx].id.as_str()) {
+                        ui.horizontal(|ui| {
+                            ui.add_space(indent);
+                            let edit = ui.add(
+                                egui::TextEdit::singleline(&mut self.proj_rename_buf)
+                                    .desired_width(ui.available_width() - 8.0)
+                                    .hint_text("Name")
+                                    .font(egui::FontId::proportional(13.0)),
+                            );
+                            if self.proj_rename_focus {
+                                edit.request_focus();
+                                if edit.has_focus() {
+                                    self.proj_rename_focus = false;
+                                }
+                            }
+                            if let Some(lock) = self.proj_rename_lock.clone() {
+                                if self.proj_rename_buf == lock {
+                                    select_all_edit(ui, edit.id, &self.proj_rename_buf);
+                                } else {
+                                    self.proj_rename_lock = None;
+                                }
+                            }
+                            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                self.cancel_proj_rename();
+                            } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                self.finish_proj_rename();
+                            } else if edit.lost_focus() && !self.proj_rename_focus {
+                                self.finish_proj_rename();
+                            }
+                        });
+                        continue;
+                    }
+                    let icon = match kind {
+                        ProjectKind::Folder => crate::icons::RailIcon::Folder,
+                        ProjectKind::Project => crate::icons::RailIcon::Chat,
+                    };
+                    let active = self.project_sel.as_deref() == Some(self.projects[idx].id.as_str())
+                        && kind == ProjectKind::Project;
+                    let row = ui
+                        .horizontal(|ui| {
+                            ui.add_space(indent);
+                            if kind == ProjectKind::Folder {
+                                ui.label(
+                                    RichText::new(if open { "▾" } else { "▸" })
+                                        .size(12.0)
+                                        .color(crate::theme::SUBTLE),
+                                );
+                            }
+                            Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
+                        })
+                        .inner;
+                    if row.double_clicked() {
+                        self.begin_proj_rename(
+                            self.projects[idx].id.clone(),
+                            self.projects[idx].name.clone(),
+                        );
+                    } else if row.clicked() {
+                        let id = self.projects[idx].id.clone();
+                        match kind {
+                            ProjectKind::Folder => {
+                                toggle_folder(&mut self.projects, &id);
+                                self.touch_projects();
+                                self.flush_projects();
+                            }
+                            ProjectKind::Project => self.bind_project_id(&id),
+                        }
+                    }
+                    if row.secondary_clicked() {
+                        self.proj_menu = Some(self.projects[idx].id.clone());
+                        self.proj_menu_pos = row.rect.left_bottom();
+                        self.proj_ignore_close = true;
+                        self.proj_plus_open = false;
+                        self.proj_add_for = None;
+                    }
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -3546,9 +4328,11 @@ impl Cabin {
                         .desired_width(ui.available_width())
                         .frame(false),
                 );
+                let hist_h = (ui.available_height() - RAIL_FOOTER_H).max(36.0);
                 egui::ScrollArea::vertical()
+                    .id_salt("rail-history")
                     .auto_shrink([false, true])
-                    .max_height(ui.available_height() - 72.0)
+                    .max_height(hist_h)
                     .show(ui, |ui| {
                         let q = self.sidebar_q.to_ascii_lowercase();
                         let pinned: Vec<bool> = self.threads.iter().map(|t| t.pinned).collect();
@@ -3633,26 +4417,9 @@ impl Cabin {
                         }
                     });
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                    let avatar = ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), 48.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            let (dot, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
-                            ui.painter().circle_filled(dot.center(), 14.0, crate::theme::PANEL);
-                            ui.painter().circle_stroke(
-                                dot.center(),
-                                14.0,
-                                egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG),
-                            );
-                            ui.add_space(8.0);
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(&account).size(crate::theme::FONT_META).color(crate::theme::FG));
-                                ui.label(RichText::new(&email).size(11.0).color(crate::theme::SUBTLE));
-                            });
-                        },
-                    );
-                    if avatar.response.interact(egui::Sense::click()).clicked() {
+                    if Self::cabin_avatar(ui, &account, &email).clicked() {
                         self.settings_menu_open = !self.settings_menu_open;
+                        self.settings_menu_ignore = true;
                     }
                 });
             });
@@ -3695,26 +4462,30 @@ impl Cabin {
                             } else {
                                 crate::theme::BUBBLE_ASSISTANT
                             };
-                            ui.horizontal(|ui| {
-                                if user {
-                                    ui.add_space(ui.available_width() * 0.22);
-                                }
+                            let bubble_w = crate::markdown::bubble_width(ui.available_width());
+                            let draw = |ui: &mut egui::Ui| {
                                 egui::Frame::none()
                                     .fill(fill)
-                                    .stroke(egui::Stroke::new(1.0, crate::theme::BORDER))
+                                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
                                     .rounding(12.0)
                                     .inner_margin(egui::Margin::symmetric(14.0, 10.0))
                                     .show(ui, |ui| {
-                                        ui.set_max_width(
-                                            ui.available_width() * if user { 1.0 } else { 0.78 },
-                                        );
+                                        ui.set_width(bubble_w);
                                         if m.role == "assistant" {
                                             crate::markdown::show(ui, &m.content);
                                         } else {
                                             ui.label(RichText::new(&m.content).color(crate::theme::FG));
                                         }
                                     });
-                            });
+                            };
+                            if user {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::TOP),
+                                    draw,
+                                );
+                            } else {
+                                draw(ui);
+                            }
                             ui.add_space(8.0);
                         }
                         if self.running {
@@ -3819,17 +4590,45 @@ impl Cabin {
             }
             let hits = filter_slash_commands(&self.composer);
             if !hits.is_empty() {
-                ui.label(RichText::new("Tab accepts · type /").small());
-                for (i, s) in hits.iter().enumerate() {
-                    let row = format!("{} — {}", s.cmd, s.hint);
-                    if ui.selectable_label(i == self.slash_pick, row).clicked() {
-                        self.composer = s.insert.to_string();
-                        if s.run_on_pick {
-                            let t = std::mem::take(&mut self.composer);
-                            self.send_chat(t);
+                let first = hits.first().map(|s| s.cmd).unwrap_or("");
+                let n = hits.len();
+                let changed = self.slash_filter_n != n || self.slash_filter_first != first;
+                self.slash_pick = slash_pick_retain(self.slash_pick, changed, n);
+                self.slash_filter_n = n;
+                self.slash_filter_first = first;
+                ui.label(RichText::new("↑↓ · Tab accepts · type /").small());
+                egui::ScrollArea::vertical()
+                    .max_height(148.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for (i, s) in hits.iter().enumerate() {
+                            let row = format!("{} — {}", s.cmd, s.hint);
+                            if ui.selectable_label(i == self.slash_pick, row).clicked() {
+                                if let Some(t) = slash_pick_take(
+                                    &mut self.composer,
+                                    s.insert,
+                                    s.run_on_pick,
+                                ) {
+                                    self.send_chat(t);
+                                }
+                            }
                         }
+                    });
+                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
+                    self.slash_pick = slash_pick_step(self.slash_pick, hits.len(), 1);
+                } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp))
+                {
+                    self.slash_pick = slash_pick_step(self.slash_pick, hits.len(), -1);
+                } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
+                    let s = hits[self.slash_pick.min(hits.len() - 1)];
+                    if let Some(t) = slash_pick_take(&mut self.composer, s.insert, s.run_on_pick) {
+                        self.send_chat(t);
                     }
                 }
+            } else {
+                self.slash_pick = 0;
+                self.slash_filter_n = 0;
+                self.slash_filter_first = "";
             }
             ui.add_space(6.0);
             ui.vertical_centered(|ui| {
@@ -3862,22 +4661,11 @@ impl Cabin {
                         }
                         let edit = ui.add(
                             egui::TextEdit::multiline(&mut self.composer)
-                                .desired_width((ui.available_width() - 168.0).max(80.0))
+                                .desired_width((ui.available_width() - 180.0).max(80.0))
                                 .desired_rows(1)
                                 .frame(false)
                                 .hint_text("What do you want to know?"),
                         );
-                        if edit.has_focus()
-                            && !hits.is_empty()
-                            && ui.input(|i| i.key_pressed(egui::Key::Tab))
-                        {
-                            let pick = hits[self.slash_pick.min(hits.len() - 1)];
-                            self.composer = pick.insert.to_string();
-                            if pick.run_on_pick {
-                                let t = std::mem::take(&mut self.composer);
-                                self.send_chat(t);
-                            }
-                        }
                         let mut mode = if self.cfg.mode.trim().is_empty() {
                             "auto".to_string()
                         } else {
@@ -3886,12 +4674,13 @@ impl Cabin {
                         let mode_now = mode.clone();
                         egui::ComboBox::from_id_salt("composer-mode")
                             .selected_text(Self::mode_label(&mode_now))
-                            .width(72.0)
+                            .width(84.0)
                             .show_ui(ui, |ui| {
                                 for (id, label) in [
                                     ("auto", "Auto"),
                                     ("fast", "Fast"),
-                                    ("balanced", "Think"),
+                                    ("balanced", "Balance"),
+                                    ("think", "Think"),
                                     ("max", "Max"),
                                 ] {
                                     ui.selectable_value(&mut mode, id.to_string(), label);
@@ -3928,10 +4717,7 @@ impl Cabin {
                         )
                         .on_hover_text("Send");
                         if send.clicked()
-                            || (edit.has_focus()
-                                && ui.input(|i| {
-                                    i.key_pressed(egui::Key::Enter) && i.modifiers.command
-                                }))
+                            || ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command)
                         {
                             let t = std::mem::take(&mut self.composer);
                             self.send_chat(t);
@@ -4063,6 +4849,9 @@ impl Cabin {
         let usage = usage_line(&self.usage);
         let catalog = catalog_line();
         let mut close = false;
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            close = true;
+        }
         let mut next_sec: Option<SettingsSec> = None;
         let sec = self.settings_sec;
         let screen = ctx.screen_rect();
@@ -4097,7 +4886,9 @@ impl Cabin {
                                             .show(ui, |ui| {
                                                 ui.set_width(196.0);
                                                 ui.set_min_height(modal.height() - 24.0);
-                                                crate::cards::section_label(ui, "General");
+                                                if crate::cards::section_label(ui, "General") {
+                                                    next_sec = Some(settings_group_home(SettingsGroup::General));
+                                                }
                                                 for (s, label) in [
                                                     (SettingsSec::Account, "Account"),
                                                     (SettingsSec::Appearance, "Appearance"),
@@ -4108,7 +4899,9 @@ impl Cabin {
                                                     }
                                                 }
                                                 ui.add_space(10.0);
-                                                crate::cards::section_label(ui, "Cabin");
+                                                if crate::cards::section_label(ui, "Cabin") {
+                                                    next_sec = Some(settings_group_home(SettingsGroup::Cabin));
+                                                }
                                                 for (s, label) in [
                                                     (SettingsSec::Host, "Host"),
                                                     (SettingsSec::Imagine, "Imagine"),
@@ -4120,12 +4913,16 @@ impl Cabin {
                                                     }
                                                 }
                                                 ui.add_space(10.0);
-                                                crate::cards::section_label(ui, "Data");
+                                                if crate::cards::section_label(ui, "Data") {
+                                                    next_sec = Some(settings_group_home(SettingsGroup::Data));
+                                                }
                                                 if crate::cards::settings_nav(ui, "GitHub", sec == SettingsSec::Github) {
                                                     next_sec = Some(SettingsSec::Github);
                                                 }
                                                 ui.add_space(10.0);
-                                                crate::cards::section_label(ui, "About");
+                                                if crate::cards::section_label(ui, "About") {
+                                                    next_sec = Some(settings_group_home(SettingsGroup::About));
+                                                }
                                                 for (s, label) in [
                                                     (SettingsSec::Update, "Update"),
                                                     (SettingsSec::About, "About"),
@@ -4207,8 +5004,8 @@ impl Cabin {
                                                             }
                                                             crate::cards::settings_field(ui, "Console key", "Optional. Never in markdown.", &mut self.cfg.api_key, true);
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
-                                                            crate::cards::settings_field(ui, "Chat model", "Empty means the cabin default. Imagine never shares this.", &mut self.cfg.model, false);
-                                                            crate::cards::settings_field(ui, "Composer mode", "auto, fast, balanced, or max.", &mut self.cfg.mode, false);
+                                                            crate::cards::settings_field(ui, "Chat model", "Empty or a ladder default (mini / 4.3 / 4.6) lets Auto route. A catalog pin such as grok-3 skips Auto. Imagine never shares this.", &mut self.cfg.model, false);
+                                                            crate::cards::settings_field(ui, "Composer mode", "Auto routes Fast / Balance / Think / Max. Fast is Grok 3 mini. Balance is Grok 4.3. Think is Grok 4.6 high. Max is Grok 4.6 xhigh. The combo does not overwrite Chat model.", &mut self.cfg.mode, false);
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(ui, "The cabin is dark. Light and System stay on grok.com.");
@@ -4292,10 +5089,13 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Bound project", "The world. Host, Imagine, and memory stay here.", &mut self.cfg.project_dir, false);
                                                         }
                                                         SettingsSec::Update => {
-                                                            crate::cards::settings_note(ui, "Overlay only — git pull --ff-only then install.sh --user. Does not wipe ~/.config/GrokHub.");
+                                                            crate::cards::settings_note(ui, "Overlay only — git pull --ff-only origin main, then install.sh --user. The clone must be on main. Does not wipe ~/.config/GrokHub.");
                                                             crate::cards::settings_field(ui, "Source clone", "Empty uses GROKHUB_SRC or the install receipt.", &mut self.cfg.source_dir, false);
                                                             if crate::cards::settings_action(ui, "Install overlay", "Pulls this clone and runs the user install.", "Update") {
                                                                 update = true;
+                                                            }
+                                                            if !self.status.is_empty() {
+                                                                crate::cards::settings_note(ui, &self.status);
                                                             }
                                                         }
                                                         SettingsSec::About => {
@@ -4996,9 +5796,14 @@ impl Cabin {
             .show(ctx, |ui| {
             if crate::cards::page_header(ui, "Skills and Connectors", "New Skill") {
                 self.skills_tab_connectors = false;
-                let stub = crate::cards::starter_skill("new-skill");
-                self.skill_name = stub.name.clone();
-                self.skill_body = grokhub_core::render_skill_md(&stub);
+                let existing: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
+                let stub = crate::cards::starter_skill(&next_starter_skill_name(&existing));
+                if skills::save_skill(&stub).is_ok() {
+                    self.skill_list = skills::list_skills();
+                    self.skill_name = stub.name.clone();
+                    self.skill_body = grokhub_core::render_skill_md(&stub);
+                    self.status = format!("Wrote skill {}", stub.name);
+                }
             }
             if !self.verify_chip.is_empty() {
                 ui.label(RichText::new(&self.verify_chip).strong());
@@ -5243,6 +6048,24 @@ impl Cabin {
     }
 }
 
+fn click_project_opens_board(already_selected: bool) -> bool {
+    already_selected
+}
+
+fn health_settings_sec() -> SettingsSec {
+    SettingsSec::About
+}
+
+fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {
+    let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+    let end = text.chars().count();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+        egui::text::CCursor::new(0),
+        egui::text::CCursor::new(end),
+    )));
+    state.store(ui.ctx(), id);
+}
+
 fn expand_home(p: &str) -> String {
     if let Some(rest) = p.strip_prefix("~/") {
         if let Ok(home) = std::env::var("HOME") {
@@ -5253,4 +6076,155 @@ fn expand_home(p: &str) -> String {
         return std::env::var("HOME").unwrap_or_else(|_| p.to_string());
     }
     p.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_all_edit;
+    use eframe::egui;
+
+    #[test]
+    fn rename_focus_selects_the_placeholder() {
+        egui::__run_test_ui(|ui| {
+            let mut buf = String::from("Project");
+            let edit = ui.add(egui::TextEdit::singleline(&mut buf));
+            select_all_edit(ui, edit.id, &buf);
+            let state = egui::TextEdit::load_state(ui.ctx(), edit.id).expect("edit state");
+            let range = state.cursor.char_range().expect("selection");
+            let [a, b] = range.sorted();
+            assert_eq!(a.index, 0);
+            assert_eq!(b.index, 7);
+        });
+    }
+
+    #[test]
+    fn click_other_project_stays_on_this_pane() {
+        assert!(!super::click_project_opens_board(false));
+    }
+
+    #[test]
+    fn click_bound_project_opens_the_board() {
+        assert!(super::click_project_opens_board(true));
+    }
+
+    #[test]
+    fn health_opens_the_about_page() {
+        assert_eq!(super::health_settings_sec(), super::SettingsSec::About);
+    }
+
+    #[test]
+    fn titlebar_close_is_a_real_hit() {
+        let s = super::titlebar_chrome_size();
+        assert!(s.x >= 32.0, "close hit {s:?}");
+        assert_eq!(s.y, crate::theme::TITLEBAR_H);
+    }
+
+    #[test]
+    fn maximize_toggles_restore() {
+        assert!(super::next_maximized(false));
+        assert!(!super::next_maximized(true));
+    }
+
+    #[test]
+    fn cabin_menu_closes_on_outside_click() {
+        assert!(super::cabin_menu_should_dismiss(false, true));
+        assert!(!super::cabin_menu_should_dismiss(true, true));
+        assert!(!super::cabin_menu_should_dismiss(false, false));
+    }
+
+    #[test]
+    fn new_skill_gets_a_free_name() {
+        assert_eq!(super::next_starter_skill_name(&[]), "new-skill");
+        assert_eq!(
+            super::next_starter_skill_name(&["new-skill".into()]),
+            "new-skill-2"
+        );
+        assert_eq!(
+            super::next_starter_skill_name(&["new-skill".into(), "new-skill-2".into()]),
+            "new-skill-3"
+        );
+    }
+
+    fn about_section_opens_update() {
+        assert_eq!(
+            super::settings_group_home(super::SettingsGroup::About),
+            super::SettingsSec::Update
+        );
+    }
+
+    #[test]
+    fn general_section_opens_account() {
+        assert_eq!(
+            super::settings_group_home(super::SettingsGroup::General),
+            super::SettingsSec::Account
+        );
+    }
+
+    #[test]
+    fn slash_arrows_move_and_clamp() {
+        assert_eq!(super::slash_pick_step(0, 5, 1), 1);
+        assert_eq!(super::slash_pick_step(0, 5, -1), 0);
+        assert_eq!(super::slash_pick_step(4, 5, 1), 4);
+        assert_eq!(super::slash_pick_step(9, 3, 0), 2);
+    }
+
+    #[test]
+    fn tab_accept_runs_on_pick() {
+        let mut composer = "/fi".into();
+        let run = super::slash_pick_take(&mut composer, "/fix", true);
+        assert_eq!(run.as_deref(), Some("/fix"));
+        assert!(composer.is_empty());
+    }
+
+    #[test]
+    fn tab_accept_stays_for_args() {
+        let mut composer = "/proj".into();
+        let run = super::slash_pick_take(&mut composer, "/project bind ", false);
+        assert!(run.is_none());
+        assert_eq!(composer, "/project bind ");
+    }
+
+    #[test]
+    fn slash_pick_resets_when_the_list_changes() {
+        assert_eq!(super::slash_pick_retain(2, true, 4), 0);
+        assert_eq!(super::slash_pick_retain(2, false, 4), 2);
+        assert_eq!(super::slash_pick_retain(9, false, 3), 2);
+        assert_eq!(super::slash_pick_retain(1, true, 0), 0);
+    }
+
+    #[test]
+    fn idle_visible_cabin_does_not_spin() {
+        assert!(!super::wants_live_repaint(false, false, false, true, false));
+        assert!(!super::wants_live_repaint(false, false, false, false, false));
+        assert!(super::wants_live_repaint(true, false, false, true, false));
+        assert!(super::HIDDEN_HEARTBEAT_MS > 80);
+        assert!(!super::night_host_check_blocks_ui());
+    }
+
+    #[test]
+    fn mode_status_does_not_treat_ladder_default_as_auto_pin() {
+        assert_eq!(
+            super::mode_status_line("auto", "grok-3-mini-fast"),
+            "Mode auto — routes Fast / Balance / Think / Max"
+        );
+        assert_eq!(
+            super::mode_status_line("auto", "grok-4.6"),
+            "Mode auto — routes Fast / Balance / Think / Max"
+        );
+        assert_eq!(super::mode_status_line("auto", "grok-3"), "Mode auto → grok-3");
+        assert_eq!(
+            super::mode_status_line("think", "grok-3"),
+            "Mode think → grok-4.6 · high"
+        );
+        assert_eq!(
+            super::mode_status_line("max", ""),
+            "Mode max → grok-4.6 · xhigh"
+        );
+    }
+
+    #[test]
+    fn rail_footer_is_reserved() {
+        assert_eq!(super::RAIL_FOOTER_H, 52.0);
+        assert!(super::PALETTE_LIST_H < 400.0);
+    }
 }

@@ -216,7 +216,7 @@ OpenClaw import already reads `SOUL.md`. Give GrokHub its own short voice file n
 
 ### Failover, not a provider zoo (ZeroClaw / Nanobot)
 
-If Max / OAuth flakes, drop to the next Adaptive tier. Adaptive already routes by task; add failover on error. One chain. No new providers.
+If Max / OAuth flakes, drop to the next Adaptive tier (Grok 4.6 → 4.3 → Fast). Adaptive already routes by task; add failover on error. One chain. No new providers.
 
 ### Session lock (Nanobot)
 

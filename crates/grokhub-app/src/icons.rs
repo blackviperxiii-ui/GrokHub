@@ -503,7 +503,7 @@ pub fn icon_for_label(label: &str) -> TileIcon {
         TileIcon::Host
     } else if l.contains("imagine") || l.contains("draw") || l.contains("image") {
         TileIcon::Image
-    } else if l.contains("think") || l.contains("harder") {
+    } else if l.contains("think") || l.contains("harder") || l.contains("max") {
         TileIcon::Think
     } else if l.contains("help") || l.contains("what can") {
         TileIcon::Help
@@ -652,6 +652,7 @@ mod tests {
         assert_eq!(icon_for_label("Connect Grok"), TileIcon::Connect);
         assert_eq!(icon_for_label("Open Imagine"), TileIcon::Image);
         assert_eq!(icon_for_label("Think Harder"), TileIcon::Think);
+        assert_eq!(icon_for_label("Go Max"), TileIcon::Think);
         assert_ne!(icon_for_label("Host snapshot"), icon_for_label("Morning brief"));
         assert_ne!(BarIcon::Mic, BarIcon::Send);
         assert_ne!(BarIcon::Plus, BarIcon::Search);

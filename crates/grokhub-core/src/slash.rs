@@ -27,6 +27,10 @@ pub enum Slash {
     ProjectBind(Option<String>),
     ProjectClear,
     ProjectShow,
+    ProjectNew(String),
+    ProjectFolder(String),
+    ProjectRename(String),
+    ProjectMove(String),
     Send(String),
     Sync,
     Hub,
@@ -134,6 +138,34 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
                 Some(Slash::ProjectClear)
             } else if rest.is_empty() || rest.eq_ignore_ascii_case("show") {
                 Some(Slash::ProjectShow)
+            } else if let Some(name) = rest.strip_prefix("new ") {
+                let name = name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectNew(name.to_string()))
+                }
+            } else if let Some(name) = rest.strip_prefix("folder ") {
+                let name = name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectFolder(name.to_string()))
+                }
+            } else if let Some(name) = rest.strip_prefix("rename ") {
+                let name = name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectRename(name.to_string()))
+                }
+            } else if let Some(name) = rest.strip_prefix("move ") {
+                let name = name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectMove(name.to_string()))
+                }
             } else {
                 let path = rest
                     .strip_prefix("bind")
@@ -183,6 +215,10 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::ProjectBind(_) => "project_bind",
         Slash::ProjectClear => "project_clear",
         Slash::ProjectShow => "project_show",
+        Slash::ProjectNew(_) => "project_new",
+        Slash::ProjectFolder(_) => "project_folder",
+        Slash::ProjectRename(_) => "project_rename",
+        Slash::ProjectMove(_) => "project_move",
         Slash::Send(_) => "send",
         Slash::Sync => "sync",
         Slash::Hub => "hub",
@@ -237,6 +273,13 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/delete", hint: "Delete this chat tab", insert: "/delete", run_on_pick: true },
     SlashDef { cmd: "/remember", hint: "Save durable memory note", insert: "/remember ", run_on_pick: false },
     SlashDef { cmd: "/project", hint: "Show bound project", insert: "/project", run_on_pick: true },
+    SlashDef { cmd: "/project bind", hint: "Bind a folder as the world", insert: "/project bind ", run_on_pick: false },
+    SlashDef { cmd: "/project new", hint: "Create a project", insert: "/project new ", run_on_pick: false },
+    SlashDef { cmd: "/project folder", hint: "Create a sidebar folder", insert: "/project folder ", run_on_pick: false },
+    SlashDef { cmd: "/project rename", hint: "Rename the selected project", insert: "/project rename ", run_on_pick: false },
+    SlashDef { cmd: "/project move", hint: "Add the selected project to a folder", insert: "/project move ", run_on_pick: false },
+    SlashDef { cmd: "/board", hint: "Open the Workboard", insert: "/board", run_on_pick: true },
+    SlashDef { cmd: "/skill", hint: "Run a skill…", insert: "/skill ", run_on_pick: false },
     SlashDef { cmd: "/host", hint: "Desktop host status", insert: "/host", run_on_pick: true },
     SlashDef { cmd: "/approve off", hint: "YOLO — run without confirm", insert: "/approve off", run_on_pick: true },
     SlashDef { cmd: "/recall", hint: "Search chats and memory", insert: "/recall ", run_on_pick: false },
@@ -296,9 +339,10 @@ pub fn resolve_mode_arg(arg: &str) -> Option<String> {
     let mapped = match a.as_str() {
         "auto" | "adaptive" | "smart" => "auto",
         "fast" => "fast",
-        "balanced" | "expert" | "think" | "thinking" => "balanced",
+        "balance" | "balanced" => "balanced",
+        "think" | "thinking" | "expert" => "think",
         "heavy" | "max" | "deep" => "max",
-        "build" => "build",
+        "build" => "think",
         _ => return None,
     };
     Some(mapped.into())
@@ -320,6 +364,12 @@ pub fn slash_help() -> String {
         "/sh <cmd> — run on this box",
         "/host on|off — host tools",
         "/project bind <path> — bound tree is the world",
+        "/project new <name> — create a project",
+        "/project folder <name> — create a sidebar folder",
+        "/project rename <name> — rename the selected project",
+        "/project move <folder>|root — add the selected project to a folder",
+        "/board — open the Workboard",
+        "/skill <name> — run a skill",
         "/memory note <fact> — write MEMORY.md",
         "/recall <q> — search memory",
         "/forget <topic> — drop matching memory lines",
@@ -338,7 +388,7 @@ pub fn slash_help() -> String {
         "/health — doctor",
         "/fix — halt + doctor",
         "/remember <fact> — write MEMORY.md",
-        "/mode fast|balanced|max|auto|build",
+        "/mode auto|fast|balance|think|max — Auto routes (Settings pin skips if not a ladder default); Fast mini; Balance 4.3; Think 4.6 high; Max 4.6 xhigh",
         "/dream — Imagine last night",
         "/tools on|off — host tools",
         "/import — OpenClaw workspace",
@@ -388,6 +438,10 @@ mod tests {
         assert_eq!(parse_slash("/sh ls /tmp"), Some(Slash::Sh("ls /tmp".into())));
         assert_eq!(parse_slash("$ echo hi"), Some(Slash::Sh("echo hi".into())));
         assert_eq!(parse_slash("/project bind ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
+        assert_eq!(parse_slash("/project new Night watch"), Some(Slash::ProjectNew("Night watch".into())));
+        assert_eq!(parse_slash("/project folder Cabin"), Some(Slash::ProjectFolder("Cabin".into())));
+        assert_eq!(parse_slash("/project rename Dawn"), Some(Slash::ProjectRename("Dawn".into())));
+        assert_eq!(parse_slash("/project move Cabin"), Some(Slash::ProjectMove("Cabin".into())));
         assert_eq!(parse_slash("/inhabit cabin-2"), Some(Slash::Inhabit("cabin-2".into())));
         assert_eq!(parse_slash("/send flash the pi"), Some(Slash::Send("flash the pi".into())));
         assert_eq!(slash_kind(&Slash::Update), "update");
@@ -397,6 +451,9 @@ mod tests {
         assert_eq!(parse_slash("/close"), Some(Slash::Delete));
         assert_eq!(parse_slash("/host"), Some(Slash::HostStatus));
         assert_eq!(parse_slash("/mode max"), Some(Slash::Mode("max".into())));
+        assert_eq!(parse_slash("/mode think"), Some(Slash::Mode("think".into())));
+        assert_eq!(parse_slash("/mode balance"), Some(Slash::Mode("balanced".into())));
+        assert_eq!(parse_slash("/mode balanced"), Some(Slash::Mode("balanced".into())));
         assert_eq!(parse_slash("/dream"), Some(Slash::Dream));
         assert_eq!(parse_slash("/tools off"), Some(Slash::Tools { on: false }));
         assert_eq!(parse_slash("/import"), Some(Slash::Import));
@@ -409,7 +466,13 @@ mod tests {
         assert_eq!(parse_slash("/palette"), Some(Slash::Palette));
         assert!(slash_help().contains("/import"));
         assert!(slash_help().contains("/consult"));
+        assert!(slash_help().contains("/project new"));
+        assert!(slash_help().contains("/project folder"));
+        assert!(slash_help().contains("/board"));
+        assert!(slash_help().contains("/skill"));
+        assert!(slash_help().contains("/mode auto|fast|balance|think|max"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
+        assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());
     }
 }

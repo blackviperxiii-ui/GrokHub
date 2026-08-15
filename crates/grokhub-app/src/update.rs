@@ -2,7 +2,10 @@ use crate::config;
 use crate::host::run_host;
 use grokhub_core::{discover_source, forbidden_reason, update_cmds, update_wipes_config};
 use std::env;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::Duration;
 
 pub fn resolve_source(cfg_source: &str) -> Option<PathBuf> {
@@ -105,5 +108,68 @@ mod tests {
         assert!(host_receipt_failed("$ git\nexit 1 · 10ms\nfatal\n"));
         assert!(host_receipt_failed("$ x\nHOST_RECEIPT: timed out"));
         assert!(run_update_cmds(&["rm -rf ~/.config/GrokHub".into()]).is_err());
+    }
+
+    #[test]
+    fn run_update_pulls_main_then_overlay() {
+        let _g = TEST_CONFIG_LOCK.lock().unwrap();
+        let pid = std::process::id();
+        let root = std::env::temp_dir().join(format!("grokhub-upd-src-{pid}"));
+        let bare = std::env::temp_dir().join(format!("grokhub-upd-bare-{pid}.git"));
+        let prev_cfg = env::var("GROKHUB_CONFIG").ok();
+        let cfg = std::env::temp_dir().join(format!("grokhub-upd-cfg-{pid}"));
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&bare);
+        let _ = fs::remove_dir_all(&cfg);
+        env::set_var("GROKHUB_CONFIG", &cfg);
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::create_dir_all(root.join("crates/grokhub-app")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+        let install = root.join("scripts/install.sh");
+        fs::write(
+            &install,
+            "#!/bin/sh\nset -e\necho overlay-ok > \"$(dirname \"$0\")/../overlay.ok\"\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            let mut perm = fs::metadata(&install).unwrap().permissions();
+            perm.set_mode(0o755);
+            fs::set_permissions(&install, perm).unwrap();
+        }
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(&root)
+                    .status()
+                    .unwrap()
+                    .success(),
+                "{args:?}"
+            );
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "cabin@test"]);
+        git(&["config", "user.name", "Cabin"]);
+        git(&["add", "."]);
+        git(&["commit", "-m", "seed"]);
+        assert!(Command::new("git")
+            .args(["init", "--bare"])
+            .arg(&bare)
+            .status()
+            .unwrap()
+            .success());
+        git(&["remote", "add", "origin", &bare.display().to_string()]);
+        git(&["push", "-u", "origin", "main"]);
+        let out = run_update(&root).expect("update");
+        assert!(out.contains("exit 0"), "{out}");
+        assert!(root.join("overlay.ok").is_file(), "{out}");
+        match prev_cfg {
+            Some(v) => env::set_var("GROKHUB_CONFIG", v),
+            None => env::remove_var("GROKHUB_CONFIG"),
+        }
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&bare);
+        let _ = fs::remove_dir_all(&cfg);
     }
 }

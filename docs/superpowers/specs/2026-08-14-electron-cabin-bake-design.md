@@ -12,7 +12,7 @@ OAuth, slash, threads, tray, and overlay update already sit in the Rust cabin. T
 
 File-backed `automations.json`. NL parse stays (“every weekday at 9…”, heartbeat). A timer marks due rows and runs them as a chat turn, inheriting YOLO / supervised.
 
-Script gate: skip when `checkCommand` exits non-zero or prints nothing. Quiet hours block destructive host. Daily unit budget blocks further night runs after the cap.
+Script gate: skip when `checkCommand` exits non-zero or prints nothing. That host check runs off the UI thread. Quiet hours block destructive host. Daily unit budget blocks further night runs after the cap.
 
 Cabin nav: **Night**.
 
@@ -26,7 +26,7 @@ Eyes: windshield objects as an overlay, not only a text dump. Live JPEG while Ey
 
 Slash autocomplete while the composer starts with `/` or `$`. `/rename`, `/context`, `/health`, `/fix`, `/remember`, `/mode`, `/dream`, `/tools on|off`. `/host` alone is status.
 
-History search across threads. Goal pin survives compact. Send while a turn is running is interrupt-and-redirect. Assistant markdown is rendered (headers, bold, code, lists). Failover drops max → balanced → fast on 401/429/5xx.
+History search across threads. Goal pin survives compact. Send while a turn is running is interrupt-and-redirect. Assistant markdown is rendered (headers, bold, code, lists). Failover drops Grok 4.6 (Max / Think) → Grok 4.3 (Balance) → Fast (`grok-3-mini-fast`) on 401/403/429/5xx.
 
 ## Cabin organs
 

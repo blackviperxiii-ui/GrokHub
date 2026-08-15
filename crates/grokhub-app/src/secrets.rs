@@ -28,11 +28,9 @@ pub fn load() -> Secrets {
 }
 
 pub fn save(s: &Secrets) -> Result<(), String> {
-    let dir = config::config_dir();
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = secrets_path();
     let body = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
-    fs::write(&path, body).map_err(|e| e.to_string())?;
+    config::atomic_write(&path, body.as_bytes())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
