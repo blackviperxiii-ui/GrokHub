@@ -588,6 +588,23 @@ pub fn settings_action(ui: &mut egui::Ui, title: &str, hint: &str, action: &str)
     hit
 }
 
+pub fn settings_progress(ui: &mut egui::Ui, pct: u8, fill: Color32) {
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::ProgressBar::new((pct as f32 / 100.0).clamp(0.0, 1.0))
+                .desired_width(240.0)
+                .desired_height(10.0)
+                .fill(fill),
+        );
+        ui.label(
+            RichText::new(format!("{pct}%"))
+                .size(13.0)
+                .color(crate::theme::FG),
+        );
+    });
+    ui.add_space(8.0);
+}
+
 pub fn settings_nav(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     ui.add(
         egui::Button::new(

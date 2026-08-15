@@ -53,7 +53,8 @@ use grokhub_core::{
     thread_goal_prompt, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
     unified_diff_cite, usage_line,
-    transcribe_route, uid, update_cmds, update_plan_steps, update_wipes_config, voice_session_url, Automation, BoardCard,
+    transcribe_route, uid, update_cmds, overlay_update_begin, overlay_update_finish,
+    update_wipes_config, voice_session_url, Automation, BoardCard,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ComputerOp, DeviceCodeStart, HeyGrokAction,
     HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, Recipe, ReplayOp, RewindRecord,
@@ -271,9 +272,10 @@ enum JobOut {
     ChatDelta(String),
     Imagine(String),
     Voice(String),
-    Host(String),
     HostLine(String),
     HostDone(String),
+    UpdateProgress { pct: u8, msg: String },
+    UpdateDone { ok: bool },
     Connector(String),
     Consult(String),
     Err(String),
@@ -357,6 +359,7 @@ pub struct Cabin {
     reflected_idle: bool,
     last_recipe: Option<Recipe>,
     pending_update: bool,
+    update_pct: Option<u8>,
     secrets: Secrets,
     threads: Vec<ChatThread>,
     thread_idx: usize,
@@ -598,6 +601,7 @@ impl Cabin {
             reflected_idle: false,
             last_recipe: None,
             pending_update: false,
+            update_pct: None,
             secrets,
             threads,
             thread_idx,
@@ -3081,19 +3085,17 @@ impl Cabin {
                     self.send_chat(t);
                 }
             }
-            Ok(JobOut::Host(block)) => {
+            Ok(JobOut::UpdateProgress { pct, msg }) => {
+                self.rx = Some(rx);
+                self.update_pct = Some(pct);
+                self.status = msg;
+            }
+            Ok(JobOut::UpdateDone { ok }) => {
                 self.running = false;
-                self.last_receipt_ok = Some(!crate::update::host_receipt_failed(&block));
-                self.messages.push(Msg {
-                    role: "user".into(),
-                    content: format!("HOST_RESULT (facts only):\n{block}"),
-                });
-                self.status = if crate::update::host_receipt_failed(&block) {
-                    "Update failed".into()
-                } else {
-                    "Update finished — restart the cabin".into()
-                };
-                self.persist();
+                self.last_receipt_ok = Some(ok);
+                let view = overlay_update_finish(ok, self.update_pct.unwrap_or(0));
+                self.update_pct = Some(view.pct);
+                self.status = view.status;
             }
             Ok(JobOut::Err(e)) => {
                 self.running = false;
@@ -3337,9 +3339,10 @@ impl Cabin {
     }
 
     fn queue_update(&mut self) {
+        self.nav = Nav::Settings;
+        self.settings_sec = SettingsSec::Update;
         let Some(src) = resolve_source(&self.cfg.source_dir) else {
             self.status = "Set Settings → source (clone path) or GROKHUB_SRC".into();
-            self.nav = Nav::Settings;
             return;
         };
         self.cfg.source_dir = src.display().to_string();
@@ -3347,15 +3350,7 @@ impl Cabin {
         let _ = config::save(&self.cfg);
         match update_cmds(&src) {
             Ok(cmds) if !update_wipes_config(&cmds) => {
-                let plan: Vec<HostPlanStep> = update_plan_steps(cmds);
-                if self.cfg.yolo {
-                    self.start_overlay_update(approved_cmds(&plan));
-                } else {
-                    self.pending_update = true;
-                    self.plan_pending = Some(plan);
-                    self.status = "Update plan needs approval".into();
-                    self.nav = Nav::Chat;
-                }
+                self.start_overlay_update(cmds);
             }
             Ok(_) => self.status = "refusing an update that would wipe config".into(),
             Err(e) => self.status = e,
@@ -3371,17 +3366,26 @@ impl Cabin {
             self.status = "Update plan empty".into();
             return;
         }
-        self.running = true;
-        self.status = "Updating install…".into();
-        self.nav = Nav::Chat;
+        self.nav = Nav::Settings;
+        self.settings_sec = SettingsSec::Update;
+        let begin = overlay_update_begin(cmds.len());
+        self.running = begin.running;
+        self.update_pct = Some(begin.pct);
+        self.status = begin.status;
         self.last_host = cmds.clone();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let r = crate::update::run_update_cmds(&cmds);
+            let progress = tx.clone();
+            let r = crate::update::run_update_cmds_with_progress(&cmds, |pct, msg| {
+                let _ = progress.send(JobOut::UpdateProgress {
+                    pct,
+                    msg: msg.to_string(),
+                });
+            });
             let _ = tx.send(match r {
-                Ok(block) => JobOut::Host(block),
-                Err(e) if crate::update::host_receipt_failed(&e) => JobOut::Host(e),
+                Ok(_) => JobOut::UpdateDone { ok: true },
+                Err(e) if crate::update::host_receipt_failed(&e) => JobOut::UpdateDone { ok: false },
                 Err(e) => JobOut::Err(e),
             });
         });
@@ -5379,6 +5383,14 @@ impl Cabin {
                                                             if crate::cards::settings_action(ui, "Install overlay", "Pulls this clone and runs the user install.", "Update") {
                                                                 update = true;
                                                             }
+                                                            if let Some(pct) = self.update_pct {
+                                                                let fill = if self.last_receipt_ok == Some(false) && !self.running {
+                                                                    crate::theme::OFFLINE
+                                                                } else {
+                                                                    crate::theme::LIVE
+                                                                };
+                                                                crate::cards::settings_progress(ui, pct, fill);
+                                                            }
                                                             if !self.status.is_empty() {
                                                                 crate::cards::settings_note(ui, &self.status);
                                                             }
@@ -6431,6 +6443,16 @@ mod tests {
             super::settings_group_home(super::SettingsGroup::About),
             super::SettingsSec::Update
         );
+    }
+
+    #[test]
+    fn overlay_update_skips_chat() {
+        let v = grokhub_core::overlay_update_begin(2);
+        assert!(v.stay_on_update);
+        assert!(!v.posts_chat);
+        let done = grokhub_core::overlay_update_finish(true, 50);
+        assert!(!done.posts_chat);
+        assert!(done.stay_on_update);
     }
 
     #[test]
