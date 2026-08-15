@@ -82,14 +82,27 @@ fn install_inter(ctx: &egui::Context) {
             fam.insert(0, "inter-medium".into());
         }
     }
+    let mut bold_stack = Vec::new();
     if let Ok(bold) = std::fs::read("/usr/share/fonts/truetype/macos/Inter-Bold.ttf") {
         fonts
             .font_data
             .insert("inter-bold".into(), FontData::from_owned(bold));
-        fonts.families.insert(
-            FontFamily::Name("inter-bold".into()),
-            vec!["inter-bold".into(), "inter".into()],
-        );
+        bold_stack.push("inter-bold".into());
+    }
+    if fonts.font_data.contains_key("inter") {
+        bold_stack.push("inter".into());
+    }
+    if let Some(prop) = fonts.families.get(&FontFamily::Proportional) {
+        for name in prop {
+            if !bold_stack.contains(name) {
+                bold_stack.push(name.clone());
+            }
+        }
+    }
+    if !bold_stack.is_empty() {
+        fonts
+            .families
+            .insert(FontFamily::Name("inter-bold".into()), bold_stack);
     }
     let mono = std::fs::read("/usr/share/fonts/truetype/macos/JetBrainsMono-Regular.ttf")
         .or_else(|_| std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"));
@@ -104,11 +117,15 @@ fn install_inter(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-pub fn apply(ctx: &egui::Context) {
+pub fn install_fonts(ctx: &egui::Context) {
     static FONTS: AtomicBool = AtomicBool::new(false);
     if !FONTS.swap(true, Ordering::SeqCst) {
         install_inter(ctx);
     }
+}
+
+pub fn apply(ctx: &egui::Context) {
+    install_fonts(ctx);
     let mut visuals = egui::Visuals::dark();
     visuals.dark_mode = true;
     visuals.override_text_color = Some(FG);
