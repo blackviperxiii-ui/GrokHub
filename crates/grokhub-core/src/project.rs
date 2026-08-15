@@ -170,6 +170,76 @@ pub fn drop_node(nodes: &mut Vec<ProjectNode>, id: &str) -> bool {
     true
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectMenuAct {
+    Rename,
+    AddToFolder,
+    RemoveFromFolder,
+    NewHere,
+    Delete,
+}
+
+pub fn project_menu_acts(kind: ProjectKind) -> &'static [ProjectMenuAct] {
+    match kind {
+        ProjectKind::Project => &[
+            ProjectMenuAct::Rename,
+            ProjectMenuAct::AddToFolder,
+            ProjectMenuAct::RemoveFromFolder,
+            ProjectMenuAct::Delete,
+        ],
+        ProjectKind::Folder => &[
+            ProjectMenuAct::Rename,
+            ProjectMenuAct::NewHere,
+            ProjectMenuAct::Delete,
+        ],
+    }
+}
+
+pub fn project_menu_label(act: ProjectMenuAct) -> &'static str {
+    match act {
+        ProjectMenuAct::Rename => "Rename",
+        ProjectMenuAct::AddToFolder => "Add to folder",
+        ProjectMenuAct::RemoveFromFolder => "Remove from folder",
+        ProjectMenuAct::NewHere => "New project here",
+        ProjectMenuAct::Delete => "Delete",
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DropOutcome {
+    pub dropped: bool,
+    pub unbound: bool,
+    pub name: String,
+}
+
+pub fn drop_selected(nodes: &mut Vec<ProjectNode>, id: &str, bound_path: &str) -> DropOutcome {
+    let node = nodes.iter().find(|n| n.id == id);
+    let name = node.map(|n| n.name.clone()).unwrap_or_default();
+    let path = node.map(|n| n.path.clone()).unwrap_or_default();
+    let dropped = drop_node(nodes, id);
+    let unbound = dropped && !bound_path.trim().is_empty() && path == bound_path;
+    DropOutcome {
+        dropped,
+        unbound,
+        name,
+    }
+}
+
+pub fn should_seed_sidebar(file_present: bool, loaded: &[ProjectNode]) -> bool {
+    loaded.is_empty() && !file_present
+}
+
+pub fn restore_bound_path(saved: &str, work_root: &str, sidebar_file_present: bool) -> String {
+    if !saved.trim().is_empty() {
+        return saved.to_string();
+    }
+    if sidebar_file_present {
+        String::new()
+    } else {
+        work_root.to_string()
+    }
+}
+
 pub fn create_folder(
     nodes: &mut Vec<ProjectNode>,
     id: &str,
@@ -450,6 +520,55 @@ mod tests {
         assert_eq!(
             visible_tree(&nodes),
             vec![(0, 0), (1, 2), (0, 1), (1, 4), (0, 3)]
+        );
+    }
+
+    #[test]
+    fn project_menu_can_rename_and_delete() {
+        let proj = project_menu_acts(ProjectKind::Project);
+        assert!(proj.contains(&ProjectMenuAct::Rename));
+        assert!(proj.contains(&ProjectMenuAct::Delete));
+        assert!(proj.contains(&ProjectMenuAct::AddToFolder));
+        assert_eq!(project_menu_label(ProjectMenuAct::Delete), "Delete");
+        let fold = project_menu_acts(ProjectKind::Folder);
+        assert!(fold.contains(&ProjectMenuAct::Rename));
+        assert!(fold.contains(&ProjectMenuAct::Delete));
+        assert!(fold.contains(&ProjectMenuAct::NewHere));
+        assert!(!fold.contains(&ProjectMenuAct::AddToFolder));
+    }
+
+    #[test]
+    fn drop_selected_unbinds_the_bound_path() {
+        let mut nodes = Vec::new();
+        create_project(&mut nodes, "p1", "Night", None, "/w").unwrap();
+        create_project(&mut nodes, "p2", "Keep", None, "/w").unwrap();
+        let path = nodes[0].path.clone();
+        let out = drop_selected(&mut nodes, "p1", &path);
+        assert!(out.dropped);
+        assert!(out.unbound);
+        assert_eq!(out.name, "Night");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].id, "p2");
+        let out = drop_selected(&mut nodes, "p2", "/other");
+        assert!(out.dropped);
+        assert!(!out.unbound);
+        assert!(nodes.is_empty());
+    }
+
+    #[test]
+    fn empty_saved_sidebar_is_not_reseeded() {
+        assert!(should_seed_sidebar(false, &[]));
+        assert!(!should_seed_sidebar(true, &[]));
+        let seeded = seed_from_bound("/home/j/GrokHub-Work");
+        assert!(!should_seed_sidebar(false, &seeded));
+        assert_eq!(
+            restore_bound_path("/home/j/Dawn", "/home/j/GrokHub-Work", true),
+            "/home/j/Dawn"
+        );
+        assert!(restore_bound_path("", "/home/j/GrokHub-Work", true).is_empty());
+        assert_eq!(
+            restore_bound_path("", "/home/j/GrokHub-Work", false),
+            "/home/j/GrokHub-Work"
         );
     }
 }

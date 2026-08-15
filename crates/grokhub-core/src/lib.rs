@@ -148,10 +148,12 @@ pub use oauth::{
     XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE, XAI_OAUTH_USERINFO,
 };
 pub use project::{
-    add_to_folder, clean_project_name, create_folder, create_project, drop_node, folder_choices,
-    host_cmd_leaves_project, host_hour_blocked, is_under_project, project_name_from_path,
-    project_slug, project_work_path, rename_node, seed_from_bound, settle_project_path,
-    stage_project, toggle_folder, upsert_bound, visible_tree, ProjectKind, ProjectNode,
+    add_to_folder, clean_project_name, create_folder, create_project, drop_node, drop_selected,
+    folder_choices, host_cmd_leaves_project, host_hour_blocked, is_under_project,
+    project_menu_acts, project_menu_label, project_name_from_path, project_slug, project_work_path,
+    rename_node, restore_bound_path, seed_from_bound, settle_project_path, should_seed_sidebar,
+    stage_project, toggle_folder, upsert_bound, visible_tree, DropOutcome, ProjectKind,
+    ProjectMenuAct, ProjectNode,
 };
 pub use redact::{forget_topic, is_plain_text, redact_secrets};
 pub use skill::{
