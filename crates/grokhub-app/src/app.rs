@@ -137,6 +137,31 @@ fn slash_pick_retain(pick: usize, list_changed: bool, len: usize) -> usize {
     }
 }
 
+fn next_maximized(currently: bool) -> bool {
+    !currently
+}
+
+fn cabin_menu_should_dismiss(ignore: bool, outside_click: bool) -> bool {
+    !ignore && outside_click
+}
+
+fn next_starter_skill_name(existing: &[String]) -> String {
+    if !existing.iter().any(|n| n == "new-skill") {
+        return "new-skill".into();
+    }
+    let mut i = 2_u32;
+    loop {
+        let name = format!("new-skill-{i}");
+        if !existing.iter().any(|n| n == &name) {
+            return name;
+        }
+        i = i.saturating_add(1);
+        if i > 99 {
+            return format!("new-skill-{i}");
+        }
+    }
+}
+
 fn wants_live_repaint(
     running: bool,
     chip_busy: bool,
@@ -334,6 +359,8 @@ pub struct Cabin {
     auto_compose: bool,
     board_compose: bool,
     settings_menu_open: bool,
+    settings_menu_ignore: bool,
+    win_max: bool,
     imagine_want_focus: bool,
     settings_sec: SettingsSec,
     settings_back: Nav,
@@ -551,6 +578,8 @@ impl Cabin {
             auto_compose: false,
             board_compose: false,
             settings_menu_open: false,
+            settings_menu_ignore: false,
+            win_max: false,
             imagine_want_focus: false,
             settings_sec: SettingsSec::Account,
             settings_back: Nav::Chat,
@@ -1352,9 +1381,7 @@ impl Cabin {
                 });
                 self.persist();
             }
-            Slash::Palette => {
-                self.palette_open = true;
-            }
+            Slash::Palette => self.open_palette(),
             Slash::ProjectBind(path) => {
                 let p = path.unwrap_or_else(|| self.cfg.project_dir.clone());
                 let p = expand_home(&p);
@@ -1920,8 +1947,17 @@ impl Cabin {
         });
     }
 
+    fn open_palette(&mut self) {
+        self.palette_open = true;
+        self.palette_focus = true;
+        self.palette_pick = 0;
+        self.palette_q.clear();
+        self.settings_menu_open = false;
+    }
+
     fn run_palette(&mut self, action: &str) {
         self.palette_open = false;
+        self.settings_menu_open = false;
         match action {
             "nav:chat" => self.nav = Nav::Chat,
             "nav:night" => self.nav = Nav::Night,
@@ -2575,11 +2611,7 @@ impl Cabin {
             return;
         }
         let aspect = crate::cards::imagine_aspect_label(self.imagine_aspect);
-        let prompt = if prompt.contains(aspect) {
-            prompt
-        } else {
-            format!("{prompt}, {aspect} still")
-        };
+        let prompt = crate::cards::imagine_still_prompt(&prompt, aspect, self.imagine_quality);
         self.running = true;
         self.status = "Imagining…".into();
         let key = self.bearer();
@@ -3246,10 +3278,10 @@ impl eframe::App for Cabin {
             self.new_thread(false);
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K) && !i.modifiers.shift) {
-            self.palette_open = !self.palette_open;
             if self.palette_open {
-                self.palette_focus = true;
-                self.palette_pick = 0;
+                self.palette_open = false;
+            } else {
+                self.open_palette();
             }
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Slash)) {
@@ -3304,12 +3336,18 @@ impl eframe::App for Cabin {
             self.ui_palette(ctx);
         }
         if self.shortcuts_open {
-            egui::Window::new("Shortcuts").collapsible(false).show(ctx, |ui| {
-                ui.label(shortcut_help());
-                if ui.button("Close").clicked() {
-                    self.shortcuts_open = false;
-                }
-            });
+            egui::Window::new("Shortcuts")
+                .collapsible(false)
+                .default_width(420.0)
+                .show(ctx, |ui| {
+                    ui.set_max_width(400.0);
+                    for line in shortcut_help().lines() {
+                        ui.label(line);
+                    }
+                    if ui.button("Close").clicked() {
+                        self.shortcuts_open = false;
+                    }
+                });
         }
         self.ui_project_overlays(ctx);
     }
@@ -3364,7 +3402,7 @@ impl Cabin {
         let mut disconnect = false;
         let mut help = false;
         let authed = self.has_key();
-        egui::Window::new("settings-menu")
+        let shown = egui::Window::new("settings-menu")
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
@@ -3435,6 +3473,7 @@ impl Cabin {
                     }
                 }
             });
+        let menu_rect = shown.map(|r| r.response.rect);
         if let Some(id) = pick {
             self.set_nav_id(id);
             self.settings_menu_open = false;
@@ -3453,6 +3492,14 @@ impl Cabin {
             self.status = "Signed out".into();
             self.settings_menu_open = false;
         }
+        let outside = ctx.input(|i| i.pointer.any_click())
+            && ctx.pointer_interact_pos().is_some_and(|pos| {
+                menu_rect.map(|r| !r.expand(8.0).contains(pos)).unwrap_or(true)
+            });
+        if cabin_menu_should_dismiss(self.settings_menu_ignore, outside) {
+            self.settings_menu_open = false;
+        }
+        self.settings_menu_ignore = false;
     }
 
     fn ui_palette(&mut self, ctx: &egui::Context) {
@@ -3697,7 +3744,11 @@ impl Cabin {
                             }
                         }
                         if titlebar_chrome_btn(ui, "□").clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+                            let currently = ctx
+                                .input(|i| i.viewport().maximized)
+                                .unwrap_or(self.win_max);
+                            self.win_max = next_maximized(currently);
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(self.win_max));
                         }
                         if titlebar_chrome_btn(ui, "–").clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -3795,9 +3846,7 @@ impl Cabin {
                 ui.add_space(4.0);
                 if Self::nav_row(ui, false, crate::icons::RailIcon::Search, "Search", false).clicked()
                 {
-                    self.palette_open = true;
-                    self.palette_focus = true;
-                    self.palette_pick = 0;
+                    self.open_palette();
                 }
                 if Self::nav_row(ui, false, crate::icons::RailIcon::Compose, "New chat", true)
                     .clicked()
@@ -3965,6 +4014,7 @@ impl Cabin {
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     if Self::cabin_avatar(ui, &account, &email).clicked() {
                         self.settings_menu_open = !self.settings_menu_open;
+                        self.settings_menu_ignore = true;
                     }
                 });
             });
@@ -4262,10 +4312,7 @@ impl Cabin {
                         )
                         .on_hover_text("Send");
                         if send.clicked()
-                            || (edit.has_focus()
-                                && ui.input(|i| {
-                                    i.key_pressed(egui::Key::Enter) && i.modifiers.command
-                                }))
+                            || ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command)
                         {
                             let t = std::mem::take(&mut self.composer);
                             self.send_chat(t);
@@ -4397,6 +4444,9 @@ impl Cabin {
         let usage = usage_line(&self.usage);
         let catalog = catalog_line();
         let mut close = false;
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            close = true;
+        }
         let mut next_sec: Option<SettingsSec> = None;
         let sec = self.settings_sec;
         let screen = ctx.screen_rect();
@@ -5241,9 +5291,14 @@ impl Cabin {
             .show(ctx, |ui| {
             if crate::cards::page_header(ui, "Skills and Connectors", "New Skill") {
                 self.skills_tab_connectors = false;
-                let stub = crate::cards::starter_skill("new-skill");
-                self.skill_name = stub.name.clone();
-                self.skill_body = grokhub_core::render_skill_md(&stub);
+                let existing: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
+                let stub = crate::cards::starter_skill(&next_starter_skill_name(&existing));
+                if skills::save_skill(&stub).is_ok() {
+                    self.skill_list = skills::list_skills();
+                    self.skill_name = stub.name.clone();
+                    self.skill_body = grokhub_core::render_skill_md(&stub);
+                    self.status = format!("Wrote skill {}", stub.name);
+                }
             }
             if !self.verify_chip.is_empty() {
                 ui.label(RichText::new(&self.verify_chip).strong());
@@ -5557,6 +5612,32 @@ mod tests {
         let s = super::titlebar_chrome_size();
         assert!(s.x >= 32.0, "close hit {s:?}");
         assert_eq!(s.y, crate::theme::TITLEBAR_H);
+    }
+
+    #[test]
+    fn maximize_toggles_restore() {
+        assert!(super::next_maximized(false));
+        assert!(!super::next_maximized(true));
+    }
+
+    #[test]
+    fn cabin_menu_closes_on_outside_click() {
+        assert!(super::cabin_menu_should_dismiss(false, true));
+        assert!(!super::cabin_menu_should_dismiss(true, true));
+        assert!(!super::cabin_menu_should_dismiss(false, false));
+    }
+
+    #[test]
+    fn new_skill_gets_a_free_name() {
+        assert_eq!(super::next_starter_skill_name(&[]), "new-skill");
+        assert_eq!(
+            super::next_starter_skill_name(&["new-skill".into()]),
+            "new-skill-2"
+        );
+        assert_eq!(
+            super::next_starter_skill_name(&["new-skill".into(), "new-skill-2".into()]),
+            "new-skill-3"
+        );
     }
 
     fn about_section_opens_update() {
