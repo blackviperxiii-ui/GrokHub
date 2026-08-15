@@ -68,11 +68,11 @@ pub fn chat_request_body_vision(
     body
 }
 
-/// Think is Grok 4.6 at high. Max is the same model at xhigh.
+/// Think is Grok 4.6 at high. Max is the same model at xhigh. Balance leaves effort unset.
 pub fn reasoning_effort_for_mode(mode: &str) -> Option<&'static str> {
     match mode.trim() {
         "max" | "deep" | "heavy" => Some("xhigh"),
-        "balanced" | "build" | "expert" => Some("high"),
+        "think" | "build" | "expert" => Some("high"),
         _ => None,
     }
 }
@@ -90,16 +90,18 @@ pub fn should_failover_status(status: u16) -> bool {
 
 pub fn model_for_mode(mode: &str) -> &'static str {
     match mode {
-        "max" | "deep" | "heavy" | "balanced" | "build" | "expert" => "grok-4.6",
+        "max" | "deep" | "heavy" => "grok-4.6",
+        "think" | "build" | "expert" => "grok-4.6",
+        "balanced" | "balance" => "grok-4.3",
         "auto" => "grok-3-mini-fast",
         _ => DEFAULT_MODEL,
     }
 }
 
-/// Max and Think always send Grok 4.6. Other modes keep an explicit pin, else the mode map.
+/// Max and Think send Grok 4.6. Balance sends Grok 4.3. Other modes keep a pin, else the mode map.
 pub fn resolve_chat_model(mode: &str, model: &str) -> String {
     match mode.trim() {
-        "max" | "deep" | "heavy" | "balanced" | "build" | "expert" => {
+        "max" | "deep" | "heavy" | "think" | "build" | "expert" | "balanced" | "balance" => {
             model_for_mode(mode.trim()).to_string()
         }
         _ if !model.trim().is_empty() => model.trim().to_string(),
@@ -203,15 +205,15 @@ mod tests {
 
     #[test]
     fn think_is_grok_4_6_high() {
-        assert_eq!(model_for_mode("balanced"), "grok-4.6");
+        assert_eq!(model_for_mode("think"), "grok-4.6");
         assert_eq!(model_for_mode("build"), "grok-4.6");
         assert_eq!(model_for_mode("expert"), "grok-4.6");
-        assert_eq!(resolve_chat_model("balanced", "grok-3"), "grok-4.6");
-        assert_eq!(resolve_chat_model("balanced", ""), "grok-4.6");
-        assert_eq!(reasoning_effort_for_mode("balanced"), Some("high"));
+        assert_eq!(resolve_chat_model("think", "grok-3"), "grok-4.6");
+        assert_eq!(resolve_chat_model("think", ""), "grok-4.6");
+        assert_eq!(reasoning_effort_for_mode("think"), Some("high"));
         assert_eq!(reasoning_effort_for_mode("max"), Some("xhigh"));
         assert_eq!(reasoning_effort_for_mode("auto"), None);
-        let think = chat_request_body_for_mode("balanced", &[("user".into(), "hi".into())]);
+        let think = chat_request_body_for_mode("think", &[("user".into(), "hi".into())]);
         assert_eq!(think["model"], "grok-4.6");
         assert_eq!(think["reasoning_effort"], "high");
         let max = chat_request_body_for_mode("max", &[("user".into(), "hi".into())]);
@@ -220,5 +222,20 @@ mod tests {
         assert_ne!(think["reasoning_effort"], max["reasoning_effort"]);
         assert_eq!(chat_timeout_secs(Some("high")), 600);
         assert_eq!(failover_model("grok-4.6"), Some("grok-3"));
+    }
+
+    #[test]
+    fn balance_is_grok_4_3() {
+        assert_eq!(model_for_mode("balanced"), "grok-4.3");
+        assert_eq!(model_for_mode("balance"), "grok-4.3");
+        assert_eq!(resolve_chat_model("balanced", "grok-4.6"), "grok-4.3");
+        assert_eq!(resolve_chat_model("balance", ""), "grok-4.3");
+        assert_eq!(reasoning_effort_for_mode("balanced"), None);
+        assert_eq!(reasoning_effort_for_mode("think"), Some("high"));
+        let body = chat_request_body_for_mode("balanced", &[("user".into(), "hi".into())]);
+        assert_eq!(body["model"], "grok-4.3");
+        assert!(body.get("reasoning_effort").is_none());
+        assert_ne!(model_for_mode("think"), "grok-4.3");
+        assert_eq!(failover_model("grok-4.3"), Some("grok-3"));
     }
 }
