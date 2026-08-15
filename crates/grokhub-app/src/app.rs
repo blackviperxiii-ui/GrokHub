@@ -3865,25 +3865,29 @@ impl Cabin {
                                 crate::theme::BUBBLE_ASSISTANT
                             };
                             let bubble_w = crate::markdown::bubble_width(ui.available_width());
-                            ui.horizontal(|ui| {
-                                if user {
-                                    ui.add_space((ui.available_width() - bubble_w).max(0.0));
-                                }
+                            let draw = |ui: &mut egui::Ui| {
                                 egui::Frame::none()
                                     .fill(fill)
                                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
                                     .rounding(12.0)
                                     .inner_margin(egui::Margin::symmetric(14.0, 10.0))
                                     .show(ui, |ui| {
-                                        ui.set_min_width(bubble_w);
-                                        ui.set_max_width(bubble_w);
+                                        ui.set_width(bubble_w);
                                         if m.role == "assistant" {
                                             crate::markdown::show(ui, &m.content);
                                         } else {
                                             ui.label(RichText::new(&m.content).color(crate::theme::FG));
                                         }
                                     });
-                            });
+                            };
+                            if user {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::TOP),
+                                    draw,
+                                );
+                            } else {
+                                draw(ui);
+                            }
                             ui.add_space(8.0);
                         }
                         if self.running {
