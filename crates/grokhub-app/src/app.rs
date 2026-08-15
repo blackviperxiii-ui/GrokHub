@@ -47,6 +47,8 @@ use grokhub_core::{
     presence_orb_state, presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
     remember_chip_outcome, remember_typed_prompt, roll_usage_day,
+    greeting_fingerprint, greeting_prompt, local_greeting, pick_greeting,
+    should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     rewind_dest, save_hub_state, screen_from_extents, search_corpus, should_attach_cabin_frame,
     should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
@@ -511,6 +513,12 @@ pub struct Cabin {
     chip_busy: bool,
     chip_fp: String,
     chip_llm_at: u64,
+    greeting: String,
+    greeting_fp: String,
+    greeting_llm_fp: String,
+    greeting_rx: Option<mpsc::Receiver<String>>,
+    greeting_busy: bool,
+    greeting_llm_at: u64,
     skills_tab_connectors: bool,
     skill_q: String,
     github_args: String,
@@ -763,6 +771,12 @@ impl Cabin {
             chip_busy: false,
             chip_fp: String::new(),
             chip_llm_at: 0,
+            greeting: String::new(),
+            greeting_fp: String::new(),
+            greeting_llm_fp: String::new(),
+            greeting_rx: None,
+            greeting_busy: false,
+            greeting_llm_at: 0,
             skills_tab_connectors: false,
             skill_q: String::new(),
             github_args: String::new(),
@@ -1483,6 +1497,110 @@ impl Cabin {
                 self.chip_busy = false;
             }
         }
+    }
+
+    fn poll_greeting(&mut self) {
+        let Some(rx) = self.greeting_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(raw) => {
+                self.greeting_busy = false;
+                self.greeting = pick_greeting(&self.greeting, Some(&raw));
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.greeting_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.greeting_busy = false;
+            }
+        }
+    }
+
+    fn refresh_greeting(&mut self) {
+        let empty = self.messages.is_empty();
+        let scratch = self.scratch();
+        if !should_paint_greeting(empty, scratch) {
+            if !self.greeting.is_empty() {
+                self.greeting.clear();
+            }
+            return;
+        }
+        let user_md = config::read_memory("USER.md");
+        let memory_md = config::read_memory("MEMORY.md");
+        let insights: Vec<String> = self
+            .learning
+            .insights
+            .iter()
+            .take(6)
+            .map(|i| i.text.clone())
+            .collect();
+        let display_name = self
+            .secrets
+            .oauth
+            .as_ref()
+            .and_then(|t| t.name.clone())
+            .unwrap_or_default();
+        let hour = Self::chip_hour();
+        let input = GreetingInput {
+            user_md: &user_md,
+            memory_md: &memory_md,
+            insights: &insights,
+            display_name: &display_name,
+            hour,
+        };
+        let local = local_greeting(&input);
+        let fp = greeting_fingerprint(&input);
+        if self.greeting_fp != fp {
+            self.greeting = local;
+            self.greeting_fp = fp.clone();
+        }
+        if should_refresh_greeting(
+            &self.greeting_llm_fp,
+            &fp,
+            self.greeting_llm_at,
+            now_ms(),
+            self.has_key(),
+            self.greeting_busy,
+        ) {
+            self.greeting_llm_fp = fp;
+            self.greeting_llm_at = now_ms();
+            self.spawn_greeting_llm(&user_md, &memory_md, &insights, &display_name, hour);
+        }
+    }
+
+    fn spawn_greeting_llm(
+        &mut self,
+        user_md: &str,
+        memory_md: &str,
+        insights: &[String],
+        display_name: &str,
+        hour: u8,
+    ) {
+        if self.greeting_busy {
+            return;
+        }
+        let key = self.bearer();
+        if key.trim().is_empty() {
+            return;
+        }
+        let input = GreetingInput {
+            user_md,
+            memory_md,
+            insights,
+            display_name,
+            hour,
+        };
+        let prompt = greeting_prompt(&input);
+        let model = model_for_mode(GREETING_LLM_MODE).to_string();
+        let (tx, rx) = mpsc::channel();
+        self.greeting_rx = Some(rx);
+        self.greeting_busy = true;
+        std::thread::spawn(move || {
+            let raw = grok_chat(&key, &model, &[("user".into(), prompt)], None, None)
+                .unwrap_or_default();
+            let _ = tx.send(raw);
+        });
     }
 
     fn poll_goals(&mut self) {
@@ -4178,8 +4296,10 @@ impl eframe::App for Cabin {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
         self.poll_chips();
+        self.poll_greeting();
         self.poll_goals();
         self.refresh_chips();
+        self.refresh_greeting();
         self.drain_inbox();
         self.poll_tray(ctx);
         self.poll_voice();
@@ -5132,7 +5252,14 @@ impl Cabin {
     }
 
     fn ui_empty_home(&mut self, ui: &mut egui::Ui) {
-        let block = crate::theme::WORDMARK + 28.0 + crate::theme::QUERY_MIN_H;
+        let greet_on = should_paint_greeting(self.messages.is_empty(), self.scratch())
+            && !self.greeting.is_empty();
+        let greet_h = if greet_on {
+            crate::theme::GREETING_SIZE + 28.0
+        } else {
+            28.0
+        };
+        let block = crate::theme::WORDMARK + greet_h + crate::theme::QUERY_MIN_H;
         let lift = ((ui.available_height() - block) * 0.5).clamp(24.0, 320.0);
         ui.add_space(lift);
         ui.vertical_centered(|ui| {
@@ -5141,7 +5268,18 @@ impl Cabin {
                     .font(crate::theme::title_font(crate::theme::WORDMARK))
                     .color(crate::theme::fg()),
             );
-            ui.add_space(28.0);
+            if greet_on {
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new(&self.greeting)
+                        .size(crate::theme::GREETING_SIZE)
+                        .italics()
+                        .color(crate::theme::whisper()),
+                );
+                ui.add_space(18.0);
+            } else {
+                ui.add_space(28.0);
+            }
             ui.set_max_width(crate::theme::QUERY_MAX_W);
             self.ui_composer_stack(ui);
         });
@@ -6995,6 +7133,31 @@ mod tests {
         assert_eq!(
             super::mode_status_line("max", ""),
             "Mode max → grok-4.6 · xhigh"
+        );
+    }
+
+    #[test]
+    fn empty_home_paints_faint_greeting() {
+        let src = include_str!("app.rs");
+        let home = src.find("fn ui_empty_home").expect("empty home");
+        let slice = &src[home..home + 1600];
+        assert!(
+            slice.contains("self.greeting"),
+            "new chats paint a greeting blurb: {slice}"
+        );
+        let mark = slice.find("GrokHub").expect("wordmark");
+        let greet = slice[mark..]
+            .find("self.greeting")
+            .map(|i| mark + i)
+            .expect("greeting under wordmark");
+        let composer = slice.find("ui_composer_stack").expect("composer");
+        assert!(
+            mark < greet && greet < composer,
+            "greeting sits under the wordmark, above the chat box"
+        );
+        assert!(
+            slice.contains("whisper"),
+            "greeting uses the faint paint color"
         );
     }
 
