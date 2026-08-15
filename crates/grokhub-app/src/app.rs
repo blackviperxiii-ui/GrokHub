@@ -3016,6 +3016,7 @@ impl Cabin {
                     "add" => {
                         self.proj_add_for = Some(id.clone());
                         self.project_sel = Some(id);
+                        self.proj_ignore_close = true;
                     }
                     "root" => {
                         if add_to_folder(&mut self.projects, &id, None).is_ok() {
@@ -3079,6 +3080,8 @@ impl Cabin {
                     }
                     Err(e) => self.status = e.into(),
                 }
+            } else if self.proj_ignore_close {
+                self.proj_ignore_close = false;
             } else if ctx.input(|i| i.pointer.any_click()) {
                 if let Some(pos) = ctx.pointer_interact_pos() {
                     if !menu_rect.expand(8.0).contains(pos) {
@@ -3698,6 +3701,7 @@ impl Cabin {
                             if self.proj_rename_focus {
                                 edit.request_focus();
                                 if edit.has_focus() {
+                                    select_all_edit(ui, edit.id, &self.proj_rename_buf);
                                     self.proj_rename_focus = false;
                                 }
                             }
@@ -5316,6 +5320,16 @@ impl Cabin {
     }
 }
 
+fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {
+    let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+    let end = text.chars().count();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+        egui::text::CCursor::new(0),
+        egui::text::CCursor::new(end),
+    )));
+    state.store(ui.ctx(), id);
+}
+
 fn expand_home(p: &str) -> String {
     if let Some(rest) = p.strip_prefix("~/") {
         if let Ok(home) = std::env::var("HOME") {
@@ -5326,4 +5340,23 @@ fn expand_home(p: &str) -> String {
         return std::env::var("HOME").unwrap_or_else(|_| p.to_string());
     }
     p.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_all_edit;
+    use eframe::egui;
+
+    #[test]
+    fn rename_focus_selects_the_placeholder() {
+        egui::__run_test_ui(|ui| {
+            let mut buf = String::from("Project");
+            let edit = ui.add(egui::TextEdit::singleline(&mut buf));
+            select_all_edit(ui, edit.id, &buf);
+            let state = egui::TextEdit::load_state(ui.ctx(), edit.id).expect("edit state");
+            let range = state.cursor.char_range().expect("selection");
+            assert_eq!(range.primary.index, 0);
+            assert_eq!(range.secondary.index, 7);
+        });
+    }
 }
