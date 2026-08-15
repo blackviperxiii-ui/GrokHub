@@ -1,5 +1,7 @@
 //! Cabin organs: greet, room, passenger, presence, redirect.
 
+use crate::chat_view::is_workload_user;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MidThoughtGreet {
     pub goal: Option<String>,
@@ -162,7 +164,7 @@ pub fn last_user_text(messages: &[(String, String)]) -> Option<String> {
     messages
         .iter()
         .rev()
-        .find(|(r, _)| r == "user")
+        .find(|(r, c)| r == "user" && !is_workload_user(c))
         .map(|(_, c)| c.clone())
 }
 
@@ -256,5 +258,13 @@ mod tests {
         let c = parse_local_clock("5 16 42", 1).unwrap();
         assert_eq!(c.weekday, 5);
         assert_eq!(c.hm(), "16:42");
+        assert_eq!(
+            last_user_text(&[
+                ("user".into(), "check the box".into()),
+                ("user".into(), "HOST_RESULT (facts only):\n$ uname -a\n".into()),
+            ])
+            .as_deref(),
+            Some("check the box")
+        );
     }
 }
