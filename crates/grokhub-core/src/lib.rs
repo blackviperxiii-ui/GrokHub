@@ -14,6 +14,7 @@ pub mod diagnostics;
 pub mod doctor;
 pub mod frame;
 pub mod goal;
+pub mod greeting;
 pub mod history;
 pub mod host_cite;
 pub mod host_plan;
@@ -123,6 +124,11 @@ pub use goal::{
     blend_thread_goal, compact_keep_pin, looks_incomplete, next_goal_prompt, parse_fast_topics,
     parse_goal_outcome, should_name_thread, thread_goal_prompt, ThreadGoal, GOAL_DROP_AFTER,
     GOAL_MAX_STEPS,
+};
+pub use greeting::{
+    greeting_fingerprint, greeting_name, greeting_prompt, local_greeting, parse_llm_greeting,
+    pick_greeting, should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_DEBOUNCE_MS, GREETING_LLM_MODE,
+    GREETING_MAX_CHARS,
 };
 pub use history::search_corpus;
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
