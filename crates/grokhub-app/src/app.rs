@@ -19,9 +19,9 @@ use grokhub_core::{
     context_fingerprint,
     context_percent, daily_units_blocked,
     dedicated_imagine_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
-    pick_fresh_seed, wall_can_paint, wall_evict, ImagineKind, ImagineSpec, ImagineWall,
-    WallGif, WALL_GIF_EVERY_MS,
-    WALL_GIF_MAX,
+    pick_fresh_seed, wall_can_paint, wall_evict, ImagineKind, ImagineSpec, ImagineToolboxDock,
+    ImagineWall, WallGif, WALL_GIF_EVERY_MS, WALL_GIF_MAX, IMAGINE_TOOLBOX_PAD,
+    imagine_toolbox_dock, imagine_toolbox_shows_title,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
@@ -5697,6 +5697,17 @@ impl Cabin {
         let bar_w = (content.width() - 48.0)
             .min(crate::theme::IMAGINE_BAR_W)
             .max(280.0);
+        let dock = imagine_toolbox_dock(
+            !self.imagine_prompt.trim().is_empty(),
+            !self.imagine_last.is_empty(),
+            self.running,
+        );
+        let (align, offset) = match dock {
+            ImagineToolboxDock::Middle => (egui::Align2::CENTER_CENTER, egui::Vec2::ZERO),
+            ImagineToolboxDock::Bottom => {
+                (egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -IMAGINE_TOOLBOX_PAD))
+            }
+        };
         egui::Area::new(egui::Id::new("imagine-new"))
             .fixed_pos(egui::pos2(content.right() - 148.0, content.top() + 12.0))
             .order(egui::Order::Foreground)
@@ -5706,26 +5717,27 @@ impl Cabin {
                 }
             });
         egui::Area::new(egui::Id::new("imagine-composer"))
-            .fixed_pos(egui::pos2(
-                content.center().x - bar_w * 0.5,
-                content.top() + 36.0,
-            ))
+            .constrain_to(content)
+            .anchor(align, offset)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 ui.set_width(bar_w);
+                let origin = ui.next_widget_position();
                 let fade = egui::Rect::from_min_size(
-                    egui::pos2(ui.next_widget_position().x - 24.0, content.top()),
-                    egui::vec2(bar_w + 48.0, 220.0),
+                    egui::pos2(origin.x - 24.0, origin.y - 16.0),
+                    egui::vec2(bar_w + 48.0, 260.0),
                 );
                 ui.painter()
                     .rect_filled(fade, 0.0, Color32::from_black_alpha(110));
                 ui.vertical_centered(|ui| {
-                    ui.label(
-                        RichText::new(format!("Imagine {word}"))
-                            .font(crate::theme::title_font(crate::theme::IMAGINE_TITLE))
-                            .color(crate::theme::FG),
-                    );
-                    ui.add_space(crate::theme::IMAGINE_GAP);
+                    if imagine_toolbox_shows_title(dock) {
+                        ui.label(
+                            RichText::new(format!("Imagine {word}"))
+                                .font(crate::theme::title_font(crate::theme::IMAGINE_TITLE))
+                                .color(crate::theme::FG),
+                        );
+                        ui.add_space(crate::theme::IMAGINE_GAP);
+                    }
                     self.ui_attach_chip(ui, PlusTarget::Imagine);
                     let bar = self.ui_imagine_bar(ui);
                     generate = bar.generate;
