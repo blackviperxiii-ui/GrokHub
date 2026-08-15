@@ -50,6 +50,7 @@ use grokhub_core::{
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     rewind_dest, save_hub_state, screen_from_extents, search_corpus, should_attach_cabin_frame,
     should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
+    apply_composer_enter, composer_enter, ComposerEnter,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title, apply_manual_rename, delete_thread, history_order, should_name_thread,
     skip_automation, slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
@@ -151,6 +152,51 @@ fn slash_pick_retain(pick: usize, list_changed: bool, len: usize) -> usize {
         0
     } else {
         slash_pick_step(pick, len, 0)
+    }
+}
+
+fn consume_enter_keys(ui: &mut egui::Ui) {
+    ui.input_mut(|i| {
+        i.events.retain(|ev| match ev {
+            egui::Event::Key {
+                key: egui::Key::Enter,
+                ..
+            } => false,
+            egui::Event::Text(t) if t == "\n" || t == "\r" || t == "\r\n" => false,
+            _ => true,
+        });
+    });
+}
+
+/// Enter sends. Control+Enter appends a newline and is not delivered to TextEdit.
+fn take_focused_composer(
+    ui: &mut egui::Ui,
+    composer: &mut String,
+    focused: bool,
+) -> Option<String> {
+    if !focused {
+        return None;
+    }
+    let (enter, control) = ui.input(|i| {
+        (
+            i.key_pressed(egui::Key::Enter),
+            i.modifiers.ctrl || i.modifiers.command,
+        )
+    });
+    match composer_enter(enter, control) {
+        Some(ComposerEnter::Send) => {
+            consume_enter_keys(ui);
+            if composer.ends_with('\n') {
+                composer.pop();
+            }
+            Some(std::mem::take(composer))
+        }
+        Some(ComposerEnter::Newline) => {
+            let _ = apply_composer_enter(composer, true, true);
+            consume_enter_keys(ui);
+            None
+        }
+        None => None,
     }
 }
 
@@ -5288,13 +5334,26 @@ impl Cabin {
                         if plus.clicked() {
                             self.open_plus(PlusTarget::Chat, plus.rect.left_bottom());
                         }
+                        let composer_id = egui::Id::new("chat-composer");
+                        let focused = ui.memory(|m| m.has_focus(composer_id));
+                        if let Some(t) =
+                            take_focused_composer(ui, &mut self.composer, focused)
+                        {
+                            self.send_chat(t);
+                        }
                         let edit = ui.add(
                             egui::TextEdit::multiline(&mut self.composer)
+                                .id(composer_id)
                                 .desired_width((ui.available_width() - 180.0).max(80.0))
                                 .desired_rows(1)
                                 .frame(false)
                                 .hint_text("What do you want to know?"),
                         );
+                        if let Some(t) =
+                            take_focused_composer(ui, &mut self.composer, edit.has_focus())
+                        {
+                            self.send_chat(t);
+                        }
                         let mut mode = if self.cfg.mode.trim().is_empty() {
                             "auto".to_string()
                         } else {
@@ -5345,9 +5404,7 @@ impl Cabin {
                             },
                         )
                         .on_hover_text("Send");
-                        if send.clicked()
-                            || ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command)
-                        {
+                        if send.clicked() {
                             let t = std::mem::take(&mut self.composer);
                             self.send_chat(t);
                         }

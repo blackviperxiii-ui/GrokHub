@@ -79,7 +79,7 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `secrets.js
 
 Tokens stay in `secrets.json`. Never in markdown.
 
-Composer is a pill: **What do you want to know?** Plus opens Upload / Paste. Mode combo is Auto / Fast / Balance / Think / Max. `/mode` only sets the combo — it does not overwrite Settings → Chat model. Mic is Hey Grok. Ctrl+Enter or the arrow sends; Enter is a newline. Chat shows thought and tool steps; host receipts stay off the bubble. Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash -lc`.
+Composer is a pill: **What do you want to know?** Plus opens Upload / Paste. Mode combo is Auto / Fast / Balance / Think / Max. `/mode` only sets the combo — it does not overwrite Settings → Chat model. Mic is Hey Grok. Enter or the arrow sends; Ctrl+Enter starts a new line. Chat shows thought and tool steps; host receipts stay off the bubble. Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash -lc`.
 
 ## Always-on hub
 
