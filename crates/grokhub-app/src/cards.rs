@@ -276,6 +276,31 @@ pub fn imagine_quality_label(quality: bool) -> &'static str {
     }
 }
 
+pub fn imagine_quality_word(quality: bool) -> &'static str {
+    if quality {
+        "quality"
+    } else {
+        "speed"
+    }
+}
+
+/// Speed / Quality and aspect are still-prompt words. grok-2-image has no other lever.
+pub fn imagine_still_prompt(prompt: &str, aspect: &str, quality: bool) -> String {
+    let q = imagine_quality_word(quality);
+    let p = prompt.trim();
+    if p.is_empty() {
+        return String::new();
+    }
+    let has_aspect = p.contains(aspect);
+    let has_q = p.to_ascii_lowercase().contains(q);
+    match (has_aspect, has_q) {
+        (true, true) => p.to_string(),
+        (true, false) => format!("{p}, {q} still"),
+        (false, true) => format!("{p}, {aspect} still"),
+        (false, false) => format!("{p}, {aspect} {q} still"),
+    }
+}
+
 pub fn imagine_aspect_label(i: u8) -> &'static str {
     grokhub_core::imagine_aspect_label(i)
 }
@@ -443,9 +468,15 @@ pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     .clicked()
 }
 
-pub fn section_label(ui: &mut egui::Ui, label: &str) {
-    ui.label(RichText::new(label).size(13.0).strong().color(crate::theme::SUBTLE));
+pub fn section_label(ui: &mut egui::Ui, label: &str) -> bool {
+    let hit = ui
+        .add(
+            egui::Label::new(RichText::new(label).size(13.0).strong().color(crate::theme::SUBTLE))
+                .sense(egui::Sense::click()),
+        )
+        .clicked();
     ui.add_space(10.0);
+    hit
 }
 
 pub fn settings_group(ui: &mut egui::Ui, title: &str, mut body: impl FnMut(&mut egui::Ui)) {
@@ -729,13 +760,18 @@ fn still_jpeg(key: &str) -> &'static [u8] {
     }
 }
 
+fn imagine_still_rgba(bytes: &[u8]) -> image::RgbaImage {
+    image::load_from_memory(bytes)
+        .map(|img| img.to_rgba8())
+        .unwrap_or_else(|_| image::RgbaImage::from_pixel(1, 1, image::Rgba([0x14, 0x14, 0x14, 0xff])))
+}
+
 fn imagine_still_tex(ctx: &egui::Context, key: &str) -> (TextureHandle, [usize; 2]) {
     let id = egui::Id::new(("imagine-still", key));
     if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
         return hit;
     }
-    let img = image::load_from_memory(still_jpeg(key)).expect("imagine still");
-    let rgba = img.to_rgba8();
+    let rgba = imagine_still_rgba(still_jpeg(key));
     let size = [rgba.width() as usize, rgba.height() as usize];
     let tex = ctx.load_texture(
         format!("imagine-still-{key}"),
@@ -1104,6 +1140,19 @@ mod tests {
         assert_eq!(imagine_kind_label(ImagineKind::Agent), "Agent");
         assert_eq!(imagine_quality_label(false), "Speed");
         assert_eq!(imagine_quality_label(true), "Quality (v2.0)");
+        let fallback = imagine_still_rgba(b"not-a-jpeg");
+        assert_eq!((fallback.width(), fallback.height()), (1, 1));
+        assert_eq!(imagine_quality_word(true), "quality");
+        assert_eq!(imagine_quality_word(false), "speed");
+        assert_eq!(
+            imagine_still_prompt("a night cabin", "2:3", true),
+            "a night cabin, 2:3 quality still"
+        );
+        assert_eq!(
+            imagine_still_prompt("a night cabin, 2:3 still", "2:3", false),
+            "a night cabin, 2:3 still, speed still"
+        );
+        assert_eq!(imagine_still_prompt("", "2:3", true), "");
         for s in IMAGINE_SCENES {
             let blob = format!("{} {}", s.title, s.prompt).to_ascii_lowercase();
             for w in forbidden {

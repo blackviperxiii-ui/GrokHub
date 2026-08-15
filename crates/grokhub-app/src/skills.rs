@@ -39,7 +39,7 @@ pub fn save_skill(s: &SkillMd) -> Result<PathBuf, String> {
     let dir = skills_dir().join(skill_dir_name(&s.name));
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("SKILL.md");
-    fs::write(&path, render_skill_md(s)).map_err(|e| e.to_string())?;
+    crate::config::atomic_write(&path, render_skill_md(s).as_bytes())?;
     if let Some(script) = verify_as_script(&s.verify) {
         let scripts = dir.join("scripts");
         fs::create_dir_all(&scripts).map_err(|e| e.to_string())?;

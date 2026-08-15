@@ -1110,7 +1110,39 @@ fn apply_draft_boost(chips: &mut [QuickChip], draft_raw: &str, intents: &BTreeMa
     }
 }
 
-fn stage_chips(stage: ChipStage) -> Vec<QuickChip> {
+fn routing_chip(id: &str, mode: &str, score: f32) -> QuickChip {
+    let mode = mode.trim();
+    if matches!(mode, "max" | "deep" | "heavy") {
+        chip(
+            id,
+            "Use Adaptive",
+            "__mode:auto",
+            ChipKind::Mode,
+            score,
+            "Auto routes Fast / Balance / Think / Max",
+        )
+    } else if matches!(mode, "think" | "thinking" | "expert" | "build") {
+        chip(
+            id,
+            "Go Max",
+            "__mode:max",
+            ChipKind::Mode,
+            score,
+            "Max · Grok 4.6 xhigh",
+        )
+    } else {
+        chip(
+            id,
+            "Think Harder",
+            "__mode:think",
+            ChipKind::Mode,
+            score,
+            "Think · Grok 4.6 high",
+        )
+    }
+}
+
+fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
     match stage {
         ChipStage::Empty => vec![
             chip(
@@ -1121,14 +1153,7 @@ fn stage_chips(stage: ChipStage) -> Vec<QuickChip> {
                 70.0,
                 "New chat",
             ),
-            chip(
-                "empty-think",
-                "Think Harder",
-                "__mode:max",
-                ChipKind::Mode,
-                68.0,
-                "Use the deepest model",
-            ),
+            routing_chip("empty-think", mode, 68.0),
             chip(
                 "empty-imagine",
                 "Open Imagine",
@@ -1191,14 +1216,7 @@ fn stage_chips(stage: ChipStage) -> Vec<QuickChip> {
                 80.0,
                 "Long thread",
             ),
-            chip(
-                "long-think",
-                "Think Harder",
-                "__mode:max",
-                ChipKind::Mode,
-                72.0,
-                "Deeper pass",
-            ),
+            routing_chip("long-think", mode, 72.0),
         ],
         ChipStage::Mid | ChipStage::Default => vec![
             chip(
@@ -1209,38 +1227,12 @@ fn stage_chips(stage: ChipStage) -> Vec<QuickChip> {
                 74.0,
                 "Mid-thread",
             ),
-            chip(
-                "mid-think",
-                "Think Harder",
-                "__mode:max",
-                ChipKind::Mode,
-                70.0,
-                "Deeper pass",
-            ),
+            routing_chip("mid-think", mode, 70.0),
         ],
     }
 }
 
 fn default_chips(mode: &str) -> Vec<QuickChip> {
-    let mode_chip = if mode == "max" || mode == "deep" {
-        chip(
-            "def-auto",
-            "Use Adaptive",
-            "__mode:auto",
-            ChipKind::Mode,
-            24.0,
-            "Routing",
-        )
-    } else {
-        chip(
-            "def-think",
-            "Think Harder",
-            "__mode:max",
-            ChipKind::Mode,
-            24.0,
-            "Routing",
-        )
-    };
     vec![
         chip(
             "def-help",
@@ -1250,7 +1242,7 @@ fn default_chips(mode: &str) -> Vec<QuickChip> {
             24.0,
             "Default",
         ),
-        mode_chip,
+        routing_chip("def-route", mode, 24.0),
         chip(
             "def-imagine",
             "Open Imagine",
@@ -1411,7 +1403,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             "Implement context",
         ));
     }
-    chips.extend(stage_chips(stage));
+    chips.extend(stage_chips(stage, input.mode));
     if ctx.host || input.host_on {
         chips.extend(host_chips());
     }
@@ -1775,8 +1767,10 @@ pub fn mode_from_chip_value(value: &str) -> Option<&'static str> {
     let rest = v.strip_prefix("__mode:").unwrap_or(v);
     match rest {
         "max" | "deep" | "heavy" => Some("max"),
-        "balanced" | "build" | "expert" => Some("balanced"),
-        "auto" | "fast" => Some("auto"),
+        "think" | "thinking" | "build" | "expert" => Some("think"),
+        "balanced" | "balance" => Some("balanced"),
+        "fast" => Some("fast"),
+        "auto" => Some("auto"),
         _ => None,
     }
 }
@@ -1819,9 +1813,43 @@ mod tests {
     fn empty_stage_offers_think_harder() {
         let mem = ChipMemory::default();
         let chips = build_quick_chips(input(&[], "", &mem, &[], &[]));
-        assert!(chips.iter().any(|c| c.label == "Think Harder" && c.kind == ChipKind::Mode));
+        let think = chips
+            .iter()
+            .find(|c| c.label == "Think Harder" && c.kind == ChipKind::Mode)
+            .expect("think chip");
+        assert_eq!(think.value, "__mode:think");
+        assert_eq!(mode_from_chip_value(&think.value), Some("think"));
         assert!(chips.len() <= CHIP_VISIBLE_MAX);
         assert!(chips[0].primary);
+    }
+
+    #[test]
+    fn routing_chips_follow_new_modes() {
+        let mem = ChipMemory::default();
+        let mut auto = input(&[], "", &mem, &[], &[]);
+        auto.mode = "auto";
+        let auto_chips = build_quick_chips(auto);
+        assert!(auto_chips.iter().any(|c| {
+            c.label == "Think Harder" && c.value == "__mode:think" && c.kind == ChipKind::Mode
+        }));
+
+        let mut think = input(&[], "", &mem, &[], &[]);
+        think.mode = "think";
+        let think_chips = build_quick_chips(think);
+        assert!(think_chips.iter().any(|c| {
+            (c.label == "Go Max" || c.label == "Max")
+                && c.value == "__mode:max"
+                && c.kind == ChipKind::Mode
+        }));
+        assert!(!think_chips.iter().any(|c| c.label == "Think Harder"));
+
+        let mut max = input(&[], "", &mem, &[], &[]);
+        max.mode = "max";
+        let max_chips = build_quick_chips(max);
+        assert!(max_chips.iter().any(|c| {
+            c.label == "Use Adaptive" && c.value == "__mode:auto" && c.kind == ChipKind::Mode
+        }));
+        assert!(!max_chips.iter().any(|c| c.label == "Think Harder"));
     }
 
     #[test]
@@ -1946,6 +1974,10 @@ mod tests {
     fn mode_and_nav_values() {
         assert_eq!(mode_from_chip_value("__mode:max"), Some("max"));
         assert_eq!(mode_from_chip_value("__mode:auto"), Some("auto"));
+        assert_eq!(mode_from_chip_value("__mode:fast"), Some("fast"));
+        assert_eq!(mode_from_chip_value("fast"), Some("fast"));
+        assert_eq!(mode_from_chip_value("__mode:think"), Some("think"));
+        assert_eq!(mode_from_chip_value("__mode:balanced"), Some("balanced"));
         assert_eq!(nav_from_chip_value("__nav:imagine"), Some("imagine"));
     }
 

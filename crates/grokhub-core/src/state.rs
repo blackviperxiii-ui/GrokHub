@@ -268,7 +268,17 @@ pub fn save_hub_state(path: &std::path::Path, st: &HubState) -> Result<(), Strin
     }
     let disk = state_for_disk(st);
     let s = serde_json::to_string_pretty(&disk).map_err(|e| e.to_string())?;
-    std::fs::write(path, s).map_err(|e| e.to_string())
+    let tmp = path.with_file_name(format!(
+        ".{}.tmp",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("hub-state.json")
+    ));
+    std::fs::write(&tmp, s).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })
 }
 
 pub fn load_hub_state(path: &std::path::Path) -> Option<HubState> {

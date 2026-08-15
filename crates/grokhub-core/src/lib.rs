@@ -44,9 +44,10 @@ pub mod windshield;
 pub mod workboard;
 
 pub use chat::{
-    chat_request_body, chat_request_body_vision, extract_host_cmds, failover_model,
-    model_for_mode, needs_auth_banner, parse_chat_content, should_failover_status, DEFAULT_MODEL,
-    XAI_BASE,
+    chat_request_body, chat_request_body_for_mode, chat_request_body_vision, chat_timeout_secs,
+    effective_chat_mode, extract_host_cmds, failover_model, is_composer_ladder_model, model_for_mode,
+    needs_auth_banner, parse_chat_content, reasoning_effort_for_mode, resolve_chat_model,
+    route_auto_mode, settings_pin_blocks_auto, should_failover_status, DEFAULT_MODEL, XAI_BASE,
 };
 pub use chips::{
     build_quick_chips, chip_memory_key, chip_suggest_prompt, context_fingerprint, detect_chip_context,
@@ -83,7 +84,8 @@ pub use reflect::{
 pub use pair::{make_pair_code, normalize_code, CODE_ALPH, PAIR_TTL_MS};
 pub use automation::{
     automation_blocked_by_policy, compute_next_run, due_automations, ensure_automation_schedule,
-    mark_automation_ran, parse_nl_automation, skip_automation, Automation,
+    mark_automation_ran, night_check_command, night_check_exit_code, night_check_stdout,
+    parse_nl_automation, skip_automation, skip_night_check_receipt, Automation,
 };
 pub use connector::{
     connector_url_allowed, extract_connector_cmds, github_api_path, map_website_connector_name,
@@ -124,7 +126,10 @@ pub use oauth::{
     XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE,
 };
 pub use project::{
+    add_to_folder, clean_project_name, create_folder, create_project, drop_node, folder_choices,
     host_cmd_leaves_project, host_hour_blocked, is_under_project, project_name_from_path,
+    project_slug, project_work_path, rename_node, seed_from_bound, settle_project_path,
+    stage_project, toggle_folder, upsert_bound, visible_tree, ProjectKind, ProjectNode,
 };
 pub use redact::{forget_topic, is_plain_text, redact_secrets};
 pub use skill::{
@@ -163,7 +168,10 @@ pub use thread_tab::{
     apply_auto_title, apply_manual_rename, clean_tab_title, delete_thread, history_order, toggle_pin,
     DeleteOutcome, ThreadTab,
 };
-pub use update::{discover_source, is_grokhub_source, update_cmds, update_wipes_config, walk_up_source};
+pub use update::{
+    discover_source, is_grokhub_source, update_cmds, update_plan_steps, update_wipes_config,
+    walk_up_source,
+};
 
 pub const PRESENCE_PUSH_MIN_MS: u64 = 400;
 
@@ -202,8 +210,8 @@ pub fn cap_history_images<T: Clone>(
 
 pub fn next_failover_tier(tier: &str) -> &'static str {
     match tier {
-        "max" => "balanced",
-        "balanced" => "fast",
+        "max" | "think" | "deep" | "heavy" | "expert" | "build" => "balanced",
+        "balanced" | "balance" => "fast",
         _ => "fast",
     }
 }
@@ -258,7 +266,10 @@ mod tests {
     #[test]
     fn failover() {
         assert_eq!(next_failover_tier("max"), "balanced");
+        assert_eq!(next_failover_tier("think"), "balanced");
         assert_eq!(next_failover_tier("balanced"), "fast");
+        assert_eq!(next_failover_tier("fast"), "fast");
+        assert_eq!(next_failover_tier("auto"), "fast");
     }
 
     #[test]

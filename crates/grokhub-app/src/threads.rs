@@ -45,10 +45,8 @@ pub fn load() -> Vec<ChatThread> {
 }
 
 pub fn save(threads: &[ChatThread]) -> Result<(), String> {
-    let dir = config::config_dir();
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let s = serde_json::to_string_pretty(threads).map_err(|e| e.to_string())?;
-    fs::write(threads_path(), s).map_err(|e| e.to_string())
+    config::atomic_write(&threads_path(), s.as_bytes())
 }
 
 pub fn export_markdown(t: &ChatThread) -> String {
