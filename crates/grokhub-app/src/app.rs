@@ -289,6 +289,7 @@ pub struct Cabin {
     proj_rename_focus: bool,
     proj_staged: Option<String>,
     proj_ignore_close: bool,
+    projects_dirty: bool,
 }
 
 fn paint_wall_cover(
@@ -500,6 +501,7 @@ impl Cabin {
             proj_rename_focus: false,
             proj_staged: None,
             proj_ignore_close: false,
+            projects_dirty: false,
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
             let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
@@ -534,7 +536,7 @@ impl Cabin {
         let _ = crate::store::save_usage(&self.usage);
         let _ = crate::store::save_chips(&self.chip_memory);
         let _ = crate::store::save_wall(&self.wall);
-        let _ = crate::store::save_projects(&self.projects);
+        self.flush_projects();
         let _ = config::save(&self.cfg);
         if let Ok(st) = self.hub.lock() {
             let _ = save_hub_state(&config::hub_state_path(), &st);
@@ -561,6 +563,18 @@ impl Cabin {
         }
     }
 
+    fn touch_projects(&mut self) {
+        self.projects_dirty = true;
+    }
+
+    fn flush_projects(&mut self) {
+        if !self.projects_dirty {
+            return;
+        }
+        let _ = crate::store::save_projects(&self.projects);
+        self.projects_dirty = false;
+    }
+
     fn bind_project_id(&mut self, id: &str) {
         let Some(n) = self.projects.iter().find(|n| n.id == id && n.kind == ProjectKind::Project) else {
             return;
@@ -568,9 +582,10 @@ impl Cabin {
         let path = n.path.clone();
         let name = n.name.clone();
         if !path.trim().is_empty() {
-            let _ = std::fs::create_dir_all(&path);
+            if !std::path::Path::new(&path).is_dir() {
+                let _ = std::fs::create_dir_all(&path);
+            }
             self.cfg.project_dir = path.clone();
-            let _ = config::save(&self.cfg);
         }
         self.project_sel = Some(id.to_string());
         self.nav = Nav::Workboard;
@@ -584,7 +599,10 @@ impl Cabin {
         match create_project(&mut self.projects, &id, name, parent, &root) {
             Ok(i) => {
                 let path = self.projects[i].path.clone();
-                let _ = std::fs::create_dir_all(&path);
+                if !std::path::Path::new(&path).is_dir() {
+                    let _ = std::fs::create_dir_all(&path);
+                }
+                self.touch_projects();
                 self.bind_project_id(&id);
                 self.status = format!("Project {}", self.projects[i].name);
             }
@@ -606,6 +624,7 @@ impl Cabin {
                 self.proj_rename_focus = true;
                 self.proj_staged = Some(id);
                 self.status = "Name this project".into();
+                self.touch_projects();
                 self.persist();
             }
             Err(e) => self.status = e.into(),
@@ -617,6 +636,7 @@ impl Cabin {
         match create_folder(&mut self.projects, &id, name, None) {
             Ok(i) => {
                 self.status = format!("Folder {}", self.projects[i].name);
+                self.touch_projects();
                 self.persist();
             }
             Err(e) => self.status = e.into(),
@@ -632,6 +652,7 @@ impl Cabin {
                 self.proj_rename_focus = true;
                 self.proj_staged = Some(id);
                 self.status = "Name this folder".into();
+                self.touch_projects();
                 self.persist();
             }
             Err(e) => self.status = e.into(),
@@ -645,6 +666,7 @@ impl Cabin {
         if let Some(id) = id {
             if self.proj_staged.as_deref() == Some(id.as_str()) {
                 drop_node(&mut self.projects, &id);
+                self.touch_projects();
                 self.persist();
             }
         }
@@ -659,20 +681,28 @@ impl Cabin {
         match rename_node(&mut self.projects, &id, &self.proj_rename_buf) {
             Ok(()) => {
                 self.status = format!("Renamed {}", self.proj_rename_buf.trim());
+                self.touch_projects();
+                let mut bound = false;
                 if staged {
                     let root = self.work_root();
                     if let Ok(path) = settle_project_path(&mut self.projects, &id, &root) {
                         if !path.is_empty() {
-                            let _ = std::fs::create_dir_all(&path);
+                            if !std::path::Path::new(&path).is_dir() {
+                                let _ = std::fs::create_dir_all(&path);
+                            }
                             self.bind_project_id(&id);
+                            bound = true;
                         }
                     }
                 }
-                self.persist();
+                if !bound {
+                    self.persist();
+                }
             }
             Err(e) => {
                 if staged {
                     drop_node(&mut self.projects, &id);
+                    self.touch_projects();
                 }
                 self.status = e.into();
             }
@@ -691,6 +721,7 @@ impl Cabin {
             match add_to_folder(&mut self.projects, &pid, None) {
                 Ok(()) => {
                     self.status = "Moved to Projects".into();
+                    self.touch_projects();
                     self.persist();
                 }
                 Err(e) => self.status = e.into(),
@@ -712,6 +743,7 @@ impl Cabin {
                     f.open = true;
                 }
                 self.status = format!("Added to {folder}");
+                self.touch_projects();
                 self.persist();
             }
             Err(e) => self.status = e.into(),
@@ -1244,7 +1276,7 @@ impl Cabin {
                 self.cfg.project_dir = p.clone();
                 let _ = std::fs::create_dir_all(&p);
                 self.project_sel = upsert_bound(&mut self.projects, &p);
-                let _ = config::save(&self.cfg);
+                self.touch_projects();
                 self.persist();
                 self.status = format!("Bound {p}");
             }
@@ -1270,6 +1302,7 @@ impl Cabin {
                 match rename_node(&mut self.projects, &id, &name) {
                     Ok(()) => {
                         self.status = format!("Renamed {name}");
+                        self.touch_projects();
                         self.persist();
                     }
                     Err(e) => self.status = e.into(),
@@ -1291,7 +1324,7 @@ impl Cabin {
                 let _ = std::fs::create_dir_all(&p);
                 self.cfg.project_dir = p.clone();
                 self.project_sel = upsert_bound(&mut self.projects, &p);
-                let _ = config::save(&self.cfg);
+                self.touch_projects();
                 self.persist();
                 self.status = format!("Room {} → {p}", plan.slug);
                 self.queue_sh(plan.host_script);
@@ -2987,6 +3020,7 @@ impl Cabin {
                     "root" => {
                         if add_to_folder(&mut self.projects, &id, None).is_ok() {
                             self.status = "Moved to Projects".into();
+                            self.touch_projects();
                             self.persist();
                         }
                     }
@@ -3040,6 +3074,7 @@ impl Cabin {
                         } else {
                             self.status = "Moved to Projects".into();
                         }
+                        self.touch_projects();
                         self.persist();
                     }
                     Err(e) => self.status = e.into(),
@@ -3648,9 +3683,10 @@ impl Cabin {
                 });
                 let tree = visible_tree(&self.projects);
                 for (depth, idx) in tree {
-                    let node = self.projects[idx].clone();
-                    let indent = 12.0 * depth as f32;
-                    if self.proj_rename.as_deref() == Some(node.id.as_str()) {
+                    let kind = self.projects[idx].kind;
+                    let open = self.projects[idx].open;
+                    let indent = 20.0 * depth as f32;
+                    if self.proj_rename.as_deref() == Some(self.projects[idx].id.as_str()) {
                         ui.horizontal(|ui| {
                             ui.add_space(indent);
                             let edit = ui.add(
@@ -3675,42 +3711,48 @@ impl Cabin {
                         });
                         continue;
                     }
-                    let icon = match node.kind {
+                    let icon = match kind {
                         ProjectKind::Folder => crate::icons::RailIcon::Folder,
                         ProjectKind::Project => crate::icons::RailIcon::Chat,
                     };
-                    let label = if node.kind == ProjectKind::Folder {
-                        let mark = if node.open { "▾ " } else { "▸ " };
-                        format!("{mark}{}", node.name)
-                    } else {
-                        node.name.clone()
-                    };
-                    let active = self.project_sel.as_deref() == Some(node.id.as_str())
-                        && node.kind == ProjectKind::Project;
-                    ui.horizontal(|ui| {
-                        ui.add_space(indent);
-                        let row = Self::nav_row(ui, active, icon, &label, false);
-                        if row.clicked() {
-                            match node.kind {
-                                ProjectKind::Folder => {
-                                    toggle_folder(&mut self.projects, &node.id);
-                                }
-                                ProjectKind::Project => self.bind_project_id(&node.id),
+                    let active = self.project_sel.as_deref() == Some(self.projects[idx].id.as_str())
+                        && kind == ProjectKind::Project;
+                    let row = ui
+                        .horizontal(|ui| {
+                            ui.add_space(indent);
+                            if kind == ProjectKind::Folder {
+                                ui.label(
+                                    RichText::new(if open { "▾" } else { "▸" })
+                                        .size(12.0)
+                                        .color(crate::theme::SUBTLE),
+                                );
                             }
+                            Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
+                        })
+                        .inner;
+                    if row.clicked() {
+                        let id = self.projects[idx].id.clone();
+                        match kind {
+                            ProjectKind::Folder => {
+                                toggle_folder(&mut self.projects, &id);
+                                self.touch_projects();
+                                self.flush_projects();
+                            }
+                            ProjectKind::Project => self.bind_project_id(&id),
                         }
-                        if row.double_clicked() {
-                            self.proj_rename_buf = node.name.clone();
-                            self.proj_rename = Some(node.id.clone());
-                            self.proj_rename_focus = true;
-                        }
-                        if row.secondary_clicked() {
-                            self.proj_menu = Some(node.id.clone());
-                            self.proj_menu_pos = row.rect.left_bottom();
-                            self.proj_ignore_close = true;
-                            self.proj_plus_open = false;
-                            self.proj_add_for = None;
-                        }
-                    });
+                    }
+                    if row.double_clicked() {
+                        self.proj_rename_buf = self.projects[idx].name.clone();
+                        self.proj_rename = Some(self.projects[idx].id.clone());
+                        self.proj_rename_focus = true;
+                    }
+                    if row.secondary_clicked() {
+                        self.proj_menu = Some(self.projects[idx].id.clone());
+                        self.proj_menu_pos = row.rect.left_bottom();
+                        self.proj_ignore_close = true;
+                        self.proj_plus_open = false;
+                        self.proj_add_for = None;
+                    }
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {

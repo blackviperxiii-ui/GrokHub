@@ -237,7 +237,7 @@ pub fn toggle_folder(nodes: &mut [ProjectNode], id: &str) -> bool {
 }
 
 pub fn visible_tree(nodes: &[ProjectNode]) -> Vec<(u8, usize)> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(nodes.len());
     let mut shown = vec![false; nodes.len()];
     for (i, n) in nodes.iter().enumerate() {
         if n.kind == ProjectKind::Folder {
@@ -430,5 +430,26 @@ mod tests {
         assert_eq!(nodes.len(), 1);
         assert!(nodes[0].parent.is_none());
         assert_eq!(visible_tree(&nodes), vec![(0, 0)]);
+    }
+
+    #[test]
+    fn visible_tree_keeps_folder_then_root_order() {
+        let mut nodes = Vec::new();
+        create_folder(&mut nodes, "f1", "Cabin", None).unwrap();
+        create_folder(&mut nodes, "f2", "Dawn", None).unwrap();
+        create_project(&mut nodes, "p1", "Night", Some("f1"), "/w").unwrap();
+        create_project(&mut nodes, "p2", "Root", None, "/w").unwrap();
+        create_project(&mut nodes, "p3", "Late", Some("f2"), "/w").unwrap();
+        nodes[0].open = true;
+        nodes[1].open = false;
+        assert_eq!(
+            visible_tree(&nodes),
+            vec![(0, 0), (1, 2), (0, 1), (0, 3)]
+        );
+        nodes[1].open = true;
+        assert_eq!(
+            visible_tree(&nodes),
+            vec![(0, 0), (1, 2), (0, 1), (1, 4), (0, 3)]
+        );
     }
 }
