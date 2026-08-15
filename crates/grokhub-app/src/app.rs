@@ -50,7 +50,7 @@ use grokhub_core::{
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     rewind_dest, save_hub_state, screen_from_extents, search_corpus, should_attach_cabin_frame,
     should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
-    apply_composer_enter, composer_enter, ComposerEnter,
+    composer_enter, ComposerEnter,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title, apply_manual_rename, delete_thread, history_order, should_name_thread,
     skip_automation, slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
@@ -168,7 +168,7 @@ fn consume_enter_keys(ui: &mut egui::Ui) {
     });
 }
 
-/// Enter sends. Control+Enter appends a newline and is not delivered to TextEdit.
+/// Enter sends. Control+Enter is left for TextEdit (`return_key`) to insert a newline.
 fn take_focused_composer(
     ui: &mut egui::Ui,
     composer: &mut String,
@@ -191,11 +191,7 @@ fn take_focused_composer(
             }
             Some(std::mem::take(composer))
         }
-        Some(ComposerEnter::Newline) => {
-            let _ = apply_composer_enter(composer, true, true);
-            consume_enter_keys(ui);
-            None
-        }
+        Some(ComposerEnter::Newline) => None,
         None => None,
     }
 }
@@ -5341,13 +5337,18 @@ impl Cabin {
                         {
                             self.send_chat(t);
                         }
+                        let rows = (self.composer.matches('\n').count() + 1).min(8);
                         let edit = ui.add(
                             egui::TextEdit::multiline(&mut self.composer)
                                 .id(composer_id)
                                 .desired_width((ui.available_width() - 180.0).max(80.0))
-                                .desired_rows(1)
+                                .desired_rows(rows)
                                 .frame(false)
-                                .hint_text("What do you want to know?"),
+                                .hint_text("What do you want to know?")
+                                .return_key(Some(egui::KeyboardShortcut::new(
+                                    egui::Modifiers::COMMAND,
+                                    egui::Key::Enter,
+                                ))),
                         );
                         if let Some(t) =
                             take_focused_composer(ui, &mut self.composer, edit.has_focus())
