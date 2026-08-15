@@ -1,5 +1,17 @@
 use eframe::egui::{Color32, RichText, Ui};
 
+/// Lock the chat bubble to a real wrap width.
+/// A wrapping label inside `horizontal` collapses to one glyph unless min==max==this.
+pub fn bubble_width(available: f32) -> f32 {
+    let avail = available.max(0.0);
+    let w = avail * 0.78;
+    if avail < 240.0 {
+        avail
+    } else {
+        w.clamp(240.0, avail)
+    }
+}
+
 pub fn show(ui: &mut Ui, text: &str) {
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("### ") {
@@ -60,8 +72,18 @@ fn inline(ui: &mut Ui, line: &str) {
 
 #[cfg(test)]
 mod tests {
+    use super::bubble_width;
+
     #[test]
     fn splits_markers() {
         assert!("**bold** and `code`".contains("**"));
+    }
+
+    #[test]
+    fn bubble_locks_a_real_wrap_width() {
+        let w = bubble_width(800.0);
+        assert!((w - 624.0).abs() < 0.1, "{w}");
+        assert!(w >= 240.0);
+        assert!(bubble_width(100.0) <= 100.0);
     }
 }

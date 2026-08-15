@@ -3864,19 +3864,19 @@ impl Cabin {
                             } else {
                                 crate::theme::BUBBLE_ASSISTANT
                             };
+                            let bubble_w = crate::markdown::bubble_width(ui.available_width());
                             ui.horizontal(|ui| {
                                 if user {
-                                    ui.add_space(ui.available_width() * 0.22);
+                                    ui.add_space((ui.available_width() - bubble_w).max(0.0));
                                 }
                                 egui::Frame::none()
                                     .fill(fill)
-                                    .stroke(egui::Stroke::new(1.0, crate::theme::BORDER))
+                                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
                                     .rounding(12.0)
                                     .inner_margin(egui::Margin::symmetric(14.0, 10.0))
                                     .show(ui, |ui| {
-                                        ui.set_max_width(
-                                            ui.available_width() * if user { 1.0 } else { 0.78 },
-                                        );
+                                        ui.set_min_width(bubble_w);
+                                        ui.set_max_width(bubble_w);
                                         if m.role == "assistant" {
                                             crate::markdown::show(ui, &m.content);
                                         } else {
