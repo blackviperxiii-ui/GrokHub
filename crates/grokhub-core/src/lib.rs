@@ -44,8 +44,9 @@ pub mod workboard;
 
 pub use chat::{
     chat_request_body, chat_request_body_for_mode, chat_request_body_vision, chat_timeout_secs,
-    extract_host_cmds, failover_model, model_for_mode, needs_auth_banner, parse_chat_content,
-    reasoning_effort_for_mode, resolve_chat_model, should_failover_status,
+    effective_chat_mode, extract_host_cmds, failover_model, model_for_mode, needs_auth_banner,
+    parse_chat_content, reasoning_effort_for_mode, resolve_chat_model, route_auto_mode,
+    should_failover_status,
     DEFAULT_MODEL, XAI_BASE,
 };
 pub use chips::{
@@ -198,8 +199,8 @@ pub fn cap_history_images<T: Clone>(
 
 pub fn next_failover_tier(tier: &str) -> &'static str {
     match tier {
-        "max" => "balanced",
-        "balanced" => "fast",
+        "max" | "think" | "deep" | "heavy" | "expert" | "build" => "balanced",
+        "balanced" | "balance" => "fast",
         _ => "fast",
     }
 }
@@ -254,7 +255,10 @@ mod tests {
     #[test]
     fn failover() {
         assert_eq!(next_failover_tier("max"), "balanced");
+        assert_eq!(next_failover_tier("think"), "balanced");
         assert_eq!(next_failover_tier("balanced"), "fast");
+        assert_eq!(next_failover_tier("fast"), "fast");
+        assert_eq!(next_failover_tier("auto"), "fast");
     }
 
     #[test]
