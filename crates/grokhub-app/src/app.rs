@@ -41,8 +41,9 @@ use grokhub_core::{
     rewind_dest, save_hub_state, screen_from_extents, search_corpus, should_attach_cabin_frame,
     should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
-    should_name_thread, skip_automation, slash_help, step_from_cmd, summarize_write,
-    surgical_memory_edit, thread_goal_prompt,
+    apply_auto_title, apply_manual_rename, delete_thread, history_order, should_name_thread,
+    skip_automation, slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
+    thread_goal_prompt, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
     unified_diff_cite, usage_line,
     transcribe_route, uid, update_cmds, update_wipes_config, voice_session_url, Automation, BoardCard,
@@ -142,6 +143,15 @@ fn imagine_choice_menu(
             });
         });
     picked
+}
+
+enum TabAct {
+    Switch(usize),
+    Pin(usize),
+    StartRename(usize),
+    CommitRename(usize),
+    CancelRename,
+    Delete(usize),
 }
 
 enum JobOut {
@@ -283,6 +293,8 @@ pub struct Cabin {
     hotkey_halt: u32,
     tools_collapsed: bool,
     sidebar_q: String,
+    rename_idx: Option<usize>,
+    rename_buf: String,
     chip_memory: ChipMemory,
     chip_dismissed: Vec<String>,
     llm_chips: Vec<QuickChip>,
@@ -483,6 +495,8 @@ impl Cabin {
             hotkey_halt: 0,
             tools_collapsed: false,
             sidebar_q: String::new(),
+            rename_idx: None,
+            rename_buf: String::new(),
             chip_memory: crate::store::load_chips(),
             chip_dismissed: vec![],
             llm_chips: vec![],
@@ -645,7 +659,14 @@ impl Cabin {
         }
         t.goal = blend_thread_goal(&t.goal, &topics, GOAL_DROP_AFTER);
         if !t.goal.label.is_empty() {
-            t.title = t.goal.label.clone();
+            let mut tab = ThreadTab {
+                title: t.title.clone(),
+                pinned: t.pinned,
+                title_locked: t.title_locked,
+            };
+            if apply_auto_title(&mut tab, &t.goal.label) {
+                t.title = tab.title;
+            }
             if tid == current {
                 self.cfg.goal_pin = t.goal.label.clone();
             }
@@ -869,6 +890,7 @@ impl Cabin {
                 .collect();
         }
         self.thread_idx = idx.min(self.threads.len().saturating_sub(1));
+        self.rename_idx = None;
         self.messages = self
             .threads
             .get(self.thread_idx)
@@ -909,6 +931,79 @@ impl Cabin {
         } else {
             "New chat".into()
         };
+        self.persist();
+    }
+
+    fn rename_thread(&mut self, idx: usize, title: &str) {
+        let Some(t) = self.threads.get_mut(idx) else {
+            return;
+        };
+        let mut tab = ThreadTab {
+            title: t.title.clone(),
+            pinned: t.pinned,
+            title_locked: t.title_locked,
+        };
+        if apply_manual_rename(&mut tab, title) {
+            t.title = tab.title;
+            t.title_locked = true;
+            self.status = format!("Renamed {}", t.title);
+            self.rename_idx = None;
+            self.persist();
+        }
+    }
+
+    fn pin_thread(&mut self, idx: usize) {
+        let Some(t) = self.threads.get_mut(idx) else {
+            return;
+        };
+        t.pinned = toggle_pin(t.pinned);
+        self.status = if t.pinned {
+            format!("Pinned {}", t.title)
+        } else {
+            format!("Unpinned {}", t.title)
+        };
+        self.persist();
+    }
+
+    fn delete_thread_at(&mut self, idx: usize) {
+        let was_current = idx == self.thread_idx;
+        match delete_thread(self.threads.len(), idx, self.thread_idx) {
+            DeleteOutcome::ResetLast => {
+                self.threads.clear();
+                self.threads.push(ChatThread::new("Chat", false));
+                self.thread_idx = 0;
+                self.messages.clear();
+                self.cfg.goal_pin.clear();
+                self.goal_step = 0;
+                self.status = "Chat deleted".into();
+            }
+            DeleteOutcome::Removed { next } => {
+                let gone = self.threads.remove(idx);
+                self.thread_idx = next;
+                if was_current {
+                    self.messages = self
+                        .threads
+                        .get(next)
+                        .map(|t| {
+                            t.messages
+                                .iter()
+                                .map(|(role, content)| Msg {
+                                    role: role.clone(),
+                                    content: content.clone(),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    self.cfg.goal_pin = self
+                        .threads
+                        .get(next)
+                        .map(|t| t.goal.label.clone())
+                        .unwrap_or_default();
+                }
+                self.status = format!("Deleted {}", gone.title);
+            }
+        }
+        self.rename_idx = None;
         self.persist();
     }
 
@@ -1128,13 +1223,9 @@ impl Cabin {
                 let _ = config::save(&self.cfg);
                 self.status = if on { "Host on".into() } else { "Host off".into() };
             }
-            Slash::Rename(title) => {
-                if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                    t.title = title.chars().take(80).collect();
-                    self.status = format!("Renamed {}", t.title);
-                    self.persist();
-                }
-            }
+            Slash::Rename(title) => self.rename_thread(self.thread_idx, &title),
+            Slash::Pin => self.pin_thread(self.thread_idx),
+            Slash::Delete => self.delete_thread_at(self.thread_idx),
             Slash::Context => {
                 let n = self.messages.len();
                 let tokens = estimate_messages(
@@ -3460,24 +3551,85 @@ impl Cabin {
                     .max_height(ui.available_height() - 72.0)
                     .show(ui, |ui| {
                         let q = self.sidebar_q.to_ascii_lowercase();
-                        let n = self.threads.len();
-                        for i in 0..n {
+                        let pinned: Vec<bool> = self.threads.iter().map(|t| t.pinned).collect();
+                        let order = history_order(&pinned);
+                        let mut act: Option<TabAct> = None;
+                        for i in order {
                             let title = self.threads[i].title.clone();
                             if !q.is_empty() && !title.to_ascii_lowercase().contains(&q) {
                                 continue;
                             }
-                            if Self::nav_row(
+                            if self.rename_idx == Some(i) {
+                                let edit = ui.add(
+                                    egui::TextEdit::singleline(&mut self.rename_buf)
+                                        .desired_width(ui.available_width())
+                                        .hint_text("Name this chat"),
+                                );
+                                edit.request_focus();
+                                if ui.input(|inp| inp.key_pressed(egui::Key::Enter)) {
+                                    act = Some(TabAct::CommitRename(i));
+                                } else if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+                                    act = Some(TabAct::CancelRename);
+                                }
+                                continue;
+                            }
+                            let icon = if self.threads[i].pinned {
+                                crate::icons::RailIcon::Pin
+                            } else {
+                                crate::icons::RailIcon::Chat
+                            };
+                            let resp = Self::nav_row(
                                 ui,
                                 i == self.thread_idx && self.nav == Nav::Chat,
-                                crate::icons::RailIcon::Chat,
+                                icon,
                                 &title,
                                 false,
-                            )
-                            .clicked()
-                            {
+                            );
+                            if resp.clicked() {
+                                act = Some(TabAct::Switch(i));
+                            }
+                            if resp.double_clicked() {
+                                act = Some(TabAct::StartRename(i));
+                            }
+                            let pinned = self.threads[i].pinned;
+                            resp.context_menu(|ui| {
+                                if ui.button(if pinned { "Unpin" } else { "Pin" }).clicked() {
+                                    act = Some(TabAct::Pin(i));
+                                    ui.close_menu();
+                                }
+                                if ui.button("Rename").clicked() {
+                                    act = Some(TabAct::StartRename(i));
+                                    ui.close_menu();
+                                }
+                                if ui.button("Delete").clicked() {
+                                    act = Some(TabAct::Delete(i));
+                                    ui.close_menu();
+                                }
+                            });
+                        }
+                        match act {
+                            Some(TabAct::Switch(i)) => {
                                 self.switch_thread(i);
                                 self.nav = Nav::Chat;
                             }
+                            Some(TabAct::Pin(i)) => self.pin_thread(i),
+                            Some(TabAct::StartRename(i)) => {
+                                self.rename_buf = self
+                                    .threads
+                                    .get(i)
+                                    .map(|t| t.title.clone())
+                                    .unwrap_or_default();
+                                self.rename_idx = Some(i);
+                            }
+                            Some(TabAct::CommitRename(i)) => {
+                                let name = self.rename_buf.clone();
+                                self.rename_thread(i, &name);
+                            }
+                            Some(TabAct::CancelRename) => {
+                                self.rename_idx = None;
+                            }
+                            Some(TabAct::Delete(i)) => self.delete_thread_at(i),
+                            None => {}
                         }
                     });
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
