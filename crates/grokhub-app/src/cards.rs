@@ -2,7 +2,7 @@
 
 use crate::icons::{self, TileIcon};
 use eframe::egui::{self, Color32, ColorImage, RichText, Sense, Stroke, TextureHandle, TextureOptions};
-use grokhub_core::SkillMd;
+use grokhub_core::{curate_wall, wall_curate_seed, SkillMd, WallGif, WallSlot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SuggestedAuto {
@@ -700,12 +700,23 @@ fn cover_uv(iw: f32, ih: f32, dw: f32, dh: f32) -> egui::Rect {
     }
 }
 
+fn tile_h(tall: bool, scale: f32) -> f32 {
+    let base = if tall {
+        crate::theme::IMAGINE_TILE_TALL
+    } else {
+        crate::theme::IMAGINE_TILE_SHORT
+    };
+    base * scale
+}
+
 /// grok.com/imagine masonry: full-bleed stills, 1px gutters, caption over the photo.
+/// Generated covers sit in a random seat among the stock stills.
 pub fn imagine_masonry(
     ui: &mut egui::Ui,
     selected: &str,
     now_ms: u64,
-    mut on_pick: impl FnMut(&'static str),
+    gifs: &[WallGif],
+    mut on_pick: impl FnMut(String),
 ) {
     let w = ui.available_width();
     if !w.is_finite() || w < 16.0 {
@@ -721,15 +732,12 @@ pub fn imagine_masonry(
     let gap = 1.0;
     let col_w = ((w - gap * (cols as f32 - 1.0)) / cols as f32).max(8.0);
     let scale = (col_w / 345.0).clamp(0.62, 1.25);
-    let heights: Vec<f32> = IMAGINE_SCENES
+    let slots = curate_wall(IMAGINE_SCENES.len(), gifs.len(), wall_curate_seed(gifs));
+    let heights: Vec<f32> = slots
         .iter()
-        .map(|s| {
-            let base = if s.tall {
-                crate::theme::IMAGINE_TILE_TALL
-            } else {
-                crate::theme::IMAGINE_TILE_SHORT
-            };
-            base * scale
+        .map(|slot| match slot {
+            WallSlot::Stock(i) => tile_h(IMAGINE_SCENES.get(*i).map(|s| s.tall).unwrap_or(false), scale),
+            WallSlot::Gif(i) => tile_h(gifs.get(*i).map(|g| g.tall).unwrap_or(false), scale),
         })
         .collect();
     let mut col_h = vec![0.0_f32; cols];
@@ -743,15 +751,28 @@ pub fn imagine_masonry(
     let total_h = col_h.into_iter().fold(0.0_f32, f32::max);
     let (full, _) = ui.allocate_exact_size(egui::vec2(w, total_h), Sense::hover());
     let mut ys: Vec<f32> = (0..cols).map(|_| full.top()).collect();
-    for (i, scene) in IMAGINE_SCENES.iter().enumerate() {
+    for (i, slot) in slots.iter().enumerate() {
         let c = i % cols;
         let h = heights[i];
         let rect = egui::Rect::from_min_size(
             egui::pos2(full.left() + c as f32 * (col_w + gap), ys[c]),
             egui::vec2(col_w, h),
         );
-        if imagine_photo_tile(ui, scene, selected == scene.prompt, rect, i, now_ms) {
-            on_pick(scene.prompt);
+        match slot {
+            WallSlot::Stock(si) => {
+                if let Some(scene) = IMAGINE_SCENES.get(*si) {
+                    if imagine_photo_tile(ui, scene, selected == scene.prompt, rect, i, now_ms) {
+                        on_pick(scene.prompt.to_string());
+                    }
+                }
+            }
+            WallSlot::Gif(gi) => {
+                if let Some(gif) = gifs.get(*gi) {
+                    if imagine_disk_tile(ui, gif, selected == gif.prompt, rect, i, now_ms) {
+                        on_pick(gif.prompt.clone());
+                    }
+                }
+            }
         }
         ys[c] += h + gap;
     }
@@ -798,6 +819,99 @@ fn imagine_photo_tile(
         egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0),
         egui::Align2::LEFT_BOTTOM,
         scene.title,
+        egui::FontId::proportional(crate::theme::FONT_CHROME),
+        Color32::WHITE,
+    );
+    if selected || resp.hovered() {
+        ui.painter()
+            .rect_stroke(rect, 0.0, Stroke::new(1.0_f32, crate::theme::FG));
+    }
+    resp.clicked()
+}
+
+fn imagine_disk_tex(ctx: &egui::Context, path: &str) -> (TextureHandle, [usize; 2]) {
+    let id = egui::Id::new(("imagine-disk", path));
+    if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
+        return hit;
+    }
+    let img = std::fs::read(path)
+        .ok()
+        .and_then(|b| image::load_from_memory(&b).ok())
+        .unwrap_or_else(|| image::DynamicImage::new_rgb8(8, 8));
+    let rgba = img.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let tex = ctx.load_texture(
+        format!("imagine-disk-{path}"),
+        ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+        TextureOptions::LINEAR,
+    );
+    let hit = (tex, size);
+    ctx.data_mut(|d| d.insert_temp(id, hit.clone()));
+    hit
+}
+
+fn imagine_disk_tile(
+    ui: &mut egui::Ui,
+    gif: &WallGif,
+    selected: bool,
+    rect: egui::Rect,
+    idx: usize,
+    now_ms: u64,
+) -> bool {
+    let resp = ui.interact(
+        rect,
+        egui::Id::new(("imagine-wall", idx, gif.id.as_str())),
+        Sense::click(),
+    );
+    let n = if gif.path_b.is_empty() { 1 } else { 2 };
+    let tick = (now_ms / crate::theme::IMAGINE_FRAME_MS) as usize + gif.title.len();
+    let path_a = if tick % n == 0 {
+        gif.path_a.as_str()
+    } else {
+        gif.path_b.as_str()
+    };
+    let path_b = if tick % n == 0 {
+        gif.path_b.as_str()
+    } else {
+        gif.path_a.as_str()
+    };
+    let t = (now_ms % crate::theme::IMAGINE_FRAME_MS) as f32 / crate::theme::IMAGINE_FRAME_MS as f32;
+    let fade = if n == 1 {
+        0.0
+    } else {
+        ((t - 0.72) / 0.28).clamp(0.0, 1.0)
+    };
+    let (tex, size) = imagine_disk_tex(ui.ctx(), path_a);
+    let uv = cover_uv(
+        size[0] as f32,
+        size[1] as f32,
+        rect.width(),
+        rect.height(),
+    );
+    ui.painter()
+        .image(tex.id(), rect, uv, Color32::WHITE);
+    if fade > 0.02 && path_b != path_a && !path_b.is_empty() {
+        let (tex_b, size_b) = imagine_disk_tex(ui.ctx(), path_b);
+        let uv_b = cover_uv(
+            size_b[0] as f32,
+            size_b[1] as f32,
+            rect.width(),
+            rect.height(),
+        );
+        let alpha = (fade * 255.0).round().clamp(0.0, 255.0) as u8;
+        ui.painter()
+            .image(tex_b.id(), rect, uv_b, Color32::from_white_alpha(alpha));
+    }
+    let fade_bar = egui::Rect::from_min_max(
+        egui::pos2(rect.left(), rect.bottom() - 42.0),
+        rect.max,
+    );
+    ui.painter()
+        .rect_filled(fade_bar, 0.0, Color32::from_black_alpha(140));
+    ui.painter().text(
+        egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0),
+        egui::Align2::LEFT_BOTTOM,
+        &gif.title,
         egui::FontId::proportional(crate::theme::FONT_CHROME),
         Color32::WHITE,
     );

@@ -49,6 +49,9 @@ pub struct AppConfig {
     pub daily_auto_cap: u32,
     #[serde(default)]
     pub goal_pin: String,
+    /// Cabin paints a new Imagine cover every few hours.
+    #[serde(default = "default_imagine_wall")]
+    pub imagine_wall: bool,
 }
 
 fn default_autonomy() -> u8 {
@@ -77,6 +80,10 @@ fn default_quiet_end() -> String {
 
 fn default_daily_auto() -> u32 {
     40
+}
+
+fn default_imagine_wall() -> bool {
+    true
 }
 
 pub fn config_dir() -> PathBuf {
@@ -177,6 +184,10 @@ pub fn save_board(cards: &[BoardCard]) -> Result<(), String> {
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let s = serde_json::to_string_pretty(cards).map_err(|e| e.to_string())?;
     fs::write(workboard_path(), s).map_err(|e| e.to_string())
+}
+
+pub fn wall_dir() -> PathBuf {
+    config_dir().join("imagine-wall")
 }
 
 pub fn imagine_dir() -> PathBuf {

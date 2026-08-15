@@ -62,8 +62,11 @@ pub use host_plan::{
 };
 pub use host_safety::{forbidden_reason, recall_hits};
 pub use imagine::{
-    dedicated_imagine_model, extract_imagine_prompt, imagine_dest, imagine_request_body,
-    imagine_slug, parse_imagine_url, DEFAULT_IMAGINE_MODEL,
+    curate_wall, dedicated_imagine_model, extract_imagine_prompt, imagine_dest, imagine_request_body,
+    imagine_slug, parse_imagine_url, pick_fresh_seed, wall_can_paint, wall_curate_seed, wall_due,
+    wall_evict, ImagineWall, WallGif, WallSeed, WallSlot, DEFAULT_IMAGINE_MODEL, WALL_GIF_EVERY_MS,
+    WALL_GIF_MAX,
+    WALL_SEEDS,
 };
 pub use inhabit::{can_inhabit, InhabitBundle};
 pub use recipe::{
