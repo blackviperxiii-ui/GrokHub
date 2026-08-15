@@ -8,6 +8,7 @@ pub const XAI_OAUTH_SCOPE: &str =
     "openid profile email offline_access grok-cli:access api:access";
 pub const XAI_OAUTH_ISSUER: &str = "https://auth.x.ai";
 pub const XAI_OAUTH_DISCOVERY: &str = "https://auth.x.ai/.well-known/openid-configuration";
+pub const XAI_OAUTH_USERINFO: &str = "https://auth.x.ai/oauth2/userinfo";
 pub const XAI_DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 pub const TOKEN_REFRESH_SKEW_MS: u64 = 30 * 60 * 1000;
 pub const TOKEN_MAX_AGE_WITHOUT_EXP_MS: u64 = 5 * 60 * 60 * 1000;
@@ -27,7 +28,16 @@ pub struct XaiOAuthTokens {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
+    pub picture: Option<String>,
+    #[serde(default)]
     pub connected_at: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OAuthProfile {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub picture: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +76,103 @@ pub fn trusted_xai_url(url: &str) -> Result<String, String> {
     } else {
         Err(format!("Untrusted xAI host: {host}"))
     }
+}
+
+pub fn trusted_profile_photo_url(url: &str) -> Result<String, String> {
+    let url = url.trim();
+    let rest = url
+        .strip_prefix("https://")
+        .ok_or_else(|| "Profile photo requires https".to_string())?;
+    let host = rest
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if profile_photo_host_ok(&host) {
+        Ok(url.to_string())
+    } else {
+        Err(format!("Untrusted profile photo host: {host}"))
+    }
+}
+
+fn profile_photo_host_ok(host: &str) -> bool {
+    host == "x.ai"
+        || host.ends_with(".x.ai")
+        || host == "grok.com"
+        || host.ends_with(".grok.com")
+        || host == "pbs.twimg.com"
+        || host.ends_with(".twimg.com")
+        || host == "googleusercontent.com"
+        || host.ends_with(".googleusercontent.com")
+}
+
+fn claim_text(v: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|k| {
+        v.get(*k)
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    })
+}
+
+fn picture_from_claims(v: &Value) -> Option<String> {
+    let raw = claim_text(v, &["picture", "profile_image_url", "profileImageUrl"])?;
+    trusted_profile_photo_url(&raw).ok()
+}
+
+pub fn parse_userinfo_profile(json: &Value) -> OAuthProfile {
+    let mut name = claim_text(json, &["name", "preferred_username"]);
+    if name.is_none() {
+        let first = claim_text(json, &["given_name", "first_name", "firstName"]);
+        let last = claim_text(json, &["family_name", "last_name", "lastName"]);
+        name = match (first, last) {
+            (Some(a), Some(b)) => Some(format!("{a} {b}")),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+    }
+    OAuthProfile {
+        name,
+        email: claim_text(json, &["email"]),
+        picture: picture_from_claims(json),
+    }
+}
+
+pub fn apply_profile(tokens: &mut XaiOAuthTokens, profile: &OAuthProfile) {
+    if let Some(name) = profile.name.clone() {
+        tokens.name = Some(name);
+    }
+    if let Some(email) = profile.email.clone() {
+        tokens.email = Some(email);
+    }
+    if let Some(picture) = profile.picture.clone() {
+        tokens.picture = Some(picture);
+    }
+}
+
+pub fn merge_refreshed(prev: &XaiOAuthTokens, mut next: XaiOAuthTokens) -> XaiOAuthTokens {
+    if next.refresh_token.is_none() {
+        next.refresh_token = prev.refresh_token.clone();
+    }
+    if next.id_token.is_none() {
+        next.id_token = prev.id_token.clone();
+    }
+    if next.email.is_none() {
+        next.email = prev.email.clone();
+    }
+    if next.name.is_none() {
+        next.name = prev.name.clone();
+    }
+    if next.picture.is_none() {
+        next.picture = prev.picture.clone();
+    }
+    next.connected_at = prev.connected_at;
+    next
 }
 
 pub fn has_auth(api_key: &str, access_token: &str) -> bool {
@@ -180,14 +287,13 @@ pub fn parse_token_json(json: &Value, now_ms: u64) -> Result<XaiOAuthTokens, Str
     }
     let mut email = None;
     let mut name = None;
+    let mut picture = None;
     if let Some(id) = &id_token {
         if let Some(claims) = decode_jwt_payload(id) {
-            email = claims.get("email").and_then(|v| v.as_str()).map(|s| s.to_string());
-            name = claims
-                .get("name")
-                .or_else(|| claims.get("preferred_username"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            let profile = parse_userinfo_profile(&claims);
+            email = profile.email;
+            name = profile.name;
+            picture = profile.picture;
         }
     }
     Ok(XaiOAuthTokens {
@@ -197,6 +303,7 @@ pub fn parse_token_json(json: &Value, now_ms: u64) -> Result<XaiOAuthTokens, Str
         id_token,
         email,
         name,
+        picture,
         connected_at: now_ms,
     })
 }
@@ -354,5 +461,129 @@ mod tests {
 
     fn now_far() -> u64 {
         9_999_999_999
+    }
+
+    fn jwt_from_payload(payload: &str) -> String {
+        format!("eyJhbGciOiJub25lIn0.{}.sig", b64url_encode(payload.as_bytes()))
+    }
+
+    fn b64url_encode(data: &[u8]) -> String {
+        const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        let mut i = 0;
+        while i < data.len() {
+            let b0 = data[i];
+            let b1 = if i + 1 < data.len() { data[i + 1] } else { 0 };
+            let b2 = if i + 2 < data.len() { data[i + 2] } else { 0 };
+            let n = ((b0 as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
+            out.push(T[((n >> 18) & 63) as usize] as char);
+            out.push(T[((n >> 12) & 63) as usize] as char);
+            if i + 1 < data.len() {
+                out.push(T[((n >> 6) & 63) as usize] as char);
+            }
+            if i + 2 < data.len() {
+                out.push(T[(n & 63) as usize] as char);
+            }
+            i += 3;
+        }
+        out.replace('+', "-").replace('/', "_")
+    }
+
+    #[test]
+    fn id_token_picture_claim() {
+        let jwt = jwt_from_payload(
+            r#"{"email":"viper@x.ai","name":"Viper","picture":"https://assets.grok.com/users/viper.png"}"#,
+        );
+        let t = parse_token_json(
+            &json!({"access_token":"tok","id_token": jwt}),
+            1,
+        )
+        .unwrap();
+        assert_eq!(t.email.as_deref(), Some("viper@x.ai"));
+        assert_eq!(t.name.as_deref(), Some("Viper"));
+        assert_eq!(
+            t.picture.as_deref(),
+            Some("https://assets.grok.com/users/viper.png")
+        );
+    }
+
+    #[test]
+    fn userinfo_profile_picture() {
+        let p = parse_userinfo_profile(&json!({
+            "sub": "u1",
+            "name": "Viper",
+            "email": "viper@x.ai",
+            "picture": "https://pbs.twimg.com/profile_images/viper.jpg"
+        }));
+        assert_eq!(p.name.as_deref(), Some("Viper"));
+        assert_eq!(p.email.as_deref(), Some("viper@x.ai"));
+        assert_eq!(
+            p.picture.as_deref(),
+            Some("https://pbs.twimg.com/profile_images/viper.jpg")
+        );
+    }
+
+    #[test]
+    fn userinfo_rejects_untrusted_picture_host() {
+        let p = parse_userinfo_profile(&json!({
+            "picture": "https://evil.com/x.png"
+        }));
+        assert!(p.picture.is_none());
+    }
+
+    #[test]
+    fn trusted_profile_photo_hosts() {
+        assert!(trusted_profile_photo_url("https://assets.grok.com/users/viper.png").is_ok());
+        assert!(trusted_profile_photo_url("https://auth.x.ai/avatar/viper.png").is_ok());
+        assert!(trusted_profile_photo_url("https://pbs.twimg.com/profile_images/viper.jpg").is_ok());
+        assert!(trusted_profile_photo_url(
+            "https://lh3.googleusercontent.com/a/viper"
+        )
+        .is_ok());
+        assert!(trusted_profile_photo_url("https://evil.com/x.png").is_err());
+        assert!(trusted_profile_photo_url("http://assets.grok.com/users/viper.png").is_err());
+    }
+
+    #[test]
+    fn refresh_keeps_oauth_picture() {
+        let prev = XaiOAuthTokens {
+            access_token: "old".into(),
+            refresh_token: Some("ref".into()),
+            email: Some("viper@x.ai".into()),
+            name: Some("Viper".into()),
+            picture: Some("https://assets.grok.com/users/viper.png".into()),
+            connected_at: 9,
+            ..Default::default()
+        };
+        let next = XaiOAuthTokens {
+            access_token: "new".into(),
+            refresh_token: Some("ref2".into()),
+            connected_at: 10,
+            ..Default::default()
+        };
+        let merged = merge_refreshed(&prev, next);
+        assert_eq!(merged.access_token, "new");
+        assert_eq!(merged.refresh_token.as_deref(), Some("ref2"));
+        assert_eq!(merged.picture.as_deref(), Some("https://assets.grok.com/users/viper.png"));
+        assert_eq!(merged.name.as_deref(), Some("Viper"));
+        assert_eq!(merged.email.as_deref(), Some("viper@x.ai"));
+    }
+
+    #[test]
+    fn apply_profile_fills_picture() {
+        let mut t = XaiOAuthTokens {
+            access_token: "tok".into(),
+            ..Default::default()
+        };
+        apply_profile(
+            &mut t,
+            &OAuthProfile {
+                name: Some("Viper".into()),
+                email: Some("viper@x.ai".into()),
+                picture: Some("https://assets.grok.com/users/viper.png".into()),
+            },
+        );
+        assert_eq!(t.name.as_deref(), Some("Viper"));
+        assert_eq!(t.picture.as_deref(), Some("https://assets.grok.com/users/viper.png"));
     }
 }

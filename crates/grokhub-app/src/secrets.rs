@@ -67,6 +67,11 @@ mod tests {
         save(&s).expect("save");
         let loaded = load();
         assert_eq!(access_token(&loaded), "tok");
+        assert!(loaded.oauth.as_ref().unwrap().picture.is_none());
+        let old = r#"{"apiKey":"","oauth":{"accessToken":"legacy"}}"#;
+        let parsed: Secrets = serde_json::from_str(old).unwrap();
+        assert_eq!(access_token(&parsed), "legacy");
+        assert!(parsed.oauth.unwrap().picture.is_none());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
