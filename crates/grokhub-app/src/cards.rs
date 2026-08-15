@@ -764,13 +764,18 @@ fn still_jpeg(key: &str) -> &'static [u8] {
     }
 }
 
+fn imagine_still_rgba(bytes: &[u8]) -> image::RgbaImage {
+    image::load_from_memory(bytes)
+        .map(|img| img.to_rgba8())
+        .unwrap_or_else(|_| image::RgbaImage::from_pixel(1, 1, image::Rgba([0x14, 0x14, 0x14, 0xff])))
+}
+
 fn imagine_still_tex(ctx: &egui::Context, key: &str) -> (TextureHandle, [usize; 2]) {
     let id = egui::Id::new(("imagine-still", key));
     if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
         return hit;
     }
-    let img = image::load_from_memory(still_jpeg(key)).expect("imagine still");
-    let rgba = img.to_rgba8();
+    let rgba = imagine_still_rgba(still_jpeg(key));
     let size = [rgba.width() as usize, rgba.height() as usize];
     let tex = ctx.load_texture(
         format!("imagine-still-{key}"),
@@ -1135,6 +1140,8 @@ mod tests {
         assert_eq!(imagine_kind_label(ImagineKind::Agent), "Agent");
         assert_eq!(imagine_quality_label(false), "Speed");
         assert_eq!(imagine_quality_label(true), "Quality (v2.0)");
+        let fallback = imagine_still_rgba(b"not-a-jpeg");
+        assert_eq!((fallback.width(), fallback.height()), (1, 1));
         assert_eq!(imagine_quality_word(true), "quality");
         assert_eq!(imagine_quality_word(false), "speed");
         assert_eq!(
