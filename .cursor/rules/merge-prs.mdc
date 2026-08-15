@@ -1,0 +1,20 @@
+---
+description: When Jeremy says merge PRs, land them on main, delete leftovers, update docs.
+alwaysApply: true
+---
+
+# Merge PRs
+
+When Jeremy says **merge PRs**, that is the whole job:
+
+1. Merge every remaining open PR into `main`.
+2. Delete each PR branch after it is on `main`.
+3. Delete leftover remote and local `cursor/*` (and any other stale) branches. `main` should be the only branch unless he says otherwise.
+4. Update the documents so they match what actually shipped (`README.md`, `/help` / slash text, shipping specs under `docs/`).
+5. Leave `main` clean: tests pass, no leftover branches, no stale Electron trees, no draft PR heads sitting around.
+
+Do not leave merged PR heads on the remote. GitHub will not delete them for us (`delete_branch_on_merge` is off). After every merge, `git push origin --delete <branch>` until the repo branch list is only `main`.
+
+If a PR is already superseded on `main` (duplicate cabin work, or an Electron-era branch that would restore deleted `src/` / `desktop/`), record it merged with `git merge -s ours` so the PR closes **without** reverting `main`. Then delete that branch too.
+
+Do not start this merge/cleanup pass unless he asked. While he says dev is still working, leave PRs and branches alone.
