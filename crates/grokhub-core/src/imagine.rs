@@ -172,6 +172,44 @@ pub fn extract_imagine_prompt(text: &str) -> Option<String> {
     None
 }
 
+/// Gap above the pane floor when the Imagine toolbox docks to the bottom.
+pub const IMAGINE_TOOLBOX_PAD: f32 = 24.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImagineToolboxDock {
+    Middle,
+    Bottom,
+}
+
+pub fn imagine_toolbox_dock(prompt_filled: bool, has_result: bool, working: bool) -> ImagineToolboxDock {
+    if prompt_filled || has_result || working {
+        ImagineToolboxDock::Bottom
+    } else {
+        ImagineToolboxDock::Middle
+    }
+}
+
+pub fn imagine_toolbox_shows_title(dock: ImagineToolboxDock) -> bool {
+    match dock {
+        ImagineToolboxDock::Middle => true,
+        ImagineToolboxDock::Bottom => false,
+    }
+}
+
+pub fn imagine_toolbox_top(
+    content_top: f32,
+    content_h: f32,
+    box_h: f32,
+    dock: ImagineToolboxDock,
+) -> f32 {
+    match dock {
+        ImagineToolboxDock::Middle => content_top + ((content_h - box_h) * 0.5).max(0.0),
+        ImagineToolboxDock::Bottom => {
+            (content_top + content_h - box_h - IMAGINE_TOOLBOX_PAD).max(content_top)
+        }
+    }
+}
+
 /// Twenty live covers. Oldest leaves first.
 pub const WALL_GIF_MAX: usize = 20;
 /// A new cover every few hours.
@@ -606,5 +644,37 @@ mod tests {
         let gifs = vec![gif("alpha", 1), gif("beta", 2)];
         assert_eq!(wall_curate_seed(&gifs), wall_curate_seed(&gifs));
         assert_ne!(wall_curate_seed(&gifs), wall_curate_seed(&[gif("alpha", 1)]));
+    }
+
+    #[test]
+    fn idle_toolbox_sits_in_the_middle() {
+        assert_eq!(
+            imagine_toolbox_dock(false, false, false),
+            ImagineToolboxDock::Middle
+        );
+        assert!(imagine_toolbox_shows_title(ImagineToolboxDock::Middle));
+        let top = imagine_toolbox_top(100.0, 600.0, 180.0, ImagineToolboxDock::Middle);
+        assert_eq!(top, 310.0);
+        assert!(top > 200.0, "must not pin under the titlebar: {top}");
+    }
+
+    #[test]
+    fn entered_prompt_and_work_drop_the_toolbox() {
+        assert_eq!(
+            imagine_toolbox_dock(true, false, false),
+            ImagineToolboxDock::Bottom
+        );
+        assert_eq!(
+            imagine_toolbox_dock(false, false, true),
+            ImagineToolboxDock::Bottom
+        );
+        assert_eq!(
+            imagine_toolbox_dock(false, true, false),
+            ImagineToolboxDock::Bottom
+        );
+        assert!(!imagine_toolbox_shows_title(ImagineToolboxDock::Bottom));
+        let top = imagine_toolbox_top(100.0, 600.0, 180.0, ImagineToolboxDock::Bottom);
+        assert_eq!(top, 496.0);
+        assert!(top > imagine_toolbox_top(100.0, 600.0, 180.0, ImagineToolboxDock::Middle));
     }
 }
