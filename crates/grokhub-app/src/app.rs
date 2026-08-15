@@ -29,6 +29,7 @@ use grokhub_core::{
     ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
+    resolve_chat_model,
     needs_auth_banner, next_goal_prompt,
     now_ms, on_wheel_grab, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
     parse_nl_automation, parse_recipe, parse_slash, passenger_label, plan_from_text, plan_room,
@@ -47,7 +48,7 @@ use grokhub_core::{
     HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, Recipe, ReplayOp, RewindRecord,
     SkillMd, Slash, TranscribeRoute, UsageDay, VoiceEvent, VoiceState, CONTEXT_BUDGET_TOKENS,
-    DEFAULT_MODEL, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS,
+    GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS,
     PRESENCE_RING_MS, TRANSCRIBERS,
 };
 use grokhub_hub::serve_lan;
@@ -1329,11 +1330,13 @@ impl Cabin {
             Slash::Remember(note) => self.run_slash(Slash::MemoryNote(note)),
             Slash::Mode(mode) => {
                 self.cfg.mode = mode.clone();
-                if self.cfg.model.trim().is_empty() || self.cfg.model == DEFAULT_MODEL {
-                    self.cfg.model = model_for_mode(&mode).to_string();
-                }
+                self.cfg.model = model_for_mode(&mode).to_string();
                 let _ = config::save(&self.cfg);
-                self.status = format!("Mode {mode} → {}", model_for_mode(&mode));
+                let model = self.cfg.model.as_str();
+                self.status = match grokhub_core::reasoning_effort_for_model(model) {
+                    Some(effort) => format!("Mode {mode} → {model} · {effort}"),
+                    None => format!("Mode {mode} → {model}"),
+                };
             }
             Slash::Dream => self.run_dream(),
             Slash::Import => self.import_openclaw(),
@@ -2086,13 +2089,7 @@ impl Cabin {
         self.running = true;
         self.status = "Thinking…".into();
         let key = self.bearer();
-        let model = if !self.cfg.mode.trim().is_empty() && self.cfg.model.trim().is_empty() {
-            model_for_mode(&self.cfg.mode).to_string()
-        } else if self.cfg.model.trim().is_empty() {
-            DEFAULT_MODEL.to_string()
-        } else {
-            self.cfg.model.clone()
-        };
+        let model = resolve_chat_model(&self.cfg.mode, &self.cfg.model);
         let mut msgs: Vec<(String, String)> = self
             .messages
             .iter()
@@ -4544,7 +4541,7 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Console key", "Optional. Never in markdown.", &mut self.cfg.api_key, true);
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
                                                             crate::cards::settings_field(ui, "Chat model", "Empty means the cabin default. Imagine never shares this.", &mut self.cfg.model, false);
-                                                            crate::cards::settings_field(ui, "Composer mode", "auto, fast, balanced, or max.", &mut self.cfg.mode, false);
+                                                            crate::cards::settings_field(ui, "Composer mode", "auto, fast, balanced, or max (Grok 4.6 xhigh).", &mut self.cfg.mode, false);
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(ui, "The cabin is dark. Light and System stay on grok.com.");

@@ -1,5 +1,5 @@
 use grokhub_core::{
-    chat_request_body_vision, chat_stream_flag, dedicated_imagine_model, frame_bytes,
+    chat_request_body_vision, chat_stream_flag, chat_timeout_secs, dedicated_imagine_model, frame_bytes,
     imagine_request_body, imagine_slug, parse_chat_content, parse_imagine_url, parse_sse_delta,
     parse_stt_text, sse_done, stt_multipart, stt_url, tts_request_body, tts_url, PresenceFrame,
     XAI_BASE,
@@ -20,7 +20,7 @@ pub fn grok_chat(
     let resp = ureq::post(&format!("{XAI_BASE}/chat/completions"))
         .set("authorization", &format!("Bearer {key}"))
         .set("content-type", "application/json")
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(chat_timeout_secs(model)))
         .send_json(body)
         .map_err(http_err)?;
     let v: serde_json::Value = resp.into_json().map_err(|e| e.to_string())?;
@@ -50,7 +50,7 @@ pub fn grok_chat_stream(
         .set("authorization", &format!("Bearer {key}"))
         .set("content-type", "application/json")
         .set("accept", "text/event-stream")
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(chat_timeout_secs(model)))
         .send_json(body)
     {
         Ok(r) => r,
