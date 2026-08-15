@@ -378,7 +378,7 @@ pub fn slash_help() -> String {
         "/health — doctor",
         "/fix — halt + doctor",
         "/remember <fact> — write MEMORY.md",
-        "/mode fast|balanced|think|max|auto",
+        "/mode auto|fast|balance|think|max — Auto routes; Fast mini; Balance 4.3; Think 4.6 high; Max 4.6 xhigh",
         "/dream — Imagine last night",
         "/tools on|off — host tools",
         "/import — OpenClaw workspace",
@@ -457,6 +457,7 @@ mod tests {
         assert!(slash_help().contains("/project folder"));
         assert!(slash_help().contains("/board"));
         assert!(slash_help().contains("/skill"));
+        assert!(slash_help().contains("/mode auto|fast|balance|think|max"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());

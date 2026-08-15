@@ -34,7 +34,19 @@ GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub
 
 Close on the window hides the cabin to the tray. Jobs, hub, and idle reflect keep running. Tray: **Show cabin**, **Halt hands**, **Quit**. `grokhub --agent` starts already hidden. `GROKHUB_TRAY=0` quits on close.
 
-Slash: `/help` · `/new` · `/scratch` · `/clear` · `/undo` · `/retry` · `/stop` · `/sh` · `/host` · `/project` · `/approve` · `/memory` · `/recall` · `/forget` · `/board` · `/imagine` · `/skill` · `/compact` · `/learn reflect` · `/update` · `/send` · `/sync` · `/hub` · `/inhabit` · `/rewind` · `/room` · `/export` · `/mode` · `/dream` · `/palette`. Type `/help` in the cabin for the rest. `/project` also takes `bind`, `new`, `folder`, `rename`, `move`, `clear`.
+Slash: `/help` · `/new` · `/scratch` · `/clear` · `/undo` · `/retry` · `/stop` · `/sh` · `/host` · `/project` · `/approve` · `/memory` · `/recall` · `/forget` · `/board` · `/imagine` · `/skill` · `/compact` · `/learn reflect` · `/update` · `/send` · `/sync` · `/hub` · `/inhabit` · `/rewind` · `/room` · `/export` · `/mode auto|fast|balance|think|max` · `/dream` · `/palette`. Type `/help` in the cabin for the rest. `/project` also takes `bind`, `new`, `folder`, `rename`, `move`, `clear`.
+
+Composer modes (combo on the pill, or `/mode`):
+
+| UI | Sends |
+|----|--------|
+| **Auto** | Picks Fast / Balance / Think / Max from the ask. A Settings chat-model pin skips this. |
+| **Fast** | `grok-3-mini-fast` |
+| **Balance** | `grok-4.3` |
+| **Think** | `grok-4.6` at `high` |
+| **Max** | `grok-4.6` at `xhigh` (`xhigh` is 4.6 only) |
+
+If the request returns 401 / 403 / 429 / 5xx, the cabin retries once down the ladder: Grok 4.6 → 4.3 → Fast. Fast has no further drop.
 
 Projects sit in the left rail. `+` makes a project (`~/GrokHub-Work/<slug>`) or a one-level folder. Double-click or right-click to rename (display name only — the path stays). Right-click a project to add it to a folder or remove it. Folders are sidebar only; they do not move files. Click a project to bind it. Click the bound project again to open the Workboard. Bound tree is the world.
 
@@ -65,7 +77,7 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `secrets.js
 
 Tokens stay in `secrets.json`. Never in markdown.
 
-Composer is a pill: **What do you want to know?** Predictive quick chips sit above it — local habits plus Fast mode (`grok-3-mini-fast`) when the thread changes. Click sends or navigates; × dismisses. Habits live in `chips.json`, never secrets. Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash -lc`.
+Composer is a pill: **What do you want to know?** Plus pastes the clipboard. Mode combo is Auto / Fast / Balance / Think / Max. Mic is Hey Grok. Ctrl+Enter or the arrow sends; Enter is a newline. Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash -lc`.
 
 ## Always-on hub
 
