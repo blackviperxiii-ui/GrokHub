@@ -75,7 +75,7 @@ enum Nav {
     Settings,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsSec {
     Account,
     Appearance,
@@ -589,8 +589,11 @@ impl Cabin {
             }
             self.cfg.project_dir = path.clone();
         }
+        let already = self.project_sel.as_deref() == Some(id);
         self.project_sel = Some(id.to_string());
-        self.nav = Nav::Workboard;
+        if click_project_opens_board(already) {
+            self.nav = Nav::Workboard;
+        }
         self.status = format!("Bound {name}");
         self.persist();
     }
@@ -1244,6 +1247,7 @@ impl Cabin {
             }
             Slash::Health => {
                 self.nav = Nav::Settings;
+                self.settings_sec = health_settings_sec();
                 self.status = self.doctor_text();
             }
             Slash::Fix => {
@@ -3745,7 +3749,12 @@ impl Cabin {
                             Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
                         })
                         .inner;
-                    if row.clicked() {
+                    if row.double_clicked() {
+                        self.begin_proj_rename(
+                            self.projects[idx].id.clone(),
+                            self.projects[idx].name.clone(),
+                        );
+                    } else if row.clicked() {
                         let id = self.projects[idx].id.clone();
                         match kind {
                             ProjectKind::Folder => {
@@ -3755,12 +3764,6 @@ impl Cabin {
                             }
                             ProjectKind::Project => self.bind_project_id(&id),
                         }
-                    }
-                    if row.double_clicked() {
-                        self.begin_proj_rename(
-                            self.projects[idx].id.clone(),
-                            self.projects[idx].name.clone(),
-                        );
                     }
                     if row.secondary_clicked() {
                         self.proj_menu = Some(self.projects[idx].id.clone());
@@ -4009,16 +4012,21 @@ impl Cabin {
             let hits = filter_slash_commands(&self.composer);
             if !hits.is_empty() {
                 ui.label(RichText::new("Tab accepts · type /").small());
-                for (i, s) in hits.iter().enumerate() {
-                    let row = format!("{} — {}", s.cmd, s.hint);
-                    if ui.selectable_label(i == self.slash_pick, row).clicked() {
-                        self.composer = s.insert.to_string();
-                        if s.run_on_pick {
-                            let t = std::mem::take(&mut self.composer);
-                            self.send_chat(t);
+                egui::ScrollArea::vertical()
+                    .max_height(148.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for (i, s) in hits.iter().enumerate() {
+                            let row = format!("{} — {}", s.cmd, s.hint);
+                            if ui.selectable_label(i == self.slash_pick, row).clicked() {
+                                self.composer = s.insert.to_string();
+                                if s.run_on_pick {
+                                    let t = std::mem::take(&mut self.composer);
+                                    self.send_chat(t);
+                                }
+                            }
                         }
-                    }
-                }
+                    });
             }
             ui.add_space(6.0);
             ui.vertical_centered(|ui| {
@@ -5332,6 +5340,14 @@ impl Cabin {
     }
 }
 
+fn click_project_opens_board(already_selected: bool) -> bool {
+    already_selected
+}
+
+fn health_settings_sec() -> SettingsSec {
+    SettingsSec::About
+}
+
 fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {
     let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
     let end = text.chars().count();
@@ -5371,5 +5387,20 @@ mod tests {
             assert_eq!(a.index, 0);
             assert_eq!(b.index, 7);
         });
+    }
+
+    #[test]
+    fn click_other_project_stays_on_this_pane() {
+        assert!(!super::click_project_opens_board(false));
+    }
+
+    #[test]
+    fn click_bound_project_opens_the_board() {
+        assert!(super::click_project_opens_board(true));
+    }
+
+    #[test]
+    fn health_opens_the_about_page() {
+        assert_eq!(super::health_settings_sec(), super::SettingsSec::About);
     }
 }
