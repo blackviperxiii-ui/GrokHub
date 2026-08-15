@@ -1,4 +1,152 @@
 //! Goal pin survives compact. Incomplete turns stay open.
+//! Fast mode names the chat tab from the current topics.
+
+use serde::{Deserialize, Serialize};
+
+/// Turns a topic can stay unseen before the tab drops it.
+pub const GOAL_DROP_AFTER: u32 = 3;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoal {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub topics: Vec<String>,
+    #[serde(default)]
+    pub unseen: Vec<u32>,
+}
+
+pub fn should_name_thread(scratch: bool, user_turns: usize) -> bool {
+    !scratch && user_turns > 0
+}
+
+pub fn parse_fast_topics(reply: &str) -> Vec<String> {
+    let line = reply
+        .lines()
+        .map(str::trim)
+        .find(|l| l.to_ascii_uppercase().starts_with("GOAL:"))
+        .or_else(|| {
+            reply
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty() && l.len() <= 80 && !looks_like_refusal(l))
+        });
+    let Some(line) = line else {
+        return Vec::new();
+    };
+    let rest = line
+        .strip_prefix("GOAL:")
+        .or_else(|| line.strip_prefix("goal:"))
+        .or_else(|| line.strip_prefix("Goal:"))
+        .unwrap_or(line)
+        .trim();
+    if rest.is_empty() || looks_like_refusal(rest) {
+        return Vec::new();
+    }
+    split_topics(rest)
+}
+
+fn looks_like_refusal(s: &str) -> bool {
+    let t = s.to_ascii_lowercase();
+    t.contains("cannot") || t.contains("can't") || t.starts_with("i ") || t.starts_with("sorry")
+}
+
+fn split_topics(rest: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for chunk in rest.split(|c| c == ',' || c == '/') {
+        for part in chunk.split(" and ") {
+            let t = part
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_ascii_lowercase();
+            if t.is_empty() || t.len() > 24 {
+                continue;
+            }
+            if !t
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-')
+            {
+                continue;
+            }
+            if out.iter().any(|x: &String| x == &t) {
+                continue;
+            }
+            out.push(t);
+            if out.len() == 4 {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+pub fn blend_thread_goal(prev: &ThreadGoal, observed: &[String], drop_after: u32) -> ThreadGoal {
+    if observed.is_empty() {
+        return prev.clone();
+    }
+    let mut topics = prev.topics.clone();
+    let mut unseen = if prev.unseen.len() == prev.topics.len() {
+        prev.unseen.clone()
+    } else {
+        vec![0; prev.topics.len()]
+    };
+    for u in unseen.iter_mut() {
+        *u = u.saturating_add(1);
+    }
+    for obs in observed {
+        let key = obs.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        if let Some(i) = topics.iter().position(|t| t == &key) {
+            unseen[i] = 0;
+        } else {
+            topics.push(key);
+            unseen.push(0);
+        }
+    }
+    let mut kept_topics = Vec::new();
+    let mut kept_unseen = Vec::new();
+    for (topic, unseen) in topics.into_iter().zip(unseen) {
+        if unseen >= drop_after {
+            continue;
+        }
+        kept_topics.push(topic);
+        kept_unseen.push(unseen);
+    }
+    ThreadGoal {
+        label: kept_topics.join(" and "),
+        topics: kept_topics,
+        unseen: kept_unseen,
+    }
+}
+
+pub fn thread_goal_prompt(messages: &[(String, String)]) -> String {
+    let recent = messages
+        .iter()
+        .rev()
+        .take(8)
+        .rev()
+        .map(|(role, content)| {
+            format!(
+                "{role}: {}",
+                content.chars().take(400).collect::<String>()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "Read this chat. Name the current topics in a few lowercase words.\n\
+Reply with one line only:\n\
+GOAL: topic\n\
+or\n\
+GOAL: topic and topic\n\
+Topics are what the conversation is actually about right now, including adult topics.\n\
+No quotes, no extra words.\n\n{recent}"
+    )
+}
 
 pub fn looks_incomplete(assistant_text: &str) -> bool {
     let t = assistant_text.to_ascii_lowercase();
@@ -134,5 +282,40 @@ mod tests {
         let p = next_goal_prompt("flash the pi", "wrote image", 0, 6).unwrap();
         assert!(p.contains("Goal step 1/6"));
         assert!(next_goal_prompt("flash the pi", "x", 6, 6).is_none());
+    }
+
+    #[test]
+    fn fast_mode_names_the_tab_and_drops_stale_topics() {
+        assert_eq!(parse_fast_topics("GOAL: porn"), vec!["porn".to_string()]);
+        assert_eq!(
+            parse_fast_topics("GOAL: porn and comics"),
+            vec!["porn".to_string(), "comics".to_string()]
+        );
+        assert_eq!(
+            parse_fast_topics("Sure.\nGOAL: Comics, ink"),
+            vec!["comics".to_string(), "ink".to_string()]
+        );
+        assert!(parse_fast_topics("I cannot help with that.").is_empty());
+        assert!(should_name_thread(false, 1));
+        assert!(!should_name_thread(true, 4));
+        assert!(!should_name_thread(false, 0));
+        let empty = ThreadGoal::default();
+        let porn = blend_thread_goal(&empty, &["porn".into()], GOAL_DROP_AFTER);
+        assert_eq!(porn.label, "porn");
+        assert_eq!(porn.topics, vec!["porn".to_string()]);
+        let both = blend_thread_goal(&porn, &["comics".into()], GOAL_DROP_AFTER);
+        assert_eq!(both.label, "porn and comics");
+        let stay = blend_thread_goal(&both, &["comics".into()], GOAL_DROP_AFTER);
+        assert_eq!(stay.label, "porn and comics");
+        let dropped = blend_thread_goal(&stay, &["comics".into()], GOAL_DROP_AFTER);
+        assert_eq!(dropped.label, "comics");
+        assert_eq!(dropped.topics, vec!["comics".to_string()]);
+        let prompt = thread_goal_prompt(&[
+            ("user".into(), "draw porn".into()),
+            ("assistant".into(), "here".into()),
+        ]);
+        assert!(prompt.contains("GOAL:"));
+        assert!(prompt.contains("draw porn"));
+        assert!(prompt.to_ascii_lowercase().contains("topic"));
     }
 }

@@ -4,6 +4,8 @@ use crate::icons::{self, TileIcon};
 use eframe::egui::{self, Color32, ColorImage, RichText, Sense, Stroke, TextureHandle, TextureOptions};
 use grokhub_core::{curate_wall, wall_curate_seed, SkillMd, WallGif, WallSlot};
 
+pub use grokhub_core::ImagineKind;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SuggestedAuto {
     pub icon: TileIcon,
@@ -245,8 +247,6 @@ pub const IMAGINE_SCENES: &[ImagineScene] = &[
     },
 ];
 
-pub const IMAGINE_ASPECTS: &[&str] = &["1:1", "2:3", "16:9"];
-
 /// grok.com/imagine Image-mode toolbar labels, measured 2026-08-15.
 pub const IMAGINE_BAR_CHIPS: &[&str] = &[
     "Image",
@@ -257,12 +257,8 @@ pub const IMAGINE_BAR_CHIPS: &[&str] = &[
     "Auto",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImagineKind {
-    Image,
-    Video,
-    Agent,
-}
+/// grok.com/imagine Video-mode chips, measured 2026-08-15.
+pub const IMAGINE_VIDEO_CHIPS: &[&str] = &["480p", "720p", "6s", "10s", "15s", "Video audio"];
 
 pub fn imagine_kind_label(kind: ImagineKind) -> &'static str {
     match kind {
@@ -281,7 +277,7 @@ pub fn imagine_quality_label(quality: bool) -> &'static str {
 }
 
 pub fn imagine_aspect_label(i: u8) -> &'static str {
-    IMAGINE_ASPECTS[(i as usize) % IMAGINE_ASPECTS.len()]
+    grokhub_core::imagine_aspect_label(i)
 }
 
 /// Dark track + selected chip — grok.com Image|Video|Agent and Speed|Quality.
@@ -1095,10 +1091,14 @@ mod tests {
         assert_eq!(IMAGINE_SCENES.len(), 9);
         assert_eq!(imagine_word(0), "the cabin");
         assert_eq!(imagine_word(2800), "the night");
-        assert_eq!(imagine_aspect_label(0), "1:1");
-        assert_eq!(imagine_aspect_label(1), "2:3");
-        assert_eq!(imagine_aspect_label(2), "16:9");
+        assert_eq!(imagine_aspect_label(0), "2:3");
+        assert_eq!(imagine_aspect_label(1), "3:2");
+        assert_eq!(imagine_aspect_label(2), "1:1");
+        assert_eq!(imagine_aspect_label(3), "9:16");
+        assert_eq!(imagine_aspect_label(4), "16:9");
+        assert_eq!(grokhub_core::imagine_aspect_name(0), "Tall");
         assert_eq!(IMAGINE_BAR_CHIPS, ["Image", "Video", "Agent", "Speed", "Quality (v2.0)", "Auto"]);
+        assert_eq!(IMAGINE_VIDEO_CHIPS, ["480p", "720p", "6s", "10s", "15s", "Video audio"]);
         assert_eq!(imagine_kind_label(ImagineKind::Image), "Image");
         assert_eq!(imagine_kind_label(ImagineKind::Video), "Video");
         assert_eq!(imagine_kind_label(ImagineKind::Agent), "Agent");
