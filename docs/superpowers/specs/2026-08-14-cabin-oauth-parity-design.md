@@ -16,7 +16,7 @@ Device-code against `https://auth.x.ai` (OIDC discovery). Public client id stays
 
 Flow: Settings → **Connect Grok OAuth** (or `grokhub --oauth`) → show user code → open `verification_uri` → poll token endpoint → store tokens.
 
-Bearer for `api.x.ai` is: console API key if set, else OAuth access token. Refresh 30 minutes before expiry. Tokens live in `~/.config/GrokHub/secrets.json` mode `0600`. Never in markdown.
+Bearer for `api.x.ai` is: console API key if set, else OAuth access token. Refresh 30 minutes before expiry. Tokens live in `~/.config/GrokHub/secrets.json` mode `0600`. Never in markdown. The cabin footer paints the Grok profile photo when the session has one.
 
 Trusted hosts only: `x.ai` and `*.x.ai`. Connector fetches: `grok.com`, `x.ai`, `api.x.ai`, plus user extras.
 
