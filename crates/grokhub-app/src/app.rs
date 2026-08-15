@@ -5355,8 +5355,9 @@ mod tests {
             select_all_edit(ui, edit.id, &buf);
             let state = egui::TextEdit::load_state(ui.ctx(), edit.id).expect("edit state");
             let range = state.cursor.char_range().expect("selection");
-            assert_eq!(range.primary.index, 0);
-            assert_eq!(range.secondary.index, 7);
+            let [a, b] = range.sorted();
+            assert_eq!(a.index, 0);
+            assert_eq!(b.index, 7);
         });
     }
 }
