@@ -4159,7 +4159,11 @@ fn titlebar_chrome_size() -> egui::Vec2 {
 }
 
 fn titlebar_chrome_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click());
+    let (_rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click());
+    let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
+    if wash.a() > 0 {
+        ui.painter().rect_filled(rect, 6.0, wash);
+    }
     let color = if resp.hovered() {
         crate::theme::fg()
     } else {
@@ -4731,7 +4735,8 @@ impl Cabin {
             crate::theme::muted()
         };
         let w = ui.available_width();
-        let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, crate::theme::NAV_ROW_H), egui::Sense::click());
+        let (_rect, resp) = ui.allocate_exact_size(egui::vec2(w, crate::theme::NAV_ROW_H), egui::Sense::click());
+        let (resp, rect, fill) = crate::theme::feel_response(ui, resp, fill);
         ui.painter().rect_filled(rect, 10.0, fill);
         if outline {
             ui.painter().rect_stroke(
@@ -4761,6 +4766,10 @@ impl Cabin {
     ) -> egui::Response {
         let (rect, resp) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), RAIL_FOOTER_H), egui::Sense::click());
+        let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
+        if wash.a() > 0 {
+            ui.painter().rect_filled(rect, 10.0, wash);
+        }
         let c = egui::pos2(rect.left() + 20.0, rect.center().y);
         if let Some(tex) = photo {
             let size = egui::vec2(28.0, 28.0);

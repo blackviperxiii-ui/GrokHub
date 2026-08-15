@@ -369,7 +369,7 @@ pub fn imagine_seg_chip(ui: &mut egui::Ui, selected: bool, add: impl FnOnce(&mut
     } else {
         Color32::TRANSPARENT
     };
-    let inner = egui::Frame::none()
+    let resp = egui::Frame::none()
         .fill(fill)
         .rounding(crate::theme::IMAGINE_HIT)
         .inner_margin(egui::Margin::symmetric(10.0, 4.0))
@@ -380,13 +380,15 @@ pub fn imagine_seg_chip(ui: &mut egui::Ui, selected: bool, add: impl FnOnce(&mut
             ));
             ui.set_height(crate::theme::IMAGINE_HIT - 8.0);
             ui.horizontal_centered(add);
-        });
-    ui.interact(
-        inner.response.rect,
-        inner.response.id.with("hit"),
-        Sense::click(),
-    )
-    .clicked()
+        })
+        .response
+        .interact(Sense::click());
+    let (resp, felt, wash) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
+    if wash.a() > 0 {
+        ui.painter()
+            .rect_filled(felt, crate::theme::IMAGINE_HIT, wash);
+    }
+    resp.clicked()
 }
 
 pub fn imagine_frame_key(scene: &ImagineScene, now_ms: u64) -> &'static str {
@@ -470,7 +472,7 @@ pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
 }
 
 pub fn white_pill(ui: &mut egui::Ui, label: &str) -> bool {
-    ui.add(
+    crate::theme::pointing(ui.add(
         egui::Button::new(
             RichText::new(label)
                 .size(crate::theme::FONT_CHROME)
@@ -480,22 +482,22 @@ pub fn white_pill(ui: &mut egui::Ui, label: &str) -> bool {
         .fill(crate::theme::fg())
         .rounding(crate::theme::HIT)
         .min_size(egui::vec2(0.0, crate::theme::HIT)),
-    )
+    ))
     .clicked()
 }
 
 pub fn ghost_pill(ui: &mut egui::Ui, label: &str) -> bool {
-    ui.add(
+    crate::theme::pointing(ui.add(
         egui::Button::new(RichText::new(label).size(12.0).color(crate::theme::muted()))
             .fill(egui::Color32::TRANSPARENT)
             .rounding(14.0)
             .stroke(Stroke::new(1.0_f32, crate::theme::border())),
-    )
+    ))
     .clicked()
 }
 
 pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
-    ui.add(
+    crate::theme::pointing(ui.add(
         egui::Button::new(RichText::new(label).size(13.0).strong().color(if active {
             crate::theme::bg()
         } else {
@@ -516,7 +518,7 @@ pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
                 crate::theme::border()
             },
         )),
-    )
+    ))
     .clicked()
 }
 
@@ -566,12 +568,13 @@ pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool
 }
 
 pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 24.0), Sense::click());
+    let (_rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 24.0), Sense::click());
     let fill = if on {
         crate::theme::fg()
     } else {
         crate::theme::panel()
     };
+    let (resp, rect, fill) = crate::theme::feel_response(ui, resp, fill);
     ui.painter().rect_filled(rect, 12.0, fill);
     if !on {
         ui.painter()
@@ -641,7 +644,7 @@ pub fn settings_action(ui: &mut egui::Ui, title: &str, hint: &str, action: &str)
 }
 
 pub fn settings_nav(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
-    ui.add(
+    crate::theme::pointing(ui.add(
         egui::Button::new(
             RichText::new(label)
                 .size(crate::theme::FONT_CHROME)
@@ -658,7 +661,7 @@ pub fn settings_nav(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
         })
         .rounding(8.0)
         .min_size(egui::vec2(188.0, 36.0)),
-    )
+    ))
     .clicked()
 }
 
@@ -678,7 +681,8 @@ pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: 
     } else {
         crate::theme::border()
     };
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(108.0, 96.0), Sense::click());
+    let (_rect, resp) = ui.allocate_exact_size(egui::vec2(108.0, 96.0), Sense::click());
+    let (resp, rect, fill) = crate::theme::feel_response(ui, resp, fill);
     ui.painter().rect_filled(rect, 12.0, fill);
     ui.painter()
         .rect_stroke(rect, 12.0, Stroke::new(1.0_f32, stroke));
@@ -758,16 +762,20 @@ pub fn grok_tile(
         })
         .response
         .interact(Sense::click());
+    let (resp, felt, wash) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
+    if wash.a() > 0 {
+        ui.painter().rect_filled(felt, 18.0, wash);
+    }
     if add_clicked {
         hit = TileHit::Add;
     } else if resp.clicked() {
         hit = TileHit::Body;
     }
-    if resp.hovered() {
+    if selected || resp.hovered() {
         ui.painter().rect_stroke(
-            resp.rect,
+            felt,
             18.0,
-            Stroke::new(1.0, crate::theme::border_strong()),
+            Stroke::new(1.0_f32, crate::theme::border_strong()),
         );
     }
     hit
@@ -966,6 +974,7 @@ fn imagine_photo_tile(
     now_ms: u64,
 ) -> bool {
     let resp = ui.interact(rect, egui::Id::new(("imagine-tile", idx)), Sense::click());
+    let (resp, _felt, wash) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
     let (key_a, key_b, fade) = imagine_frame_pair(scene, now_ms);
     let (tex, size) = imagine_still_tex(ui.ctx(), key_a);
     let uv = cover_uv(
@@ -1005,6 +1014,9 @@ fn imagine_photo_tile(
         ui.painter()
             .rect_stroke(rect, 0.0, Stroke::new(1.0_f32, crate::theme::fg()));
     }
+    if wash.a() > 0 {
+        ui.painter().rect_filled(rect, 0.0, wash);
+    }
     resp.clicked()
 }
 
@@ -1042,6 +1054,7 @@ fn imagine_disk_tile(
         egui::Id::new(("imagine-wall", idx, gif.id.as_str())),
         Sense::click(),
     );
+    let (resp, _felt, wash) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
     let n = if gif.path_b.is_empty() { 1 } else { 2 };
     let tick = (now_ms / crate::theme::IMAGINE_FRAME_MS) as usize + gif.title.len();
     let path_a = if tick % n == 0 {
@@ -1098,6 +1111,9 @@ fn imagine_disk_tile(
         ui.painter()
             .rect_stroke(rect, 0.0, Stroke::new(1.0_f32, crate::theme::fg()));
     }
+    if wash.a() > 0 {
+        ui.painter().rect_filled(rect, 0.0, wash);
+    }
     resp.clicked()
 }
 
@@ -1129,12 +1145,16 @@ pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &
         })
         .response
         .interact(Sense::click());
+    let (resp, felt, wash) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
+    if wash.a() > 0 {
+        ui.painter().rect_filled(felt, 18.0, wash);
+    }
     if resp.clicked() {
         hit = true;
     }
     if resp.hovered() {
         ui.painter()
-            .rect_stroke(resp.rect, 18.0, Stroke::new(1.0, crate::theme::border_strong()));
+            .rect_stroke(felt, 18.0, Stroke::new(1.0_f32, crate::theme::border_strong()));
     }
     hit
 }
