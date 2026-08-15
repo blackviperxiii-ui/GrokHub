@@ -3035,8 +3035,7 @@ impl Cabin {
 
     fn hide_to_tray(&mut self, ctx: &egui::Context) {
         self.window_visible = false;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        apply_tray_window(ctx, crate::tray::hide_to_tray_window());
         if !self.told_tray {
             self.told_tray = true;
             crate::notify::ping("GrokHub", "Still running in the tray");
@@ -3046,9 +3045,7 @@ impl Cabin {
 
     fn show_from_tray(&mut self, ctx: &egui::Context) {
         self.window_visible = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        apply_tray_window(ctx, crate::tray::show_from_tray_window());
         ctx.request_repaint();
     }
 
@@ -3283,6 +3280,14 @@ impl Cabin {
                 }
             }
         }
+    }
+}
+
+fn apply_tray_window(ctx: &egui::Context, w: crate::tray::TrayWindow) {
+    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(w.visible));
+    if w.visible {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(w.minimized));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 }
 

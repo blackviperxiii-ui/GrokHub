@@ -23,7 +23,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     })
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
     #[serde(default)]
@@ -104,6 +104,35 @@ fn default_daily_auto() -> u32 {
 
 fn default_imagine_wall() -> bool {
     true
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            device_name: String::new(),
+            yolo: false,
+            model: String::new(),
+            imagine_model: String::new(),
+            voice_model: String::new(),
+            cabin_eyes: false,
+            autonomy: default_autonomy(),
+            source_dir: String::new(),
+            project_dir: String::new(),
+            host_on: default_host_on(),
+            host_hour_cap: default_host_cap(),
+            approve_risky_only: false,
+            current_thread: String::new(),
+            connector_hosts: Vec::new(),
+            close_to_tray: default_close_to_tray(),
+            mode: String::new(),
+            quiet_start: default_quiet_start(),
+            quiet_end: default_quiet_end(),
+            daily_auto_cap: default_daily_auto(),
+            goal_pin: String::new(),
+            imagine_wall: default_imagine_wall(),
+        }
+    }
 }
 
 pub fn config_dir() -> PathBuf {
@@ -255,6 +284,26 @@ mod tests {
         atomic_write(&dest, br#"{"ok":true}"#).expect("atomic");
         assert_eq!(fs::read_to_string(&dest).unwrap(), r#"{"ok":true}"#);
         assert!(!root.join(".atomic.json.tmp").exists());
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn default_close_to_tray_is_on() {
+        assert!(
+            AppConfig::default().close_to_tray,
+            "first persist must write closeToTray true so X hides to the tray"
+        );
+        assert!(default_close_to_tray());
+        let _g = TEST_CONFIG_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("grokhub-cfg-empty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let loaded = load();
+        assert!(loaded.close_to_tray);
+        assert!(loaded.host_on);
+        assert_eq!(loaded.autonomy, 1);
+        assert!(loaded.imagine_wall);
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }

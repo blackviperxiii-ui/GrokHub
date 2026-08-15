@@ -19,6 +19,39 @@ pub fn should_hide_on_close(close_to_tray: bool, tray_alive: bool) -> bool {
     close_to_tray && (tray_alive || tray_wanted())
 }
 
+/// What the cabin window should be after close-to-tray or Show cabin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrayWindow {
+    pub visible: bool,
+    pub minimized: bool,
+}
+
+/// Close to tray unmaps the cabin. Iconify is minimize — that leaves a taskbar stub.
+pub fn hide_to_tray_window() -> TrayWindow {
+    TrayWindow {
+        visible: false,
+        minimized: false,
+    }
+}
+
+pub fn show_from_tray_window() -> TrayWindow {
+    TrayWindow {
+        visible: true,
+        minimized: false,
+    }
+}
+
+/// winit Wayland cannot unmap. Prefer X11 when DISPLAY exists so close can hide.
+pub fn prefer_x11_backend(existing: Option<&str>, has_display: bool) -> Option<&'static str> {
+    if existing.is_some() {
+        None
+    } else if has_display {
+        Some("x11")
+    } else {
+        None
+    }
+}
+
 pub struct TrayHost {
     rx: mpsc::Receiver<TrayCmd>,
     _keep: ksni::blocking::Handle<GrokTray>,
@@ -154,5 +187,25 @@ mod tests {
             Some(v) => std::env::set_var("GROKHUB_TRAY", v),
             None => std::env::remove_var("GROKHUB_TRAY"),
         }
+    }
+
+    #[test]
+    fn close_to_tray_unmaps_and_does_not_minimize() {
+        let hide = hide_to_tray_window();
+        assert!(!hide.visible);
+        assert!(
+            !hide.minimized,
+            "Minimized(true) parks a taskbar stub instead of the tray"
+        );
+        let show = show_from_tray_window();
+        assert!(show.visible);
+        assert!(!show.minimized);
+    }
+
+    #[test]
+    fn tray_hide_prefers_x11_when_display_exists() {
+        assert_eq!(prefer_x11_backend(None, true), Some("x11"));
+        assert_eq!(prefer_x11_backend(Some("wayland"), true), None);
+        assert_eq!(prefer_x11_backend(None, false), None);
     }
 }
