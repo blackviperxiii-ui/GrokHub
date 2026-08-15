@@ -54,6 +54,110 @@ pub fn parse_imagine_url(body: &Value) -> Option<String> {
         })
 }
 
+/// grok.com/imagine Aspect Ratio menu, measured 2026-08-15.
+pub const IMAGINE_ASPECTS: &[(&str, &str)] = &[
+    ("2:3", "Tall"),
+    ("3:2", "Wide"),
+    ("1:1", "Square"),
+    ("9:16", "Vertical"),
+    ("16:9", "Widescreen"),
+];
+
+/// Style Auto menu. Cabin stills only — each label becomes a prompt suffix.
+pub const IMAGINE_STYLES: &[&str] = &["Auto", "Cinematic", "Anime", "Comic", "Photo", "Illustration"];
+
+/// grok.com/imagine Video-mode chips, measured 2026-08-15.
+pub const IMAGINE_VIDEO_RES: &[&str] = &["480p", "720p"];
+pub const IMAGINE_VIDEO_DURS: &[&str] = &["6s", "10s", "15s"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImagineKind {
+    Image,
+    Video,
+    Agent,
+}
+
+pub struct ImagineSpec<'a> {
+    pub prompt: &'a str,
+    pub kind: ImagineKind,
+    pub quality: bool,
+    pub style: &'a str,
+    pub aspect: &'a str,
+    pub video_res: &'a str,
+    pub video_dur: &'a str,
+    pub video_audio: bool,
+}
+
+pub fn imagine_aspect_label(i: u8) -> &'static str {
+    IMAGINE_ASPECTS[(i as usize) % IMAGINE_ASPECTS.len()].0
+}
+
+pub fn imagine_aspect_name(i: u8) -> &'static str {
+    IMAGINE_ASPECTS[(i as usize) % IMAGINE_ASPECTS.len()].1
+}
+
+pub fn imagine_style_label(i: u8) -> &'static str {
+    IMAGINE_STYLES[(i as usize) % IMAGINE_STYLES.len()]
+}
+
+pub fn imagine_video_res_label(i: u8) -> &'static str {
+    IMAGINE_VIDEO_RES[(i as usize) % IMAGINE_VIDEO_RES.len()]
+}
+
+pub fn imagine_video_dur_label(i: u8) -> &'static str {
+    IMAGINE_VIDEO_DURS[(i as usize) % IMAGINE_VIDEO_DURS.len()]
+}
+
+/// Cabin stills only. Selectors change the still prompt — they do not mint video files.
+pub fn compose_imagine_prompt(spec: &ImagineSpec<'_>) -> String {
+    let prompt = spec.prompt.trim();
+    let mut parts = Vec::new();
+    if !prompt.is_empty() {
+        parts.push(prompt.to_string());
+    }
+    let aspect = spec.aspect.trim();
+    if !aspect.is_empty() && !prompt.contains(aspect) {
+        parts.push(format!("{aspect} still"));
+    } else if !prompt.to_ascii_lowercase().contains("still") {
+        parts.push("still".into());
+    }
+    match spec.kind {
+        ImagineKind::Image => {
+            if spec.quality {
+                parts.push("high detail, quality v2.0".into());
+            } else {
+                parts.push("speed draft".into());
+            }
+        }
+        ImagineKind::Video => {
+            let audio = if spec.video_audio {
+                "with audio"
+            } else {
+                "silent"
+            };
+            parts.push(format!(
+                "storyboard still for a {} {} clip, {}",
+                spec.video_dur.trim(),
+                spec.video_res.trim(),
+                audio
+            ));
+        }
+        ImagineKind::Agent => {
+            parts.push("character sprite still, living agent pose".into());
+            if spec.quality {
+                parts.push("high detail, quality v2.0".into());
+            } else {
+                parts.push("speed draft".into());
+            }
+        }
+    }
+    let style = spec.style.trim();
+    if !style.is_empty() && !style.eq_ignore_ascii_case("auto") {
+        parts.push(format!("{style} style"));
+    }
+    parts.join(", ")
+}
+
 /// Assistant verb that kicks Imagine. Distinct from `IMAGINE: <url>` receipts.
 pub fn extract_imagine_prompt(text: &str) -> Option<String> {
     for line in text.lines() {
@@ -333,6 +437,82 @@ mod tests {
             Some("a cabin at night")
         );
         assert!(extract_imagine_prompt("IMAGINE: https://img/x.png").is_none());
+    }
+
+    #[test]
+    fn grok_com_selectors_shape_the_still() {
+        assert_eq!(
+            IMAGINE_ASPECTS,
+            &[
+                ("2:3", "Tall"),
+                ("3:2", "Wide"),
+                ("1:1", "Square"),
+                ("9:16", "Vertical"),
+                ("16:9", "Widescreen"),
+            ]
+        );
+        assert_eq!(IMAGINE_STYLES, &["Auto", "Cinematic", "Anime", "Comic", "Photo", "Illustration"]);
+        assert_eq!(IMAGINE_VIDEO_RES, &["480p", "720p"]);
+        assert_eq!(IMAGINE_VIDEO_DURS, &["6s", "10s", "15s"]);
+        let quality = compose_imagine_prompt(&ImagineSpec {
+            prompt: "a cabin porch at night",
+            kind: ImagineKind::Image,
+            quality: true,
+            style: "Cinematic",
+            aspect: "2:3",
+            video_res: "480p",
+            video_dur: "6s",
+            video_audio: true,
+        });
+        assert!(quality.contains("a cabin porch at night"));
+        assert!(quality.contains("2:3"));
+        assert!(quality.to_ascii_lowercase().contains("cinematic"));
+        assert!(quality.to_ascii_lowercase().contains("quality"));
+        assert!(quality.to_ascii_lowercase().contains("still"));
+        assert!(!quality.to_ascii_lowercase().contains("mp4"));
+        let speed = compose_imagine_prompt(&ImagineSpec {
+            prompt: "a kettle",
+            kind: ImagineKind::Image,
+            quality: false,
+            style: "Auto",
+            aspect: "16:9",
+            video_res: "480p",
+            video_dur: "6s",
+            video_audio: false,
+        });
+        assert!(speed.contains("16:9"));
+        assert!(speed.to_ascii_lowercase().contains("speed"));
+        assert!(!speed.to_ascii_lowercase().contains("cinematic"));
+        let video = compose_imagine_prompt(&ImagineSpec {
+            prompt: "snow on the rail",
+            kind: ImagineKind::Video,
+            quality: true,
+            style: "Auto",
+            aspect: "9:16",
+            video_res: "720p",
+            video_dur: "10s",
+            video_audio: true,
+        });
+        assert!(video.contains("9:16"));
+        assert!(video.contains("720p"));
+        assert!(video.contains("10s"));
+        assert!(video.to_ascii_lowercase().contains("storyboard"));
+        assert!(video.to_ascii_lowercase().contains("audio"));
+        assert!(video.to_ascii_lowercase().contains("still"));
+        let agent = compose_imagine_prompt(&ImagineSpec {
+            prompt: "a mascot on the desk",
+            kind: ImagineKind::Agent,
+            quality: true,
+            style: "Comic",
+            aspect: "1:1",
+            video_res: "480p",
+            video_dur: "6s",
+            video_audio: false,
+        });
+        assert!(agent.contains("1:1"));
+        assert!(agent.to_ascii_lowercase().contains("comic"));
+        assert!(agent.to_ascii_lowercase().contains("sprite") || agent.to_ascii_lowercase().contains("agent"));
+        assert!(agent.to_ascii_lowercase().contains("still"));
     }
 
     fn gif(id: &str, created_ms: u64) -> WallGif {

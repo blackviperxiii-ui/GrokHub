@@ -607,10 +607,12 @@ pub fn paint_aspect_rect(ui: &mut egui::Ui, aspect: u8, size: f32, color: egui::
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     let painter = ui.painter();
     let stroke = Stroke::new(1.4_f32, color);
-    let (w, h) = match aspect % 3 {
-        0 => (size * 0.42, size * 0.42),
-        1 => (size * 0.28, size * 0.46),
-        2 => (size * 0.50, size * 0.28),
+    let (w, h) = match aspect % 5 {
+        0 => (size * 0.28, size * 0.46),
+        1 => (size * 0.46, size * 0.30),
+        2 => (size * 0.42, size * 0.42),
+        3 => (size * 0.24, size * 0.48),
+        4 => (size * 0.50, size * 0.28),
         other => {
             let _ = other;
             (size * 0.42, size * 0.42)
