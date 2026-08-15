@@ -25,13 +25,19 @@ pub fn extract_host_cmds(text: &str) -> Vec<String> {
 }
 
 pub fn chat_request_body(model: &str, messages: &[(String, String)]) -> Value {
-    chat_request_body_vision(model, messages, None)
+    chat_request_body_vision(model, messages, None, None)
+}
+
+pub fn chat_request_body_for_mode(mode: &str, messages: &[(String, String)]) -> Value {
+    let model = model_for_mode(mode);
+    chat_request_body_vision(model, messages, None, reasoning_effort_for_mode(mode))
 }
 
 pub fn chat_request_body_vision(
     model: &str,
     messages: &[(String, String)],
     image_data_url: Option<&str>,
+    effort: Option<&str>,
 ) -> Value {
     let mut msgs: Vec<Value> = messages
         .iter()
@@ -54,26 +60,27 @@ pub fn chat_request_body_vision(
         "stream": false,
         "messages": msgs,
     });
-    if let Some(effort) = reasoning_effort_for_model(resolved) {
-        body["reasoning_effort"] = json!(effort);
+    if resolved == "grok-4.6" {
+        if let Some(effort) = effort {
+            body["reasoning_effort"] = json!(effort);
+        }
     }
     body
 }
 
-/// Max is Grok 4.6 at xhigh. Other chat models leave effort unset.
-pub fn reasoning_effort_for_model(model: &str) -> Option<&'static str> {
-    if model.trim() == "grok-4.6" {
-        Some("xhigh")
-    } else {
-        None
+/// Think is Grok 4.6 at high. Max is the same model at xhigh.
+pub fn reasoning_effort_for_mode(mode: &str) -> Option<&'static str> {
+    match mode.trim() {
+        "max" | "deep" | "heavy" => Some("xhigh"),
+        "balanced" | "build" | "expert" => Some("high"),
+        _ => None,
     }
 }
 
-pub fn chat_timeout_secs(model: &str) -> u64 {
-    if reasoning_effort_for_model(model) == Some("xhigh") {
-        600
-    } else {
-        120
+pub fn chat_timeout_secs(effort: Option<&str>) -> u64 {
+    match effort {
+        Some("high") | Some("xhigh") => 600,
+        _ => 120,
     }
 }
 
@@ -83,17 +90,18 @@ pub fn should_failover_status(status: u16) -> bool {
 
 pub fn model_for_mode(mode: &str) -> &'static str {
     match mode {
-        "max" | "deep" | "heavy" => "grok-4.6",
-        "balanced" | "build" | "expert" => "grok-3",
+        "max" | "deep" | "heavy" | "balanced" | "build" | "expert" => "grok-4.6",
         "auto" => "grok-3-mini-fast",
         _ => DEFAULT_MODEL,
     }
 }
 
-/// Max always sends Grok 4.6. Other modes keep an explicit pin, else the mode map.
+/// Max and Think always send Grok 4.6. Other modes keep an explicit pin, else the mode map.
 pub fn resolve_chat_model(mode: &str, model: &str) -> String {
     match mode.trim() {
-        "max" | "deep" | "heavy" => model_for_mode("max").to_string(),
+        "max" | "deep" | "heavy" | "balanced" | "build" | "expert" => {
+            model_for_mode(mode.trim()).to_string()
+        }
         _ if !model.trim().is_empty() => model.trim().to_string(),
         mode if !mode.is_empty() => model_for_mode(mode).to_string(),
         _ => DEFAULT_MODEL.to_string(),
@@ -103,6 +111,7 @@ pub fn resolve_chat_model(mode: &str, model: &str) -> String {
 pub fn failover_model(current: &str) -> Option<&'static str> {
     let tier = tier_of_model(current);
     match crate::next_failover_tier(tier) {
+        "balanced" => Some("grok-3"),
         next if next != tier => Some(model_for_mode(next)),
         _ => None,
     }
@@ -154,6 +163,7 @@ mod tests {
             "grok-3-mini-fast",
             &[("user".into(), "see".into())],
             Some("data:image/jpeg;base64,AAAA"),
+            None,
         );
         assert_eq!(vis["messages"][0]["content"][1]["type"], "image_url");
         let reply = json!({
@@ -165,13 +175,13 @@ mod tests {
         assert_eq!(failover_model("grok-4-latest"), Some("grok-3"));
         assert_eq!(failover_model("grok-4.6"), Some("grok-3"));
         assert!(failover_model(DEFAULT_MODEL).is_none());
-        let max = chat_request_body("grok-4.6", &[("user".into(), "hi".into())]);
+        let max = chat_request_body_for_mode("max", &[("user".into(), "hi".into())]);
         assert_eq!(max["model"], "grok-4.6");
         assert_eq!(max["reasoning_effort"], "xhigh");
         let fast = chat_request_body(DEFAULT_MODEL, &[("user".into(), "hi".into())]);
         assert!(fast.get("reasoning_effort").is_none());
-        assert_eq!(chat_timeout_secs("grok-4.6"), 600);
-        assert_eq!(chat_timeout_secs(DEFAULT_MODEL), 120);
+        assert_eq!(chat_timeout_secs(Some("xhigh")), 600);
+        assert_eq!(chat_timeout_secs(None), 120);
     }
 
     #[test]
@@ -179,16 +189,36 @@ mod tests {
         assert_eq!(model_for_mode("max"), "grok-4.6");
         assert_eq!(model_for_mode("deep"), "grok-4.6");
         assert_eq!(model_for_mode("heavy"), "grok-4.6");
-        assert_eq!(reasoning_effort_for_model("grok-4.6"), Some("xhigh"));
-        assert_eq!(reasoning_effort_for_model("grok-4-latest"), None);
+        assert_eq!(reasoning_effort_for_mode("max"), Some("xhigh"));
         assert_ne!(model_for_mode("max"), "grok-4-latest");
         assert_eq!(resolve_chat_model("max", "grok-3"), "grok-4.6");
         assert_eq!(resolve_chat_model("max", ""), "grok-4.6");
         assert_eq!(resolve_chat_model("auto", "grok-3"), "grok-3");
         assert_eq!(resolve_chat_model("auto", ""), "grok-3-mini-fast");
         assert_eq!(
-            reasoning_effort_for_model(&resolve_chat_model("max", "grok-3-mini-fast")),
+            reasoning_effort_for_mode("max"),
             Some("xhigh")
         );
+    }
+
+    #[test]
+    fn think_is_grok_4_6_high() {
+        assert_eq!(model_for_mode("balanced"), "grok-4.6");
+        assert_eq!(model_for_mode("build"), "grok-4.6");
+        assert_eq!(model_for_mode("expert"), "grok-4.6");
+        assert_eq!(resolve_chat_model("balanced", "grok-3"), "grok-4.6");
+        assert_eq!(resolve_chat_model("balanced", ""), "grok-4.6");
+        assert_eq!(reasoning_effort_for_mode("balanced"), Some("high"));
+        assert_eq!(reasoning_effort_for_mode("max"), Some("xhigh"));
+        assert_eq!(reasoning_effort_for_mode("auto"), None);
+        let think = chat_request_body_for_mode("balanced", &[("user".into(), "hi".into())]);
+        assert_eq!(think["model"], "grok-4.6");
+        assert_eq!(think["reasoning_effort"], "high");
+        let max = chat_request_body_for_mode("max", &[("user".into(), "hi".into())]);
+        assert_eq!(max["model"], "grok-4.6");
+        assert_eq!(max["reasoning_effort"], "xhigh");
+        assert_ne!(think["reasoning_effort"], max["reasoning_effort"]);
+        assert_eq!(chat_timeout_secs(Some("high")), 600);
+        assert_eq!(failover_model("grok-4.6"), Some("grok-3"));
     }
 }

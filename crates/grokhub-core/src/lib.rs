@@ -43,9 +43,10 @@ pub mod windshield;
 pub mod workboard;
 
 pub use chat::{
-    chat_request_body, chat_request_body_vision, chat_timeout_secs, extract_host_cmds, failover_model,
-    model_for_mode, needs_auth_banner, parse_chat_content, reasoning_effort_for_model,
-    resolve_chat_model, should_failover_status, DEFAULT_MODEL, XAI_BASE,
+    chat_request_body, chat_request_body_for_mode, chat_request_body_vision, chat_timeout_secs,
+    extract_host_cmds, failover_model, model_for_mode, needs_auth_banner, parse_chat_content,
+    reasoning_effort_for_mode, resolve_chat_model, should_failover_status,
+    DEFAULT_MODEL, XAI_BASE,
 };
 pub use chips::{
     build_quick_chips, chip_memory_key, chip_suggest_prompt, context_fingerprint, detect_chip_context,
