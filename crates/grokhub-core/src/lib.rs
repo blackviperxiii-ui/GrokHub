@@ -2,6 +2,7 @@
 
 pub mod appearance;
 pub mod attach;
+pub mod feel;
 pub mod automation;
 pub mod chat;
 pub mod chips;
@@ -48,6 +49,10 @@ pub mod workboard;
 pub use appearance::{
     appearance_choices, os_prefers_dark, parse_theme, pick_theme, resolve_dark, theme_id, theme_label,
     ThemeChoice,
+};
+pub use feel::{
+    feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb, mix_channel, HOVER_EXPANSION,
+    HOVER_SECS, PRESS_EXPANSION, PRESS_SECS,
 };
 pub use attach::{
     append_composer, attach_kind, attach_name, attach_prompt_line, chat_attach_status,
