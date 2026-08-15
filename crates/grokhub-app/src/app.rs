@@ -287,6 +287,7 @@ pub struct Cabin {
     proj_rename: Option<String>,
     proj_rename_buf: String,
     proj_rename_focus: bool,
+    proj_rename_lock: Option<String>,
     proj_staged: Option<String>,
     proj_ignore_close: bool,
     projects_dirty: bool,
@@ -499,6 +500,7 @@ impl Cabin {
             proj_rename: None,
             proj_rename_buf: String::new(),
             proj_rename_focus: false,
+            proj_rename_lock: None,
             proj_staged: None,
             proj_ignore_close: false,
             projects_dirty: false,
@@ -613,15 +615,13 @@ impl Cabin {
     fn stage_new_project(&mut self, parent: Option<&str>) {
         let id = uid("proj");
         match stage_project(&mut self.projects, &id, "Project", parent) {
-            Ok(i) => {
+            Ok(_) => {
                 if let Some(pid) = parent {
                     if let Some(f) = self.projects.iter_mut().find(|n| n.id == pid) {
                         f.open = true;
                     }
                 }
-                self.proj_rename_buf = self.projects[i].name.clone();
-                self.proj_rename = Some(id.clone());
-                self.proj_rename_focus = true;
+                self.begin_proj_rename(id.clone(), String::new());
                 self.proj_staged = Some(id);
                 self.status = "Name this project".into();
                 self.touch_projects();
@@ -646,10 +646,8 @@ impl Cabin {
     fn stage_new_folder(&mut self) {
         let id = uid("fold");
         match create_folder(&mut self.projects, &id, "Folder", None) {
-            Ok(i) => {
-                self.proj_rename_buf = self.projects[i].name.clone();
-                self.proj_rename = Some(id.clone());
-                self.proj_rename_focus = true;
+            Ok(_) => {
+                self.begin_proj_rename(id.clone(), String::new());
                 self.proj_staged = Some(id);
                 self.status = "Name this folder".into();
                 self.touch_projects();
@@ -659,10 +657,18 @@ impl Cabin {
         }
     }
 
+    fn begin_proj_rename(&mut self, id: String, buf: String) {
+        self.proj_rename_lock = if buf.is_empty() { None } else { Some(buf.clone()) };
+        self.proj_rename_buf = buf;
+        self.proj_rename = Some(id);
+        self.proj_rename_focus = true;
+    }
+
     fn cancel_proj_rename(&mut self) {
         let id = self.proj_rename.take();
         self.proj_rename_buf.clear();
         self.proj_rename_focus = false;
+        self.proj_rename_lock = None;
         if let Some(id) = id {
             if self.proj_staged.as_deref() == Some(id.as_str()) {
                 drop_node(&mut self.projects, &id);
@@ -709,6 +715,7 @@ impl Cabin {
         }
         self.proj_rename_buf.clear();
         self.proj_rename_focus = false;
+        self.proj_rename_lock = None;
         self.proj_staged = None;
     }
 
@@ -3008,9 +3015,7 @@ impl Cabin {
                 match a {
                     "rename" => {
                         if let Some(n) = self.projects.iter().find(|n| n.id == id) {
-                            self.proj_rename_buf = n.name.clone();
-                            self.proj_rename = Some(id);
-                            self.proj_rename_focus = true;
+                            self.begin_proj_rename(id, n.name.clone());
                         }
                     }
                     "add" => {
@@ -3701,8 +3706,14 @@ impl Cabin {
                             if self.proj_rename_focus {
                                 edit.request_focus();
                                 if edit.has_focus() {
-                                    select_all_edit(ui, edit.id, &self.proj_rename_buf);
                                     self.proj_rename_focus = false;
+                                }
+                            }
+                            if let Some(lock) = self.proj_rename_lock.clone() {
+                                if self.proj_rename_buf == lock {
+                                    select_all_edit(ui, edit.id, &self.proj_rename_buf);
+                                } else {
+                                    self.proj_rename_lock = None;
                                 }
                             }
                             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -3746,9 +3757,10 @@ impl Cabin {
                         }
                     }
                     if row.double_clicked() {
-                        self.proj_rename_buf = self.projects[idx].name.clone();
-                        self.proj_rename = Some(self.projects[idx].id.clone());
-                        self.proj_rename_focus = true;
+                        self.begin_proj_rename(
+                            self.projects[idx].id.clone(),
+                            self.projects[idx].name.clone(),
+                        );
                     }
                     if row.secondary_clicked() {
                         self.proj_menu = Some(self.projects[idx].id.clone());
