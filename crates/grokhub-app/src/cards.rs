@@ -169,12 +169,14 @@ pub const SUGGESTED_AUTOS: &[SuggestedAuto] = &[
 pub const IMAGINE_WORDS: &[&str] = &["the cabin", "the night", "a scene", "the board"];
 
 /// Still-image seeds. grok-2-image only — no video, no photo-edit tools we do not have.
+/// `frames` cycle like grok.com/imagine cover GIFs — inspiration, not generated output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImagineScene {
     pub icon: TileIcon,
     pub title: &'static str,
     pub prompt: &'static str,
     pub tall: bool,
+    pub frames: &'static [&'static str],
 }
 
 pub const IMAGINE_SCENES: &[ImagineScene] = &[
@@ -183,38 +185,76 @@ pub const IMAGINE_SCENES: &[ImagineScene] = &[
         title: "Night cabin",
         prompt: "still photograph of a dark timber cabin at night, one warm window, no people, no text",
         tall: false,
+        frames: &["night_cabin", "night_cabin_b"],
     },
     ImagineScene {
         icon: TileIcon::Board,
         title: "Bound project",
         prompt: "still of a wooden workbench with a closed laptop and a bound notebook, dim cabin light, no people, no text",
         tall: true,
+        frames: &["bound_project", "bound_project_b"],
     },
     ImagineScene {
         icon: TileIcon::Host,
         title: "Host desk",
         prompt: "still of a Linux workstation desk, dark room, monitor glow, no people, no faces, no text",
         tall: true,
+        frames: &["host_desk", "host_desk_b"],
     },
     ImagineScene {
         icon: TileIcon::List,
         title: "Workboard still",
         prompt: "still of a wall of blank paper task cards in a dark cabin, warm lamp, no people, no readable text",
         tall: false,
+        frames: &["workboard", "workboard_b"],
     },
     ImagineScene {
         icon: TileIcon::Sun,
         title: "Morning window",
         prompt: "still of a cabin window at dawn, frost on glass, empty room, no people, no text",
         tall: true,
+        frames: &["morning_window", "morning_window_b"],
     },
     ImagineScene {
         icon: TileIcon::Image,
         title: "A scene",
         prompt: "tight still-image of an empty cabin room at night, one lamp, wood walls, no people, no text",
         tall: false,
+        frames: &["a_scene", "a_scene_b"],
+    },
+    ImagineScene {
+        icon: TileIcon::Moon,
+        title: "Wood stove",
+        prompt: "still of a wood stove in a dark timber cabin, embers, no people, no text",
+        tall: true,
+        frames: &["wood_stove"],
+    },
+    ImagineScene {
+        icon: TileIcon::Moon,
+        title: "Pine ridge",
+        prompt: "still of a pine ridge at night above a dark valley, no people, no text",
+        tall: false,
+        frames: &["pine_ridge"],
+    },
+    ImagineScene {
+        icon: TileIcon::Sun,
+        title: "Empty chair",
+        prompt: "still of an empty wooden chair by a cabin window at night, one lamp, no people, no text",
+        tall: true,
+        frames: &["empty_chair"],
     },
 ];
+
+pub const IMAGINE_ASPECTS: &[&str] = &["1:1", "2:3", "16:9"];
+
+pub fn imagine_aspect_label(i: u8) -> &'static str {
+    IMAGINE_ASPECTS[(i as usize) % IMAGINE_ASPECTS.len()]
+}
+
+pub fn imagine_frame_key(scene: &ImagineScene, now_ms: u64) -> &'static str {
+    let n = scene.frames.len().max(1);
+    scene.frames[((now_ms / 2200) as usize + scene.title.len()) % n]
+}
 
 pub fn imagine_word(now_ms: u64) -> &'static str {
     IMAGINE_WORDS[((now_ms / 2800) as usize) % IMAGINE_WORDS.len()]
@@ -443,6 +483,28 @@ pub fn settings_action(ui: &mut egui::Ui, title: &str, hint: &str, action: &str)
     hit
 }
 
+pub fn settings_nav(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
+    ui.add(
+        egui::Button::new(
+            RichText::new(label)
+                .size(crate::theme::FONT_CHROME)
+                .color(if active {
+                    crate::theme::FG
+                } else {
+                    crate::theme::MUTED
+                }),
+        )
+        .fill(if active {
+            crate::theme::NAV_ACTIVE
+        } else {
+            Color32::TRANSPARENT
+        })
+        .rounding(8.0)
+        .min_size(egui::vec2(188.0, 36.0)),
+    )
+    .clicked()
+}
+
 pub fn settings_note(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).size(13.0).color(crate::theme::MUTED));
     ui.add_space(8.0);
@@ -566,14 +628,23 @@ pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui,
     }
 }
 
-fn still_jpeg(title: &str) -> &'static [u8] {
-    match title {
-        "Night cabin" => include_bytes!("../assets/imagine/night_cabin.jpg"),
-        "Bound project" => include_bytes!("../assets/imagine/bound_project.jpg"),
-        "Host desk" => include_bytes!("../assets/imagine/host_desk.jpg"),
-        "Workboard still" => include_bytes!("../assets/imagine/workboard.jpg"),
-        "Morning window" => include_bytes!("../assets/imagine/morning_window.jpg"),
-        "A scene" => include_bytes!("../assets/imagine/a_scene.jpg"),
+fn still_jpeg(key: &str) -> &'static [u8] {
+    match key {
+        "night_cabin" => include_bytes!("../assets/imagine/night_cabin.jpg"),
+        "night_cabin_b" => include_bytes!("../assets/imagine/night_cabin_b.jpg"),
+        "bound_project" => include_bytes!("../assets/imagine/bound_project.jpg"),
+        "bound_project_b" => include_bytes!("../assets/imagine/bound_project_b.jpg"),
+        "host_desk" => include_bytes!("../assets/imagine/host_desk.jpg"),
+        "host_desk_b" => include_bytes!("../assets/imagine/host_desk_b.jpg"),
+        "workboard" => include_bytes!("../assets/imagine/workboard.jpg"),
+        "workboard_b" => include_bytes!("../assets/imagine/workboard_b.jpg"),
+        "morning_window" => include_bytes!("../assets/imagine/morning_window.jpg"),
+        "morning_window_b" => include_bytes!("../assets/imagine/morning_window_b.jpg"),
+        "a_scene" => include_bytes!("../assets/imagine/a_scene.jpg"),
+        "a_scene_b" => include_bytes!("../assets/imagine/a_scene_b.jpg"),
+        "wood_stove" => include_bytes!("../assets/imagine/wood_stove.jpg"),
+        "pine_ridge" => include_bytes!("../assets/imagine/pine_ridge.jpg"),
+        "empty_chair" => include_bytes!("../assets/imagine/empty_chair.jpg"),
         other => {
             let _ = other;
             include_bytes!("../assets/imagine/a_scene.jpg")
@@ -581,16 +652,16 @@ fn still_jpeg(title: &str) -> &'static [u8] {
     }
 }
 
-fn imagine_still_tex(ctx: &egui::Context, title: &str) -> (TextureHandle, [usize; 2]) {
-    let id = egui::Id::new(("imagine-still", title));
+fn imagine_still_tex(ctx: &egui::Context, key: &str) -> (TextureHandle, [usize; 2]) {
+    let id = egui::Id::new(("imagine-still", key));
     if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
         return hit;
     }
-    let img = image::load_from_memory(still_jpeg(title)).expect("imagine still");
+    let img = image::load_from_memory(still_jpeg(key)).expect("imagine still");
     let rgba = img.to_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
     let tex = ctx.load_texture(
-        format!("imagine-still-{title}"),
+        format!("imagine-still-{key}"),
         ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
         TextureOptions::LINEAR,
     );
@@ -617,6 +688,7 @@ fn cover_uv(iw: f32, ih: f32, dw: f32, dh: f32) -> egui::Rect {
 pub fn imagine_masonry(
     ui: &mut egui::Ui,
     selected: &str,
+    now_ms: u64,
     mut on_pick: impl FnMut(&'static str),
 ) {
     let w = ui.available_width();
@@ -662,7 +734,7 @@ pub fn imagine_masonry(
             egui::pos2(full.left() + c as f32 * (col_w + gap), ys[c]),
             egui::vec2(col_w, h),
         );
-        if imagine_photo_tile(ui, scene, selected == scene.prompt, rect, i) {
+        if imagine_photo_tile(ui, scene, selected == scene.prompt, rect, i, now_ms) {
             on_pick(scene.prompt);
         }
         ys[c] += h + gap;
@@ -675,9 +747,10 @@ fn imagine_photo_tile(
     selected: bool,
     rect: egui::Rect,
     idx: usize,
+    now_ms: u64,
 ) -> bool {
     let resp = ui.interact(rect, egui::Id::new(("imagine-tile", idx)), Sense::click());
-    let (tex, size) = imagine_still_tex(ui.ctx(), scene.title);
+    let (tex, size) = imagine_still_tex(ui.ctx(), imagine_frame_key(scene, now_ms));
     let uv = cover_uv(
         size[0] as f32,
         size[1] as f32,
@@ -811,9 +884,12 @@ mod tests {
         assert!(!LIVE_CONNECTORS[0].tools.iter().any(|(_, t)| *t == "create_pr_comment"));
         assert!(!is_cabin_catalog("outlook"));
         assert!(!is_cabin_catalog("gmail"));
-        assert_eq!(IMAGINE_SCENES.len(), 6);
+        assert_eq!(IMAGINE_SCENES.len(), 9);
         assert_eq!(imagine_word(0), "the cabin");
         assert_eq!(imagine_word(2800), "the night");
+        assert_eq!(imagine_aspect_label(0), "1:1");
+        assert_eq!(imagine_aspect_label(1), "2:3");
+        assert_eq!(imagine_aspect_label(2), "16:9");
         for s in IMAGINE_SCENES {
             let blob = format!("{} {}", s.title, s.prompt).to_ascii_lowercase();
             for w in forbidden {
@@ -828,11 +904,19 @@ mod tests {
             assert!(!blob.contains("photo edit"));
             let _ = s.icon;
             let _ = s.tall;
-            let bytes = still_jpeg(s.title);
-            assert!(bytes.len() > 1000, "imagine still {} is empty", s.title);
-            let img = image::load_from_memory(bytes).expect(s.title);
-            assert!(img.width() >= 256);
-            assert!(img.height() >= 256);
+            assert!(!s.frames.is_empty());
+            for key in s.frames {
+                let bytes = still_jpeg(key);
+                assert!(bytes.len() > 1000, "imagine still {key} is empty");
+                let img = image::load_from_memory(bytes).expect(*key);
+                assert!(img.width() >= 256);
+                assert!(img.height() >= 256);
+            }
+            let a = imagine_frame_key(s, 0);
+            let b = imagine_frame_key(s, 2200);
+            if s.frames.len() > 1 {
+                assert_ne!(a, b);
+            }
         }
         let uv = cover_uv(768.0, 512.0, 345.0, 230.0);
         assert!(uv.width() > 0.4 && uv.height() > 0.9);

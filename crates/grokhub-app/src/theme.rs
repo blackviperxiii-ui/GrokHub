@@ -58,8 +58,8 @@ pub const IMAGINE_TITLE: f32 = 22.0;
 pub const IMAGINE_GAP: f32 = 32.0;
 /// measured Imagine query-bar width
 pub const IMAGINE_BAR_W: f32 = 768.0;
-/// Imagine query-bar: prompt rows + 36px tool row (taller than grok.com's 94 so a still can be written)
-pub const IMAGINE_BAR_H: f32 = 148.0;
+/// grok.com/imagine `.query-bar` measured height
+pub const IMAGINE_BAR_H: f32 = 94.0;
 /// Imagine `.query-bar` `border-radius: 20px` — not the chat pill
 pub const IMAGINE_BAR_RADIUS: f32 = 20.0;
 /// Imagine Upload / Submit `size-9`
@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(IMAGINE_TITLE, 22.0);
         assert_eq!(IMAGINE_GAP, 32.0);
         assert_eq!(IMAGINE_BAR_W, 768.0);
-        assert_eq!(IMAGINE_BAR_H, 148.0);
+        assert_eq!(IMAGINE_BAR_H, 94.0);
         assert_eq!(IMAGINE_BAR_RADIUS, 20.0);
         assert_eq!(IMAGINE_HIT, 36.0);
         assert_eq!(IMAGINE_TILE_SHORT, 230.0);
