@@ -1777,7 +1777,8 @@ pub fn mode_from_chip_value(value: &str) -> Option<&'static str> {
         "max" | "deep" | "heavy" => Some("max"),
         "think" | "thinking" | "build" | "expert" => Some("think"),
         "balanced" | "balance" => Some("balanced"),
-        "auto" | "fast" => Some("auto"),
+        "fast" => Some("fast"),
+        "auto" => Some("auto"),
         _ => None,
     }
 }
@@ -1947,6 +1948,8 @@ mod tests {
     fn mode_and_nav_values() {
         assert_eq!(mode_from_chip_value("__mode:max"), Some("max"));
         assert_eq!(mode_from_chip_value("__mode:auto"), Some("auto"));
+        assert_eq!(mode_from_chip_value("__mode:fast"), Some("fast"));
+        assert_eq!(mode_from_chip_value("fast"), Some("fast"));
         assert_eq!(mode_from_chip_value("__mode:think"), Some("think"));
         assert_eq!(mode_from_chip_value("__mode:balanced"), Some("balanced"));
         assert_eq!(nav_from_chip_value("__nav:imagine"), Some("imagine"));
