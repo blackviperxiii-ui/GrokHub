@@ -65,6 +65,7 @@ mod tests {
         assert!(shortcut_help().contains("Ctrl+K"));
         assert!(shortcut_help().contains("Super+G"));
         assert!(filter_palette("night").iter().any(|(l, _)| *l == "Night"));
-        assert!(filter_palette("").len() >= 8);
+        assert!(filter_palette("set").iter().any(|(l, _)| *l == "Settings"));
+        assert_eq!(filter_palette("").len(), 20);
     }
 }

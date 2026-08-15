@@ -128,6 +128,27 @@ fn slash_pick_take(composer: &mut String, insert: &str, run_on_pick: bool) -> Op
     }
 }
 
+fn slash_pick_retain(pick: usize, list_changed: bool, len: usize) -> usize {
+    if list_changed || len == 0 {
+        0
+    } else {
+        slash_pick_step(pick, len, 0)
+    }
+}
+
+fn wants_live_repaint(
+    running: bool,
+    chip_busy: bool,
+    hub_on: bool,
+    window_visible: bool,
+    imagine: bool,
+) -> bool {
+    running || chip_busy || hub_on || !window_visible || imagine
+}
+
+const RAIL_FOOTER_H: f32 = 52.0;
+const PALETTE_LIST_H: f32 = 280.0;
+
 fn settings_sec_title(sec: SettingsSec) -> &'static str {
     match sec {
         SettingsSec::Account => "Account",
@@ -268,6 +289,8 @@ pub struct Cabin {
     daily_auto_used: u32,
     daily_auto_day: String,
     slash_pick: usize,
+    slash_filter_n: usize,
+    slash_filter_first: &'static str,
     last_window_title: String,
     voice_orb: String,
     last_night_tick: Instant,
@@ -275,6 +298,8 @@ pub struct Cabin {
     usage: UsageDay,
     palette_open: bool,
     palette_q: String,
+    palette_pick: usize,
+    palette_focus: bool,
     shortcuts_open: bool,
     pending_skill: Option<SkillMd>,
     goal_step: u32,
@@ -482,6 +507,8 @@ impl Cabin {
             daily_auto_used: 0,
             daily_auto_day: String::new(),
             slash_pick: 0,
+            slash_filter_n: 0,
+            slash_filter_first: "",
             last_window_title: String::new(),
             voice_orb: "idle".into(),
             last_night_tick: Instant::now(),
@@ -489,6 +516,8 @@ impl Cabin {
             usage: crate::store::load_usage(),
             palette_open: false,
             palette_q: String::new(),
+            palette_pick: 0,
+            palette_focus: false,
             shortcuts_open: false,
             pending_skill: None,
             goal_step: 0,
@@ -3192,6 +3221,10 @@ impl eframe::App for Cabin {
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K) && !i.modifiers.shift) {
             self.palette_open = !self.palette_open;
+            if self.palette_open {
+                self.palette_focus = true;
+                self.palette_pick = 0;
+            }
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Slash)) {
             self.shortcuts_open = !self.shortcuts_open;
@@ -3208,13 +3241,13 @@ impl eframe::App for Cabin {
         if self.last_persist.elapsed() > Duration::from_secs(2) {
             self.persist();
         }
-        if self.running
-            || self.chip_busy
-            || self.hub_on
-            || !self.window_visible
-            || self.tray.is_some()
-            || self.page_nav() == Nav::Imagine
-        {
+        if wants_live_repaint(
+            self.running,
+            self.chip_busy,
+            self.hub_on,
+            self.window_visible,
+            self.page_nav() == Nav::Imagine,
+        ) {
             ctx.request_repaint_after(Duration::from_millis(80));
         }
 
@@ -3407,16 +3440,45 @@ impl Cabin {
             .resizable(false)
             .anchor(egui::Align2::CENTER_TOP, [0.0, 48.0])
             .show(ctx, |ui| {
-                ui.add(
+                ui.set_min_width(360.0);
+                let edit = ui.add(
                     egui::TextEdit::singleline(&mut self.palette_q)
                         .hint_text("Go to…")
                         .desired_width(360.0),
                 );
-                for (label, action) in filter_palette(&self.palette_q) {
-                    if ui.selectable_label(false, label).clicked() {
-                        picked = Some(action.to_string());
+                if self.palette_focus {
+                    edit.request_focus();
+                    self.palette_focus = false;
+                }
+                let hits = filter_palette(&self.palette_q);
+                self.palette_pick = slash_pick_step(self.palette_pick, hits.len(), 0);
+                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
+                    self.palette_pick = slash_pick_step(self.palette_pick, hits.len(), 1);
+                } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp))
+                {
+                    self.palette_pick = slash_pick_step(self.palette_pick, hits.len(), -1);
+                } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                    if let Some((_, action)) = hits.get(self.palette_pick) {
+                        picked = Some((*action).to_string());
                     }
                 }
+                egui::ScrollArea::vertical()
+                    .max_height(PALETTE_LIST_H)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.set_min_width(360.0);
+                        for (i, (label, action)) in hits.iter().enumerate() {
+                            if ui
+                                .add_sized(
+                                    [ui.available_width(), 28.0],
+                                    egui::SelectableLabel::new(i == self.palette_pick, *label),
+                                )
+                                .clicked()
+                            {
+                                picked = Some((*action).to_string());
+                            }
+                        }
+                    });
                 if ui.button("Close").clicked() {
                     close = true;
                 }
@@ -3680,6 +3742,33 @@ impl Cabin {
         resp
     }
 
+    fn cabin_avatar(ui: &mut egui::Ui, account: &str, email: &str) -> egui::Response {
+        let (rect, resp) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), RAIL_FOOTER_H), egui::Sense::click());
+        let c = egui::pos2(rect.left() + 20.0, rect.center().y);
+        ui.painter().circle_filled(c, 14.0, crate::theme::PANEL);
+        ui.painter().circle_stroke(
+            c,
+            14.0,
+            egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG),
+        );
+        ui.painter().text(
+            egui::pos2(rect.left() + 42.0, rect.center().y - 8.0),
+            egui::Align2::LEFT_CENTER,
+            account,
+            egui::FontId::proportional(crate::theme::FONT_META),
+            crate::theme::FG,
+        );
+        ui.painter().text(
+            egui::pos2(rect.left() + 42.0, rect.center().y + 8.0),
+            egui::Align2::LEFT_CENTER,
+            email,
+            egui::FontId::proportional(11.0),
+            crate::theme::SUBTLE,
+        );
+        resp
+    }
+
     fn ui_sidebar(&mut self, ctx: &egui::Context) {
         let account = self
             .secrets
@@ -3702,6 +3791,8 @@ impl Cabin {
                 if Self::nav_row(ui, false, crate::icons::RailIcon::Search, "Search", false).clicked()
                 {
                     self.palette_open = true;
+                    self.palette_focus = true;
+                    self.palette_pick = 0;
                 }
                 if Self::nav_row(ui, false, crate::icons::RailIcon::Compose, "New chat", true)
                     .clicked()
@@ -3839,14 +3930,16 @@ impl Cabin {
                         .desired_width(ui.available_width())
                         .frame(false),
                 );
+                let hist_h = (ui.available_height() - RAIL_FOOTER_H).max(36.0);
                 egui::ScrollArea::vertical()
+                    .id_salt("rail-history")
                     .auto_shrink([false, true])
-                    .max_height(ui.available_height() - 72.0)
+                    .max_height(hist_h)
                     .show(ui, |ui| {
                         let q = self.sidebar_q.to_ascii_lowercase();
                         let n = self.threads.len();
                         for i in 0..n {
-                            let title = self.threads[i].title.clone();
+                            let title = self.threads[i].title.as_str();
                             if !q.is_empty() && !title.to_ascii_lowercase().contains(&q) {
                                 continue;
                             }
@@ -3854,7 +3947,7 @@ impl Cabin {
                                 ui,
                                 i == self.thread_idx && self.nav == Nav::Chat,
                                 crate::icons::RailIcon::Chat,
-                                &title,
+                                title,
                                 false,
                             )
                             .clicked()
@@ -3865,25 +3958,7 @@ impl Cabin {
                         }
                     });
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                    let avatar = ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), 48.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            let (dot, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
-                            ui.painter().circle_filled(dot.center(), 14.0, crate::theme::PANEL);
-                            ui.painter().circle_stroke(
-                                dot.center(),
-                                14.0,
-                                egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG),
-                            );
-                            ui.add_space(8.0);
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(&account).size(crate::theme::FONT_META).color(crate::theme::FG));
-                                ui.label(RichText::new(&email).size(11.0).color(crate::theme::SUBTLE));
-                            });
-                        },
-                    );
-                    if avatar.response.interact(egui::Sense::click()).clicked() {
+                    if Self::cabin_avatar(ui, &account, &email).clicked() {
                         self.settings_menu_open = !self.settings_menu_open;
                     }
                 });
@@ -4055,6 +4130,12 @@ impl Cabin {
             }
             let hits = filter_slash_commands(&self.composer);
             if !hits.is_empty() {
+                let first = hits.first().map(|s| s.cmd).unwrap_or("");
+                let n = hits.len();
+                let changed = self.slash_filter_n != n || self.slash_filter_first != first;
+                self.slash_pick = slash_pick_retain(self.slash_pick, changed, n);
+                self.slash_filter_n = n;
+                self.slash_filter_first = first;
                 ui.label(RichText::new("↑↓ · Tab accepts · type /").small());
                 egui::ScrollArea::vertical()
                     .max_height(148.0)
@@ -4073,7 +4154,6 @@ impl Cabin {
                             }
                         }
                     });
-                self.slash_pick = slash_pick_step(self.slash_pick, hits.len(), 0);
                 if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
                     self.slash_pick = slash_pick_step(self.slash_pick, hits.len(), 1);
                 } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp))
@@ -4085,6 +4165,10 @@ impl Cabin {
                         self.send_chat(t);
                     }
                 }
+            } else {
+                self.slash_pick = 0;
+                self.slash_filter_n = 0;
+                self.slash_filter_first = "";
             }
             ui.add_space(6.0);
             ui.vertical_centered(|ui| {
@@ -5497,5 +5581,26 @@ mod tests {
         let run = super::slash_pick_take(&mut composer, "/project bind ", false);
         assert!(run.is_none());
         assert_eq!(composer, "/project bind ");
+    }
+
+    #[test]
+    fn slash_pick_resets_when_the_list_changes() {
+        assert_eq!(super::slash_pick_retain(2, true, 4), 0);
+        assert_eq!(super::slash_pick_retain(2, false, 4), 2);
+        assert_eq!(super::slash_pick_retain(9, false, 3), 2);
+        assert_eq!(super::slash_pick_retain(1, true, 0), 0);
+    }
+
+    #[test]
+    fn idle_visible_cabin_does_not_spin() {
+        assert!(!super::wants_live_repaint(false, false, false, true, false));
+        assert!(super::wants_live_repaint(false, false, false, false, false));
+        assert!(super::wants_live_repaint(true, false, false, true, false));
+    }
+
+    #[test]
+    fn rail_footer_is_reserved() {
+        assert_eq!(super::RAIL_FOOTER_H, 52.0);
+        assert!(super::PALETTE_LIST_H < 400.0);
     }
 }
