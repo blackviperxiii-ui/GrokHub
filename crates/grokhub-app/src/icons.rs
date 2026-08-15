@@ -240,10 +240,13 @@ pub fn rail_icon_for(id: &str) -> RailIcon {
 
 pub fn paint_rail_icon(ui: &mut egui::Ui, icon: RailIcon, size: f32, color: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
-    let painter = ui.painter();
+    paint_rail_icon_at(ui.painter(), rect, icon, color);
+}
+
+pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailIcon, color: egui::Color32) {
     let c = rect.center();
     let w = rect.width();
-    let stroke = Stroke::new(1.8, color);
+    let stroke = Stroke::new(1.8_f32, color);
     match icon {
         RailIcon::Search => {
             painter.circle_stroke(Pos2::new(c.x - 1.0, c.y - 1.0), w * 0.22, stroke);
@@ -256,7 +259,7 @@ pub fn paint_rail_icon(ui: &mut egui::Ui, icon: RailIcon, size: f32, color: egui
             );
         }
         RailIcon::Compose => {
-            let r = rect.shrink(size * 0.22);
+            let r = rect.shrink(w * 0.22);
             painter.rect_stroke(r, 3.0, stroke);
             painter.line_segment(
                 [Pos2::new(c.x, r.top() + 3.0), Pos2::new(c.x, r.bottom() - 3.0)],
@@ -268,7 +271,7 @@ pub fn paint_rail_icon(ui: &mut egui::Ui, icon: RailIcon, size: f32, color: egui
             );
         }
         RailIcon::Imagine => {
-            let r = rect.shrink(size * 0.20);
+            let r = rect.shrink(w * 0.20);
             painter.rect_stroke(r, 3.0, stroke);
             painter.circle_filled(
                 Pos2::new(r.left() + w * 0.22, r.top() + w * 0.20),
@@ -313,7 +316,7 @@ pub fn paint_rail_icon(ui: &mut egui::Ui, icon: RailIcon, size: f32, color: egui
             }
         }
         RailIcon::Folder => {
-            let r = rect.shrink(size * 0.20);
+            let r = rect.shrink(w * 0.20);
             painter.rect_stroke(
                 egui::Rect::from_min_max(
                     Pos2::new(r.left(), r.top() + 4.0),
@@ -345,7 +348,7 @@ pub fn paint_rail_icon(ui: &mut egui::Ui, icon: RailIcon, size: f32, color: egui
             );
         }
         RailIcon::Chat => {
-            let r = rect.shrink(size * 0.20);
+            let r = rect.shrink(w * 0.20);
             painter.rect_stroke(r, 5.0, stroke);
             painter.line_segment(
                 [
