@@ -516,6 +516,48 @@ pub fn icon_for_label(label: &str) -> TileIcon {
     }
 }
 
+/// Landscape glyph for the Imagine Image-mode pill — no catalog-card chrome.
+pub fn paint_image_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    let painter = ui.painter();
+    let r = rect.shrink(size * 0.08);
+    let stroke = Stroke::new(1.4_f32, color);
+    painter.rect_stroke(r, 2.0, stroke);
+    painter.circle_filled(
+        Pos2::new(r.left() + r.width() * 0.28, r.top() + r.height() * 0.32),
+        size * 0.08,
+        color,
+    );
+    painter.line_segment(
+        [
+            Pos2::new(r.left() + 2.0, r.bottom() - 3.0),
+            Pos2::new(r.center().x, r.center().y + 1.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            Pos2::new(r.center().x, r.center().y + 1.0),
+            Pos2::new(r.right() - 2.0, r.bottom() - 4.0),
+        ],
+        stroke,
+    );
+}
+
+pub fn paint_plus_at(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let w = rect.width();
+    let stroke = Stroke::new(1.6_f32, color);
+    painter.line_segment(
+        [Pos2::new(c.x, c.y - w * 0.18), Pos2::new(c.x, c.y + w * 0.18)],
+        stroke,
+    );
+    painter.line_segment(
+        [Pos2::new(c.x - w * 0.18, c.y), Pos2::new(c.x + w * 0.18, c.y)],
+        stroke,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,5 +578,7 @@ mod tests {
         assert_eq!(rail_icon_for("workboard"), RailIcon::Folder);
         assert_ne!(RailIcon::Search, RailIcon::Compose);
         assert_ne!(RailIcon::Imagine, RailIcon::Grid);
+        let _ = paint_image_mode;
+        let _ = paint_plus_at;
     }
 }
