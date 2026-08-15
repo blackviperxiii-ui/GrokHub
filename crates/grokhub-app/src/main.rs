@@ -167,6 +167,12 @@ fn run_hub() {
 }
 
 fn run_cabin(hidden: bool) -> eframe::Result<()> {
+    if let Some(backend) = tray::prefer_x11_backend(
+        env::var("WINIT_UNIX_BACKEND").ok().as_deref(),
+        env::var_os("DISPLAY").is_some(),
+    ) {
+        env::set_var("WINIT_UNIX_BACKEND", backend);
+    }
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1100.0, 720.0])
