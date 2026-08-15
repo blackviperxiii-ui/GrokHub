@@ -1,6 +1,9 @@
 use crate::config;
 use crate::host::run_host;
-use grokhub_core::{discover_source, forbidden_reason, update_cmds, update_wipes_config};
+use grokhub_core::{
+    discover_source, forbidden_reason, update_cmds, update_progress_pct, update_step_label,
+    update_wipes_config,
+};
 use std::env;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -52,11 +55,20 @@ pub fn host_receipt_failed(receipt: &str) -> bool {
 }
 
 pub fn run_update_cmds(cmds: &[String]) -> Result<String, String> {
+    run_update_cmds_with_progress(cmds, |_, _| {})
+}
+
+pub fn run_update_cmds_with_progress(
+    cmds: &[String],
+    mut on_progress: impl FnMut(u8, &str),
+) -> Result<String, String> {
     if update_wipes_config(cmds) {
         return Err("refusing an update that would wipe config".into());
     }
+    let total = cmds.len();
     let mut out = String::new();
-    for c in cmds {
+    on_progress(update_progress_pct(0, total), "Updating…");
+    for (i, c) in cmds.iter().enumerate() {
         if let Some(why) = forbidden_reason(c) {
             return Err(why.to_string());
         }
@@ -66,6 +78,7 @@ pub fn run_update_cmds(cmds: &[String]) -> Result<String, String> {
         if host_receipt_failed(&chunk) {
             return Err(out);
         }
+        on_progress(update_progress_pct(i + 1, total), update_step_label(c));
     }
     Ok(out)
 }
@@ -171,5 +184,19 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&bare);
         let _ = fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn overlay_reports_percent_without_chat_text() {
+        let cmds = vec!["true".into(), "true".into()];
+        let mut ticks = Vec::new();
+        let out = run_update_cmds_with_progress(&cmds, |pct, msg| {
+            ticks.push((pct, msg.to_string()));
+        })
+        .expect("ok");
+        assert!(!out.contains("HOST_RESULT"), "{out}");
+        let pcts: Vec<u8> = ticks.iter().map(|(p, _)| *p).collect();
+        assert_eq!(pcts, vec![0, 50, 100], "{ticks:?}");
+        assert!(ticks.iter().all(|(_, m)| !m.contains("HOST_RESULT")), "{ticks:?}");
     }
 }
