@@ -22,10 +22,10 @@ pub enum TileIcon {
 pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     let painter = ui.painter();
-    let fill = crate::theme::SURFACE;
-    let stroke = Stroke::new(1.5, crate::theme::FG);
+    let fill = crate::theme::surface();
+    let stroke = Stroke::new(1.5, crate::theme::fg());
     painter.rect_filled(rect, 10.0, fill);
-    painter.rect_stroke(rect, 10.0, Stroke::new(1.0, crate::theme::BORDER_STRONG));
+    painter.rect_stroke(rect, 10.0, Stroke::new(1.0, crate::theme::border_strong()));
     let r = rect.shrink(size * 0.22);
     let c = r.center();
     let w = r.width();
@@ -58,7 +58,7 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
         TileIcon::List => {
             for i in 0..3 {
                 let y = r.top() + 5.0 + i as f32 * (w * 0.28);
-                painter.circle_filled(Pos2::new(r.left() + 4.0, y), 1.8, crate::theme::FG);
+                painter.circle_filled(Pos2::new(r.left() + 4.0, y), 1.8, crate::theme::fg());
                 painter.line_segment(
                     [Pos2::new(r.left() + 10.0, y), Pos2::new(r.right() - 3.0, y)],
                     stroke,
@@ -70,7 +70,7 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
             painter.circle_filled(
                 Pos2::new(r.left() + w * 0.28, r.top() + w * 0.28),
                 2.4,
-                crate::theme::FG,
+                crate::theme::fg(),
             );
             painter.line_segment(
                 [
@@ -88,16 +88,16 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
             );
         }
         TileIcon::Github => {
-            painter.circle_filled(Pos2::new(c.x, c.y + w * 0.04), w * 0.28, crate::theme::FG);
+            painter.circle_filled(Pos2::new(c.x, c.y + w * 0.04), w * 0.28, crate::theme::fg());
             painter.circle_filled(
                 Pos2::new(c.x - w * 0.18, c.y - w * 0.16),
                 w * 0.10,
-                crate::theme::FG,
+                crate::theme::fg(),
             );
             painter.circle_filled(
                 Pos2::new(c.x + w * 0.18, c.y - w * 0.16),
                 w * 0.10,
-                crate::theme::FG,
+                crate::theme::fg(),
             );
             painter.line_segment(
                 [
@@ -141,7 +141,7 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
             painter.line_segment([pts[2], pts[3]], stroke);
         }
         TileIcon::Moon => {
-            painter.circle_filled(c, w * 0.32, crate::theme::FG);
+            painter.circle_filled(c, w * 0.32, crate::theme::fg());
             painter.circle_filled(
                 Pos2::new(c.x + w * 0.14, c.y - w * 0.08),
                 w * 0.26,
@@ -187,7 +187,7 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
                 egui::Align2::CENTER_CENTER,
                 "?",
                 egui::FontId::proportional(size * 0.42),
-                crate::theme::FG,
+                crate::theme::fg(),
             );
         }
         TileIcon::Chat => {
@@ -426,8 +426,8 @@ pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::
             );
         }
         BarIcon::Send => {
-            painter.circle_filled(c, w * 0.46, crate::theme::FG);
-            let arrow = Stroke::new(1.8, crate::theme::BG);
+            painter.circle_filled(c, w * 0.46, crate::theme::fg());
+            let arrow = Stroke::new(1.8, crate::theme::bg());
             painter.line_segment(
                 [Pos2::new(c.x, c.y + w * 0.16), Pos2::new(c.x, c.y - w * 0.16)],
                 arrow,

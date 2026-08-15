@@ -12,7 +12,7 @@ use crate::xai::{grok_chat, grok_chat_stream, grok_imagine, grok_stt, grok_tts, 
 use eframe::egui::{self, Color32, RichText};
 use grokhub_core::{
     append_composer, apply_work_update, attach_kind, attach_name, attach_prompt_line,
-    approved_cmds, auth_bearer, automation_blocked_by_policy, blend_thread_goal,
+    appearance_choices, approved_cmds, auth_bearer, automation_blocked_by_policy, blend_thread_goal,
     build_hub_snapshot,
     build_quick_chips, build_windshield, bump_skill_run, cabin_eyes_for_turn, can_inhabit, can_mark_done,
     bump_usage, catalog_line, chip_suggest_prompt, compact_keep_pin, compose_imagine_prompt,
@@ -38,9 +38,9 @@ use grokhub_core::{
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
     chat_attach_status, imagine_ref_status, needs_auth_banner, next_chat_image, next_goal_prompt,
     plus_empty_status, plus_menu_rows,
-    resolve_chat_model, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
+    resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
     now_ms, on_wheel_grab, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
-    parse_nl_automation, parse_recipe, parse_slash, passenger_label, plan_from_text, plan_room,
+    parse_nl_automation, parse_recipe, parse_slash, parse_theme, passenger_label, pick_theme, plan_from_text, plan_room,
     presence_orb_state, presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
     remember_chip_outcome, remember_typed_prompt, roll_usage_day,
@@ -50,14 +50,14 @@ use grokhub_core::{
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title, apply_manual_rename, delete_thread, history_order, should_name_thread,
     skip_automation, slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
-    thread_goal_prompt, toggle_pin, DeleteOutcome, ThreadTab,
+    thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
     unified_diff_cite, usage_line,
     transcribe_route, uid, update_cmds, update_plan_steps, update_wipes_config, voice_session_url, Automation, BoardCard,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ComputerOp, DeviceCodeStart, HeyGrokAction,
     HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, Recipe, ReplayOp, RewindRecord,
-    AttachKind, PlusAct, PlusTarget, SkillMd, Slash, TranscribeRoute, UsageDay, VoiceEvent,
+    AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
     VoiceState, CONTEXT_BUDGET_TOKENS,
     DEFAULT_MODEL, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS, IMAGINE_ASPECTS,
     IMAGINE_STYLES,
@@ -935,7 +935,7 @@ impl Cabin {
                     ui.label(
                         RichText::new(dir.display().to_string())
                             .size(12.0)
-                            .color(crate::theme::MUTED),
+                            .color(crate::theme::muted()),
                     );
                     ui.horizontal(|ui| {
                         if ui.button("Up").clicked() {
@@ -998,7 +998,7 @@ impl Cabin {
                         ui.label(
                             RichText::new(format!("Attached {name}"))
                                 .size(12.0)
-                                .color(crate::theme::FG),
+                                .color(crate::theme::fg()),
                         );
                         if ui.small_button("×").clicked() {
                             self.clear_chat_attach();
@@ -1012,7 +1012,7 @@ impl Cabin {
                         ui.label(
                             RichText::new(format!("Reference {name}"))
                                 .size(12.0)
-                                .color(crate::theme::FG),
+                                .color(crate::theme::fg()),
                         );
                         if ui.small_button("×").clicked() {
                             self.imagine_ref = None;
@@ -1025,7 +1025,7 @@ impl Cabin {
             ui.label(
                 RichText::new(&self.status)
                     .size(12.0)
-                    .color(crate::theme::MUTED),
+                    .color(crate::theme::muted()),
             );
         }
     }
@@ -3788,7 +3788,7 @@ impl Cabin {
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_min_width(168.0);
-                        ui.label(RichText::new("Add to folder").size(12.0).color(crate::theme::MUTED));
+                        ui.label(RichText::new("Add to folder").size(12.0).color(crate::theme::muted()));
                         if folders.is_empty() {
                             ui.label("Create a folder first");
                         }
@@ -3848,9 +3848,9 @@ fn titlebar_chrome_size() -> egui::Vec2 {
 fn titlebar_chrome_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click());
     let color = if resp.hovered() {
-        crate::theme::FG
+        crate::theme::fg()
     } else {
-        crate::theme::MUTED
+        crate::theme::muted()
     };
     ui.painter().text(
         rect.center(),
@@ -3944,7 +3944,13 @@ impl eframe::App for Cabin {
             ctx.request_repaint_after(Duration::from_millis(HIDDEN_HEARTBEAT_MS));
         }
 
-        crate::theme::apply(ctx);
+        crate::theme::apply(
+            ctx,
+            resolve_dark(
+                parse_theme(&self.cfg.theme),
+                crate::theme::desktop_prefers_dark(),
+            ),
+        );
         self.ui_titlebar(ctx);
         self.ui_sidebar(ctx);
         self.ui_settings_menu(ctx);
@@ -4045,9 +4051,9 @@ impl Cabin {
             .anchor(egui::Align2::LEFT_BOTTOM, [12.0, -56.0])
             .frame(
                 egui::Frame::none()
-                    .fill(crate::theme::PANEL)
+                    .fill(crate::theme::panel())
                     .rounding(12.0)
-                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .inner_margin(egui::Margin::same(8.0)),
             )
             .show(ctx, |ui| {
@@ -4059,7 +4065,7 @@ impl Cabin {
                             egui::Button::new(
                                 RichText::new(*label)
                                     .size(crate::theme::FONT_CHROME)
-                                    .color(crate::theme::FG),
+                                    .color(crate::theme::fg()),
                             )
                             .fill(egui::Color32::TRANSPARENT)
                             .rounding(8.0)
@@ -4078,7 +4084,7 @@ impl Cabin {
                         egui::Button::new(
                             RichText::new("Help")
                                 .size(crate::theme::FONT_CHROME)
-                                .color(crate::theme::FG),
+                                .color(crate::theme::fg()),
                         )
                         .fill(egui::Color32::TRANSPARENT)
                         .rounding(8.0)
@@ -4094,7 +4100,7 @@ impl Cabin {
                         egui::Button::new(
                             RichText::new(auth_label)
                                 .size(crate::theme::FONT_CHROME)
-                                .color(crate::theme::FG),
+                                .color(crate::theme::fg()),
                         )
                         .fill(egui::Color32::TRANSPARENT)
                         .rounding(8.0)
@@ -4202,10 +4208,10 @@ impl Cabin {
 
     fn ui_command(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
             let _ = crate::cards::page_header(ui, "Command", "");
-            ui.label(RichText::new("Host shell on this box. Bound project is the world.").color(crate::theme::MUTED));
+            ui.label(RichText::new("Host shell on this box. Bound project is the world.").color(crate::theme::muted()));
             ui.add_space(12.0);
             if !self.host_live.is_empty() {
                 ui.colored_label(Color32::from_rgb(232, 168, 96), &self.host_live);
@@ -4250,10 +4256,10 @@ impl Cabin {
 
     fn ui_agents(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
             let _ = crate::cards::page_header(ui, "Queue", "");
-            ui.label(RichText::new("Goal loop. One writer per thread. Auto-continue stays under GOAL_MAX_STEPS.").color(crate::theme::MUTED));
+            ui.label(RichText::new("Goal loop. One writer per thread. Auto-continue stays under GOAL_MAX_STEPS.").color(crate::theme::muted()));
             ui.add_space(12.0);
             ui.label(format!(
                 "Goal pin: {} · step {}/{}",
@@ -4364,7 +4370,7 @@ impl Cabin {
     fn ui_titlebar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("titlebar")
             .exact_height(crate::theme::TITLEBAR_H)
-            .frame(egui::Frame::none().fill(crate::theme::BG))
+            .frame(egui::Frame::none().fill(crate::theme::bg()))
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -4402,14 +4408,14 @@ impl Cabin {
         outline: bool,
     ) -> egui::Response {
         let fill = if active {
-            crate::theme::NAV_ACTIVE
+            crate::theme::nav_active()
         } else {
             egui::Color32::TRANSPARENT
         };
         let color = if active {
-            crate::theme::FG
+            crate::theme::fg()
         } else {
-            crate::theme::MUTED
+            crate::theme::muted()
         };
         let w = ui.available_width();
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, crate::theme::NAV_ROW_H), egui::Sense::click());
@@ -4418,7 +4424,7 @@ impl Cabin {
             ui.painter().rect_stroke(
                 rect,
                 10.0,
-                egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG),
+                egui::Stroke::new(1.0_f32, crate::theme::border_strong()),
             );
         }
         let icon_c = egui::pos2(rect.left() + 20.0, rect.center().y);
@@ -4438,25 +4444,25 @@ impl Cabin {
         let (rect, resp) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), RAIL_FOOTER_H), egui::Sense::click());
         let c = egui::pos2(rect.left() + 20.0, rect.center().y);
-        ui.painter().circle_filled(c, 14.0, crate::theme::PANEL);
+        ui.painter().circle_filled(c, 14.0, crate::theme::panel());
         ui.painter().circle_stroke(
             c,
             14.0,
-            egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG),
+            egui::Stroke::new(1.0_f32, crate::theme::border_strong()),
         );
         ui.painter().text(
             egui::pos2(rect.left() + 42.0, rect.center().y - 8.0),
             egui::Align2::LEFT_CENTER,
             account,
             egui::FontId::proportional(crate::theme::FONT_META),
-            crate::theme::FG,
+            crate::theme::fg(),
         );
         ui.painter().text(
             egui::pos2(rect.left() + 42.0, rect.center().y + 8.0),
             egui::Align2::LEFT_CENTER,
             email,
             egui::FontId::proportional(11.0),
-            crate::theme::SUBTLE,
+            crate::theme::subtle(),
         );
         resp
     }
@@ -4477,7 +4483,7 @@ impl Cabin {
         egui::SidePanel::left("rail")
             .exact_width(crate::theme::SIDEBAR_W)
             .resizable(false)
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(8.0)))
+            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(8.0)))
             .show(ctx, |ui| {
                 ui.add_space(4.0);
                 if Self::nav_row(ui, false, crate::icons::RailIcon::Search, "Search", false).clicked()
@@ -4501,10 +4507,10 @@ impl Cabin {
                 }
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Projects").size(12.0).color(crate::theme::SUBTLE));
+                    ui.label(RichText::new("Projects").size(12.0).color(crate::theme::subtle()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let plus = ui.add(
-                            egui::Button::new(RichText::new("+").size(16.0).color(crate::theme::MUTED))
+                            egui::Button::new(RichText::new("+").size(16.0).color(crate::theme::muted()))
                                 .fill(egui::Color32::TRANSPARENT)
                                 .stroke(egui::Stroke::NONE)
                                 .min_size(egui::vec2(22.0, 22.0)),
@@ -4568,7 +4574,7 @@ impl Cabin {
                                 ui.label(
                                     RichText::new(if open { "▾" } else { "▸" })
                                         .size(12.0)
-                                        .color(crate::theme::SUBTLE),
+                                        .color(crate::theme::subtle()),
                                 );
                             }
                             Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
@@ -4600,11 +4606,11 @@ impl Cabin {
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("History").size(12.0).color(crate::theme::SUBTLE));
+                    ui.label(RichText::new("History").size(12.0).color(crate::theme::subtle()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add(
-                                egui::Button::new(RichText::new("See all").size(11.0).color(crate::theme::SUBTLE))
+                                egui::Button::new(RichText::new("See all").size(11.0).color(crate::theme::subtle()))
                                     .fill(egui::Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::NONE),
                             )
@@ -4723,7 +4729,7 @@ impl Cabin {
             egui::TopBottomPanel::bottom("composer")
                 .frame(
                     egui::Frame::none()
-                        .fill(crate::theme::BG)
+                        .fill(crate::theme::bg())
                         .inner_margin(egui::Margin {
                             left: 32.0,
                             right: 32.0,
@@ -4736,7 +4742,7 @@ impl Cabin {
                 });
         }
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(20.0)))
+            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(20.0)))
             .show(ctx, |ui| {
                 if empty {
                     self.ui_empty_home(ui);
@@ -4748,17 +4754,17 @@ impl Cabin {
                         for m in &self.messages {
                             let user = m.role == "user";
                             let fill = if user {
-                                crate::theme::BUBBLE_USER
+                                crate::theme::bubble_user()
                             } else if m.role == "system" {
-                                crate::theme::PANEL
+                                crate::theme::panel()
                             } else {
-                                crate::theme::BUBBLE_ASSISTANT
+                                crate::theme::bubble_assistant()
                             };
                             let bubble_w = crate::markdown::bubble_width(ui.available_width());
                             let draw = |ui: &mut egui::Ui| {
                                 egui::Frame::none()
                                     .fill(fill)
-                                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                                     .rounding(12.0)
                                     .inner_margin(egui::Margin::symmetric(14.0, 10.0))
                                     .show(ui, |ui| {
@@ -4766,7 +4772,7 @@ impl Cabin {
                                         if m.role == "assistant" {
                                             crate::markdown::show(ui, &m.content);
                                         } else {
-                                            ui.label(RichText::new(&m.content).color(crate::theme::FG));
+                                            ui.label(RichText::new(&m.content).color(crate::theme::fg()));
                                         }
                                     });
                             };
@@ -4781,7 +4787,7 @@ impl Cabin {
                             ui.add_space(8.0);
                         }
                         if self.running {
-                            ui.label(RichText::new("Working…").italics().color(crate::theme::SUBTLE));
+                            ui.label(RichText::new("Working…").italics().color(crate::theme::subtle()));
                         }
                     });
             });
@@ -4795,7 +4801,7 @@ impl Cabin {
             ui.label(
                 RichText::new("GrokHub")
                     .font(crate::theme::title_font(crate::theme::WORDMARK))
-                    .color(crate::theme::FG),
+                    .color(crate::theme::fg()),
             );
             ui.add_space(28.0);
             ui.set_max_width(crate::theme::QUERY_MAX_W);
@@ -4806,7 +4812,7 @@ impl Cabin {
     fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {
             if needs_auth_banner(self.has_key()) && !self.messages.is_empty() {
                 ui.horizontal(|ui| {
-                    ui.colored_label(crate::theme::SETUP, "Connect Grok in Settings");
+                    ui.colored_label(crate::theme::setup(), "Connect Grok in Settings");
                     if ui.button("Settings").clicked() {
                         self.nav = Nav::Settings;
                     }
@@ -4927,9 +4933,9 @@ impl Cabin {
             ui.set_max_width(crate::theme::QUERY_MAX_W);
             self.ui_attach_chip(ui, PlusTarget::Chat);
             egui::Frame::none()
-                .fill(crate::theme::ELEVATED)
+                .fill(crate::theme::elevated())
                 .rounding(crate::theme::QUERY_RADIUS)
-                .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                 .inner_margin(egui::Margin::same(8.0))
                 .show(ui, |ui| {
                     ui.set_min_height(crate::theme::QUERY_MIN_H - 16.0);
@@ -4938,7 +4944,7 @@ impl Cabin {
                             ui,
                             crate::icons::BarIcon::Plus,
                             22.0,
-                            crate::theme::MUTED,
+                            crate::theme::muted(),
                         )
                         .on_hover_text("Upload a file or paste clipboard");
                         if plus.clicked() {
@@ -4978,7 +4984,7 @@ impl Cabin {
                             ui,
                             crate::icons::BarIcon::Mic,
                             22.0,
-                            crate::theme::MUTED,
+                            crate::theme::muted(),
                         )
                         .on_hover_text("Hey Grok")
                         .clicked()
@@ -4995,9 +5001,9 @@ impl Cabin {
                             },
                             if ready { 28.0 } else { 22.0 },
                             if ready {
-                                crate::theme::FG
+                                crate::theme::fg()
                             } else {
-                                crate::theme::MUTED
+                                crate::theme::muted()
                             },
                         )
                         .on_hover_text("Send");
@@ -5014,12 +5020,12 @@ impl Cabin {
 
     fn ui_devices(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
             if crate::cards::page_header(ui, "Devices", if self.hub_on { "Sharing" } else { "Start share" }) {
                 self.start_hub();
             }
-            ui.label(RichText::new("Pairing stays the same. Receipts come back here.").color(crate::theme::MUTED));
+            ui.label(RichText::new("Pairing stays the same. Receipts come back here.").color(crate::theme::muted()));
             ui.add_space(12.0);
             if let Ok(st) = self.hub.lock() {
                 ui.label(format!("This box: {} ({})", st.device_name, st.device_id));
@@ -5057,7 +5063,7 @@ impl Cabin {
 
     fn ui_memory(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
             let _ = crate::cards::page_header(ui, "Memory", "");
             ui.horizontal(|ui| {
@@ -5154,9 +5160,9 @@ impl Cabin {
                 );
                 ui.allocate_ui_at_rect(modal, |ui| {
                     egui::Frame::none()
-                        .fill(crate::theme::BG)
+                        .fill(crate::theme::bg())
                         .rounding(16.0)
-                        .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                        .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                         .inner_margin(egui::Margin::ZERO)
                         .show(ui, |ui| {
                             ui.set_min_size(modal.size());
@@ -5166,7 +5172,7 @@ impl Cabin {
                                     egui::Layout::top_down(egui::Align::Min),
                                     |ui| {
                                         egui::Frame::none()
-                                            .fill(crate::theme::SURFACE)
+                                            .fill(crate::theme::surface())
                                             .inner_margin(egui::Margin::same(12.0))
                                             .show(ui, |ui| {
                                                 ui.set_width(196.0);
@@ -5229,7 +5235,7 @@ impl Cabin {
                                             ui.label(
                                                 RichText::new(settings_sec_title(sec))
                                                     .font(crate::theme::title_font(22.0))
-                                                    .color(crate::theme::FG),
+                                                    .color(crate::theme::fg()),
                                             );
                                             ui.with_layout(
                                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -5240,7 +5246,7 @@ impl Cabin {
                                                             egui::Button::new(
                                                                 RichText::new("×")
                                                                     .size(18.0)
-                                                                    .color(crate::theme::MUTED),
+                                                                    .color(crate::theme::muted()),
                                                             )
                                                             .fill(Color32::TRANSPARENT)
                                                             .stroke(egui::Stroke::NONE),
@@ -5293,26 +5299,38 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Composer mode", "Auto routes Fast / Balance / Think / Max. Fast is Grok 3 mini. Balance is Grok 4.3. Think is Grok 4.6 high. Max is Grok 4.6 xhigh. The combo does not overwrite Chat model.", &mut self.cfg.mode, false);
                                                         }
                                                         SettingsSec::Appearance => {
-                                                            crate::cards::settings_note(ui, "The cabin is dark. Light and System stay on grok.com.");
+                                                            crate::cards::settings_note(
+                                                                ui,
+                                                                "Dark stays on. System follows the desktop.",
+                                                            );
                                                             ui.horizontal(|ui| {
-                                                                for (label, on) in [("Light", false), ("Dark", true), ("System", false)] {
-                                                                    let fill = if on { crate::theme::NAV_ACTIVE } else { crate::theme::SURFACE };
-                                                                    egui::Frame::none()
-                                                                        .fill(fill)
-                                                                        .rounding(12.0)
-                                                                        .stroke(egui::Stroke::new(1.0_f32, if on { crate::theme::FG } else { crate::theme::BORDER }))
-                                                                        .inner_margin(egui::Margin::same(10.0))
-                                                                        .show(ui, |ui| {
-                                                                            let preview = if label == "Light" {
-                                                                                Color32::from_rgb(0xF4, 0xF4, 0xF5)
-                                                                            } else {
+                                                                let current = parse_theme(&self.cfg.theme);
+                                                                let os_dark = crate::theme::desktop_prefers_dark();
+                                                                for choice in appearance_choices() {
+                                                                    let on = current == *choice;
+                                                                    let preview = match choice {
+                                                                        ThemeChoice::Dark => crate::theme::BG,
+                                                                        ThemeChoice::System => {
+                                                                            if os_dark {
                                                                                 crate::theme::BG
-                                                                            };
-                                                                            ui.allocate_ui(egui::vec2(88.0, 56.0), |ui| {
-                                                                                ui.painter().rect_filled(ui.max_rect(), 6.0, preview);
-                                                                            });
-                                                                            ui.label(RichText::new(label).size(13.0).color(crate::theme::FG));
-                                                                        });
+                                                                            } else {
+                                                                                crate::theme::LIGHT_BG
+                                                                            }
+                                                                        }
+                                                                    };
+                                                                    if crate::cards::appearance_card(
+                                                                        ui,
+                                                                        theme_label(*choice),
+                                                                        on,
+                                                                        preview,
+                                                                    ) {
+                                                                        if let Some(next) =
+                                                                            pick_theme(current, *choice)
+                                                                        {
+                                                                            self.cfg.theme = theme_id(next).into();
+                                                                            save = true;
+                                                                        }
+                                                                    }
                                                                     ui.add_space(10.0);
                                                                 }
                                                             });
@@ -5334,7 +5352,7 @@ impl Cabin {
                                                             }
                                                             crate::cards::settings_note(ui, &format!("Passenger: {passenger}"));
                                                             ui.horizontal(|ui| {
-                                                                ui.label(RichText::new("Autonomy").size(15.0).color(crate::theme::FG));
+                                                                ui.label(RichText::new("Autonomy").size(15.0).color(crate::theme::fg()));
                                                                 ui.add(egui::Slider::new(&mut self.cfg.autonomy, 0..=4).show_value(true));
                                                             });
                                                         }
@@ -5365,7 +5383,7 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Quiet start", "Local time. Automations hold here.", &mut self.cfg.quiet_start, false);
                                                             crate::cards::settings_field(ui, "Quiet end", "Local time.", &mut self.cfg.quiet_end, false);
                                                             ui.horizontal(|ui| {
-                                                                ui.label(RichText::new("Daily cap").size(15.0).color(crate::theme::FG));
+                                                                ui.label(RichText::new("Daily cap").size(15.0).color(crate::theme::fg()));
                                                                 ui.add(egui::Slider::new(&mut self.cfg.daily_auto_cap, 0..=200));
                                                             });
                                                         }
@@ -5449,7 +5467,7 @@ impl Cabin {
 
     fn ui_night(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
             if crate::cards::page_header(ui, "Automations", "New Automation") {
                 self.auto_compose = true;
@@ -5458,9 +5476,9 @@ impl Cabin {
             if self.auto_compose {
                 ui.add_space(12.0);
                 egui::Frame::none()
-                    .fill(crate::theme::ELEVATED)
+                    .fill(crate::theme::elevated())
                     .rounding(12.0)
-                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .inner_margin(egui::Margin::same(14.0))
                     .show(ui, |ui| {
                         ui.label(RichText::new("New automation").strong());
@@ -5473,9 +5491,9 @@ impl Cabin {
                             if ui
                                 .add(
                                     egui::Button::new(
-                                        RichText::new("Add").strong().color(crate::theme::BG),
+                                        RichText::new("Add").strong().color(crate::theme::bg()),
                                     )
-                                    .fill(crate::theme::FG)
+                                    .fill(crate::theme::fg())
                                     .rounding(12.0),
                                 )
                                 .clicked()
@@ -5498,7 +5516,7 @@ impl Cabin {
             if self.automations.is_empty() {
                 ui.label(
                     RichText::new("None yet — pick a suggestion or New Automation.")
-                        .color(crate::theme::MUTED),
+                        .color(crate::theme::muted()),
                 );
                 ui.add_space(16.0);
             } else {
@@ -5550,7 +5568,7 @@ impl Cabin {
 
     fn ui_history(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
             let _ = crate::cards::page_header(ui, "History", "");
             ui.horizontal(|ui| {
@@ -5586,16 +5604,16 @@ impl Cabin {
 
     fn ui_board(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
             if crate::cards::page_header(ui, "Workboard", "New card") {
                 self.board_compose = true;
             }
             if self.board_compose {
                 egui::Frame::none()
-                    .fill(crate::theme::ELEVATED)
+                    .fill(crate::theme::elevated())
                     .rounding(16.0)
-                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .inner_margin(egui::Margin::same(14.0))
                     .show(ui, |ui| {
                         ui.add(
@@ -5626,7 +5644,7 @@ impl Cabin {
             crate::cards::section_label(ui, "Open");
             let mut bump: Option<(usize, BoardStatus)> = None;
             if self.board.is_empty() {
-                ui.label(RichText::new("No cards yet.").color(crate::theme::MUTED));
+                ui.label(RichText::new("No cards yet.").color(crate::theme::muted()));
             } else {
                 let n = self.board.len();
                 crate::cards::tile_row(ui, n, |ui, i| {
@@ -5682,7 +5700,7 @@ impl Cabin {
         let word = crate::cards::imagine_word(now_ms());
         let selected = self.imagine_prompt.clone();
         let panel = egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::ZERO))
+            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::ZERO))
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -5723,7 +5741,7 @@ impl Cabin {
                     ui.label(
                         RichText::new(format!("Imagine {word}"))
                             .font(crate::theme::title_font(crate::theme::IMAGINE_TITLE))
-                            .color(crate::theme::FG),
+                            .color(crate::theme::fg()),
                     );
                     ui.add_space(crate::theme::IMAGINE_GAP);
                     self.ui_attach_chip(ui, PlusTarget::Imagine);
@@ -5758,15 +5776,15 @@ impl Cabin {
         let bar_w = ui.available_width().min(crate::theme::IMAGINE_BAR_W);
         let focused = ui.memory(|m| m.has_focus(egui::Id::new("imagine-prompt")));
         let stroke = if focused {
-            crate::theme::BORDER_STRONG
+            crate::theme::border_strong()
         } else {
-            crate::theme::BORDER
+            crate::theme::border()
         };
         let model = dedicated_imagine_model(&self.cfg.imagine_model);
         let ready = !self.imagine_prompt.trim().is_empty();
         let authed = self.has_key();
         egui::Frame::none()
-            .fill(crate::theme::SURFACE)
+            .fill(crate::theme::surface())
             .rounding(crate::theme::IMAGINE_BAR_RADIUS)
             .stroke(egui::Stroke::new(1.0_f32, stroke))
             .inner_margin(egui::Margin::same(12.0))
@@ -5811,8 +5829,8 @@ impl Cabin {
                         egui::Sense::click(),
                     );
                     ui.painter()
-                        .circle_filled(plus_r.center(), 18.0, crate::theme::PANEL);
-                    crate::icons::paint_plus_at(ui.painter(), plus_r, crate::theme::MUTED);
+                        .circle_filled(plus_r.center(), 18.0, crate::theme::panel());
+                    crate::icons::paint_plus_at(ui.painter(), plus_r, crate::theme::muted());
                     if plus
                         .on_hover_text("Upload a file or paste clipboard")
                         .clicked()
@@ -5828,9 +5846,9 @@ impl Cabin {
                             let on = self.imagine_kind == kind;
                             let label = crate::cards::imagine_kind_label(kind);
                             let ink = if on {
-                                crate::theme::FG
+                                crate::theme::fg()
                             } else {
-                                crate::theme::MUTED
+                                crate::theme::muted()
                             };
                             if crate::cards::imagine_seg_chip(ui, on, |ui| {
                                 match kind {
@@ -5875,9 +5893,9 @@ impl Cabin {
                                             RichText::new(label)
                                                 .size(crate::theme::FONT_CHROME)
                                                 .color(if on {
-                                                    crate::theme::FG
+                                                    crate::theme::fg()
                                                 } else {
-                                                    crate::theme::MUTED
+                                                    crate::theme::muted()
                                                 }),
                                         );
                                     }) {
@@ -5893,9 +5911,9 @@ impl Cabin {
                                             RichText::new(label)
                                                 .size(crate::theme::FONT_CHROME)
                                                 .color(if on {
-                                                    crate::theme::FG
+                                                    crate::theme::fg()
                                                 } else {
-                                                    crate::theme::MUTED
+                                                    crate::theme::muted()
                                                 }),
                                         );
                                     }) {
@@ -5909,9 +5927,9 @@ impl Cabin {
                                     RichText::new("Video audio")
                                         .size(crate::theme::FONT_CHROME)
                                         .color(if audio_on {
-                                            crate::theme::FG
+                                            crate::theme::fg()
                                         } else {
-                                            crate::theme::MUTED
+                                            crate::theme::muted()
                                         }),
                                 );
                             }) {
@@ -5928,9 +5946,9 @@ impl Cabin {
                                             RichText::new(label)
                                                 .size(crate::theme::FONT_CHROME)
                                                 .color(if on {
-                                                    crate::theme::FG
+                                                    crate::theme::fg()
                                                 } else {
-                                                    crate::theme::MUTED
+                                                    crate::theme::muted()
                                                 }),
                                         );
                                     }) {
@@ -5942,18 +5960,18 @@ impl Cabin {
                     }
                     let style_label = imagine_style_label(self.imagine_style);
                     let style = egui::Frame::none()
-                        .fill(crate::theme::PANEL)
+                        .fill(crate::theme::panel())
                         .rounding(crate::theme::IMAGINE_HIT)
                         .inner_margin(egui::Margin::symmetric(10.0, 6.0))
                         .show(ui, |ui| {
                             ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
                             ui.horizontal_centered(|ui| {
-                                crate::icons::paint_style_auto(ui, 16.0, crate::theme::FG);
+                                crate::icons::paint_style_auto(ui, 16.0, crate::theme::fg());
                                 ui.add_space(4.0);
                                 ui.label(
                                     RichText::new(style_label)
                                         .size(crate::theme::FONT_CHROME)
-                                        .color(crate::theme::FG),
+                                        .color(crate::theme::fg()),
                                 );
                             });
                         })
@@ -5981,7 +5999,7 @@ impl Cabin {
                     let aspect = imagine_aspect_label(self.imagine_aspect);
                     let aspect_name = imagine_aspect_name(self.imagine_aspect);
                     let aspect_hit = egui::Frame::none()
-                        .fill(crate::theme::PANEL)
+                        .fill(crate::theme::panel())
                         .rounding(crate::theme::IMAGINE_HIT)
                         .inner_margin(egui::Margin::symmetric(10.0, 6.0))
                         .show(ui, |ui| {
@@ -5991,13 +6009,13 @@ impl Cabin {
                                     ui,
                                     self.imagine_aspect,
                                     16.0,
-                                    crate::theme::FG,
+                                    crate::theme::fg(),
                                 );
                                 ui.add_space(4.0);
                                 ui.label(
                                     RichText::new(aspect)
                                         .size(crate::theme::FONT_CHROME)
-                                        .color(crate::theme::FG),
+                                        .color(crate::theme::fg()),
                                 );
                             });
                         })
@@ -6027,7 +6045,7 @@ impl Cabin {
                         ui.label(
                             RichText::new("Imagining…")
                                 .size(crate::theme::FONT_META)
-                                .color(crate::theme::MUTED),
+                                .color(crate::theme::muted()),
                         );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -6041,9 +6059,9 @@ impl Cabin {
                             },
                             crate::theme::IMAGINE_HIT,
                             if ready && !self.running {
-                                crate::theme::FG
+                                crate::theme::fg()
                             } else {
-                                crate::theme::MUTED
+                                crate::theme::muted()
                             },
                         )
                         .on_hover_text(if self.running {
@@ -6058,7 +6076,7 @@ impl Cabin {
                             ui,
                             crate::icons::BarIcon::Mic,
                             crate::theme::IMAGINE_HIT,
-                            crate::theme::MUTED,
+                            crate::theme::muted(),
                         )
                         .on_hover_text("Hey Grok")
                         .clicked()
@@ -6073,7 +6091,7 @@ impl Cabin {
 
     fn ui_skills(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
             if crate::cards::page_header(ui, "Skills and Connectors", "New Skill") {
                 self.skills_tab_connectors = false;
@@ -6109,7 +6127,7 @@ impl Cabin {
                 crate::cards::section_label(ui, "Live");
                 ui.label(
                     RichText::new("GitHub is the only live connector. No Outlook, Gmail, or Drive — those are not wired.")
-                        .color(crate::theme::MUTED),
+                        .color(crate::theme::muted()),
                 );
                 ui.add_space(12.0);
                 let has_pat = !self.secrets.github_token.trim().is_empty();
@@ -6135,8 +6153,8 @@ impl Cabin {
                         for (label, tool) in c.tools {
                             if ui
                                 .add(
-                                    egui::Button::new(RichText::new(*label).color(crate::theme::FG))
-                                        .fill(crate::theme::ELEVATED)
+                                    egui::Button::new(RichText::new(*label).color(crate::theme::fg()))
+                                        .fill(crate::theme::elevated())
                                         .rounding(14.0),
                                 )
                                 .clicked()
@@ -6146,8 +6164,8 @@ impl Cabin {
                         }
                         if ui
                             .add(
-                                egui::Button::new(RichText::new("Settings").color(crate::theme::BG))
-                                    .fill(crate::theme::FG)
+                                egui::Button::new(RichText::new("Settings").color(crate::theme::bg()))
+                                    .fill(crate::theme::fg())
                                     .rounding(14.0),
                             )
                             .clicked()
@@ -6195,7 +6213,7 @@ impl Cabin {
             if list.is_empty() {
                 ui.label(
                     RichText::new("No skills yet — New Skill writes a SKILL.md you can edit.")
-                        .color(crate::theme::MUTED),
+                        .color(crate::theme::muted()),
                 );
             } else {
                 let names: Vec<(String, String, bool)> = list
@@ -6274,10 +6292,10 @@ impl Cabin {
 
     fn ui_eyes(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(24.0)))
+            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
             let _ = crate::cards::page_header(ui, "Eyes", "");
-            ui.label(RichText::new("AT-SPI via pyatspi when present, else wmctrl + xdotool cursor. Lock screens are won’ts. Cabin eyes captures a frame on each chat send.").color(crate::theme::MUTED));
+            ui.label(RichText::new("AT-SPI via pyatspi when present, else wmctrl + xdotool cursor. Lock screens are won’ts. Cabin eyes captures a frame on each chat send.").color(crate::theme::muted()));
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 if ui.button("Scan + frame").clicked() {
@@ -6507,5 +6525,25 @@ mod tests {
     fn rail_footer_is_reserved() {
         assert_eq!(super::RAIL_FOOTER_H, 52.0);
         assert!(super::PALETTE_LIST_H < 400.0);
+    }
+
+    #[test]
+    fn appearance_tab_is_dark_and_system() {
+        let ids: Vec<&str> = grokhub_core::appearance_choices()
+            .iter()
+            .copied()
+            .map(grokhub_core::theme_id)
+            .collect();
+        assert_eq!(ids, vec!["dark", "system"]);
+        assert!(!ids.iter().any(|id| *id == "light"));
+        assert_eq!(grokhub_core::parse_theme("light"), grokhub_core::ThemeChoice::Dark);
+        assert!(grokhub_core::resolve_dark(
+            grokhub_core::ThemeChoice::Dark,
+            false
+        ));
+        assert!(!grokhub_core::resolve_dark(
+            grokhub_core::ThemeChoice::System,
+            false
+        ));
     }
 }
