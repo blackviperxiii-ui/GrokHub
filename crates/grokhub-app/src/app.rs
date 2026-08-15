@@ -9,7 +9,7 @@ use crate::skills;
 use crate::threads::{self, ChatThread};
 use crate::update::{remember_source, resolve_source};
 use crate::xai::{grok_chat, grok_chat_stream, grok_imagine, grok_stt, grok_tts, http_status_of};
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use grokhub_core::{
     append_composer, apply_work_update, attach_kind, attach_name, attach_prompt_line,
     approved_cmds, auth_bearer, automation_blocked_by_policy, blend_thread_goal,
@@ -205,6 +205,18 @@ fn mode_status_line(mode: &str, pinned_model: &str) -> String {
 
 const RAIL_FOOTER_H: f32 = 52.0;
 const PALETTE_LIST_H: f32 = 280.0;
+
+struct OauthPhotoOut {
+    tokens: Option<grokhub_core::XaiOAuthTokens>,
+    url: String,
+    bytes: Option<Vec<u8>>,
+}
+
+fn oauth_photo_image(bytes: &[u8]) -> Option<ColorImage> {
+    let rgba = crate::oauth::avatar_rgba(bytes)?;
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    Some(ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
+}
 
 fn settings_sec_title(sec: SettingsSec) -> &'static str {
     match sec {
@@ -469,6 +481,11 @@ pub struct Cabin {
     proj_staged: Option<String>,
     proj_ignore_close: bool,
     projects_dirty: bool,
+    oauth_photo: Option<TextureHandle>,
+    oauth_photo_key: String,
+    oauth_photo_rx: Option<mpsc::Receiver<OauthPhotoOut>>,
+    oauth_photo_busy: bool,
+    oauth_profile_tried: bool,
 }
 
 fn paint_wall_cover(
@@ -709,6 +726,11 @@ impl Cabin {
             proj_staged: None,
             proj_ignore_close: false,
             projects_dirty: false,
+            oauth_photo: None,
+            oauth_photo_key: String::new(),
+            oauth_photo_rx: None,
+            oauth_photo_busy: false,
+            oauth_profile_tried: false,
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
             let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
@@ -2698,6 +2720,9 @@ impl Cabin {
                         self.secrets.oauth = Some(t);
                         let _ = secrets::save(&self.secrets);
                         self.oauth_pending = None;
+                        self.oauth_profile_tried = false;
+                        self.oauth_photo = None;
+                        self.oauth_photo_key.clear();
                         self.status = "Grok OAuth connected".into();
                     }
                 }
@@ -2709,6 +2734,96 @@ impl Cabin {
             },
             Err(e) => self.status = e,
         }
+    }
+
+    fn clear_oauth_photo(&mut self) {
+        self.oauth_photo = None;
+        self.oauth_photo_key.clear();
+        self.oauth_photo_rx = None;
+        self.oauth_photo_busy = false;
+        self.oauth_profile_tried = false;
+    }
+
+    fn sign_out_oauth(&mut self) {
+        self.secrets.oauth = None;
+        self.clear_oauth_photo();
+        let _ = secrets::save(&self.secrets);
+        self.status = "Signed out".into();
+    }
+
+    fn poll_oauth_photo(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = self.oauth_photo_rx.take() {
+            match rx.try_recv() {
+                Ok(out) => {
+                    self.oauth_photo_busy = false;
+                    self.oauth_profile_tried = true;
+                    if let Some(tokens) = out.tokens {
+                        let changed = self.secrets.oauth.as_ref() != Some(&tokens);
+                        self.secrets.oauth = Some(tokens);
+                        if changed {
+                            let _ = secrets::save(&self.secrets);
+                        }
+                    }
+                    self.oauth_photo_key = out.url;
+                    self.oauth_photo = out.bytes.as_ref().and_then(|b| {
+                        oauth_photo_image(b).map(|img| {
+                            ctx.load_texture("oauth-avatar", img, TextureOptions::LINEAR)
+                        })
+                    });
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.oauth_photo_rx = Some(rx);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.oauth_photo_busy = false;
+                }
+            }
+        }
+        self.kick_oauth_photo();
+    }
+
+    fn kick_oauth_photo(&mut self) {
+        if self.oauth_photo_busy {
+            return;
+        }
+        let Some(tok) = self.secrets.oauth.clone() else {
+            if self.oauth_photo.is_some() || !self.oauth_photo_key.is_empty() {
+                self.clear_oauth_photo();
+            }
+            return;
+        };
+        let url = tok
+            .picture
+            .as_ref()
+            .and_then(|u| grokhub_core::trusted_profile_photo_url(u).ok())
+            .unwrap_or_default();
+        if !url.is_empty() && url == self.oauth_photo_key {
+            return;
+        }
+        if url.is_empty() && self.oauth_profile_tried {
+            return;
+        }
+        self.oauth_photo_busy = true;
+        let (tx, rx) = mpsc::channel();
+        self.oauth_photo_rx = Some(rx);
+        std::thread::spawn(move || {
+            let tokens = crate::oauth::enrich_tokens(tok);
+            let url = tokens
+                .picture
+                .as_ref()
+                .and_then(|u| grokhub_core::trusted_profile_photo_url(u).ok())
+                .unwrap_or_default();
+            let bytes = if url.is_empty() {
+                None
+            } else {
+                crate::oauth::fetch_profile_photo(&url, &tokens.access_token).ok()
+            };
+            let _ = tx.send(OauthPhotoOut {
+                tokens: Some(tokens),
+                url,
+                bytes,
+            });
+        });
     }
 
     fn kick_model(&mut self) {
@@ -3894,6 +4009,7 @@ impl eframe::App for Cabin {
             self.poll_oauth();
             ctx.request_repaint_after(Duration::from_secs(2));
         }
+        self.poll_oauth_photo(ctx);
         if ctx.input(|i| i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::Escape))
         {
             let (halt, _) = on_wheel_grab(self.running);
@@ -3934,7 +4050,7 @@ impl eframe::App for Cabin {
         }
         if wants_live_repaint(
             self.running,
-            self.chip_busy,
+            self.chip_busy || self.oauth_photo_busy,
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -4123,9 +4239,7 @@ impl Cabin {
             self.settings_menu_open = false;
         }
         if disconnect {
-            self.secrets.oauth = None;
-            let _ = crate::secrets::save(&self.secrets);
-            self.status = "Signed out".into();
+            self.sign_out_oauth();
             self.settings_menu_open = false;
         }
         let outside = ctx.input(|i| i.pointer.any_click())
@@ -4434,11 +4548,24 @@ impl Cabin {
         resp
     }
 
-    fn cabin_avatar(ui: &mut egui::Ui, account: &str, email: &str) -> egui::Response {
+    fn cabin_avatar(
+        ui: &mut egui::Ui,
+        account: &str,
+        email: &str,
+        photo: Option<&TextureHandle>,
+    ) -> egui::Response {
         let (rect, resp) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), RAIL_FOOTER_H), egui::Sense::click());
         let c = egui::pos2(rect.left() + 20.0, rect.center().y);
-        ui.painter().circle_filled(c, 14.0, crate::theme::PANEL);
+        if let Some(tex) = photo {
+            let size = egui::vec2(28.0, 28.0);
+            egui::Image::from_texture(tex)
+                .fit_to_exact_size(size)
+                .rounding(14.0)
+                .paint_at(ui, egui::Rect::from_center_size(c, size));
+        } else {
+            ui.painter().circle_filled(c, 14.0, crate::theme::PANEL);
+        }
         ui.painter().circle_stroke(
             c,
             14.0,
@@ -4709,7 +4836,7 @@ impl Cabin {
                         }
                     });
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                    if Self::cabin_avatar(ui, &account, &email).clicked() {
+                    if Self::cabin_avatar(ui, &account, &email, self.oauth_photo.as_ref()).clicked() {
                         self.settings_menu_open = !self.settings_menu_open;
                         self.settings_menu_ignore = true;
                     }
@@ -5411,9 +5538,7 @@ impl Cabin {
             self.start_oauth();
         }
         if disconnect {
-            self.secrets.oauth = None;
-            let _ = secrets::save(&self.secrets);
-            self.status = "Signed out".into();
+            self.sign_out_oauth();
         }
         if update {
             self.queue_update();
