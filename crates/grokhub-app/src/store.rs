@@ -146,6 +146,9 @@ mod tests {
             !raw.contains("\n  "),
             "projects.json should stay compact so the 2s persist is cheap"
         );
+        save_projects(&[]).expect("empty");
+        assert!(projects_path().exists());
+        assert!(load_projects().is_empty());
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
