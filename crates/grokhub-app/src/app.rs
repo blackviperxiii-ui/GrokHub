@@ -37,6 +37,7 @@ use grokhub_core::{
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
     chat_attach_status, imagine_ref_status, needs_auth_banner, next_chat_image, next_goal_prompt,
+    is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
     plus_empty_status, plus_menu_rows,
     resolve_chat_model, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
     now_ms, on_wheel_grab, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
@@ -282,6 +283,7 @@ enum TabAct {
 enum JobOut {
     Chat(String),
     ChatDelta(String),
+    ThoughtDelta(String),
     Imagine(String),
     Voice(String),
     Host(String),
@@ -321,6 +323,74 @@ fn listen_turn(api_key: &str) -> String {
         },
         TranscribeRoute::None => {
             "VOICE_RECEIPT: Connect Grok in Settings, or install whisper".into()
+        }
+    }
+}
+
+fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, idx: usize, thought_open: bool) {
+    let bubble_w = crate::markdown::bubble_width(ui.available_width());
+    match block.kind {
+        ChatKind::User => {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                egui::Frame::none()
+                    .fill(crate::theme::BUBBLE_USER)
+                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                    .rounding(12.0)
+                    .inner_margin(egui::Margin::symmetric(14.0, 10.0))
+                    .show(ui, |ui| {
+                        ui.set_width(bubble_w);
+                        ui.label(RichText::new(&block.body).color(crate::theme::FG));
+                    });
+            });
+        }
+        ChatKind::Assistant => {
+            ui.allocate_ui_with_layout(
+                egui::vec2(bubble_w, 0.0),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_max_width(bubble_w);
+                    crate::markdown::show(ui, &block.body);
+                },
+            );
+        }
+        ChatKind::Thought => {
+            egui::CollapsingHeader::new(
+                RichText::new("Thought")
+                    .size(crate::theme::FONT_META)
+                    .color(crate::theme::MUTED),
+            )
+            .id_salt(("chat-thought", idx))
+            .default_open(thought_open)
+            .show(ui, |ui| {
+                ui.set_max_width(bubble_w);
+                ui.label(
+                    RichText::new(&block.body)
+                        .size(crate::theme::FONT_META)
+                        .italics()
+                        .color(crate::theme::SUBTLE),
+                );
+            });
+        }
+        ChatKind::Tool => {
+            egui::Frame::none()
+                .fill(crate::theme::PANEL)
+                .rounding(10.0)
+                .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(&block.title)
+                                .size(crate::theme::FONT_META)
+                                .color(crate::theme::MUTED),
+                        );
+                        ui.label(
+                            RichText::new(&block.body)
+                                .size(crate::theme::FONT_META)
+                                .monospace()
+                                .color(crate::theme::FG),
+                        );
+                    });
+                });
         }
     }
 }
@@ -409,6 +479,7 @@ pub struct Cabin {
     pending_skill: Option<SkillMd>,
     goal_step: u32,
     stream_buf: String,
+    thought_buf: String,
     presence_ring: Vec<(u64, String)>,
     webcam_url: Option<String>,
     voice_sock: Option<crate::voice_ws::VoiceSock>,
@@ -660,6 +731,7 @@ impl Cabin {
             pending_skill: None,
             goal_step: 0,
             stream_buf: String::new(),
+            thought_buf: String::new(),
             presence_ring: vec![],
             webcam_url: None,
             voice_sock: None,
@@ -1115,7 +1187,7 @@ impl Cabin {
                 }
             }
         }
-        if !self.status.is_empty() {
+        if !self.status.is_empty() && self.status != "Thinking…" {
             ui.label(
                 RichText::new(&self.status)
                     .size(12.0)
@@ -1956,7 +2028,12 @@ impl Cabin {
                 }
             }
             Slash::Retry => {
-                if let Some(m) = self.messages.iter().rev().find(|m| m.role == "user") {
+                if let Some(m) = self
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == "user" && !is_workload_user(&m.content))
+                {
                     let t = m.content.clone();
                     self.kick_model_retry(t);
                 } else {
@@ -2935,7 +3012,7 @@ impl Cabin {
             .messages
             .iter()
             .rev()
-            .find(|m| m.role == "user")
+            .find(|m| m.role == "user" && !is_workload_user(&m.content))
             .map(|m| m.content.as_str())
             .unwrap_or("");
         let mode = effective_chat_mode(&self.cfg.mode, last_user, &self.cfg.model);
@@ -2948,7 +3025,14 @@ impl Cabin {
         let mut msgs: Vec<(String, String)> = self
             .messages
             .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
+            .map(|m| {
+                let content = if m.role == "assistant" {
+                    strip_thinking(&m.content)
+                } else {
+                    m.content.clone()
+                };
+                (m.role.clone(), content)
+            })
             .collect();
         let soul = config::read_memory("SOUL.md");
         let pins = skills::pin_text(&self.skill_list);
@@ -3014,11 +3098,22 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         self.stream_buf.clear();
+        self.thought_buf.clear();
         std::thread::spawn(move || {
             let tx_d = tx.clone();
-            let r = grok_chat_stream(&key, &model, &msgs, image.as_deref(), effort, |d| {
-                let _ = tx_d.send(JobOut::ChatDelta(d.to_string()));
-            });
+            let r = grok_chat_stream(
+                &key,
+                &model,
+                &msgs,
+                image.as_deref(),
+                effort,
+                |d| {
+                    let _ = tx_d.send(JobOut::ChatDelta(d.to_string()));
+                },
+                |t| {
+                    let _ = tx_d.send(JobOut::ThoughtDelta(t.to_string()));
+                },
+            );
             let r = match r {
                 Err(e) => {
                     if http_status_of(&e).map(should_failover_status).unwrap_or(false) {
@@ -3041,39 +3136,37 @@ impl Cabin {
         });
     }
 
+    fn upsert_stream_assistant(&mut self) {
+        let content = merge_thinking(&self.thought_buf, &self.stream_buf);
+        if content.is_empty() {
+            return;
+        }
+        if let Some(last) = self.messages.last_mut() {
+            if last.role == "assistant" {
+                last.content = content;
+                return;
+            }
+        }
+        self.messages.push(Msg {
+            role: "assistant".into(),
+            content,
+        });
+    }
+
     fn poll_job(&mut self) {
         let Some(rx) = self.rx.take() else { return };
         match rx.try_recv() {
             Ok(JobOut::ChatDelta(d)) => {
                 self.rx = Some(rx);
                 self.stream_buf.push_str(&d);
-                self.status = format!("streaming… {}", self.stream_buf.chars().count());
-                let matches_prefix = {
-                    let prev = self
-                        .stream_buf
-                        .strip_suffix(d.as_str())
-                        .unwrap_or(self.stream_buf.as_str());
-                    self.messages
-                        .last()
-                        .map(|m| m.role == "assistant" && m.content == prev)
-                        .unwrap_or(false)
-                };
-                if matches_prefix {
-                    if let Some(last) = self.messages.last_mut() {
-                        last.content = self.stream_buf.clone();
-                    }
-                } else if !self.stream_buf.is_empty()
-                    && self.messages.last().map(|m| m.role != "assistant").unwrap_or(true)
-                {
-                    self.messages.push(Msg {
-                        role: "assistant".into(),
-                        content: self.stream_buf.clone(),
-                    });
-                } else if let Some(last) = self.messages.last_mut() {
-                    if last.role == "assistant" {
-                        last.content = self.stream_buf.clone();
-                    }
-                }
+                self.status = "Thinking…".into();
+                self.upsert_stream_assistant();
+            }
+            Ok(JobOut::ThoughtDelta(d)) => {
+                self.rx = Some(rx);
+                self.thought_buf.push_str(&d);
+                self.status = "Thinking…".into();
+                self.upsert_stream_assistant();
             }
             Ok(JobOut::Chat(text)) => {
                 self.running = false;
@@ -3082,6 +3175,13 @@ impl Cabin {
                 remember_chip_outcome(&mut self.chip_memory, true, now_ms());
                 record_turn(&mut self.learning);
                 bump_usage(&mut self.usage, "message");
+                let text = if self.thought_buf.is_empty() {
+                    text
+                } else {
+                    merge_thinking(&self.thought_buf, &strip_thinking(&text))
+                };
+                self.thought_buf.clear();
+                self.stream_buf.clear();
                 let replace_last = self.messages.last().map(|m| m.role == "assistant").unwrap_or(false);
                 if replace_last {
                     if let Some(last) = self.messages.last_mut() {
@@ -3197,7 +3297,7 @@ impl Cabin {
             Ok(JobOut::HostLine(line)) => {
                 self.rx = Some(rx);
                 self.host_live = line.clone();
-                self.status = line;
+                self.status = "Host…".into();
                 self.voice_orb = "hands".into();
             }
             Ok(JobOut::HostDone(block)) => {
@@ -3366,7 +3466,8 @@ impl Cabin {
         self.last_host = gated.clone();
         self.running = true;
         self.voice_orb = "hands".into();
-        self.status = host_status_line(&gated[0], "", 0);
+        self.host_live = gated[0].clone();
+        self.status = "Host…".into();
         self.plan_pending = None;
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
@@ -4979,43 +5080,35 @@ impl Cabin {
                 egui::ScrollArea::vertical()
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
-                        for m in &self.messages {
-                            let user = m.role == "user";
-                            let fill = if user {
-                                crate::theme::BUBBLE_USER
-                            } else if m.role == "system" {
-                                crate::theme::PANEL
-                            } else {
-                                crate::theme::BUBBLE_ASSISTANT
-                            };
-                            let bubble_w = crate::markdown::bubble_width(ui.available_width());
-                            let draw = |ui: &mut egui::Ui| {
-                                egui::Frame::none()
-                                    .fill(fill)
-                                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
-                                    .rounding(12.0)
-                                    .inner_margin(egui::Margin::symmetric(14.0, 10.0))
-                                    .show(ui, |ui| {
-                                        ui.set_width(bubble_w);
-                                        if m.role == "assistant" {
-                                            crate::markdown::show(ui, &m.content);
-                                        } else {
-                                            ui.label(RichText::new(&m.content).color(crate::theme::FG));
-                                        }
-                                    });
-                            };
-                            if user {
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::TOP),
-                                    draw,
-                                );
-                            } else {
-                                draw(ui);
-                            }
+                        let pairs: Vec<(String, String)> = self
+                            .messages
+                            .iter()
+                            .map(|m| (m.role.clone(), m.content.clone()))
+                            .collect();
+                        let views = visible_chat(&pairs);
+                        let last_thought = views.iter().rposition(|v| v.kind == ChatKind::Thought);
+                        for (i, block) in views.iter().enumerate() {
+                            paint_chat_block(
+                                ui,
+                                block,
+                                i,
+                                self.running && last_thought == Some(i),
+                            );
                             ui.add_space(8.0);
                         }
                         if self.running {
-                            ui.label(RichText::new("Working…").italics().color(crate::theme::SUBTLE));
+                            match views.last().map(|v| v.kind) {
+                                None | Some(ChatKind::User) => {
+                                    ui.label(
+                                        RichText::new("Thinking…")
+                                            .italics()
+                                            .color(crate::theme::SUBTLE),
+                                    );
+                                }
+                                Some(ChatKind::Assistant)
+                                | Some(ChatKind::Thought)
+                                | Some(ChatKind::Tool) => {}
+                            }
                         }
                     });
             });

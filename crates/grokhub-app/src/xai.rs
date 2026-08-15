@@ -1,8 +1,8 @@
 use grokhub_core::{
     chat_request_body_vision, chat_stream_flag, chat_timeout_secs, dedicated_imagine_model, frame_bytes,
-    imagine_request_body, imagine_slug, parse_chat_content, parse_imagine_url, parse_sse_delta,
-    parse_stt_text, sse_done, stt_multipart, stt_url, tts_request_body, tts_url, PresenceFrame,
-    XAI_BASE,
+    imagine_request_body, imagine_slug, merge_thinking, parse_chat_content, parse_chat_reasoning,
+    parse_imagine_url, parse_sse_delta, parse_sse_thought, parse_stt_text, sse_done, stt_multipart, stt_url,
+    tts_request_body, tts_url, PresenceFrame, XAI_BASE,
 };
 use std::io::Read;
 
@@ -31,7 +31,9 @@ pub fn grok_chat(
     {
         return Err(err.to_string());
     }
-    parse_chat_content(&v).ok_or_else(|| "empty Grok reply".into())
+    parse_chat_content(&v)
+        .map(|content| merge_thinking(&parse_chat_reasoning(&v).unwrap_or_default(), &content))
+        .ok_or_else(|| "empty Grok reply".into())
 }
 
 pub fn grok_chat_stream(
@@ -41,6 +43,7 @@ pub fn grok_chat_stream(
     image_data_url: Option<&str>,
     effort: Option<&str>,
     mut on_delta: impl FnMut(&str),
+    mut on_thought: impl FnMut(&str),
 ) -> Result<String, String> {
     let key = api_key.trim();
     if key.is_empty() {
@@ -56,7 +59,10 @@ pub fn grok_chat_stream(
         .send_json(body)
     {
         Ok(r) => r,
-        Err(e) => return grok_chat(api_key, model, messages, image_data_url, effort).map_err(|_| http_err(e)),
+        Err(e) => {
+            return grok_chat(api_key, model, messages, image_data_url, effort)
+                .map_err(|_| http_err(e))
+        }
     };
     let mut reader = resp.into_reader();
     let mut raw = String::new();
@@ -77,6 +83,9 @@ pub fn grok_chat_stream(
                 } else {
                     Ok(acc)
                 };
+            }
+            if let Some(t) = parse_sse_thought(&line) {
+                on_thought(&t);
             }
             if let Some(d) = parse_sse_delta(&line) {
                 on_delta(&d);
