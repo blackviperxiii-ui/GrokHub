@@ -23,7 +23,9 @@ use grokhub_core::{
     extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
     forget_topic, greet_from_last_job, has_auth, has_goal_complete, has_verify_ok, hey_grok_on_press,
     import_memory_file, insight_pin, is_openclaw_workspace,
-    host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
+    add_to_folder, create_folder, create_project, folder_choices, host_cmd_leaves_project,
+    host_hour_blocked, host_risk, host_status_line, is_hard_run, rename_node, seed_from_bound,
+    toggle_folder, upsert_bound, visible_tree, ProjectKind, ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
     needs_auth_banner, next_goal_prompt,
@@ -274,6 +276,16 @@ pub struct Cabin {
     wall: ImagineWall,
     wall_rx: Option<mpsc::Receiver<Result<WallGif, String>>>,
     wall_busy: bool,
+    projects: Vec<ProjectNode>,
+    project_sel: Option<String>,
+    proj_menu: Option<String>,
+    proj_menu_pos: egui::Pos2,
+    proj_plus_open: bool,
+    proj_plus_pos: egui::Pos2,
+    proj_add_for: Option<String>,
+    proj_rename: Option<String>,
+    proj_rename_buf: String,
+    proj_ignore_close: bool,
 }
 
 fn paint_wall_cover(
@@ -357,6 +369,15 @@ impl Cabin {
                 cfg.project_dir = format!("{home}/GrokHub-Work");
             }
         }
+        let mut projects = crate::store::load_projects();
+        if projects.is_empty() {
+            projects = seed_from_bound(&cfg.project_dir);
+        }
+        let project_sel = projects
+            .iter()
+            .find(|n| n.kind == ProjectKind::Project && n.path == cfg.project_dir)
+            .or_else(|| projects.iter().find(|n| n.kind == ProjectKind::Project))
+            .map(|n| n.id.clone());
         let secrets = secrets::load();
         let approve_risky_only = cfg.approve_risky_only;
         let mut c = Self {
@@ -464,6 +485,16 @@ impl Cabin {
             wall: crate::store::load_wall(),
             wall_rx: None,
             wall_busy: false,
+            projects,
+            project_sel,
+            proj_menu: None,
+            proj_menu_pos: egui::Pos2::ZERO,
+            proj_plus_open: false,
+            proj_plus_pos: egui::Pos2::ZERO,
+            proj_add_for: None,
+            proj_rename: None,
+            proj_rename_buf: String::new(),
+            proj_ignore_close: false,
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
             let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
@@ -498,6 +529,7 @@ impl Cabin {
         let _ = crate::store::save_usage(&self.usage);
         let _ = crate::store::save_chips(&self.chip_memory);
         let _ = crate::store::save_wall(&self.wall);
+        let _ = crate::store::save_projects(&self.projects);
         let _ = config::save(&self.cfg);
         if let Ok(st) = self.hub.lock() {
             let _ = save_hub_state(&config::hub_state_path(), &st);
@@ -514,6 +546,110 @@ impl Cabin {
 
     fn has_key(&self) -> bool {
         has_auth(&self.cfg.api_key, &secrets::access_token(&self.secrets))
+    }
+
+    fn work_root(&self) -> String {
+        if let Ok(home) = std::env::var("HOME") {
+            format!("{home}/GrokHub-Work")
+        } else {
+            "GrokHub-Work".into()
+        }
+    }
+
+    fn bind_project_id(&mut self, id: &str) {
+        let Some(n) = self.projects.iter().find(|n| n.id == id && n.kind == ProjectKind::Project) else {
+            return;
+        };
+        let path = n.path.clone();
+        let name = n.name.clone();
+        if !path.trim().is_empty() {
+            let _ = std::fs::create_dir_all(&path);
+            self.cfg.project_dir = path.clone();
+            let _ = config::save(&self.cfg);
+        }
+        self.project_sel = Some(id.to_string());
+        self.nav = Nav::Workboard;
+        self.status = format!("Bound {name}");
+        self.persist();
+    }
+
+    fn make_project(&mut self, name: &str, parent: Option<&str>) {
+        let id = uid("proj");
+        let root = self.work_root();
+        match create_project(&mut self.projects, &id, name, parent, &root) {
+            Ok(i) => {
+                let path = self.projects[i].path.clone();
+                let _ = std::fs::create_dir_all(&path);
+                self.proj_rename_buf = self.projects[i].name.clone();
+                self.proj_rename = Some(id.clone());
+                self.bind_project_id(&id);
+                self.status = format!("Project {}", self.projects[i].name);
+            }
+            Err(e) => self.status = e.into(),
+        }
+    }
+
+    fn make_folder(&mut self, name: &str) {
+        let id = uid("fold");
+        match create_folder(&mut self.projects, &id, name, None) {
+            Ok(i) => {
+                self.proj_rename_buf = self.projects[i].name.clone();
+                self.proj_rename = Some(id);
+                self.status = format!("Folder {}", self.projects[i].name);
+                self.persist();
+            }
+            Err(e) => self.status = e.into(),
+        }
+    }
+
+    fn finish_proj_rename(&mut self) {
+        let Some(id) = self.proj_rename.take() else {
+            return;
+        };
+        match rename_node(&mut self.projects, &id, &self.proj_rename_buf) {
+            Ok(()) => {
+                self.status = format!("Renamed {}", self.proj_rename_buf.trim());
+                self.persist();
+            }
+            Err(e) => self.status = e.into(),
+        }
+        self.proj_rename_buf.clear();
+    }
+
+    fn move_sel_to_folder_name(&mut self, folder: &str) {
+        let Some(pid) = self.project_sel.clone() else {
+            self.status = "Select a project first".into();
+            return;
+        };
+        if folder.eq_ignore_ascii_case("root") {
+            match add_to_folder(&mut self.projects, &pid, None) {
+                Ok(()) => {
+                    self.status = "Moved to Projects".into();
+                    self.persist();
+                }
+                Err(e) => self.status = e.into(),
+            }
+            return;
+        }
+        let fid = self
+            .projects
+            .iter()
+            .find(|n| n.kind == ProjectKind::Folder && n.name.eq_ignore_ascii_case(folder))
+            .map(|n| n.id.clone());
+        let Some(fid) = fid else {
+            self.status = format!("No folder {folder}");
+            return;
+        };
+        match add_to_folder(&mut self.projects, &pid, Some(&fid)) {
+            Ok(()) => {
+                if let Some(f) = self.projects.iter_mut().find(|n| n.id == fid) {
+                    f.open = true;
+                }
+                self.status = format!("Added to {folder}");
+                self.persist();
+            }
+            Err(e) => self.status = e.into(),
+        }
     }
 
     fn chat_pairs(&self) -> Vec<(String, String)> {
@@ -1041,7 +1177,9 @@ impl Cabin {
                 let p = expand_home(&p);
                 self.cfg.project_dir = p.clone();
                 let _ = std::fs::create_dir_all(&p);
+                self.project_sel = upsert_bound(&mut self.projects, &p);
                 let _ = config::save(&self.cfg);
+                self.persist();
                 self.status = format!("Bound {p}");
             }
             Slash::ProjectClear => {
@@ -1056,6 +1194,22 @@ impl Cabin {
                     format!("Project {}", self.cfg.project_dir)
                 };
             }
+            Slash::ProjectNew(name) => self.make_project(&name, None),
+            Slash::ProjectFolder(name) => self.make_folder(&name),
+            Slash::ProjectRename(name) => {
+                let Some(id) = self.project_sel.clone() else {
+                    self.status = "Select a project first".into();
+                    return;
+                };
+                match rename_node(&mut self.projects, &id, &name) {
+                    Ok(()) => {
+                        self.status = format!("Renamed {name}");
+                        self.persist();
+                    }
+                    Err(e) => self.status = e.into(),
+                }
+            }
+            Slash::ProjectMove(folder) => self.move_sel_to_folder_name(&folder),
             Slash::Send(task) => self.dispatch_send(task),
             Slash::Sync => self.sync_hub(),
             Slash::Hub => {
@@ -1070,7 +1224,9 @@ impl Cabin {
                 let p = format!("{home}/{}", plan.project_rel);
                 let _ = std::fs::create_dir_all(&p);
                 self.cfg.project_dir = p.clone();
+                self.project_sel = upsert_bound(&mut self.projects, &p);
                 let _ = config::save(&self.cfg);
+                self.persist();
                 self.status = format!("Room {} → {p}", plan.slug);
                 self.queue_sh(plan.host_script);
             }
@@ -2678,6 +2834,150 @@ impl Cabin {
             Err(e) => self.status = e,
         }
     }
+
+    fn ui_project_overlays(&mut self, ctx: &egui::Context) {
+        if self.proj_plus_open {
+            let mut pick: Option<&'static str> = None;
+            let mut menu_rect = egui::Rect::NOTHING;
+            egui::Area::new(egui::Id::new("proj-plus"))
+                .fixed_pos(self.proj_plus_pos + egui::vec2(0.0, 4.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(160.0);
+                        if ui.selectable_label(false, "New project").clicked() {
+                            pick = Some("project");
+                        }
+                        if ui.selectable_label(false, "New folder").clicked() {
+                            pick = Some("folder");
+                        }
+                        menu_rect = ui.min_rect();
+                    });
+                });
+            if let Some(kind) = pick {
+                self.proj_plus_open = false;
+                match kind {
+                    "project" => self.make_project("Project", None),
+                    "folder" => self.make_folder("Folder"),
+                    _ => {}
+                }
+            } else if self.proj_ignore_close {
+                self.proj_ignore_close = false;
+            } else if ctx.input(|i| i.pointer.any_click()) {
+                if let Some(pos) = ctx.pointer_interact_pos() {
+                    if !menu_rect.expand(8.0).contains(pos) {
+                        self.proj_plus_open = false;
+                    }
+                }
+            }
+        }
+        if let Some(id) = self.proj_menu.clone() {
+            let kind = self
+                .projects
+                .iter()
+                .find(|n| n.id == id)
+                .map(|n| n.kind);
+            let mut act: Option<&'static str> = None;
+            let mut menu_rect = egui::Rect::NOTHING;
+            egui::Area::new(egui::Id::new("proj-menu"))
+                .fixed_pos(self.proj_menu_pos + egui::vec2(0.0, 4.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(168.0);
+                        if ui.selectable_label(false, "Rename").clicked() {
+                            act = Some("rename");
+                        }
+                        if kind == Some(ProjectKind::Project) {
+                            if ui.selectable_label(false, "Add to folder").clicked() {
+                                act = Some("add");
+                            }
+                            if ui.selectable_label(false, "Remove from folder").clicked() {
+                                act = Some("root");
+                            }
+                        }
+                        if kind == Some(ProjectKind::Folder)
+                            && ui.selectable_label(false, "New project here").clicked()
+                        {
+                            act = Some("new-here");
+                        }
+                        menu_rect = ui.min_rect();
+                    });
+                });
+            if let Some(a) = act {
+                self.proj_menu = None;
+                match a {
+                    "rename" => {
+                        if let Some(n) = self.projects.iter().find(|n| n.id == id) {
+                            self.proj_rename_buf = n.name.clone();
+                            self.proj_rename = Some(id);
+                        }
+                    }
+                    "add" => {
+                        self.proj_add_for = Some(id.clone());
+                        self.project_sel = Some(id);
+                    }
+                    "root" => {
+                        if add_to_folder(&mut self.projects, &id, None).is_ok() {
+                            self.status = "Moved to Projects".into();
+                            self.persist();
+                        }
+                    }
+                    "new-here" => self.make_project("Project", Some(&id)),
+                    _ => {}
+                }
+            } else if self.proj_ignore_close {
+                self.proj_ignore_close = false;
+            } else if ctx.input(|i| i.pointer.any_click()) {
+                if let Some(pos) = ctx.pointer_interact_pos() {
+                    if !menu_rect.expand(8.0).contains(pos) {
+                        self.proj_menu = None;
+                    }
+                }
+            }
+        }
+        if let Some(pid) = self.proj_add_for.clone() {
+            let folders = folder_choices(&self.projects);
+            let mut picked: Option<Option<String>> = None;
+            egui::Area::new(egui::Id::new("proj-add"))
+                .fixed_pos(self.proj_menu_pos + egui::vec2(8.0, 8.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(168.0);
+                        ui.label(RichText::new("Add to folder").size(12.0).color(crate::theme::MUTED));
+                        if folders.is_empty() {
+                            ui.label("Create a folder first");
+                        }
+                        for (fid, name) in &folders {
+                            if ui.selectable_label(false, name).clicked() {
+                                picked = Some(Some(fid.clone()));
+                            }
+                        }
+                        if ui.selectable_label(false, "Projects (root)").clicked() {
+                            picked = Some(None);
+                        }
+                    });
+                });
+            if let Some(folder) = picked {
+                self.proj_add_for = None;
+                match add_to_folder(&mut self.projects, &pid, folder.as_deref()) {
+                    Ok(()) => {
+                        if let Some(fid) = folder {
+                            if let Some(f) = self.projects.iter_mut().find(|n| n.id == fid) {
+                                f.open = true;
+                            }
+                            self.status = "Added to folder".into();
+                        } else {
+                            self.status = "Moved to Projects".into();
+                        }
+                        self.persist();
+                    }
+                    Err(e) => self.status = e.into(),
+                }
+            }
+        }
+    }
 }
 
 impl eframe::App for Cabin {
@@ -2789,6 +3089,7 @@ impl eframe::App for Cabin {
                 }
             });
         }
+        self.ui_project_overlays(ctx);
     }
 }
 
@@ -3226,11 +3527,6 @@ impl Cabin {
             .as_ref()
             .and_then(|t| t.email.clone())
             .unwrap_or_else(|| "Connect Grok".into());
-        let project = std::path::Path::new(&self.cfg.project_dir)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("GrokHub")
-            .to_string();
         egui::SidePanel::left("rail")
             .exact_width(crate::theme::SIDEBAR_W)
             .resizable(false)
@@ -3257,17 +3553,83 @@ impl Cabin {
                     }
                 }
                 ui.add_space(10.0);
-                ui.label(RichText::new("Projects").size(12.0).color(crate::theme::SUBTLE));
-                if Self::nav_row(
-                    ui,
-                    cur == "workboard",
-                    crate::icons::RailIcon::Folder,
-                    &project,
-                    false,
-                )
-                .clicked()
-                {
-                    self.nav = Nav::Workboard;
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Projects").size(12.0).color(crate::theme::SUBTLE));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let plus = ui.add(
+                            egui::Button::new(RichText::new("+").size(14.0).color(crate::theme::MUTED))
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(egui::Stroke::NONE),
+                        );
+                        let plus_pos = plus.rect.left_bottom();
+                        if plus.on_hover_text("New project or folder").clicked() {
+                            self.proj_plus_open = true;
+                            self.proj_plus_pos = plus_pos;
+                            self.proj_ignore_close = true;
+                            self.proj_menu = None;
+                        }
+                    });
+                });
+                let tree = visible_tree(&self.projects);
+                for (depth, idx) in tree {
+                    let node = self.projects[idx].clone();
+                    let indent = 12.0 * depth as f32;
+                    if self.proj_rename.as_deref() == Some(node.id.as_str()) {
+                        ui.horizontal(|ui| {
+                            ui.add_space(indent);
+                            let edit = ui.add(
+                                egui::TextEdit::singleline(&mut self.proj_rename_buf)
+                                    .desired_width(ui.available_width() - 8.0)
+                                    .hint_text("Name"),
+                            );
+                            if edit.lost_focus()
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter) || !i.key_pressed(egui::Key::Escape))
+                            {
+                                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                    self.proj_rename = None;
+                                    self.proj_rename_buf.clear();
+                                } else {
+                                    self.finish_proj_rename();
+                                }
+                            }
+                        });
+                        continue;
+                    }
+                    let icon = match node.kind {
+                        ProjectKind::Folder => crate::icons::RailIcon::Folder,
+                        ProjectKind::Project => crate::icons::RailIcon::Chat,
+                    };
+                    let label = if node.kind == ProjectKind::Folder {
+                        let mark = if node.open { "▾ " } else { "▸ " };
+                        format!("{mark}{}", node.name)
+                    } else {
+                        node.name.clone()
+                    };
+                    let active = self.project_sel.as_deref() == Some(node.id.as_str())
+                        && node.kind == ProjectKind::Project;
+                    ui.horizontal(|ui| {
+                        ui.add_space(indent);
+                        let row = Self::nav_row(ui, active, icon, &label, false);
+                        if row.clicked() {
+                            match node.kind {
+                                ProjectKind::Folder => {
+                                    toggle_folder(&mut self.projects, &node.id);
+                                }
+                                ProjectKind::Project => self.bind_project_id(&node.id),
+                            }
+                        }
+                        if row.double_clicked() {
+                            self.proj_rename_buf = node.name.clone();
+                            self.proj_rename = Some(node.id.clone());
+                        }
+                        if row.secondary_clicked() {
+                            self.proj_menu = Some(node.id.clone());
+                            self.proj_menu_pos = row.rect.left_bottom();
+                            self.proj_ignore_close = true;
+                            self.proj_plus_open = false;
+                            self.proj_add_for = None;
+                        }
+                    });
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
