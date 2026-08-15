@@ -2927,6 +2927,7 @@ impl Cabin {
     fn hide_to_tray(&mut self, ctx: &egui::Context) {
         self.window_visible = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         if !self.told_tray {
             self.told_tray = true;
             crate::notify::ping("GrokHub", "Still running in the tray");
@@ -2937,6 +2938,7 @@ impl Cabin {
     fn show_from_tray(&mut self, ctx: &egui::Context) {
         self.window_visible = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         ctx.request_repaint();
     }
@@ -3173,6 +3175,27 @@ impl Cabin {
             }
         }
     }
+}
+
+fn titlebar_chrome_size() -> egui::Vec2 {
+    egui::vec2(36.0, crate::theme::TITLEBAR_H)
+}
+
+fn titlebar_chrome_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click());
+    let color = if resp.hovered() {
+        crate::theme::FG
+    } else {
+        crate::theme::MUTED
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(16.0),
+        color,
+    );
+    resp
 }
 
 impl eframe::App for Cabin {
@@ -3662,14 +3685,7 @@ impl Cabin {
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new("×").color(crate::theme::MUTED))
-                                    .fill(crate::theme::BG)
-                                    .stroke(egui::Stroke::NONE),
-                            )
-                            .clicked()
-                        {
+                        if titlebar_chrome_btn(ui, "×").clicked() {
                             let hide = crate::tray::should_hide_on_close(
                                 self.cfg.close_to_tray,
                                 self.tray.is_some(),
@@ -3680,24 +3696,10 @@ impl Cabin {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
                         }
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new("□").color(crate::theme::MUTED))
-                                    .fill(crate::theme::BG)
-                                    .stroke(egui::Stroke::NONE),
-                            )
-                            .clicked()
-                        {
+                        if titlebar_chrome_btn(ui, "□").clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
                         }
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new("–").color(crate::theme::MUTED))
-                                    .fill(crate::theme::BG)
-                                    .stroke(egui::Stroke::NONE),
-                            )
-                            .clicked()
-                        {
+                        if titlebar_chrome_btn(ui, "–").clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
                     });
@@ -5551,6 +5553,12 @@ mod tests {
     }
 
     #[test]
+    fn titlebar_close_is_a_real_hit() {
+        let s = super::titlebar_chrome_size();
+        assert!(s.x >= 32.0, "close hit {s:?}");
+        assert_eq!(s.y, crate::theme::TITLEBAR_H);
+    }
+
     fn about_section_opens_update() {
         assert_eq!(
             super::settings_group_home(super::SettingsGroup::About),
