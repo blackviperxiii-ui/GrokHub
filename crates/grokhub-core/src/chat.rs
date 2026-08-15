@@ -215,6 +215,15 @@ pub fn parse_chat_content(body: &Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+pub fn parse_chat_reasoning(body: &Value) -> Option<String> {
+    let msg = body.get("choices")?.as_array()?.first()?.get("message")?;
+    msg.get("reasoning_content")
+        .or_else(|| msg.get("reasoning"))
+        .and_then(|c| c.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +256,10 @@ mod tests {
             "choices": [{ "message": { "content": "hello" } }]
         });
         assert_eq!(parse_chat_content(&reply).as_deref(), Some("hello"));
+        let reasoned = json!({
+            "choices": [{ "message": { "content": "hello", "reasoning_content": "Need a snapshot." } }]
+        });
+        assert_eq!(parse_chat_reasoning(&reasoned).as_deref(), Some("Need a snapshot."));
         assert!(should_failover_status(429));
         assert!(!should_failover_status(200));
         assert_eq!(failover_model("grok-4-latest"), Some("grok-4.3"));

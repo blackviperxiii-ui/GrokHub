@@ -3,6 +3,7 @@
 pub mod attach;
 pub mod automation;
 pub mod chat;
+pub mod chat_view;
 pub mod chips;
 pub mod connector;
 pub mod consult;
@@ -53,8 +54,11 @@ pub use attach::{
 pub use chat::{
     chat_request_body, chat_request_body_for_mode, chat_request_body_vision, chat_timeout_secs,
     effective_chat_mode, extract_host_cmds, failover_model, is_composer_ladder_model, model_for_mode,
-    needs_auth_banner, parse_chat_content, reasoning_effort_for_mode, resolve_chat_model,
+    needs_auth_banner, parse_chat_content, parse_chat_reasoning, reasoning_effort_for_mode, resolve_chat_model,
     route_auto_mode, settings_pin_blocks_auto, should_failover_status, DEFAULT_MODEL, XAI_BASE,
+};
+pub use chat_view::{
+    is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
 };
 pub use chips::{
     build_quick_chips, chip_memory_key, chip_suggest_prompt, context_fingerprint, detect_chip_context,
@@ -115,7 +119,7 @@ pub use learning::{insight_pin, record_turn, upsert_insight, LearningState};
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
 pub use openclaw::{default_openclaw_paths, import_memory_file, is_openclaw_workspace};
 pub use shortcuts::{filter_palette, shortcut_help, SHORTCUTS};
-pub use stream::{chat_stream_flag, parse_sse_delta, sse_done};
+pub use stream::{chat_stream_flag, parse_sse_delta, parse_sse_thought, sse_done};
 pub use usage::{bump_usage, roll_usage_day, usage_blocked, usage_line, UsageDay};
 pub use hub_sync::{build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, HubMemoryFile, HubSnapshot};
 pub use hygiene::{lockish, should_send_screenshot};
