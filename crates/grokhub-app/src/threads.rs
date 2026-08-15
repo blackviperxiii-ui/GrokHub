@@ -15,6 +15,10 @@ pub struct ChatThread {
     pub messages: Vec<(String, String)>,
     #[serde(default)]
     pub goal: ThreadGoal,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub title_locked: bool,
 }
 
 impl ChatThread {
@@ -25,6 +29,8 @@ impl ChatThread {
             scratch,
             messages: vec![],
             goal: ThreadGoal::default(),
+            pinned: false,
+            title_locked: false,
         }
     }
 }
@@ -71,6 +77,8 @@ mod tests {
         assert_eq!(loaded[0].title, "night");
         assert!(loaded[0].scratch);
         assert!(loaded[0].goal.label.is_empty());
+        assert!(!loaded[0].pinned);
+        assert!(!loaded[0].title_locked);
         assert!(export_markdown(&loaded[0]).contains("hi"));
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");

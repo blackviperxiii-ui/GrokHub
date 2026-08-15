@@ -35,6 +35,7 @@ pub mod slash;
 pub mod state;
 pub mod stream;
 pub mod task;
+pub mod thread_tab;
 pub mod update;
 pub mod usage;
 pub mod verify;
@@ -158,6 +159,10 @@ pub use state::{
     load_hub_state, save_hub_state, state_for_disk, HubState, PairError, DEFAULT_PORT, HUB_KIND,
 };
 pub use task::{HubTask, Receipt};
+pub use thread_tab::{
+    apply_auto_title, apply_manual_rename, clean_tab_title, delete_thread, history_order, toggle_pin,
+    DeleteOutcome, ThreadTab,
+};
 pub use update::{discover_source, is_grokhub_source, update_cmds, update_wipes_config, walk_up_source};
 
 pub const PRESENCE_PUSH_MIN_MS: u64 = 400;
