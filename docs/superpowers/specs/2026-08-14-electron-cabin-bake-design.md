@@ -12,7 +12,7 @@ OAuth, slash, threads, tray, and overlay update already sit in the Rust cabin. T
 
 File-backed `automations.json`. NL parse stays (“every weekday at 9…”, heartbeat). A timer marks due rows and runs them as a chat turn, inheriting YOLO / supervised.
 
-Script gate: skip when `checkCommand` exits non-zero or prints nothing. Quiet hours block destructive host. Daily unit budget blocks further night runs after the cap.
+Script gate: skip when `checkCommand` exits non-zero or prints nothing. That host check runs off the UI thread. Quiet hours block destructive host. Daily unit budget blocks further night runs after the cap.
 
 Cabin nav: **Night**.
 

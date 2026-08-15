@@ -40,7 +40,7 @@ Composer modes (combo on the pill, or `/mode`):
 
 | UI | Sends |
 |----|--------|
-| **Auto** | Picks Fast / Balance / Think / Max from the ask. A Settings chat-model pin skips this. |
+| **Auto** | Picks Fast / Balance / Think / Max from the ask. A Settings chat-model pin that is **not** a ladder default (`grok-3-mini-fast` / `grok-4.3` / `grok-4.6`) skips this. `/mode` and the composer combo do not write that pin. |
 | **Fast** | `grok-3-mini-fast` |
 | **Balance** | `grok-4.3` |
 | **Think** | `grok-4.6` at `high` |
@@ -77,7 +77,7 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `secrets.js
 
 Tokens stay in `secrets.json`. Never in markdown.
 
-Composer is a pill: **What do you want to know?** Plus pastes the clipboard. Mode combo is Auto / Fast / Balance / Think / Max. Mic is Hey Grok. Ctrl+Enter or the arrow sends; Enter is a newline. Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash -lc`.
+Composer is a pill: **What do you want to know?** Plus pastes the clipboard. Mode combo is Auto / Fast / Balance / Think / Max. `/mode` only sets the combo — it does not overwrite Settings → Chat model. Mic is Hey Grok. Ctrl+Enter or the arrow sends; Enter is a newline. Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash -lc`.
 
 ## Always-on hub
 

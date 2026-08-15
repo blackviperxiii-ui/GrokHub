@@ -1,9 +1,10 @@
 use grokhub_core::{is_plain_text, BoardCard};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
-/// Write then rename so a kill mid-persist cannot leave a truncated JSON.
+/// Write, fsync, then rename so a kill mid-persist cannot leave a truncated JSON.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = path.parent().ok_or_else(|| "atomic write needs a parent".to_string())?;
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -12,7 +13,10 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .and_then(|s| s.to_str())
         .ok_or_else(|| "atomic write needs a file name".to_string())?;
     let tmp = dir.join(format!(".{name}.tmp"));
-    fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+    let mut f = fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    f.write_all(bytes).map_err(|e| e.to_string())?;
+    f.sync_all().map_err(|e| e.to_string())?;
+    drop(f);
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         e.to_string()

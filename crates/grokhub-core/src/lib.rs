@@ -44,10 +44,9 @@ pub mod workboard;
 
 pub use chat::{
     chat_request_body, chat_request_body_for_mode, chat_request_body_vision, chat_timeout_secs,
-    effective_chat_mode, extract_host_cmds, failover_model, model_for_mode, needs_auth_banner,
-    parse_chat_content, reasoning_effort_for_mode, resolve_chat_model, route_auto_mode,
-    should_failover_status,
-    DEFAULT_MODEL, XAI_BASE,
+    effective_chat_mode, extract_host_cmds, failover_model, is_composer_ladder_model, model_for_mode,
+    needs_auth_banner, parse_chat_content, reasoning_effort_for_mode, resolve_chat_model,
+    route_auto_mode, settings_pin_blocks_auto, should_failover_status, DEFAULT_MODEL, XAI_BASE,
 };
 pub use chips::{
     build_quick_chips, chip_memory_key, chip_suggest_prompt, context_fingerprint, detect_chip_context,
@@ -82,7 +81,8 @@ pub use reflect::{
 pub use pair::{make_pair_code, normalize_code, CODE_ALPH, PAIR_TTL_MS};
 pub use automation::{
     automation_blocked_by_policy, compute_next_run, due_automations, ensure_automation_schedule,
-    mark_automation_ran, parse_nl_automation, skip_automation, Automation,
+    mark_automation_ran, night_check_command, night_check_exit_code, night_check_stdout,
+    parse_nl_automation, skip_automation, skip_night_check_receipt, Automation,
 };
 pub use connector::{
     connector_url_allowed, extract_connector_cmds, github_api_path, map_website_connector_name,

@@ -19,6 +19,7 @@ use grokhub_core::{
     pick_fresh_seed, wall_can_paint, wall_evict, ImagineWall, WallGif, WALL_GIF_EVERY_MS,
     WALL_GIF_MAX,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
+    night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
     forget_topic, greet_from_last_job, has_auth, has_goal_complete, has_verify_ok, hey_grok_on_press,
@@ -29,7 +30,7 @@ use grokhub_core::{
     ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
-    resolve_chat_model, effective_chat_mode,
+    resolve_chat_model, effective_chat_mode, settings_pin_blocks_auto,
     needs_auth_banner, next_goal_prompt,
     now_ms, on_wheel_grab, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
     parse_nl_automation, parse_recipe, parse_slash, passenger_label, plan_from_text, plan_room,
@@ -40,7 +41,7 @@ use grokhub_core::{
     rewind_dest, save_hub_state, screen_from_extents, search_corpus, should_attach_cabin_frame,
     should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
-    skip_automation, slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
+    slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
     top_habit_labels,
     unified_diff_cite, usage_line,
     transcribe_route, uid, update_cmds, update_plan_steps, update_wipes_config, voice_session_url, Automation, BoardCard,
@@ -177,6 +178,17 @@ const HIDDEN_HEARTBEAT_MS: u64 = 400;
 
 fn night_host_check_blocks_ui() -> bool {
     false
+}
+
+fn mode_status_line(mode: &str, pinned_model: &str) -> String {
+    if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
+        return "Mode auto — routes Fast / Balance / Think / Max".into();
+    }
+    let model = resolve_chat_model(mode, pinned_model);
+    match grokhub_core::reasoning_effort_for_mode(mode) {
+        Some(effort) => format!("Mode {mode} → {model} · {effort}"),
+        None => format!("Mode {mode} → {model}"),
+    }
 }
 
 const RAIL_FOOTER_H: f32 = 52.0;
@@ -327,6 +339,7 @@ pub struct Cabin {
     last_window_title: String,
     voice_orb: String,
     last_night_tick: Instant,
+    night_check_rx: Option<(String, mpsc::Receiver<(String, i32)>)>,
     learning: LearningState,
     usage: UsageDay,
     palette_open: bool,
@@ -547,6 +560,7 @@ impl Cabin {
             last_window_title: String::new(),
             voice_orb: "idle".into(),
             last_night_tick: Instant::now(),
+            night_check_rx: None,
             learning: crate::store::load_learning(),
             usage: crate::store::load_usage(),
             palette_open: false,
@@ -1367,13 +1381,8 @@ impl Cabin {
             Slash::Remember(note) => self.run_slash(Slash::MemoryNote(note)),
             Slash::Mode(mode) => {
                 self.cfg.mode = mode.clone();
-                self.cfg.model = model_for_mode(&mode).to_string();
                 let _ = config::save(&self.cfg);
-                let model = self.cfg.model.as_str();
-                self.status = match grokhub_core::reasoning_effort_for_mode(&mode) {
-                    Some(effort) => format!("Mode {mode} → {model} · {effort}"),
-                    None => format!("Mode {mode} → {model}"),
-                };
+                self.status = mode_status_line(&mode, &self.cfg.model);
             }
             Slash::Dream => self.run_dream(),
             Slash::Import => self.import_openclaw(),
@@ -1777,18 +1786,61 @@ impl Cabin {
             .into_iter()
             .map(|a| ensure_automation_schedule(a, clock_copy))
             .collect();
+        if self.poll_night_check(clock.now_ms) {
+            return;
+        }
         let due = due_automations(&self.automations, clock.now_ms);
         let Some(a) = due.into_iter().next() else {
             return;
         };
-        if !a.check_command.trim().is_empty() && night_host_check_blocks_ui() {
-            let out = run_host(&a.check_command, Duration::from_secs(20));
-            let code = if out.contains("exit 0") { 0 } else { 1 };
-            if skip_automation(&out, code) {
-                self.mark_auto_ran(&a.id, clock.now_ms);
-                return;
-            }
+        if let Some(cmd) = night_check_command(&a.check_command) {
+            self.spawn_night_check(a.id.clone(), a.name.clone(), cmd.to_string());
+            return;
         }
+        self.fire_night(a, clock.now_ms);
+    }
+
+    fn poll_night_check(&mut self, now_ms: u64) -> bool {
+        let Some((id, rx)) = self.night_check_rx.take() else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok((out, _code)) => {
+                if skip_night_check_receipt(&out) {
+                    let name = self
+                        .automations
+                        .iter()
+                        .find(|a| a.id == id)
+                        .map(|a| a.name.clone())
+                        .unwrap_or_else(|| id.clone());
+                    self.mark_auto_ran(&id, now_ms);
+                    self.status = format!("Night skipped {name} (check)");
+                } else if let Some(a) = self.automations.iter().find(|x| x.id == id).cloned() {
+                    self.fire_night(a, now_ms);
+                }
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.night_check_rx = Some((id, rx));
+                true
+            }
+            Err(mpsc::TryRecvError::Disconnected) => false,
+        }
+    }
+
+    fn spawn_night_check(&mut self, id: String, name: String, cmd: String) {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let out = run_host(&cmd, Duration::from_secs(20));
+            let code = night_check_exit_code(&out);
+            let _ = tx.send((out, code));
+        });
+        self.night_check_rx = Some((id, rx));
+        self.status = format!("Night check: {name}");
+    }
+
+    fn fire_night(&mut self, a: Automation, now_ms: u64) {
+        let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
         let destructive = a.instructions.to_ascii_lowercase().contains("rm ")
             || host_risk(&a.instructions) == HostRisk::Destructive;
@@ -1796,7 +1848,7 @@ impl Cabin {
             self.status = format!("Night skipped {} (quiet/policy)", a.name);
             return;
         }
-        self.mark_auto_ran(&a.id, clock.now_ms);
+        self.mark_auto_ran(&a.id, now_ms);
         self.daily_auto_used = self.daily_auto_used.saturating_add(1);
         self.status = format!("Night: {}", a.name);
         self.nav = Nav::Chat;
@@ -4626,8 +4678,8 @@ impl Cabin {
                                                             }
                                                             crate::cards::settings_field(ui, "Console key", "Optional. Never in markdown.", &mut self.cfg.api_key, true);
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
-                                                            crate::cards::settings_field(ui, "Chat model", "Empty means the cabin default. Imagine never shares this.", &mut self.cfg.model, false);
-                                                            crate::cards::settings_field(ui, "Composer mode", "Auto routes Fast / Balance / Think / Max. Fast is Grok 3 mini. Balance is Grok 4.3. Think is Grok 4.6 high. Max is Grok 4.6 xhigh.", &mut self.cfg.mode, false);
+                                                            crate::cards::settings_field(ui, "Chat model", "Empty or a ladder default (mini / 4.3 / 4.6) lets Auto route. A catalog pin such as grok-3 skips Auto. Imagine never shares this.", &mut self.cfg.model, false);
+                                                            crate::cards::settings_field(ui, "Composer mode", "Auto routes Fast / Balance / Think / Max. Fast is Grok 3 mini. Balance is Grok 4.3. Think is Grok 4.6 high. Max is Grok 4.6 xhigh. The combo does not overwrite Chat model.", &mut self.cfg.mode, false);
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(ui, "The cabin is dark. Light and System stay on grok.com.");
@@ -5721,6 +5773,27 @@ mod tests {
         assert!(super::wants_live_repaint(true, false, false, true, false));
         assert!(super::HIDDEN_HEARTBEAT_MS > 80);
         assert!(!super::night_host_check_blocks_ui());
+    }
+
+    #[test]
+    fn mode_status_does_not_treat_ladder_default_as_auto_pin() {
+        assert_eq!(
+            super::mode_status_line("auto", "grok-3-mini-fast"),
+            "Mode auto — routes Fast / Balance / Think / Max"
+        );
+        assert_eq!(
+            super::mode_status_line("auto", "grok-4.6"),
+            "Mode auto — routes Fast / Balance / Think / Max"
+        );
+        assert_eq!(super::mode_status_line("auto", "grok-3"), "Mode auto → grok-3");
+        assert_eq!(
+            super::mode_status_line("think", "grok-3"),
+            "Mode think → grok-4.6 · high"
+        );
+        assert_eq!(
+            super::mode_status_line("max", ""),
+            "Mode max → grok-4.6 · xhigh"
+        );
     }
 
     #[test]

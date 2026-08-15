@@ -251,6 +251,46 @@ pub fn skip_automation(check_output: &str, check_exit: i32) -> bool {
     check_exit != 0 || check_output.trim().is_empty()
 }
 
+/// Night `checkCommand` must run off the UI thread. Empty means no gate.
+pub fn night_check_command(check_command: &str) -> Option<&str> {
+    let t = check_command.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
+}
+
+pub fn night_check_exit_code(output: &str) -> i32 {
+    if output.contains("exit 0") {
+        0
+    } else {
+        1
+    }
+}
+
+/// Host receipts wrap `$ cmd` / `exit N`. Only the command stdout gates skip-on-empty.
+pub fn night_check_stdout(receipt: &str) -> &str {
+    let rest = match receipt.find("\nexit ") {
+        Some(idx) => {
+            let after = &receipt[idx + 1..];
+            match after.find('\n') {
+                Some(nl) => &after[nl + 1..],
+                None => "",
+            }
+        }
+        None => receipt,
+    };
+    match rest.find("[stderr]") {
+        Some(idx) => &rest[..idx],
+        None => rest,
+    }
+}
+
+pub fn skip_night_check_receipt(receipt: &str) -> bool {
+    skip_automation(night_check_stdout(receipt), night_check_exit_code(receipt))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +306,16 @@ mod tests {
         assert!(skip_automation("", 0));
         assert!(skip_automation("ok", 1));
         assert!(!skip_automation("work to do", 0));
+        assert_eq!(night_check_command("  "), None);
+        assert_eq!(night_check_command("test -f /tmp/ready"), Some("test -f /tmp/ready"));
+        assert_eq!(night_check_exit_code("$ cmd\nexit 0\n"), 0);
+        assert_eq!(night_check_exit_code("$ cmd\nexit 1\n"), 1);
+        assert!(skip_automation("ready", night_check_exit_code("exit 1")));
+        assert!(!skip_automation("ready", night_check_exit_code("exit 0")));
+        assert_eq!(night_check_stdout("$ cmd\nexit 0 · 3ms\n"), "");
+        assert_eq!(night_check_stdout("$ cmd\nexit 0 · 3ms\ndirty\n"), "dirty\n");
+        assert!(skip_night_check_receipt("$ git status --porcelain\nexit 0 · 3ms\n"));
+        assert!(!skip_night_check_receipt("$ git status --porcelain\nexit 0 · 3ms\n M src.rs\n"));
         let clock = LocalClock {
             now_ms: 1_000,
             weekday: 3,
