@@ -5,7 +5,10 @@ use eframe::egui::{
     self, Color32, ColorImage, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
     TextureHandle, TextureOptions,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
+use grokhub_core::os_prefers_dark;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::Mutex;
+use std::time::Instant;
 
 pub fn title_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("inter-bold".into()))
@@ -36,6 +39,132 @@ pub const BUBBLE_ASSISTANT: Color32 = PANEL;
 pub const LIVE: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
 pub const SETUP: Color32 = Color32::from_rgb(0xea, 0xb3, 0x08);
 pub const OFFLINE: Color32 = Color32::from_rgb(0xef, 0x44, 0x44);
+/// grok.com light `--surface-base` (System when the desktop is light).
+pub const LIGHT_BG: Color32 = Color32::from_rgb(0xf4, 0xf4, 0xf5);
+pub const LIGHT_SURFACE: Color32 = Color32::from_rgb(0xee, 0xee, 0xf0);
+pub const LIGHT_PANEL: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
+pub const LIGHT_ELEVATED: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);
+pub const LIGHT_FG: Color32 = Color32::from_rgb(0x0a, 0x0a, 0x0a);
+pub const LIGHT_MUTED: Color32 = Color32::from_rgb(0x73, 0x73, 0x73);
+pub const LIGHT_SUBTLE: Color32 = Color32::from_rgb(0x8a, 0x8a, 0x8a);
+pub const LIGHT_BORDER: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
+pub const LIGHT_BORDER_STRONG: Color32 = Color32::from_rgb(0xd4, 0xd4, 0xd8);
+pub const LIGHT_NAV_ACTIVE: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
+pub const LIGHT_BUBBLE_USER: Color32 = Color32::from_rgb(0xe8, 0xe8, 0xea);
+pub const LIGHT_HOVER: Color32 = Color32::from_rgb(0xda, 0xda, 0xdd);
+
+static USE_LIGHT: AtomicBool = AtomicBool::new(false);
+static LAST_PAINT: AtomicU8 = AtomicU8::new(255);
+
+struct OsDarkCache {
+    at: Instant,
+    dark: bool,
+}
+
+static OS_DARK: Mutex<Option<OsDarkCache>> = Mutex::new(None);
+
+fn tok(dark: Color32, light: Color32) -> Color32 {
+    if USE_LIGHT.load(Ordering::Relaxed) {
+        light
+    } else {
+        dark
+    }
+}
+
+pub fn bg() -> Color32 {
+    tok(BG, LIGHT_BG)
+}
+pub fn surface() -> Color32 {
+    tok(SURFACE, LIGHT_SURFACE)
+}
+pub fn panel() -> Color32 {
+    tok(PANEL, LIGHT_PANEL)
+}
+pub fn elevated() -> Color32 {
+    tok(ELEVATED, LIGHT_ELEVATED)
+}
+pub fn fg() -> Color32 {
+    tok(FG, LIGHT_FG)
+}
+pub fn muted() -> Color32 {
+    tok(MUTED, LIGHT_MUTED)
+}
+pub fn subtle() -> Color32 {
+    tok(SUBTLE, LIGHT_SUBTLE)
+}
+pub fn border() -> Color32 {
+    tok(BORDER, LIGHT_BORDER)
+}
+pub fn border_strong() -> Color32 {
+    tok(BORDER_STRONG, LIGHT_BORDER_STRONG)
+}
+pub fn nav_active() -> Color32 {
+    tok(NAV_ACTIVE, LIGHT_NAV_ACTIVE)
+}
+pub fn bubble_user() -> Color32 {
+    tok(BUBBLE_USER, LIGHT_BUBBLE_USER)
+}
+pub fn bubble_assistant() -> Color32 {
+    panel()
+}
+pub fn live() -> Color32 {
+    LIVE
+}
+pub fn setup() -> Color32 {
+    SETUP
+}
+pub fn offline() -> Color32 {
+    OFFLINE
+}
+
+#[cfg(test)]
+pub fn set_paint_dark(dark: bool) {
+    USE_LIGHT.store(!dark, Ordering::Relaxed);
+    LAST_PAINT.store(255, Ordering::SeqCst);
+}
+
+pub fn desktop_prefers_dark() -> bool {
+    if let Ok(v) = std::env::var("GROKHUB_COLOR_SCHEME") {
+        return os_prefers_dark(&v, "", "");
+    }
+    if let Ok(mut g) = OS_DARK.lock() {
+        if let Some(c) = g.as_ref() {
+            if c.at.elapsed().as_secs() < 2 {
+                return c.dark;
+            }
+        }
+        let dark = probe_os_dark();
+        *g = Some(OsDarkCache {
+            at: Instant::now(),
+            dark,
+        });
+        return dark;
+    }
+    true
+}
+
+fn probe_os_dark() -> bool {
+    let scheme = cmd_stdout(
+        "gsettings",
+        &["get", "org.gnome.desktop.interface", "color-scheme"],
+    );
+    let gtk = std::env::var("GTK_THEME").unwrap_or_default();
+    let xfce = cmd_stdout("xfconf-query", &["-c", "xsettings", "-p", "/Net/ThemeName"]);
+    os_prefers_dark(&scheme, &gtk, &xfce)
+}
+
+fn cmd_stdout(bin: &str, args: &[&str]) -> String {
+    std::process::Command::new(bin)
+        .args(args)
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default()
+        .trim()
+        .trim_matches('\'')
+        .to_string()
+}
+
 pub const SIDEBAR_W: f32 = 260.0;
 pub const TITLEBAR_H: f32 = 28.0;
 /// `.query-bar` measured max-width
@@ -171,43 +300,53 @@ pub fn install_fonts(ctx: &egui::Context) {
     }
 }
 
-pub fn apply(ctx: &egui::Context) {
-    static STYLE: AtomicBool = AtomicBool::new(false);
+pub fn apply(ctx: &egui::Context, dark: bool) {
     install_fonts(ctx);
-    if STYLE.swap(true, Ordering::SeqCst) {
+    USE_LIGHT.store(!dark, Ordering::Relaxed);
+    let flag = if dark { 1 } else { 0 };
+    if LAST_PAINT.swap(flag, Ordering::SeqCst) == flag {
         return;
     }
-    let mut visuals = egui::Visuals::dark();
-    visuals.dark_mode = true;
-    visuals.override_text_color = Some(FG);
-    visuals.panel_fill = SURFACE;
-    visuals.window_fill = PANEL;
-    visuals.extreme_bg_color = BG;
-    visuals.faint_bg_color = ELEVATED;
-    visuals.code_bg_color = ELEVATED;
-    visuals.hyperlink_color = FG;
-    visuals.warn_fg_color = MUTED;
-    visuals.error_fg_color = FG;
-    visuals.selection.bg_fill = ELEVATED;
-    visuals.selection.stroke = Stroke::new(1.0, BORDER_STRONG);
-    visuals.widgets.noninteractive.bg_fill = PANEL;
-    visuals.widgets.noninteractive.weak_bg_fill = SURFACE;
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, MUTED);
-    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
-    visuals.widgets.inactive.bg_fill = ELEVATED;
-    visuals.widgets.inactive.weak_bg_fill = ELEVATED;
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, FG);
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(0x29, 0x29, 0x29);
-    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x29, 0x29, 0x29);
-    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, FG);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, BORDER_STRONG);
-    visuals.widgets.active.bg_fill = ELEVATED;
-    visuals.widgets.active.fg_stroke = Stroke::new(1.0, FG);
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0, BORDER_STRONG);
-    visuals.widgets.open.bg_fill = ELEVATED;
-    visuals.widgets.open.fg_stroke = Stroke::new(1.0, FG);
-    visuals.window_stroke = Stroke::new(1.0, BORDER);
+    let mut visuals = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    let hover = if dark {
+        Color32::from_rgb(0x29, 0x29, 0x29)
+    } else {
+        LIGHT_HOVER
+    };
+    visuals.dark_mode = dark;
+    visuals.override_text_color = Some(fg());
+    visuals.panel_fill = surface();
+    visuals.window_fill = panel();
+    visuals.extreme_bg_color = bg();
+    visuals.faint_bg_color = elevated();
+    visuals.code_bg_color = elevated();
+    visuals.hyperlink_color = fg();
+    visuals.warn_fg_color = muted();
+    visuals.error_fg_color = fg();
+    visuals.selection.bg_fill = elevated();
+    visuals.selection.stroke = Stroke::new(1.0_f32, border_strong());
+    visuals.widgets.noninteractive.bg_fill = panel();
+    visuals.widgets.noninteractive.weak_bg_fill = surface();
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, muted());
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, border());
+    visuals.widgets.inactive.bg_fill = elevated();
+    visuals.widgets.inactive.weak_bg_fill = elevated();
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, fg());
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, border());
+    visuals.widgets.hovered.bg_fill = hover;
+    visuals.widgets.hovered.weak_bg_fill = hover;
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, fg());
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, border_strong());
+    visuals.widgets.active.bg_fill = elevated();
+    visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, fg());
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, border_strong());
+    visuals.widgets.open.bg_fill = elevated();
+    visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, fg());
+    visuals.window_stroke = Stroke::new(1.0_f32, border());
     visuals.window_rounding = 8.0.into();
     visuals.menu_rounding = 8.0.into();
     visuals.widgets.noninteractive.rounding = 8.0.into();
@@ -277,5 +416,12 @@ mod tests {
         assert_eq!(stage_subtitle("imagine"), "Images");
         assert_eq!(stage_subtitle("connectors"), "GitHub");
         assert_eq!(title_font(40.0).size, 40.0);
+        set_paint_dark(true);
+        assert_eq!(bg(), BG);
+        set_paint_dark(false);
+        assert_eq!(bg(), LIGHT_BG);
+        assert_eq!(fg(), LIGHT_FG);
+        set_paint_dark(true);
+        assert_eq!(bg(), BG);
     }
 }

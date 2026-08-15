@@ -1,5 +1,6 @@
 //! Shared GrokHub brain. Linux, Windows, and Android must call this — not a second protocol.
 
+pub mod appearance;
 pub mod attach;
 pub mod automation;
 pub mod chat;
@@ -45,6 +46,10 @@ pub mod voice;
 pub mod windshield;
 pub mod workboard;
 
+pub use appearance::{
+    appearance_choices, os_prefers_dark, parse_theme, pick_theme, resolve_dark, theme_id, theme_label,
+    ThemeChoice,
+};
 pub use attach::{
     append_composer, attach_kind, attach_name, attach_prompt_line, chat_attach_status,
     clip_image_args, imagine_ref_status, list_pick_names, next_chat_image, parse_picker_stdout,
