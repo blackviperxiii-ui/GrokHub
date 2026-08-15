@@ -194,8 +194,9 @@ pub use thread_tab::{
     DeleteOutcome, ThreadTab,
 };
 pub use update::{
-    discover_source, is_grokhub_source, update_cmds, update_plan_steps, update_wipes_config,
-    walk_up_source,
+    discover_source, is_grokhub_source, overlay_update_begin, overlay_update_finish,
+    overlay_update_progress, update_cmds, update_plan_steps, update_progress_pct,
+    update_step_label, update_wipes_config, walk_up_source, OverlayUpdateView,
 };
 
 pub const PRESENCE_PUSH_MIN_MS: u64 = 400;

@@ -116,6 +116,70 @@ pub fn update_wipes_config(cmds: &[String]) -> bool {
     })
 }
 
+pub fn update_progress_pct(done_cmds: usize, total_cmds: usize) -> u8 {
+    if total_cmds == 0 {
+        return 100;
+    }
+    let pct = done_cmds.saturating_mul(100) / total_cmds;
+    pct.min(100) as u8
+}
+
+pub fn update_step_label(cmd: &str) -> &'static str {
+    if cmd.contains("pull --ff-only") {
+        "Pulling origin/main…"
+    } else if cmd.contains("install.sh") {
+        "Installing overlay…"
+    } else {
+        "Updating…"
+    }
+}
+
+pub struct OverlayUpdateView {
+    pub pct: u8,
+    pub status: String,
+    pub running: bool,
+    pub posts_chat: bool,
+    pub stay_on_update: bool,
+}
+
+fn overlay_view(pct: u8, status: String, running: bool) -> OverlayUpdateView {
+    OverlayUpdateView {
+        pct,
+        status,
+        running,
+        posts_chat: false,
+        stay_on_update: true,
+    }
+}
+
+pub fn overlay_update_begin(total_cmds: usize) -> OverlayUpdateView {
+    overlay_view(
+        update_progress_pct(0, total_cmds),
+        "Updating…".into(),
+        true,
+    )
+}
+
+pub fn overlay_update_progress(
+    done_cmds: usize,
+    total_cmds: usize,
+    label: &str,
+) -> OverlayUpdateView {
+    overlay_view(
+        update_progress_pct(done_cmds, total_cmds),
+        label.to_string(),
+        true,
+    )
+}
+
+pub fn overlay_update_finish(ok: bool, last_pct: u8) -> OverlayUpdateView {
+    if ok {
+        overlay_view(100, "Update finished — restart the cabin".into(), false)
+    } else {
+        overlay_view(last_pct, "Update failed".into(), false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +255,65 @@ mod tests {
         assert!(plan[1].explain.contains("overlay"), "{plan:?}");
         assert_ne!(plan[0].explain, "read-only");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn overlay_progress_is_cmd_share() {
+        assert_eq!(update_progress_pct(0, 2), 0);
+        assert_eq!(update_progress_pct(1, 2), 50);
+        assert_eq!(update_progress_pct(2, 2), 100);
+        assert_eq!(update_progress_pct(3, 2), 100);
+        assert_eq!(update_progress_pct(0, 0), 100);
+        assert_eq!(update_progress_pct(1, 3), 33);
+    }
+
+    #[test]
+    fn overlay_update_stays_on_settings_and_skips_chat() {
+        let start = overlay_update_begin(2);
+        assert_eq!(start.pct, 0);
+        assert!(start.running);
+        assert!(!start.posts_chat);
+        assert!(start.stay_on_update);
+        assert!(start.status.contains("Updating"));
+
+        let pull = overlay_update_progress(
+            1,
+            2,
+            update_step_label("git pull --ff-only origin main"),
+        );
+        assert_eq!(pull.pct, 50);
+        assert!(pull.running);
+        assert!(!pull.posts_chat);
+        assert!(pull.stay_on_update);
+        assert!(pull.status.contains("Pulling"));
+
+        let ok = overlay_update_finish(true, 50);
+        assert_eq!(ok.pct, 100);
+        assert!(!ok.running);
+        assert!(!ok.posts_chat);
+        assert!(ok.stay_on_update);
+        assert!(ok.status.contains("restart"));
+        assert!(!ok.status.contains("HOST_RESULT"));
+
+        let fail = overlay_update_finish(false, 50);
+        assert_eq!(fail.pct, 50);
+        assert!(!fail.running);
+        assert!(!fail.posts_chat);
+        assert!(fail.stay_on_update);
+        assert!(fail.status.contains("failed"));
+        assert!(!fail.status.contains("HOST_RESULT"));
+    }
+
+    #[test]
+    fn overlay_step_labels_name_pull_and_install() {
+        assert_eq!(
+            update_step_label("git -C '/x' pull --ff-only origin main"),
+            "Pulling origin/main…"
+        );
+        assert_eq!(
+            update_step_label("'/x/scripts/install.sh' --user"),
+            "Installing overlay…"
+        );
+        assert_eq!(update_step_label("echo hi"), "Updating…");
     }
 }
