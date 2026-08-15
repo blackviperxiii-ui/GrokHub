@@ -378,7 +378,7 @@ pub fn slash_help() -> String {
         "/health — doctor",
         "/fix — halt + doctor",
         "/remember <fact> — write MEMORY.md",
-        "/mode auto|fast|balance|think|max — Auto routes; Fast mini; Balance 4.3; Think 4.6 high; Max 4.6 xhigh",
+        "/mode auto|fast|balance|think|max — Auto routes (Settings pin skips if not a ladder default); Fast mini; Balance 4.3; Think 4.6 high; Max 4.6 xhigh",
         "/dream — Imagine last night",
         "/tools on|off — host tools",
         "/import — OpenClaw workspace",

@@ -32,7 +32,7 @@ Shared crate: `grokhub-core` — pair codes, hub state, frames, inhabit, redacti
 
 First run stays in chat. Banner: **Connect Grok in Settings**. Settings holds the xAI API key, YOLO (`/approve off`), device name, model.
 
-Composer placeholder: **What do you want to know?** Mode combo: Auto / Fast / Balance / Think / Max. Auto routes from the ask (`grok-3-mini-fast` / `grok-4.3` / `grok-4.6` `high` / `grok-4.6` `xhigh`). Fast pins mini. Balance is Grok 4.3. Think is Grok 4.6 at high. Max is Grok 4.6 at xhigh. Failover on 401/403/429/5xx: 4.6 → 4.3 → Fast. `/mode auto|fast|balance|think|max`.
+Composer placeholder: **What do you want to know?** Mode combo: Auto / Fast / Balance / Think / Max. Auto routes from the ask (`grok-3-mini-fast` / `grok-4.3` / `grok-4.6` `high` / `grok-4.6` `xhigh`). A Settings chat-model pin skips Auto only when it is not a ladder default — `/mode` does not write that pin. Fast pins mini. Balance is Grok 4.3. Think is Grok 4.6 at high. Max is Grok 4.6 at xhigh. Failover on 401/403/429/5xx: 4.6 → 4.3 → Fast. `/mode auto|fast|balance|think|max`.
 
 Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash -lc` and sends stdout back.
 
