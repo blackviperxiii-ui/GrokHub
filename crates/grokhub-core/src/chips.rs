@@ -1775,6 +1775,7 @@ pub fn mode_from_chip_value(value: &str) -> Option<&'static str> {
     let rest = v.strip_prefix("__mode:").unwrap_or(v);
     match rest {
         "max" | "deep" | "heavy" => Some("max"),
+        "think" | "thinking" => Some("thinking"),
         "balanced" | "build" | "expert" => Some("balanced"),
         "auto" | "fast" => Some("auto"),
         _ => None,
@@ -1945,6 +1946,8 @@ mod tests {
     #[test]
     fn mode_and_nav_values() {
         assert_eq!(mode_from_chip_value("__mode:max"), Some("max"));
+        assert_eq!(mode_from_chip_value("__mode:thinking"), Some("thinking"));
+        assert_eq!(mode_from_chip_value("think"), Some("thinking"));
         assert_eq!(mode_from_chip_value("__mode:auto"), Some("auto"));
         assert_eq!(nav_from_chip_value("__nav:imagine"), Some("imagine"));
     }

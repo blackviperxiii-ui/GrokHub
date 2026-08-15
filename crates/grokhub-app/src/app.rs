@@ -692,7 +692,7 @@ impl Cabin {
     fn mode_label(mode: &str) -> &'static str {
         match mode {
             "max" | "deep" | "heavy" => "Max",
-            "balanced" | "build" | "expert" => "Think",
+            "thinking" | "think" | "balanced" | "build" | "expert" => "Think",
             "fast" => "Fast",
             _ => "Auto",
         }
@@ -1014,9 +1014,7 @@ impl Cabin {
             Slash::Remember(note) => self.run_slash(Slash::MemoryNote(note)),
             Slash::Mode(mode) => {
                 self.cfg.mode = mode.clone();
-                if self.cfg.model.trim().is_empty() || self.cfg.model == DEFAULT_MODEL {
-                    self.cfg.model = model_for_mode(&mode).to_string();
-                }
+                self.cfg.model = model_for_mode(&mode).to_string();
                 let _ = config::save(&self.cfg);
                 self.status = format!("Mode {mode} → {}", model_for_mode(&mode));
             }
@@ -1750,7 +1748,7 @@ impl Cabin {
         self.running = true;
         self.status = "Thinking…".into();
         let key = self.bearer();
-        let model = if !self.cfg.mode.trim().is_empty() && self.cfg.model.trim().is_empty() {
+        let model = if !self.cfg.mode.trim().is_empty() {
             model_for_mode(&self.cfg.mode).to_string()
         } else if self.cfg.model.trim().is_empty() {
             DEFAULT_MODEL.to_string()
@@ -3575,7 +3573,7 @@ impl Cabin {
                                 for (id, label) in [
                                     ("auto", "Auto"),
                                     ("fast", "Fast"),
-                                    ("balanced", "Think"),
+                                    ("thinking", "Think"),
                                     ("max", "Max"),
                                 ] {
                                     ui.selectable_value(&mut mode, id.to_string(), label);
@@ -3892,7 +3890,7 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Console key", "Optional. Never in markdown.", &mut self.cfg.api_key, true);
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
                                                             crate::cards::settings_field(ui, "Chat model", "Empty means the cabin default. Imagine never shares this.", &mut self.cfg.model, false);
-                                                            crate::cards::settings_field(ui, "Composer mode", "auto, fast, balanced, or max.", &mut self.cfg.mode, false);
+                                                            crate::cards::settings_field(ui, "Composer mode", "auto, fast, thinking (Grok 4.3), or max (Grok 4.6).", &mut self.cfg.mode, false);
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(ui, "The cabin is dark. Light and System stay on grok.com.");

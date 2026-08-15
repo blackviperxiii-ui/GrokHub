@@ -288,7 +288,8 @@ pub fn resolve_mode_arg(arg: &str) -> Option<String> {
     let mapped = match a.as_str() {
         "auto" | "adaptive" | "smart" => "auto",
         "fast" => "fast",
-        "balanced" | "expert" | "think" | "thinking" => "balanced",
+        "think" | "thinking" => "thinking",
+        "balanced" | "expert" => "balanced",
         "heavy" | "max" | "deep" => "max",
         "build" => "build",
         _ => return None,
@@ -328,7 +329,7 @@ pub fn slash_help() -> String {
         "/health — doctor",
         "/fix — halt + doctor",
         "/remember <fact> — write MEMORY.md",
-        "/mode fast|balanced|max|auto|build",
+        "/mode fast|thinking|max|auto|build",
         "/dream — Imagine last night",
         "/tools on|off — host tools",
         "/import — OpenClaw workspace",
@@ -384,6 +385,11 @@ mod tests {
         assert_eq!(parse_slash("/rename night").as_ref().map(slash_kind), Some("rename"));
         assert_eq!(parse_slash("/host"), Some(Slash::HostStatus));
         assert_eq!(parse_slash("/mode max"), Some(Slash::Mode("max".into())));
+        assert_eq!(parse_slash("/mode thinking"), Some(Slash::Mode("thinking".into())));
+        assert_eq!(parse_slash("/mode think"), Some(Slash::Mode("thinking".into())));
+        assert_eq!(resolve_mode_arg("thinking").as_deref(), Some("thinking"));
+        assert_eq!(resolve_mode_arg("max").as_deref(), Some("max"));
+        assert!(slash_help().contains("thinking"));
         assert_eq!(parse_slash("/dream"), Some(Slash::Dream));
         assert_eq!(parse_slash("/tools off"), Some(Slash::Tools { on: false }));
         assert_eq!(parse_slash("/import"), Some(Slash::Import));
