@@ -3148,8 +3148,8 @@ impl Cabin {
                 egui::Frame::none()
                     .fill(crate::theme::BG)
                     .inner_margin(egui::Margin {
-                        left: 48.0,
-                        right: 48.0,
+                        left: 32.0,
+                        right: 32.0,
                         top: 10.0,
                         bottom: 22.0,
                     }),
@@ -3318,7 +3318,7 @@ impl Cabin {
                         }
                         let edit = ui.add(
                             egui::TextEdit::multiline(&mut self.composer)
-                                .desired_width(ui.available_width() - 188.0)
+                                .desired_width((ui.available_width() - 188.0).max(80.0))
                                 .desired_rows(2)
                                 .frame(false)
                                 .hint_text("Ask anything"),
@@ -3415,11 +3415,12 @@ impl Cabin {
                         ui.add_space(28.0);
                         let tiles = self.visible_chips.clone();
                         let n = tiles.len().min(4);
-                        let max_w = 880.0_f32.min(ui.available_width());
-                        let pad = ((ui.available_width() - max_w) * 0.5).max(0.0);
+                        let avail = ui.available_width().max(1.0);
+                        let max_w = 880.0_f32.min(avail);
+                        let pad = ((avail - max_w) * 0.5).max(0.0);
                         ui.horizontal(|ui| {
                             ui.add_space(pad);
-                            ui.allocate_ui(egui::vec2(max_w, 0.0), |ui| {
+                            ui.allocate_ui(egui::vec2(max_w.max(1.0), 1.0), |ui| {
                         crate::cards::tile_row(ui, n, |ui, i| {
                             let c = &tiles[i];
                             if crate::cards::empty_prompt_tile(
