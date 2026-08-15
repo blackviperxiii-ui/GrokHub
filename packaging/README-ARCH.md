@@ -9,6 +9,6 @@ cd Grok-Hub
 grokhub
 ```
 
-Later updates: Settings → **Update**, `/update`, or `grokhub --update`. The clone must be on `main`. Overlay only — `~/.config/GrokHub` stays. Quit the tray and relaunch so the new binary runs.
+Later updates: Settings → **Update**, `/update`, or `grokhub --update`. The clone must be on `main` with an `origin`. Overlay only — `~/.config/GrokHub` stays. Quit the tray and relaunch so the new binary runs.
 
 See [aur/README.md](./aur/README.md) for makepkg.

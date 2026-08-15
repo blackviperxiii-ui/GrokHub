@@ -43,7 +43,7 @@ use grokhub_core::{
     skip_automation, slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
     top_habit_labels,
     unified_diff_cite, usage_line,
-    transcribe_route, uid, update_cmds, update_wipes_config, voice_session_url, Automation, BoardCard,
+    transcribe_route, uid, update_cmds, update_plan_steps, update_wipes_config, voice_session_url, Automation, BoardCard,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ComputerOp, DeviceCodeStart, HeyGrokAction,
     HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, Recipe, ReplayOp, RewindRecord,
@@ -2688,7 +2688,7 @@ impl Cabin {
         let _ = config::save(&self.cfg);
         match update_cmds(&src) {
             Ok(cmds) if !update_wipes_config(&cmds) => {
-                let plan: Vec<HostPlanStep> = cmds.into_iter().map(step_from_cmd).collect();
+                let plan: Vec<HostPlanStep> = update_plan_steps(cmds);
                 if self.cfg.yolo {
                     self.start_overlay_update(approved_cmds(&plan));
                 } else {
@@ -4632,7 +4632,7 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Bound project", "The world. Host, Imagine, and memory stay here.", &mut self.cfg.project_dir, false);
                                                         }
                                                         SettingsSec::Update => {
-                                                            crate::cards::settings_note(ui, "Overlay only — git pull --ff-only then install.sh --user. Does not wipe ~/.config/GrokHub.");
+                                                            crate::cards::settings_note(ui, "Overlay only — git pull --ff-only origin main, then install.sh --user. The clone must be on main. Does not wipe ~/.config/GrokHub.");
                                                             crate::cards::settings_field(ui, "Source clone", "Empty uses GROKHUB_SRC or the install receipt.", &mut self.cfg.source_dir, false);
                                                             if crate::cards::settings_action(ui, "Install overlay", "Pulls this clone and runs the user install.", "Update") {
                                                                 update = true;

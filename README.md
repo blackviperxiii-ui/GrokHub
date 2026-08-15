@@ -42,7 +42,7 @@ Imagine always uses dedicated **`grok-2-image`** (chat model is ignored). Hey Gr
 
 Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is the sign-in. Device-code against `auth.x.ai` — same public client as Grok CLI. A console API key is optional. Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600), never in markdown.
 
-Settings → **Update** (or `grokhub --update` / `/update`) does `git pull --ff-only` in the source clone, then `./scripts/install.sh --user`. The clone must be on `main`. Overlay only — config stays. Supervised unless YOLO. Quit the tray and relaunch `grokhub` so the new binary is the one that runs.
+Settings → **Update** (or `grokhub --update` / `/update`) does `git pull --ff-only origin main` in the source clone, then `./scripts/install.sh --user`. The clone must be on `main` with an `origin`. Overlay only — config stays. Supervised unless YOLO. Quit the tray and relaunch `grokhub` so the new binary is the one that runs.
 
 `HOST_PLAN` is an editable checklist. `scripts/verify.sh` gates **done** / `GOAL_COMPLETE`. A recipe whose `screen=` does not match the current desktop reshoots and skips coordinate clicks. Idle ≥ 10 minutes (or `/learn reflect`) does a surgical `MEMORY.md` edit with a diff and `.prev` restore.
 
