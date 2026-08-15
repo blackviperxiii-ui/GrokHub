@@ -502,69 +502,106 @@ pub enum ChipRowAct {
     Dismiss(usize),
 }
 
+pub(crate) fn chip_paint_label(label: &str) -> String {
+    const MAX: usize = 22;
+    let t = label.split_whitespace().collect::<Vec<_>>().join(" ");
+    if t.chars().count() <= MAX {
+        return t;
+    }
+    let mut out = String::new();
+    for (i, ch) in t.chars().enumerate() {
+        if i + 1 >= MAX {
+            break;
+        }
+        out.push(ch);
+    }
+    format!("{}…", out.trim_end())
+}
+
 pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> Option<ChipRowAct> {
     if chips.is_empty() {
         return None;
     }
     let mut act = None;
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-        for (i, c) in chips.iter().take(grokhub_core::CHIP_VISIBLE_MAX).enumerate() {
-            let fill = if c.primary {
-                crate::theme::surface()
-            } else {
-                Color32::TRANSPARENT
-            };
-            let stroke = if c.primary {
-                crate::theme::border_strong()
-            } else {
-                crate::theme::border()
-            };
-            let color = if c.primary {
-                crate::theme::fg()
-            } else {
-                crate::theme::muted()
-            };
-            egui::Frame::none()
-                .fill(fill)
-                .rounding(14.0)
-                .stroke(Stroke::new(1.0_f32, stroke))
-                .inner_margin(egui::Margin::symmetric(10.0, 4.0))
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
-                    ui.horizontal(|ui| {
-                        let hit = crate::theme::pointing(
-                            ui.add(
-                                egui::Button::new(RichText::new(&c.label).size(12.0).color(color))
+    let max_w = crate::theme::QUERY_MAX_W.min(ui.available_width().max(120.0));
+    ui.scope(|ui| {
+        ui.set_max_width(max_w);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            for (i, c) in chips.iter().take(grokhub_core::CHIP_VISIBLE_MAX).enumerate() {
+                let chip_id = ui.id().with(("qchip", i));
+                let hovered = ui
+                    .ctx()
+                    .data(|d| d.get_temp::<bool>(chip_id))
+                    .unwrap_or(false);
+                let fill = if c.primary {
+                    crate::theme::surface()
+                } else {
+                    Color32::TRANSPARENT
+                };
+                let stroke = if c.primary {
+                    crate::theme::border_strong()
+                } else {
+                    crate::theme::border()
+                };
+                let color = if c.primary {
+                    crate::theme::fg()
+                } else {
+                    crate::theme::muted()
+                };
+                let paint = chip_paint_label(&c.label);
+                let tip = if paint != c.label {
+                    c.label.clone()
+                } else if c.hint.is_empty() {
+                    c.value.clone()
+                } else {
+                    c.hint.clone()
+                };
+                let ir = egui::Frame::none()
+                    .fill(fill)
+                    .rounding(14.0)
+                    .stroke(Stroke::new(1.0_f32, stroke))
+                    .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                        ui.horizontal(|ui| {
+                            let hit = crate::theme::pointing(
+                                ui.add(
+                                    egui::Button::new(
+                                        RichText::new(paint).size(12.0).color(color),
+                                    )
                                     .fill(Color32::TRANSPARENT)
                                     .stroke(Stroke::NONE),
-                            ),
-                        )
-                        .on_hover_text(if c.hint.is_empty() {
-                            c.value.clone()
-                        } else {
-                            c.hint.clone()
-                        });
-                        if hit.clicked() {
-                            act = Some(ChipRowAct::Apply(i));
-                        }
-                        let x = crate::theme::pointing(
-                            ui.add(
-                                egui::Button::new(
-                                    RichText::new("×").size(12.0).color(crate::theme::subtle()),
+                                ),
+                            )
+                            .on_hover_text(tip);
+                            if hit.clicked() {
+                                act = Some(ChipRowAct::Apply(i));
+                            }
+                            if hovered {
+                                let x = crate::theme::pointing(
+                                    ui.add(
+                                        egui::Button::new(
+                                            RichText::new("×")
+                                                .size(12.0)
+                                                .color(crate::theme::subtle()),
+                                        )
+                                        .fill(Color32::TRANSPARENT)
+                                        .stroke(Stroke::NONE)
+                                        .min_size(egui::vec2(16.0, 16.0)),
+                                    ),
                                 )
-                                .fill(Color32::TRANSPARENT)
-                                .stroke(Stroke::NONE)
-                                .min_size(egui::vec2(16.0, 16.0)),
-                            ),
-                        )
-                        .on_hover_text("Hide this suggestion");
-                        if x.clicked() {
-                            act = Some(ChipRowAct::Dismiss(i));
-                        }
+                                .on_hover_text("Hide this suggestion");
+                                if x.clicked() {
+                                    act = Some(ChipRowAct::Dismiss(i));
+                                }
+                            }
+                        });
                     });
-                });
-        }
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp(chip_id, ir.response.hovered()));
+            }
+        });
     });
     ui.add_space(8.0);
     act
@@ -1266,6 +1303,12 @@ mod tests {
             ChipRowAct::Apply(i) => assert_eq!(i, 4),
             ChipRowAct::Dismiss(_) => panic!("apply is not dismiss"),
         }
+        assert_eq!(chip_paint_label("Continue Night cabin"), "Continue Night cabin");
+        let long = chip_paint_label(
+            "Continue the work from the chat \"Night cabin\". Last ask: paint the wall.",
+        );
+        assert!(long.chars().count() <= 22, "{long}");
+        assert!(long.ends_with('…'), "{long}");
     }
 
     #[test]

@@ -155,6 +155,7 @@ fn slash_pick_retain(pick: usize, list_changed: bool, len: usize) -> usize {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
 enum ComposerStackSlot {
     AuthBanner,
     SkillApprove,
@@ -166,6 +167,7 @@ enum ComposerStackSlot {
     Pill,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn composer_stack_order() -> &'static [ComposerStackSlot] {
     &[
         ComposerStackSlot::AuthBanner,

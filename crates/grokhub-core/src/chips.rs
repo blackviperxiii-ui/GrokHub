@@ -720,14 +720,13 @@ fn chips_from_other_threads(threads: &[ChipThread]) -> Vec<QuickChip> {
             let follow = chips_from_last_assistant(&[("assistant".into(), last_asst.to_string())]);
             if let Some(mut c) = follow.into_iter().next() {
                 c.id = format!("prev-act-{i}");
-                c.label = shorten(&format!("{} · {}", c.label, t.title.trim()), 34);
+                c.score = 84.0 - (i as f32);
                 c.value = format!(
                     "In the previous chat \"{}\": {}. {}",
                     t.title.trim(),
                     shorten(if last_user.is_empty() { last_asst } else { last_user }, 80),
                     c.value
                 );
-                c.score = 84.0 - (i as f32);
                 c.hint = format!("From a previous reply in {}", t.title.trim());
                 if is_plain_text(&c.value) && is_plain_text(&c.label) {
                     out.push(c);
@@ -2256,6 +2255,39 @@ mod tests {
             }),
             "expected a continue chip from the other chat, got {:?}",
             labels(&chips)
+        );
+    }
+
+    #[test]
+    fn previous_reply_followup_keeps_short_label() {
+        let mem = ChipMemory::default();
+        let others = [ChipThread {
+            title: "Night cabin".into(),
+            last_user: "paint the wall".into(),
+            last_assistant: "First coat is ready. I'll run HOST_CMD diagnostics on the wall next."
+                .into(),
+        }];
+        let mut inp = input(&[], "", &mem, &[], &[]);
+        inp.other_threads = &others;
+        let chips = build_quick_chips(inp);
+        let prev_act = chips
+            .iter()
+            .find(|c| c.id.starts_with("prev-act"))
+            .expect("previous-chat last-reply action");
+        assert!(
+            !prev_act.label.contains("Night cabin"),
+            "follow-up label should stay the action, not the thread title: {}",
+            prev_act.label
+        );
+        assert!(
+            prev_act.hint.contains("Night cabin"),
+            "hint should name the previous chat: {}",
+            prev_act.hint
+        );
+        assert!(
+            prev_act.value.contains("Night cabin"),
+            "value should stay grounded in the previous chat: {}",
+            prev_act.value
         );
     }
 
