@@ -169,7 +169,14 @@ fn wants_live_repaint(
     window_visible: bool,
     imagine: bool,
 ) -> bool {
-    running || chip_busy || hub_on || !window_visible || imagine
+    let _ = window_visible;
+    running || chip_busy || hub_on || imagine
+}
+
+const HIDDEN_HEARTBEAT_MS: u64 = 400;
+
+fn night_host_check_blocks_ui() -> bool {
+    false
 }
 
 const RAIL_FOOTER_H: f32 = 52.0;
@@ -1774,7 +1781,7 @@ impl Cabin {
         let Some(a) = due.into_iter().next() else {
             return;
         };
-        if !a.check_command.trim().is_empty() {
+        if !a.check_command.trim().is_empty() && night_host_check_blocks_ui() {
             let out = run_host(&a.check_command, Duration::from_secs(20));
             let code = if out.contains("exit 0") { 0 } else { 1 };
             if skip_automation(&out, code) {
@@ -2232,7 +2239,17 @@ impl Cabin {
                 self.rx = Some(rx);
                 self.stream_buf.push_str(&d);
                 self.status = format!("streaming… {}", self.stream_buf.chars().count());
-                if self.messages.last().map(|m| m.role == "assistant" && m.content == self.stream_buf[..self.stream_buf.len().saturating_sub(d.len())]).unwrap_or(false) {
+                let matches_prefix = {
+                    let prev = self
+                        .stream_buf
+                        .strip_suffix(d.as_str())
+                        .unwrap_or(self.stream_buf.as_str());
+                    self.messages
+                        .last()
+                        .map(|m| m.role == "assistant" && m.content == prev)
+                        .unwrap_or(false)
+                };
+                if matches_prefix {
                     if let Some(last) = self.messages.last_mut() {
                         last.content = self.stream_buf.clone();
                     }
@@ -3307,6 +3324,8 @@ impl eframe::App for Cabin {
             self.page_nav() == Nav::Imagine,
         ) {
             ctx.request_repaint_after(Duration::from_millis(80));
+        } else if !self.window_visible {
+            ctx.request_repaint_after(Duration::from_millis(HIDDEN_HEARTBEAT_MS));
         }
 
         crate::theme::apply(ctx);
@@ -5690,8 +5709,10 @@ mod tests {
     #[test]
     fn idle_visible_cabin_does_not_spin() {
         assert!(!super::wants_live_repaint(false, false, false, true, false));
-        assert!(super::wants_live_repaint(false, false, false, false, false));
+        assert!(!super::wants_live_repaint(false, false, false, false, false));
         assert!(super::wants_live_repaint(true, false, false, true, false));
+        assert!(super::HIDDEN_HEARTBEAT_MS > 80);
+        assert!(!super::night_host_check_blocks_ui());
     }
 
     #[test]
