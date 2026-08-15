@@ -172,7 +172,11 @@ pub fn install_fonts(ctx: &egui::Context) {
 }
 
 pub fn apply(ctx: &egui::Context) {
+    static STYLE: AtomicBool = AtomicBool::new(false);
     install_fonts(ctx);
+    if STYLE.swap(true, Ordering::SeqCst) {
+        return;
+    }
     let mut visuals = egui::Visuals::dark();
     visuals.dark_mode = true;
     visuals.override_text_color = Some(FG);
