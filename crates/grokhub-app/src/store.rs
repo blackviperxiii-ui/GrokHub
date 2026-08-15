@@ -13,9 +13,8 @@ pub fn load_learning() -> LearningState {
 }
 
 pub fn save_learning(s: &LearningState) -> Result<(), String> {
-    fs::create_dir_all(config::config_dir()).map_err(|e| e.to_string())?;
-    fs::write(learning_path(), serde_json::to_string_pretty(s).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())
+    let body = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
+    config::atomic_write(&learning_path(), body.as_bytes())
 }
 
 pub fn usage_path() -> std::path::PathBuf {
@@ -28,9 +27,8 @@ pub fn load_usage() -> UsageDay {
 }
 
 pub fn save_usage(d: &UsageDay) -> Result<(), String> {
-    fs::create_dir_all(config::config_dir()).map_err(|e| e.to_string())?;
-    fs::write(usage_path(), serde_json::to_string_pretty(d).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())
+    let body = serde_json::to_string_pretty(d).map_err(|e| e.to_string())?;
+    config::atomic_write(&usage_path(), body.as_bytes())
 }
 
 pub fn chips_path() -> std::path::PathBuf {
@@ -52,12 +50,8 @@ pub fn load_wall() -> ImagineWall {
 }
 
 pub fn save_wall(w: &ImagineWall) -> Result<(), String> {
-    fs::create_dir_all(config::config_dir()).map_err(|e| e.to_string())?;
-    fs::write(
-        wall_path(),
-        serde_json::to_string_pretty(w).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())
+    let body = serde_json::to_string_pretty(w).map_err(|e| e.to_string())?;
+    config::atomic_write(&wall_path(), body.as_bytes())
 }
 
 pub fn projects_path() -> std::path::PathBuf {
@@ -70,18 +64,13 @@ pub fn load_projects() -> Vec<ProjectNode> {
 }
 
 pub fn save_projects(nodes: &[ProjectNode]) -> Result<(), String> {
-    fs::create_dir_all(config::config_dir()).map_err(|e| e.to_string())?;
-    fs::write(
-        projects_path(),
-        serde_json::to_string(nodes).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())
+    let body = serde_json::to_string(nodes).map_err(|e| e.to_string())?;
+    config::atomic_write(&projects_path(), body.as_bytes())
 }
 
 pub fn save_chips(s: &ChipMemory) -> Result<(), String> {
-    fs::create_dir_all(config::config_dir()).map_err(|e| e.to_string())?;
-    fs::write(chips_path(), serde_json::to_string_pretty(s).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())
+    let body = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
+    config::atomic_write(&chips_path(), body.as_bytes())
 }
 
 #[cfg(test)]
