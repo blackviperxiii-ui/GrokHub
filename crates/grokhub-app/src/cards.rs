@@ -496,6 +496,80 @@ pub fn ghost_pill(ui: &mut egui::Ui, label: &str) -> bool {
     .clicked()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChipRowAct {
+    Apply(usize),
+    Dismiss(usize),
+}
+
+pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> Option<ChipRowAct> {
+    if chips.is_empty() {
+        return None;
+    }
+    let mut act = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+        for (i, c) in chips.iter().take(grokhub_core::CHIP_VISIBLE_MAX).enumerate() {
+            let fill = if c.primary {
+                crate::theme::surface()
+            } else {
+                Color32::TRANSPARENT
+            };
+            let stroke = if c.primary {
+                crate::theme::border_strong()
+            } else {
+                crate::theme::border()
+            };
+            let color = if c.primary {
+                crate::theme::fg()
+            } else {
+                crate::theme::muted()
+            };
+            egui::Frame::none()
+                .fill(fill)
+                .rounding(14.0)
+                .stroke(Stroke::new(1.0_f32, stroke))
+                .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                    ui.horizontal(|ui| {
+                        let hit = crate::theme::pointing(
+                            ui.add(
+                                egui::Button::new(RichText::new(&c.label).size(12.0).color(color))
+                                    .fill(Color32::TRANSPARENT)
+                                    .stroke(Stroke::NONE),
+                            ),
+                        )
+                        .on_hover_text(if c.hint.is_empty() {
+                            c.value.clone()
+                        } else {
+                            c.hint.clone()
+                        });
+                        if hit.clicked() {
+                            act = Some(ChipRowAct::Apply(i));
+                        }
+                        let x = crate::theme::pointing(
+                            ui.add(
+                                egui::Button::new(
+                                    RichText::new("×").size(12.0).color(crate::theme::subtle()),
+                                )
+                                .fill(Color32::TRANSPARENT)
+                                .stroke(Stroke::NONE)
+                                .min_size(egui::vec2(16.0, 16.0)),
+                            ),
+                        )
+                        .on_hover_text("Hide this suggestion");
+                        if x.clicked() {
+                            act = Some(ChipRowAct::Dismiss(i));
+                        }
+                    });
+                });
+        }
+    });
+    ui.add_space(8.0);
+    act
+}
+
 pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     crate::theme::pointing(ui.add(
         egui::Button::new(RichText::new(label).size(13.0).strong().color(if active {
@@ -1184,6 +1258,15 @@ pub fn chip_icon(label: &str) -> TileIcon {
 mod tests {
     use super::*;
     use grokhub_core::parse_nl_automation;
+
+    #[test]
+    fn chip_row_act_is_apply_or_dismiss() {
+        assert_ne!(ChipRowAct::Apply(0), ChipRowAct::Dismiss(0));
+        match ChipRowAct::Apply(4) {
+            ChipRowAct::Apply(i) => assert_eq!(i, 4),
+            ChipRowAct::Dismiss(_) => panic!("apply is not dismiss"),
+        }
+    }
 
     #[test]
     fn suggested_autos_parse() {
