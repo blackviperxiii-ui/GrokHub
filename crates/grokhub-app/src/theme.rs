@@ -6,6 +6,10 @@ use eframe::egui::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub fn title_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("inter-bold".into()))
+}
+
 pub const BG: Color32 = Color32::from_rgb(0x09, 0x09, 0x09);
 pub const SURFACE: Color32 = Color32::from_rgb(0x11, 0x11, 0x11);
 pub const PANEL: Color32 = Color32::from_rgb(0x17, 0x17, 0x17);
@@ -41,6 +45,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("eyes", "Eyes"),
 ];
 
+#[allow(dead_code)]
 pub fn stage_subtitle(id: &str) -> &'static str {
     match id {
         "history" => "Past chats",
@@ -69,7 +74,26 @@ fn install_inter(ctx: &egui::Context) {
             fam.insert(0, "inter".into());
         }
     }
-    if let Ok(mono) = std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf") {
+    if let Ok(medium) = std::fs::read("/usr/share/fonts/truetype/macos/Inter-Medium.ttf") {
+        fonts
+            .font_data
+            .insert("inter-medium".into(), FontData::from_owned(medium));
+        if let Some(fam) = fonts.families.get_mut(&FontFamily::Proportional) {
+            fam.insert(0, "inter-medium".into());
+        }
+    }
+    if let Ok(bold) = std::fs::read("/usr/share/fonts/truetype/macos/Inter-Bold.ttf") {
+        fonts
+            .font_data
+            .insert("inter-bold".into(), FontData::from_owned(bold));
+        fonts.families.insert(
+            FontFamily::Name("inter-bold".into()),
+            vec!["inter-bold".into(), "inter".into()],
+        );
+    }
+    let mono = std::fs::read("/usr/share/fonts/truetype/macos/JetBrainsMono-Regular.ttf")
+        .or_else(|_| std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"));
+    if let Ok(mono) = mono {
         fonts
             .font_data
             .insert("mono".into(), FontData::from_owned(mono));
@@ -165,5 +189,6 @@ mod tests {
         assert_eq!(stage_subtitle("history"), "Past chats");
         assert_eq!(stage_subtitle("imagine"), "Images");
         assert_eq!(stage_subtitle("connectors"), "GitHub");
+        assert_eq!(title_font(40.0).size, 40.0);
     }
 }
