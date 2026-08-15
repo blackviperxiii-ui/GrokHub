@@ -2807,7 +2807,10 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.oauth_photo_rx = Some(rx);
         std::thread::spawn(move || {
-            let tokens = crate::oauth::enrich_tokens(tok);
+            let tokens = match crate::oauth::ensure_access(&tok) {
+                Ok((_, t, _)) => crate::oauth::enrich_tokens(t),
+                Err(_) => crate::oauth::enrich_tokens(tok),
+            };
             let url = tokens
                 .picture
                 .as_ref()
