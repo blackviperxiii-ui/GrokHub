@@ -93,7 +93,7 @@ pub fn model_for_mode(mode: &str) -> &'static str {
         "max" | "deep" | "heavy" => "grok-4.6",
         "think" | "build" | "expert" => "grok-4.6",
         "balanced" | "balance" => "grok-4.3",
-        "auto" => "grok-3-mini-fast",
+        "auto" | "fast" => "grok-3-mini-fast",
         _ => DEFAULT_MODEL,
     }
 }

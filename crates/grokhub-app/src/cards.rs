@@ -551,7 +551,11 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                 };
                 let paint = chip_paint_label(&c.label);
                 let tip = if paint != c.label {
-                    c.label.clone()
+                    if c.hint.is_empty() {
+                        c.label.clone()
+                    } else {
+                        format!("{}\n{}", c.label, c.hint)
+                    }
                 } else if c.hint.is_empty() {
                     c.value.clone()
                 } else {
@@ -578,28 +582,36 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                             if hit.clicked() {
                                 act = Some(ChipRowAct::Apply(i));
                             }
+                            let x = crate::theme::pointing(
+                                ui.add(
+                                    egui::Button::new(
+                                        RichText::new(if hovered { "×" } else { " " })
+                                            .size(12.0)
+                                            .color(if hovered {
+                                                crate::theme::subtle()
+                                            } else {
+                                                Color32::TRANSPARENT
+                                            }),
+                                    )
+                                    .fill(Color32::TRANSPARENT)
+                                    .stroke(Stroke::NONE)
+                                    .min_size(egui::vec2(16.0, 16.0)),
+                                ),
+                            );
                             if hovered {
-                                let x = crate::theme::pointing(
-                                    ui.add(
-                                        egui::Button::new(
-                                            RichText::new("×")
-                                                .size(12.0)
-                                                .color(crate::theme::subtle()),
-                                        )
-                                        .fill(Color32::TRANSPARENT)
-                                        .stroke(Stroke::NONE)
-                                        .min_size(egui::vec2(16.0, 16.0)),
-                                    ),
-                                )
-                                .on_hover_text("Hide this suggestion");
+                                let x = x.on_hover_text("Hide this suggestion");
                                 if x.clicked() {
                                     act = Some(ChipRowAct::Dismiss(i));
                                 }
                             }
                         });
                     });
+                let hit = ir.response.interact(egui::Sense::click());
+                if hit.clicked() && act.is_none() {
+                    act = Some(ChipRowAct::Apply(i));
+                }
                 ui.ctx()
-                    .data_mut(|d| d.insert_temp(chip_id, ir.response.hovered()));
+                    .data_mut(|d| d.insert_temp(chip_id, hit.hovered()));
             }
         });
     });

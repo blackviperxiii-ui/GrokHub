@@ -364,7 +364,13 @@ pub fn detect_chip_stage(chat: &[(String, String)], last_failed: bool) -> ChipSt
     ChipStage::Default
 }
 
-pub fn context_fingerprint(chat: &[(String, String)], draft: &str, last_failed: bool, hour: u8) -> String {
+pub fn context_fingerprint(
+    chat: &[(String, String)],
+    draft: &str,
+    last_failed: bool,
+    hour: u8,
+    mode: &str,
+) -> String {
     let c = detect_chip_context(chat);
     let stage = detect_chip_stage(chat, last_failed);
     let mut bits = vec![stage.as_str().to_string()];
@@ -400,6 +406,10 @@ pub fn context_fingerprint(chat: &[(String, String)], draft: &str, last_failed: 
         bits.push(format!("d:{draft_bit}"));
     }
     bits.push(format!("h{}", hour / 6));
+    let mode_bit = mode.trim().to_ascii_lowercase();
+    if !mode_bit.is_empty() {
+        bits.push(format!("m:{mode_bit}"));
+    }
     bits.join("+")
 }
 
@@ -1588,7 +1598,9 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
     for c in &mut chips {
         c.score += memory_boost_for_chip(input.memory, c, input.now_ms, input.hour);
         if let Some(hit) = input.memory.hits.iter().find(|h| h.key == chip_memory_key(c)) {
-            if hit.context_tags.iter().any(|t| t == &context_fingerprint(input.chat, "", input.last_failed, input.hour)) {
+            if hit.context_tags.iter().any(|t| {
+                t == &context_fingerprint(input.chat, "", input.last_failed, input.hour, input.mode)
+            }) {
                 c.score += 14.0;
             }
         }
@@ -1910,6 +1922,8 @@ fn cabin_chip_copy_ok(label: &str, value: &str, hint: &str) -> bool {
         "outlook",
         "gmail",
         "google drive",
+        "office",
+        "stock",
     ] {
         if blob.contains(w) {
             return false;
@@ -2115,9 +2129,11 @@ mod tests {
     fn fingerprint_and_llm_debounce() {
         let empty: [(String, String); 0] = [];
         let err = [msg("user", "crash"), msg("assistant", "error: boom failed")];
-        let a = context_fingerprint(&empty, "", false, 21);
-        let b = context_fingerprint(&err, "fix", false, 21);
+        let a = context_fingerprint(&empty, "", false, 21, "auto");
+        let b = context_fingerprint(&err, "fix", false, 21, "auto");
         assert_ne!(a, b);
+        let think = context_fingerprint(&empty, "", false, 21, "think");
+        assert_ne!(a, think, "mode change should refresh Fast chips");
         assert!(should_refresh_llm(&a, &b, 0, 2000, true, false));
         assert!(!should_refresh_llm(&b, &b, 0, 2000, true, false));
         assert!(!should_refresh_llm(&a, &b, 1800, 2000, true, false));
@@ -2159,6 +2175,14 @@ mod tests {
             r#"[{"label":"Make a video","value":"Generate a video of the cabin.","kind":"chat","hint":"x"}]"#,
         );
         assert!(chips.is_empty());
+        let office = parse_llm_chips(
+            r#"[{"label":"Office mail","value":"Draft the weekly office memo.","kind":"chat"}]"#,
+        );
+        assert!(office.is_empty(), "{office:?}");
+        let stock = parse_llm_chips(
+            r#"[{"label":"Market move","value":"Check the stock ticker.","kind":"chat"}]"#,
+        );
+        assert!(stock.is_empty(), "{stock:?}");
     }
 
     #[test]
