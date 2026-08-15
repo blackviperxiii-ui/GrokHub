@@ -155,7 +155,6 @@ fn slash_pick_retain(pick: usize, list_changed: bool, len: usize) -> usize {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 enum ComposerStackSlot {
     AuthBanner,
     SkillApprove,
@@ -167,7 +166,6 @@ enum ComposerStackSlot {
     Pill,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn composer_stack_order() -> &'static [ComposerStackSlot] {
     &[
         ComposerStackSlot::AuthBanner,
@@ -1661,8 +1659,9 @@ impl Cabin {
             max: CHIP_VISIBLE_MAX,
             other_threads: &others,
         };
+        let mode = input.mode;
         self.visible_chips = build_quick_chips(input);
-        let mut fp = context_fingerprint(&chat, &self.composer, last_failed, hour);
+        let mut fp = context_fingerprint(&chat, &self.composer, last_failed, hour, mode);
         if !others.is_empty() {
             let extra: String = others
                 .iter()
@@ -1724,11 +1723,17 @@ impl Cabin {
 
     fn apply_chip(&mut self, chip: QuickChip) {
         let hour = Self::chip_hour();
+        let mode = if self.cfg.mode.trim().is_empty() {
+            "auto"
+        } else {
+            self.cfg.mode.as_str()
+        };
         let tag = context_fingerprint(
             &self.chat_pairs(),
             &self.composer,
             self.last_receipt_ok == Some(false),
             hour,
+            mode,
         );
         remember_chip_click(&mut self.chip_memory, &chip, Some(&tag), now_ms(), hour);
         let _ = crate::store::save_chips(&self.chip_memory);
@@ -5318,6 +5323,14 @@ impl Cabin {
             ui.add_space(6.0);
             ui.vertical_centered(|ui| {
             ui.set_max_width(crate::theme::QUERY_MAX_W);
+            for slot in composer_stack_order() {
+                match slot {
+                    ComposerStackSlot::AuthBanner
+                    | ComposerStackSlot::SkillApprove
+                    | ComposerStackSlot::SaveAsSkill
+                    | ComposerStackSlot::HostPlan
+                    | ComposerStackSlot::SlashPalette => {}
+                    ComposerStackSlot::Chips => {
             if let Some(act) = crate::cards::quick_chip_row(ui, &self.visible_chips) {
                 match act {
                     crate::cards::ChipRowAct::Apply(i) => {
@@ -5333,7 +5346,11 @@ impl Cabin {
                     }
                 }
             }
+                    }
+                    ComposerStackSlot::Attach => {
             self.ui_attach_chip(ui, PlusTarget::Chat);
+                    }
+                    ComposerStackSlot::Pill => {
             egui::Frame::none()
                 .fill(crate::theme::elevated())
                 .rounding(crate::theme::QUERY_RADIUS)
@@ -5417,6 +5434,9 @@ impl Cabin {
                         }
                     });
                 });
+                    }
+                }
+            }
             });
     }
 
