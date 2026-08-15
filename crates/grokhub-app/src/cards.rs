@@ -247,8 +247,73 @@ pub const IMAGINE_SCENES: &[ImagineScene] = &[
 
 pub const IMAGINE_ASPECTS: &[&str] = &["1:1", "2:3", "16:9"];
 
+/// grok.com/imagine Image-mode toolbar labels, measured 2026-08-15.
+pub const IMAGINE_BAR_CHIPS: &[&str] = &[
+    "Image",
+    "Video",
+    "Agent",
+    "Speed",
+    "Quality (v2.0)",
+    "Auto",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImagineKind {
+    Image,
+    Video,
+    Agent,
+}
+
+pub fn imagine_kind_label(kind: ImagineKind) -> &'static str {
+    match kind {
+        ImagineKind::Image => "Image",
+        ImagineKind::Video => "Video",
+        ImagineKind::Agent => "Agent",
+    }
+}
+
+pub fn imagine_quality_label(quality: bool) -> &'static str {
+    if quality {
+        "Quality (v2.0)"
+    } else {
+        "Speed"
+    }
+}
+
 pub fn imagine_aspect_label(i: u8) -> &'static str {
     IMAGINE_ASPECTS[(i as usize) % IMAGINE_ASPECTS.len()]
+}
+
+/// Dark track + selected chip — grok.com Image|Video|Agent and Speed|Quality.
+pub fn imagine_seg_track(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::none()
+        .fill(crate::theme::BG)
+        .rounding(crate::theme::IMAGINE_HIT)
+        .inner_margin(egui::Margin::same(2.0))
+        .show(ui, |ui| {
+            ui.set_height(crate::theme::IMAGINE_HIT);
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.horizontal_centered(add);
+        });
+}
+
+pub fn imagine_seg_chip(ui: &mut egui::Ui, selected: bool, add: impl FnOnce(&mut egui::Ui)) -> bool {
+    let fill = if selected {
+        crate::theme::PANEL
+    } else {
+        Color32::TRANSPARENT
+    };
+    egui::Frame::none()
+        .fill(fill)
+        .rounding(crate::theme::IMAGINE_HIT)
+        .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+        .show(ui, |ui| {
+            ui.set_height(crate::theme::IMAGINE_HIT - 8.0);
+            ui.horizontal_centered(add);
+        })
+        .response
+        .interact(Sense::click())
+        .clicked()
 }
 
 pub fn imagine_frame_key(scene: &ImagineScene, now_ms: u64) -> &'static str {
@@ -1033,6 +1098,12 @@ mod tests {
         assert_eq!(imagine_aspect_label(0), "1:1");
         assert_eq!(imagine_aspect_label(1), "2:3");
         assert_eq!(imagine_aspect_label(2), "16:9");
+        assert_eq!(IMAGINE_BAR_CHIPS, ["Image", "Video", "Agent", "Speed", "Quality (v2.0)", "Auto"]);
+        assert_eq!(imagine_kind_label(ImagineKind::Image), "Image");
+        assert_eq!(imagine_kind_label(ImagineKind::Video), "Video");
+        assert_eq!(imagine_kind_label(ImagineKind::Agent), "Agent");
+        assert_eq!(imagine_quality_label(false), "Speed");
+        assert_eq!(imagine_quality_label(true), "Quality (v2.0)");
         for s in IMAGINE_SCENES {
             let blob = format!("{} {}", s.title, s.prompt).to_ascii_lowercase();
             for w in forbidden {
