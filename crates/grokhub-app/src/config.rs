@@ -72,6 +72,8 @@ pub struct AppConfig {
     /// Cabin paints a new Imagine cover every few hours.
     #[serde(default = "default_imagine_wall")]
     pub imagine_wall: bool,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 fn default_autonomy() -> u8 {
@@ -106,6 +108,10 @@ fn default_imagine_wall() -> bool {
     true
 }
 
+fn default_theme() -> String {
+    "dark".into()
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -131,6 +137,7 @@ impl Default for AppConfig {
             daily_auto_cap: default_daily_auto(),
             goal_pin: String::new(),
             imagine_wall: default_imagine_wall(),
+            theme: default_theme(),
         }
     }
 }
@@ -304,6 +311,11 @@ mod tests {
         assert!(loaded.host_on);
         assert_eq!(loaded.autonomy, 1);
         assert!(loaded.imagine_wall);
+        assert_eq!(loaded.theme, "dark");
+        let mut themed = AppConfig::default();
+        themed.theme = "system".into();
+        save(&themed).expect("theme save");
+        assert_eq!(load().theme, "system");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
