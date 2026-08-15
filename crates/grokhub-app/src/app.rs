@@ -1,7 +1,7 @@
 use crate::config::{self, AppConfig};
 use crate::desktop::{
-    capture_data_url, capture_webcam, collect_rows, first_bin, play_audio, record_once,
-    transcribe_local,
+    capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin, load_image_data_url,
+    pick_file, play_audio, read_text_capped, record_once, transcribe_local,
 };
 use crate::host::{run_host, run_host_stream};
 use crate::secrets::{self, Secrets};
@@ -11,7 +11,8 @@ use crate::update::{remember_source, resolve_source};
 use crate::xai::{grok_chat, grok_chat_stream, grok_imagine, grok_stt, grok_tts, http_status_of};
 use eframe::egui::{self, Color32, RichText};
 use grokhub_core::{
-    approved_cmds, apply_work_update, auth_bearer, automation_blocked_by_policy, blend_thread_goal,
+    append_composer, apply_work_update, attach_kind, attach_name, attach_prompt_line,
+    approved_cmds, auth_bearer, automation_blocked_by_policy, blend_thread_goal,
     build_hub_snapshot,
     build_quick_chips, build_windshield, bump_skill_run, cabin_eyes_for_turn, can_inhabit, can_mark_done,
     bump_usage, catalog_line, chip_suggest_prompt, compact_keep_pin, compose_imagine_prompt,
@@ -35,8 +36,9 @@ use grokhub_core::{
     ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
-    resolve_chat_model, effective_chat_mode, settings_pin_blocks_auto,
-    needs_auth_banner, next_goal_prompt, parse_fast_topics,
+    chat_attach_status, imagine_ref_status, needs_auth_banner, next_chat_image, next_goal_prompt,
+    plus_empty_status, plus_menu_rows,
+    resolve_chat_model, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
     now_ms, on_wheel_grab, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
     parse_nl_automation, parse_recipe, parse_slash, passenger_label, plan_from_text, plan_room,
     presence_orb_state, presence_should_stream, propose_skill_from_turn, quiet_hours_active,
@@ -55,7 +57,8 @@ use grokhub_core::{
     BoardStatus, ChipInput, ChipKind, ChipMemory, ComputerOp, DeviceCodeStart, HeyGrokAction,
     HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, Recipe, ReplayOp, RewindRecord,
-    SkillMd, Slash, TranscribeRoute, UsageDay, VoiceEvent, VoiceState, CONTEXT_BUDGET_TOKENS,
+    AttachKind, PlusAct, PlusTarget, SkillMd, Slash, TranscribeRoute, UsageDay, VoiceEvent,
+    VoiceState, CONTEXT_BUDGET_TOKENS,
     DEFAULT_MODEL, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS, IMAGINE_ASPECTS,
     IMAGINE_STYLES,
     PRESENCE_RING_MS, TRANSCRIBERS,
@@ -65,6 +68,7 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
+use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -443,6 +447,14 @@ pub struct Cabin {
     wall: ImagineWall,
     wall_rx: Option<mpsc::Receiver<Result<WallGif, String>>>,
     wall_busy: bool,
+    attach_url: Option<String>,
+    attach_name: Option<String>,
+    imagine_ref: Option<String>,
+    plus_menu: Option<PlusTarget>,
+    plus_anchor: egui::Pos2,
+    plus_ignore_close: bool,
+    file_pick: Option<PlusTarget>,
+    pick_dir: String,
     projects: Vec<ProjectNode>,
     project_sel: Option<String>,
     proj_menu: Option<String>,
@@ -675,6 +687,14 @@ impl Cabin {
             wall: crate::store::load_wall(),
             wall_rx: None,
             wall_busy: false,
+            attach_url: None,
+            attach_name: None,
+            imagine_ref: None,
+            plus_menu: None,
+            plus_anchor: egui::Pos2::ZERO,
+            plus_ignore_close: false,
+            file_pick: None,
+            pick_dir: std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()),
             projects,
             project_sel,
             proj_menu: None,
@@ -740,6 +760,274 @@ impl Cabin {
 
     fn has_key(&self) -> bool {
         has_auth(&self.cfg.api_key, &secrets::access_token(&self.secrets))
+    }
+
+    fn open_plus(&mut self, target: PlusTarget, anchor: egui::Pos2) {
+        self.plus_menu = Some(target);
+        self.plus_anchor = anchor;
+        self.plus_ignore_close = true;
+        self.file_pick = None;
+    }
+
+    fn run_plus_act(&mut self, target: PlusTarget, act: PlusAct) {
+        match act {
+            PlusAct::Upload => {
+                if let Some(p) = pick_file() {
+                    self.apply_path(target, &p);
+                } else {
+                    self.file_pick = Some(target);
+                }
+            }
+            PlusAct::Paste => self.apply_clipboard(target),
+        }
+    }
+
+    fn apply_clipboard(&mut self, target: PlusTarget) {
+        if let Some(p) = clipboard_image() {
+            self.apply_path(target, &p);
+            return;
+        }
+        if let Some(clip) = crate::desktop::clipboard_once() {
+            match target {
+                PlusTarget::Chat => {
+                    self.composer = append_composer(&self.composer, &clip);
+                    self.status = "Pasted clipboard".into();
+                }
+                PlusTarget::Imagine => {
+                    self.imagine_prompt = append_composer(&self.imagine_prompt, &clip);
+                    self.status = "Pasted clipboard".into();
+                }
+            }
+            return;
+        }
+        self.status = plus_empty_status().into();
+    }
+
+    fn apply_path(&mut self, target: PlusTarget, path: &Path) {
+        let raw = path.display().to_string();
+        let kind = attach_kind(&raw);
+        let name = attach_name(&raw);
+        match target {
+            PlusTarget::Chat => match kind {
+                AttachKind::Image => match load_image_data_url(path) {
+                    Ok(url) => {
+                        self.attach_url = Some(url);
+                        self.attach_name = Some(name.clone());
+                        self.status = chat_attach_status(kind, &name);
+                    }
+                    Err(e) => self.status = e,
+                },
+                AttachKind::Text => match read_text_capped(path) {
+                    Ok(t) => {
+                        self.composer = append_composer(&self.composer, &t);
+                        self.status = chat_attach_status(kind, &name);
+                    }
+                    Err(e) => self.status = e,
+                },
+                AttachKind::Other => {
+                    self.composer = append_composer(&self.composer, &raw);
+                    self.status = chat_attach_status(kind, &name);
+                }
+            },
+            PlusTarget::Imagine => match kind {
+                AttachKind::Image => {
+                    self.imagine_ref = Some(name.clone());
+                    let hint = attach_prompt_line(kind, &name);
+                    self.imagine_prompt = append_composer(&self.imagine_prompt, &hint);
+                    self.status = imagine_ref_status(&name);
+                }
+                AttachKind::Text => match read_text_capped(path) {
+                    Ok(t) => {
+                        self.imagine_prompt = append_composer(&self.imagine_prompt, &t);
+                        self.status = chat_attach_status(kind, &name);
+                    }
+                    Err(e) => self.status = e,
+                },
+                AttachKind::Other => {
+                    self.imagine_prompt = append_composer(&self.imagine_prompt, &raw);
+                    self.status = chat_attach_status(kind, &name);
+                }
+            },
+        }
+        self.file_pick = None;
+    }
+
+    fn clear_chat_attach(&mut self) {
+        self.attach_url = None;
+        self.attach_name = None;
+        self.status.clear();
+    }
+
+    fn pick_entries(dir: &Path) -> Vec<(String, bool)> {
+        let mut dirs = Vec::new();
+        let mut files = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') || name.is_empty() {
+                    continue;
+                }
+                if e.path().is_dir() {
+                    dirs.push(name);
+                } else {
+                    files.push(name);
+                }
+            }
+        }
+        dirs.sort();
+        files.sort();
+        let mut out = Vec::new();
+        for d in dirs {
+            out.push((d, true));
+        }
+        for f in files {
+            out.push((f, false));
+        }
+        out
+    }
+
+    fn ui_plus_overlays(&mut self, ctx: &egui::Context) {
+        if let Some(target) = self.plus_menu {
+            let mut picked = None;
+            let mut menu_rect = egui::Rect::NOTHING;
+            egui::Area::new(egui::Id::new("plus-menu"))
+                .fixed_pos(self.plus_anchor + egui::vec2(0.0, 6.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(168.0);
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        for (label, act) in plus_menu_rows() {
+                            if ui.selectable_label(false, *label).clicked() {
+                                picked = Some(*act);
+                            }
+                        }
+                        menu_rect = ui.min_rect();
+                    });
+                });
+            if let Some(act) = picked {
+                self.plus_menu = None;
+                self.run_plus_act(target, act);
+            } else if self.plus_ignore_close {
+                self.plus_ignore_close = false;
+            } else if ctx.input(|i| i.pointer.any_click()) {
+                if let Some(pos) = ctx.pointer_interact_pos() {
+                    if !menu_rect.expand(8.0).contains(pos) {
+                        self.plus_menu = None;
+                    }
+                }
+            }
+        }
+        if let Some(target) = self.file_pick {
+            let mut picked: Option<PathBuf> = None;
+            let mut up = false;
+            let mut cancel = false;
+            let mut paste = false;
+            let dir = PathBuf::from(&self.pick_dir);
+            let entries = Self::pick_entries(&dir);
+            egui::Window::new("Upload")
+                .collapsible(false)
+                .resizable(true)
+                .default_width(420.0)
+                .default_height(360.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(
+                        RichText::new(dir.display().to_string())
+                            .size(12.0)
+                            .color(crate::theme::MUTED),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button("Up").clicked() {
+                            up = true;
+                        }
+                        if ui.button("Home").clicked() {
+                            if let Ok(home) = std::env::var("HOME") {
+                                self.pick_dir = home;
+                            }
+                        }
+                        if ui.button("Paste clipboard").clicked() {
+                            paste = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancel = true;
+                        }
+                    });
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical()
+                        .max_height(260.0)
+                        .show(ui, |ui| {
+                            for (name, is_dir) in &entries {
+                                let label = if *is_dir {
+                                    format!("📁 {name}")
+                                } else {
+                                    format!("📄 {name}")
+                                };
+                                if ui.selectable_label(false, label).clicked() {
+                                    let next = dir.join(name);
+                                    if *is_dir {
+                                        self.pick_dir = next.display().to_string();
+                                    } else {
+                                        picked = Some(next);
+                                    }
+                                }
+                            }
+                        });
+                });
+            if up {
+                if let Some(parent) = dir.parent() {
+                    self.pick_dir = parent.display().to_string();
+                }
+            }
+            if let Some(p) = picked {
+                self.apply_path(target, &p);
+            } else if paste {
+                self.file_pick = None;
+                self.apply_clipboard(target);
+            } else if cancel {
+                self.file_pick = None;
+            }
+        }
+    }
+
+    fn ui_attach_chip(&mut self, ui: &mut egui::Ui, target: PlusTarget) {
+        match target {
+            PlusTarget::Chat => {
+                if let Some(name) = self.attach_name.clone() {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("Attached {name}"))
+                                .size(12.0)
+                                .color(crate::theme::FG),
+                        );
+                        if ui.small_button("×").clicked() {
+                            self.clear_chat_attach();
+                        }
+                    });
+                }
+            }
+            PlusTarget::Imagine => {
+                if let Some(name) = self.imagine_ref.clone() {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("Reference {name}"))
+                                .size(12.0)
+                                .color(crate::theme::FG),
+                        );
+                        if ui.small_button("×").clicked() {
+                            self.imagine_ref = None;
+                        }
+                    });
+                }
+            }
+        }
+        if !self.status.is_empty() {
+            ui.label(
+                RichText::new(&self.status)
+                    .size(12.0)
+                    .color(crate::theme::MUTED),
+            );
+        }
     }
 
     fn work_root(&self) -> String {
@@ -2499,8 +2787,10 @@ impl Cabin {
             msgs.insert(0, ("system".into(), sys));
         }
         self.ensure_cabin_frame();
+        let user_img = self.attach_url.take();
+        self.attach_name = None;
         let fused = self.last_frame_url.clone().or_else(|| self.webcam_url.clone());
-        let image = if should_attach_cabin_frame(
+        let cabin = if should_attach_cabin_frame(
             cabin_eyes_for_turn(self.cfg.cabin_eyes, fused.is_some()),
             self.cfg.cabin_eyes,
         ) {
@@ -2508,6 +2798,7 @@ impl Cabin {
         } else {
             None
         };
+        let image = next_chat_image(user_img.as_deref(), cabin.as_deref()).map(|s| s.to_string());
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         self.stream_buf.clear();
@@ -3693,6 +3984,7 @@ impl eframe::App for Cabin {
                     }
                 });
         }
+        self.ui_plus_overlays(ctx);
         self.ui_project_overlays(ctx);
     }
 }
@@ -4633,6 +4925,7 @@ impl Cabin {
             ui.add_space(6.0);
             ui.vertical_centered(|ui| {
             ui.set_max_width(crate::theme::QUERY_MAX_W);
+            self.ui_attach_chip(ui, PlusTarget::Chat);
             egui::Frame::none()
                 .fill(crate::theme::ELEVATED)
                 .rounding(crate::theme::QUERY_RADIUS)
@@ -4641,23 +4934,15 @@ impl Cabin {
                 .show(ui, |ui| {
                     ui.set_min_height(crate::theme::QUERY_MIN_H - 16.0);
                     ui.horizontal(|ui| {
-                        if crate::icons::paint_bar_icon(
+                        let plus = crate::icons::paint_bar_icon(
                             ui,
                             crate::icons::BarIcon::Plus,
                             22.0,
                             crate::theme::MUTED,
                         )
-                        .on_hover_text("Paste clipboard")
-                        .clicked()
-                        {
-                            if let Some(clip) = crate::desktop::clipboard_once() {
-                                if !self.composer.is_empty() && !self.composer.ends_with('\n') {
-                                    self.composer.push('\n');
-                                }
-                                self.composer.push_str(&clip);
-                            } else {
-                                self.status = "clipboard empty — install wl-paste or xclip".into();
-                            }
+                        .on_hover_text("Upload a file or paste clipboard");
+                        if plus.clicked() {
+                            self.open_plus(PlusTarget::Chat, plus.rect.left_bottom());
                         }
                         let edit = ui.add(
                             egui::TextEdit::multiline(&mut self.composer)
@@ -5441,6 +5726,7 @@ impl Cabin {
                             .color(crate::theme::FG),
                     );
                     ui.add_space(crate::theme::IMAGINE_GAP);
+                    self.ui_attach_chip(ui, PlusTarget::Imagine);
                     let bar = self.ui_imagine_bar(ui);
                     generate = bar.generate;
                     go_settings = bar.go_settings;
@@ -5527,16 +5813,11 @@ impl Cabin {
                     ui.painter()
                         .circle_filled(plus_r.center(), 18.0, crate::theme::PANEL);
                     crate::icons::paint_plus_at(ui.painter(), plus_r, crate::theme::MUTED);
-                    if plus.on_hover_text("Upload — paste clipboard into the still").clicked() {
-                        if let Some(clip) = crate::desktop::clipboard_once() {
-                            if !self.imagine_prompt.is_empty() && !self.imagine_prompt.ends_with('\n')
-                            {
-                                self.imagine_prompt.push('\n');
-                            }
-                            self.imagine_prompt.push_str(&clip);
-                        } else {
-                            self.status = "clipboard empty — install wl-paste or xclip".into();
-                        }
+                    if plus
+                        .on_hover_text("Upload a file or paste clipboard")
+                        .clicked()
+                    {
+                        self.open_plus(PlusTarget::Imagine, plus_r.left_bottom());
                     }
                     crate::cards::imagine_seg_track(ui, |ui| {
                         for kind in [

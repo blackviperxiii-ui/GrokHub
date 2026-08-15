@@ -1,5 +1,6 @@
 //! Shared GrokHub brain. Linux, Windows, and Android must call this — not a second protocol.
 
+pub mod attach;
 pub mod automation;
 pub mod chat;
 pub mod chips;
@@ -43,6 +44,12 @@ pub mod voice;
 pub mod windshield;
 pub mod workboard;
 
+pub use attach::{
+    append_composer, attach_kind, attach_name, attach_prompt_line, chat_attach_status,
+    clip_image_args, imagine_ref_status, list_pick_names, next_chat_image, parse_picker_stdout,
+    picker_args, plus_empty_status, plus_menu_rows, take_text_body, AttachKind, PlusAct, PlusTarget,
+    TEXT_FILE_CAP,
+};
 pub use chat::{
     chat_request_body, chat_request_body_for_mode, chat_request_body_vision, chat_timeout_secs,
     effective_chat_mode, extract_host_cmds, failover_model, is_composer_ladder_model, model_for_mode,

@@ -1,6 +1,6 @@
 use grokhub_core::{
-    jpeg_data_url, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, AtspiRow, RECORDERS,
-    TRANSCRIBERS,
+    clip_image_args, jpeg_data_url, parse_atspi_line, parse_picker_stdout, parse_wmctrl_line,
+    parse_xdotool_mouse, picker_args, take_text_body, AtspiRow, RECORDERS, TRANSCRIBERS,
 };
 use image::GenericImageView;
 use std::path::{Path, PathBuf};
@@ -281,6 +281,72 @@ pub fn record_pcm_chunks() -> Vec<Vec<u8>> {
     }
 }
 
+pub fn pick_file() -> Option<PathBuf> {
+    for bin in ["zenity", "kdialog", "yad", "qarma"] {
+        let Some(args) = picker_args(bin) else {
+            continue;
+        };
+        if !which(bin) {
+            continue;
+        }
+        if let Ok(o) = Command::new(bin).args(args).output() {
+            if o.status.success() {
+                if let Some(p) = parse_picker_stdout(&String::from_utf8_lossy(&o.stdout)) {
+                    let path = PathBuf::from(p);
+                    if path.exists() {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+pub fn clipboard_image() -> Option<PathBuf> {
+    let dest = std::env::temp_dir().join("grokhub-clip.png");
+    for bin in ["xclip", "wl-paste"] {
+        let Some(args) = clip_image_args(bin) else {
+            continue;
+        };
+        if !which(bin) {
+            continue;
+        }
+        if let Ok(o) = Command::new(bin).args(args).output() {
+            if !o.status.success() || o.stdout.len() < 24 {
+                continue;
+            }
+            let b = &o.stdout;
+            let png = b[0] == 0x89 && b[1] == b'P';
+            let jpg = b[0] == 0xFF && b[1] == 0xD8;
+            if !png && !jpg {
+                continue;
+            }
+            if std::fs::write(&dest, b).is_ok() {
+                return Some(dest);
+            }
+        }
+    }
+    None
+}
+
+pub fn load_image_data_url(path: &Path) -> Result<String, String> {
+    let img = image::open(path).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    let mut cur = std::io::Cursor::new(&mut buf);
+    img.write_to(&mut cur, image::ImageFormat::Jpeg)
+        .map_err(|e| e.to_string())?;
+    if buf.len() < 32 {
+        return Err("empty image".into());
+    }
+    Ok(jpeg_data_url(&buf))
+}
+
+pub fn read_text_capped(path: &Path) -> Result<String, String> {
+    let s = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    Ok(take_text_body(&s))
+}
+
 pub fn clipboard_once() -> Option<String> {
     for (bin, args) in [
         ("wl-paste", &[] as &[&str]),
@@ -309,5 +375,19 @@ mod tests {
         assert!(TRANSCRIBERS.contains(&"whisper"));
         assert!(PLAYERS.contains(&"ffplay"));
         assert!(first_bin(&["definitely-not-a-bin-grokhub"]).is_none());
+    }
+
+    #[test]
+    fn loads_jpeg_data_url_from_png() {
+        let dir = std::env::temp_dir().join("grokhub-attach-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let p = dir.join("dot.png");
+        let img = image::RgbImage::from_pixel(2, 2, image::Rgb([10, 20, 30]));
+        img.save(&p).unwrap();
+        let url = load_image_data_url(&p).unwrap();
+        assert!(url.starts_with("data:image/jpeg;base64,"));
+        let txt = dir.join("note.txt");
+        std::fs::write(&txt, "hello cabin").unwrap();
+        assert_eq!(read_text_capped(&txt).unwrap(), "hello cabin");
     }
 }
