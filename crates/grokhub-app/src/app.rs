@@ -2620,13 +2620,9 @@ impl eframe::App for Cabin {
             || self.hub_on
             || !self.window_visible
             || self.tray.is_some()
-            || self.nav == Nav::Imagine
+            || self.page_nav() == Nav::Imagine
         {
-            ctx.request_repaint_after(Duration::from_millis(if self.nav == Nav::Imagine {
-                400
-            } else {
-                80
-            }));
+            ctx.request_repaint_after(Duration::from_millis(80));
         }
 
         crate::theme::apply(ctx);
@@ -2634,7 +2630,7 @@ impl eframe::App for Cabin {
         self.ui_sidebar(ctx);
         self.ui_settings_menu(ctx);
 
-        match self.nav {
+        match self.page_nav() {
             Nav::Chat => self.ui_chat(ctx),
             Nav::Devices => self.ui_devices(ctx),
             Nav::Memory => self.ui_memory(ctx),
@@ -2647,7 +2643,10 @@ impl eframe::App for Cabin {
             Nav::Command => self.ui_command(ctx),
             Nav::Connectors => self.ui_connectors(ctx),
             Nav::Agents => self.ui_agents(ctx),
-            Nav::Settings => self.ui_settings(ctx),
+            Nav::Settings => self.ui_chat(ctx),
+        }
+        if self.nav == Nav::Settings {
+            self.ui_settings(ctx);
         }
         if self.palette_open {
             self.ui_palette(ctx);
@@ -2921,13 +2920,24 @@ impl Cabin {
         });
     }
 
+    fn page_nav(&self) -> Nav {
+        if self.nav != Nav::Settings {
+            return self.nav;
+        }
+        if self.settings_back == Nav::Settings {
+            Nav::Chat
+        } else {
+            self.settings_back
+        }
+    }
+
     fn nav_id(&self) -> &'static str {
-        match self.nav {
+        match self.page_nav() {
             Nav::Chat => "chat",
             Nav::History => "history",
             Nav::Imagine => "imagine",
             Nav::Workboard => "workboard",
-            Nav::Settings => "settings",
+            Nav::Settings => "chat",
             Nav::Skills => "skills",
             Nav::Night => "automations",
             Nav::Command => "command",
@@ -3609,12 +3619,18 @@ impl Cabin {
         let mut close = false;
         let mut next_sec: Option<SettingsSec> = None;
         let sec = self.settings_sec;
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(Color32::from_black_alpha(180)))
+        let screen = ctx.screen_rect();
+        egui::Area::new(egui::Id::new("settings-overlay"))
+            .fixed_pos(screen.min)
+            .order(egui::Order::Foreground)
+            .interactable(true)
             .show(ctx, |ui| {
+                ui.set_min_size(screen.size());
+                ui.painter()
+                    .rect_filled(screen, 0.0, Color32::from_black_alpha(180));
                 let modal = egui::Rect::from_center_size(
-                    ui.max_rect().center(),
-                    egui::vec2(920.0, 620.0).min(ui.max_rect().size() - egui::vec2(48.0, 48.0)),
+                    screen.center(),
+                    egui::vec2(920.0, 620.0).min(screen.size() - egui::vec2(48.0, 48.0)),
                 );
                 ui.allocate_ui_at_rect(modal, |ui| {
                     egui::Frame::none()
@@ -4119,32 +4135,9 @@ impl Cabin {
         let mut seed: Option<&'static str> = None;
         let word = crate::cards::imagine_word(now_ms());
         let selected = self.imagine_prompt.clone();
-        egui::CentralPanel::default()
+        let panel = egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::ZERO))
             .show(ctx, |ui| {
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(16.0);
-                        if crate::cards::white_pill(ui, "+ New project") {
-                            new_project = true;
-                        }
-                    });
-                });
-                ui.vertical_centered(|ui| {
-                    ui.add_space(20.0);
-                    ui.label(
-                        RichText::new(format!("Imagine {word}"))
-                            .font(crate::theme::title_font(crate::theme::IMAGINE_TITLE))
-                            .color(crate::theme::FG),
-                    );
-                    ui.add_space(crate::theme::IMAGINE_GAP);
-                    ui.set_max_width(crate::theme::IMAGINE_BAR_W);
-                    let bar = self.ui_imagine_bar(ui);
-                    generate = bar.generate;
-                    go_settings = bar.go_settings;
-                });
-                ui.add_space(28.0);
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -4153,6 +4146,44 @@ impl Cabin {
                             seed = Some(p);
                         });
                     });
+            });
+        let content = panel.response.rect;
+        let bar_w = (content.width() - 48.0)
+            .min(crate::theme::IMAGINE_BAR_W)
+            .max(280.0);
+        egui::Area::new(egui::Id::new("imagine-new"))
+            .fixed_pos(egui::pos2(content.right() - 148.0, content.top() + 12.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                if crate::cards::white_pill(ui, "+ New project") {
+                    new_project = true;
+                }
+            });
+        egui::Area::new(egui::Id::new("imagine-composer"))
+            .fixed_pos(egui::pos2(
+                content.center().x - bar_w * 0.5,
+                content.top() + 36.0,
+            ))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                ui.set_width(bar_w);
+                let fade = egui::Rect::from_min_size(
+                    egui::pos2(ui.next_widget_position().x - 24.0, content.top()),
+                    egui::vec2(bar_w + 48.0, 220.0),
+                );
+                ui.painter()
+                    .rect_filled(fade, 0.0, Color32::from_black_alpha(110));
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        RichText::new(format!("Imagine {word}"))
+                            .font(crate::theme::title_font(crate::theme::IMAGINE_TITLE))
+                            .color(crate::theme::FG),
+                    );
+                    ui.add_space(crate::theme::IMAGINE_GAP);
+                    let bar = self.ui_imagine_bar(ui);
+                    generate = bar.generate;
+                    go_settings = bar.go_settings;
+                });
             });
         if new_project {
             self.imagine_prompt.clear();

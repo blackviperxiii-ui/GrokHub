@@ -68,6 +68,8 @@ pub const IMAGINE_HIT: f32 = 36.0;
 pub const IMAGINE_TILE_SHORT: f32 = 230.0;
 /// grok.com/imagine masonry tall tile (~345)
 pub const IMAGINE_TILE_TALL: f32 = 345.0;
+/// Cover GIF cycle — two stills crossfade like grok.com inspiration MP4s.
+pub const IMAGINE_FRAME_MS: u64 = 1600;
 
 /// Live grok.com primary rail. Settings is an avatar menu, not a row.
 pub const GROK_NAV: &[(&str, &str)] = &[
@@ -261,6 +263,7 @@ mod tests {
         assert_eq!(IMAGINE_HIT, 36.0);
         assert_eq!(IMAGINE_TILE_SHORT, 230.0);
         assert_eq!(IMAGINE_TILE_TALL, 345.0);
+        assert_eq!(IMAGINE_FRAME_MS, 1600);
         assert_ne!(IMAGINE_BAR_RADIUS, QUERY_RADIUS);
         assert_eq!(GROK_NAV[0], ("imagine", "Imagine"));
         assert!(GROK_NAV.iter().all(|(id, _)| *id != "settings"));

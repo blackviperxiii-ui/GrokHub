@@ -227,21 +227,21 @@ pub const IMAGINE_SCENES: &[ImagineScene] = &[
         title: "Wood stove",
         prompt: "still of a wood stove in a dark timber cabin, embers, no people, no text",
         tall: true,
-        frames: &["wood_stove"],
+        frames: &["wood_stove", "wood_stove_b"],
     },
     ImagineScene {
         icon: TileIcon::Moon,
         title: "Pine ridge",
         prompt: "still of a pine ridge at night above a dark valley, no people, no text",
         tall: false,
-        frames: &["pine_ridge"],
+        frames: &["pine_ridge", "pine_ridge_b"],
     },
     ImagineScene {
         icon: TileIcon::Sun,
         title: "Empty chair",
         prompt: "still of an empty wooden chair by a cabin window at night, one lamp, no people, no text",
         tall: true,
-        frames: &["empty_chair"],
+        frames: &["empty_chair", "empty_chair_b"],
     },
 ];
 
@@ -252,8 +252,21 @@ pub fn imagine_aspect_label(i: u8) -> &'static str {
 }
 
 pub fn imagine_frame_key(scene: &ImagineScene, now_ms: u64) -> &'static str {
+    imagine_frame_pair(scene, now_ms).0
+}
+
+/// Current cover, next cover, and 0..1 crossfade into the next still.
+pub fn imagine_frame_pair(scene: &ImagineScene, now_ms: u64) -> (&'static str, &'static str, f32) {
     let n = scene.frames.len().max(1);
-    scene.frames[((now_ms / 2200) as usize + scene.title.len()) % n]
+    let tick = (now_ms / crate::theme::IMAGINE_FRAME_MS) as usize + scene.title.len();
+    let a = scene.frames[tick % n];
+    let b = scene.frames[(tick + 1) % n];
+    if n == 1 {
+        return (a, a, 0.0);
+    }
+    let t = (now_ms % crate::theme::IMAGINE_FRAME_MS) as f32 / crate::theme::IMAGINE_FRAME_MS as f32;
+    let fade = ((t - 0.72) / 0.28).clamp(0.0, 1.0);
+    (a, b, fade)
 }
 
 pub fn imagine_word(now_ms: u64) -> &'static str {
@@ -643,8 +656,11 @@ fn still_jpeg(key: &str) -> &'static [u8] {
         "a_scene" => include_bytes!("../assets/imagine/a_scene.jpg"),
         "a_scene_b" => include_bytes!("../assets/imagine/a_scene_b.jpg"),
         "wood_stove" => include_bytes!("../assets/imagine/wood_stove.jpg"),
+        "wood_stove_b" => include_bytes!("../assets/imagine/wood_stove_b.jpg"),
         "pine_ridge" => include_bytes!("../assets/imagine/pine_ridge.jpg"),
+        "pine_ridge_b" => include_bytes!("../assets/imagine/pine_ridge_b.jpg"),
         "empty_chair" => include_bytes!("../assets/imagine/empty_chair.jpg"),
+        "empty_chair_b" => include_bytes!("../assets/imagine/empty_chair_b.jpg"),
         other => {
             let _ = other;
             include_bytes!("../assets/imagine/a_scene.jpg")
@@ -750,7 +766,8 @@ fn imagine_photo_tile(
     now_ms: u64,
 ) -> bool {
     let resp = ui.interact(rect, egui::Id::new(("imagine-tile", idx)), Sense::click());
-    let (tex, size) = imagine_still_tex(ui.ctx(), imagine_frame_key(scene, now_ms));
+    let (key_a, key_b, fade) = imagine_frame_pair(scene, now_ms);
+    let (tex, size) = imagine_still_tex(ui.ctx(), key_a);
     let uv = cover_uv(
         size[0] as f32,
         size[1] as f32,
@@ -759,6 +776,18 @@ fn imagine_photo_tile(
     );
     ui.painter()
         .image(tex.id(), rect, uv, Color32::WHITE);
+    if fade > 0.02 && key_b != key_a {
+        let (tex_b, size_b) = imagine_still_tex(ui.ctx(), key_b);
+        let uv_b = cover_uv(
+            size_b[0] as f32,
+            size_b[1] as f32,
+            rect.width(),
+            rect.height(),
+        );
+        let alpha = (fade * 255.0).round().clamp(0.0, 255.0) as u8;
+        ui.painter()
+            .image(tex_b.id(), rect, uv_b, Color32::from_white_alpha(alpha));
+    }
     let fade = egui::Rect::from_min_max(
         egui::pos2(rect.left(), rect.bottom() - 42.0),
         rect.max,
@@ -904,7 +933,11 @@ mod tests {
             assert!(!blob.contains("photo edit"));
             let _ = s.icon;
             let _ = s.tall;
-            assert!(!s.frames.is_empty());
+            assert!(
+                s.frames.len() >= 2,
+                "imagine {} needs two frames to live like a cover GIF",
+                s.title
+            );
             for key in s.frames {
                 let bytes = still_jpeg(key);
                 assert!(bytes.len() > 1000, "imagine still {key} is empty");
@@ -913,10 +946,12 @@ mod tests {
                 assert!(img.height() >= 256);
             }
             let a = imagine_frame_key(s, 0);
-            let b = imagine_frame_key(s, 2200);
-            if s.frames.len() > 1 {
-                assert_ne!(a, b);
-            }
+            let b = imagine_frame_key(s, crate::theme::IMAGINE_FRAME_MS);
+            assert_ne!(a, b, "imagine {} cover must change", s.title);
+            let (_, _, fade0) = imagine_frame_pair(s, 0);
+            let (_, _, fade1) = imagine_frame_pair(s, crate::theme::IMAGINE_FRAME_MS - 1);
+            assert!(fade0 < 0.05);
+            assert!(fade1 > 0.9);
         }
         let uv = cover_uv(768.0, 512.0, 345.0, 230.0);
         assert!(uv.width() > 0.4 && uv.height() > 0.9);
