@@ -11,16 +11,21 @@ use crate::update::{remember_source, resolve_source};
 use crate::xai::{grok_chat, grok_chat_stream, grok_imagine, grok_stt, grok_tts, http_status_of};
 use eframe::egui::{self, Color32, RichText};
 use grokhub_core::{
-    approved_cmds, apply_work_update, auth_bearer, automation_blocked_by_policy, build_hub_snapshot,
+    approved_cmds, apply_work_update, auth_bearer, automation_blocked_by_policy, blend_thread_goal,
+    build_hub_snapshot,
     build_quick_chips, build_windshield, bump_skill_run, cabin_eyes_for_turn, can_inhabit, can_mark_done,
-    bump_usage, catalog_line, chip_suggest_prompt, compact_keep_pin, context_fingerprint,
+    bump_usage, catalog_line, chip_suggest_prompt, compact_keep_pin, compose_imagine_prompt,
+    context_fingerprint,
     context_percent, daily_units_blocked,
     dedicated_imagine_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
-    pick_fresh_seed, wall_can_paint, wall_evict, ImagineWall, WallGif, WALL_GIF_EVERY_MS,
+    pick_fresh_seed, wall_can_paint, wall_evict, ImagineKind, ImagineSpec, ImagineWall,
+    WallGif, WALL_GIF_EVERY_MS,
     WALL_GIF_MAX,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
+    imagine_aspect_label, imagine_aspect_name, imagine_style_label, imagine_video_dur_label,
+    imagine_video_res_label,
     extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
     forget_topic, greet_from_last_job, has_auth, has_goal_complete, has_verify_ok, hey_grok_on_press,
     import_memory_file, insight_pin, is_openclaw_workspace,
@@ -31,7 +36,7 @@ use grokhub_core::{
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
     resolve_chat_model, effective_chat_mode, settings_pin_blocks_auto,
-    needs_auth_banner, next_goal_prompt,
+    needs_auth_banner, next_goal_prompt, parse_fast_topics,
     now_ms, on_wheel_grab, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
     parse_nl_automation, parse_recipe, parse_slash, passenger_label, plan_from_text, plan_room,
     presence_orb_state, presence_should_stream, propose_skill_from_turn, quiet_hours_active,
@@ -41,7 +46,8 @@ use grokhub_core::{
     rewind_dest, save_hub_state, screen_from_extents, search_corpus, should_attach_cabin_frame,
     should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
-    slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
+    should_name_thread, skip_automation, slash_help, step_from_cmd, summarize_write,
+    surgical_memory_edit, thread_goal_prompt,
     top_habit_labels,
     unified_diff_cite, usage_line,
     transcribe_route, uid, update_cmds, update_plan_steps, update_wipes_config, voice_session_url, Automation, BoardCard,
@@ -49,7 +55,8 @@ use grokhub_core::{
     HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, Recipe, ReplayOp, RewindRecord,
     SkillMd, Slash, TranscribeRoute, UsageDay, VoiceEvent, VoiceState, CONTEXT_BUDGET_TOKENS,
-    GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS,
+    DEFAULT_MODEL, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS, IMAGINE_ASPECTS,
+    IMAGINE_STYLES,
     PRESENCE_RING_MS, TRANSCRIBERS,
 };
 use grokhub_hub::serve_lan;
@@ -220,6 +227,31 @@ struct ImagineBarOut {
     go_settings: bool,
 }
 
+fn imagine_choice_menu(
+    ui: &egui::Ui,
+    id: &'static str,
+    anchor: egui::Rect,
+    rows: impl IntoIterator<Item = (impl Into<String>, bool)>,
+) -> Option<usize> {
+    let rows: Vec<(String, bool)> = rows.into_iter().map(|(l, on)| (l.into(), on)).collect();
+    let mut picked = None;
+    egui::Area::new(egui::Id::new(id))
+        .fixed_pos(anchor.left_bottom() + egui::vec2(0.0, 6.0))
+        .order(egui::Order::Foreground)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_min_width(anchor.width().max(148.0));
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for (i, (label, on)) in rows.iter().enumerate() {
+                    if ui.selectable_label(*on, label).clicked() {
+                        picked = Some(i);
+                    }
+                }
+            });
+        });
+    picked
+}
+
 enum JobOut {
     Chat(String),
     ChatDelta(String),
@@ -386,6 +418,16 @@ pub struct Cabin {
     settings_back: Nav,
     imagine_aspect: u8,
     imagine_quality: bool,
+    imagine_kind: ImagineKind,
+    imagine_style: u8,
+    imagine_video_res: u8,
+    imagine_video_dur: u8,
+    imagine_video_audio: bool,
+    imagine_aspect_open: bool,
+    imagine_style_open: bool,
+    goal_rx: Option<mpsc::Receiver<(String, String)>>,
+    goal_busy: bool,
+    goal_stale: bool,
     wall: ImagineWall,
     wall_rx: Option<mpsc::Receiver<Result<WallGif, String>>>,
     wall_busy: bool,
@@ -604,8 +646,18 @@ impl Cabin {
             imagine_want_focus: false,
             settings_sec: SettingsSec::Account,
             settings_back: Nav::Chat,
-            imagine_aspect: 1,
+            imagine_aspect: 0,
             imagine_quality: true,
+            imagine_kind: ImagineKind::Image,
+            imagine_style: 0,
+            imagine_video_res: 0,
+            imagine_video_dur: 0,
+            imagine_video_audio: true,
+            imagine_aspect_open: false,
+            imagine_style_open: false,
+            goal_rx: None,
+            goal_busy: false,
+            goal_stale: false,
             wall: crate::store::load_wall(),
             wall_rx: None,
             wall_busy: false,
@@ -911,6 +963,102 @@ impl Cabin {
         }
     }
 
+    fn poll_goals(&mut self) {
+        let Some(rx) = self.goal_rx.take() else {
+            if self.goal_stale {
+                self.spawn_thread_goal();
+            }
+            return;
+        };
+        match rx.try_recv() {
+            Ok((tid, reply)) => {
+                self.goal_busy = false;
+                self.apply_thread_goal(&tid, &reply);
+                if self.goal_stale {
+                    self.spawn_thread_goal();
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.goal_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.goal_busy = false;
+                if self.goal_stale {
+                    self.spawn_thread_goal();
+                }
+            }
+        }
+    }
+
+    fn apply_thread_goal(&mut self, tid: &str, reply: &str) {
+        let topics = parse_fast_topics(reply);
+        if topics.is_empty() {
+            return;
+        }
+        let current = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.id.clone())
+            .unwrap_or_default();
+        let Some(t) = self.threads.iter_mut().find(|t| t.id == tid) else {
+            return;
+        };
+        if t.scratch {
+            return;
+        }
+        t.goal = blend_thread_goal(&t.goal, &topics, GOAL_DROP_AFTER);
+        if !t.goal.label.is_empty() {
+            t.title = t.goal.label.clone();
+            if tid == current {
+                self.cfg.goal_pin = t.goal.label.clone();
+            }
+        }
+        let _ = threads::save(&self.threads);
+        let _ = config::save(&self.cfg);
+    }
+
+    fn spawn_thread_goal(&mut self) {
+        if self.goal_busy {
+            self.goal_stale = true;
+            return;
+        }
+        let scratch = self.scratch();
+        let user_turns = self.messages.iter().filter(|m| m.role == "user").count();
+        if !should_name_thread(scratch, user_turns) {
+            self.goal_stale = false;
+            return;
+        }
+        if !self.has_key() {
+            self.goal_stale = false;
+            return;
+        }
+        let tid = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.id.clone())
+            .unwrap_or_default();
+        if tid.is_empty() {
+            self.goal_stale = false;
+            return;
+        }
+        let prompt = thread_goal_prompt(&self.chat_pairs());
+        let key = self.bearer();
+        if key.trim().is_empty() {
+            self.goal_stale = false;
+            return;
+        }
+        let model = model_for_mode("fast").to_string();
+        let (tx, rx) = mpsc::channel();
+        self.goal_rx = Some(rx);
+        self.goal_busy = true;
+        self.goal_stale = false;
+        std::thread::spawn(move || {
+            let reply = grok_chat(&key, &model, &[("user".into(), prompt)], None, None)
+                .unwrap_or_default();
+            let _ = tx.send((tid, reply));
+        });
+    }
+
     fn refresh_chips(&mut self) {
         let chat = self.chat_pairs();
         let hour = Self::chip_hour();
@@ -1099,6 +1247,11 @@ impl Cabin {
                     .collect()
             })
             .unwrap_or_default();
+        self.cfg.goal_pin = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.goal.label.clone())
+            .unwrap_or_default();
         self.persist();
     }
 
@@ -1114,6 +1267,8 @@ impl Cabin {
         self.threads.push(ChatThread::new(title, scratch));
         self.thread_idx = self.threads.len() - 1;
         self.messages.clear();
+        self.cfg.goal_pin.clear();
+        self.goal_step = 0;
         self.status = if scratch {
             "Scratch — no memory writes".into()
         } else {
@@ -2435,6 +2590,7 @@ impl Cabin {
                         context_percent(tokens, CONTEXT_BUDGET_TOKENS)
                     );
                 }
+                self.spawn_thread_goal();
             }
             Ok(JobOut::Consult(detail)) => {
                 self.running = false;
@@ -2687,10 +2843,22 @@ impl Cabin {
         if prompt.is_empty() || self.running {
             return;
         }
-        let aspect = crate::cards::imagine_aspect_label(self.imagine_aspect);
-        let prompt = crate::cards::imagine_still_prompt(&prompt, aspect, self.imagine_quality);
+        let prompt = compose_imagine_prompt(&ImagineSpec {
+            prompt: &prompt,
+            kind: self.imagine_kind,
+            quality: self.imagine_quality,
+            style: imagine_style_label(self.imagine_style),
+            aspect: imagine_aspect_label(self.imagine_aspect),
+            video_res: imagine_video_res_label(self.imagine_video_res),
+            video_dur: imagine_video_dur_label(self.imagine_video_dur),
+            video_audio: self.imagine_video_audio,
+        });
         self.running = true;
-        self.status = "Imagining…".into();
+        self.status = match self.imagine_kind {
+            ImagineKind::Image => "Imagining…".into(),
+            ImagineKind::Video => "Imagining storyboard still…".into(),
+            ImagineKind::Agent => "Imagining agent still…".into(),
+        };
         let key = self.bearer();
         let model = dedicated_imagine_model(&self.cfg.imagine_model);
         let (tx, rx) = mpsc::channel();
@@ -3316,6 +3484,7 @@ impl eframe::App for Cabin {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
         self.poll_chips();
+        self.poll_goals();
         self.refresh_chips();
         self.drain_inbox();
         self.poll_tray(ctx);
@@ -5219,56 +5388,126 @@ impl Cabin {
                     }
                     crate::cards::imagine_seg_track(ui, |ui| {
                         for kind in [
-                            crate::cards::ImagineKind::Image,
-                            crate::cards::ImagineKind::Video,
-                            crate::cards::ImagineKind::Agent,
+                            ImagineKind::Image,
+                            ImagineKind::Video,
+                            ImagineKind::Agent,
                         ] {
-                            let on = kind == crate::cards::ImagineKind::Image;
+                            let on = self.imagine_kind == kind;
                             let label = crate::cards::imagine_kind_label(kind);
+                            let ink = if on {
+                                crate::theme::FG
+                            } else {
+                                crate::theme::MUTED
+                            };
                             if crate::cards::imagine_seg_chip(ui, on, |ui| {
                                 match kind {
-                                    crate::cards::ImagineKind::Image => {
-                                        crate::icons::paint_image_mode(ui, 16.0, crate::theme::FG);
-                                        ui.add_space(4.0);
-                                        ui.label(
-                                            RichText::new(label)
-                                                .size(crate::theme::FONT_CHROME)
-                                                .color(crate::theme::FG),
-                                        );
+                                    ImagineKind::Image => {
+                                        crate::icons::paint_image_mode(ui, 16.0, ink);
                                     }
-                                    crate::cards::ImagineKind::Video => {
-                                        crate::icons::paint_video_mode(ui, 16.0, crate::theme::MUTED);
+                                    ImagineKind::Video => {
+                                        crate::icons::paint_video_mode(ui, 16.0, ink);
                                     }
-                                    crate::cards::ImagineKind::Agent => {
-                                        crate::icons::paint_agent_mode(ui, 16.0, crate::theme::MUTED);
+                                    ImagineKind::Agent => {
+                                        crate::icons::paint_agent_mode(ui, 16.0, ink);
                                     }
                                 }
-                            }) && kind != crate::cards::ImagineKind::Image
-                            {
-                                self.status =
-                                    "Cabin stills only — Video and Agent stay on grok.com.".into();
+                                if on {
+                                    ui.add_space(4.0);
+                                    ui.label(
+                                        RichText::new(label)
+                                            .size(crate::theme::FONT_CHROME)
+                                            .color(ink),
+                                    );
+                                }
+                            }) {
+                                self.imagine_kind = kind;
+                                self.status = match kind {
+                                    ImagineKind::Image => "Image still".into(),
+                                    ImagineKind::Video => {
+                                        "Video chips hint a storyboard still — cabin has no video file."
+                                            .into()
+                                    }
+                                    ImagineKind::Agent => "Agent paints a character sprite still.".into(),
+                                };
                             }
                         }
                     });
-                    crate::cards::imagine_seg_track(ui, |ui| {
-                        for quality in [false, true] {
-                            let on = self.imagine_quality == quality;
-                            let label = crate::cards::imagine_quality_label(quality);
-                            if crate::cards::imagine_seg_chip(ui, on, |ui| {
+                    match self.imagine_kind {
+                        ImagineKind::Video => {
+                            crate::cards::imagine_seg_track(ui, |ui| {
+                                for (i, label) in ["480p", "720p"].into_iter().enumerate() {
+                                    let on = self.imagine_video_res == i as u8;
+                                    if crate::cards::imagine_seg_chip(ui, on, |ui| {
+                                        ui.label(
+                                            RichText::new(label)
+                                                .size(crate::theme::FONT_CHROME)
+                                                .color(if on {
+                                                    crate::theme::FG
+                                                } else {
+                                                    crate::theme::MUTED
+                                                }),
+                                        );
+                                    }) {
+                                        self.imagine_video_res = i as u8;
+                                    }
+                                }
+                            });
+                            crate::cards::imagine_seg_track(ui, |ui| {
+                                for (i, label) in ["6s", "10s", "15s"].into_iter().enumerate() {
+                                    let on = self.imagine_video_dur == i as u8;
+                                    if crate::cards::imagine_seg_chip(ui, on, |ui| {
+                                        ui.label(
+                                            RichText::new(label)
+                                                .size(crate::theme::FONT_CHROME)
+                                                .color(if on {
+                                                    crate::theme::FG
+                                                } else {
+                                                    crate::theme::MUTED
+                                                }),
+                                        );
+                                    }) {
+                                        self.imagine_video_dur = i as u8;
+                                    }
+                                }
+                            });
+                            let audio_on = self.imagine_video_audio;
+                            if crate::cards::imagine_seg_chip(ui, audio_on, |ui| {
                                 ui.label(
-                                    RichText::new(label)
+                                    RichText::new("Video audio")
                                         .size(crate::theme::FONT_CHROME)
-                                        .color(if on {
+                                        .color(if audio_on {
                                             crate::theme::FG
                                         } else {
                                             crate::theme::MUTED
                                         }),
                                 );
                             }) {
-                                self.imagine_quality = quality;
+                                self.imagine_video_audio = !self.imagine_video_audio;
                             }
                         }
-                    });
+                        ImagineKind::Image | ImagineKind::Agent => {
+                            crate::cards::imagine_seg_track(ui, |ui| {
+                                for quality in [false, true] {
+                                    let on = self.imagine_quality == quality;
+                                    let label = crate::cards::imagine_quality_label(quality);
+                                    if crate::cards::imagine_seg_chip(ui, on, |ui| {
+                                        ui.label(
+                                            RichText::new(label)
+                                                .size(crate::theme::FONT_CHROME)
+                                                .color(if on {
+                                                    crate::theme::FG
+                                                } else {
+                                                    crate::theme::MUTED
+                                                }),
+                                        );
+                                    }) {
+                                        self.imagine_quality = quality;
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    let style_label = imagine_style_label(self.imagine_style);
                     let style = egui::Frame::none()
                         .fill(crate::theme::PANEL)
                         .rounding(crate::theme::IMAGINE_HIT)
@@ -5279,7 +5518,7 @@ impl Cabin {
                                 crate::icons::paint_style_auto(ui, 16.0, crate::theme::FG);
                                 ui.add_space(4.0);
                                 ui.label(
-                                    RichText::new("Auto")
+                                    RichText::new(style_label)
                                         .size(crate::theme::FONT_CHROME)
                                         .color(crate::theme::FG),
                                 );
@@ -5287,11 +5526,27 @@ impl Cabin {
                         })
                         .response
                         .interact(egui::Sense::click())
-                        .on_hover_text("Style Auto — the cabin still");
+                        .on_hover_text("Style — suffix on the still");
                     if style.clicked() {
-                        self.status = "Auto is the cabin still.".into();
+                        self.imagine_style_open = !self.imagine_style_open;
+                        self.imagine_aspect_open = false;
                     }
-                    let aspect = crate::cards::imagine_aspect_label(self.imagine_aspect);
+                    if self.imagine_style_open {
+                        if let Some(i) = imagine_choice_menu(
+                            ui,
+                            "imagine_style_menu",
+                            style.rect,
+                            IMAGINE_STYLES
+                                .iter()
+                                .enumerate()
+                                .map(|(i, label)| (*label, self.imagine_style == i as u8)),
+                        ) {
+                            self.imagine_style = i as u8;
+                            self.imagine_style_open = false;
+                        }
+                    }
+                    let aspect = imagine_aspect_label(self.imagine_aspect);
+                    let aspect_name = imagine_aspect_name(self.imagine_aspect);
                     let aspect_hit = egui::Frame::none()
                         .fill(crate::theme::PANEL)
                         .rounding(crate::theme::IMAGINE_HIT)
@@ -5315,9 +5570,23 @@ impl Cabin {
                         })
                         .response
                         .interact(egui::Sense::click())
-                        .on_hover_text(format!("Still frame {aspect} · {model}"));
+                        .on_hover_text(format!("{aspect} {aspect_name} · {model}"));
                     if aspect_hit.clicked() {
-                        self.imagine_aspect = (self.imagine_aspect + 1) % 3;
+                        self.imagine_aspect_open = !self.imagine_aspect_open;
+                        self.imagine_style_open = false;
+                    }
+                    if self.imagine_aspect_open {
+                        if let Some(i) = imagine_choice_menu(
+                            ui,
+                            "imagine_aspect_menu",
+                            aspect_hit.rect,
+                            IMAGINE_ASPECTS.iter().enumerate().map(|(i, (ratio, name))| {
+                                (format!("{ratio}  {name}"), self.imagine_aspect == i as u8)
+                            }),
+                        ) {
+                            self.imagine_aspect = i as u8;
+                            self.imagine_aspect_open = false;
+                        }
                     }
                     if !authed && crate::cards::ghost_pill(ui, "Connect Grok") {
                         out.go_settings = true;

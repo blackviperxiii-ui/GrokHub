@@ -1,4 +1,4 @@
-use grokhub_core::uid;
+use grokhub_core::{uid, ThreadGoal};
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -13,6 +13,8 @@ pub struct ChatThread {
     pub scratch: bool,
     #[serde(default)]
     pub messages: Vec<(String, String)>,
+    #[serde(default)]
+    pub goal: ThreadGoal,
 }
 
 impl ChatThread {
@@ -22,6 +24,7 @@ impl ChatThread {
             title: title.to_string(),
             scratch,
             messages: vec![],
+            goal: ThreadGoal::default(),
         }
     }
 }
@@ -65,6 +68,7 @@ mod tests {
         let loaded = load();
         assert_eq!(loaded[0].title, "night");
         assert!(loaded[0].scratch);
+        assert!(loaded[0].goal.label.is_empty());
         assert!(export_markdown(&loaded[0]).contains("hi"));
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");

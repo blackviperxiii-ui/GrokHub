@@ -63,10 +63,12 @@ pub use host_plan::{
 };
 pub use host_safety::{forbidden_reason, recall_hits};
 pub use imagine::{
-    curate_wall, dedicated_imagine_model, extract_imagine_prompt, imagine_dest, imagine_request_body,
-    imagine_slug, parse_imagine_url, pick_fresh_seed, wall_can_paint, wall_curate_seed, wall_due,
-    wall_evict, ImagineWall, WallGif, WallSeed, WallSlot, DEFAULT_IMAGINE_MODEL, WALL_GIF_EVERY_MS,
-    WALL_GIF_MAX,
+    compose_imagine_prompt, curate_wall, dedicated_imagine_model, extract_imagine_prompt,
+    imagine_aspect_label, imagine_aspect_name, imagine_dest, imagine_request_body, imagine_slug,
+    imagine_style_label, imagine_video_dur_label, imagine_video_res_label, parse_imagine_url,
+    pick_fresh_seed, wall_can_paint, wall_curate_seed, wall_due, wall_evict, ImagineKind,
+    ImagineSpec, ImagineWall, WallGif, WallSeed, WallSlot, DEFAULT_IMAGINE_MODEL, IMAGINE_ASPECTS,
+    IMAGINE_STYLES, IMAGINE_VIDEO_DURS, IMAGINE_VIDEO_RES, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
     WALL_SEEDS,
 };
 pub use inhabit::{can_inhabit, InhabitBundle};
@@ -94,7 +96,11 @@ pub use context::{
     RECENT_MIN_MESSAGES,
 };
 pub use diagnostics::diagnostics_bundle;
-pub use goal::{compact_keep_pin, looks_incomplete, next_goal_prompt, parse_goal_outcome, GOAL_MAX_STEPS};
+pub use goal::{
+    blend_thread_goal, compact_keep_pin, looks_incomplete, next_goal_prompt, parse_fast_topics,
+    parse_goal_outcome, should_name_thread, thread_goal_prompt, ThreadGoal, GOAL_DROP_AFTER,
+    GOAL_MAX_STEPS,
+};
 pub use history::search_corpus;
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
 pub use learning::{insight_pin, record_turn, upsert_insight, LearningState};
