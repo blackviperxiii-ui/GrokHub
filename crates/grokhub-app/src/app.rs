@@ -3880,20 +3880,13 @@ impl Cabin {
                         }
                     });
                 });
-                ui.add_space(28.0);
+                ui.add_space(48.0);
                 ui.vertical_centered(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new("Imagine")
-                                .size(crate::theme::IMAGINE_TITLE)
-                                .color(crate::theme::FG),
-                        );
-                        ui.label(
-                            RichText::new(word)
-                                .size(crate::theme::IMAGINE_TITLE)
-                                .color(crate::theme::FG),
-                        );
-                    });
+                    ui.label(
+                        RichText::new(format!("Imagine {word}"))
+                            .size(crate::theme::IMAGINE_TITLE)
+                            .color(crate::theme::FG),
+                    );
                     ui.add_space(crate::theme::IMAGINE_GAP);
                     ui.set_max_width(crate::theme::IMAGINE_BAR_W);
                     generate = self.ui_imagine_bar(ui);
