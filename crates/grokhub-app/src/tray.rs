@@ -16,7 +16,7 @@ pub fn tray_wanted() -> bool {
 }
 
 pub fn should_hide_on_close(close_to_tray: bool, tray_alive: bool) -> bool {
-    close_to_tray && tray_alive
+    close_to_tray && (tray_alive || tray_wanted())
 }
 
 pub struct TrayHost {
@@ -141,7 +141,18 @@ mod tests {
     #[test]
     fn hide_needs_a_live_tray() {
         assert!(should_hide_on_close(true, true));
-        assert!(!should_hide_on_close(true, false));
         assert!(!should_hide_on_close(false, true));
+        let prev = std::env::var("GROKHUB_TRAY").ok();
+        std::env::remove_var("GROKHUB_TRAY");
+        assert!(
+            should_hide_on_close(true, false),
+            "Close to tray still hides when the icon failed to spawn"
+        );
+        std::env::set_var("GROKHUB_TRAY", "0");
+        assert!(!should_hide_on_close(true, false));
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_TRAY", v),
+            None => std::env::remove_var("GROKHUB_TRAY"),
+        }
     }
 }
