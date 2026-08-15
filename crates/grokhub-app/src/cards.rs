@@ -363,9 +363,9 @@ pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui,
         }
         return;
     }
-    let cols = if w >= 720.0 {
+    let cols = if w >= 1100.0 {
         3
-    } else if w >= 480.0 {
+    } else if w >= 520.0 {
         2
     } else {
         1
@@ -400,6 +400,7 @@ pub fn catalog_card(ui: &mut egui::Ui, title: &str, body: &str, selected: bool) 
     grok_tile(ui, icons::icon_for_label(title), title, body, None, selected) == TileHit::Body
 }
 
+#[allow(dead_code)]
 pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &str) -> bool {
     let mut hit = false;
     let resp = egui::Frame::none()

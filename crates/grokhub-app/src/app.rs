@@ -2643,44 +2643,80 @@ impl Cabin {
         if !self.settings_menu_open {
             return;
         }
-        let mut close = false;
-        let mut go_settings = false;
+        let mut pick: Option<&'static str> = None;
         let mut connect = false;
+        let mut disconnect = false;
+        let mut help = false;
+        let authed = self.has_key();
         egui::Window::new("settings-menu")
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
-            .anchor(egui::Align2::RIGHT_TOP, [-48.0, 44.0])
+            .anchor(egui::Align2::LEFT_BOTTOM, [12.0, -56.0])
             .frame(
                 egui::Frame::none()
                     .fill(crate::theme::PANEL)
                     .rounding(12.0)
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
-                    .inner_margin(egui::Margin::same(10.0)),
+                    .inner_margin(egui::Margin::same(8.0)),
             )
             .show(ctx, |ui| {
-                ui.set_min_width(180.0);
-                ui.label(RichText::new("Settings").size(12.0).color(crate::theme::SUBTLE));
-                ui.add_space(6.0);
-                if crate::cards::ghost_pill(ui, "Open settings") {
-                    go_settings = true;
+                ui.set_min_width(200.0);
+                for (id, label) in crate::theme::CABIN_MENU {
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(*label).size(13.0).color(crate::theme::FG))
+                                .fill(egui::Color32::TRANSPARENT)
+                                .min_size(egui::vec2(184.0, 28.0)),
+                        )
+                        .clicked()
+                    {
+                        pick = Some(*id);
+                    }
                 }
-                if crate::cards::ghost_pill(ui, "Connect Grok") {
-                    connect = true;
+                ui.add_space(4.0);
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("Help").size(13.0).color(crate::theme::FG))
+                            .fill(egui::Color32::TRANSPARENT)
+                            .min_size(egui::vec2(184.0, 28.0)),
+                    )
+                    .clicked()
+                {
+                    help = true;
                 }
-                if crate::cards::ghost_pill(ui, "Close") {
-                    close = true;
+                let auth_label = if authed { "Sign out" } else { "Connect Grok" };
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new(auth_label).size(13.0).color(crate::theme::FG))
+                            .fill(egui::Color32::TRANSPARENT)
+                            .min_size(egui::vec2(184.0, 28.0)),
+                    )
+                    .clicked()
+                {
+                    if authed {
+                        disconnect = true;
+                    } else {
+                        connect = true;
+                    }
                 }
             });
-        if go_settings {
-            self.nav = Nav::Settings;
+        if let Some(id) = pick {
+            self.set_nav_id(id);
+            self.settings_menu_open = false;
+        }
+        if help {
+            self.shortcuts_open = true;
             self.settings_menu_open = false;
         }
         if connect {
             self.start_oauth();
             self.settings_menu_open = false;
         }
-        if close {
+        if disconnect {
+            self.secrets.oauth = None;
+            let _ = crate::secrets::save(&self.secrets);
+            self.status = "Signed out".into();
             self.settings_menu_open = false;
         }
     }
@@ -2845,6 +2881,7 @@ impl Cabin {
         };
     }
 
+    #[allow(dead_code)]
     fn conn_kind(&self) -> &'static str {
         if self.has_key() {
             "live"
@@ -2856,71 +2893,16 @@ impl Cabin {
     }
 
     fn ui_titlebar(&mut self, ctx: &egui::Context) {
-        let mark = crate::theme::mark(ctx);
-        let kind = self.conn_kind();
-        let account = self
-            .secrets
-            .oauth
-            .as_ref()
-            .and_then(|t| t.email.clone().or(t.name.clone()))
-            .unwrap_or_default();
         egui::TopBottomPanel::top("titlebar")
             .exact_height(crate::theme::TITLEBAR_H)
-            .frame(
-                egui::Frame::none()
-                    .fill(crate::theme::SURFACE)
-                    .inner_margin(egui::Margin::symmetric(10.0, 0.0))
-                    .stroke(egui::Stroke::new(1.0, crate::theme::BORDER)),
-            )
+            .frame(egui::Frame::none().fill(crate::theme::BG))
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    let plate = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
-                    ui.painter().rect(
-                        plate.0,
-                        3.0,
-                        crate::theme::ELEVATED,
-                        egui::Stroke::new(1.0, crate::theme::BORDER),
-                    );
-                    let inner = plate.0.shrink(3.0);
-                    ui.painter().image(
-                        mark.id(),
-                        inner,
-                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        crate::theme::FG,
-                    );
-                    ui.label(RichText::new("GrokHub").strong().size(13.0).color(crate::theme::FG));
-                    ui.label(
-                        RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                            .small()
-                            .monospace()
-                            .color(crate::theme::SUBTLE),
-                    );
-                    let (dot, label) = match kind {
-                        "live" => (crate::theme::LIVE, "Live"),
-                        _ => (crate::theme::SETUP, "Setup"),
-                    };
-                    let pill = ui.add(
-                        egui::Button::new(
-                            RichText::new(format!("  {label}")).small().color(crate::theme::FG),
-                        )
-                        .fill(crate::theme::BG)
-                        .stroke(egui::Stroke::new(1.0, crate::theme::BORDER)),
-                    );
-                    ui.painter().circle_filled(
-                        pill.rect.left_center() + egui::vec2(8.0, 0.0),
-                        3.0,
-                        dot,
-                    );
-                    if pill.clicked() {
-                        if kind != "live" {
-                            self.start_oauth();
-                        }
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add(
                                 egui::Button::new(RichText::new("×").color(crate::theme::MUTED))
-                                    .fill(crate::theme::SURFACE)
+                                    .fill(crate::theme::BG)
                                     .stroke(egui::Stroke::NONE),
                             )
                             .clicked()
@@ -2938,7 +2920,7 @@ impl Cabin {
                         if ui
                             .add(
                                 egui::Button::new(RichText::new("□").color(crate::theme::MUTED))
-                                    .fill(crate::theme::SURFACE)
+                                    .fill(crate::theme::BG)
                                     .stroke(egui::Stroke::NONE),
                             )
                             .clicked()
@@ -2948,47 +2930,12 @@ impl Cabin {
                         if ui
                             .add(
                                 egui::Button::new(RichText::new("–").color(crate::theme::MUTED))
-                                    .fill(crate::theme::SURFACE)
+                                    .fill(crate::theme::BG)
                                     .stroke(egui::Stroke::NONE),
                             )
                             .clicked()
                         {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                        }
-                        if crate::icons::paint_bar_icon(
-                            ui,
-                            crate::icons::BarIcon::Gear,
-                            18.0,
-                            crate::theme::MUTED,
-                        )
-                        .on_hover_text("Settings")
-                        .clicked()
-                        {
-                            self.settings_menu_open = !self.settings_menu_open;
-                        }
-                        if !account.is_empty() {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        RichText::new(&account).small().color(crate::theme::MUTED),
-                                    )
-                                    .fill(crate::theme::SURFACE)
-                                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER)),
-                                )
-                                .clicked()
-                            {
-                                self.settings_menu_open = !self.settings_menu_open;
-                            }
-                        }
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new("Search").small().color(crate::theme::MUTED))
-                                    .fill(crate::theme::SURFACE)
-                                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER)),
-                            )
-                            .clicked()
-                        {
-                            self.palette_open = true;
                         }
                     });
                 });
@@ -2999,128 +2946,81 @@ impl Cabin {
         let fill = if active {
             crate::theme::ELEVATED
         } else {
-            crate::theme::SURFACE
+            egui::Color32::TRANSPARENT
         };
         let color = if active {
             crate::theme::FG
         } else {
             crate::theme::MUTED
         };
-        let resp = ui.add_sized(
-            [ui.available_width(), 32.0],
-            egui::Button::new(RichText::new(label).color(color).size(13.0))
+        ui.add_sized(
+            [ui.available_width(), 34.0],
+            egui::Button::new(RichText::new(label).color(color).size(14.0))
                 .fill(fill)
+                .rounding(10.0)
                 .stroke(egui::Stroke::NONE),
-        );
-        if active {
-            let r = resp.rect;
-            ui.painter().rect_filled(
-                egui::Rect::from_min_max(
-                    egui::pos2(r.left(), r.top() + 7.0),
-                    egui::pos2(r.left() + 2.0, r.bottom() - 7.0),
-                ),
-                1.0,
-                crate::theme::FG,
-            );
-        }
-        resp
+        )
     }
 
     fn ui_sidebar(&mut self, ctx: &egui::Context) {
+        let account = self
+            .secrets
+            .oauth
+            .as_ref()
+            .and_then(|t| t.name.clone().or(t.email.clone()))
+            .unwrap_or_else(|| "Cabin".into());
+        let email = self
+            .secrets
+            .oauth
+            .as_ref()
+            .and_then(|t| t.email.clone())
+            .unwrap_or_else(|| "Connect Grok".into());
+        let project = std::path::Path::new(&self.cfg.project_dir)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("GrokHub")
+            .to_string();
         egui::SidePanel::left("rail")
             .exact_width(crate::theme::SIDEBAR_W)
             .resizable(false)
-            .frame(egui::Frame::none().fill(crate::theme::SURFACE).stroke(egui::Stroke::new(
-                1.0,
-                crate::theme::BORDER,
-            )))
+            .frame(egui::Frame::none().fill(crate::theme::BG).inner_margin(egui::Margin::same(8.0)))
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(10.0);
-                    if ui
-                        .add_sized(
-                            [ui.available_width() - 10.0, 32.0],
-                            egui::Button::new(RichText::new("New chat").strong().color(crate::theme::BG))
-                                .fill(crate::theme::FG)
-                                .rounding(16.0),
-                        )
-                        .clicked()
-                    {
-                        self.new_thread(false);
-                    }
-                });
+                ui.add_space(4.0);
+                if Self::nav_button(ui, false, "Search").clicked() {
+                    self.palette_open = true;
+                }
+                if ui
+                    .add_sized(
+                        [ui.available_width(), 34.0],
+                        egui::Button::new(RichText::new("New chat").size(14.0).color(crate::theme::FG))
+                            .fill(egui::Color32::TRANSPARENT)
+                            .rounding(10.0)
+                            .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER_STRONG)),
+                    )
+                    .clicked()
+                {
+                    self.new_thread(false);
+                }
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(10.0);
-                    let search = ui.add_sized(
-                        [ui.available_width() - 10.0, 28.0],
-                        egui::Button::new(
-                            RichText::new("Search…                    Ctrl+K")
-                                .small()
-                                .color(crate::theme::MUTED),
-                        )
-                        .fill(crate::theme::BG)
-                        .stroke(egui::Stroke::new(1.0, crate::theme::BORDER)),
-                    );
-                    if search.clicked() {
-                        self.palette_open = true;
-                    }
-                });
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(12.0);
-                    ui.label(
-                        RichText::new("WORKSPACE")
-                            .small()
-                            .color(crate::theme::SUBTLE),
-                    );
-                });
                 let cur = self.nav_id();
-                for (id, label) in crate::theme::WORKSPACE {
-                    ui.horizontal(|ui| {
-                        ui.add_space(8.0);
-                        if Self::nav_button(ui, cur == *id, label).clicked() {
-                            self.set_nav_id(id);
-                        }
-                    });
+                for (id, label) in crate::theme::GROK_NAV {
+                    if Self::nav_button(ui, cur == *id, label).clicked() {
+                        self.set_nav_id(id);
+                    }
+                }
+                ui.add_space(10.0);
+                ui.label(RichText::new("Projects").size(12.0).color(crate::theme::SUBTLE));
+                if Self::nav_button(ui, cur == "workboard", &project).clicked() {
+                    self.nav = Nav::Workboard;
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.add_space(12.0);
-                    let chev = if self.tools_collapsed { "▸ TOOLS" } else { "▾ TOOLS" };
-                    if ui
-                        .add(
-                            egui::Button::new(RichText::new(chev).small().color(crate::theme::SUBTLE))
-                                .fill(crate::theme::SURFACE)
-                                .stroke(egui::Stroke::NONE),
-                        )
-                        .clicked()
-                    {
-                        self.tools_collapsed = !self.tools_collapsed;
-                    }
-                });
-                if !self.tools_collapsed {
-                    for (id, label) in crate::theme::TOOLS {
-                        ui.horizontal(|ui| {
-                            ui.add_space(8.0);
-                            if Self::nav_button(ui, cur == *id, label).clicked() {
-                                self.set_nav_id(id);
-                            }
-                        });
-                    }
-                }
-                ui.add_space(8.0);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.add_space(12.0);
-                    ui.label(RichText::new("RECENT").small().color(crate::theme::SUBTLE));
+                    ui.label(RichText::new("History").size(12.0).color(crate::theme::SUBTLE));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add(
-                                egui::Button::new(RichText::new("All").small().color(crate::theme::SUBTLE))
-                                    .fill(crate::theme::SURFACE)
+                                egui::Button::new(RichText::new("See all").size(11.0).color(crate::theme::SUBTLE))
+                                    .fill(egui::Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::NONE),
                             )
                             .clicked()
@@ -3129,30 +3029,45 @@ impl Cabin {
                         }
                     });
                 });
-                ui.horizontal(|ui| {
-                    ui.add_space(10.0);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.sidebar_q)
-                            .hint_text("Filter chats…")
-                            .desired_width(ui.available_width() - 10.0),
-                    );
-                });
-                let q = self.sidebar_q.to_ascii_lowercase();
-                let n = self.threads.len();
-                for i in 0..n {
-                    let title = self.threads[i].title.clone();
-                    if !q.is_empty() && !title.to_ascii_lowercase().contains(&q) {
-                        continue;
-                    }
-                    ui.horizontal(|ui| {
-                        ui.add_space(8.0);
-                        if Self::nav_button(ui, i == self.thread_idx, &title).clicked() {
-                            self.switch_thread(i);
-                            self.nav = Nav::Chat;
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.sidebar_q)
+                        .hint_text("Filter chats…")
+                        .desired_width(ui.available_width())
+                        .frame(false),
+                );
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, true])
+                    .max_height(ui.available_height() - 72.0)
+                    .show(ui, |ui| {
+                        let q = self.sidebar_q.to_ascii_lowercase();
+                        let n = self.threads.len();
+                        for i in 0..n {
+                            let title = self.threads[i].title.clone();
+                            if !q.is_empty() && !title.to_ascii_lowercase().contains(&q) {
+                                continue;
+                            }
+                            if Self::nav_button(ui, i == self.thread_idx && self.nav == Nav::Chat, &title)
+                                .clicked()
+                            {
+                                self.switch_thread(i);
+                                self.nav = Nav::Chat;
+                            }
                         }
                     });
-                }
-                ui.add_space(12.0);
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    let avatar = ui.add_sized(
+                        [ui.available_width(), 48.0],
+                        egui::Button::new(
+                            RichText::new(format!("{account}\n{email}"))
+                                .size(12.0)
+                                .color(crate::theme::FG),
+                        )
+                        .fill(egui::Color32::TRANSPARENT)
+                        .rounding(10.0),
+                    );
+                    if avatar.clicked() {
+                        self.settings_menu_open = !self.settings_menu_open;
+                    }
                 });
             });
     }
@@ -3291,7 +3206,7 @@ impl Cabin {
                                 .desired_width((ui.available_width() - 168.0).max(80.0))
                                 .desired_rows(1)
                                 .frame(false)
-                                .hint_text("Ask anything"),
+                                .hint_text("What do you want to know?"),
                         );
                         if edit.has_focus()
                             && !hits.is_empty()
@@ -3363,34 +3278,14 @@ impl Cabin {
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
                     if self.messages.is_empty() {
-                        let lift = (ui.available_height() * 0.18).clamp(36.0, 100.0);
+                        let lift = (ui.available_height() * 0.32).clamp(64.0, 180.0);
                         ui.add_space(lift);
                         ui.vertical_centered(|ui| {
                             ui.label(
-                                RichText::new("What do you want to know?")
-                                    .font(crate::theme::title_font(38.0))
+                                RichText::new("GrokHub")
+                                    .font(crate::theme::title_font(44.0))
                                     .color(crate::theme::FG),
                             );
-                            ui.add_space(8.0);
-                            ui.label(
-                                RichText::new("The cabin already knows the night.")
-                                    .size(15.0)
-                                    .color(crate::theme::MUTED),
-                            );
-                        });
-                        ui.add_space(28.0);
-                        let tiles = self.visible_chips.clone();
-                        let n = tiles.len().min(4);
-                        crate::cards::tile_row(ui, n, |ui, i| {
-                            let c = &tiles[i];
-                            if crate::cards::empty_prompt_tile(
-                                ui,
-                                crate::cards::chip_icon(&c.label),
-                                &c.label,
-                                if c.hint.is_empty() { "Suggested" } else { &c.hint },
-                            ) {
-                                self.apply_chip(c.clone());
-                            }
                         });
                     }
                     for m in &self.messages {

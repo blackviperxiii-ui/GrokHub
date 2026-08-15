@@ -10,10 +10,10 @@ pub fn title_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("inter-bold".into()))
 }
 
-pub const BG: Color32 = Color32::from_rgb(0x09, 0x09, 0x09);
-pub const SURFACE: Color32 = Color32::from_rgb(0x11, 0x11, 0x11);
-pub const PANEL: Color32 = Color32::from_rgb(0x17, 0x17, 0x17);
-pub const ELEVATED: Color32 = Color32::from_rgb(0x1f, 0x1f, 0x1f);
+pub const BG: Color32 = Color32::from_rgb(0x00, 0x00, 0x00);
+pub const SURFACE: Color32 = Color32::from_rgb(0x0a, 0x0a, 0x0a);
+pub const PANEL: Color32 = Color32::from_rgb(0x14, 0x14, 0x14);
+pub const ELEVATED: Color32 = Color32::from_rgb(0x1c, 0x1c, 0x1c);
 pub const FG: Color32 = Color32::from_rgb(0xf5, 0xf5, 0xf5);
 pub const MUTED: Color32 = Color32::from_rgb(0xa3, 0xa3, 0xa3);
 pub const SUBTLE: Color32 = Color32::from_rgb(0x73, 0x73, 0x73);
@@ -24,25 +24,29 @@ pub const BUBBLE_ASSISTANT: Color32 = PANEL;
 pub const LIVE: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
 pub const SETUP: Color32 = Color32::from_rgb(0xea, 0xb3, 0x08);
 pub const OFFLINE: Color32 = Color32::from_rgb(0xef, 0x44, 0x44);
-pub const SIDEBAR_W: f32 = 240.0;
-pub const TITLEBAR_H: f32 = 40.0;
+pub const SIDEBAR_W: f32 = 260.0;
+pub const TITLEBAR_H: f32 = 28.0;
 
-pub const WORKSPACE: &[(&str, &str)] = &[
-    ("chat", "Agent"),
-    ("history", "History"),
+/// Live grok.com primary rail. Settings is an avatar menu, not a row.
+pub const GROK_NAV: &[(&str, &str)] = &[
     ("imagine", "Imagine"),
-    ("workboard", "Workboard"),
+    ("automations", "Automations"),
+    ("skills", "Skills and Connectors"),
 ];
 
-pub const TOOLS: &[(&str, &str)] = &[
-    ("skills", "Skills and Connectors"),
-    ("automations", "Automations"),
+/// Cabin-only panes. Opened from the avatar settings menu.
+pub const CABIN_MENU: &[(&str, &str)] = &[
+    ("settings", "Settings"),
+    ("workboard", "Workboard"),
+    ("memory", "Memory"),
+    ("devices", "Devices"),
     ("command", "Command"),
     ("queue", "Queue"),
-    ("devices", "Devices"),
-    ("memory", "Memory"),
     ("eyes", "Eyes"),
 ];
+
+pub const WORKSPACE: &[(&str, &str)] = GROK_NAV;
+pub const TOOLS: &[(&str, &str)] = CABIN_MENU;
 
 #[allow(dead_code)]
 pub fn stage_subtitle(id: &str) -> &'static str {
@@ -194,14 +198,13 @@ mod tests {
 
     #[test]
     fn electron_palette() {
-        assert_eq!(BG, Color32::from_rgb(9, 9, 9));
-        assert_eq!(SURFACE, Color32::from_rgb(17, 17, 17));
-        assert_eq!(PANEL, Color32::from_rgb(23, 23, 23));
+        assert_eq!(BG, Color32::from_rgb(0, 0, 0));
+        assert_eq!(SURFACE, Color32::from_rgb(10, 10, 10));
+        assert_eq!(PANEL, Color32::from_rgb(20, 20, 20));
         assert_eq!(FG, Color32::from_rgb(245, 245, 245));
-        assert_eq!(WORKSPACE[0], ("chat", "Agent"));
-        assert!(WORKSPACE.iter().all(|(id, _)| *id != "settings"));
-        assert_eq!(TOOLS[1], ("automations", "Automations"));
-        assert_eq!(TOOLS[3], ("queue", "Queue"));
+        assert_eq!(GROK_NAV[0], ("imagine", "Imagine"));
+        assert!(GROK_NAV.iter().all(|(id, _)| *id != "settings"));
+        assert_eq!(CABIN_MENU[0], ("settings", "Settings"));
         assert!(TOOLS.iter().all(|(id, _)| *id != "connectors"));
         assert_eq!(stage_subtitle("history"), "Past chats");
         assert_eq!(stage_subtitle("imagine"), "Images");
