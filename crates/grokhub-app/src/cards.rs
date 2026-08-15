@@ -341,7 +341,7 @@ pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui,
     if n == 0 {
         return;
     }
-    let w = ui.available_width();
+    let w = ui.available_width().max(1.0);
     let cols = if w >= 720.0 {
         3
     } else if w >= 480.0 {
