@@ -29,7 +29,7 @@ use grokhub_core::{
     ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
-    resolve_chat_model,
+    resolve_chat_model, effective_chat_mode,
     needs_auth_banner, next_goal_prompt,
     now_ms, on_wheel_grab, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
     parse_nl_automation, parse_recipe, parse_slash, passenger_label, plan_from_text, plan_room,
@@ -2133,9 +2133,17 @@ impl Cabin {
         self.running = true;
         self.status = "Thinking…".into();
         let key = self.bearer();
-        let model = resolve_chat_model(&self.cfg.mode, &self.cfg.model);
+        let last_user = self
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+        let mode = effective_chat_mode(&self.cfg.mode, last_user, &self.cfg.model);
+        let model = resolve_chat_model(&mode, &self.cfg.model);
         let effort = if model == "grok-4.6" {
-            grokhub_core::reasoning_effort_for_mode(&self.cfg.mode)
+            grokhub_core::reasoning_effort_for_mode(&mode)
         } else {
             None
         };
@@ -4619,7 +4627,7 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Console key", "Optional. Never in markdown.", &mut self.cfg.api_key, true);
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
                                                             crate::cards::settings_field(ui, "Chat model", "Empty means the cabin default. Imagine never shares this.", &mut self.cfg.model, false);
-                                                            crate::cards::settings_field(ui, "Composer mode", "auto, fast, Balance (Grok 4.3), Think (Grok 4.6 high), or max (Grok 4.6 xhigh).", &mut self.cfg.mode, false);
+                                                            crate::cards::settings_field(ui, "Composer mode", "Auto routes Fast / Balance / Think / Max. Fast is Grok 3 mini. Balance is Grok 4.3. Think is Grok 4.6 high. Max is Grok 4.6 xhigh.", &mut self.cfg.mode, false);
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(ui, "The cabin is dark. Light and System stay on grok.com.");

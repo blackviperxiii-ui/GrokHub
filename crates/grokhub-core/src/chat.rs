@@ -110,23 +110,85 @@ pub fn resolve_chat_model(mode: &str, model: &str) -> String {
     }
 }
 
+/// Auto picks Fast / Balance / Think / Max from the ask. A Settings chat-model pin skips this.
+pub fn route_auto_mode(prompt: &str) -> &'static str {
+    let t = prompt.to_ascii_lowercase();
+    let len = prompt.chars().count();
+    if len > 4000 || contains_any(&t, MAX_ROUTE_SIGNALS) {
+        return "max";
+    }
+    if len > 800 || contains_any(&t, THINK_ROUTE_SIGNALS) {
+        return "think";
+    }
+    if len > 160 || contains_any(&t, BALANCE_ROUTE_SIGNALS) {
+        return "balanced";
+    }
+    "fast"
+}
+
+const MAX_ROUTE_SIGNALS: &[&str] = &[
+    "think as hard as possible",
+    "maximum effort",
+    "deepest model",
+    "xhigh",
+];
+
+const THINK_ROUTE_SIGNALS: &[&str] = &[
+    "architect",
+    "root cause",
+    "step by step",
+    "debug",
+    "refactor",
+    "implement",
+    "design a",
+    "prove ",
+];
+
+const BALANCE_ROUTE_SIGNALS: &[&str] = &[
+    "explain",
+    "compare",
+    "why ",
+    "how does",
+    "review",
+    "write a",
+];
+
+fn contains_any(hay: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|n| hay.contains(n))
+}
+
+pub fn effective_chat_mode(mode: &str, prompt: &str, pinned_model: &str) -> String {
+    let mode = mode.trim();
+    if matches!(mode, "auto" | "adaptive" | "smart") && pinned_model.trim().is_empty() {
+        route_auto_mode(prompt).to_string()
+    } else {
+        mode.to_string()
+    }
+}
+
 pub fn failover_model(current: &str) -> Option<&'static str> {
     let tier = tier_of_model(current);
-    match crate::next_failover_tier(tier) {
-        "balanced" => Some("grok-3"),
-        next if next != tier => Some(model_for_mode(next)),
-        _ => None,
+    let next = crate::next_failover_tier(tier);
+    if next == tier {
+        None
+    } else {
+        Some(model_for_mode(next))
     }
 }
 
 fn tier_of_model(model: &str) -> &'static str {
     let m = model.to_ascii_lowercase();
-    if m.contains("4") || m.contains("max") || m.contains("heavy") {
-        "max"
-    } else if m.contains("mini") || m.contains("fast") {
-        "fast"
-    } else {
+    if m.contains("4.3") || m.contains("balance") {
         "balanced"
+    } else if m.contains("4.6")
+        || m.contains("4-latest")
+        || m.contains("max")
+        || m.contains("heavy")
+        || m.contains("4")
+    {
+        "max"
+    } else {
+        "fast"
     }
 }
 
@@ -174,8 +236,8 @@ mod tests {
         assert_eq!(parse_chat_content(&reply).as_deref(), Some("hello"));
         assert!(should_failover_status(429));
         assert!(!should_failover_status(200));
-        assert_eq!(failover_model("grok-4-latest"), Some("grok-3"));
-        assert_eq!(failover_model("grok-4.6"), Some("grok-3"));
+        assert_eq!(failover_model("grok-4-latest"), Some("grok-4.3"));
+        assert_eq!(failover_model("grok-4.6"), Some("grok-4.3"));
         assert!(failover_model(DEFAULT_MODEL).is_none());
         let max = chat_request_body_for_mode("max", &[("user".into(), "hi".into())]);
         assert_eq!(max["model"], "grok-4.6");
@@ -221,7 +283,7 @@ mod tests {
         assert_eq!(max["reasoning_effort"], "xhigh");
         assert_ne!(think["reasoning_effort"], max["reasoning_effort"]);
         assert_eq!(chat_timeout_secs(Some("high")), 600);
-        assert_eq!(failover_model("grok-4.6"), Some("grok-3"));
+        assert_eq!(failover_model("grok-4.6"), Some("grok-4.3"));
     }
 
     #[test]
@@ -236,6 +298,76 @@ mod tests {
         assert_eq!(body["model"], "grok-4.3");
         assert!(body.get("reasoning_effort").is_none());
         assert_ne!(model_for_mode("think"), "grok-4.3");
-        assert_eq!(failover_model("grok-4.3"), Some("grok-3"));
+        assert_eq!(failover_model("grok-4.3"), Some("grok-3-mini-fast"));
+    }
+
+    #[test]
+    fn failover_follows_new_mode_ladder() {
+        assert_eq!(failover_model("grok-4.6"), Some("grok-4.3"));
+        assert_eq!(failover_model("grok-4.3"), Some("grok-3-mini-fast"));
+        assert_eq!(failover_model("grok-3-mini-fast"), None);
+        assert_eq!(failover_model("grok-3"), None);
+        assert_eq!(failover_model("grok-4-latest"), Some("grok-4.3"));
+        assert_eq!(crate::next_failover_tier("max"), "balanced");
+        assert_eq!(crate::next_failover_tier("think"), "balanced");
+        assert_eq!(crate::next_failover_tier("balanced"), "fast");
+        assert_eq!(crate::next_failover_tier("fast"), "fast");
+        assert_eq!(model_for_mode(crate::next_failover_tier("max")), "grok-4.3");
+        assert_eq!(model_for_mode(crate::next_failover_tier("balanced")), "grok-3-mini-fast");
+    }
+
+    #[test]
+    fn auto_routes_among_new_modes() {
+        assert_eq!(route_auto_mode("hi"), "fast");
+        assert_eq!(route_auto_mode("thanks"), "fast");
+        assert_eq!(
+            route_auto_mode("explain how rust ownership works in detail"),
+            "balanced"
+        );
+        assert_eq!(
+            route_auto_mode("architect a host-tool plan and implement the first slice"),
+            "think"
+        );
+        assert_eq!(
+            route_auto_mode("debug the root cause step by step and refactor the auth path"),
+            "think"
+        );
+        assert_eq!(
+            route_auto_mode("think as hard as possible about this proof"),
+            "max"
+        );
+        assert_eq!(model_for_mode(route_auto_mode("hi")), "grok-3-mini-fast");
+        assert_eq!(reasoning_effort_for_mode(route_auto_mode("hi")), None);
+        assert_eq!(
+            model_for_mode(route_auto_mode(
+                "architect a host-tool plan and implement the first slice"
+            )),
+            "grok-4.6"
+        );
+        assert_eq!(
+            reasoning_effort_for_mode(route_auto_mode(
+                "architect a host-tool plan and implement the first slice"
+            )),
+            Some("high")
+        );
+        assert_eq!(
+            reasoning_effort_for_mode(route_auto_mode(
+                "think as hard as possible about this proof"
+            )),
+            Some("xhigh")
+        );
+        assert_eq!(effective_chat_mode("auto", "hi", ""), "fast");
+        assert_eq!(effective_chat_mode("auto", "hi", "grok-3"), "auto");
+        assert_eq!(
+            effective_chat_mode(
+                "auto",
+                "architect a host-tool plan and implement the first slice",
+                ""
+            ),
+            "think"
+        );
+        assert_eq!(effective_chat_mode("think", "hi", ""), "think");
+        assert_eq!(effective_chat_mode("max", "hi", ""), "max");
+        assert_eq!(effective_chat_mode("balanced", "hi", ""), "balanced");
     }
 }
