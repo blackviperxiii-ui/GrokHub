@@ -88,11 +88,22 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
             );
         }
         TileIcon::Github => {
-            painter.circle_stroke(c, w * 0.38, stroke);
-            painter.circle_filled(Pos2::new(c.x - 3.5, c.y - 1.0), 1.6, crate::theme::FG);
-            painter.circle_filled(Pos2::new(c.x + 3.5, c.y - 1.0), 1.6, crate::theme::FG);
+            painter.circle_filled(Pos2::new(c.x, c.y + w * 0.04), w * 0.28, crate::theme::FG);
+            painter.circle_filled(
+                Pos2::new(c.x - w * 0.18, c.y - w * 0.16),
+                w * 0.10,
+                crate::theme::FG,
+            );
+            painter.circle_filled(
+                Pos2::new(c.x + w * 0.18, c.y - w * 0.16),
+                w * 0.10,
+                crate::theme::FG,
+            );
             painter.line_segment(
-                [Pos2::new(c.x, c.y + 1.0), Pos2::new(c.x, c.y + 6.0)],
+                [
+                    Pos2::new(c.x, c.y + w * 0.28),
+                    Pos2::new(c.x, c.y + w * 0.42),
+                ],
                 stroke,
             );
         }
@@ -130,11 +141,11 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
             painter.line_segment([pts[2], pts[3]], stroke);
         }
         TileIcon::Moon => {
-            painter.circle_stroke(c, w * 0.36, stroke);
+            painter.circle_filled(c, w * 0.32, crate::theme::FG);
             painter.circle_filled(
                 Pos2::new(c.x + w * 0.14, c.y - w * 0.08),
-                w * 0.28,
-                crate::theme::ELEVATED,
+                w * 0.26,
+                fill,
             );
         }
         TileIcon::Connect => {
@@ -182,6 +193,82 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BarIcon {
+    Plus,
+    Mic,
+    Send,
+    Search,
+}
+
+pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::Color32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let painter = ui.painter();
+    let c = rect.center();
+    let w = rect.width();
+    let stroke = Stroke::new(1.6, color);
+    match icon {
+        BarIcon::Plus => {
+            painter.line_segment(
+                [Pos2::new(c.x, c.y - w * 0.22), Pos2::new(c.x, c.y + w * 0.22)],
+                stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(c.x - w * 0.22, c.y), Pos2::new(c.x + w * 0.22, c.y)],
+                stroke,
+            );
+        }
+        BarIcon::Mic => {
+            let cap = egui::Rect::from_center_size(Pos2::new(c.x, c.y - w * 0.04), Vec2::new(w * 0.28, w * 0.42));
+            painter.rect_stroke(cap, 6.0, stroke);
+            painter.line_segment(
+                [Pos2::new(c.x, cap.bottom()), Pos2::new(c.x, c.y + w * 0.28)],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(c.x - w * 0.16, c.y + w * 0.28),
+                    Pos2::new(c.x + w * 0.16, c.y + w * 0.28),
+                ],
+                stroke,
+            );
+        }
+        BarIcon::Send => {
+            painter.circle_filled(c, w * 0.46, crate::theme::FG);
+            let arrow = Stroke::new(1.8, crate::theme::BG);
+            painter.line_segment(
+                [Pos2::new(c.x, c.y + w * 0.16), Pos2::new(c.x, c.y - w * 0.16)],
+                arrow,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(c.x - w * 0.12, c.y - w * 0.02),
+                    Pos2::new(c.x, c.y - w * 0.16),
+                ],
+                arrow,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(c.x + w * 0.12, c.y - w * 0.02),
+                    Pos2::new(c.x, c.y - w * 0.16),
+                ],
+                arrow,
+            );
+        }
+        BarIcon::Search => {
+            painter.circle_stroke(Pos2::new(c.x - 1.0, c.y - 1.0), w * 0.22, stroke);
+            painter.line_segment(
+                [
+                    Pos2::new(c.x + w * 0.10, c.y + w * 0.10),
+                    Pos2::new(c.x + w * 0.22, c.y + w * 0.22),
+                ],
+                stroke,
+            );
+        }
+    }
+    resp
+}
+
 pub fn icon_for_label(label: &str) -> TileIcon {
     let l = label.to_ascii_lowercase();
     if l.contains("connect") {
@@ -221,5 +308,7 @@ mod tests {
         assert_eq!(icon_for_label("Open Imagine"), TileIcon::Image);
         assert_eq!(icon_for_label("Think Harder"), TileIcon::Think);
         assert_ne!(icon_for_label("Host snapshot"), icon_for_label("Morning brief"));
+        assert_ne!(BarIcon::Mic, BarIcon::Send);
+        assert_ne!(BarIcon::Plus, BarIcon::Search);
     }
 }

@@ -206,22 +206,41 @@ pub fn starter_skill(name: &str) -> SkillMd {
 
 pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
     let mut clicked = false;
-    ui.add_space(8.0);
+    ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(title).size(40.0).strong().color(crate::theme::FG));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            clicked = ui
-                .add(
-                    egui::Button::new(RichText::new(action).size(14.0).strong().color(crate::theme::BG))
-                        .fill(crate::theme::FG)
-                        .rounding(20.0)
-                        .min_size(egui::vec2(0.0, 36.0)),
-                )
-                .clicked();
-        });
+        ui.label(
+            RichText::new(title)
+                .font(crate::theme::title_font(36.0))
+                .color(crate::theme::FG),
+        );
+        if !action.is_empty() {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                clicked = white_pill(ui, action);
+            });
+        }
     });
-    ui.add_space(18.0);
+    ui.add_space(14.0);
     clicked
+}
+
+pub fn white_pill(ui: &mut egui::Ui, label: &str) -> bool {
+    ui.add(
+        egui::Button::new(RichText::new(label).size(13.0).strong().color(crate::theme::BG))
+            .fill(crate::theme::FG)
+            .rounding(18.0)
+            .min_size(egui::vec2(0.0, 34.0)),
+    )
+    .clicked()
+}
+
+pub fn ghost_pill(ui: &mut egui::Ui, label: &str) -> bool {
+    ui.add(
+        egui::Button::new(RichText::new(label).size(12.0).color(crate::theme::MUTED))
+            .fill(egui::Color32::TRANSPARENT)
+            .rounding(14.0)
+            .stroke(Stroke::new(1.0_f32, crate::theme::BORDER)),
+    )
+    .clicked()
 }
 
 pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
@@ -260,14 +279,17 @@ pub fn search_field(ui: &mut egui::Ui, q: &mut String) {
         .fill(crate::theme::ELEVATED)
         .rounding(18.0)
         .stroke(Stroke::new(1.0_f32, crate::theme::BORDER))
-        .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+        .inner_margin(egui::Margin::symmetric(10.0, 5.0))
         .show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::singleline(q)
-                    .hint_text("Search")
-                    .desired_width(200.0)
-                    .frame(false),
-            );
+            ui.horizontal(|ui| {
+                icons::paint_bar_icon(ui, icons::BarIcon::Search, 16.0, crate::theme::SUBTLE);
+                ui.add(
+                    egui::TextEdit::singleline(q)
+                        .hint_text("Search")
+                        .desired_width(180.0)
+                        .frame(false),
+                );
+            });
         });
 }
 
@@ -292,30 +314,21 @@ pub fn grok_tile(
                 crate::theme::BORDER
             },
         ))
-        .inner_margin(egui::Margin::same(16.0))
+        .inner_margin(egui::Margin::same(14.0))
         .show(ui, |ui| {
-            ui.set_min_height(128.0);
+            ui.set_min_height(108.0);
             ui.horizontal(|ui| {
-                icons::paint_icon(ui, icon, 44.0);
-                ui.add_space(12.0);
+                icons::paint_icon(ui, icon, 40.0);
+                ui.add_space(10.0);
                 ui.vertical(|ui| {
-                    ui.label(RichText::new(title).size(16.0).strong().color(crate::theme::FG));
-                    ui.add_space(6.0);
-                    let clipped: String = body.chars().take(92).collect();
-                    ui.label(RichText::new(clipped).size(13.0).color(crate::theme::MUTED));
+                    ui.label(RichText::new(title).size(15.0).strong().color(crate::theme::FG));
+                    ui.add_space(4.0);
+                    let clipped: String = body.chars().take(80).collect();
+                    ui.label(RichText::new(clipped).size(12.0).color(crate::theme::MUTED));
                 });
                 if let Some(label) = add {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        add_clicked = ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(label).size(13.0).strong().color(crate::theme::BG),
-                                )
-                                .fill(crate::theme::FG)
-                                .rounding(14.0)
-                                .min_size(egui::vec2(56.0, 30.0)),
-                            )
-                            .clicked();
+                        add_clicked = white_pill(ui, label);
                     });
                 }
             });
@@ -387,21 +400,18 @@ pub fn catalog_card(ui: &mut egui::Ui, title: &str, body: &str, selected: bool) 
     grok_tile(ui, icons::icon_for_label(title), title, body, None, selected) == TileHit::Body
 }
 
-pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &str) -> bool {
+pub fn empty_prompt_chip(ui: &mut egui::Ui, icon: TileIcon, title: &str) -> bool {
     let mut hit = false;
     let resp = egui::Frame::none()
         .fill(crate::theme::ELEVATED)
-        .rounding(18.0)
+        .rounding(20.0)
         .stroke(Stroke::new(1.0_f32, crate::theme::BORDER))
-        .inner_margin(egui::Margin::same(18.0))
+        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
         .show(ui, |ui| {
-            ui.set_min_height(132.0);
-            ui.vertical_centered(|ui| {
-                icons::paint_icon(ui, icon, 40.0);
-                ui.add_space(10.0);
-                ui.label(RichText::new(title).size(15.0).strong().color(crate::theme::FG));
-                ui.add_space(4.0);
-                ui.label(RichText::new(hint).size(12.0).color(crate::theme::MUTED));
+            ui.horizontal(|ui| {
+                icons::paint_icon(ui, icon, 28.0);
+                ui.add_space(8.0);
+                ui.label(RichText::new(title).size(13.0).color(crate::theme::FG));
             });
         })
         .response
@@ -411,7 +421,7 @@ pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &
     }
     if resp.hovered() {
         ui.painter()
-            .rect_stroke(resp.rect, 18.0, Stroke::new(1.0, crate::theme::BORDER_STRONG));
+            .rect_stroke(resp.rect, 20.0, Stroke::new(1.0, crate::theme::BORDER_STRONG));
     }
     hit
 }
