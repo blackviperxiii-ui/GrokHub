@@ -341,7 +341,15 @@ pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui,
     if n == 0 {
         return;
     }
-    let w = ui.available_width().max(1.0);
+    let w = ui.available_width();
+    let spacing = ui.spacing().item_spacing.x;
+    if !w.is_finite() || w < 16.0 {
+        for i in 0..n {
+            each(ui, i);
+            ui.add_space(12.0);
+        }
+        return;
+    }
     let cols = if w >= 720.0 {
         3
     } else if w >= 480.0 {
@@ -349,6 +357,14 @@ pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui,
     } else {
         1
     };
+    let col_w = (w - spacing * (cols as f32 - 1.0)) / cols as f32;
+    if col_w < 8.0 {
+        for i in 0..n {
+            each(ui, i);
+            ui.add_space(12.0);
+        }
+        return;
+    }
     let rows = n.div_ceil(cols);
     for r in 0..rows {
         ui.columns(cols, |col_uis| {
