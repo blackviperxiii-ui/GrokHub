@@ -28,7 +28,7 @@ Slash: `/help` `/new` `/scratch` `/clear` `/undo` `/retry` `/stop` `/sh` `/host`
 
 Threads: named chats, scratch (no memory write), persist under config.
 
-Bound project: Settings + `/project bind`. Host paths outside the tree need the same confirm as destructive. Unbound = full desktop.
+Bound project: Settings + `/project bind`. Sidebar tree: create, rename, one-level folders (`/project new|folder|rename|move`). Folders do not move files. Persist `projects.json`. Host paths outside the tree need the same confirm as destructive. Unbound = full desktop.
 
 Host: `/sh`, host on/off, hourly cap, `notify-send` when a job >30s finishes, `systemd-inhibit` while a host job runs.
 

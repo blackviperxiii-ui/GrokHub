@@ -29,4 +29,4 @@ Or from `packaging/aur` after copying `PKGBUILD`.
 | `/usr/bin/grokhub` | Cabin |
 | `/usr/bin/grokhub-hub` | Standalone LAN hub |
 | `/usr/share/applications/grokhub.desktop` | App menu |
-| `~/.config/GrokHub` | Config + memory |
+| `~/.config/GrokHub` | Config + memory (`app.json`, `projects.json`, `secrets.json`) |
