@@ -14,8 +14,8 @@ use grokhub_core::{
     append_composer, apply_work_update, attach_kind, attach_name, attach_prompt_line,
     appearance_choices, approved_cmds, auth_bearer, automation_blocked_by_policy, blend_thread_goal,
     build_hub_snapshot,
-    build_quick_chips, build_windshield, bump_skill_run, cabin_eyes_for_turn, can_inhabit, can_mark_done,
-    bump_usage, catalog_line, chip_suggest_prompt, compact_keep_pin, compose_imagine_prompt,
+    build_quick_chips, build_windshield, bump_skill_run, bump_usage, cabin_eyes_for_turn, can_inhabit, can_mark_done,
+    catalog_line, chip_suggest_prompt, chip_thread_from_messages, compact_keep_pin, compose_imagine_prompt,
     context_fingerprint,
     context_percent, daily_units_blocked,
     dedicated_imagine_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
@@ -58,11 +58,11 @@ use grokhub_core::{
     unified_diff_cite, usage_line,
     transcribe_route, uid, update_cmds, overlay_update_begin, overlay_update_finish,
     update_wipes_config, voice_session_url, Automation, BoardCard,
-    BoardStatus, ChipInput, ChipKind, ChipMemory, ComputerOp, DeviceCodeStart, HeyGrokAction,
+    BoardStatus, ChipInput, ChipKind, ChipMemory, ChipThread, ComputerOp, DeviceCodeStart, HeyGrokAction,
     HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, Recipe, ReplayOp, RewindRecord,
     AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
-    VoiceState, CONTEXT_BUDGET_TOKENS,
+    VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
     DEFAULT_MODEL, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS, IMAGINE_ASPECTS,
     IMAGINE_STYLES,
     PRESENCE_RING_MS, TRANSCRIBERS,
@@ -152,6 +152,31 @@ fn slash_pick_retain(pick: usize, list_changed: bool, len: usize) -> usize {
     } else {
         slash_pick_step(pick, len, 0)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ComposerStackSlot {
+    AuthBanner,
+    SkillApprove,
+    SaveAsSkill,
+    HostPlan,
+    SlashPalette,
+    Chips,
+    Attach,
+    Pill,
+}
+
+fn composer_stack_order() -> &'static [ComposerStackSlot] {
+    &[
+        ComposerStackSlot::AuthBanner,
+        ComposerStackSlot::SkillApprove,
+        ComposerStackSlot::SaveAsSkill,
+        ComposerStackSlot::HostPlan,
+        ComposerStackSlot::SlashPalette,
+        ComposerStackSlot::Chips,
+        ComposerStackSlot::Attach,
+        ComposerStackSlot::Pill,
+    ]
 }
 
 fn next_maximized(currently: bool) -> bool {
@@ -1464,6 +1489,15 @@ impl Cabin {
         Self::local_clock().hour as u8
     }
 
+    fn other_chip_threads(&self) -> Vec<ChipThread> {
+        let current = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.id.as_str())
+            .unwrap_or("");
+        collect_other_chip_threads(&self.threads, current)
+    }
+
     fn poll_chips(&mut self) {
         let Some(rx) = self.chip_rx.take() else {
             return;
@@ -1602,6 +1636,7 @@ impl Cabin {
             .map(|t| t.title.clone())
             .unwrap_or_default();
         let last_failed = self.last_receipt_ok == Some(false);
+        let others = self.other_chip_threads();
         let input = ChipInput {
             chat: &chat,
             draft: &self.composer,
@@ -1621,10 +1656,20 @@ impl Cabin {
             last_failed,
             hour,
             now_ms: now_ms(),
-            max: 5,
+            max: CHIP_VISIBLE_MAX,
+            other_threads: &others,
         };
         self.visible_chips = build_quick_chips(input);
-        let fp = context_fingerprint(&chat, &self.composer, last_failed, hour);
+        let mut fp = context_fingerprint(&chat, &self.composer, last_failed, hour);
+        if !others.is_empty() {
+            let extra: String = others
+                .iter()
+                .take(4)
+                .map(|t| t.title.chars().take(16).collect::<String>())
+                .collect::<Vec<_>>()
+                .join(",");
+            fp = format!("{fp}+o:{extra}");
+        }
         if should_refresh_llm(
             &self.chip_fp,
             &fp,
@@ -1654,14 +1699,16 @@ impl Cabin {
             .map(|t| t.title.clone())
             .unwrap_or_default();
         let habits = top_habit_labels(&self.chip_memory, 6);
+        let others = self.other_chip_threads();
         let prompt = chip_suggest_prompt(
             &chat,
             &title,
             &self.composer,
             &habits,
             &self.chip_dismissed,
+            &others,
         );
-        let model = model_for_mode("fast").to_string();
+        let model = model_for_mode(CHIP_LLM_MODE).to_string();
         let (tx, rx) = mpsc::channel();
         self.chip_rx = Some(rx);
         self.chip_busy = true;
@@ -5269,6 +5316,21 @@ impl Cabin {
             ui.add_space(6.0);
             ui.vertical_centered(|ui| {
             ui.set_max_width(crate::theme::QUERY_MAX_W);
+            if let Some(act) = crate::cards::quick_chip_row(ui, &self.visible_chips) {
+                match act {
+                    crate::cards::ChipRowAct::Apply(i) => {
+                        if let Some(c) = self.visible_chips.get(i).cloned() {
+                            self.apply_chip(c);
+                        }
+                    }
+                    crate::cards::ChipRowAct::Dismiss(i) => {
+                        if let Some(c) = self.visible_chips.get(i).cloned() {
+                            self.dismiss_chip(c);
+                            self.refresh_chips();
+                        }
+                    }
+                }
+            }
             self.ui_attach_chip(ui, PlusTarget::Chat);
             egui::Frame::none()
                 .fill(crate::theme::elevated())
@@ -6818,6 +6880,16 @@ fn click_project_opens_board(already_selected: bool) -> bool {
     already_selected
 }
 
+fn collect_other_chip_threads(threads: &[threads::ChatThread], current_id: &str) -> Vec<ChipThread> {
+    threads
+        .iter()
+        .rev()
+        .filter(|t| t.id != current_id && !t.scratch)
+        .filter_map(|t| chip_thread_from_messages(&t.title, &t.messages))
+        .take(6)
+        .collect()
+}
+
 fn health_settings_sec() -> SettingsSec {
     SettingsSec::About
 }
@@ -7022,5 +7094,38 @@ mod tests {
             grokhub_core::ThemeChoice::System,
             false
         ));
+    }
+
+    #[test]
+    fn chips_sit_above_the_composer_pill() {
+        let order = super::composer_stack_order();
+        let chips = order
+            .iter()
+            .position(|s| *s == super::ComposerStackSlot::Chips);
+        let pill = order
+            .iter()
+            .position(|s| *s == super::ComposerStackSlot::Pill)
+            .expect("pill");
+        assert!(chips.is_some(), "chips belong above the composer pill");
+        assert!(chips.unwrap() < pill);
+    }
+
+    #[test]
+    fn other_chip_threads_skip_current_and_scratch() {
+        let mut current = crate::threads::ChatThread::new("Now", false);
+        current.id = "cur".into();
+        current.messages.push(("user".into(), "this chat".into()));
+        let mut prev = crate::threads::ChatThread::new("Night cabin", false);
+        prev.id = "prev".into();
+        prev.messages.push(("user".into(), "paint the wall".into()));
+        prev.messages
+            .push(("assistant".into(), "I can sketch the first coat.".into()));
+        let mut scratch = crate::threads::ChatThread::new("Scratch", true);
+        scratch.id = "scr".into();
+        scratch.messages.push(("user".into(), "ignore me".into()));
+        let others = super::collect_other_chip_threads(&[current, prev, scratch], "cur");
+        assert_eq!(others.len(), 1);
+        assert_eq!(others[0].title, "Night cabin");
+        assert_eq!(others[0].last_user, "paint the wall");
     }
 }
