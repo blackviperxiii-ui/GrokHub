@@ -400,18 +400,21 @@ pub fn catalog_card(ui: &mut egui::Ui, title: &str, body: &str, selected: bool) 
     grok_tile(ui, icons::icon_for_label(title), title, body, None, selected) == TileHit::Body
 }
 
-pub fn empty_prompt_chip(ui: &mut egui::Ui, icon: TileIcon, title: &str) -> bool {
+pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &str) -> bool {
     let mut hit = false;
     let resp = egui::Frame::none()
         .fill(crate::theme::ELEVATED)
-        .rounding(20.0)
+        .rounding(18.0)
         .stroke(Stroke::new(1.0_f32, crate::theme::BORDER))
-        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+        .inner_margin(egui::Margin::same(16.0))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                icons::paint_icon(ui, icon, 28.0);
+            ui.set_min_height(112.0);
+            ui.vertical_centered(|ui| {
+                icons::paint_icon(ui, icon, 36.0);
                 ui.add_space(8.0);
-                ui.label(RichText::new(title).size(13.0).color(crate::theme::FG));
+                ui.label(RichText::new(title).size(14.0).strong().color(crate::theme::FG));
+                ui.add_space(4.0);
+                ui.label(RichText::new(hint).size(12.0).color(crate::theme::MUTED));
             });
         })
         .response
@@ -421,7 +424,7 @@ pub fn empty_prompt_chip(ui: &mut egui::Ui, icon: TileIcon, title: &str) -> bool
     }
     if resp.hovered() {
         ui.painter()
-            .rect_stroke(resp.rect, 20.0, Stroke::new(1.0, crate::theme::BORDER_STRONG));
+            .rect_stroke(resp.rect, 18.0, Stroke::new(1.0, crate::theme::BORDER_STRONG));
     }
     hit
 }

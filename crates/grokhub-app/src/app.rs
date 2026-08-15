@@ -228,6 +228,7 @@ pub struct Cabin {
     pending_connectors: Vec<(String, String, String)>,
     auto_compose: bool,
     board_compose: bool,
+    settings_menu_open: bool,
 }
 
 impl Cabin {
@@ -371,6 +372,7 @@ impl Cabin {
             pending_connectors: vec![],
             auto_compose: false,
             board_compose: false,
+            settings_menu_open: false,
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
             let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
@@ -2566,6 +2568,7 @@ impl eframe::App for Cabin {
         crate::theme::apply(ctx);
         self.ui_titlebar(ctx);
         self.ui_sidebar(ctx);
+        self.ui_settings_menu(ctx);
 
         match self.nav {
             Nav::Chat => self.ui_chat(ctx),
@@ -2633,6 +2636,52 @@ impl Cabin {
             .unwrap_or_default();
         if !today.is_empty() {
             roll_usage_day(&mut self.usage, &today);
+        }
+    }
+
+    fn ui_settings_menu(&mut self, ctx: &egui::Context) {
+        if !self.settings_menu_open {
+            return;
+        }
+        let mut close = false;
+        let mut go_settings = false;
+        let mut connect = false;
+        egui::Window::new("settings-menu")
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::RIGHT_TOP, [-48.0, 44.0])
+            .frame(
+                egui::Frame::none()
+                    .fill(crate::theme::PANEL)
+                    .rounding(12.0)
+                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                    .inner_margin(egui::Margin::same(10.0)),
+            )
+            .show(ctx, |ui| {
+                ui.set_min_width(180.0);
+                ui.label(RichText::new("Settings").size(12.0).color(crate::theme::SUBTLE));
+                ui.add_space(6.0);
+                if crate::cards::ghost_pill(ui, "Open settings") {
+                    go_settings = true;
+                }
+                if crate::cards::ghost_pill(ui, "Connect Grok") {
+                    connect = true;
+                }
+                if crate::cards::ghost_pill(ui, "Close") {
+                    close = true;
+                }
+            });
+        if go_settings {
+            self.nav = Nav::Settings;
+            self.settings_menu_open = false;
+        }
+        if connect {
+            self.start_oauth();
+            self.settings_menu_open = false;
+        }
+        if close {
+            self.settings_menu_open = false;
         }
     }
 
@@ -2906,6 +2955,17 @@ impl Cabin {
                         {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
+                        if crate::icons::paint_bar_icon(
+                            ui,
+                            crate::icons::BarIcon::Gear,
+                            18.0,
+                            crate::theme::MUTED,
+                        )
+                        .on_hover_text("Settings")
+                        .clicked()
+                        {
+                            self.settings_menu_open = !self.settings_menu_open;
+                        }
                         if !account.is_empty() {
                             if ui
                                 .add(
@@ -2913,18 +2973,18 @@ impl Cabin {
                                         RichText::new(&account).small().color(crate::theme::MUTED),
                                     )
                                     .fill(crate::theme::SURFACE)
-                                    .stroke(egui::Stroke::new(1.0, crate::theme::BORDER)),
+                                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER)),
                                 )
                                 .clicked()
                             {
-                                self.nav = Nav::Settings;
+                                self.settings_menu_open = !self.settings_menu_open;
                             }
                         }
                         if ui
                             .add(
                                 egui::Button::new(RichText::new("Search").small().color(crate::theme::MUTED))
                                     .fill(crate::theme::SURFACE)
-                                    .stroke(egui::Stroke::new(1.0, crate::theme::BORDER)),
+                                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER)),
                             )
                             .clicked()
                         {
@@ -3186,27 +3246,6 @@ impl Cabin {
                     }
                 });
             }
-            let chips = self.visible_chips.clone();
-            if !chips.is_empty() {
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-                    for chip in chips {
-                        if crate::cards::empty_prompt_chip(
-                            ui,
-                            crate::cards::chip_icon(&chip.label),
-                            &chip.label,
-                        ) {
-                            self.apply_chip(chip);
-                            return;
-                        }
-                        if crate::cards::ghost_pill(ui, "×") {
-                            self.dismiss_chip(chip);
-                            return;
-                        }
-                    }
-                });
-            }
             let hits = filter_slash_commands(&self.composer);
             if !hits.is_empty() {
                 ui.label(RichText::new("Tab accepts · type /").small());
@@ -3324,7 +3363,7 @@ impl Cabin {
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
                     if self.messages.is_empty() {
-                        let lift = (ui.available_height() * 0.28).clamp(48.0, 140.0);
+                        let lift = (ui.available_height() * 0.18).clamp(36.0, 100.0);
                         ui.add_space(lift);
                         ui.vertical_centered(|ui| {
                             ui.label(
@@ -3338,6 +3377,20 @@ impl Cabin {
                                     .size(15.0)
                                     .color(crate::theme::MUTED),
                             );
+                        });
+                        ui.add_space(28.0);
+                        let tiles = self.visible_chips.clone();
+                        let n = tiles.len().min(4);
+                        crate::cards::tile_row(ui, n, |ui, i| {
+                            let c = &tiles[i];
+                            if crate::cards::empty_prompt_tile(
+                                ui,
+                                crate::cards::chip_icon(&c.label),
+                                &c.label,
+                                if c.hint.is_empty() { "Suggested" } else { &c.hint },
+                            ) {
+                                self.apply_chip(c.clone());
+                            }
                         });
                     }
                     for m in &self.messages {

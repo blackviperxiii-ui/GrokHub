@@ -32,7 +32,6 @@ pub const WORKSPACE: &[(&str, &str)] = &[
     ("history", "History"),
     ("imagine", "Imagine"),
     ("workboard", "Workboard"),
-    ("settings", "Settings"),
 ];
 
 pub const TOOLS: &[(&str, &str)] = &[
@@ -200,6 +199,7 @@ mod tests {
         assert_eq!(PANEL, Color32::from_rgb(23, 23, 23));
         assert_eq!(FG, Color32::from_rgb(245, 245, 245));
         assert_eq!(WORKSPACE[0], ("chat", "Agent"));
+        assert!(WORKSPACE.iter().all(|(id, _)| *id != "settings"));
         assert_eq!(TOOLS[1], ("automations", "Automations"));
         assert_eq!(TOOLS[3], ("queue", "Queue"));
         assert!(TOOLS.iter().all(|(id, _)| *id != "connectors"));
