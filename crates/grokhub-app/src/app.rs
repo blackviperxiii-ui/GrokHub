@@ -4637,6 +4637,9 @@ impl Cabin {
                                                             if crate::cards::settings_action(ui, "Install overlay", "Pulls this clone and runs the user install.", "Update") {
                                                                 update = true;
                                                             }
+                                                            if !self.status.is_empty() {
+                                                                crate::cards::settings_note(ui, &self.status);
+                                                            }
                                                         }
                                                         SettingsSec::About => {
                                                             crate::cards::settings_note(ui, &usage);
