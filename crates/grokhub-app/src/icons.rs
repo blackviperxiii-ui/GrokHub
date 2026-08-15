@@ -208,8 +208,154 @@ pub enum BarIcon {
     Plus,
     Mic,
     Send,
+    ArrowUp,
     Search,
     Gear,
+}
+
+/// grok.com rail — 20px stroke-2 square-cap icons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RailIcon {
+    Search,
+    Compose,
+    Imagine,
+    Clock,
+    Grid,
+    Folder,
+    Chat,
+}
+
+pub fn rail_icon_for(id: &str) -> RailIcon {
+    match id {
+        "imagine" => RailIcon::Imagine,
+        "automations" => RailIcon::Clock,
+        "skills" | "connectors" => RailIcon::Grid,
+        "workboard" => RailIcon::Folder,
+        "history" => RailIcon::Clock,
+        "search" => RailIcon::Search,
+        "new" => RailIcon::Compose,
+        _ => RailIcon::Chat,
+    }
+}
+
+pub fn paint_rail_icon(ui: &mut egui::Ui, icon: RailIcon, size: f32, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    let painter = ui.painter();
+    let c = rect.center();
+    let w = rect.width();
+    let stroke = Stroke::new(1.8, color);
+    match icon {
+        RailIcon::Search => {
+            painter.circle_stroke(Pos2::new(c.x - 1.0, c.y - 1.0), w * 0.22, stroke);
+            painter.line_segment(
+                [
+                    Pos2::new(c.x + w * 0.10, c.y + w * 0.10),
+                    Pos2::new(c.x + w * 0.24, c.y + w * 0.24),
+                ],
+                stroke,
+            );
+        }
+        RailIcon::Compose => {
+            let r = rect.shrink(size * 0.22);
+            painter.rect_stroke(r, 3.0, stroke);
+            painter.line_segment(
+                [Pos2::new(c.x, r.top() + 3.0), Pos2::new(c.x, r.bottom() - 3.0)],
+                stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(r.left() + 3.0, c.y), Pos2::new(r.right() - 3.0, c.y)],
+                stroke,
+            );
+        }
+        RailIcon::Imagine => {
+            let r = rect.shrink(size * 0.20);
+            painter.rect_stroke(r, 3.0, stroke);
+            painter.circle_filled(
+                Pos2::new(r.left() + w * 0.22, r.top() + w * 0.20),
+                1.6,
+                color,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(r.left() + 2.0, r.bottom() - 3.0),
+                    Pos2::new(c.x, c.y + 1.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(c.x, c.y + 1.0),
+                    Pos2::new(r.right() - 2.0, r.bottom() - 3.0),
+                ],
+                stroke,
+            );
+        }
+        RailIcon::Clock => {
+            painter.circle_stroke(c, w * 0.32, stroke);
+            painter.line_segment([c, Pos2::new(c.x, c.y - w * 0.16)], stroke);
+            painter.line_segment([c, Pos2::new(c.x + w * 0.14, c.y + w * 0.08)], stroke);
+        }
+        RailIcon::Grid => {
+            let s = w * 0.16;
+            let g = w * 0.10;
+            for row in 0..2 {
+                for col in 0..2 {
+                    let p = Pos2::new(
+                        c.x - s - g * 0.5 + col as f32 * (s * 2.0 + g),
+                        c.y - s - g * 0.5 + row as f32 * (s * 2.0 + g),
+                    );
+                    painter.rect_stroke(
+                        egui::Rect::from_center_size(p, Vec2::splat(s * 2.0)),
+                        2.0,
+                        stroke,
+                    );
+                }
+            }
+        }
+        RailIcon::Folder => {
+            let r = rect.shrink(size * 0.20);
+            painter.rect_stroke(
+                egui::Rect::from_min_max(
+                    Pos2::new(r.left(), r.top() + 4.0),
+                    Pos2::new(r.right(), r.bottom()),
+                ),
+                3.0,
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(r.left(), r.top() + 4.0),
+                    Pos2::new(r.left() + 4.0, r.top()),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(r.left() + 4.0, r.top()),
+                    Pos2::new(c.x + 1.0, r.top()),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(c.x + 1.0, r.top()),
+                    Pos2::new(c.x + 4.0, r.top() + 4.0),
+                ],
+                stroke,
+            );
+        }
+        RailIcon::Chat => {
+            let r = rect.shrink(size * 0.20);
+            painter.rect_stroke(r, 5.0, stroke);
+            painter.line_segment(
+                [
+                    Pos2::new(r.left() + 4.0, r.bottom()),
+                    Pos2::new(r.left() + 2.0, r.bottom() + 3.0),
+                ],
+                stroke,
+            );
+        }
+    }
 }
 
 pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::Color32) -> egui::Response {
@@ -290,6 +436,27 @@ pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::
                 arrow,
             );
         }
+        BarIcon::ArrowUp => {
+            // grok.com Submit: M6 11L12 5M12 5L18 11M12 5V19 square-cap
+            painter.line_segment(
+                [Pos2::new(c.x, c.y + w * 0.22), Pos2::new(c.x, c.y - w * 0.22)],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(c.x - w * 0.20, c.y - w * 0.02),
+                    Pos2::new(c.x, c.y - w * 0.22),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(c.x + w * 0.20, c.y - w * 0.02),
+                    Pos2::new(c.x, c.y - w * 0.22),
+                ],
+                stroke,
+            );
+        }
         BarIcon::Search => {
             painter.circle_stroke(Pos2::new(c.x - 1.0, c.y - 1.0), w * 0.22, stroke);
             painter.line_segment(
@@ -359,5 +526,12 @@ mod tests {
         assert_ne!(BarIcon::Mic, BarIcon::Send);
         assert_ne!(BarIcon::Plus, BarIcon::Search);
         assert_ne!(BarIcon::Gear, BarIcon::Search);
+        assert_ne!(BarIcon::ArrowUp, BarIcon::Send);
+        assert_eq!(rail_icon_for("imagine"), RailIcon::Imagine);
+        assert_eq!(rail_icon_for("automations"), RailIcon::Clock);
+        assert_eq!(rail_icon_for("skills"), RailIcon::Grid);
+        assert_eq!(rail_icon_for("workboard"), RailIcon::Folder);
+        assert_ne!(RailIcon::Search, RailIcon::Compose);
+        assert_ne!(RailIcon::Imagine, RailIcon::Grid);
     }
 }

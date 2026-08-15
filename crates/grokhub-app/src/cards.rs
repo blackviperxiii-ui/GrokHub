@@ -225,10 +225,15 @@ pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
 
 pub fn white_pill(ui: &mut egui::Ui, label: &str) -> bool {
     ui.add(
-        egui::Button::new(RichText::new(label).size(13.0).strong().color(crate::theme::BG))
-            .fill(crate::theme::FG)
-            .rounding(18.0)
-            .min_size(egui::vec2(0.0, 34.0)),
+        egui::Button::new(
+            RichText::new(label)
+                .size(crate::theme::FONT_CHROME)
+                .strong()
+                .color(crate::theme::BG),
+        )
+        .fill(crate::theme::FG)
+        .rounding(crate::theme::HIT)
+        .min_size(egui::vec2(0.0, crate::theme::HIT)),
     )
     .clicked()
 }
