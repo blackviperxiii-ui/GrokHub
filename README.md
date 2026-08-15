@@ -34,7 +34,7 @@ GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub
 
 Close on the window hides the cabin to the tray — the window unmaps; it does not minimize to the taskbar. Jobs, hub, and idle reflect keep running. Tray: **Show cabin**, **Halt hands**, **Quit**. `grokhub --agent` starts already hidden. `GROKHUB_TRAY=0` quits on close.
 
-Slash: `/help` · `/new` · `/scratch` · `/clear` · `/undo` · `/retry` · `/stop` · `/sh` · `/host` · `/project` · `/approve` · `/memory` · `/recall` · `/forget` · `/board` · `/imagine` · `/skill` · `/compact` · `/learn reflect` · `/update` · `/send` · `/sync` · `/hub` · `/inhabit` · `/rewind` · `/room` · `/export` · `/mode auto|fast|balance|think|max` · `/dream` · `/palette`. Type `/help` in the cabin for the rest. `/project` also takes `bind`, `new`, `folder`, `rename`, `move`, `clear`.
+Slash: `/help` · `/new` · `/scratch` · `/clear` · `/undo` · `/retry` · `/stop` · `/sh` · `/host` · `/project` · `/approve` · `/memory` · `/recall` · `/forget` · `/board` · `/imagine` · `/skill` · `/compact` · `/learn reflect` · `/update` · `/send` · `/sync` · `/hub` · `/inhabit` · `/rewind` · `/room` · `/export` · `/rename` · `/pin` · `/delete` · `/mode auto|fast|balance|think|max` · `/dream` · `/palette`. Type `/help` in the cabin for the rest. `/project` also takes `bind`, `new`, `folder`, `rename`, `move`, `clear`.
 
 Composer modes (combo on the pill, or `/mode`):
 
@@ -49,6 +49,8 @@ Composer modes (combo on the pill, or `/mode`):
 If the request returns 401 / 403 / 429 / 5xx, the cabin retries once down the ladder: Grok 4.6 → 4.3 → Fast. Fast has no further drop.
 
 Projects sit in the left rail. `+` makes a project (`~/GrokHub-Work/<slug>`) or a one-level folder. Double-click or right-click to rename (display name only — the path stays). Right-click a project to add it to a folder or remove it. Folders are sidebar only; they do not move files. Click a project to bind it. Click the bound project again to open the Workboard. Bound tree is the world.
+
+History chats: click to open, double-click or right-click to rename, right-click to pin or delete. `/rename` locks the name. After every turn Fast (`grok-3-mini-fast`) names the tab from the current topics unless you locked it. Scratch chats stay unnamed. `/pin` and `/delete` (or `/close`) work on the open chat.
 
 Imagine always uses dedicated **`grok-2-image`** (chat model is ignored). Hey Grok records 4s (`arecord` / `ffmpeg` / `sox`), transcribes with xAI STT when a key is present (whisper fallback), and speaks the reply via xAI TTS. Eyes walks AT-SPI (`pyatspi`) then wmctrl + cursor. With Cabin eyes on, a JPEG is captured on each chat send, stored on the hub (not disk), and attached to that turn.
 

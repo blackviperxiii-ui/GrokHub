@@ -1,4 +1,4 @@
-use grokhub_core::uid;
+use grokhub_core::{uid, ThreadGoal};
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -13,6 +13,12 @@ pub struct ChatThread {
     pub scratch: bool,
     #[serde(default)]
     pub messages: Vec<(String, String)>,
+    #[serde(default)]
+    pub goal: ThreadGoal,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub title_locked: bool,
 }
 
 impl ChatThread {
@@ -22,6 +28,9 @@ impl ChatThread {
             title: title.to_string(),
             scratch,
             messages: vec![],
+            goal: ThreadGoal::default(),
+            pinned: false,
+            title_locked: false,
         }
     }
 }
@@ -65,7 +74,31 @@ mod tests {
         let loaded = load();
         assert_eq!(loaded[0].title, "night");
         assert!(loaded[0].scratch);
+        assert!(loaded[0].goal.label.is_empty());
+        assert!(!loaded[0].pinned);
+        assert!(!loaded[0].title_locked);
         assert!(export_markdown(&loaded[0]).contains("hi"));
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn old_threads_json_gains_goal_defaults() {
+        let _g = TEST_CONFIG_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("grokhub-thr-old-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        fs::write(
+            root.join("threads.json"),
+            r#"[{"id":"thr-1","title":"old","scratch":false,"messages":[]}]"#,
+        )
+        .unwrap();
+        let loaded = load();
+        assert_eq!(loaded[0].title, "old");
+        assert!(loaded[0].goal.label.is_empty());
+        assert!(!loaded[0].pinned);
+        assert!(!loaded[0].title_locked);
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }

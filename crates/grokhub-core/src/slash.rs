@@ -52,6 +52,8 @@ pub enum Slash {
     Usage,
     Models,
     Palette,
+    Pin,
+    Delete,
 }
 
 pub fn parse_slash(line: &str) -> Option<Slash> {
@@ -118,6 +120,8 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
             _ => Some(Slash::HostStatus),
         },
         "/rename" if !rest.is_empty() => Some(Slash::Rename(rest.to_string())),
+        "/pin" => Some(Slash::Pin),
+        "/delete" | "/close" => Some(Slash::Delete),
         "/context" => Some(Slash::Context),
         "/health" => Some(Slash::Health),
         "/fix" => Some(Slash::Fix),
@@ -237,6 +241,8 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Usage => "usage",
         Slash::Models => "models",
         Slash::Palette => "palette",
+        Slash::Pin => "pin",
+        Slash::Delete => "delete",
     }
 }
 
@@ -263,6 +269,8 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/imagine", hint: "Open Imagine", insert: "/imagine ", run_on_pick: false },
     SlashDef { cmd: "/export", hint: "Export chat markdown", insert: "/export", run_on_pick: true },
     SlashDef { cmd: "/rename", hint: "Rename chat…", insert: "/rename ", run_on_pick: false },
+    SlashDef { cmd: "/pin", hint: "Pin or unpin this chat", insert: "/pin", run_on_pick: true },
+    SlashDef { cmd: "/delete", hint: "Delete this chat tab", insert: "/delete", run_on_pick: true },
     SlashDef { cmd: "/remember", hint: "Save durable memory note", insert: "/remember ", run_on_pick: false },
     SlashDef { cmd: "/project", hint: "Show bound project", insert: "/project", run_on_pick: true },
     SlashDef { cmd: "/project bind", hint: "Bind a folder as the world", insert: "/project bind ", run_on_pick: false },
@@ -373,7 +381,9 @@ pub fn slash_help() -> String {
         "/rewind — restore last project snapshot",
         "/room <name> — speak the room",
         "/export — write this chat as markdown",
-        "/rename <title> — name this chat",
+        "/rename <title> — name this chat (permanent)",
+        "/pin — pin or unpin this chat",
+        "/delete — delete this chat tab",
         "/context — context budget",
         "/health — doctor",
         "/fix — halt + doctor",
@@ -436,6 +446,11 @@ mod tests {
         assert_eq!(parse_slash("/send flash the pi"), Some(Slash::Send("flash the pi".into())));
         assert_eq!(slash_kind(&Slash::Update), "update");
         assert_eq!(parse_slash("/rename night").as_ref().map(slash_kind), Some("rename"));
+        assert_eq!(parse_slash("/pin"), Some(Slash::Pin));
+        assert_eq!(parse_slash("/delete"), Some(Slash::Delete));
+        assert_eq!(parse_slash("/close"), Some(Slash::Delete));
+        assert!(slash_help().contains("/delete"));
+        assert!(filter_slash_commands("/de").iter().any(|s| s.cmd == "/delete"));
         assert_eq!(parse_slash("/host"), Some(Slash::HostStatus));
         assert_eq!(parse_slash("/mode max"), Some(Slash::Mode("max".into())));
         assert_eq!(parse_slash("/mode think"), Some(Slash::Mode("think".into())));
