@@ -934,7 +934,7 @@ impl Cabin {
         self.chip_rx = Some(rx);
         self.chip_busy = true;
         std::thread::spawn(move || {
-            let chips = grok_chat(&key, &model, &[("user".into(), prompt)], None)
+            let chips = grok_chat(&key, &model, &[("user".into(), prompt)], None, None)
                 .map(|t| parse_llm_chips(&t))
                 .unwrap_or_default();
             let _ = tx.send(chips);
@@ -1333,7 +1333,7 @@ impl Cabin {
                 self.cfg.model = model_for_mode(&mode).to_string();
                 let _ = config::save(&self.cfg);
                 let model = self.cfg.model.as_str();
-                self.status = match grokhub_core::reasoning_effort_for_model(model) {
+                self.status = match grokhub_core::reasoning_effort_for_mode(&mode) {
                     Some(effort) => format!("Mode {mode} → {model} · {effort}"),
                     None => format!("Mode {mode} → {model}"),
                 };
@@ -1911,7 +1911,7 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let r = grok_chat(&key, &model, &[("user".into(), q.clone())], None);
+            let r = grok_chat(&key, &model, &[("user".into(), q.clone())], None, None);
             let _ = tx.send(match r {
                 Ok(t) => JobOut::Consult(format_consult_reply(&q, &t)),
                 Err(e) => JobOut::Err(e),
@@ -2090,6 +2090,11 @@ impl Cabin {
         self.status = "Thinking…".into();
         let key = self.bearer();
         let model = resolve_chat_model(&self.cfg.mode, &self.cfg.model);
+        let effort = if model == "grok-4.6" {
+            grokhub_core::reasoning_effort_for_mode(&self.cfg.mode)
+        } else {
+            None
+        };
         let mut msgs: Vec<(String, String)> = self
             .messages
             .iter()
@@ -2158,14 +2163,14 @@ impl Cabin {
         self.stream_buf.clear();
         std::thread::spawn(move || {
             let tx_d = tx.clone();
-            let r = grok_chat_stream(&key, &model, &msgs, image.as_deref(), |d| {
+            let r = grok_chat_stream(&key, &model, &msgs, image.as_deref(), effort, |d| {
                 let _ = tx_d.send(JobOut::ChatDelta(d.to_string()));
             });
             let r = match r {
                 Err(e) => {
                     if http_status_of(&e).map(should_failover_status).unwrap_or(false) {
                         if let Some(next) = failover_model(&model) {
-                            grok_chat(&key, next, &msgs, image.as_deref())
+                            grok_chat(&key, next, &msgs, image.as_deref(), None)
                                 .map_err(|e2| format!("{e}; failover {next}: {e2}"))
                         } else {
                             Err(e)
@@ -4541,7 +4546,7 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Console key", "Optional. Never in markdown.", &mut self.cfg.api_key, true);
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
                                                             crate::cards::settings_field(ui, "Chat model", "Empty means the cabin default. Imagine never shares this.", &mut self.cfg.model, false);
-                                                            crate::cards::settings_field(ui, "Composer mode", "auto, fast, balanced, or max (Grok 4.6 xhigh).", &mut self.cfg.mode, false);
+                                                            crate::cards::settings_field(ui, "Composer mode", "auto, fast, Think (Grok 4.6 high), or max (Grok 4.6 xhigh).", &mut self.cfg.mode, false);
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(ui, "The cabin is dark. Light and System stay on grok.com.");

@@ -11,16 +11,17 @@ pub fn grok_chat(
     model: &str,
     messages: &[(String, String)],
     image_data_url: Option<&str>,
+    effort: Option<&str>,
 ) -> Result<String, String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
-    let body = chat_request_body_vision(model, messages, image_data_url);
+    let body = chat_request_body_vision(model, messages, image_data_url, effort);
     let resp = ureq::post(&format!("{XAI_BASE}/chat/completions"))
         .set("authorization", &format!("Bearer {key}"))
         .set("content-type", "application/json")
-        .timeout(std::time::Duration::from_secs(chat_timeout_secs(model)))
+        .timeout(std::time::Duration::from_secs(chat_timeout_secs(effort)))
         .send_json(body)
         .map_err(http_err)?;
     let v: serde_json::Value = resp.into_json().map_err(|e| e.to_string())?;
@@ -38,23 +39,24 @@ pub fn grok_chat_stream(
     model: &str,
     messages: &[(String, String)],
     image_data_url: Option<&str>,
+    effort: Option<&str>,
     mut on_delta: impl FnMut(&str),
 ) -> Result<String, String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
-    let mut body = chat_request_body_vision(model, messages, image_data_url);
+    let mut body = chat_request_body_vision(model, messages, image_data_url, effort);
     chat_stream_flag(&mut body, true);
     let resp = match ureq::post(&format!("{XAI_BASE}/chat/completions"))
         .set("authorization", &format!("Bearer {key}"))
         .set("content-type", "application/json")
         .set("accept", "text/event-stream")
-        .timeout(std::time::Duration::from_secs(chat_timeout_secs(model)))
+        .timeout(std::time::Duration::from_secs(chat_timeout_secs(effort)))
         .send_json(body)
     {
         Ok(r) => r,
-        Err(e) => return grok_chat(api_key, model, messages, image_data_url).map_err(|_| http_err(e)),
+        Err(e) => return grok_chat(api_key, model, messages, image_data_url, effort).map_err(|_| http_err(e)),
     };
     let mut reader = resp.into_reader();
     let mut raw = String::new();
@@ -71,7 +73,7 @@ pub fn grok_chat_stream(
             raw = raw[idx + 1..].to_string();
             if sse_done(&line) {
                 return if acc.is_empty() {
-                    grok_chat(api_key, model, messages, image_data_url)
+                    grok_chat(api_key, model, messages, image_data_url, effort)
                 } else {
                     Ok(acc)
                 };
@@ -83,7 +85,7 @@ pub fn grok_chat_stream(
         }
     }
     if acc.is_empty() {
-        grok_chat(api_key, model, messages, image_data_url)
+        grok_chat(api_key, model, messages, image_data_url, effort)
     } else {
         Ok(acc)
     }
