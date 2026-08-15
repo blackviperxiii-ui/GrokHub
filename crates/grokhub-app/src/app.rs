@@ -1047,8 +1047,10 @@ impl Cabin {
         if !self.projects_dirty {
             return;
         }
-        let _ = crate::store::save_projects(&self.projects);
-        self.projects_dirty = false;
+        match crate::store::save_projects(&self.projects) {
+            Ok(()) => self.projects_dirty = false,
+            Err(e) => self.status = format!("Projects not saved: {e}"),
+        }
     }
 
     fn bind_project_id(&mut self, id: &str) {
