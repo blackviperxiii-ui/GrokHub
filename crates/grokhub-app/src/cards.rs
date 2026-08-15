@@ -165,6 +165,61 @@ pub const SUGGESTED_AUTOS: &[SuggestedAuto] = &[
     },
 ];
 
+/// grok.com/imagine rotating h1 noun — cabin-real only.
+pub const IMAGINE_WORDS: &[&str] = &["the cabin", "the night", "a scene", "the board"];
+
+/// Still-image seeds. grok-2-image only — no video, no photo-edit tools we do not have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImagineScene {
+    pub icon: TileIcon,
+    pub title: &'static str,
+    pub prompt: &'static str,
+    pub tall: bool,
+}
+
+pub const IMAGINE_SCENES: &[ImagineScene] = &[
+    ImagineScene {
+        icon: TileIcon::Moon,
+        title: "Night cabin",
+        prompt: "still photograph of a dark timber cabin at night, one warm window, no people, no text",
+        tall: false,
+    },
+    ImagineScene {
+        icon: TileIcon::Board,
+        title: "Bound project",
+        prompt: "still of a wooden workbench with a closed laptop and a bound notebook, dim cabin light, no people, no text",
+        tall: true,
+    },
+    ImagineScene {
+        icon: TileIcon::Host,
+        title: "Host desk",
+        prompt: "still of a Linux workstation desk, dark room, monitor glow, no people, no faces, no text",
+        tall: true,
+    },
+    ImagineScene {
+        icon: TileIcon::List,
+        title: "Workboard still",
+        prompt: "still of a wall of blank paper task cards in a dark cabin, warm lamp, no people, no readable text",
+        tall: false,
+    },
+    ImagineScene {
+        icon: TileIcon::Sun,
+        title: "Morning window",
+        prompt: "still of a cabin window at dawn, frost on glass, empty room, no people, no text",
+        tall: true,
+    },
+    ImagineScene {
+        icon: TileIcon::Image,
+        title: "A scene",
+        prompt: "tight still-image of an empty cabin room at night, one lamp, wood walls, no people, no text",
+        tall: false,
+    },
+];
+
+pub fn imagine_word(now_ms: u64) -> &'static str {
+    IMAGINE_WORDS[((now_ms / 2800) as usize) % IMAGINE_WORDS.len()]
+}
+
 pub fn is_cabin_catalog(name: &str) -> bool {
     let k = name.trim().to_ascii_lowercase();
     matches!(k.as_str(), "github" | "gh")
@@ -397,6 +452,49 @@ pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui,
     }
 }
 
+pub fn imagine_scene_tile(ui: &mut egui::Ui, scene: &ImagineScene, selected: bool) -> bool {
+    let h = if scene.tall { 180.0 } else { 132.0 };
+    let mut hit = false;
+    let resp = egui::Frame::none()
+        .fill(crate::theme::PANEL)
+        .rounding(0.0)
+        .stroke(Stroke::new(
+            1.0_f32,
+            if selected {
+                crate::theme::FG
+            } else {
+                crate::theme::BORDER
+            },
+        ))
+        .inner_margin(egui::Margin::same(12.0))
+        .show(ui, |ui| {
+            ui.set_min_height(h);
+            ui.vertical(|ui| {
+                ui.add_space((h - 56.0).max(8.0) * 0.35);
+                ui.horizontal(|ui| {
+                    ui.add_space(4.0);
+                    icons::paint_icon(ui, scene.icon, 36.0);
+                });
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new(scene.title)
+                        .size(crate::theme::FONT_CHROME)
+                        .color(crate::theme::FG),
+                );
+            });
+        })
+        .response
+        .interact(Sense::click());
+    if resp.clicked() {
+        hit = true;
+    }
+    if resp.hovered() {
+        ui.painter()
+            .rect_stroke(resp.rect, 0.0, Stroke::new(1.0_f32, crate::theme::BORDER_STRONG));
+    }
+    hit
+}
+
 pub fn suggestion_card(ui: &mut egui::Ui, title: &str, body: &str) -> bool {
     grok_tile(ui, icons::icon_for_label(title), title, body, Some("Add"), false) == TileHit::Add
 }
@@ -502,6 +600,24 @@ mod tests {
         assert!(!LIVE_CONNECTORS[0].tools.iter().any(|(_, t)| *t == "create_pr_comment"));
         assert!(!is_cabin_catalog("outlook"));
         assert!(!is_cabin_catalog("gmail"));
+        assert_eq!(IMAGINE_SCENES.len(), 6);
+        assert_eq!(imagine_word(0), "the cabin");
+        assert_eq!(imagine_word(2800), "the night");
+        for s in IMAGINE_SCENES {
+            let blob = format!("{} {}", s.title, s.prompt).to_ascii_lowercase();
+            for w in forbidden {
+                assert!(!blob.contains(w), "imagine {} mentions {w}", s.title);
+            }
+            assert!(
+                blob.contains("still") || blob.contains("cabin") || blob.contains("desk"),
+                "imagine {} is not a still",
+                s.title
+            );
+            assert!(!blob.contains("video"));
+            assert!(!blob.contains("photo edit"));
+            let _ = s.icon;
+            let _ = s.tall;
+        }
         assert!(is_cabin_catalog("github"));
         let pulse = SUGGESTED_SKILLS.iter().find(|s| s.name == "github-pulse").unwrap();
         let cmds = grokhub_core::extract_connector_cmds(pulse.instructions);
