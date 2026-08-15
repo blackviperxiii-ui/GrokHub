@@ -23,9 +23,10 @@ use grokhub_core::{
     extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
     forget_topic, greet_from_last_job, has_auth, has_goal_complete, has_verify_ok, hey_grok_on_press,
     import_memory_file, insight_pin, is_openclaw_workspace,
-    add_to_folder, create_folder, create_project, folder_choices, host_cmd_leaves_project,
+    add_to_folder, create_folder, create_project, drop_node, folder_choices, host_cmd_leaves_project,
     host_hour_blocked, host_risk, host_status_line, is_hard_run, rename_node, seed_from_bound,
-    toggle_folder, upsert_bound, visible_tree, ProjectKind, ProjectNode,
+    settle_project_path, stage_project, toggle_folder, upsert_bound, visible_tree, ProjectKind,
+    ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
     needs_auth_banner, next_goal_prompt,
@@ -286,6 +287,7 @@ pub struct Cabin {
     proj_rename: Option<String>,
     proj_rename_buf: String,
     proj_rename_focus: bool,
+    proj_staged: Option<String>,
     proj_ignore_close: bool,
 }
 
@@ -496,6 +498,7 @@ impl Cabin {
             proj_rename: None,
             proj_rename_buf: String::new(),
             proj_rename_focus: false,
+            proj_staged: None,
             proj_ignore_close: false,
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
@@ -582,11 +585,28 @@ impl Cabin {
             Ok(i) => {
                 let path = self.projects[i].path.clone();
                 let _ = std::fs::create_dir_all(&path);
+                self.bind_project_id(&id);
+                self.status = format!("Project {}", self.projects[i].name);
+            }
+            Err(e) => self.status = e.into(),
+        }
+    }
+
+    fn stage_new_project(&mut self, parent: Option<&str>) {
+        let id = uid("proj");
+        match stage_project(&mut self.projects, &id, "Project", parent) {
+            Ok(i) => {
+                if let Some(pid) = parent {
+                    if let Some(f) = self.projects.iter_mut().find(|n| n.id == pid) {
+                        f.open = true;
+                    }
+                }
                 self.proj_rename_buf = self.projects[i].name.clone();
                 self.proj_rename = Some(id.clone());
                 self.proj_rename_focus = true;
-                self.bind_project_id(&id);
-                self.status = format!("Project {}", self.projects[i].name);
+                self.proj_staged = Some(id);
+                self.status = "Name this project".into();
+                self.persist();
             }
             Err(e) => self.status = e.into(),
         }
@@ -596,9 +616,6 @@ impl Cabin {
         let id = uid("fold");
         match create_folder(&mut self.projects, &id, name, None) {
             Ok(i) => {
-                self.proj_rename_buf = self.projects[i].name.clone();
-                self.proj_rename = Some(id);
-                self.proj_rename_focus = true;
                 self.status = format!("Folder {}", self.projects[i].name);
                 self.persist();
             }
@@ -606,19 +623,63 @@ impl Cabin {
         }
     }
 
-    fn finish_proj_rename(&mut self) {
-        let Some(id) = self.proj_rename.take() else {
-            return;
-        };
-        match rename_node(&mut self.projects, &id, &self.proj_rename_buf) {
-            Ok(()) => {
-                self.status = format!("Renamed {}", self.proj_rename_buf.trim());
+    fn stage_new_folder(&mut self) {
+        let id = uid("fold");
+        match create_folder(&mut self.projects, &id, "Folder", None) {
+            Ok(i) => {
+                self.proj_rename_buf = self.projects[i].name.clone();
+                self.proj_rename = Some(id.clone());
+                self.proj_rename_focus = true;
+                self.proj_staged = Some(id);
+                self.status = "Name this folder".into();
                 self.persist();
             }
             Err(e) => self.status = e.into(),
         }
+    }
+
+    fn cancel_proj_rename(&mut self) {
+        let id = self.proj_rename.take();
         self.proj_rename_buf.clear();
         self.proj_rename_focus = false;
+        if let Some(id) = id {
+            if self.proj_staged.as_deref() == Some(id.as_str()) {
+                drop_node(&mut self.projects, &id);
+                self.persist();
+            }
+        }
+        self.proj_staged = None;
+    }
+
+    fn finish_proj_rename(&mut self) {
+        let Some(id) = self.proj_rename.take() else {
+            return;
+        };
+        let staged = self.proj_staged.as_deref() == Some(id.as_str());
+        match rename_node(&mut self.projects, &id, &self.proj_rename_buf) {
+            Ok(()) => {
+                self.status = format!("Renamed {}", self.proj_rename_buf.trim());
+                if staged {
+                    let root = self.work_root();
+                    if let Ok(path) = settle_project_path(&mut self.projects, &id, &root) {
+                        if !path.is_empty() {
+                            let _ = std::fs::create_dir_all(&path);
+                            self.bind_project_id(&id);
+                        }
+                    }
+                }
+                self.persist();
+            }
+            Err(e) => {
+                if staged {
+                    drop_node(&mut self.projects, &id);
+                }
+                self.status = e.into();
+            }
+        }
+        self.proj_rename_buf.clear();
+        self.proj_rename_focus = false;
+        self.proj_staged = None;
     }
 
     fn move_sel_to_folder_name(&mut self, folder: &str) {
@@ -2862,8 +2923,8 @@ impl Cabin {
             if let Some(kind) = pick {
                 self.proj_plus_open = false;
                 match kind {
-                    "project" => self.make_project("Project", None),
-                    "folder" => self.make_folder("Folder"),
+                    "project" => self.stage_new_project(None),
+                    "folder" => self.stage_new_folder(),
                     _ => {}
                 }
             } else if self.proj_ignore_close {
@@ -2929,7 +2990,7 @@ impl Cabin {
                             self.persist();
                         }
                     }
-                    "new-here" => self.make_project("Project", Some(&id)),
+                    "new-here" => self.stage_new_project(Some(&id)),
                     _ => {}
                 }
             } else if self.proj_ignore_close {
@@ -2945,6 +3006,7 @@ impl Cabin {
         if let Some(pid) = self.proj_add_for.clone() {
             let folders = folder_choices(&self.projects);
             let mut picked: Option<Option<String>> = None;
+            let mut menu_rect = egui::Rect::NOTHING;
             egui::Area::new(egui::Id::new("proj-add"))
                 .fixed_pos(self.proj_menu_pos + egui::vec2(8.0, 8.0))
                 .order(egui::Order::Foreground)
@@ -2963,6 +3025,7 @@ impl Cabin {
                         if ui.selectable_label(false, "Projects (root)").clicked() {
                             picked = Some(None);
                         }
+                        menu_rect = ui.min_rect();
                     });
                 });
             if let Some(folder) = picked {
@@ -2980,6 +3043,12 @@ impl Cabin {
                         self.persist();
                     }
                     Err(e) => self.status = e.into(),
+                }
+            } else if ctx.input(|i| i.pointer.any_click()) {
+                if let Some(pos) = ctx.pointer_interact_pos() {
+                    if !menu_rect.expand(8.0).contains(pos) {
+                        self.proj_add_for = None;
+                    }
                 }
             }
         }
@@ -3597,11 +3666,10 @@ impl Cabin {
                                 }
                             }
                             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                self.proj_rename = None;
-                                self.proj_rename_buf.clear();
-                                self.proj_rename_focus = false;
-                            } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) || edit.lost_focus()
-                            {
+                                self.cancel_proj_rename();
+                            } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                self.finish_proj_rename();
+                            } else if edit.lost_focus() && !self.proj_rename_focus {
                                 self.finish_proj_rename();
                             }
                         });
