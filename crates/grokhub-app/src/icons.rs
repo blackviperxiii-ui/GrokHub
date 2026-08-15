@@ -157,15 +157,25 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
             );
         }
         TileIcon::Think => {
-            painter.circle_stroke(c, w * 0.28, stroke);
+            painter.circle_stroke(c + Vec2::new(0.0, -w * 0.06), w * 0.26, stroke);
             painter.line_segment(
-                [Pos2::new(c.x, c.y + w * 0.28), Pos2::new(c.x, c.y + w * 0.46)],
+                [
+                    Pos2::new(c.x - w * 0.10, c.y + w * 0.18),
+                    Pos2::new(c.x + w * 0.10, c.y + w * 0.18),
+                ],
                 stroke,
             );
             painter.line_segment(
                 [
-                    Pos2::new(c.x - 4.0, c.y + w * 0.46),
-                    Pos2::new(c.x + 4.0, c.y + w * 0.46),
+                    Pos2::new(c.x - w * 0.08, c.y + w * 0.28),
+                    Pos2::new(c.x + w * 0.08, c.y + w * 0.28),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(c.x - w * 0.05, c.y + w * 0.38),
+                    Pos2::new(c.x + w * 0.05, c.y + w * 0.38),
                 ],
                 stroke,
             );
@@ -219,16 +229,40 @@ pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::
             );
         }
         BarIcon::Mic => {
-            let cap = egui::Rect::from_center_size(Pos2::new(c.x, c.y - w * 0.04), Vec2::new(w * 0.28, w * 0.42));
-            painter.rect_stroke(cap, 6.0, stroke);
+            let cap = egui::Rect::from_center_size(
+                Pos2::new(c.x, c.y - w * 0.08),
+                Vec2::new(w * 0.32, w * 0.40),
+            );
+            painter.rect_filled(cap, 7.0, color);
             painter.line_segment(
-                [Pos2::new(c.x, cap.bottom()), Pos2::new(c.x, c.y + w * 0.28)],
+                [
+                    Pos2::new(c.x - w * 0.22, c.y + w * 0.02),
+                    Pos2::new(c.x - w * 0.22, c.y + w * 0.10),
+                ],
                 stroke,
             );
             painter.line_segment(
                 [
-                    Pos2::new(c.x - w * 0.16, c.y + w * 0.28),
-                    Pos2::new(c.x + w * 0.16, c.y + w * 0.28),
+                    Pos2::new(c.x + w * 0.22, c.y + w * 0.02),
+                    Pos2::new(c.x + w * 0.22, c.y + w * 0.10),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(c.x - w * 0.22, c.y + w * 0.10),
+                    Pos2::new(c.x + w * 0.22, c.y + w * 0.10),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(c.x, c.y + w * 0.10), Pos2::new(c.x, c.y + w * 0.26)],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(c.x - w * 0.14, c.y + w * 0.26),
+                    Pos2::new(c.x + w * 0.14, c.y + w * 0.26),
                 ],
                 stroke,
             );
