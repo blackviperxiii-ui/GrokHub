@@ -3415,12 +3415,6 @@ impl Cabin {
                         ui.add_space(28.0);
                         let tiles = self.visible_chips.clone();
                         let n = tiles.len().min(4);
-                        let avail = ui.available_width().max(1.0);
-                        let max_w = 880.0_f32.min(avail);
-                        let pad = ((avail - max_w) * 0.5).max(0.0);
-                        ui.horizontal(|ui| {
-                            ui.add_space(pad);
-                            ui.allocate_ui(egui::vec2(max_w.max(1.0), 1.0), |ui| {
                         crate::cards::tile_row(ui, n, |ui, i| {
                             let c = &tiles[i];
                             if crate::cards::empty_prompt_tile(
@@ -3431,8 +3425,6 @@ impl Cabin {
                             ) {
                                 self.apply_chip(c.clone());
                             }
-                        });
-                            });
                         });
                     }
                     for m in &self.messages {
