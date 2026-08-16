@@ -386,6 +386,7 @@ pub fn slash_help() -> String {
         "Pulse every 15s: every organ runs. Hidden idle waits for the pulse.",
         "After 21:00 a quiet Balanced review fills Suggested tiles from what it learned.",
         "Devices pair URL is a LAN IPv4. Hub complete is owner-only.",
+        "Chat rail opens the last-accessed thread. MidThought can greet Continue {title}.",
         "Five chips sit centered over the composer.",
     ]
     .join("\n")
@@ -480,6 +481,7 @@ mod tests {
         assert!(slash_help().contains("quiet Balanced review"));
         assert!(slash_help().contains("centered over the composer"));
         assert!(slash_help().contains("Hidden idle waits for the pulse"));
+        assert!(slash_help().contains("Chat rail opens the last-accessed thread"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());
