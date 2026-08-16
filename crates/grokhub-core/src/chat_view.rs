@@ -63,11 +63,14 @@ pub fn visible_chat(messages: &[(String, String)]) -> Vec<ChatView> {
             "assistant" => {
                 let (thought, rest) = split_thought(content);
                 if !thought.is_empty() {
-                    out.push(ChatView {
-                        kind: ChatKind::Thought,
-                        title: "Thought".into(),
-                        body: thought,
-                    });
+                    let thought = scrub_thought(&thought);
+                    if !thought.is_empty() {
+                        out.push(ChatView {
+                            kind: ChatKind::Thought,
+                            title: "Thought".into(),
+                            body: thought,
+                        });
+                    }
                 }
                 let prose = visible_assistant(&rest);
                 if !prose.is_empty() {
@@ -149,6 +152,71 @@ fn visible_assistant(text: &str) -> String {
         lines.pop();
     }
     lines.join("\n").trim().to_string()
+}
+
+/// Drop “an image is attached” narration. Cabin eyes / a drop already sent the frame.
+pub fn scrub_thought(text: &str) -> String {
+    let mut out = String::new();
+    for chunk in split_thought_chunks(text) {
+        if thought_chunk_is_attach_noise(chunk) {
+            continue;
+        }
+        out.push_str(chunk);
+    }
+    out.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
+fn split_thought_chunks(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let bytes = text.as_bytes();
+    for (i, ch) in text.char_indices() {
+        if ch == '.' || ch == '!' || ch == '?' || ch == '\n' {
+            let end = i + ch.len_utf8();
+            if end <= bytes.len() {
+                out.push(&text[start..end]);
+                start = end;
+            }
+        }
+    }
+    if start < text.len() {
+        out.push(&text[start..]);
+    }
+    out
+}
+
+fn thought_chunk_is_attach_noise(chunk: &str) -> bool {
+    let t = chunk.to_ascii_lowercase();
+    if t.trim().is_empty() {
+        return false;
+    }
+    [
+        "image attached",
+        "attached an image",
+        "attached a image",
+        "an image is attached",
+        "image is attached",
+        "there's an image",
+        "there is an image",
+        "user attached",
+        "you attached",
+        "uploaded an image",
+        "sent an image",
+        "provided an image",
+        "image was attached",
+        "attached image",
+        "image you attached",
+        "image you just",
+        "you just dropped",
+        "you dropped",
+        "you uploaded",
+    ]
+    .iter()
+    .any(|n| t.contains(n))
 }
 
 fn split_thought(content: &str) -> (String, String) {
@@ -390,6 +458,33 @@ mod tests {
             .iter()
             .any(|x| x.kind == ChatKind::Tool && x.title == "Hands"));
         assert!(!v.iter().any(|x| x.body.contains("COMPUTER_RESULT")));
+    }
+
+    #[test]
+    fn thought_drops_attach_narration() {
+        assert_eq!(
+            scrub_thought("The user attached an image. They asked about chowder."),
+            "They asked about chowder."
+        );
+        assert_eq!(scrub_thought("There is an image attached."), "");
+        assert_eq!(
+            scrub_thought("You just dropped a black void. Need a snapshot."),
+            "Need a snapshot."
+        );
+        assert_eq!(scrub_thought("Need a snapshot."), "Need a snapshot.");
+        let kept = visible_chat(&[(
+            "assistant".into(),
+            "THINKING:\nThere is an image attached. Plan the reply.\n\nHello.".into(),
+        )]);
+        assert_eq!(kinds(&kept), vec![ChatKind::Thought, ChatKind::Assistant]);
+        assert_eq!(kept[0].body, "Plan the reply.");
+        assert_eq!(kept[1].body, "Hello.");
+        let gone = visible_chat(&[(
+            "assistant".into(),
+            "THINKING:\nYou just dropped an image.\n\nHello.".into(),
+        )]);
+        assert_eq!(kinds(&gone), vec![ChatKind::Assistant]);
+        assert_eq!(gone[0].body, "Hello.");
     }
 
     #[test]
