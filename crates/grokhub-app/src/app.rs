@@ -5899,10 +5899,15 @@ impl Cabin {
                                     },
                                 )
                                 .on_hover_text(composer_go_tip(self.running));
-                                if send.clicked() {
-                                    match go {
-                                        ComposerGo::Stop => self.run_slash(Slash::Stop),
-                                        ComposerGo::Send | ComposerGo::Idle => {
+                                match go {
+                                    ComposerGo::Stop => {
+                                        if send.clicked() || send.is_pointer_button_down_on()
+                                        {
+                                            self.run_slash(Slash::Stop);
+                                        }
+                                    }
+                                    ComposerGo::Send | ComposerGo::Idle => {
+                                        if send.clicked() {
                                             let t = std::mem::take(&mut self.composer);
                                             self.send_chat(t);
                                         }
@@ -7130,12 +7135,18 @@ impl Cabin {
                                 ComposerGo::Stop => composer_go_tip(true),
                                 ComposerGo::Send | ComposerGo::Idle => "Generate still · Enter",
                             });
-                            if send.clicked() {
-                                match go {
-                                    ComposerGo::Stop => out.stop = true,
-                                    ComposerGo::Send => out.generate = true,
-                                    ComposerGo::Idle => {}
+                            match go {
+                                ComposerGo::Stop => {
+                                    if send.clicked() || send.is_pointer_button_down_on() {
+                                        out.stop = true;
+                                    }
                                 }
+                                ComposerGo::Send => {
+                                    if send.clicked() {
+                                        out.generate = true;
+                                    }
+                                }
+                                ComposerGo::Idle => {}
                             }
                             if crate::icons::paint_bar_icon(
                                 ui,
@@ -7767,6 +7778,10 @@ mod tests {
         assert!(
             edit < stop,
             "Send/Stop is the last sibling after an exact-width mid strip"
+        );
+        assert!(
+            pill.contains("is_pointer_button_down_on"),
+            "Stop must halt on press; click-release is eaten by the shrink feel: {pill}"
         );
         assert!(
             !pill.contains("- 180.0"),
