@@ -295,13 +295,12 @@ pub fn composer_go_cluster_w() -> f32 {
     84.0 + 22.0 + 28.0 + 8.0 * 3.0 + 64.0
 }
 
-/// Visible pill width. Empty-home chips can stretch available past the pane;
-/// Stop sits in the overflow and gets clipped unless we cap to the clip rect.
-pub fn composer_pill_w(available: f32, clip: f32) -> f32 {
-    available
-        .min(clip)
+/// Visible pill width from the window, not egui available (chips/wordmark
+/// inflate that past the pane so Stop paints off-screen).
+pub fn composer_pill_w(screen_w: f32) -> f32 {
+    (screen_w - crate::theme::SIDEBAR_W - 40.0)
         .min(crate::theme::QUERY_MAX_W)
-        .max(200.0)
+        .max(360.0)
 }
 
 /// Prompt field is a fixed strip. A stretching `TextEdit` covers the chips
@@ -1482,14 +1481,17 @@ mod tests {
             "Fast combo + mic + Stop disc; 180px clipped Stop off a 900-wide cabin"
         );
         assert_eq!(
-            composer_pill_w(800.0, 591.0),
-            591.0,
-            "a 900-wide cabin pane is ~591 after the rail; the pill must not keep QUERY_MAX_W"
+            composer_pill_w(900.0),
+            600.0,
+            "900-wide cabin minus rail and central margins"
         );
-        assert_eq!(composer_pill_w(500.0, 591.0), 500.0);
         assert_eq!(
-            composer_pill_w(900.0, 900.0),
+            composer_pill_w(1400.0),
             crate::theme::QUERY_MAX_W
+        );
+        assert!(
+            composer_pill_w(900.0) > composer_go_cluster_w() + 80.0,
+            "Stop cluster must fit inside a 900-wide cabin pill"
         );
         let bar_inner = crate::theme::IMAGINE_BAR_H - 20.0;
         assert_eq!(imagine_prompt_h(), 32.0);
