@@ -152,7 +152,8 @@ pub use learning::{insight_pin, record_turn, upsert_insight, LearningState};
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
 pub use openclaw::{default_openclaw_paths, import_memory_file, is_openclaw_workspace};
 pub use shortcuts::{
-    apply_composer_enter, composer_enter, filter_palette, shortcut_help, ComposerEnter, SHORTCUTS,
+    apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette,
+    shortcut_help, ComposerEnter, ComposerGo, SHORTCUTS,
 };
 pub use stream::{
     chat_include_usage, chat_stream_flag, fold_stream_token, parse_sse_delta, parse_sse_thought,
