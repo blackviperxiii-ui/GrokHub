@@ -18,6 +18,7 @@ pub mod doctor;
 pub mod frame;
 pub mod goal;
 pub mod greeting;
+pub mod heartbeat;
 pub mod history;
 pub mod host_cite;
 pub mod host_plan;
@@ -125,6 +126,10 @@ pub use recipe::{
     replay_ops, screen_from_extents, should_attach_hands_frame, user_asks_cabin_eyes,
     user_asks_desktop_hands,
     ComputerDrive, ComputerOp, Recipe, ReplayOp, ScreenSize,
+};
+pub use heartbeat::{
+    heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
+    HEARTBEAT_MS,
 };
 pub use reflect::{
     fact_candidates, restore_memory_prev, should_idle_reflect, surgical_memory_edit, MemoryEdit,
