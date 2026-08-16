@@ -230,7 +230,7 @@ mod tests {
             srcinfo.contains("optdepends = ydotool")
                 && srcinfo.contains("optdepends = grim")
                 && srcinfo.contains("makedepends = cmake")
-                && !srcinfo.contains("depends = ydotool"),
+                && !srcinfo.contains("\tdepends = ydotool"),
             "AUR metadata must treat hands as sidecars: {srcinfo}"
         );
         let local_pkg = include_str!("../../../packaging/PKGBUILD");
