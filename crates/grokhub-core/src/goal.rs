@@ -15,6 +15,8 @@ pub struct ThreadGoal {
     pub topics: Vec<String>,
     #[serde(default)]
     pub unseen: Vec<u32>,
+    #[serde(default)]
+    pub step: u32,
 }
 
 pub fn should_name_thread(scratch: bool, user_turns: usize) -> bool {
@@ -116,6 +118,39 @@ pub fn blend_thread_goal(prev: &ThreadGoal, observed: &[String], drop_after: u32
             .unwrap_or_default(),
         topics: kept_topics,
         unseen: kept_unseen,
+        step: prev.step,
+    }
+}
+
+/// Follow-up prompts use the origin thread pin, not the visible tab.
+pub fn goal_pin_for_job(
+    job_thread_id: Option<&str>,
+    visible_thread_id: &str,
+    visible_pin: &str,
+    stored_pins: &[(String, String)],
+) -> String {
+    let Some(job) = job_thread_id else {
+        return visible_pin.to_string();
+    };
+    if job == visible_thread_id {
+        return visible_pin.to_string();
+    }
+    stored_pins
+        .iter()
+        .find(|(id, _)| id == job)
+        .map(|(_, pin)| pin.clone())
+        .unwrap_or_else(|| visible_pin.to_string())
+}
+
+/// Completing a background goal must not zero another thread's step.
+pub fn goal_step_after_outcome(current: u32, outcome: &str, belongs_to_job: bool) -> u32 {
+    if !belongs_to_job {
+        return current;
+    }
+    if outcome == "continue" {
+        current
+    } else {
+        0
     }
 }
 
@@ -282,6 +317,12 @@ mod tests {
         let p = next_goal_prompt("flash the pi", "wrote image", 0, 6).unwrap();
         assert!(p.contains("Goal step 1/6"));
         assert!(next_goal_prompt("flash the pi", "x", 6, 6).is_none());
+        assert_eq!(
+            goal_pin_for_job(Some("thr-a"), "thr-b", "", &[("thr-a".into(), "flash pi".into())]),
+            "flash pi"
+        );
+        assert_eq!(goal_step_after_outcome(3, "complete", false), 3);
+        assert_eq!(goal_step_after_outcome(3, "complete", true), 0);
     }
 
     #[test]
