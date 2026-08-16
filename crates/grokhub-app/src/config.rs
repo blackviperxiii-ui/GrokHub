@@ -20,8 +20,19 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         e.to_string()
-    })
+    })?;
+    restrict_private(path);
+    Ok(())
 }
+
+#[cfg(unix)]
+fn restrict_private(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn restrict_private(_path: &Path) {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -294,6 +305,16 @@ mod tests {
         atomic_write(&dest, br#"{"ok":true}"#).expect("atomic");
         assert_eq!(fs::read_to_string(&dest).unwrap(), r#"{"ok":true}"#);
         assert!(!root.join(".atomic.json.tmp").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(config_dir().join("app.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "app.json holds the console key");
+        }
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
