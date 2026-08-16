@@ -111,10 +111,10 @@ pub fn pin_session_bus() {
     }
 }
 
-/// SNI while the cabin is visible shows up as a persistent desktop notification
-/// on GNOME. Only register the icon when the window starts hidden (`--agent`).
-pub fn tray_needed_at_launch(window_hidden: bool) -> bool {
-    window_hidden && tray_wanted()
+/// The tray icon belongs in the tray from launch. × then hides the cabin;
+/// it must not be the first time the icon appears.
+pub fn tray_needed_at_launch(_window_hidden: bool) -> bool {
+    tray_wanted()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,7 +162,13 @@ pub fn show_from_tray_window() -> TrayWindow {
     }
 }
 
-/// winit Wayland cannot unmap. Prefer X11 when DISPLAY exists so close can hide.
+/// winit 0.30 ignores `WINIT_UNIX_BACKEND`. It picks Wayland whenever
+/// `WAYLAND_DISPLAY` / `WAYLAND_SOCKET` is set, and Wayland cannot unmap on ×.
+/// Clear those and keep X11 when a DISPLAY exists so close-to-tray works.
+pub fn should_clear_wayland(has_display: bool, wayland_set: bool) -> bool {
+    has_display && wayland_set
+}
+
 pub fn prefer_x11_backend(existing: Option<&str>, has_display: bool) -> Option<&'static str> {
     if existing.is_some() {
         None
@@ -170,6 +176,20 @@ pub fn prefer_x11_backend(existing: Option<&str>, has_display: bool) -> Option<&
         Some("x11")
     } else {
         None
+    }
+}
+
+/// Apply the X11 backend so `Visible(false)` actually unmaps the cabin.
+pub fn force_x11_for_close_to_tray(has_display: bool, wayland_set: bool) {
+    if !has_display {
+        return;
+    }
+    if should_clear_wayland(has_display, wayland_set) {
+        env::remove_var("WAYLAND_DISPLAY");
+        env::remove_var("WAYLAND_SOCKET");
+    }
+    if prefer_x11_backend(env::var("WINIT_UNIX_BACKEND").ok().as_deref(), has_display).is_some() {
+        env::set_var("WINIT_UNIX_BACKEND", "x11");
     }
 }
 
@@ -316,14 +336,9 @@ pub fn take_spawn_result<T>(rx: &mpsc::Receiver<T>) -> Option<T> {
     }
 }
 
-/// SNI while the cabin is visible looks like a persistent notification.
-pub fn keep_if_hidden<T: Send + 'static>(hidden: bool, host: T) -> Option<T> {
-    if hidden {
-        Some(host)
-    } else {
-        drop_off_thread(host);
-        None
-    }
+/// Keep the StatusNotifierItem whether the cabin is visible or hidden.
+pub fn keep_if_hidden<T: Send + 'static>(_hidden: bool, host: T) -> Option<T> {
+    Some(host)
 }
 
 pub fn drop_off_thread<T: Send + 'static>(value: T) {
@@ -378,6 +393,12 @@ mod tests {
         assert_eq!(prefer_x11_backend(None, true), Some("x11"));
         assert_eq!(prefer_x11_backend(Some("wayland"), true), None);
         assert_eq!(prefer_x11_backend(None, false), None);
+        assert!(
+            should_clear_wayland(true, true),
+            "winit 0.30 picks Wayland first; × cannot unmap until WAYLAND_DISPLAY is cleared"
+        );
+        assert!(!should_clear_wayland(true, false));
+        assert!(!should_clear_wayland(false, true));
     }
 
     #[test]
@@ -389,12 +410,12 @@ mod tests {
     }
 
     #[test]
-    fn visible_launch_does_not_need_a_tray_icon() {
+    fn visible_launch_registers_the_tray_icon() {
         let prev = std::env::var("GROKHUB_TRAY").ok();
         std::env::remove_var("GROKHUB_TRAY");
         assert!(
-            !tray_needed_at_launch(false),
-            "A visible cabin must not register StatusNotifierItem"
+            tray_needed_at_launch(false),
+            "A visible cabin must already have a tray icon"
         );
         assert!(tray_needed_at_launch(true), "--agent starts hidden with a tray");
         std::env::set_var("GROKHUB_TRAY", "0");
@@ -445,9 +466,9 @@ mod tests {
     }
 
     #[test]
-    fn visible_cabin_discards_a_late_tray() {
+    fn visible_cabin_keeps_the_tray() {
         assert_eq!(keep_if_hidden(true, 1), Some(1));
-        assert!(keep_if_hidden(false, 1).is_none());
+        assert_eq!(keep_if_hidden(false, 1), Some(1));
     }
 
     #[test]
