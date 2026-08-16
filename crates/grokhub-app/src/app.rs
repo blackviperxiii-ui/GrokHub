@@ -5610,7 +5610,10 @@ impl Cabin {
             } else {
                 ui.add_space(28.0);
             }
-            ui.set_max_width(crate::theme::QUERY_MAX_W);
+            ui.set_max_width(crate::cards::composer_pill_w(
+                ui.available_width(),
+                ui.available_width(),
+            ));
             self.ui_composer_stack(ui);
         });
     }
@@ -5736,7 +5739,10 @@ impl Cabin {
             }
             ui.add_space(6.0);
             ui.vertical_centered(|ui| {
-            ui.set_max_width(crate::theme::QUERY_MAX_W);
+            ui.set_max_width(crate::cards::composer_pill_w(
+                ui.available_width(),
+                ui.available_width(),
+            ));
             for slot in composer_stack_order() {
                 match slot {
                     ComposerStackSlot::AuthBanner
@@ -7750,6 +7756,12 @@ mod tests {
         assert!(
             slice.contains("composer_pill_w("),
             "cap the pill to the clip rect so Stop cannot sit in overflow: {slice}"
+        );
+        let stack = src.find("for slot in composer_stack_order()").expect("stack");
+        let cap = &src[stack.saturating_sub(280)..stack];
+        assert!(
+            cap.contains("composer_pill_w("),
+            "chip row must not stretch the centered column past the pane: {cap}"
         );
         assert!(
             slice.contains("right_to_left"),
