@@ -172,6 +172,34 @@ pub fn extract_imagine_prompt(text: &str) -> Option<String> {
     None
 }
 
+/// Filesystem path (or URL) from an `IMAGINE: …` receipt. Not a prompt verb.
+pub fn imagine_receipt_path(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("IMAGINE:") else {
+            continue;
+        };
+        let p = rest.trim();
+        if !p.is_empty() {
+            return Some(p.to_string());
+        }
+    }
+    None
+}
+
+/// Last generated still in a thread. Newer receipts win.
+pub fn last_imagine_receipt<'a, I>(messages: I) -> Option<String>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut last = None;
+    for text in messages {
+        if let Some(path) = imagine_receipt_path(text) {
+            last = Some(path);
+        }
+    }
+    last
+}
+
 /// Gap above the pane floor when the Imagine toolbox docks to the bottom.
 pub const IMAGINE_TOOLBOX_PAD: f32 = 24.0;
 
@@ -207,6 +235,79 @@ pub fn imagine_toolbox_top(
         ImagineToolboxDock::Bottom => {
             (content_top + content_h - box_h - IMAGINE_TOOLBOX_PAD).max(content_top)
         }
+    }
+}
+
+/// Gap between the Imagine chat box and the photogif wall.
+pub const IMAGINE_WALL_GAP: f32 = IMAGINE_TOOLBOX_PAD;
+
+/// Top and height of the photogif wall. Never occupies the chat box.
+pub fn imagine_wall_bounds(
+    content_top: f32,
+    content_h: f32,
+    toolbox_top: f32,
+    toolbox_h: f32,
+    dock: ImagineToolboxDock,
+) -> (f32, f32) {
+    let content_bottom = content_top + content_h;
+    match dock {
+        ImagineToolboxDock::Middle => {
+            let top = toolbox_top + toolbox_h + IMAGINE_WALL_GAP;
+            (top, (content_bottom - top).max(0.0))
+        }
+        ImagineToolboxDock::Bottom => {
+            let bottom = (toolbox_top - IMAGINE_WALL_GAP).max(content_top);
+            (content_top, (bottom - content_top).max(0.0))
+        }
+    }
+}
+
+pub fn imagine_wall_overlaps_toolbox(
+    wall_top: f32,
+    wall_h: f32,
+    toolbox_top: f32,
+    toolbox_h: f32,
+) -> bool {
+    let wall_bottom = wall_top + wall_h;
+    let toolbox_bottom = toolbox_top + toolbox_h;
+    wall_top < toolbox_bottom && toolbox_top < wall_bottom
+}
+
+/// Generated still fills the wall slot above the docked chat box — never the idle middle.
+pub fn imagine_shows_result_above(has_result: bool, dock: ImagineToolboxDock) -> bool {
+    has_result
+        && match dock {
+            ImagineToolboxDock::Bottom => true,
+            ImagineToolboxDock::Middle => false,
+        }
+}
+
+/// Letterbox a still inside the wall so the full generated image sits above the chat box.
+pub fn imagine_result_fit(
+    wall_x: f32,
+    wall_y: f32,
+    wall_w: f32,
+    wall_h: f32,
+    img_w: f32,
+    img_h: f32,
+) -> (f32, f32, f32, f32) {
+    let iw = img_w.max(1.0);
+    let ih = img_h.max(1.0);
+    let ww = wall_w.max(0.0);
+    let wh = wall_h.max(0.0);
+    if ww <= 0.0 || wh <= 0.0 {
+        return (wall_x, wall_y, 0.0, 0.0);
+    }
+    let ia = iw / ih;
+    let da = ww / wh;
+    if ia > da {
+        let h = ww / ia;
+        let y = wall_y + (wh - h) * 0.5;
+        (wall_x, y, ww, h)
+    } else {
+        let w = wh * ia;
+        let x = wall_x + (ww - w) * 0.5;
+        (wall_x.max(x), wall_y, w, wh)
     }
 }
 
@@ -676,5 +777,121 @@ mod tests {
         let top = imagine_toolbox_top(100.0, 600.0, 180.0, ImagineToolboxDock::Bottom);
         assert_eq!(top, 496.0);
         assert!(top > imagine_toolbox_top(100.0, 600.0, 180.0, ImagineToolboxDock::Middle));
+    }
+
+    #[test]
+    fn idle_photogif_wall_starts_under_the_chat_box() {
+        let toolbox_top = imagine_toolbox_top(100.0, 600.0, 180.0, ImagineToolboxDock::Middle);
+        let (top, h) = imagine_wall_bounds(
+            100.0,
+            600.0,
+            toolbox_top,
+            180.0,
+            ImagineToolboxDock::Middle,
+        );
+        assert!(
+            top >= toolbox_top + 180.0,
+            "wall must sit under the idle chat box, not behind it: wall_top={top} box_bottom={}",
+            toolbox_top + 180.0
+        );
+        assert!(h > 0.0);
+        assert!(top + h <= 700.0 + 0.01);
+        assert!(!imagine_wall_overlaps_toolbox(
+            top,
+            h,
+            toolbox_top,
+            180.0
+        ));
+    }
+
+    #[test]
+    fn docked_photogif_wall_stops_above_the_chat_box() {
+        let toolbox_top = imagine_toolbox_top(100.0, 600.0, 180.0, ImagineToolboxDock::Bottom);
+        let (top, h) = imagine_wall_bounds(
+            100.0,
+            600.0,
+            toolbox_top,
+            180.0,
+            ImagineToolboxDock::Bottom,
+        );
+        assert_eq!(top, 100.0);
+        assert!(
+            top + h <= toolbox_top,
+            "wall must not run behind the docked chat box: wall_bottom={} box_top={toolbox_top}",
+            top + h
+        );
+        assert!(h > 0.0);
+        assert!(!imagine_wall_overlaps_toolbox(
+            top,
+            h,
+            toolbox_top,
+            180.0
+        ));
+    }
+
+    #[test]
+    fn imagine_receipt_path_reads_the_saved_still() {
+        assert_eq!(
+            imagine_receipt_path("IMAGINE: /tmp/cabin.png").as_deref(),
+            Some("/tmp/cabin.png")
+        );
+        assert_eq!(
+            imagine_receipt_path("  IMAGINE: /work/night.jpg \n").as_deref(),
+            Some("/work/night.jpg")
+        );
+        assert!(imagine_receipt_path("IMAGINE:").is_none());
+        assert!(imagine_receipt_path("IMAGINE_PROMPT: a cabin at night").is_none());
+        assert!(imagine_receipt_path("ok").is_none());
+        assert_eq!(
+            last_imagine_receipt(
+                [
+                    "hello",
+                    "IMAGINE: /tmp/one.png",
+                    "IMAGINE_PROMPT: skip me",
+                    "IMAGINE: /tmp/two.png",
+                ]
+                .into_iter()
+            )
+            .as_deref(),
+            Some("/tmp/two.png")
+        );
+        assert!(last_imagine_receipt(["hello"].into_iter()).is_none());
+    }
+
+    #[test]
+    fn generated_still_shows_above_the_docked_chat_box() {
+        assert!(imagine_shows_result_above(
+            true,
+            ImagineToolboxDock::Bottom
+        ));
+        assert!(!imagine_shows_result_above(
+            false,
+            ImagineToolboxDock::Bottom
+        ));
+        assert!(!imagine_shows_result_above(
+            true,
+            ImagineToolboxDock::Middle
+        ));
+        assert!(!imagine_shows_result_above(
+            false,
+            ImagineToolboxDock::Middle
+        ));
+        let dock = imagine_toolbox_dock(true, true, false);
+        assert_eq!(dock, ImagineToolboxDock::Bottom);
+        assert!(imagine_shows_result_above(true, dock));
+        let toolbox_top = imagine_toolbox_top(100.0, 600.0, 180.0, dock);
+        let (wall_top, wall_h) = imagine_wall_bounds(100.0, 600.0, toolbox_top, 180.0, dock);
+        let (x, y, w, h) = imagine_result_fit(40.0, wall_top, 720.0, wall_h, 1024.0, 768.0);
+        assert!(w > 0.0 && h > 0.0);
+        assert!(y >= wall_top);
+        assert!(y + h <= wall_top + wall_h + 0.01);
+        assert!(x >= 40.0);
+        assert!(x + w <= 40.0 + 720.0 + 0.01);
+        assert!(
+            y + h <= toolbox_top,
+            "generated still must sit above the chat box: still_bottom={} box_top={toolbox_top}",
+            y + h
+        );
+        assert!(!imagine_wall_overlaps_toolbox(y, h, toolbox_top, 180.0));
     }
 }
