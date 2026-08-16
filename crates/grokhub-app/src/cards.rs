@@ -289,6 +289,12 @@ pub fn imagine_send_cluster_w() -> f32 {
     crate::theme::IMAGINE_HIT * 2.0 + 12.0
 }
 
+/// Fast combo + mic + Send/Stop. Extra chrome is ComboBox padding/caret
+/// past `.width(84)` — 180px left Fast as the right edge of a 900-wide cabin.
+pub fn composer_go_cluster_w() -> f32 {
+    84.0 + 22.0 + 28.0 + 8.0 * 3.0 + 64.0
+}
+
 /// Prompt field is a fixed strip. A stretching `TextEdit` covers the chips
 /// and steals their clicks (I-beam over 720p / Video audio).
 pub fn imagine_prompt_h() -> f32 {
@@ -1460,6 +1466,11 @@ mod tests {
         assert_eq!(
             imagine_send_cluster_w(),
             crate::theme::IMAGINE_HIT * 2.0 + 12.0
+        );
+        assert!(
+            composer_go_cluster_w()
+                >= 84.0 + 22.0 + 28.0 + 8.0 * 3.0 + 64.0,
+            "Fast combo + mic + Stop disc; 180px clipped Stop off a 900-wide cabin"
         );
         let bar_inner = crate::theme::IMAGINE_BAR_H - 20.0;
         assert_eq!(imagine_prompt_h(), 32.0);
