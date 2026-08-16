@@ -1,11 +1,12 @@
 use grokhub_core::{
     clip_image_args, computer_cmd_line, computer_drive, jpeg_data_url, lock_blocks_hands,
-    parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse, picker_args,
-    take_text_body, AtspiRow, ComputerDrive, ComputerOp, RECORDERS, TRANSCRIBERS,
+    parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse, pcm_from_capture,
+    picker_args, take_text_body, AtspiRow, ComputerDrive, ComputerOp, RECORDERS, TRANSCRIBERS,
 };
 use image::GenericImageView;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 const ATSPI_PY: &str = r#"
@@ -309,6 +310,90 @@ pub fn play_audio(path: &Path) -> Result<(), String> {
     }
 }
 
+/// Stream 24 kHz s16le mono PCM to the speakers (realtime Voice output).
+pub struct PcmSink {
+    child: Option<Child>,
+}
+
+impl Default for PcmSink {
+    fn default() -> Self {
+        Self { child: None }
+    }
+}
+
+impl PcmSink {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, pcm: &[u8]) {
+        if pcm.is_empty() {
+            return;
+        }
+        if self.ensure().is_err() {
+            return;
+        }
+        if let Some(child) = self.child.as_mut() {
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(pcm);
+            }
+        }
+    }
+
+    fn ensure(&mut self) -> Result<(), String> {
+        if let Some(c) = self.child.as_mut() {
+            match c.try_wait() {
+                Ok(None) => return Ok(()),
+                _ => {
+                    self.child = None;
+                }
+            }
+        }
+        let child = if which("paplay") {
+            Command::new("paplay")
+                .args(["--raw", "--rate=24000", "--channels=1", "--format=s16le"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| e.to_string())?
+        } else if which("ffplay") {
+            Command::new("ffplay")
+                .args([
+                    "-nodisp",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "s16le",
+                    "-ar",
+                    "24000",
+                    "-ac",
+                    "1",
+                    "-i",
+                    "pipe:0",
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| e.to_string())?
+        } else {
+            return Err("no paplay/ffplay for pcm".into());
+        };
+        self.child = Some(child);
+        Ok(())
+    }
+}
+
+impl Drop for PcmSink {
+    fn drop(&mut self) {
+        if let Some(mut c) = self.child.take() {
+            let _ = c.stdin.take();
+            let _ = c.kill();
+        }
+    }
+}
+
 fn record_wav(path: &Path) -> Result<(), String> {
     let dest = path.to_str().ok_or("wav path")?;
     match first_bin(RECORDERS).as_deref() {
@@ -452,10 +537,11 @@ pub fn record_pcm_chunks() -> Vec<Vec<u8>> {
     }
     let bytes = std::fs::read(&dest).unwrap_or_default();
     let _ = std::fs::remove_file(&dest);
-    if bytes.len() < 64 {
+    let pcm = pcm_from_capture(&bytes);
+    if pcm.len() < 64 {
         vec![]
     } else {
-        vec![bytes]
+        vec![pcm.to_vec()]
     }
 }
 

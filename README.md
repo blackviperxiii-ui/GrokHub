@@ -52,9 +52,9 @@ Projects sit in the left rail. `+` makes a project (`~/GrokHub-Work/<slug>`) or 
 
 History tabs pin, rename, and delete (right-click, or `/pin` `/rename` `/delete`). A manual rename is locked. After each turn Fast names the tab from the current topics unless that lock is set. Scratch stays unnamed.
 
-Imagine always uses dedicated **`grok-2-image`** (chat model is ignored). The toolbox docks mid-pane, then to the floor once a prompt or still is live. Aspect / kind / quality / style chips change the still prompt. Plus opens **Upload file / Paste clipboard**. Hey Grok records 4s (`arecord` / `ffmpeg` / `sox`), transcribes with xAI STT when a key is present (whisper fallback), and speaks the reply via xAI TTS. Eyes walks AT-SPI (`pyatspi`) then wmctrl + cursor. With Cabin eyes on, a JPEG is captured on each chat send, stored on the hub (not disk), and attached to that turn. Asking Grok to click, type, or otherwise drive the desktop also attaches a frame and runs `COMPUTER_CMD` through xdotool (no sandbox).
+Imagine always uses dedicated **`grok-2-image`** (chat model is ignored). The toolbox docks mid-pane, then to the floor once a prompt or still is live. Aspect / kind / quality / style chips change the still prompt. Plus opens **Upload file / Paste clipboard**. Hey Grok records 4s (`arecord` / `ffmpeg` / `sox`). **OAuth** transcribes with xAI STT and speaks the reply via xAI TTS (whisper fallback if neither OAuth nor a console key is present). Duplex Voice (`wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-2.0`) needs a **console API key** — consumer OAuth does not grant that socket. Eyes walks AT-SPI (`pyatspi`) then wmctrl + cursor. With Cabin eyes on, a JPEG is captured on each chat send, stored on the hub (not disk), and attached to that turn. Asking Grok to click, type, or otherwise drive the desktop also attaches a frame and runs `COMPUTER_CMD` through xdotool (no sandbox).
 
-Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is the sign-in. Device-code against `auth.x.ai` — same public client as Grok CLI. The footer paints the Grok profile photo when the session has one. A console API key is optional. Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600), never in markdown. Settings → Appearance is **Dark** or **System** (no Light).
+Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is the sign-in. Device-code against `auth.x.ai` — same public client as Grok CLI. The footer paints the Grok profile photo when the session has one. A console API key is the fallback for chat and the only path for duplex Voice. Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600), never in markdown. Settings → Appearance is **Dark**, **Light**, or **System**.
 
 Settings → **Update** (or `grokhub --update` / `/update`) does `git pull --ff-only origin main` in the source clone, then `./scripts/install.sh --user`. The clone must be on `main` with an `origin`. Overlay only — config stays. Progress stays on Settings (bar + percent). Quit the tray and relaunch `grokhub` so the new binary is the one that runs.
 
@@ -106,6 +106,7 @@ Contract: [`docs/superpowers/plans/2026-08-14-dispatch-android-notes.md`](docs/s
 | `GET` | `/v1/task/:id` | Bearer |
 | `GET` | `/v1/results` | Bearer |
 | `GET` | `/v1/frame.jpg` | Bearer (`?since=` → 304) |
+| `POST` | `/v1/voice/client-secret` | Bearer — mints a 5-minute xAI realtime secret from the cabin console key. Android/browser use `wsProtocol` (`xai-client-secret.<token>`). OAuth cannot mint this. |
 
 ## Packaging
 

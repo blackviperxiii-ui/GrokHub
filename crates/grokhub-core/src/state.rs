@@ -1,11 +1,11 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
 use crate::frame::{store_frame, PresenceFrame};
 use crate::inhabit::InhabitBundle;
 use crate::pair::{make_pair_code, normalize_code, PAIR_TTL_MS};
 use crate::task::{HubTask, Receipt};
 use crate::{new_token, now_ms, uid};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::sync::Arc;
 
 pub const HUB_KIND: &str = "grokhub-hub-v1";
 pub const DEFAULT_PORT: u16 = 18766;
@@ -42,6 +42,22 @@ pub struct HubState {
     pub inhabit: Option<InhabitBundle>,
     #[serde(skip)]
     pub last_frame: Option<PresenceFrame>,
+    /// Console API key for duplex Voice minting. Never written to hub-state.json.
+    #[serde(skip)]
+    pub console_api_key: String,
+    /// Cabin injects xAI `POST /realtime/client_secrets`. Tests stub this.
+    #[serde(skip)]
+    pub mint_realtime: Option<MintRealtimeFn>,
+}
+
+/// Mint an ephemeral realtime client secret with a console API key.
+#[derive(Clone)]
+pub struct MintRealtimeFn(pub Arc<dyn Fn(&str) -> Result<Value, String> + Send + Sync>);
+
+impl std::fmt::Debug for MintRealtimeFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MintRealtimeFn")
+    }
 }
 
 impl HubState {
@@ -58,6 +74,8 @@ impl HubState {
             last_incoming_at: 0,
             inhabit: None,
             last_frame: None,
+            console_api_key: String::new(),
+            mint_realtime: None,
         }
     }
 
@@ -259,6 +277,8 @@ pub enum PairError {
 pub fn state_for_disk(st: &HubState) -> HubState {
     let mut out = st.clone();
     out.last_frame = None;
+    out.console_api_key.clear();
+    out.mint_realtime = None;
     out
 }
 
@@ -325,12 +345,15 @@ mod tests {
             data_url: "data:image/jpeg;base64,SECRETFRAME".into(),
             at: 9,
         });
+        st.console_api_key = "xai-should-not-persist".into();
         save_hub_state(&path, &st).expect("save");
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(!raw.contains("SECRETFRAME"));
+        assert!(!raw.contains("xai-should-not-persist"));
         let loaded = load_hub_state(&path).expect("load");
         assert_eq!(loaded.device_id, st.device_id);
         assert!(loaded.last_frame.is_none());
+        assert!(loaded.console_api_key.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

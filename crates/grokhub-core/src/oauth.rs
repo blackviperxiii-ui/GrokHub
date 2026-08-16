@@ -180,15 +180,25 @@ pub fn has_auth(api_key: &str, access_token: &str) -> bool {
 }
 
 pub fn auth_bearer(api_key: &str, access_token: &str) -> Option<String> {
-    let key = api_key.trim();
-    if !key.is_empty() {
-        return Some(key.to_string());
-    }
     let tok = access_token.trim();
     if !tok.is_empty() {
         return Some(tok.to_string());
     }
+    let key = api_key.trim();
+    if !key.is_empty() {
+        return Some(key.to_string());
+    }
     None
+}
+
+/// Duplex Voice (`wss://api.x.ai/v1/realtime`) is console-key only. OAuth does not grant it.
+pub fn realtime_bearer(api_key: &str, _access_token: &str) -> Option<String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        None
+    } else {
+        Some(key.to_string())
+    }
 }
 
 pub fn token_needs_refresh(tokens: &XaiOAuthTokens, now_ms: u64) -> bool {
@@ -411,8 +421,12 @@ mod tests {
         assert!(has_auth("", "tok"));
         assert!(has_auth("xai-k", ""));
         assert!(!has_auth("", ""));
-        assert_eq!(auth_bearer("xai-k", "tok").as_deref(), Some("xai-k"));
+        assert_eq!(auth_bearer("xai-k", "tok").as_deref(), Some("tok"));
         assert_eq!(auth_bearer("", "tok").as_deref(), Some("tok"));
+        assert_eq!(auth_bearer("xai-k", "").as_deref(), Some("xai-k"));
+        assert_eq!(realtime_bearer("xai-k", "tok").as_deref(), Some("xai-k"));
+        assert_eq!(realtime_bearer("", "tok"), None);
+        assert_eq!(realtime_bearer("", ""), None);
     }
 
     #[test]

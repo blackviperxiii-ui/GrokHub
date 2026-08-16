@@ -15,7 +15,8 @@ pub const MODEL_CATALOG: &[ModelRow] = &[
     ModelRow { id: "grok-4-latest", label: "Grok 4", kind: "chat" },
     ModelRow { id: "grok-4-1-fast-non-reasoning", label: "Grok 4.1 Fast", kind: "chat" },
     ModelRow { id: "grok-2-image", label: "Grok 2 Image", kind: "imagine" },
-    ModelRow { id: "grok-voice-latest", label: "Grok Voice", kind: "voice" },
+    ModelRow { id: "grok-voice-think-fast-2.0", label: "Grok Voice Think Fast 2.0", kind: "voice" },
+    ModelRow { id: "grok-voice-latest", label: "Grok Voice (latest alias)", kind: "voice" },
 ];
 
 pub fn sanitize_chat_model(id: &str) -> &'static str {
@@ -50,6 +51,7 @@ mod tests {
         assert!(catalog_line().contains("Grok 4.3"));
         assert!(catalog_line().contains("Grok 4.6"));
         assert!(!catalog_line().contains("Grok 4.6 xhigh"));
+        assert!(catalog_line().contains("grok-voice-think-fast-2.0"));
         assert!(catalog_line().contains("grok-voice-latest"));
     }
 }
