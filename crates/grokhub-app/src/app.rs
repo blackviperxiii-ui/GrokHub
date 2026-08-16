@@ -444,7 +444,7 @@ fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool
 }
 
 fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, idx: usize, thought_open: bool) {
-    let bubble_w = bubble_max_width(ui.available_width());
+    let bubble_w = crate::markdown::bubble_width(ui.available_width());
     match block.kind {
         ChatKind::User => {
             let _ = paint_speech_bubble(ui, &block.body, true, false);
