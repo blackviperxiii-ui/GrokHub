@@ -283,6 +283,15 @@ pub fn lock_blocks_hands(titles: &[&str]) -> bool {
     titles.iter().copied().any(crate::hygiene::lockish)
 }
 
+/// Wait-for may poll a lock title. Pointer, type, key, and act must not.
+pub fn pointer_op_blocked_on_lock(op: &ComputerOp) -> bool {
+    !matches!(op, ComputerOp::WaitFor { .. })
+}
+
+pub fn hands_blocked_by_lock(op: &ComputerOp, titles: &[&str]) -> bool {
+    pointer_op_blocked_on_lock(op) && lock_blocks_hands(titles)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,5 +422,67 @@ mod tests {
             ComputerDrive::WaitFor(t) => assert_eq!(t.as_deref(), Some("Settings")),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn lock_screen_blocks_pointer_but_allows_wait() {
+        let lock = ["Lock screen"];
+        assert!(hands_blocked_by_lock(
+            &ComputerOp::Click { x: 10, y: 20 },
+            &lock
+        ));
+        assert!(hands_blocked_by_lock(
+            &ComputerOp::Type {
+                text: "secret".into()
+            },
+            &["Password"]
+        ));
+        assert!(hands_blocked_by_lock(
+            &ComputerOp::Key {
+                name: "Return".into()
+            },
+            &["greeter"]
+        ));
+        assert!(hands_blocked_by_lock(
+            &ComputerOp::Act {
+                name: "Unlock".into()
+            },
+            &["polkit agent"]
+        ));
+        assert!(
+            !hands_blocked_by_lock(
+                &ComputerOp::WaitFor {
+                    title: Some("Lock screen".into())
+                },
+                &lock
+            ),
+            "wait_for may poll; it must not click or type into a lock"
+        );
+        assert!(!hands_blocked_by_lock(
+            &ComputerOp::Click { x: 10, y: 20 },
+            &["GrokHub", "Terminal"]
+        ));
+        assert!(pointer_op_blocked_on_lock(&ComputerOp::Scroll { dy: 1 }));
+        assert!(!pointer_op_blocked_on_lock(&ComputerOp::WaitFor { title: None }));
+    }
+
+    #[test]
+    fn rejects_incomplete_computer_ops() {
+        assert!(parse_computer_op("COMPUTER_CMD: type").is_none());
+        assert!(parse_computer_op("COMPUTER_CMD: key").is_none());
+        assert!(parse_computer_op("COMPUTER_CMD: click").is_none());
+        assert!(parse_computer_op("COMPUTER_CMD: click x y").is_none());
+        assert!(parse_computer_op("COMPUTER_CMD: nope 1 2").is_none());
+        assert!(parse_computer_op("COMPUTER_CMD:").is_none());
+        assert_eq!(
+            extract_computer_ops("noise\nCOMPUTER_CMD: move 1 2\nHOST_CMD: ls\n"),
+            vec![ComputerOp::Move { x: 1, y: 2 }]
+        );
+        assert_eq!(
+            screen_from_extents(1920, 1080),
+            Some(ScreenSize { w: 1920, h: 1080 })
+        );
+        assert!(screen_from_extents(0, 1080).is_none());
+        assert!(screen_from_extents(1920, 0).is_none());
     }
 }
