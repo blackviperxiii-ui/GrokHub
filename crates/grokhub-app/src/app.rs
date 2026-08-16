@@ -1,7 +1,8 @@
 use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin, load_image_data_url,
-    pick_file, play_audio, read_text_capped, record_once, run_computer_op, transcribe_local,
+    pick_file, play_audio, read_text_capped, record_once, run_computer_op, run_computer_op_cancel,
+    transcribe_local,
 };
 use crate::host::{run_host, run_host_stream};
 use crate::secrets::{self, Secrets};
@@ -46,7 +47,7 @@ use grokhub_core::{
     plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
     parse_computer_cmd_loose, should_attach_hands_frame, user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
-    now_ms, on_wheel_grab, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
+    now_ms, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
     parse_nl_automation, parse_recipe, parse_slash, parse_theme, passenger_label, pick_theme, plan_from_text, plan_room,
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
@@ -82,6 +83,7 @@ use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -514,6 +516,7 @@ pub struct Cabin {
     messages: Vec<Msg>,
     status: String,
     running: bool,
+    host_halt: Arc<AtomicBool>,
     rx: Option<mpsc::Receiver<JobOut>>,
     chat_job_thread: Option<String>,
     hub: Arc<Mutex<HubState>>,
@@ -780,6 +783,7 @@ impl Cabin {
             messages,
             status: String::new(),
             running: false,
+            host_halt: Arc::new(AtomicBool::new(false)),
             rx: None,
             chat_job_thread: None,
             hub: Arc::new(Mutex::new(hub)),
@@ -1069,11 +1073,17 @@ impl Cabin {
     }
 
     fn halt_in_flight(&mut self) {
+        self.host_halt.store(true, Ordering::SeqCst);
         self.rx = None;
         self.running = false;
         self.chat_job_thread = None;
         self.stream_buf.clear();
         self.thought_buf.clear();
+        if let Some(mut s) = self.voice_sock.take() {
+            s.halt();
+        }
+        self.voice_state = VoiceState::Idle;
+        self.voice_orb = "idle".into();
     }
 
     fn apply_assistant_snapshot(&mut self, content: String) {
@@ -2317,15 +2327,12 @@ impl Cabin {
                         .collect::<Vec<_>>(),
                 )
                 .unwrap_or_default();
-                self.halt_in_flight();
-                self.voice_orb = "idle".into();
+                self.halt_work("Redirected");
                 text = redirect_prompt(&prev, &text);
-                self.status = "Redirected".into();
             }
             ChatSendKind::Fresh => {
                 if self.running && self.chat_job_thread.is_some() {
                     self.halt_in_flight();
-                    self.voice_orb = "idle".into();
                 }
             }
         }
@@ -2504,10 +2511,7 @@ impl Cabin {
                     self.status = "Nothing to retry".into();
                 }
             }
-            Slash::Stop => {
-                self.halt_in_flight();
-                self.status = "Stopped".into();
-            }
+            Slash::Stop => self.halt_work("Stopped"),
             Slash::Sh(cmd) => self.queue_sh(cmd),
             Slash::Host { on } => {
                 self.cfg.host_on = on;
@@ -2561,8 +2565,7 @@ impl Cabin {
                 self.status = self.doctor_text();
             }
             Slash::Fix => {
-                self.halt_in_flight();
-                self.voice_orb = "idle".into();
+                self.halt_work("Stopped");
                 self.nav = Nav::Settings;
                 self.settings_sec = health_settings_sec();
                 self.status = self.doctor_text();
@@ -3981,6 +3984,7 @@ impl Cabin {
         }
         self.snapshot_project();
         self.last_host = gated.clone();
+        self.host_halt.store(false, Ordering::SeqCst);
         self.running = true;
         self.chat_job_thread = None;
         self.voice_orb = "hands".into();
@@ -3992,12 +3996,17 @@ impl Cabin {
         let cap = self.cfg.host_hour_cap;
         let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
+        let halt = self.host_halt.clone();
         std::thread::spawn(move || {
             let started = Instant::now();
             let mut inhibit = crate::notify::inhibit_sleep();
             let mut block = String::new();
             let mut count = 0u32;
             for c in &gated {
+                if halt.load(Ordering::SeqCst) {
+                    block.push_str("HOST_RECEIPT: halted\n");
+                    break;
+                }
                 if host_hour_blocked(count, cap) {
                     block.push_str("hour cap reached\n");
                     break;
@@ -4010,9 +4019,9 @@ impl Cabin {
                         "Hands: {}",
                         computer_cmd_line(&op)
                     )));
-                    run_computer_op(&op)
+                    run_computer_op_cancel(&op, Some(&halt))
                 } else {
-                    run_host_stream(c, Duration::from_secs(90), move |line| {
+                    run_host_stream(c, Duration::from_secs(90), Some(&halt), move |line| {
                         let _ = tx_line.send(JobOut::HostLine(host_status_line(&cmd, line, 0)));
                     })
                 };
@@ -4105,16 +4114,7 @@ impl Cabin {
     fn listen_voice(&mut self) {
         let action = hey_grok_on_press(self.voice_state, self.running);
         if action == HeyGrokAction::Halt {
-            let (halt, _) = on_wheel_grab(self.running);
-            if halt {
-                self.halt_in_flight();
-            }
-            if let Some(mut s) = self.voice_sock.take() {
-                s.halt();
-            }
-            self.voice_state = VoiceState::Idle;
-            self.voice_orb = "idle".into();
-            self.status = "Hands on — halted".into();
+            self.halt_work("Hands on — halted");
             return;
         }
         let oauth = secrets::access_token(&self.secrets);
@@ -4428,6 +4428,11 @@ impl Cabin {
         }
     }
 
+    fn halt_work(&mut self, status: impl Into<String>) {
+        self.halt_in_flight();
+        self.status = status.into();
+    }
+
     fn drain_inbox(&mut self) {
         if !self.hub_on || self.running {
             return;
@@ -4566,10 +4571,7 @@ impl Cabin {
         };
         match tray.try_recv() {
             Some(crate::tray::TrayCmd::Show) => self.show_from_tray(ctx),
-            Some(crate::tray::TrayCmd::Halt) => {
-                self.halt_in_flight();
-                self.status = "Stopped".into();
-            }
+            Some(crate::tray::TrayCmd::Halt) => self.halt_work("Stopped"),
             Some(crate::tray::TrayCmd::Quit) => {
                 self.want_quit = true;
                 if let Some(tray) = self.tray.take() {
@@ -4788,12 +4790,7 @@ impl eframe::App for Cabin {
         self.poll_oauth_photo(ctx);
         if ctx.input(|i| i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::Escape))
         {
-            let (halt, _) = on_wheel_grab(self.running);
-            if halt || self.running {
-                self.halt_in_flight();
-            }
-            self.voice_orb = "idle".into();
-            self.status = "Stopped".into();
+            self.halt_work("Stopped");
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::G) && !i.modifiers.shift) {
             self.listen_voice();
@@ -4901,16 +4898,7 @@ impl Cabin {
             if ev.id == self.hotkey_hey {
                 self.listen_voice();
             } else if ev.id == self.hotkey_halt {
-                let (halt, _) = on_wheel_grab(self.running);
-                if halt || self.running {
-                    self.halt_in_flight();
-                }
-                if let Some(mut s) = self.voice_sock.take() {
-                    s.halt();
-                }
-                self.voice_orb = "idle".into();
-                self.voice_state = VoiceState::Idle;
-                self.status = "Stopped".into();
+                self.halt_work("Stopped");
             }
         }
     }
