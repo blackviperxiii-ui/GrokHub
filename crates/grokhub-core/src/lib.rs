@@ -144,7 +144,7 @@ pub use reflect::{
 };
 pub use review::{
     build_review_digest, cabin_real_text, dedupe_suggestions, parse_suggest_lines,
-    partition_suggestions, review_due, review_system_prompt, DigestLine, LearnedSuggestion,
+    partition_suggestions, review_due, review_status_line, review_system_prompt, DigestLine, LearnedSuggestion,
     ReviewDigest, SuggestionKind, SuggestionStore, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
 };
 pub use pair::{make_pair_code, normalize_code, CODE_ALPH, PAIR_TTL_MS};
