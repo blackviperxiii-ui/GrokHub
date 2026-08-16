@@ -5765,6 +5765,11 @@ impl Cabin {
             self.ui_attach_chip(ui, PlusTarget::Chat);
                     }
                     ComposerStackSlot::Pill => {
+            let pill_w = crate::cards::composer_pill_w(
+                ui.available_width(),
+                ui.clip_rect().intersect(ui.max_rect()).width(),
+            );
+            ui.set_max_width(pill_w);
             egui::Frame::none()
                 .fill(crate::theme::elevated())
                 .rounding(crate::theme::QUERY_RADIUS)
@@ -7741,6 +7746,10 @@ mod tests {
         assert!(
             slice.contains("composer_go_cluster_w()"),
             "Fast + mic + Stop need a reserved strip: {slice}"
+        );
+        assert!(
+            slice.contains("composer_pill_w("),
+            "cap the pill to the clip rect so Stop cannot sit in overflow: {slice}"
         );
         assert!(
             slice.contains("right_to_left"),
