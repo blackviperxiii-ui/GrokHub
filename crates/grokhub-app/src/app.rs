@@ -5592,7 +5592,7 @@ impl Cabin {
         let block = crate::theme::WORDMARK + greet_h + crate::theme::QUERY_MIN_H;
         let lift = ((ui.available_height() - block) * 0.5).clamp(24.0, 320.0);
         ui.add_space(lift);
-        let pane_w = crate::cards::composer_pill_w(ui.max_rect().width(), ui.max_rect().width());
+        let pane_w = crate::cards::composer_pill_w(ui.ctx().screen_rect().width());
         ui.vertical_centered_justified(|ui| {
             ui.set_max_width(pane_w);
             ui.label(
@@ -5737,10 +5737,7 @@ impl Cabin {
             }
             ui.add_space(6.0);
             ui.vertical_centered_justified(|ui| {
-            let col_w = crate::cards::composer_pill_w(
-                ui.available_width(),
-                ui.available_width(),
-            );
+            let col_w = crate::cards::composer_pill_w(ui.ctx().screen_rect().width());
             ui.set_max_width(col_w);
             for slot in composer_stack_order() {
                 match slot {
@@ -5770,10 +5767,7 @@ impl Cabin {
             self.ui_attach_chip(ui, PlusTarget::Chat);
                     }
                     ComposerStackSlot::Pill => {
-            let pill_w = crate::cards::composer_pill_w(
-                ui.available_width(),
-                ui.clip_rect().intersect(ui.max_rect()).width(),
-            );
+            let pill_w = crate::cards::composer_pill_w(ui.ctx().screen_rect().width());
             ui.set_max_width(pill_w);
             egui::Frame::none()
                 .fill(crate::theme::elevated())
@@ -5781,7 +5775,7 @@ impl Cabin {
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                 .inner_margin(egui::Margin::same(8.0))
                 .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
+                    ui.set_width(pill_w.min(ui.available_width()).max(200.0));
                     ui.set_min_height(crate::theme::QUERY_MIN_H - 16.0);
                     ui.horizontal(|ui| {
                         let plus = crate::icons::paint_bar_icon(
