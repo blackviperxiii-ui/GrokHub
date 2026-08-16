@@ -2,7 +2,8 @@ use grokhub_core::{
     chat_include_usage, chat_request_body_vision, chat_stream_flag, chat_timeout_secs,
     client_secrets_body, client_secrets_url, dedicated_imagine_model, frame_bytes, imagine_request_body,
     imagine_slug, merge_thinking, parse_client_secret, parse_imagine_url, parse_model_reasoning,
-    parse_model_text, parse_sse_delta, parse_sse_thought, parse_stt_text, realtime_can_connect,
+    parse_model_text, parse_sse_text, parse_sse_thought, parse_stt_text, realtime_can_connect,
+    fold_sse_acc, sse_live_delta,
     responses_request_body, responses_url, sse_done, stt_multipart, stt_url, tts_request_body, tts_url,
     voice_client_secret_denied, PresenceFrame, XAI_BASE,
 };
@@ -56,9 +57,11 @@ fn consume_sse(
             if let Some(t) = parse_sse_thought(&line) {
                 on_thought(&t);
             }
-            if let Some(d) = parse_sse_delta(&line) {
-                on_delta(&d);
-                acc.push_str(&d);
+            if let Some((d, kind)) = parse_sse_text(&line) {
+                if sse_live_delta(acc.is_empty(), kind) {
+                    on_delta(&d);
+                }
+                fold_sse_acc(&mut acc, &d, kind);
             }
         }
     }
@@ -323,5 +326,26 @@ mod tests {
                 || err.to_ascii_lowercase().contains("api key"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn responses_done_fills_empty_acc() {
+        let data = b"data: {\"type\":\"response.output_text.done\",\"text\":\"Hello\"}\n\n";
+        let mut deltas = String::new();
+        let acc = consume_sse(&data[..], &mut |d| deltas.push_str(d), &mut |_| {}).unwrap();
+        assert_eq!(acc, "Hello");
+        assert_eq!(deltas, "Hello");
+    }
+
+    #[test]
+    fn responses_done_after_delta_does_not_duplicate() {
+        let data = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hel\"}\n",
+            "data: {\"type\":\"response.output_text.done\",\"text\":\"Hello\"}\n",
+        );
+        let mut deltas = String::new();
+        let acc = consume_sse(data.as_bytes(), &mut |d| deltas.push_str(d), &mut |_| {}).unwrap();
+        assert_eq!(acc, "Hello");
+        assert_eq!(deltas, "Hel");
     }
 }

@@ -24,6 +24,28 @@ pub fn make_pair_code() -> String {
     s
 }
 
+pub fn parse_hostname_i(stdout: &str) -> Vec<String> {
+    stdout.split_whitespace().map(|s| s.to_string()).collect()
+}
+
+pub fn pick_lan_ipv4(candidates: &[&str]) -> Option<String> {
+    candidates.iter().find_map(|a| {
+        let ip: std::net::Ipv4Addr = a.parse().ok()?;
+        if ip.is_loopback() || ip.is_unspecified() || ip.is_link_local() || ip.is_multicast() {
+            None
+        } else {
+            Some(ip.to_string())
+        }
+    })
+}
+
+pub fn hub_pair_url(port: u16, lan_ip: Option<&str>) -> String {
+    match lan_ip.filter(|s| !s.is_empty()) {
+        Some(ip) => format!("http://{ip}:{port}"),
+        None => format!("http://127.0.0.1:{port}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -43,5 +65,21 @@ mod tests {
         assert_eq!(b[3], b'-');
         assert!(code.chars().filter(|c| *c != '-').all(|c| CODE_ALPH.contains(c)));
         assert_eq!(PAIR_TTL_MS, 15 * 60 * 1000);
+    }
+
+    #[test]
+    fn pair_url_uses_lan_ip_not_placeholder() {
+        assert_eq!(
+            pick_lan_ipv4(&["127.0.0.1", "192.168.1.40", "10.0.0.8"]),
+            Some("192.168.1.40".into())
+        );
+        assert_eq!(pick_lan_ipv4(&["127.0.0.1", "0.0.0.0"]), None);
+        assert_eq!(
+            hub_pair_url(18766, Some("192.168.1.40")),
+            "http://192.168.1.40:18766"
+        );
+        assert_eq!(hub_pair_url(18766, None), "http://127.0.0.1:18766");
+        assert!(!hub_pair_url(18766, pick_lan_ipv4(&["192.168.1.40"]).as_deref()).contains("<lan>"));
+        assert_eq!(parse_hostname_i("192.168.1.40 10.0.0.8\n"), vec!["192.168.1.40", "10.0.0.8"]);
     }
 }

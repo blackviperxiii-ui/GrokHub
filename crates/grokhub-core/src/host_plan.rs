@@ -143,6 +143,35 @@ pub fn approved_cmds(steps: &[HostPlanStep]) -> Vec<String> {
         .collect()
 }
 
+/// YOLO still holds destructive steps when `/approve risky` is on,
+/// and holds anything that leaves the bound project.
+pub fn yolo_plan_split(
+    plan: &[HostPlanStep],
+    risky_only: bool,
+    project_root: &str,
+) -> (Vec<String>, Vec<HostPlanStep>) {
+    yolo_plan_split_in(plan, risky_only, project_root, std::env::var("HOME").ok().as_deref())
+}
+
+pub fn yolo_plan_split_in(
+    plan: &[HostPlanStep],
+    risky_only: bool,
+    project_root: &str,
+    home: Option<&str>,
+) -> (Vec<String>, Vec<HostPlanStep>) {
+    let mut run = Vec::new();
+    let mut hold = Vec::new();
+    for s in plan {
+        let outside = crate::project::host_cmd_leaves_project_in(&s.cmd, project_root, home);
+        if (risky_only && s.risk == HostRisk::Destructive) || outside {
+            hold.push(s.clone());
+        } else if s.checked {
+            run.push(s.cmd.clone());
+        }
+    }
+    (run, hold)
+}
+
 pub fn move_step(steps: &mut [HostPlanStep], idx: usize, up: bool) {
     if up {
         if idx == 0 || idx >= steps.len() {
@@ -182,5 +211,10 @@ mod tests {
         assert_eq!(mixed[1].cmd, "COMPUTER_CMD: click 10 20");
         assert_eq!(mixed[2].cmd, "COMPUTER_CMD: type hello");
         assert_eq!(mixed[1].risk, HostRisk::Moderate);
+        let risky = plan_from_text("HOST_PLAN:\n1. ls\n2. rm -rf /tmp/x\n").unwrap();
+        let (run, hold) = yolo_plan_split_in(&risky, true, "", None);
+        assert_eq!(run, vec!["ls".to_string()]);
+        assert_eq!(hold.len(), 1);
+        assert_eq!(hold[0].cmd, "rm -rf /tmp/x");
     }
 }

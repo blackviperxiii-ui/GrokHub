@@ -68,14 +68,14 @@ pub use autonomy::{
 pub use attach::{
     append_composer, attach_kind, attach_name, attach_prompt_line, chat_attach_status,
     cabin_eyes_request_text, cabin_frame_only, clip_image_args, imagine_ref_status, list_pick_names,
-    next_chat_image, parse_picker_stdout,
+    next_chat_image, parse_picker_stdout, this_turn_cabin_frame,
     picker_args, plus_empty_status, plus_menu_rows, take_text_body, AttachKind, PlusAct, PlusTarget,
     TEXT_FILE_CAP,
 };
 pub use chat::{
     chat_request_body, chat_request_body_for_mode, chat_request_body_vision, chat_timeout_secs,
     effective_chat_mode, extract_host_cmds, failover_model, is_composer_ladder_model, model_for_mode,
-    needs_auth_banner, parse_chat_content, parse_chat_reasoning, parse_model_reasoning, parse_model_text,
+    needs_auth_banner, paint_connect_banner, parse_chat_content, parse_chat_reasoning, parse_model_reasoning, parse_model_text,
     parse_responses_reasoning, parse_responses_text, reasoning_effort_for_mode, resolve_chat_model,
     responses_request_body, responses_url, route_auto_mode, settings_pin_blocks_auto,
     should_failover_status, DEFAULT_MODEL, XAI_BASE,
@@ -89,8 +89,9 @@ pub use chat_bubble::{
     BUBBLE_MAX_FRAC, BUBBLE_MAX_PX, BUBBLE_PAD_X, BUBBLE_PAD_Y, BUBBLE_RADIUS,
 };
 pub use chat_job::{
-    apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
-    upsert_assistant_turn, ChatSendKind,
+    apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
+    drop_trailing_assistant, job_error_goes_to_chat, persist_user_turn, push_bound_message,
+    upsert_assistant_turn, worker_gone_status, ChatSendKind,
 };
 pub use chips::{
     build_quick_chips, chip_memory_key, chip_suggest_prompt, chip_thread_from_messages,
@@ -109,7 +110,7 @@ pub use capture::{
 pub use frame::{encode_b64, frame_bytes, jpeg_data_url, FrameGet, PresenceFrame};
 pub use host_plan::{
     approved_cmds, explain_host_risk, host_risk, move_step, parse_host_plan, plan_from_text,
-    step_from_cmd, HostPlanStep, HostRisk,
+    step_from_cmd, yolo_plan_split, HostPlanStep, HostRisk,
 };
 pub use host_safety::{forbidden_reason, recall_hits};
 pub use imagine::{
@@ -123,7 +124,7 @@ pub use imagine::{
     IMAGINE_WALL_GAP,
     WALL_GIF_EVERY_MS, WALL_GIF_MAX, WALL_SEEDS,
 };
-pub use inhabit::{can_inhabit, InhabitBundle};
+pub use inhabit::{can_inhabit, inhabit_bundle_usable, inhabit_ready, InhabitBundle};
 pub use recipe::{
     computer_cmd_line, computer_drive, computer_drive_for, extract_computer_ops, hands_backend_name,
     hands_blocked_by_lock, hands_protocol, lock_blocks_hands, pointer_op_blocked_on_lock,
@@ -141,12 +142,15 @@ pub use reflect::{
     fact_candidates, restore_memory_prev, should_idle_reflect, surgical_memory_edit, MemoryEdit,
     IDLE_REFLECT_MS,
 };
-pub use pair::{make_pair_code, normalize_code, CODE_ALPH, PAIR_TTL_MS};
+pub use pair::{
+    hub_pair_url, make_pair_code, normalize_code, parse_hostname_i, pick_lan_ipv4, CODE_ALPH,
+    PAIR_TTL_MS,
+};
 pub use automation::{
     automation_blocked_by_policy, compute_next_run, due_automations, ensure_automation_schedule,
-    mark_automation_ran, night_check_command, night_check_exit_code, night_check_stdout,
-    parse_nl_automation, replay_automation_target, skip_automation, skip_night_check_receipt,
-    Automation,
+    mark_automation_ran, mark_automation_skipped, night_check_command, night_check_exit_code,
+    night_check_stdout, parse_nl_automation, replay_automation_target, skip_automation,
+    skip_night_check_receipt, Automation,
 };
 pub use connector::{
     connector_url_allowed, extract_connector_cmds, github_api_path, map_website_connector_name,
@@ -154,8 +158,8 @@ pub use connector::{
 };
 pub use consult::{format_consult_reply, parse_consult};
 pub use context::{
-    context_percent, estimate_messages, estimate_tokens, should_auto_compact, CONTEXT_BUDGET_TOKENS,
-    RECENT_MIN_MESSAGES,
+    context_percent, estimate_messages, estimate_tokens, should_auto_compact, should_auto_compact_now,
+    CONTEXT_BUDGET_TOKENS, RECENT_MIN_MESSAGES,
 };
 pub use diagnostics::diagnostics_bundle;
 pub use goal::{
@@ -181,8 +185,9 @@ pub use shortcuts::{
     shortcut_help, ComposerEnter, ComposerGo, SHORTCUTS,
 };
 pub use stream::{
-    chat_include_usage, chat_stream_flag, fold_stream_token, parse_sse_delta, parse_sse_thought,
-    parse_sse_usage, sse_done, StreamTokenKind, StreamUsage,
+    chat_include_usage, chat_stream_flag, fold_sse_acc, fold_stream_token, parse_sse_delta,
+    parse_sse_text, parse_sse_thought, parse_sse_usage, sse_done, sse_live_delta, StreamTokenKind,
+    StreamUsage,
 };
 pub use usage::{bump_usage, roll_usage_day, usage_blocked, usage_line, UsageDay};
 pub use hub_sync::{build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, HubMemoryFile, HubSnapshot};
@@ -195,7 +200,7 @@ pub use organs::{
 };
 pub use rewind::{keep_last_rewinds, rewind_allowed, rewind_dest, RewindRecord};
 pub use oauth::{
-    apply_profile, auth_bearer, has_auth, merge_refreshed, parse_device_start, parse_poll_result,
+    apply_profile, auth_bearer, chat_bearer, has_auth, merge_refreshed, parse_device_start, parse_poll_result,
     parse_token_json, parse_userinfo_profile, realtime_bearer, token_needs_refresh, trusted_profile_photo_url,
     trusted_xai_url, DeviceCodeStart, OAuthProfile, PollResult, PollStatus, XaiOAuthTokens,
     TOKEN_REFRESH_SKEW_MS, XAI_DEVICE_CODE_GRANT, XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY,
@@ -203,7 +208,8 @@ pub use oauth::{
 };
 pub use project::{
     add_to_folder, clean_project_name, create_folder, create_project, drop_node, drop_selected,
-    folder_choices, host_cmd_leaves_project, host_hour_blocked, is_under_project,
+    folder_choices, expand_host_path_token, host_cmd_leaves_project, host_hour_blocked,
+    refund_host_reserved, is_under_project,
     project_menu_acts, project_menu_label, project_name_from_path, project_slug, project_work_path,
     rename_node, restore_bound_path, seed_from_bound, settle_project_path, should_seed_sidebar,
     stage_project, toggle_folder, upsert_bound, visible_tree, DropOutcome, ProjectKind,
@@ -220,7 +226,8 @@ pub use slash::{
     SLASH_COMMANDS,
 };
 pub use verify::{
-    can_mark_done, has_goal_complete, has_verify_ok, interpret_verify, verify_script_path,
+    can_mark_done, has_goal_complete, has_verify_ok, interpret_verify, verify_ok_after_user_turn,
+    verify_script_path,
     VerifyResult,
 };
 pub use voice::{
@@ -236,21 +243,23 @@ pub use voice::{
     DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS,
 };
 pub use windshield::{
-    build_windshield, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, refused_lock,
-    windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
+    build_windshield, lock_check_titles, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse,
+    refused_lock, window_name_from_atspi, window_name_from_wmctrl, windshield_prompt, AtspiRow,
+    PendingStep, WindshieldFrame,
 };
 pub use workboard::{
     apply_work_update, extract_work_pins, extract_work_updates, parse_work_pin, parse_work_update,
     BoardCard, BoardStatus,
 };
 pub use state::{
-    load_hub_state, save_hub_state, state_for_disk, HubState, MintRealtimeFn, PairError, DEFAULT_PORT,
-    HUB_KIND,
+    load_hub_state, save_hub_state, state_for_disk, CompleteError, HubState, MintRealtimeFn, PairError,
+    DEFAULT_PORT, HUB_KIND,
 };
 pub use task::{HubTask, Receipt};
 pub use thread_tab::{
-    apply_auto_title, apply_manual_rename, clean_tab_title, delete_thread, display_tab_title,
-    history_order, short_auto_title, toggle_pin, DeleteOutcome, ThreadTab, AUTO_TITLE_MAX,
+    apply_auto_title, apply_auto_title_in, apply_manual_rename, auto_title_blocked, clean_tab_title,
+    delete_thread, display_tab_title, history_order, short_auto_title, toggle_pin, DeleteOutcome,
+    ThreadTab, AUTO_TITLE_MAX,
 };
 pub use update::{
     discover_source, is_grokhub_source, overlay_update_begin, overlay_update_can_restart,

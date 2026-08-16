@@ -52,6 +52,10 @@ pub enum Slash {
     Delete,
 }
 
+fn looks_like_bind_path(s: &str) -> bool {
+    s.starts_with('/') || s.starts_with('~') || s.starts_with('.')
+}
+
 pub fn parse_slash(line: &str) -> Option<Slash> {
     let t = line.trim();
     if t.starts_with("$ ") {
@@ -149,13 +153,17 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
                 } else {
                     Some(Slash::ProjectMove(name.to_string()))
                 }
+            } else if rest.len() >= 4 && rest[..4].eq_ignore_ascii_case("bind") {
+                let path = rest[4..].trim();
+                if path.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectBind(Some(path.to_string())))
+                }
+            } else if looks_like_bind_path(rest) {
+                Some(Slash::ProjectBind(Some(rest.to_string())))
             } else {
-                let path = rest
-                    .strip_prefix("bind")
-                    .map(|s| s.trim())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(rest);
-                Some(Slash::ProjectBind(Some(path.to_string())))
+                None
             }
         }
         "/send" if !rest.is_empty() => Some(Slash::Send(rest.to_string())),
@@ -418,6 +426,10 @@ mod tests {
         assert_eq!(parse_slash("/sh ls /tmp"), Some(Slash::Sh("ls /tmp".into())));
         assert_eq!(parse_slash("$ echo hi"), Some(Slash::Sh("echo hi".into())));
         assert_eq!(parse_slash("/project bind ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
+        assert_eq!(parse_slash("/project ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
+        assert_eq!(parse_slash("/project /tmp/cabin"), Some(Slash::ProjectBind(Some("/tmp/cabin".into()))));
+        assert_eq!(parse_slash("/project typo"), None);
+        assert_eq!(parse_slash("/project bind"), None);
         assert_eq!(parse_slash("/project new Night watch"), Some(Slash::ProjectNew("Night watch".into())));
         assert_eq!(parse_slash("/project folder Cabin"), Some(Slash::ProjectFolder("Cabin".into())));
         assert_eq!(parse_slash("/project rename Dawn"), Some(Slash::ProjectRename("Dawn".into())));

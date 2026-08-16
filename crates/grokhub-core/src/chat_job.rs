@@ -81,6 +81,59 @@ pub fn apply_stream_snapshot(
     }
 }
 
+/// Replace a partial live assistant with the error, or append one.
+pub fn apply_job_error(messages: &mut Vec<(String, String)>, err: &str) -> String {
+    let text = format!("Error: {err}");
+    if let Some((role, body)) = messages.last_mut() {
+        if role == "assistant" {
+            *body = text;
+            return err.to_string();
+        }
+    }
+    messages.push(("assistant".into(), text));
+    err.to_string()
+}
+
+pub fn worker_gone_status() -> &'static str {
+    "Job dropped — worker gone"
+}
+
+/// Halt / redirect must not leave a truncated assistant in the transcript.
+pub fn drop_trailing_assistant(messages: &mut Vec<(String, String)>) {
+    if messages.last().map(|(r, _)| r == "assistant").unwrap_or(false) {
+        messages.pop();
+    }
+}
+
+/// Update / host / voice jobs have no chat thread — errors stay on the status bar.
+pub fn job_error_goes_to_chat(chat_job_thread: Option<&str>) -> bool {
+    chat_job_thread.is_some()
+}
+
+/// Host / connector / consult receipts stay on the thread that started the job.
+pub fn push_bound_message(
+    job_thread_id: Option<&str>,
+    visible_thread_id: &str,
+    visible_messages: &mut Vec<(String, String)>,
+    stored: &mut [(String, Vec<(String, String)>)],
+    role: &str,
+    content: String,
+) {
+    let target = job_thread_id.unwrap_or(visible_thread_id);
+    if target == visible_thread_id {
+        visible_messages.push((role.to_string(), content));
+        return;
+    }
+    if let Some((_, msgs)) = stored.iter_mut().find(|(id, _)| id == target) {
+        msgs.push((role.to_string(), content));
+    }
+}
+
+/// Composer send without auth must not write a user turn.
+pub fn persist_user_turn(has_key: bool) -> bool {
+    has_key
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +210,76 @@ mod tests {
         assert_eq!(chat_send_kind(None, "thr-b", true), ChatSendKind::Redirect);
         assert!(!chat_shows_thinking(None, "thr-b", false));
         assert_eq!(chat_send_kind(None, "thr-b", false), ChatSendKind::Fresh);
+    }
+
+    #[test]
+    fn job_error_replaces_partial_assistant() {
+        let mut msgs = origin_partial();
+        let status = apply_job_error(&mut msgs, "429 rate limited");
+        assert_eq!(status, "429 rate limited");
+        assert_eq!(
+            msgs.last().map(|m| m.1.as_str()),
+            Some("Error: 429 rate limited")
+        );
+        assert_eq!(msgs.iter().filter(|(r, _)| r == "assistant").count(), 1);
+    }
+
+    #[test]
+    fn job_error_appends_when_no_assistant_yet() {
+        let mut msgs = vec![("user".into(), "hi".into())];
+        apply_job_error(&mut msgs, "401 unauthorized");
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[1], ("assistant".into(), "Error: 401 unauthorized".into()));
+    }
+
+    #[test]
+    fn worker_gone_has_a_status() {
+        assert!(!worker_gone_status().is_empty());
+    }
+
+    #[test]
+    fn halt_drops_partial_assistant() {
+        let mut msgs = origin_partial();
+        drop_trailing_assistant(&mut msgs);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].0, "user");
+        assert!(!job_error_goes_to_chat(None));
+        assert!(job_error_goes_to_chat(Some("thr-a")));
+        assert!(!persist_user_turn(false));
+        assert!(persist_user_turn(true));
+    }
+
+    #[test]
+    fn host_receipt_stays_on_the_origin_thread() {
+        let mut visible = vec![("user".into(), "other".into())];
+        let mut stored = vec![
+            ("thr-a".into(), vec![("user".into(), "run ls".into())]),
+            ("thr-b".into(), visible.clone()),
+        ];
+        push_bound_message(
+            Some("thr-a"),
+            "thr-b",
+            &mut visible,
+            &mut stored,
+            "user",
+            "HOST_RESULT (facts only):\nok".into(),
+        );
+        assert_eq!(visible, vec![("user".into(), "other".into())]);
+        assert_eq!(
+            stored[0].1.last().map(|m| m.1.as_str()),
+            Some("HOST_RESULT (facts only):\nok")
+        );
+        push_bound_message(
+            Some("thr-b"),
+            "thr-b",
+            &mut visible,
+            &mut stored,
+            "user",
+            "CONNECTOR_RESULT (facts only):\nok".into(),
+        );
+        assert_eq!(
+            visible.last().map(|m| m.1.as_str()),
+            Some("CONNECTOR_RESULT (facts only):\nok")
+        );
     }
 }
