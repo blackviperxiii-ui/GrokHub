@@ -230,6 +230,7 @@ pub enum RailIcon {
 
 pub fn rail_icon_for(id: &str) -> RailIcon {
     match id {
+        "chat" => RailIcon::Chat,
         "imagine" => RailIcon::Imagine,
         "automations" => RailIcon::Clock,
         "skills" | "connectors" => RailIcon::Grid,
@@ -724,6 +725,7 @@ mod tests {
         assert_ne!(BarIcon::Gear, BarIcon::Search);
         assert_ne!(BarIcon::ArrowUp, BarIcon::Send);
         assert_ne!(BarIcon::Stop, BarIcon::Send);
+        assert_eq!(rail_icon_for("chat"), RailIcon::Chat);
         assert_eq!(rail_icon_for("imagine"), RailIcon::Imagine);
         assert_eq!(rail_icon_for("automations"), RailIcon::Clock);
         assert_eq!(rail_icon_for("skills"), RailIcon::Grid);
