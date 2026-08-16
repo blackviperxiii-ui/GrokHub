@@ -6,6 +6,32 @@ pub enum ComposerEnter {
     Newline,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposerGo {
+    Idle,
+    Send,
+    Stop,
+}
+
+/// Send turns into Stop while a reply (or host/imagine job) is running.
+pub fn composer_go(running: bool, ready: bool) -> ComposerGo {
+    if running {
+        ComposerGo::Stop
+    } else if ready {
+        ComposerGo::Send
+    } else {
+        ComposerGo::Idle
+    }
+}
+
+pub fn composer_go_tip(running: bool) -> &'static str {
+    if running {
+        "Stop"
+    } else {
+        "Send"
+    }
+}
+
 pub fn composer_enter(enter: bool, control: bool) -> Option<ComposerEnter> {
     if !enter {
         return None;
@@ -121,5 +147,23 @@ mod tests {
         assert!(lines.contains(&"Enter — Send message (Composer)"));
         assert!(lines.contains(&"Ctrl+Enter — New line (Composer)"));
         assert!(!lines.contains(&"Ctrl+Enter — Send message (Composer)"));
+    }
+
+    #[test]
+    fn send_becomes_stop_while_running() {
+        assert_eq!(composer_go(false, false), ComposerGo::Idle);
+        assert_eq!(composer_go(false, true), ComposerGo::Send);
+        assert_eq!(
+            composer_go(true, false),
+            ComposerGo::Stop,
+            "empty draft still shows Stop so you can interrupt"
+        );
+        assert_eq!(
+            composer_go(true, true),
+            ComposerGo::Stop,
+            "a typed follow-up must not keep the Send glyph while Grok is answering"
+        );
+        assert_eq!(composer_go_tip(true), "Stop");
+        assert_eq!(composer_go_tip(false), "Send");
     }
 }
