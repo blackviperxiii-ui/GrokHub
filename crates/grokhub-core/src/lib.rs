@@ -140,7 +140,7 @@ pub use inhabit::{
 };
 pub use hands::{
     diagnose_hands, extra_bin_dirs, hands_chip_label, hands_chip_live, hands_down_receipt,
-    resolve_bin_in, ydotool_socket_path, HandsDown, HANDS_PACMAN,
+    resolve_bin_in, ydotool_socket_path, HandsDown, HANDS_PACMAN, PYATSPI_MISSING,
 };
 pub use recipe::{
     bin_on_path, computer_cmd_line, computer_drive, computer_drive_for, default_bin_extra_dirs,

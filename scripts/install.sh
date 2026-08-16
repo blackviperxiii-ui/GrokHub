@@ -121,6 +121,17 @@ fi
 PREFIX="$PREFIX" HANDS_SRC="${HANDS_SRC:-$ROOT/target/hands-src}" \
   bash "$ROOT/scripts/build-hands.sh" || echo "hands: build-hands.sh continued"
 
+# Windshield / act / wait_for need pyatspi. Overlay-safe if pacman fails.
+if command -v pacman >/dev/null; then
+  if pacman -Q python-atspi >/dev/null 2>&1; then
+    echo "hands: python-atspi already installed"
+  elif [[ "$(id -u)" -eq 0 ]]; then
+    pacman -S --needed python-atspi || echo "hands: pacman -S --needed python-atspi"
+  else
+    sudo pacman -S --needed python-atspi || echo "hands: sudo pacman -S --needed python-atspi"
+  fi
+fi
+
 if command -v systemctl >/dev/null && [[ -x "$HANDS_BIN/ydotoold" || -x "$(command -v ydotoold 2>/dev/null || true)" ]]; then
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   systemctl --user enable --now ydotoold.service >/dev/null 2>&1 || true
