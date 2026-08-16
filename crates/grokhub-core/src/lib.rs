@@ -143,7 +143,7 @@ pub use organs::{
 pub use rewind::{keep_last_rewinds, rewind_allowed, rewind_dest, RewindRecord};
 pub use oauth::{
     apply_profile, auth_bearer, has_auth, merge_refreshed, parse_device_start, parse_poll_result,
-    parse_token_json, parse_userinfo_profile, token_needs_refresh, trusted_profile_photo_url,
+    parse_token_json, parse_userinfo_profile, realtime_bearer, token_needs_refresh, trusted_profile_photo_url,
     trusted_xai_url, DeviceCodeStart, OAuthProfile, PollResult, PollStatus, XaiOAuthTokens,
     TOKEN_REFRESH_SKEW_MS, XAI_DEVICE_CODE_GRANT, XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY,
     XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE, XAI_OAUTH_USERINFO,
@@ -170,12 +170,15 @@ pub use verify::{
     VerifyResult,
 };
 pub use voice::{
-    cabin_eyes_for_turn, dedicated_voice_model, encode_input_audio_append, encode_session_update,
-    hey_grok_on_press, is_voice_error, parse_realtime_event, parse_stt_text, parse_voice_event_text,
-    redact_cabin_from_memory, reduce_voice_state, should_attach_cabin_frame,
-    should_capture_before_chat, should_mute_speaker, stt_multipart, stt_url, transcribe_route,
-    tts_request_body, tts_url, voice_can_connect, voice_session_url, CabinEyesState, HeyGrokAction,
-    TranscribeRoute, VoiceEvent, VoiceState, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS,
+    cabin_eyes_for_turn, client_secret_ws_protocol, client_secrets_body, client_secrets_url,
+    dedicated_voice_model, encode_input_audio_append, encode_session_update, hey_grok_on_press,
+    hey_grok_route, hey_grok_starts_ptt, is_voice_error, parse_client_secret, parse_realtime_event,
+    parse_stt_text, parse_voice_event_text, pcm_from_capture, redact_cabin_from_memory,
+    realtime_can_connect, reduce_voice_state, should_attach_cabin_frame, should_capture_before_chat,
+    should_mute_speaker, speech_can_connect, stt_multipart, stt_url, transcribe_route,
+    tts_request_body, tts_url, voice_can_connect, voice_client_secret_denied, voice_session_url,
+    voice_transcript_sends_chat, CabinEyesState, HeyGrokAction, HeyGrokRoute, TranscribeRoute,
+    VoiceEvent, VoiceState, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS,
 };
 pub use windshield::{
     build_windshield, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, refused_lock,
@@ -186,7 +189,8 @@ pub use workboard::{
     BoardCard, BoardStatus,
 };
 pub use state::{
-    load_hub_state, save_hub_state, state_for_disk, HubState, PairError, DEFAULT_PORT, HUB_KIND,
+    load_hub_state, save_hub_state, state_for_disk, HubState, MintRealtimeFn, PairError, DEFAULT_PORT,
+    HUB_KIND,
 };
 pub use task::{HubTask, Receipt};
 pub use thread_tab::{
@@ -317,9 +321,12 @@ mod tests {
             data_url: "data:image/jpeg;base64,AAAA".into(),
             at: 1,
         });
+        st.console_api_key = "xai-should-not-persist".into();
         let disk = state_for_disk(&st);
         let s = serde_json::to_string(&disk).unwrap();
         assert!(!s.contains("data:image"));
+        assert!(!s.contains("xai-should-not-persist"));
+        assert!(disk.console_api_key.is_empty());
         assert!(s.contains(&st.device_id));
     }
 }

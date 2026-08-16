@@ -1,8 +1,9 @@
 use grokhub_core::{
-    chat_request_body_vision, chat_stream_flag, chat_timeout_secs, dedicated_imagine_model, frame_bytes,
-    imagine_request_body, imagine_slug, merge_thinking, parse_chat_content, parse_chat_reasoning,
-    parse_imagine_url, parse_sse_delta, parse_sse_thought, parse_stt_text, sse_done, stt_multipart, stt_url,
-    tts_request_body, tts_url, PresenceFrame, XAI_BASE,
+    chat_request_body_vision, chat_stream_flag, chat_timeout_secs, client_secrets_body,
+    client_secrets_url, dedicated_imagine_model, frame_bytes, imagine_request_body, imagine_slug,
+    merge_thinking, parse_chat_content, parse_chat_reasoning, parse_client_secret, parse_imagine_url,
+    parse_sse_delta, parse_sse_thought, parse_stt_text, realtime_can_connect, sse_done, stt_multipart,
+    stt_url, tts_request_body, tts_url, voice_client_secret_denied, PresenceFrame, XAI_BASE,
 };
 use std::io::Read;
 
@@ -218,6 +219,31 @@ pub fn grok_tts(api_key: &str, text: &str) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
+pub fn grok_realtime_secret(api_key: &str) -> Result<serde_json::Value, String> {
+    if !realtime_can_connect(api_key) {
+        return Err(voice_client_secret_denied(false)
+            .unwrap_or("Duplex Voice needs a console API key.")
+            .into());
+    }
+    let resp = ureq::post(&client_secrets_url())
+        .set("authorization", &format!("Bearer {}", api_key.trim()))
+        .set("content-type", "application/json")
+        .timeout(std::time::Duration::from_secs(20))
+        .send_json(client_secrets_body())
+        .map_err(http_err)?;
+    let v: serde_json::Value = resp.into_json().map_err(|e| e.to_string())?;
+    if let Some(err) = v
+        .get("error")
+        .and_then(|e| e.get("message").and_then(|m| m.as_str()).or(e.as_str()))
+    {
+        return Err(err.to_string());
+    }
+    if parse_client_secret(&v).is_none() {
+        return Err("empty client secret".into());
+    }
+    Ok(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,5 +252,15 @@ mod tests {
     fn status_prefix() {
         assert_eq!(http_status_of("HTTP 429: rate"), Some(429));
         assert!(http_status_of("timeout").is_none());
+    }
+
+    #[test]
+    fn realtime_secret_needs_console_key() {
+        let err = grok_realtime_secret("").expect_err("oauth cannot mint");
+        assert!(
+            err.to_ascii_lowercase().contains("console")
+                || err.to_ascii_lowercase().contains("api key"),
+            "{err}"
+        );
     }
 }

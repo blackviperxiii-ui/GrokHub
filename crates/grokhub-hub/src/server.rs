@@ -220,6 +220,38 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         }
     }
 
+    if method == Method::Post && path == "/v1/voice/client-secret" {
+        if let Some(err) = grokhub_core::voice_client_secret_denied(grokhub_core::realtime_can_connect(
+            &st.console_api_key,
+        )) {
+            return send_json(req, 400, json!({ "ok": false, "error": err }));
+        }
+        let key = st.console_api_key.clone();
+        let mint = st.mint_realtime.clone();
+        drop(st);
+        let minted = match mint {
+            Some(f) => (f.0)(&key),
+            None => Err("Cabin mint not wired".into()),
+        };
+        return match minted {
+            Ok(v) => {
+                let secret = grokhub_core::parse_client_secret(&v).unwrap_or_default();
+                send_json(
+                    req,
+                    200,
+                    json!({
+                        "ok": true,
+                        "value": secret,
+                        "wsProtocol": grokhub_core::client_secret_ws_protocol(&secret),
+                        "url": grokhub_core::voice_session_url(""),
+                        "clientSecret": v
+                    }),
+                )
+            }
+            Err(e) => send_json(req, 502, json!({ "ok": false, "error": e })),
+        };
+    }
+
     send_json(req, 404, json!({ "ok": false, "error": "unknown hub route" }))
 }
 
@@ -384,5 +416,55 @@ mod tests {
         );
         assert_eq!(st_j, 200);
         assert!(headers.to_ascii_lowercase().contains("x-grokhub-frame-at"));
+
+        let req = format!(
+            "POST /v1/voice/client-secret HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Length: 0\r\n\r\n"
+        );
+        let (st_v, _, body) = http(port, &req);
+        assert_eq!(st_v, 400, "{}", String::from_utf8_lossy(&body));
+        let msg = String::from_utf8_lossy(&body).to_ascii_lowercase();
+        assert!(
+            msg.contains("console") || msg.contains("api key"),
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+
+    #[test]
+    fn mints_ephemeral_without_hitting_xai() {
+        let mut st = HubState::empty();
+        let code = st.rotate_pair().code;
+        st.console_api_key = "xai-test-key".into();
+        st.mint_realtime = Some(grokhub_core::MintRealtimeFn(std::sync::Arc::new(
+            |_key: &str| {
+                Ok(json!({
+                    "value": "ek_test_secret",
+                    "expires_at": 1
+                }))
+            },
+        )));
+        let state = Arc::new(Mutex::new(st));
+        let port = serve_background(state, 0).expect("bind");
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        let pair_body = format!(
+            r#"{{"code":"{code}","deviceId":"d-voice","deviceName":"Pixel"}}"#
+        );
+        let req = format!(
+            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
+            pair_body.len()
+        );
+        let (_, _, body) = http(port, &req);
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let token = v["token"].as_str().unwrap();
+        let req = format!(
+            "POST /v1/voice/client-secret HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Length: 0\r\n\r\n"
+        );
+        let (st_v, _, body) = http(port, &req);
+        assert_eq!(st_v, 200, "{}", String::from_utf8_lossy(&body));
+        let secret: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(secret["ok"], true);
+        assert_eq!(secret["value"], "ek_test_secret");
+        assert_eq!(secret["wsProtocol"], "xai-client-secret.ek_test_secret");
+        assert!(secret["url"].as_str().unwrap().contains("grok-voice-think-fast-2.0"));
     }
 }

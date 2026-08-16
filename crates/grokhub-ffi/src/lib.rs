@@ -101,7 +101,7 @@ mod tests {
             assert_eq!(CStr::from_ptr(img2).to_str().unwrap(), "grok-2-image");
             grokhub_string_free(img2);
             let voice = grokhub_voice_model(std::ptr::null());
-            assert_eq!(CStr::from_ptr(voice).to_str().unwrap(), "grok-voice-latest");
+            assert_eq!(CStr::from_ptr(voice).to_str().unwrap(), "grok-voice-think-fast-2.0");
             grokhub_string_free(voice);
             let cmd = CString::new("cat /etc/shadow").unwrap();
             assert_eq!(grokhub_forbidden(cmd.as_ptr()), 1);
