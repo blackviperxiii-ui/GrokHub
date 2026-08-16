@@ -13,7 +13,7 @@ Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 ## Run
 
 ```bash
-sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 ydotool xdotool grim wmctrl python-atspi
+sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 cmake meson ninja wayland wayland-protocols pixman libpng
 rustup default stable
 git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
 cd Grok-Hub
@@ -113,7 +113,9 @@ Contract: [`docs/superpowers/plans/2026-08-14-dispatch-android-notes.md`](docs/s
 | Path | Role |
 |------|------|
 | `~/.local/bin/grokhub` | User install (`./scripts/install.sh --user`) |
+| `~/.local/lib/grokhub/bin` | Sidecar ydotool / ydotoold / grim |
 | `/usr/bin/grokhub` | System / makepkg |
+| `/usr/lib/grokhub/bin` | System sidecar hands |
 | `~/.config/GrokHub` | User data (`app.json`, `projects.json`, `secrets.json`, memory) |
 
 Release tarball: `grokhub-linux-v*.tar.gz` from `./scripts/make-release-bundle.sh`.
@@ -124,6 +126,7 @@ Arch notes: [`packaging/README-ARCH.md`](packaging/README-ARCH.md).
 
 ```bash
 rm -f ~/.local/bin/grokhub ~/.local/bin/grokhub-hub
+rm -rf ~/.local/lib/grokhub
 rm -f ~/.local/share/applications/grokhub.desktop
 # optional: rm -rf ~/.config/GrokHub
 sudo rm -f /usr/bin/grokhub /usr/bin/grokhub-hub

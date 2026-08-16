@@ -5,7 +5,7 @@ Native Rust binaries. No Electron.
 ## From a clone
 
 ```bash
-sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 ydotool xdotool grim wmctrl python-atspi
+sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 cmake meson ninja wayland wayland-protocols pixman libpng
 rustup default stable
 git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
 cd Grok-Hub
@@ -13,7 +13,7 @@ cd Grok-Hub
 grokhub
 ```
 
-`install.sh --user` sudo-installs the hands packages with the cabin. One password.
+`install.sh --user` builds ydotool + grim next to the cabin. One password for build deps and the `input` group.
 
 ## makepkg (system)
 
@@ -22,13 +22,14 @@ cd packaging/aur
 makepkg -si
 ```
 
-`makepkg -si` / `yay -S grokhub` installs `ydotool` `xdotool` `grim` `wmctrl` `python-atspi` as depends. First cabin launch or Eyes → Install hands starts `ydotoold`.
+`makepkg -si` / `yay -S grokhub` compile ydotool + grim into `/usr/lib/grokhub/bin`. Hands runtime packages are optdepends. First cabin launch or Eyes → Install hands starts `ydotoold`.
 
 ## Layout
 
 | Path | Role |
 |------|------|
 | `/usr/bin/grokhub` | Cabin |
+| `/usr/lib/grokhub/bin` | Sidecar ydotool / ydotoold / grim |
 | `/usr/bin/grokhub-hub` | Standalone LAN hub |
 | `/usr/share/applications/grokhub.desktop` | App menu |
 | `~/.config/GrokHub` | Config + memory (`app.json`, `projects.json`, `secrets.json`) |

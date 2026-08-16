@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Build dist-release/grokhub-linux-vX.Y.Z.tar.gz (native binaries).
+# Hands sidecars build on the machine via install.sh — keep the tar small.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,34 +23,60 @@ cp -a "$ROOT/packaging/grokhub.svg" "$STAGE/grokhub.svg"
 cp -a "$ROOT/LICENSE" "$STAGE/LICENSE"
 cp -a "$ROOT/packaging/systemd/ydotoold.service" "$STAGE/ydotoold.service"
 cp -a "$ROOT/packaging/udev/60-grokhub-uinput.rules" "$STAGE/60-grokhub-uinput.rules"
+cp -a "$ROOT/scripts/build-hands.sh" "$STAGE/build-hands.sh"
 cat >"$STAGE/install.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PREFIX="${PREFIX:-$HOME/.local}"
+HANDS_BIN="$PREFIX/lib/grokhub/bin"
 install -Dm755 "$HERE/grokhub" "$PREFIX/bin/grokhub"
 install -Dm755 "$HERE/grokhub-hub" "$PREFIX/bin/grokhub-hub"
 install -Dm644 "$HERE/grokhub.desktop" "$PREFIX/share/applications/grokhub.desktop"
 install -Dm644 "$HERE/grokhub.svg" "$PREFIX/share/icons/hicolor/scalable/apps/grokhub.svg"
-install -Dm644 "$HERE/ydotoold.service" "$HOME/.config/systemd/user/ydotoold.service"
-HANDS_PKGS=(ydotool xdotool grim wmctrl python-atspi)
+mkdir -p "$(dirname "$HOME/.config/systemd/user/ydotoold.service")"
+cat >"$HOME/.config/systemd/user/ydotoold.service" <<UNIT
+[Unit]
+Description=ydotool daemon for GrokHub hands
+PartOf=graphical-session.target
+After=graphical-session.target
+ConditionPathExists=${HANDS_BIN}/ydotoold
+
+[Service]
+Type=simple
+ExecStart=${HANDS_BIN}/ydotoold --socket-path=%t/ydotool.sock
+Restart=on-failure
+RestartSec=2
+Environment=YDOTOOL_SOCKET=%t/ydotool.sock
+
+[Install]
+WantedBy=graphical-session.target
+UNIT
+BUILD_PKGS=(cmake meson ninja wayland wayland-protocols pixman libpng)
 if command -v pacman >/dev/null; then
-  if pacman -Q "${HANDS_PKGS[@]}" >/dev/null 2>&1; then
-    echo "hands packages present"
-  elif [[ "$(id -u)" -eq 0 ]] && pacman -S --needed "${HANDS_PKGS[@]}"; then
-    echo "installed hands packages"
-  elif sudo pacman -S --needed "${HANDS_PKGS[@]}"; then
-    echo "installed hands packages"
-  else
-    echo "hands: sudo pacman -S --needed ${HANDS_PKGS[*]}"
+  missing=0
+  for p in "${BUILD_PKGS[@]}"; do
+    if ! pacman -Q "$p" >/dev/null 2>&1; then
+      missing=1
+      break
+    fi
+  done
+  if [[ "$missing" -eq 1 ]]; then
+    if [[ "$(id -u)" -eq 0 ]]; then
+      pacman -S --needed "${BUILD_PKGS[@]}" || echo "hands: pacman -S --needed ${BUILD_PKGS[*]}"
+    else
+      sudo pacman -S --needed "${BUILD_PKGS[@]}" || echo "hands: sudo pacman -S --needed ${BUILD_PKGS[*]}"
+    fi
   fi
 fi
+PREFIX="$PREFIX" HANDS_SRC="${HANDS_SRC:-$HERE/hands-src}" \
+  bash "$HERE/build-hands.sh" || echo "hands: build-hands.sh continued"
 if [[ "$(id -u)" -eq 0 ]]; then
   install -Dm644 "$HERE/60-grokhub-uinput.rules" \
     /usr/lib/udev/rules.d/60-grokhub-uinput.rules
   udevadm control --reload-rules 2>/dev/null || true
 fi
-if command -v systemctl >/dev/null && command -v ydotoold >/dev/null; then
+if command -v systemctl >/dev/null && [[ -x "$HANDS_BIN/ydotoold" ]]; then
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   systemctl --user enable --now ydotoold.service >/dev/null 2>&1 || true
 fi
@@ -64,8 +91,9 @@ if command -v id >/dev/null && [[ -n "${HANDS_USER}" ]]; then
   fi
 fi
 echo "installed $PREFIX/bin/grokhub"
+echo "hands sidecars $HANDS_BIN"
 EOF
-chmod 755 "$STAGE/install.sh" "$STAGE/grokhub" "$STAGE/grokhub-hub"
+chmod 755 "$STAGE/install.sh" "$STAGE/grokhub" "$STAGE/grokhub-hub" "$STAGE/build-hands.sh"
 
 OUT="$ROOT/dist-release/grokhub-linux-v${VER}.tar.gz"
 tar -C "$ROOT/dist-release" -czf "$OUT" grokhub-linux
