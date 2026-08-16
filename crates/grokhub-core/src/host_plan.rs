@@ -75,7 +75,7 @@ pub fn parse_host_plan(text: &str) -> Option<Vec<HostPlanStep>> {
             continue;
         }
         if t.is_empty() {
-            break;
+            continue;
         }
         let rest = t
             .trim_start_matches(|c: char| c.is_ascii_digit())
@@ -192,6 +192,8 @@ mod tests {
         let text = "HOST_PLAN:\n1. ls ~/proj — list files\n2. git status — see dirty tree\n";
         let steps = parse_host_plan(text).unwrap();
         assert_eq!(steps.len(), 2);
+        let spaced = parse_host_plan("HOST_PLAN:\n1. ls\n\n2. git status\n").unwrap();
+        assert_eq!(spaced.len(), 2, "blank lines must not end the plan");
         assert_eq!(steps[0].cmd, "ls ~/proj");
         assert_eq!(steps[0].risk, HostRisk::Safe);
         assert!(explain_host_risk("git push --force", HostRisk::Destructive).contains("force"));

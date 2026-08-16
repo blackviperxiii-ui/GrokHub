@@ -407,6 +407,31 @@ pub fn expand_host_path_token_in(tok: &str, home: Option<&str>) -> Option<String
     None
 }
 
+pub fn normalize_host_path(p: &str) -> String {
+    let slash = p.replace('\\', "/");
+    let abs = slash.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in slash.split('/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            parts.pop();
+            continue;
+        }
+        parts.push(seg);
+    }
+    if abs {
+        format!("/{}", parts.join("/"))
+    } else {
+        parts.join("/")
+    }
+}
+
+fn looks_like_host_path(tok: &str) -> bool {
+    tok.contains('/') || tok == ".." || tok.starts_with('.')
+}
+
 pub fn host_cmd_leaves_project(cmd: &str, project_root: &str) -> bool {
     host_cmd_leaves_project_in(cmd, project_root, std::env::var("HOME").ok().as_deref())
 }
@@ -417,10 +442,15 @@ pub fn host_cmd_leaves_project_in(cmd: &str, project_root: &str, home: Option<&s
         return false;
     }
     for tok in cmd.split_whitespace() {
-        if let Some(path) = expand_host_path_token_in(tok, home) {
-            if !is_under_project(&path, root) {
-                return true;
-            }
+        let path = if let Some(p) = expand_host_path_token_in(tok, home) {
+            normalize_host_path(&p)
+        } else if looks_like_host_path(tok) {
+            normalize_host_path(&format!("{}/{tok}", root.trim_end_matches('/')))
+        } else {
+            continue;
+        };
+        if !is_under_project(&path, root) {
+            return true;
         }
     }
     false
@@ -469,6 +499,16 @@ mod tests {
         );
         assert!(!host_cmd_leaves_project("ls", "/home/j/proj"));
         assert!(!host_cmd_leaves_project("cat /etc/passwd", ""));
+        assert!(
+            host_cmd_leaves_project_in("cat ../outside.txt", "/home/j/proj", Some("/home/j")),
+            "relative traversal must leave the bound tree"
+        );
+        assert!(!host_cmd_leaves_project_in(
+            "cat src/main.rs",
+            "/home/j/proj",
+            None
+        ));
+        assert!(host_cmd_leaves_project_in("cd ..", "/home/j/proj", None));
         assert!(host_hour_blocked(40, 40));
         assert!(!host_hour_blocked(3, 40));
         assert!(!host_hour_blocked(40, 0), "cap 0 means unlimited");

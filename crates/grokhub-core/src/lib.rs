@@ -85,8 +85,8 @@ pub use chat_bubble::{
 };
 pub use chat_job::{
     apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
-    drop_trailing_assistant, job_error_goes_to_chat, persist_user_turn, push_bound_message,
-    upsert_assistant_turn, worker_gone_status, ChatSendKind,
+    drop_trailing_assistant, drop_trailing_assistant_on, job_error_goes_to_chat, kick_messages_for_job,
+    persist_user_turn, push_bound_message, upsert_assistant_turn, worker_gone_status, ChatSendKind,
 };
 pub use chips::{
     build_quick_chips, chip_memory_key, chip_suggest_prompt, chip_thread_from_messages,
@@ -119,7 +119,9 @@ pub use imagine::{
     IMAGINE_WALL_GAP,
     WALL_GIF_EVERY_MS, WALL_GIF_MAX, WALL_SEEDS,
 };
-pub use inhabit::{can_inhabit, inhabit_bundle_usable, inhabit_ready, InhabitBundle};
+pub use inhabit::{
+    can_inhabit, inhabit_bundle_usable, inhabit_claim_allowed, inhabit_ready, InhabitBundle,
+};
 pub use recipe::{
     computer_cmd_line, computer_drive, extract_computer_ops, hands_blocked_by_lock, hands_protocol,
     lock_blocks_hands, pointer_op_blocked_on_lock,
@@ -199,7 +201,7 @@ pub use oauth::{
 pub use project::{
     add_to_folder, clean_project_name, create_folder, create_project, drop_node, drop_selected,
     folder_choices, expand_host_path_token, host_cmd_leaves_project, host_hour_blocked,
-    refund_host_reserved, is_under_project,
+    normalize_host_path, refund_host_reserved, is_under_project,
     project_menu_acts, project_menu_label, project_name_from_path, project_slug, project_work_path,
     rename_node, restore_bound_path, seed_from_bound, settle_project_path, should_seed_sidebar,
     stage_project, toggle_folder, upsert_bound, visible_tree, DropOutcome, ProjectKind,

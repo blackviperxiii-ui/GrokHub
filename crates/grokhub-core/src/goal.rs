@@ -235,7 +235,7 @@ pub fn compact_keep_pin(
         return out;
     };
     let marked = format!("GOAL PIN: {pin}");
-    if !out.iter().any(|(_, c)| c.contains(pin)) {
+    if !out.iter().any(|(_, c)| c == &marked || c.starts_with(&format!("{marked}\n"))) {
         out.insert(0, ("system".into(), marked));
     }
     out
@@ -279,6 +279,11 @@ mod tests {
         assert_eq!(parse_goal_outcome("All set."), "complete");
         assert!(!looks_incomplete("All set."));
         assert!(!looks_incomplete("All done. GOAL_COMPLETE"));
+        let api = (0..12)
+            .map(|i| ("user".into(), format!("fix the api {i}")))
+            .collect::<Vec<_>>();
+        let pinned = compact_keep_pin(&api, 8, Some("pi"));
+        assert_eq!(pinned[0], ("system".into(), "GOAL PIN: pi".into()));
         assert!(looks_incomplete(""));
         assert!(looks_incomplete("I'll continue with the flash"));
         let p = next_goal_prompt("flash the pi", "wrote image", 0, 6).unwrap();
