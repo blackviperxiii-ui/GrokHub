@@ -5796,7 +5796,7 @@ impl Cabin {
                             self.send_chat(t);
                         }
                         let cluster = crate::cards::composer_go_cluster_w();
-                        let rest = ui.available_width();
+                        let rest = (pill_w - 48.0).min(ui.available_width()).max(cluster + 80.0);
                         let rows = (self.composer.matches('\n').count() + 1).min(8);
                         let bar_h = crate::theme::QUERY_MIN_H - 16.0;
                         ui.allocate_ui_with_layout(
@@ -7747,8 +7747,8 @@ mod tests {
             "Fast + mic + Stop need a reserved strip: {pill}"
         );
         assert!(
-            pill.contains("composer_pill_w("),
-            "cap the pill to the clip rect so Stop cannot sit in overflow: {pill}"
+            pill.contains("pill_w -") || pill.contains("pill_w-"),
+            "rest width must come from the window pill, not inflated available: {pill}"
         );
         assert!(
             pill.contains("right_to_left"),
