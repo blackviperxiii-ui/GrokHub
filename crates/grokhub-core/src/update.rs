@@ -217,14 +217,13 @@ pub enum RestartAct {
     Spawn { argv: Vec<String> },
 }
 
-/// Restart hands, then the hub unit (if live), then the cabin unit or a fresh process.
-pub fn restart_acts(
-    cabin_unit: bool,
-    hub_unit: bool,
-    hands_unit: bool,
-    exe: &str,
-    hidden: bool,
-) -> Vec<RestartAct> {
+/// Restart hands and hub units if they are live, then spawn a new cabin.
+///
+/// Never `systemctl restart grokhub.service` from inside the cabin: that
+/// deadlocks (systemd waits for us, we wait for systemctl). The running
+/// process must drop `cabin.pid` before the spawn, then exit, or the child
+/// only raises the old window.
+pub fn restart_acts(hub_unit: bool, hands_unit: bool, exe: &str, hidden: bool) -> Vec<RestartAct> {
     let mut acts = Vec::new();
     let mut units = Vec::new();
     if hands_unit {
@@ -233,17 +232,12 @@ pub fn restart_acts(
     if hub_unit {
         units.push("grokhub-hub.service".into());
     }
-    if cabin_unit {
-        units.push("grokhub.service".into());
-    }
     if !units.is_empty() {
         acts.push(RestartAct::Systemd { units });
     }
-    if !cabin_unit {
-        acts.push(RestartAct::Spawn {
-            argv: restart_argv(exe, hidden),
-        });
-    }
+    acts.push(RestartAct::Spawn {
+        argv: restart_argv(exe, hidden),
+    });
     acts
 }
 
@@ -399,17 +393,18 @@ mod tests {
             vec!["/opt/grokhub".to_string(), "--agent".into()]
         );
         assert_eq!(
-            restart_acts(true, true, true, "/opt/grokhub", false),
-            vec![RestartAct::Systemd {
-                units: vec![
-                    "ydotoold.service".into(),
-                    "grokhub-hub.service".into(),
-                    "grokhub.service".into()
-                ]
-            }]
+            restart_acts(true, true, "/opt/grokhub", false),
+            vec![
+                RestartAct::Systemd {
+                    units: vec!["ydotoold.service".into(), "grokhub-hub.service".into()]
+                },
+                RestartAct::Spawn {
+                    argv: vec!["/opt/grokhub".into()]
+                }
+            ]
         );
         assert_eq!(
-            restart_acts(false, true, false, "/opt/grokhub", true),
+            restart_acts(true, false, "/opt/grokhub", true),
             vec![
                 RestartAct::Systemd {
                     units: vec!["grokhub-hub.service".into()]
@@ -420,23 +415,27 @@ mod tests {
             ]
         );
         assert_eq!(
-            restart_acts(false, false, false, "/opt/grokhub", false),
+            restart_acts(false, false, "/opt/grokhub", false),
             vec![RestartAct::Spawn {
                 argv: vec!["/opt/grokhub".into()]
             }]
         );
+        assert!(
+            !restart_acts(true, true, "/opt/grokhub", false)
+                .iter()
+                .any(|a| match a {
+                    RestartAct::Systemd { units } => units.iter().any(|u| u == "grokhub.service"),
+                    RestartAct::Spawn { .. } => false,
+                }),
+            "cabin must spawn a new process, not systemctl restart grokhub.service"
+        );
         assert_eq!(
-            systemd_user_restart_args(&[
-                "ydotoold.service".into(),
-                "grokhub-hub.service".into(),
-                "grokhub.service".into()
-            ]),
+            systemd_user_restart_args(&["ydotoold.service".into(), "grokhub-hub.service".into()]),
             vec![
                 "--user",
                 "restart",
                 "ydotoold.service",
-                "grokhub-hub.service",
-                "grokhub.service"
+                "grokhub-hub.service"
             ]
         );
         let _ = fs::remove_dir_all(&root);
