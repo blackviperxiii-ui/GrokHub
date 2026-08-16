@@ -141,6 +141,11 @@ fn is_protocol_line(line: &str) -> bool {
         || t.starts_with("CONSULT:")
 }
 
+/// User-visible assistant prose. Thinking and HOST_CMD lines do not count.
+pub fn assistant_prose(text: &str) -> String {
+    visible_assistant(&strip_thinking(text))
+}
+
 fn visible_assistant(text: &str) -> String {
     let mut lines: Vec<&str> = text
         .lines()
@@ -408,6 +413,11 @@ mod tests {
         assert!(merged.starts_with("THINKING:"));
         assert!(merged.contains("I'll look."));
         assert_eq!(strip_thinking(&merged), "I'll look.");
+        assert_eq!(
+            assistant_prose("THINKING:\nnot found, I'll apt install\n\nHands are ready."),
+            "Hands are ready."
+        );
+        assert!(assistant_prose("THINKING:\nlet me check PATH\n\n").is_empty());
         let tagged = "<think>plan the night</think>\nHello.";
         assert_eq!(strip_thinking(tagged), "Hello.");
         let v = visible_chat(&[("assistant".into(), tagged.into())]);
