@@ -1,6 +1,7 @@
 //! Cabin organs: greet, room, passenger, presence, redirect.
 
 use crate::chat_view::is_workload_user;
+use crate::goal::is_auto_continue_prompt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MidThoughtGreet {
@@ -164,7 +165,9 @@ pub fn last_user_text(messages: &[(String, String)]) -> Option<String> {
     messages
         .iter()
         .rev()
-        .find(|(r, c)| r == "user" && !is_workload_user(c))
+        .find(|(r, c)| {
+            r == "user" && !is_workload_user(c) && !is_auto_continue_prompt(c)
+        })
         .map(|(_, c)| c.clone())
 }
 
@@ -262,6 +265,7 @@ mod tests {
             last_user_text(&[
                 ("user".into(), "check the box".into()),
                 ("user".into(), "HOST_RESULT (facts only):\n$ uname -a\n".into()),
+                ("user".into(), crate::goal::FOLLOWUP_PROMPT.into()),
             ])
             .as_deref(),
             Some("check the box")
