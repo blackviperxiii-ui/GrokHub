@@ -644,6 +644,7 @@ pub struct Cabin {
     greeting_rx: Option<mpsc::Receiver<String>>,
     greeting_busy: bool,
     greeting_llm_at: u64,
+    continue_hint: String,
     skills_tab_connectors: bool,
     skill_q: String,
     github_args: String,
@@ -915,6 +916,7 @@ impl Cabin {
             greeting_rx: None,
             greeting_busy: false,
             greeting_llm_at: 0,
+            continue_hint: String::new(),
             skills_tab_connectors: false,
             skill_q: String::new(),
             github_args: String::new(),
@@ -2220,7 +2222,24 @@ impl Cabin {
             .get(self.thread_idx)
             .map(|t| t.goal.label.clone())
             .unwrap_or_default();
+        self.stamp_current_access();
         self.persist();
+    }
+
+    fn stamp_current_access(&mut self) {
+        if let Some(t) = self.threads.get_mut(self.thread_idx) {
+            t.accessed_ms = now_ms();
+        }
+    }
+
+    fn open_recent_chat(&mut self) {
+        if let Some(idx) = threads::most_recently_accessed_index(&self.threads) {
+            if idx != self.thread_idx {
+                self.switch_thread(idx);
+                return;
+            }
+        }
+        self.stamp_current_access();
     }
 
     fn new_thread(&mut self, scratch: bool) {
@@ -2243,6 +2262,7 @@ impl Cabin {
         } else {
             "New chat".into()
         };
+        self.stamp_current_access();
         self.persist();
     }
 
@@ -2307,6 +2327,7 @@ impl Cabin {
                 self.cfg.goal_pin.clear();
                 self.goal_step = 0;
                 self.status = "Chat deleted".into();
+                self.stamp_current_access();
             }
             DeleteOutcome::Removed { next } => {
                 let gone = self.threads.remove(idx);
@@ -2988,6 +3009,9 @@ impl Cabin {
             match act {
                 HeartbeatAct::Housekeep => {
                     self.roll_today();
+                    if self.nav == Nav::Chat && !self.scratch() {
+                        self.stamp_current_access();
+                    }
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist();
                     }
@@ -3000,7 +3024,7 @@ impl Cabin {
                     }
                 }
                 HeartbeatAct::Wall => self.tick_wall(),
-                HeartbeatAct::MidThought => {}
+                HeartbeatAct::MidThought => self.tick_mid_thought(),
                 HeartbeatAct::Reflect => {
                     if should_idle_reflect(
                         self.last_activity.elapsed().as_millis() as u64,
@@ -3521,9 +3545,16 @@ impl Cabin {
         }
     }
 
+    fn tick_mid_thought(&mut self) {
+        if !self.last_receipts.is_empty() || !self.rewind_rows.is_empty() {
+            return;
+        }
+        self.continue_hint = threads::continue_thread_hint(&self.threads);
+    }
+
     fn last_night_hint(&self) -> String {
         if self.last_receipts.is_empty() && self.rewind_rows.is_empty() {
-            return String::new();
+            return self.continue_hint.chars().take(80).collect();
         }
         let g = greet_from_last_job(
             if self.cfg.goal_pin.is_empty() {
@@ -5491,6 +5522,10 @@ impl Cabin {
             "connectors" => {
                 self.skills_tab_connectors = true;
                 Nav::Connectors
+            }
+            "chat" => {
+                self.open_recent_chat();
+                Nav::Chat
             }
             _ => Nav::Chat,
         };
@@ -8510,15 +8545,76 @@ mod tests {
             !impl_src.contains("You sit down. Last night"),
             "MidThought must not inject a fake assistant turn"
         );
+        let mid = src
+            .split("fn tick_mid_thought(")
+            .nth(1)
+            .and_then(|s| s.split("fn last_night_hint(").next())
+            .expect("tick_mid_thought");
+        assert!(
+            !mid.contains("send_chat") && !mid.contains("Nav::Chat") && !mid.contains("self.running"),
+            "MidThought stays quiet: {mid}"
+        );
+        assert!(
+            mid.contains("continue_thread_hint"),
+            "MidThought folds Continue {{title}} into the greeting path: {mid}"
+        );
         let hint = src
             .split("fn last_night_hint(")
             .nth(1)
             .and_then(|s| s.split("fn mark_auto_ran(").next())
             .expect("last_night_hint");
         assert!(
-            !hint.contains("messages.push"),
+            !hint.contains("messages.push") && !hint.contains("send_chat"),
             "last-night context stays in the greeting: {hint}"
         );
+        assert!(hint.contains("continue_hint"), "empty last-night falls back to continue hint: {hint}");
         assert!(src.contains("last_night: &last_night") || src.contains("last_night: &self.last_night_hint()"));
+        assert!(src.contains("self.tick_mid_thought()"));
+    }
+
+    #[test]
+    fn chat_rail_opens_most_recent_thread() {
+        let src = include_str!("app.rs");
+        let theme = include_str!("theme.rs");
+        let chat = theme.find("(\"chat\", \"Chat\")").expect("chat rail");
+        let imagine = theme.find("(\"imagine\", \"Imagine\")").expect("imagine rail");
+        assert!(chat < imagine, "Chat sits above Imagine on the rail");
+        let set_nav = src
+            .split("fn set_nav_id(")
+            .nth(1)
+            .and_then(|s| s.split("fn conn_kind(").next())
+            .expect("set_nav_id");
+        assert!(
+            set_nav.contains("\"chat\" =>") && set_nav.contains("self.open_recent_chat()"),
+            "Chat rail click opens the last accessed thread: {set_nav}"
+        );
+        let open = src
+            .split("fn open_recent_chat(")
+            .nth(1)
+            .and_then(|s| s.split("fn new_thread(").next())
+            .expect("open_recent_chat");
+        assert!(
+            open.contains("most_recently_accessed_index") && open.contains("switch_thread"),
+            "Chat rail uses last-access, not leftover thread_idx: {open}"
+        );
+        let house = src
+            .split("HeartbeatAct::Housekeep =>")
+            .nth(1)
+            .and_then(|s| s.split("HeartbeatAct::Inbox =>").next())
+            .expect("housekeep");
+        assert!(
+            house.contains("stamp_current_access") && house.contains("Nav::Chat"),
+            "Housekeep stamps access while sitting on Chat: {house}"
+        );
+        let mut older = crate::threads::ChatThread::new("Older", false);
+        older.accessed_ms = 1_000;
+        let mut newer = crate::threads::ChatThread::new("Night cabin", false);
+        newer.accessed_ms = 8_000;
+        let mut scratch = crate::threads::ChatThread::new("Scratch", true);
+        scratch.accessed_ms = 9_000;
+        assert_eq!(
+            crate::threads::most_recently_accessed_index(&[older, newer, scratch]),
+            Some(1)
+        );
     }
 }

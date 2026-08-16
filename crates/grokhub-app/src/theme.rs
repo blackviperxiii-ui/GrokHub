@@ -214,6 +214,7 @@ pub const IMAGINE_FRAME_MS: u64 = 1600;
 
 /// Live grok.com primary rail. Settings is an avatar menu, not a row.
 pub const GROK_NAV: &[(&str, &str)] = &[
+    ("chat", "Chat"),
     ("imagine", "Imagine"),
     ("automations", "Automations"),
     ("skills", "Skills and Connectors"),
@@ -237,6 +238,7 @@ pub const TOOLS: &[(&str, &str)] = CABIN_MENU;
 pub fn stage_subtitle(id: &str) -> &'static str {
     match id {
         "history" => "Past chats",
+        "chat" => "Recent chat",
         "imagine" => "Images",
         "workboard" => "Pinned tasks",
         "skills" => "Personal skills and connectors",
@@ -478,11 +480,13 @@ mod tests {
         assert_eq!(IMAGINE_TILE_TALL, 345.0);
         assert_eq!(IMAGINE_FRAME_MS, 1600);
         assert_ne!(IMAGINE_BAR_RADIUS, QUERY_RADIUS);
-        assert_eq!(GROK_NAV[0], ("imagine", "Imagine"));
+        assert_eq!(GROK_NAV[0], ("chat", "Chat"));
+        assert_eq!(GROK_NAV[1], ("imagine", "Imagine"));
         assert!(GROK_NAV.iter().all(|(id, _)| *id != "settings"));
         assert_eq!(CABIN_MENU[0], ("settings", "Settings"));
         assert!(TOOLS.iter().all(|(id, _)| *id != "connectors"));
         assert_eq!(stage_subtitle("history"), "Past chats");
+        assert_eq!(stage_subtitle("chat"), "Recent chat");
         assert_eq!(stage_subtitle("imagine"), "Images");
         assert_eq!(stage_subtitle("connectors"), "GitHub");
         assert_eq!(title_font(40.0).size, 40.0);
