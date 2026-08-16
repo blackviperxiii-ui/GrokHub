@@ -94,6 +94,15 @@ pub fn review_due(last_day: Option<&str>, today: &str, clock: &LocalClock, night
     clock.hour >= night_hour
 }
 
+/// Muted Suggested-header copy. No chat dump.
+pub fn review_status_line(last_day: Option<&str>, today: &str) -> &'static str {
+    if last_day == Some(today) {
+        "Reviewed today"
+    } else {
+        "Review due tonight"
+    }
+}
+
 /// One thread line for the digest (user or assistant only).
 #[derive(Debug, Clone)]
 pub struct DigestLine {
@@ -496,6 +505,19 @@ mod tests {
             &clock(10),
             REVIEW_NIGHT_HOUR
         ));
+    }
+
+    #[test]
+    fn review_status_line_today_or_due() {
+        assert_eq!(
+            review_status_line(Some("2026-08-16"), "2026-08-16"),
+            "Reviewed today"
+        );
+        assert_eq!(review_status_line(None, "2026-08-16"), "Review due tonight");
+        assert_eq!(
+            review_status_line(Some("2026-08-15"), "2026-08-16"),
+            "Review due tonight"
+        );
     }
 
     #[test]
