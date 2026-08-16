@@ -1,6 +1,8 @@
 //! GrokHub native cabin. No Electron. No Tauri.
 
 mod app;
+mod helpers;
+mod titlebar;
 mod cards;
 mod icons;
 mod theme;
@@ -11,6 +13,7 @@ mod github;
 mod host;
 mod markdown;
 mod night;
+mod recipes;
 mod notify;
 mod store;
 mod voice_ws;
@@ -26,12 +29,8 @@ mod xai;
 use app::Cabin;
 use cli::{parse_args, Launch};
 use eframe::egui;
-use grokhub_core::{
-    doctor_lines, doctor_ok, load_hub_state, save_hub_state, HubState, DEFAULT_PORT, HUB_KIND,
-};
-use grokhub_hub::serve;
+use grokhub_core::{doctor_lines, doctor_ok, DEFAULT_PORT, HUB_KIND};
 use std::env;
-use std::sync::{Arc, Mutex};
 
 fn main() {
     match parse_args(&env::args().collect::<Vec<_>>()) {
@@ -135,33 +134,8 @@ fn run_hub() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_PORT);
-    let path = config::hub_state_path();
-    let mut state = load_hub_state(&path).unwrap_or_else(HubState::empty);
-    state.port = port;
-    state.sharing = true;
-    if state.pair.is_none() {
-        state.rotate_pair();
-    }
-    let code = state
-        .pair
-        .as_ref()
-        .map(|p| p.code.clone())
-        .unwrap_or_default();
-    eprintln!(
-        "grokhub {} hub on :{port}  pair {code}  kind {HUB_KIND}",
-        env!("CARGO_PKG_VERSION")
-    );
-    let shared = Arc::new(Mutex::new(state));
-    {
-        let st = shared.clone();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            if let Ok(g) = st.lock() {
-                let _ = save_hub_state(&path, &g);
-            }
-        });
-    }
-    if let Err(e) = serve(shared, port) {
+    let banner = format!("grokhub {} hub", env!("CARGO_PKG_VERSION"));
+    if let Err(e) = grokhub_hub::run(port, config::hub_state_path(), &banner) {
         eprintln!("hub failed: {e}");
         std::process::exit(1);
     }

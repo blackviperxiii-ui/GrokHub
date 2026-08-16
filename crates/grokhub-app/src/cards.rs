@@ -113,6 +113,15 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         instructions: "Emit HOST_CMD: uname -a && whoami && pwd && df -h / && uptime. After HOST_RESULT, four lines: machine, user, disk, load. No secrets.",
         verify: "echo VERIFY_OK",
     },
+    SuggestedSkill {
+        icon: TileIcon::Host,
+        name: "desktop-takeover",
+        title: "Desktop takeover",
+        body: "Look at the screen, then drive it with COMPUTER_CMD.",
+        trigger: "take over the desktop",
+        instructions: "Take over this desktop. Look at the attached frame and Windshield list. Prefer COMPUTER_CMD: act <name> and wait_for. Fix the issue or finish the task. Halt if a lock screen appears.",
+        verify: "echo VERIFY_OK",
+    },
 ];
 
 pub const LIVE_CONNECTORS: &[LiveConnector] = &[LiveConnector {
@@ -164,6 +173,12 @@ pub const SUGGESTED_AUTOS: &[SuggestedAuto] = &[
         title: "Nightly triage",
         body: "Every day at 21:00 — extract leftover tasks onto the board.",
         seed: "every day at 21, extract open tasks onto the workboard",
+    },
+    SuggestedAuto {
+        icon: TileIcon::Host,
+        title: "Replay last desktop run",
+        body: "Replay the last saved COMPUTER_CMD recipe. Night does not chat first.",
+        seed: "every day at 21, replay last",
     },
 ];
 
@@ -289,10 +304,13 @@ pub fn imagine_send_cluster_w() -> f32 {
     crate::theme::IMAGINE_HIT * 2.0 + 12.0
 }
 
-/// Fast combo + mic + Send/Stop. Extra chrome is ComboBox padding/caret
-/// past `.width(84)` — 180px left Fast as the right edge of a 900-wide cabin.
+/// Mode pill width inside the composer (replaces ComboBox `.width(84)`).
+pub const MODE_PILL_W: f32 = 84.0;
+
+/// Fast combo + mic + Send/Stop. Extra chrome is the mode pill
+/// past `MODE_PILL_W` — 180px left Fast as the right edge of a 900-wide cabin.
 pub fn composer_go_cluster_w() -> f32 {
-    84.0 + 22.0 + 28.0 + 8.0 * 3.0 + 64.0
+    MODE_PILL_W + 22.0 + 28.0 + 8.0 * 3.0 + 64.0
 }
 
 /// Filled Send/Stop disc. Always reserve this, even when Idle is a 22px arrow.
@@ -518,6 +536,139 @@ pub fn ghost_pill(ui: &mut egui::Ui, label: &str) -> bool {
             .stroke(Stroke::new(1.0_f32, crate::theme::border())),
     ))
     .clicked()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChipTone {
+    Live,
+    Setup,
+    Offline,
+    Mute,
+}
+
+pub fn chip_tone_color(tone: ChipTone) -> Color32 {
+    match tone {
+        ChipTone::Live => crate::theme::live(),
+        ChipTone::Setup => crate::theme::setup(),
+        ChipTone::Offline => crate::theme::offline(),
+        ChipTone::Mute => crate::theme::muted(),
+    }
+}
+
+pub fn status_chip(ui: &mut egui::Ui, label: &str, tone: ChipTone) {
+    let color = chip_tone_color(tone);
+    egui::Frame::none()
+        .fill(crate::theme::elevated())
+        .rounding(12.0)
+        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
+        .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+        .show(ui, |ui| {
+            ui.label(RichText::new(label).size(12.0).color(color));
+        });
+}
+
+pub fn object_chip(ui: &mut egui::Ui, kind: &str, label: &str) {
+    let tone = match kind {
+        "wont" => ChipTone::Offline,
+        "cursor" => ChipTone::Live,
+        _ => ChipTone::Setup,
+    };
+    let color = chip_tone_color(tone);
+    egui::Frame::none()
+        .fill(crate::theme::elevated())
+        .rounding(12.0)
+        .stroke(Stroke::new(1.0_f32, color))
+        .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(format!("{kind} {label}"))
+                    .size(12.0)
+                    .color(color),
+            );
+        });
+}
+
+pub fn framed_preview(ui: &mut egui::Ui, tex: &TextureHandle, size: [usize; 2], max_w: f32) {
+    let scale = max_w / size[0].max(1) as f32;
+    let h = size[1] as f32 * scale;
+    egui::Frame::none()
+        .rounding(12.0)
+        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
+        .inner_margin(egui::Margin::same(2.0))
+        .show(ui, |ui| {
+            ui.add(
+                egui::Image::new((tex.id(), egui::vec2(max_w, h))).rounding(10.0),
+            );
+        });
+}
+
+pub fn composer_modes() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("auto", "Auto"),
+        ("fast", "Fast"),
+        ("balanced", "Balance"),
+        ("think", "Think"),
+        ("max", "Max"),
+    ]
+}
+
+pub fn mode_label(id: &str) -> &'static str {
+    match id {
+        "max" | "deep" | "heavy" => "Max",
+        "think" | "build" | "expert" => "Think",
+        "balanced" | "balance" => "Balance",
+        "fast" => "Fast",
+        _ => "Auto",
+    }
+}
+
+/// Compact mode picker. Returns a new mode id when the user picks one.
+pub fn mode_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
+    let mut next = None;
+    let popup_id = ui.make_persistent_id("composer-mode-pop");
+    let resp = crate::theme::pointing(ui.add(
+        egui::Button::new(
+            RichText::new(mode_label(current))
+                .size(crate::theme::FONT_CHROME)
+                .color(crate::theme::muted()),
+        )
+        .fill(Color32::TRANSPARENT)
+        .rounding(14.0)
+        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
+        .min_size(egui::vec2(MODE_PILL_W, 28.0)),
+    ));
+    if resp.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(popup_id));
+    }
+    egui::popup::popup_above_or_below_widget(
+        ui,
+        popup_id,
+        &resp,
+        egui::AboveOrBelow::Below,
+        egui::popup::PopupCloseBehavior::CloseOnClick,
+        |ui| {
+            ui.set_min_width(MODE_PILL_W);
+            for (id, label) in composer_modes() {
+                let on = *id == current;
+                if ui.selectable_label(on, *label).clicked() {
+                    if !on {
+                        next = Some((*id).to_string());
+                    }
+                    ui.memory_mut(|m| m.close_popup());
+                }
+            }
+        },
+    );
+    next
+}
+
+pub fn clip_status(text: &str, max_chars: usize) -> String {
+    let first = text.lines().next().unwrap_or("").trim();
+    if first.chars().count() <= max_chars {
+        return first.to_string();
+    }
+    let take = max_chars.saturating_sub(1);
+    format!("{}…", first.chars().take(take).collect::<String>())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -814,7 +965,7 @@ pub fn settings_progress(ui: &mut egui::Ui, pct: u8, fill: Color32) {
         ui.label(
             RichText::new(format!("{pct}%"))
                 .size(13.0)
-                .color(crate::theme::FG),
+                .color(crate::theme::fg()),
         );
     });
     ui.add_space(8.0);
@@ -881,6 +1032,10 @@ pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: 
 }
 
 pub fn search_field(ui: &mut egui::Ui, q: &mut String) {
+    search_bar(ui, q, "Search", 180.0);
+}
+
+pub fn search_bar(ui: &mut egui::Ui, q: &mut String, hint: &str, width: f32) {
     egui::Frame::none()
         .fill(crate::theme::elevated())
         .rounding(18.0)
@@ -891,8 +1046,8 @@ pub fn search_field(ui: &mut egui::Ui, q: &mut String) {
                 icons::paint_bar_icon(ui, icons::BarIcon::Search, 16.0, crate::theme::subtle());
                 ui.add(
                     egui::TextEdit::singleline(q)
-                        .hint_text("Search")
-                        .desired_width(180.0)
+                        .hint_text(hint.to_owned())
+                        .desired_width(width)
                         .frame(false),
                 );
             });
@@ -1333,7 +1488,6 @@ pub fn catalog_card(ui: &mut egui::Ui, title: &str, body: &str, selected: bool) 
     grok_tile(ui, icons::icon_for_label(title), title, body, None, selected) == TileHit::Body
 }
 
-#[allow(dead_code)]
 pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &str) -> bool {
     let mut hit = false;
     let resp = egui::Frame::none()
@@ -1392,6 +1546,22 @@ mod tests {
     }
 
     #[test]
+    fn mode_pill_fits_the_composer_cluster() {
+        assert_eq!(MODE_PILL_W, 84.0);
+        assert_eq!(
+            composer_go_cluster_w(),
+            MODE_PILL_W + 22.0 + 28.0 + 8.0 * 3.0 + 64.0
+        );
+        assert_eq!(mode_label("think"), "Think");
+        assert_eq!(mode_label("balanced"), "Balance");
+        assert_eq!(mode_label("mystery"), "Auto");
+        assert_eq!(composer_modes().len(), 5);
+        assert_eq!(clip_status("one\ntwo", 80), "one");
+        assert_eq!(clip_status("abcdefghij", 6), "abcde…");
+        assert_eq!(chip_tone_color(ChipTone::Offline), crate::theme::offline());
+    }
+
+    #[test]
     fn first_quick_chip_is_inline_not_selected() {
         assert_eq!(quick_chip_fill(true), Color32::TRANSPARENT);
         assert_eq!(quick_chip_fill(true), quick_chip_fill(false));
@@ -1405,7 +1575,7 @@ mod tests {
 
     #[test]
     fn suggested_autos_parse() {
-        assert_eq!(SUGGESTED_AUTOS.len(), 6);
+        assert_eq!(SUGGESTED_AUTOS.len(), 7);
         for s in SUGGESTED_AUTOS {
             let a = parse_nl_automation(s.seed).expect(s.title);
             assert!(!a.instructions.is_empty());
@@ -1434,7 +1604,7 @@ mod tests {
                 assert!(!blob.contains(w), "auto {} mentions {w}", s.title);
             }
         }
-        assert_eq!(SUGGESTED_SKILLS.len(), 8);
+        assert_eq!(SUGGESTED_SKILLS.len(), 9);
         for s in SUGGESTED_SKILLS {
             let blob = format!("{} {} {}", s.name, s.body, s.instructions).to_ascii_lowercase();
             for w in forbidden {
@@ -1444,7 +1614,8 @@ mod tests {
                 || blob.contains("workboard")
                 || blob.contains("imagine")
                 || blob.contains("verify")
-                || blob.contains("connector_cmd");
+                || blob.contains("connector_cmd")
+                || blob.contains("computer_cmd");
             assert!(real, "skill {} is not a cabin verb", s.name);
             let md = skill_from_suggested(s);
             assert_eq!(md.name, s.name);
