@@ -4492,9 +4492,7 @@ impl Cabin {
     fn show_from_tray(&mut self, ctx: &egui::Context) {
         self.window_visible = true;
         apply_tray_window(ctx, crate::tray::show_from_tray_window());
-        if let Some(tray) = self.tray.take() {
-            crate::tray::drop_off_thread(tray);
-        }
+        self.ensure_tray_spawn();
         ctx.request_repaint();
     }
 
@@ -4831,6 +4829,7 @@ impl eframe::App for Cabin {
         ) {
             ctx.request_repaint_after(Duration::from_millis(80));
         } else if !self.window_visible {
+            apply_tray_window(ctx, crate::tray::hide_to_tray_window());
             ctx.request_repaint_after(Duration::from_millis(HIDDEN_HEARTBEAT_MS));
         }
 
@@ -7819,6 +7818,29 @@ mod tests {
         assert!(super::wants_live_repaint(true, false, false, true, false));
         assert!(super::HIDDEN_HEARTBEAT_MS > 80);
         assert!(!super::night_host_check_blocks_ui());
+    }
+
+    #[test]
+    fn show_cabin_keeps_the_tray_icon() {
+        let src = include_str!("app.rs");
+        let show = src
+            .split("fn show_from_tray")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_voice").next())
+            .expect("show_from_tray");
+        assert!(
+            !show.contains("drop_off_thread"),
+            "Show cabin must not tear down the tray icon: {show}"
+        );
+        assert!(
+            show.contains("ensure_tray_spawn"),
+            "Show cabin should keep a live tray: {show}"
+        );
+        assert!(
+            src.contains("force_x11_for_close_to_tray")
+                || include_str!("main.rs").contains("force_x11_for_close_to_tray"),
+            "winit 0.30 must drop WAYLAND_DISPLAY so × can unmap"
+        );
     }
 
     #[test]
