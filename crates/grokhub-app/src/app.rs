@@ -27,7 +27,7 @@ use grokhub_core::{
     imagine_toolbox_top, imagine_wall_bounds,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
     mark_automation_skipped, yolo_plan_split, chat_bearer, drop_trailing_assistant,
-    job_error_goes_to_chat, persist_user_turn,
+    job_error_goes_to_chat, persist_user_turn, push_bound_message, refund_host_reserved,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     imagine_aspect_label, imagine_aspect_name, imagine_style_label, imagine_video_dur_label,
@@ -37,6 +37,7 @@ use grokhub_core::{
     hey_grok_route, hey_grok_starts_ptt, import_memory_file, insight_pin, is_openclaw_workspace,
     add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
     host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
+    verify_ok_after_user_turn,
     project_menu_acts, project_menu_label, rename_node, restore_bound_path, seed_from_bound,
     settle_project_path, should_seed_sidebar, stage_project, toggle_folder, upsert_bound,
     visible_tree, ProjectKind, ProjectMenuAct,
@@ -64,12 +65,12 @@ use grokhub_core::{
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     rewind_dest, save_hub_state, screen_from_extents, search_corpus,
-    should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
+    should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
-    apply_auto_title, apply_manual_rename, delete_thread, display_tab_title, history_order,
+    apply_auto_title_in, apply_manual_rename, delete_thread, display_tab_title, history_order,
     should_name_thread,
     slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
@@ -600,6 +601,7 @@ pub struct Cabin {
     oauth_pending: Option<DeviceCodeStart>,
     host_hour_count: u32,
     host_hour_at: Instant,
+    host_reserved: u32,
     approve_risky_only: bool,
     tray: Option<crate::tray::TrayHost>,
     tray_rx: Option<mpsc::Receiver<Option<crate::tray::TrayHost>>>,
@@ -870,6 +872,7 @@ impl Cabin {
             oauth_pending: None,
             host_hour_count: 0,
             host_hour_at: Instant::now(),
+            host_reserved: 0,
             approve_risky_only,
             tray: None,
             tray_rx: if crate::tray::tray_needed_at_launch(hidden) {
@@ -1127,6 +1130,12 @@ impl Cabin {
         self.rx = None;
         self.running = false;
         self.chat_job_thread = None;
+        if self.host_reserved > 0 {
+            self.host_hour_count = refund_host_reserved(self.host_hour_count, self.host_reserved);
+            self.host_reserved = 0;
+        }
+        self.pending_connectors.clear();
+        self.pending_skill = None;
         self.stream_buf.clear();
         self.thought_buf.clear();
         let mut msgs: Vec<(String, String)> = self
@@ -1168,6 +1177,43 @@ impl Cabin {
             &mut visible,
             &mut stored,
             &content,
+        );
+        self.messages = visible
+            .into_iter()
+            .map(|(role, content)| Msg { role, content })
+            .collect();
+        let Some(job) = self.chat_job_thread.as_deref() else {
+            return;
+        };
+        if job == vis {
+            return;
+        }
+        if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job) {
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == job) {
+                t.messages = msgs.clone();
+            }
+        }
+    }
+
+    fn push_bound_msg(&mut self, role: &str, content: String) {
+        let vis = self.visible_thread_id();
+        let mut visible: Vec<(String, String)> = self
+            .messages
+            .iter()
+            .map(|m| (m.role.clone(), m.content.clone()))
+            .collect();
+        let mut stored: Vec<(String, Vec<(String, String)>)> = self
+            .threads
+            .iter()
+            .map(|t| (t.id.clone(), t.messages.clone()))
+            .collect();
+        push_bound_message(
+            self.chat_job_thread.as_deref(),
+            &vis,
+            &mut visible,
+            &mut stored,
+            role,
+            content,
         );
         self.messages = visible
             .into_iter()
@@ -1957,6 +2003,10 @@ impl Cabin {
             .get(self.thread_idx)
             .map(|t| t.id.clone())
             .unwrap_or_default();
+        let renaming = self
+            .rename_idx
+            .and_then(|i| self.threads.get(i))
+            .is_some_and(|r| r.id == tid);
         let Some(t) = self.threads.iter_mut().find(|t| t.id == tid) else {
             return;
         };
@@ -1970,7 +2020,7 @@ impl Cabin {
                 pinned: t.pinned,
                 title_locked: t.title_locked,
             };
-            if apply_auto_title(&mut tab, &t.goal.label) {
+            if apply_auto_title_in(&mut tab, &t.goal.label, renaming) {
                 t.title = tab.title;
             }
             if tid == current {
@@ -2419,6 +2469,7 @@ impl Cabin {
             self.status = "Connect Grok OAuth in Settings".into();
             return;
         }
+        self.verify_ok_turn = verify_ok_after_user_turn(self.verify_ok_turn, true);
         if let Some(sk) = match_skill(&text, &self.skill_list) {
             self.skill_name = sk.name.clone();
             self.status = format!("Skill {}", sk.name);
@@ -2565,7 +2616,10 @@ impl Cabin {
                 self.status = "Cleared".into();
             }
             Slash::Undo => {
-                if let Some(i) = self.messages.iter().rposition(|m| m.role == "assistant") {
+                if self.running {
+                    self.halt_in_flight();
+                    self.status = "Undid in-flight reply".into();
+                } else if let Some(i) = self.messages.iter().rposition(|m| m.role == "assistant") {
                     self.messages.remove(i);
                     self.persist();
                     self.status = "Undid last assistant turn".into();
@@ -2784,6 +2838,7 @@ impl Cabin {
     }
 
     fn kick_model_retry(&mut self, _t: String) {
+        self.halt_in_flight();
         self.kick_model();
     }
 
@@ -3301,8 +3356,9 @@ impl Cabin {
             self.status = "Connect Grok OAuth in Settings".into();
             return;
         }
+        self.halt_in_flight();
         self.running = true;
-        self.chat_job_thread = None;
+        self.chat_job_thread = Some(self.visible_thread_id());
         self.status = "Consult…".into();
         let key = self.bearer();
         let model = model_for_mode("fast").to_string();
@@ -3902,7 +3958,7 @@ impl Cabin {
                             .map(|m| (m.role.clone(), m.content.clone()))
                             .collect::<Vec<_>>(),
                     );
-                    if should_auto_compact(tokens, CONTEXT_BUDGET_TOKENS) {
+                    if should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, self.goal_step) {
                         self.run_slash(Slash::Compact);
                         self.status = format!(
                             "Auto-compact · {}% context",
@@ -3914,10 +3970,8 @@ impl Cabin {
             }
             Ok(JobOut::Consult(detail)) => {
                 self.running = false;
-                self.messages.push(Msg {
-                    role: "assistant".into(),
-                    content: detail,
-                });
+                self.push_bound_msg("assistant", detail);
+                self.chat_job_thread = None;
                 self.persist();
             }
             Ok(JobOut::HostLine(line)) => {
@@ -3930,6 +3984,7 @@ impl Cabin {
                 self.running = false;
                 self.voice_orb = "idle".into();
                 self.host_live.clear();
+                self.host_reserved = 0;
                 let ok = !crate::update::host_receipt_failed(&block);
                 self.last_receipt_ok = Some(ok);
                 self.last_receipts.push((block.chars().take(160).collect(), ok));
@@ -3956,10 +4011,7 @@ impl Cabin {
                 } else {
                     "HOST_RESULT (facts only):"
                 };
-                self.messages.push(Msg {
-                    role: "user".into(),
-                    content: format!("{prefix}\n{block}"),
-                });
+                self.push_bound_msg("user", format!("{prefix}\n{block}"));
                 if any_hands {
                     self.hands_attach = true;
                     let rows = collect_rows();
@@ -3988,10 +4040,7 @@ impl Cabin {
                     if let Some(path) = cite.split_whitespace().last() {
                         if let Ok(after) = std::fs::read_to_string(path) {
                             let diff = unified_diff_cite(path, "", &after);
-                            self.messages.push(Msg {
-                                role: "user".into(),
-                                content: format!("HOST_DIFF:\n{diff}"),
-                            });
+                            self.push_bound_msg("user", format!("HOST_DIFF:\n{diff}"));
                         }
                     }
                 }
@@ -4016,15 +4065,20 @@ impl Cabin {
             }
             Ok(JobOut::Connector(detail)) => {
                 self.running = false;
-                self.messages.push(Msg {
-                    role: "user".into(),
-                    content: format!("CONNECTOR_RESULT (facts only):\n{detail}"),
-                });
+                self.push_bound_msg(
+                    "user",
+                    format!("CONNECTOR_RESULT (facts only):\n{detail}"),
+                );
                 self.persist();
                 if !self.pending_connectors.is_empty() {
+                    let origin = self.chat_job_thread.clone();
                     let (id, tool, args) = self.pending_connectors.remove(0);
                     self.run_connector(&id, &tool, &args);
+                    if self.chat_job_thread.is_none() {
+                        self.chat_job_thread = origin;
+                    }
                 } else {
+                    self.chat_job_thread = None;
                     self.kick_model();
                 }
             }
@@ -4134,7 +4188,8 @@ impl Cabin {
         self.last_host = gated.clone();
         self.host_halt.store(false, Ordering::SeqCst);
         self.running = true;
-        self.chat_job_thread = None;
+        self.host_reserved = gated.len() as u32;
+        self.chat_job_thread = Some(self.visible_thread_id());
         self.voice_orb = "hands".into();
         self.host_live = gated[0].clone();
         self.status = "Host…".into();
@@ -4207,7 +4262,9 @@ impl Cabin {
             return;
         }
         self.running = true;
-        self.chat_job_thread = None;
+        if self.chat_job_thread.is_none() {
+            self.chat_job_thread = Some(self.visible_thread_id());
+        }
         self.status = format!("GitHub {tool}…");
         let token = self.secrets.github_token.clone();
         let tool = tool.to_string();
