@@ -1,10 +1,12 @@
 use grokhub_core::{
-    clip_image_args, jpeg_data_url, parse_atspi_line, parse_picker_stdout, parse_wmctrl_line,
-    parse_xdotool_mouse, picker_args, take_text_body, AtspiRow, RECORDERS, TRANSCRIBERS,
+    clip_image_args, computer_cmd_line, computer_drive, jpeg_data_url, lock_blocks_hands,
+    parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse, picker_args,
+    take_text_body, AtspiRow, ComputerDrive, ComputerOp, RECORDERS, TRANSCRIBERS,
 };
 use image::GenericImageView;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 const ATSPI_PY: &str = r#"
 import sys
@@ -68,6 +70,182 @@ pub fn collect_rows() -> Vec<AtspiRow> {
         }
     }
     rows
+}
+
+pub fn named_row<'a>(rows: &'a [AtspiRow], name: &str) -> Option<&'a AtspiRow> {
+    let q = name.to_ascii_lowercase();
+    rows.iter().find(|r| {
+        r.role != "cursor" && r.name.to_ascii_lowercase().contains(&q)
+    })
+}
+
+pub fn row_center(row: &AtspiRow) -> (i32, i32) {
+    (row.x + row.w / 2, row.y + row.h / 2)
+}
+
+pub fn parse_getwindowgeometry(text: &str) -> Option<(i32, i32, i32, i32)> {
+    let mut px = None;
+    let mut py = None;
+    let mut w = None;
+    let mut h = None;
+    for line in text.lines() {
+        let l = line.trim();
+        if let Some(rest) = l.strip_prefix("Position:") {
+            let rest = rest.split('(').next().unwrap_or(rest);
+            let (x, y) = rest.trim().split_once(',')?;
+            px = Some(x.trim().parse().ok()?);
+            py = Some(y.trim().parse().ok()?);
+        } else if let Some(rest) = l.strip_prefix("Geometry:") {
+            let (a, b) = rest.trim().split_once('x')?;
+            w = Some(a.trim().parse().ok()?);
+            h = Some(b.trim().parse().ok()?);
+        }
+    }
+    Some((px?, py?, w?, h?))
+}
+
+fn hands_receipt(line: &str, start: Instant, ok: bool, detail: &str) -> String {
+    format!(
+        "$ {line}\nexit {} · {}ms\n{detail}",
+        if ok { 0 } else { 1 },
+        start.elapsed().as_millis()
+    )
+}
+
+fn run_xdotool_steps(steps: &[Vec<String>]) -> Result<(), String> {
+    if !which("xdotool") {
+        return Err("xdotool missing".into());
+    }
+    for (i, step) in steps.iter().enumerate() {
+        if i > 0 {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let st = Command::new("xdotool")
+            .args(step)
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !st.success() {
+            return Err(format!("xdotool {} failed", step.join(" ")));
+        }
+    }
+    Ok(())
+}
+
+fn lock_titles() -> Vec<String> {
+    collect_rows().into_iter().map(|r| r.name).collect()
+}
+
+fn pointer_blocked(op: &ComputerOp) -> bool {
+    match op {
+        ComputerOp::WaitFor { .. } => false,
+        ComputerOp::Click { .. }
+        | ComputerOp::DoubleClick { .. }
+        | ComputerOp::Move { .. }
+        | ComputerOp::Type { .. }
+        | ComputerOp::Key { .. }
+        | ComputerOp::Scroll { .. }
+        | ComputerOp::Act { .. } => true,
+    }
+}
+
+fn act_click(name: &str) -> Result<(i32, i32), String> {
+    let rows = collect_rows();
+    if let Some(r) = named_row(&rows, name) {
+        let (x, y) = row_center(r);
+        match computer_drive(&ComputerOp::Click { x, y }) {
+            ComputerDrive::Xdotool(steps) => run_xdotool_steps(&steps)?,
+            ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) => {}
+        }
+        return Ok((x, y));
+    }
+    if !which("xdotool") {
+        return Err(format!("act {name}: not found"));
+    }
+    let out = Command::new("xdotool")
+        .args(["search", "--onlyvisible", "--name", name])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let id = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if id.is_empty() {
+        return Err(format!("act {name}: not found"));
+    }
+    let geo = Command::new("xdotool")
+        .args(["getwindowgeometry", &id])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&geo.stdout);
+    let (x, y, w, h) = parse_getwindowgeometry(&text).ok_or_else(|| {
+        format!("act {name}: no geometry")
+    })?;
+    let cx = x + w / 2;
+    let cy = y + h / 2;
+    match computer_drive(&ComputerOp::Click { x: cx, y: cy }) {
+        ComputerDrive::Xdotool(steps) => run_xdotool_steps(&steps)?,
+        ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) => {}
+    }
+    Ok((cx, cy))
+}
+
+fn wait_for_title(title: Option<&str>) -> Result<String, String> {
+    let Some(want) = title.filter(|s| !s.is_empty()) else {
+        std::thread::sleep(Duration::from_millis(400));
+        return Ok("waited".into());
+    };
+    let q = want.to_ascii_lowercase();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let rows = collect_rows();
+        if rows
+            .iter()
+            .any(|r| r.role != "cursor" && r.name.to_ascii_lowercase().contains(&q))
+        {
+            return Ok(format!("saw {want}"));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("wait_for timed out: {want}"));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+pub fn run_computer_op(op: &ComputerOp) -> String {
+    let started = Instant::now();
+    let line = computer_cmd_line(op);
+    let titles = lock_titles();
+    let title_refs: Vec<&str> = titles.iter().map(|s| s.as_str()).collect();
+    if pointer_blocked(op) && lock_blocks_hands(&title_refs) {
+        return hands_receipt(&line, started, false, "blocked: lock screen");
+    }
+    match computer_drive(op) {
+        ComputerDrive::Xdotool(steps) => match run_xdotool_steps(&steps) {
+            Ok(()) => {
+                let detail = match op {
+                    ComputerOp::Click { x, y } => format!("clicked {x},{y}"),
+                    ComputerOp::DoubleClick { x, y } => format!("double-clicked {x},{y}"),
+                    ComputerOp::Move { x, y } => format!("moved {x},{y}"),
+                    ComputerOp::Type { text } => format!("typed {} chars", text.chars().count()),
+                    ComputerOp::Key { name } => format!("key {name}"),
+                    ComputerOp::Scroll { dy } => format!("scrolled {dy}"),
+                    ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } => "ok".into(),
+                };
+                hands_receipt(&line, started, true, &detail)
+            }
+            Err(e) => hands_receipt(&line, started, false, &e),
+        },
+        ComputerDrive::Act(name) => match act_click(&name) {
+            Ok((x, y)) => hands_receipt(&line, started, true, &format!("act {name} @{x},{y}")),
+            Err(e) => hands_receipt(&line, started, false, &e),
+        },
+        ComputerDrive::WaitFor(title) => match wait_for_title(title.as_deref()) {
+            Ok(detail) => hands_receipt(&line, started, true, &detail),
+            Err(e) => hands_receipt(&line, started, false, &e),
+        },
+    }
 }
 
 pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
@@ -389,5 +567,51 @@ mod tests {
         let txt = dir.join("note.txt");
         std::fs::write(&txt, "hello cabin").unwrap();
         assert_eq!(read_text_capped(&txt).unwrap(), "hello cabin");
+    }
+
+    #[test]
+    fn named_row_center_and_geometry() {
+        let rows = vec![AtspiRow {
+            name: "Save".into(),
+            role: "push button".into(),
+            x: 10,
+            y: 20,
+            w: 80,
+            h: 40,
+        }];
+        let r = named_row(&rows, "save").unwrap();
+        assert_eq!(row_center(r), (50, 40));
+        let g = parse_getwindowgeometry(
+            "Window 1\n  Position: 10,20 (screen: 0)\n  Geometry: 100x40\n",
+        )
+        .unwrap();
+        assert_eq!(g, (10, 20, 100, 40));
+    }
+
+    #[test]
+    fn hands_move_pointer_when_display() {
+        if std::env::var("DISPLAY").is_err() || !which("xdotool") {
+            return;
+        }
+        let dest_x = 1500;
+        let dest_y = 400;
+        let out = run_computer_op(&ComputerOp::Move {
+            x: dest_x,
+            y: dest_y,
+        });
+        assert!(out.contains("exit 0"), "{out}");
+        assert!(out.contains("moved 1500,400"), "{out}");
+        let loc = Command::new("xdotool")
+            .args(["getmouselocation"])
+            .output()
+            .unwrap();
+        let row = parse_xdotool_mouse(&String::from_utf8_lossy(&loc.stdout)).unwrap();
+        assert_eq!((row.x, row.y), (dest_x, dest_y), "{out} {} {}", row.x, row.y);
+        match computer_drive(&ComputerOp::Click { x: 1, y: 2 }) {
+            ComputerDrive::Xdotool(steps) => {
+                assert!(!steps.iter().any(|s| s.iter().any(|a| a == "--sync")));
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

@@ -7,6 +7,11 @@ pub struct ScreenSize {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComputerOp {
     Click { x: i32, y: i32 },
+    DoubleClick { x: i32, y: i32 },
+    Move { x: i32, y: i32 },
+    Type { text: String },
+    Key { name: String },
+    Scroll { dy: i32 },
     Act { name: String },
     WaitFor { title: Option<String> },
 }
@@ -57,6 +62,36 @@ pub fn parse_computer_op(line: &str) -> Option<ComputerOp> {
             let y = bits.next()?.parse().ok()?;
             Some(ComputerOp::Click { x, y })
         }
+        "dblclick" | "doubleclick" | "double-click" => {
+            let x = bits.next()?.parse().ok()?;
+            let y = bits.next()?.parse().ok()?;
+            Some(ComputerOp::DoubleClick { x, y })
+        }
+        "move" | "mousemove" => {
+            let x = bits.next()?.parse().ok()?;
+            let y = bits.next()?.parse().ok()?;
+            Some(ComputerOp::Move { x, y })
+        }
+        "type" => {
+            let text = bits.collect::<Vec<_>>().join(" ");
+            if text.is_empty() {
+                None
+            } else {
+                Some(ComputerOp::Type { text })
+            }
+        }
+        "key" => {
+            let name = bits.collect::<Vec<_>>().join(" ");
+            if name.is_empty() {
+                None
+            } else {
+                Some(ComputerOp::Key { name })
+            }
+        }
+        "scroll" => {
+            let dy = bits.next()?.parse().ok()?;
+            Some(ComputerOp::Scroll { dy })
+        }
         "act" => {
             let name = bits.collect::<Vec<_>>().join(" ");
             if name.is_empty() {
@@ -106,7 +141,8 @@ pub fn replay_ops(recipe: &Recipe, current: Option<ScreenSize>) -> Vec<ReplayOp>
     }
     for op in &recipe.ops {
         match op {
-            ComputerOp::Click { .. } if reshoot => {}
+            ComputerOp::Click { .. } | ComputerOp::DoubleClick { .. } | ComputerOp::Move { .. }
+                if reshoot => {}
             other => out.push(ReplayOp::Op(other.clone())),
         }
     }
@@ -119,6 +155,132 @@ pub fn screen_from_extents(max_x: i32, max_y: i32) -> Option<ScreenSize> {
     } else {
         None
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComputerDrive {
+    Xdotool(Vec<Vec<String>>),
+    Act(String),
+    WaitFor(Option<String>),
+}
+
+pub fn computer_drive(op: &ComputerOp) -> ComputerDrive {
+    match op {
+        ComputerOp::Click { x, y } => ComputerDrive::Xdotool(vec![
+            vec!["mousemove".into(), x.to_string(), y.to_string()],
+            vec!["click".into(), "--clearmodifiers".into(), "1".into()],
+        ]),
+        ComputerOp::DoubleClick { x, y } => ComputerDrive::Xdotool(vec![
+            vec!["mousemove".into(), x.to_string(), y.to_string()],
+            vec![
+                "click".into(),
+                "--clearmodifiers".into(),
+                "--repeat".into(),
+                "2".into(),
+                "1".into(),
+            ],
+        ]),
+        ComputerOp::Move { x, y } => {
+            ComputerDrive::Xdotool(vec![vec!["mousemove".into(), x.to_string(), y.to_string()]])
+        }
+        ComputerOp::Type { text } => ComputerDrive::Xdotool(vec![vec![
+            "type".into(),
+            "--clearmodifiers".into(),
+            "--".into(),
+            text.clone(),
+        ]]),
+        ComputerOp::Key { name } => ComputerDrive::Xdotool(vec![vec![
+            "key".into(),
+            "--clearmodifiers".into(),
+            name.clone(),
+        ]]),
+        ComputerOp::Scroll { dy } => {
+            if *dy == 0 {
+                ComputerDrive::Xdotool(vec![])
+            } else {
+                let btn = if *dy < 0 { "5" } else { "4" };
+                ComputerDrive::Xdotool(vec![vec![
+                    "click".into(),
+                    "--clearmodifiers".into(),
+                    "--repeat".into(),
+                    dy.unsigned_abs().to_string(),
+                    btn.into(),
+                ]])
+            }
+        }
+        ComputerOp::Act { name } => ComputerDrive::Act(name.clone()),
+        ComputerOp::WaitFor { title } => ComputerDrive::WaitFor(title.clone()),
+    }
+}
+
+pub fn computer_cmd_line(op: &ComputerOp) -> String {
+    match op {
+        ComputerOp::Click { x, y } => format!("COMPUTER_CMD: click {x} {y}"),
+        ComputerOp::DoubleClick { x, y } => format!("COMPUTER_CMD: dblclick {x} {y}"),
+        ComputerOp::Move { x, y } => format!("COMPUTER_CMD: move {x} {y}"),
+        ComputerOp::Type { text } => format!("COMPUTER_CMD: type {text}"),
+        ComputerOp::Key { name } => format!("COMPUTER_CMD: key {name}"),
+        ComputerOp::Scroll { dy } => format!("COMPUTER_CMD: scroll {dy}"),
+        ComputerOp::Act { name } => format!("COMPUTER_CMD: act {name}"),
+        ComputerOp::WaitFor { title } => match title {
+            Some(t) => format!("COMPUTER_CMD: wait_for title={t}"),
+            None => "COMPUTER_CMD: wait_for".into(),
+        },
+    }
+}
+
+pub fn parse_computer_cmd_loose(cmd: &str) -> Option<ComputerOp> {
+    let t = cmd.trim();
+    parse_computer_op(t).or_else(|| parse_computer_op(&format!("COMPUTER_CMD: {t}")))
+}
+
+pub fn extract_computer_ops(text: &str) -> Vec<ComputerOp> {
+    text.lines().filter_map(parse_computer_op).collect()
+}
+
+pub fn hands_protocol() -> &'static str {
+    "You run unsandboxed on this Linux desktop. The cabin has full host and GUI hands when the user asks.\n\
+     HOST_CMD: <shell> — runs via bash -lc after approval (YOLO skips the prompt). Forbidden even with YOLO: ~/.ssh, /etc/shadow, /etc/sudoers, gnupg, app.json.\n\
+     COMPUTER_CMD: click X Y\n\
+     COMPUTER_CMD: dblclick X Y\n\
+     COMPUTER_CMD: move X Y\n\
+     COMPUTER_CMD: type <text>\n\
+     COMPUTER_CMD: key <name>\n\
+     COMPUTER_CMD: scroll <dy>\n\
+     COMPUTER_CMD: act <accessible-name>\n\
+     COMPUTER_CMD: wait_for title=<window>\n\
+     Prefer act and wait_for over raw clicks. Coordinates are the current screen; a JPEG frame is attached when the user asks for hands or Cabin eyes is on. Lock/password screens are won'ts — never click them or type into them. Do not read ~/.ssh or /etc/shadow."
+}
+
+pub fn user_asks_desktop_hands(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "click the",
+        "click on",
+        "double click",
+        "double-click",
+        "mouse",
+        "keyboard",
+        "type into",
+        "type in the",
+        "press enter",
+        "hit enter",
+        "move the mouse",
+        "move the cursor",
+        "use the mouse",
+        "control the ui",
+        "control the screen",
+        "desktop hands",
+    ];
+    NEEDLES.iter().any(|n| t.contains(n))
+}
+
+pub fn should_attach_hands_frame(cabin_eyes: bool, hands_turn: bool, has_frame: bool) -> bool {
+    has_frame && (cabin_eyes || hands_turn)
+}
+
+pub fn lock_blocks_hands(titles: &[&str]) -> bool {
+    titles.iter().copied().any(crate::hygiene::lockish)
 }
 
 #[cfg(test)]
@@ -152,5 +314,104 @@ mod tests {
         assert!(replay
             .iter()
             .any(|r| matches!(r, ReplayOp::Op(ComputerOp::Act { name }) if name == "Refresh")));
+    }
+
+    #[test]
+    fn hands_parse_type_key_and_click_argv() {
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: type hello cabin"),
+            Some(ComputerOp::Type {
+                text: "hello cabin".into()
+            })
+        );
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: key Return"),
+            Some(ComputerOp::Key {
+                name: "Return".into()
+            })
+        );
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: dblclick 40 80"),
+            Some(ComputerOp::DoubleClick { x: 40, y: 80 })
+        );
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: move 12 34"),
+            Some(ComputerOp::Move { x: 12, y: 34 })
+        );
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: scroll -3"),
+            Some(ComputerOp::Scroll { dy: -3 })
+        );
+        let click = computer_drive(&ComputerOp::Click { x: 100, y: 200 });
+        match click {
+            ComputerDrive::Xdotool(steps) => {
+                assert_eq!(steps[0], vec!["mousemove", "100", "200"]);
+                assert!(!steps.iter().any(|s| s.iter().any(|a| a == "--sync")));
+                assert_eq!(steps[1], vec!["click", "--clearmodifiers", "1"]);
+            }
+            other => panic!("click must be xdotool, got {other:?}"),
+        }
+        match computer_drive(&ComputerOp::Type {
+            text: "hi there".into(),
+        }) {
+            ComputerDrive::Xdotool(steps) => {
+                assert_eq!(
+                    steps[0],
+                    vec!["type", "--clearmodifiers", "--", "hi there"]
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        match computer_drive(&ComputerOp::Key { name: "ctrl+s".into() }) {
+            ComputerDrive::Xdotool(steps) => {
+                assert_eq!(steps[0], vec!["key", "--clearmodifiers", "ctrl+s"]);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            computer_drive(&ComputerOp::Act { name: "Save".into() }),
+            ComputerDrive::Act(n) if n == "Save"
+        ));
+        assert_eq!(
+            computer_cmd_line(&ComputerOp::Click { x: 1, y: 2 }),
+            "COMPUTER_CMD: click 1 2"
+        );
+        let proto = hands_protocol();
+        assert!(proto.contains("HOST_CMD:"));
+        assert!(proto.contains("COMPUTER_CMD:"));
+        assert!(proto.to_ascii_lowercase().contains("unsandboxed"));
+        assert!(user_asks_desktop_hands("click the Save button for me"));
+        assert!(user_asks_desktop_hands("type into the settings window"));
+        assert!(!user_asks_desktop_hands("what is rust ownership?"));
+        assert!(should_attach_hands_frame(false, true, true));
+        assert!(!should_attach_hands_frame(false, false, true));
+        assert!(should_attach_hands_frame(true, false, true));
+        assert!(lock_blocks_hands(&["Lock screen", "nvim"]));
+        assert!(!lock_blocks_hands(&["GrokHub", "Terminal"]));
+        assert_eq!(
+            parse_computer_cmd_loose("click 9 8"),
+            Some(ComputerOp::Click { x: 9, y: 8 })
+        );
+        assert_eq!(
+            parse_computer_cmd_loose("COMPUTER_CMD: key Return"),
+            Some(ComputerOp::Key {
+                name: "Return".into()
+            })
+        );
+        match computer_drive(&ComputerOp::Scroll { dy: -3 }) {
+            ComputerDrive::Xdotool(steps) => {
+                assert_eq!(
+                    steps[0],
+                    vec!["click", "--clearmodifiers", "--repeat", "3", "5"]
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        match computer_drive(&ComputerOp::WaitFor {
+            title: Some("Settings".into()),
+        }) {
+            ComputerDrive::WaitFor(t) => assert_eq!(t.as_deref(), Some("Settings")),
+            other => panic!("{other:?}"),
+        }
     }
 }

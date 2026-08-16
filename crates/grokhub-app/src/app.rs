@@ -1,7 +1,7 @@
 use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin, load_image_data_url,
-    pick_file, play_audio, read_text_capped, record_once, transcribe_local,
+    pick_file, play_audio, read_text_capped, record_once, run_computer_op, transcribe_local,
 };
 use crate::host::{run_host, run_host_stream};
 use crate::secrets::{self, Secrets};
@@ -41,7 +41,8 @@ use grokhub_core::{
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
     chat_attach_status, imagine_ref_status, needs_auth_banner, next_chat_image, next_goal_prompt,
     is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
-    plus_empty_status, plus_menu_rows,
+    plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
+    parse_computer_cmd_loose, should_attach_hands_frame, user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
     now_ms, on_wheel_grab, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
     parse_nl_automation, parse_recipe, parse_slash, parse_theme, passenger_label, pick_theme, plan_from_text, plan_room,
@@ -51,7 +52,7 @@ use grokhub_core::{
     greeting_fingerprint, greeting_prompt, local_greeting, pick_greeting,
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
-    rewind_dest, save_hub_state, screen_from_extents, search_corpus, should_attach_cabin_frame,
+    rewind_dest, save_hub_state, screen_from_extents, search_corpus,
     should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
     composer_enter, ComposerEnter,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
@@ -507,6 +508,7 @@ pub struct Cabin {
     last_host: Vec<String>,
     save_skill: bool,
     last_frame_url: Option<String>,
+    hands_attach: bool,
     speak_next: bool,
     verify_ok_turn: bool,
     verify_chip: String,
@@ -771,6 +773,7 @@ impl Cabin {
             last_host: vec![],
             save_skill: false,
             last_frame_url: None,
+            hands_attach: false,
             speak_next: false,
             verify_ok_turn: false,
             verify_chip: String::new(),
@@ -2224,6 +2227,9 @@ impl Cabin {
             role: "user".into(),
             content: text.clone(),
         });
+        if user_asks_desktop_hands(&text) {
+            self.hands_attach = true;
+        }
         self.persist();
         self.kick_model();
     }
@@ -3415,6 +3421,10 @@ impl Cabin {
             sys.push_str("Last HOST_RESULT (tail):\n");
             sys.push_str(&h.chars().take(400).collect::<String>());
         }
+        if !sys.is_empty() {
+            sys.push_str("\n\n");
+        }
+        sys.push_str(hands_protocol());
         let pin = insight_pin(&self.learning);
         if !pin.is_empty() {
             if !sys.is_empty() {
@@ -3430,10 +3440,9 @@ impl Cabin {
         let user_img = self.attach_url.take();
         self.attach_name = None;
         let fused = self.last_frame_url.clone().or_else(|| self.webcam_url.clone());
-        let cabin = if should_attach_cabin_frame(
-            cabin_eyes_for_turn(self.cfg.cabin_eyes, fused.is_some()),
-            self.cfg.cabin_eyes,
-        ) {
+        let hands_turn = self.hands_attach;
+        self.hands_attach = false;
+        let cabin = if should_attach_hands_frame(self.cfg.cabin_eyes, hands_turn, fused.is_some()) {
             fused
         } else {
             None
@@ -3660,10 +3669,40 @@ impl Cabin {
                 ) {
                     self.status = cite;
                 }
+                let all_hands = !self.last_host.is_empty()
+                    && self
+                        .last_host
+                        .iter()
+                        .all(|c| parse_computer_cmd_loose(c).is_some());
+                let any_hands = self
+                    .last_host
+                    .iter()
+                    .any(|c| parse_computer_cmd_loose(c).is_some());
+                let prefix = if all_hands {
+                    "COMPUTER_RESULT (facts only):"
+                } else {
+                    "HOST_RESULT (facts only):"
+                };
                 self.messages.push(Msg {
                     role: "user".into(),
-                    content: format!("HOST_RESULT (facts only):\n{block}"),
+                    content: format!("{prefix}\n{block}"),
                 });
+                if any_hands {
+                    self.hands_attach = true;
+                    let rows = collect_rows();
+                    let titles: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+                    if !lock_blocks_hands(&titles) {
+                        match capture_data_url() {
+                            Ok(url) => {
+                                if let Ok(mut st) = self.hub.lock() {
+                                    st.store_frame(&url);
+                                }
+                                self.last_frame_url = Some(url);
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                }
                 self.save_skill = true;
                 self.plan_pending = None;
                 self.persist();
@@ -3790,7 +3829,10 @@ impl Cabin {
                 });
                 continue;
             }
-            if host_cmd_leaves_project(c, &self.cfg.project_dir) && !self.cfg.yolo {
+            if !c.trim().starts_with("COMPUTER_CMD")
+                && host_cmd_leaves_project(c, &self.cfg.project_dir)
+                && !self.cfg.yolo
+            {
                 self.messages.push(Msg {
                     role: "user".into(),
                     content: format!("HOST_RESULT (facts only):\n$ {c}\nblocked: outside bound project"),
@@ -3829,9 +3871,17 @@ impl Cabin {
                 count = count.saturating_add(1);
                 let tx_line = tx.clone();
                 let cmd = c.clone();
-                let receipt = run_host_stream(c, Duration::from_secs(90), move |line| {
-                    let _ = tx_line.send(JobOut::HostLine(host_status_line(&cmd, line, 0)));
-                });
+                let receipt = if let Some(op) = parse_computer_cmd_loose(c) {
+                    let _ = tx_line.send(JobOut::HostLine(format!(
+                        "Hands: {}",
+                        computer_cmd_line(&op)
+                    )));
+                    run_computer_op(&op)
+                } else {
+                    run_host_stream(c, Duration::from_secs(90), move |line| {
+                        let _ = tx_line.send(JobOut::HostLine(host_status_line(&cmd, line, 0)));
+                    })
+                };
                 if let Some(cite) = summarize_write(c, &receipt) {
                     block.push_str(&cite);
                     block.push('\n');
@@ -3969,7 +4019,7 @@ impl Cabin {
     }
 
     fn ensure_cabin_frame(&mut self) {
-        if !should_capture_before_chat(self.cfg.cabin_eyes) {
+        if !should_capture_before_chat(self.cfg.cabin_eyes) && !self.hands_attach {
             return;
         }
         let rows = collect_rows();
@@ -4134,14 +4184,11 @@ impl Cabin {
                         t.push_str("frame: captured\n");
                     }
                 }
-                ReplayOp::Op(ComputerOp::Act { name }) => {
-                    t.push_str(&format!("act {name}\n"));
-                }
-                ReplayOp::Op(ComputerOp::WaitFor { title }) => {
-                    t.push_str(&format!("wait_for {}\n", title.unwrap_or_default()));
-                }
-                ReplayOp::Op(ComputerOp::Click { x, y }) => {
-                    t.push_str(&format!("click {x} {y}\n"));
+                ReplayOp::Op(op) => {
+                    t.push_str(&computer_cmd_line(&op));
+                    t.push('\n');
+                    t.push_str(&run_computer_op(&op));
+                    t.push('\n');
                 }
             }
         }

@@ -52,7 +52,7 @@ Projects sit in the left rail. `+` makes a project (`~/GrokHub-Work/<slug>`) or 
 
 History tabs pin, rename, and delete (right-click, or `/pin` `/rename` `/delete`). A manual rename is locked. After each turn Fast names the tab from the current topics unless that lock is set. Scratch stays unnamed.
 
-Imagine always uses dedicated **`grok-2-image`** (chat model is ignored). The toolbox docks mid-pane, then to the floor once a prompt or still is live. Aspect / kind / quality / style chips change the still prompt. Plus opens **Upload file / Paste clipboard**. Hey Grok records 4s (`arecord` / `ffmpeg` / `sox`), transcribes with xAI STT when a key is present (whisper fallback), and speaks the reply via xAI TTS. Eyes walks AT-SPI (`pyatspi`) then wmctrl + cursor. With Cabin eyes on, a JPEG is captured on each chat send, stored on the hub (not disk), and attached to that turn.
+Imagine always uses dedicated **`grok-2-image`** (chat model is ignored). The toolbox docks mid-pane, then to the floor once a prompt or still is live. Aspect / kind / quality / style chips change the still prompt. Plus opens **Upload file / Paste clipboard**. Hey Grok records 4s (`arecord` / `ffmpeg` / `sox`), transcribes with xAI STT when a key is present (whisper fallback), and speaks the reply via xAI TTS. Eyes walks AT-SPI (`pyatspi`) then wmctrl + cursor. With Cabin eyes on, a JPEG is captured on each chat send, stored on the hub (not disk), and attached to that turn. Asking Grok to click, type, or otherwise drive the desktop also attaches a frame and runs `COMPUTER_CMD` through xdotool (no sandbox).
 
 Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is the sign-in. Device-code against `auth.x.ai` — same public client as Grok CLI. The footer paints the Grok profile photo when the session has one. A console API key is optional. Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600), never in markdown. Settings → Appearance is **Dark** or **System** (no Light).
 
@@ -79,7 +79,7 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `secrets.js
 
 Tokens stay in `secrets.json`. Never in markdown.
 
-Composer is a pill: **What do you want to know?** Plus opens Upload / Paste. Mode combo is Auto / Fast / Balance / Think / Max. `/mode` only sets the combo — it does not overwrite Settings → Chat model. Mic is Hey Grok. Enter or the arrow sends; Ctrl+Enter starts a new line. Chat shows thought and tool steps; host receipts stay off the bubble. Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash -lc`.
+Composer is a pill: **What do you want to know?** Plus opens Upload / Paste. Mode combo is Auto / Fast / Balance / Think / Max. `/mode` only sets the combo — it does not overwrite Settings → Chat model. Mic is Hey Grok. Enter or the arrow sends; Ctrl+Enter starts a new line. Chat shows thought and tool steps; host receipts stay off the bubble. Grok may emit `HOST_CMD:` lines (unsandboxed `bash -lc`) and `COMPUTER_CMD:` lines (mouse, keyboard, `act` / `wait_for` via xdotool). The cabin confirms unless YOLO. When you ask it to drive the UI, a JPEG frame is attached for that turn even if Cabin eyes is off. Lock/password screens are skipped. Forbidden paths (`~/.ssh`, `/etc/shadow`) stay blocked.
 
 ## Always-on hub
 
