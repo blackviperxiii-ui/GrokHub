@@ -6,14 +6,12 @@ pkgdesc="Grok-native Linux cabin — Rust binary, no Electron"
 arch=('x86_64')
 url="https://github.com/blackviperxiii-ui/Grok-Hub"
 license=('MIT')
-depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme' 'python')
+depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme' 'python' 'python-atspi')
 optdepends=(
   'ydotool: system ydotool if the sidecar build is skipped'
   'grim: system grim if the sidecar build is skipped'
   'xdotool: X11 pointer'
   'wmctrl: X11 window list'
-  'python-atspi: windshield fallback'
-  'slurp: region capture'
 )
 makedepends=('cargo' 'rust' 'pkgconf' 'git' 'cmake' 'meson' 'ninja' 'wayland' 'wayland-protocols' 'pixman' 'libpng' 'libx11' 'libxtst' 'libxinerama' 'libxkbcommon' 'glib2' 'libxmu')
 options=('!debug')

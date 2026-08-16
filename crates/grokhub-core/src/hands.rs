@@ -78,6 +78,9 @@ pub fn diagnose_hands(
     HandsDown::Ready
 }
 
+pub const PYATSPI_MISSING: &str =
+    "python-atspi missing — install python-atspi so Eyes / act / wait_for can walk the accessibility tree. Without it the windshield falls back to a wmctrl window list.";
+
 pub fn hands_down_receipt(reason: HandsDown) -> &'static str {
     match reason {
         HandsDown::Ready => "hands ready",
@@ -225,8 +228,9 @@ mod tests {
                 && sh.contains("usermod -aG input")
                 && sh.contains("sudo install")
                 && sh.contains("60-grokhub-uinput.rules")
-                && sh.contains("modprobe uinput"),
-            "clone install must build sidecars, install the uinput udev rule on --user, and keep the input group"
+                && sh.contains("modprobe uinput")
+                && sh.contains("python-atspi"),
+            "clone install must build sidecars, install python-atspi, the uinput udev rule, and keep the input group"
         );
         assert!(
             !sh.contains("sudo pacman -S --needed ydotool"),
@@ -238,23 +242,31 @@ mod tests {
                 && srcinfo.contains("optdepends = grim")
                 && srcinfo.contains("makedepends = cmake")
                 && srcinfo.contains("makedepends = libx11")
-                && !srcinfo.contains("\tdepends = ydotool"),
-            "AUR metadata must treat hands as sidecars: {srcinfo}"
+                && srcinfo.contains("depends = python-atspi")
+                && !srcinfo.contains("\tdepends = ydotool")
+                && !srcinfo.contains("slurp"),
+            "AUR metadata must treat pointer tools as sidecars and python-atspi as a depend: {srcinfo}"
         );
         let local_pkg = include_str!("../../../packaging/PKGBUILD");
         assert!(
             local_pkg.contains("build-hands.sh")
                 && local_pkg.contains("cmake")
                 && local_pkg.contains("libx11")
-                && local_pkg.contains("python-atspi"),
-            "clone makepkg must build sidecars"
+                && local_pkg.contains("'python-atspi'")
+                && !local_pkg.contains("slurp"),
+            "clone makepkg must build sidecars and depend on python-atspi"
+        );
+        assert!(
+            PYATSPI_MISSING.contains("python-atspi") && PYATSPI_MISSING.contains("wmctrl"),
+            "Install hands must tell the user when pyatspi is missing"
         );
         let bundle = include_str!("../../../scripts/make-release-bundle.sh");
         assert!(
             bundle.contains("build-hands.sh")
                 && bundle.contains("ydotoold.service")
-                && bundle.contains("modprobe uinput"),
-            "release tarball install must ship the unit and build sidecars on the machine"
+                && bundle.contains("modprobe uinput")
+                && bundle.contains("python-atspi"),
+            "release tarball install must ship the unit, build sidecars, and install python-atspi"
         );
         assert!(
             !bundle.contains("sudo pacman -S --needed ydotool"),

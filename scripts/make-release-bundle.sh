@@ -71,6 +71,15 @@ if command -v pacman >/dev/null; then
 fi
 PREFIX="$PREFIX" HANDS_SRC="${HANDS_SRC:-$HERE/hands-src}" \
   bash "$HERE/build-hands.sh" || echo "hands: build-hands.sh continued"
+if command -v pacman >/dev/null; then
+  if pacman -Q python-atspi >/dev/null 2>&1; then
+    echo "hands: python-atspi already installed"
+  elif [[ "$(id -u)" -eq 0 ]]; then
+    pacman -S --needed python-atspi || echo "hands: pacman -S --needed python-atspi"
+  else
+    sudo pacman -S --needed python-atspi || echo "hands: sudo pacman -S --needed python-atspi"
+  fi
+fi
 UDEV_SRC="$HERE/60-grokhub-uinput.rules"
 UDEV_DEST="/etc/udev/rules.d/60-grokhub-uinput.rules"
 if [[ "$(id -u)" -eq 0 ]]; then

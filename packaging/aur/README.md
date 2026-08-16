@@ -13,7 +13,7 @@ cd Grok-Hub
 grokhub
 ```
 
-`install.sh --user` builds ydotool, grim, xdotool, and wmctrl next to the cabin. One password for build deps, the uinput udev rule, and the `input` group.
+`install.sh --user` builds ydotool, grim, xdotool, and wmctrl next to the cabin and installs `python-atspi` for Eyes / `act` / `wait_for`. One password for build deps, AT-SPI, the uinput udev rule, and the `input` group.
 
 ## makepkg (system)
 
@@ -22,7 +22,7 @@ cd packaging/aur
 makepkg -si
 ```
 
-`makepkg -si` / `yay -S grokhub` compile ydotool, grim, xdotool, and wmctrl into `/usr/lib/grokhub/bin`. Hands runtime packages are optdepends. First cabin launch or Eyes → Install hands starts `ydotoold`.
+`makepkg -si` / `yay -S grokhub` compile ydotool, grim, xdotool, and wmctrl into `/usr/lib/grokhub/bin` and depend on `python-atspi`. Pointer sidecars stay optdepends if the build is skipped. First cabin launch or Eyes → Install hands starts `ydotoold`.
 
 ## Layout
 
