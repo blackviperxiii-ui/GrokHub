@@ -76,8 +76,8 @@ pub use chat_view::{
     is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
 };
 pub use chat_bubble::{
-    bubble_max_width, bubble_outer_height, bubble_outer_width, bubble_wrap_width, BUBBLE_MAX_FRAC,
-    BUBBLE_PAD_X, BUBBLE_PAD_Y, BUBBLE_RADIUS,
+    bubble_max_width, bubble_outer_height, bubble_outer_width, bubble_wrap_width, clamp_row_width,
+    BUBBLE_MAX_FRAC, BUBBLE_MAX_PX, BUBBLE_PAD_X, BUBBLE_PAD_Y, BUBBLE_RADIUS,
 };
 pub use chat_job::{
     apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
@@ -224,8 +224,8 @@ pub use state::{
 };
 pub use task::{HubTask, Receipt};
 pub use thread_tab::{
-    apply_auto_title, apply_manual_rename, clean_tab_title, delete_thread, history_order, toggle_pin,
-    DeleteOutcome, ThreadTab,
+    apply_auto_title, apply_manual_rename, clean_tab_title, delete_thread, display_tab_title,
+    history_order, short_auto_title, toggle_pin, DeleteOutcome, ThreadTab, AUTO_TITLE_MAX,
 };
 pub use update::{
     discover_source, is_grokhub_source, overlay_update_begin, overlay_update_finish,

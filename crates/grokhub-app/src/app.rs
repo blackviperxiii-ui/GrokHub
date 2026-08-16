@@ -43,7 +43,8 @@ use grokhub_core::{
     chat_attach_status, imagine_ref_status, needs_auth_banner, next_chat_image, next_goal_prompt,
     is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
     apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible, ChatSendKind,
-    bubble_max_width, bubble_wrap_width, BUBBLE_PAD_X, BUBBLE_PAD_Y, BUBBLE_RADIUS,
+    bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X, BUBBLE_PAD_Y,
+    BUBBLE_RADIUS,
     plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
     parse_computer_cmd_loose, should_attach_hands_frame, user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
@@ -59,7 +60,8 @@ use grokhub_core::{
     should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
-    apply_auto_title, apply_manual_rename, delete_thread, history_order, should_name_thread,
+    apply_auto_title, apply_manual_rename, delete_thread, display_tab_title, history_order,
+    should_name_thread,
     slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
@@ -409,11 +411,33 @@ fn listen_turn(api_key: &str) -> String {
     }
 }
 
+fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
+    let font = egui::FontId::proportional(crate::theme::FONT_CHROME);
+    let fits = |s: &str| {
+        ui.fonts(|f| f.layout_no_wrap(s.to_owned(), font.clone(), egui::Color32::WHITE))
+            .size()
+            .x
+            <= max_w
+    };
+    if fits(label) {
+        return label.to_string();
+    }
+    let mut t = label.to_string();
+    while t.pop().is_some() {
+        let candidate = format!("{}…", t.trim_end());
+        if fits(&candidate) {
+            return candidate;
+        }
+    }
+    "…".into()
+}
+
 fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool) -> egui::Response {
-    let avail = ui.available_width();
+    let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
     let wrap = bubble_wrap_width(avail, BUBBLE_PAD_X);
     let content = crate::markdown::measure_text(ui, body, wrap);
     let inner_w = content.x.max(1.0).min(wrap);
+    let outer_w = bubble_outer_width(avail, inner_w, BUBBLE_PAD_X);
     let fill = if user {
         crate::theme::bubble_user()
     } else {
@@ -425,20 +449,27 @@ fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool
         .inner_margin(egui::Margin::symmetric(BUBBLE_PAD_X, BUBBLE_PAD_Y));
     let mut resp = None;
     let paint = |ui: &mut egui::Ui| {
-        ui.set_max_width(bubble_max_width(avail));
-        resp = Some(
-            frame
-                .show(ui, |ui| {
-                    ui.set_width(inner_w);
-                    ui.set_max_width(wrap);
-                    if markdown {
-                        crate::markdown::show(ui, body);
-                    } else {
-                        ui.label(RichText::new(body).color(crate::theme::fg()));
-                    }
-                })
-                .response,
-        );
+        ui.set_max_width(outer_w);
+        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+            ui.set_max_width(outer_w);
+            resp = Some(
+                frame
+                    .show(ui, |ui| {
+                        ui.set_width(inner_w);
+                        ui.set_max_width(inner_w);
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                        if markdown {
+                            crate::markdown::show(ui, body);
+                        } else {
+                            ui.add(
+                                egui::Label::new(RichText::new(body).color(crate::theme::fg()))
+                                    .wrap(),
+                            );
+                        }
+                    })
+                    .response,
+            );
+        });
     };
     if user {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), paint);
@@ -467,11 +498,15 @@ fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, idx: usize, thought_ope
             .default_open(thought_open)
             .show(ui, |ui| {
                 ui.set_max_width(bubble_w);
-                ui.label(
-                    RichText::new(&block.body)
-                        .size(crate::theme::FONT_META)
-                        .italics()
-                        .color(crate::theme::SUBTLE),
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&block.body)
+                            .size(crate::theme::FONT_META)
+                            .italics()
+                            .color(crate::theme::SUBTLE),
+                    )
+                    .wrap(),
                 );
             });
         }
@@ -5312,10 +5347,13 @@ impl Cabin {
         let icon_c = egui::pos2(rect.left() + 20.0, rect.center().y);
         let icon_rect = egui::Rect::from_center_size(icon_c, egui::vec2(20.0, 20.0));
         crate::icons::paint_rail_icon_at(ui.painter(), icon_rect, icon, color);
+        let text_left = rect.left() + 38.0;
+        let text_right = rect.right() - 12.0;
+        let painted = fit_rail_label(ui, label, (text_right - text_left).max(8.0));
         ui.painter().text(
-            egui::pos2(rect.left() + 38.0, rect.center().y),
+            egui::pos2(text_left, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            label,
+            painted,
             egui::FontId::proportional(crate::theme::FONT_CHROME),
             color,
         );
@@ -5588,7 +5626,7 @@ impl Cabin {
                                 ui,
                                 i == self.thread_idx && self.nav == Nav::Chat,
                                 icon,
-                                &title,
+                                &display_tab_title(&title),
                                 false,
                             );
                             if resp.double_clicked() {
@@ -7661,8 +7699,34 @@ mod tests {
                     resp.rect.width()
                 );
                 assert!(
+                    resp.rect.width() <= grokhub_core::BUBBLE_MAX_PX + 8.0,
+                    "tight column {}",
+                    resp.rect.width()
+                );
+                assert!(
                     resp.rect.height() > 48.0,
                     "wrapped bubble height {}",
+                    resp.rect.height()
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn long_sentence_stays_in_a_tight_column_on_a_wide_row() {
+        with_fonts_ui(|ui| {
+            ui.allocate_ui(egui::vec2(1600.0, 500.0), |ui| {
+                ui.set_max_width(1600.0);
+                let body = "the clam gods? oh you know... ancient, briny, and extremely picky about their cream-to-broth ratio. they live in the black void between chowder pots, only emerging when someone dares to say manhattan style in their presence. knock twice and offer a saltine or they won't even open up.";
+                let resp = super::paint_speech_bubble(ui, body, false, true);
+                assert!(
+                    resp.rect.width() <= grokhub_core::BUBBLE_MAX_PX + 8.0,
+                    "wide pane stretched the bubble to {}",
+                    resp.rect.width()
+                );
+                assert!(
+                    resp.rect.height() > 56.0,
+                    "long sentence must wrap into several lines, height {}",
                     resp.rect.height()
                 );
             });
@@ -7871,6 +7935,22 @@ mod tests {
     fn rail_footer_is_reserved() {
         assert_eq!(super::RAIL_FOOTER_H, 52.0);
         assert!(super::PALETTE_LIST_H < 400.0);
+    }
+
+    #[test]
+    fn rail_chat_title_stays_short() {
+        assert_eq!(
+            grokhub_core::display_tab_title("chowder and food interest and cho"),
+            "chowder"
+        );
+        with_fonts_ui(|ui| {
+            let painted = super::fit_rail_label(ui, "chowder and food interest and cho", 72.0);
+            assert!(
+                painted.chars().count() < 20,
+                "rail label must not run off the pill: {painted}"
+            );
+            assert!(painted.ends_with('…') || painted == "chowder", "{painted}");
+        });
     }
 
     #[test]
