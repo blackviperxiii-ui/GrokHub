@@ -169,12 +169,10 @@ fn run_hub() {
 
 fn run_cabin(hidden: bool) -> eframe::Result<()> {
     tray::pin_session_bus();
-    if let Some(backend) = tray::prefer_x11_backend(
-        env::var("WINIT_UNIX_BACKEND").ok().as_deref(),
+    tray::force_x11_for_close_to_tray(
         env::var_os("DISPLAY").is_some(),
-    ) {
-        env::set_var("WINIT_UNIX_BACKEND", backend);
-    }
+        env::var_os("WAYLAND_DISPLAY").is_some() || env::var_os("WAYLAND_SOCKET").is_some(),
+    );
     let geom = window::clamp_geom(config::load().window);
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size(window::launch_size(&geom))
