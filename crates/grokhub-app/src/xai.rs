@@ -1,9 +1,11 @@
 use grokhub_core::{
     chat_include_usage, chat_request_body_vision, chat_stream_flag, chat_timeout_secs,
     client_secrets_body, client_secrets_url, dedicated_imagine_model, dedicated_video_model,
-    frame_bytes, imagine_image_body, imagine_slug, merge_thinking, parse_client_secret,
-    parse_imagine_url, parse_model_reasoning, parse_video_job_status, parse_video_request_id,
-    parse_video_url, video_request_body, VideoJobStatus,
+    frame_bytes, imagine_image_fallback_model, imagine_image_shaped, imagine_should_retry_model,
+    imagine_slug, imagine_video_fallback_model, media_ext_from_bytes, merge_thinking,
+    parse_client_secret, parse_imagine_url, parse_model_reasoning, parse_video_job_status,
+    parse_video_request_id, parse_video_url, video_moderation_blocked, video_request_body,
+    VideoJobStatus,
     parse_model_text, parse_sse_text, parse_sse_thought, parse_stt_text, realtime_can_connect,
     fold_sse_acc, sse_live_delta,
     responses_request_body, responses_url, sse_done, stt_multipart, stt_url, tts_request_body, tts_url,
@@ -193,15 +195,34 @@ pub fn grok_imagine_opts(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
-    let body = imagine_image_body(prompt, &dedicated_imagine_model(model), aspect, resolution);
-    let v = grok_json(
-        &format!("{XAI_BASE}/images/generations"),
-        key,
-        body,
-        120,
-    )?;
-    let url = parse_imagine_url(&v).ok_or_else(|| "empty Imagine reply".to_string())?;
-    save_media(&url, prompt, "png")
+    let primary = dedicated_imagine_model(model);
+    let quality = match resolution.map(str::trim) {
+        Some("1k") => Some("low"),
+        Some("2k") => Some("medium"),
+        _ => None,
+    };
+    let try_model = |m: &str| -> Result<String, String> {
+        let body = imagine_image_shaped(prompt, m, aspect, resolution, quality);
+        let v = grok_json(
+            &format!("{XAI_BASE}/images/generations"),
+            key,
+            body,
+            180,
+        )?;
+        let url = parse_imagine_url(&v).ok_or_else(|| "empty Imagine reply".to_string())?;
+        save_media(&url, prompt, "png", key)
+    };
+    match try_model(&primary) {
+        Ok(path) => Ok(path),
+        Err(e) => {
+            if let Some(fb) = imagine_image_fallback_model(&primary) {
+                if imagine_should_retry_model(&e) {
+                    return try_model(fb);
+                }
+            }
+            Err(e)
+        }
+    }
 }
 
 pub fn grok_imagine_video(
@@ -216,21 +237,31 @@ pub fn grok_imagine_video(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
-    let body = video_request_body(
-        prompt,
-        &dedicated_video_model(model),
-        duration,
-        aspect,
-        resolution,
-    );
-    let started = grok_json(
-        &format!("{XAI_BASE}/videos/generations"),
-        key,
-        body,
-        60,
-    )?;
-    let request_id =
-        parse_video_request_id(&started).ok_or_else(|| "empty video request_id".to_string())?;
+    let primary = dedicated_video_model(model);
+    let try_start = |m: &str| -> Result<String, String> {
+        let body = video_request_body(prompt, m, duration, aspect, resolution);
+        let started = grok_json(
+            &format!("{XAI_BASE}/videos/generations"),
+            key,
+            body,
+            60,
+        )?;
+        parse_video_request_id(&started).ok_or_else(|| "empty video request_id".to_string())
+    };
+    let request_id = match try_start(&primary) {
+        Ok(id) => id,
+        Err(e) => {
+            if let Some(fb) = imagine_video_fallback_model(&primary) {
+                if imagine_should_retry_model(&e) {
+                    try_start(fb)?
+                } else {
+                    return Err(e);
+                }
+            } else {
+                return Err(e);
+            }
+        }
+    };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(480);
     loop {
         if std::time::Instant::now() >= deadline {
@@ -251,8 +282,11 @@ pub fn grok_imagine_video(
                 std::thread::sleep(std::time::Duration::from_secs(5));
             }
             VideoJobStatus::Done => {
+                if video_moderation_blocked(&v) {
+                    return Err("video blocked by moderation".into());
+                }
                 let url = parse_video_url(&v).ok_or_else(|| "empty video url".to_string())?;
-                return save_media(&url, prompt, "mp4");
+                return save_media(&url, prompt, "mp4", key);
             }
             VideoJobStatus::Failed => return Err("video failed".into()),
             VideoJobStatus::Expired => return Err("video expired".into()),
@@ -260,31 +294,36 @@ pub fn grok_imagine_video(
     }
 }
 
-fn save_media(url: &str, prompt: &str, ext: &str) -> Result<String, String> {
-    let path = if ext.trim().eq_ignore_ascii_case("png") {
-        crate::desktop::imagine_save_path(&imagine_slug(prompt))
-    } else {
-        crate::desktop::imagine_save_path_ext(&imagine_slug(prompt), ext)
-    };
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    if url.starts_with("data:image") {
+fn save_media(url: &str, prompt: &str, ext: &str, key: &str) -> Result<String, String> {
+    let buf = if url.starts_with("data:image") {
         let f = PresenceFrame {
             data_url: url.to_string(),
             at: 0,
         };
-        let (_, buf) = frame_bytes(&f).ok_or_else(|| "bad imagine data url".to_string())?;
-        std::fs::write(&path, buf).map_err(|e| e.to_string())?;
+        frame_bytes(&f)
+            .ok_or_else(|| "bad imagine data url".to_string())?
+            .1
     } else {
         let resp = ureq::get(url)
-            .timeout(std::time::Duration::from_secs(60))
+            .set("authorization", &format!("Bearer {key}"))
+            .timeout(std::time::Duration::from_secs(120))
             .call()
             .map_err(http_err)?;
-        let mut reader = resp.into_reader();
-        let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
-        std::io::copy(&mut reader, &mut file).map_err(|e| e.to_string())?;
+        let mut buf = Vec::new();
+        resp.into_reader()
+            .read_to_end(&mut buf)
+            .map_err(|e| e.to_string())?;
+        if buf.len() < 32 {
+            return Err("empty media download".into());
+        }
+        buf
+    };
+    let ext = media_ext_from_bytes(&buf, ext);
+    let path = crate::desktop::imagine_save_path_ext(&imagine_slug(prompt), ext);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
+    std::fs::write(&path, buf).map_err(|e| e.to_string())?;
     Ok(path.display().to_string())
 }
 
@@ -392,6 +431,32 @@ mod tests {
     fn status_prefix() {
         assert_eq!(http_status_of("HTTP 429: rate"), Some(429));
         assert!(http_status_of("timeout").is_none());
+    }
+
+    #[test]
+    fn imagine_download_sends_the_bearer() {
+        let src = include_str!("xai.rs");
+        let save = src
+            .split("fn save_media")
+            .nth(1)
+            .and_then(|s| s.split("pub fn grok_stt").next())
+            .expect("save_media");
+        assert!(
+            save.contains("authorization"),
+            "vidgen / image URLs need the same Bearer as the generate call: {save}"
+        );
+        assert!(
+            src.contains("imagine_should_retry_model"),
+            "OAuth often lacks grok-imagine-image-2.0 — retry grok-imagine-image"
+        );
+        assert!(
+            src.contains("imagine_video_fallback_model"),
+            "video 1.5 must fall back to grok-imagine-video"
+        );
+        assert!(
+            src.contains("video_moderation_blocked"),
+            "an empty video url after moderation must not look like a parse bug"
+        );
     }
 
     #[test]
