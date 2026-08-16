@@ -245,6 +245,44 @@ pub fn imagine_wall_overlaps_toolbox(
     wall_top < toolbox_bottom && toolbox_top < wall_bottom
 }
 
+/// Generated still fills the wall slot above the docked chat box — never the idle middle.
+pub fn imagine_shows_result_above(has_result: bool, dock: ImagineToolboxDock) -> bool {
+    has_result
+        && match dock {
+            ImagineToolboxDock::Bottom => true,
+            ImagineToolboxDock::Middle => false,
+        }
+}
+
+/// Letterbox a still inside the wall so the full generated image sits above the chat box.
+pub fn imagine_result_fit(
+    wall_x: f32,
+    wall_y: f32,
+    wall_w: f32,
+    wall_h: f32,
+    img_w: f32,
+    img_h: f32,
+) -> (f32, f32, f32, f32) {
+    let iw = img_w.max(1.0);
+    let ih = img_h.max(1.0);
+    let ww = wall_w.max(0.0);
+    let wh = wall_h.max(0.0);
+    if ww <= 0.0 || wh <= 0.0 {
+        return (wall_x, wall_y, 0.0, 0.0);
+    }
+    let ia = iw / ih;
+    let da = ww / wh;
+    if ia > da {
+        let h = ww / ia;
+        let y = wall_y + (wh - h) * 0.5;
+        (wall_x, y, ww, h)
+    } else {
+        let w = wh * ia;
+        let x = wall_x + (ww - w) * 0.5;
+        (wall_x.max(x), wall_y, w, wh)
+    }
+}
+
 /// Twenty live covers. Oldest leaves first.
 pub const WALL_GIF_MAX: usize = 20;
 /// A new cover every few hours.
@@ -761,5 +799,42 @@ mod tests {
             toolbox_top,
             180.0
         ));
+    }
+
+    #[test]
+    fn generated_still_shows_above_the_docked_chat_box() {
+        assert!(imagine_shows_result_above(
+            true,
+            ImagineToolboxDock::Bottom
+        ));
+        assert!(!imagine_shows_result_above(
+            false,
+            ImagineToolboxDock::Bottom
+        ));
+        assert!(!imagine_shows_result_above(
+            true,
+            ImagineToolboxDock::Middle
+        ));
+        assert!(!imagine_shows_result_above(
+            false,
+            ImagineToolboxDock::Middle
+        ));
+        let dock = imagine_toolbox_dock(true, true, false);
+        assert_eq!(dock, ImagineToolboxDock::Bottom);
+        assert!(imagine_shows_result_above(true, dock));
+        let toolbox_top = imagine_toolbox_top(100.0, 600.0, 180.0, dock);
+        let (wall_top, wall_h) = imagine_wall_bounds(100.0, 600.0, toolbox_top, 180.0, dock);
+        let (x, y, w, h) = imagine_result_fit(40.0, wall_top, 720.0, wall_h, 1024.0, 768.0);
+        assert!(w > 0.0 && h > 0.0);
+        assert!(y >= wall_top);
+        assert!(y + h <= wall_top + wall_h + 0.01);
+        assert!(x >= 40.0);
+        assert!(x + w <= 40.0 + 720.0 + 0.01);
+        assert!(
+            y + h <= toolbox_top,
+            "generated still must sit above the chat box: still_bottom={} box_top={toolbox_top}",
+            y + h
+        );
+        assert!(!imagine_wall_overlaps_toolbox(y, h, toolbox_top, 180.0));
     }
 }
