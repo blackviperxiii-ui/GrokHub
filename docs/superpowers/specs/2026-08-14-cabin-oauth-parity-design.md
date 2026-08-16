@@ -1,7 +1,7 @@
 # Rust cabin — Grok OAuth + Electron parity
 
 **Date:** 2026-08-14  
-**Version:** 2.0.0 (do not bump)  
+**Version:** 2.5.0  
 **Override:** Grok OAuth is required. The old “no OAuth” line in the Rust-parity spec is void.
 
 ## Why
@@ -38,8 +38,9 @@ Doctor / banner: auth = key **or** OAuth.
 
 ## Honest limits
 
-- Not a live duplex Grok Voice socket
-- Not Electron tray chrome (pings use `notify-send`; cabin is still the window)
+- Duplex Voice still needs a console API key (OAuth covers STT/TTS)
+- Tray pings are one-shot on hide (`notify-send`); the cabin is still the window
 - Inhabit still refuses the phone
 - Website connectors stay status-only unless a local token exists
 - No Telegram, no provider zoo, no WASM, no hook YAML
+- Hands are unsandboxed (`COMPUTER_CMD` / xdotool / grim) — same as the Electron cabin

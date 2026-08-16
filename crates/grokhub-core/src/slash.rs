@@ -402,6 +402,8 @@ pub fn slash_help() -> String {
         "/usage — today's buckets",
         "/models — Grok catalog",
         "/palette — command palette",
+        "Enter sends; Ctrl+Enter newline. Appearance: Dark, Light, System.",
+        "Voice: OAuth for STT/TTS; duplex needs a console key. Hands: unsandboxed mouse/keyboard/vision.",
     ]
     .join("\n")
 }
