@@ -224,6 +224,9 @@ impl HubState {
             .iter_mut()
             .find(|t| t.id == id && t.target_device_id == peer_id)
             .ok_or(CompleteError::Forbidden)?;
+        if t.status == "done" || t.status == "failed" {
+            return Ok(());
+        }
         t.status = "acked".into();
         Ok(())
     }
@@ -480,6 +483,17 @@ mod tests {
         );
         st.ack_inbox(&task.id, &hub_id).expect("target acks");
         assert_eq!(st.get_task(&task.id, &phone.id).unwrap().status, "acked");
+        let done = st
+            .enqueue_task(&phone, &hub_id, "Done", "finish me")
+            .unwrap();
+        st.complete_task(&hub_id, &done.id, "ok", vec![], Some("done"))
+            .unwrap();
+        st.ack_inbox(&done.id, &hub_id).expect("ack after complete");
+        assert_eq!(
+            st.get_task(&done.id, &phone.id).unwrap().status,
+            "done",
+            "ack must not hide a completed result from GET /v1/results"
+        );
         for i in 0..90 {
             st.enqueue_local("local", &format!("do {i}")).unwrap();
         }

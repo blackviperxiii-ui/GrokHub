@@ -39,6 +39,7 @@ use grokhub_core::{
     imagine_toolbox_top, imagine_wall_bounds,
     doctor_hands_line, due_automations, ensure_automation_schedule, estimate_messages,
     extract_connector_cmds, mark_automation_skipped, retain_held_plan, yolo_plan_split, chat_bearer,
+    oauth_access_live,
     drop_trailing_assistant_on, job_error_goes_to_chat, kick_messages_for_job, last_user_for_job,
     persist_user_turn, push_bound_message, refund_host_reserved, daily_units_blocked,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
@@ -597,6 +598,7 @@ pub struct Cabin {
     window_visible: bool,
     want_quit: bool,
     told_tray: bool,
+    pending_hub_task: Option<String>,
     automations: Vec<Automation>,
     night_nl: String,
     history_q: String,
@@ -877,6 +879,7 @@ impl Cabin {
             window_visible: !hidden,
             want_quit: false,
             told_tray: false,
+            pending_hub_task: None,
             automations: crate::night::load(),
             night_nl: String::new(),
             history_q: String::new(),
@@ -2307,12 +2310,14 @@ impl Cabin {
         if let Some(tok) = self.secrets.oauth.clone() {
             if let Ok((access, next, refreshed)) = crate::oauth::ensure_access(&tok) {
                 if refreshed {
-                    self.secrets.oauth = Some(next);
+                    self.secrets.oauth = Some(next.clone());
                     let _ = secrets::save(&self.secrets);
                 }
-                oauth_usable = true;
-                if self.cfg.api_key.trim().is_empty() {
-                    return access;
+                if oauth_access_live(&next, now_ms()) {
+                    oauth_usable = true;
+                    if self.cfg.api_key.trim().is_empty() {
+                        return access;
+                    }
                 }
             }
         }
@@ -2460,6 +2465,7 @@ impl Cabin {
         match delete_thread(self.threads.len(), idx, self.thread_idx) {
             DeleteOutcome::ResetLast => {
                 self.halt_in_flight();
+                self.finish_hub_dispatch("Chat deleted", false);
                 self.threads.clear();
                 self.threads.push(ChatThread::new("Chat", false));
                 self.thread_idx = 0;
@@ -2474,6 +2480,7 @@ impl Cabin {
                 let gone = self.threads.remove(idx);
                 if self.chat_job_thread.as_deref() == Some(gone.id.as_str()) {
                     self.halt_in_flight();
+                    self.finish_hub_dispatch("Chat deleted", false);
                 }
                 self.thread_idx = next;
                 if was_current {
@@ -2532,6 +2539,7 @@ impl Cabin {
             ChatSendKind::Fresh => {
                 if self.running && self.chat_job_thread.is_some() {
                     self.halt_in_flight();
+                    self.finish_hub_dispatch("Interrupted", false);
                 }
             }
         }
@@ -2679,6 +2687,7 @@ impl Cabin {
             Slash::Undo => {
                 if self.running {
                     self.halt_in_flight();
+                    self.finish_hub_dispatch("Undid in-flight reply", false);
                     self.status = "Undid in-flight reply".into();
                 } else if let Some(i) = self.messages.iter().rposition(|m| m.role == "assistant") {
                     self.messages.remove(i);
@@ -3299,6 +3308,7 @@ impl Cabin {
 
     fn spawn_night_check(&mut self, id: String, name: String, cmd: String) {
         if let Some(why) = forbidden_reason(&cmd) {
+            self.mark_auto_skipped(&id, now_ms());
             self.status = format!("Night check blocked: {why}");
             return;
         }
@@ -4176,7 +4186,7 @@ impl Cabin {
                     let facts = fact_candidates(&job_pairs);
                     extract_insights(&mut self.learning, &facts);
                 }
-                self.chat_job_thread = None;
+                let origin = self.chat_job_thread.take();
                 if here && self.speak_next {
                     self.speak_next = false;
                     self.speak_reply(&text);
@@ -4195,7 +4205,9 @@ impl Cabin {
                 for (key, st) in extract_work_updates(&text) {
                     let _ = apply_work_update(&mut self.board, &key, st);
                 }
+                let mut host_needs_kick = false;
                 if let Some(plan) = plan_from_text(&text) {
+                    self.chat_job_thread = origin.clone();
                     self.pending_update = false;
                     if self.cfg.yolo {
                         let (run, hold) = yolo_plan_split(
@@ -4204,7 +4216,7 @@ impl Cabin {
                             &self.cfg.project_dir,
                         );
                         if !run.is_empty() {
-                            self.run_cmds(run);
+                            host_needs_kick = self.run_cmds(run);
                         }
                         if !hold.is_empty() {
                             self.plan_pending = Some(hold);
@@ -4213,13 +4225,15 @@ impl Cabin {
                             }
                         }
                     } else {
-                        self.run_cmds(approved_cmds(&plan));
+                        host_needs_kick = self.run_cmds(approved_cmds(&plan));
                     }
                 }
                 for c in extract_connector_cmds(&text) {
+                    self.chat_job_thread = origin.clone();
                     self.run_connector(&c.connector_id, &c.tool, &c.args);
                 }
                 if let Some(p) = extract_imagine_prompt(&text) {
+                    self.chat_job_thread = origin.clone();
                     self.imagine_prompt = p;
                     if here {
                         self.nav = Nav::Imagine;
@@ -4238,7 +4252,10 @@ impl Cabin {
                     }
                 }
                 if let Some(q) = parse_consult(&text) {
-                    self.run_consult(q);
+                    if !self.running {
+                        self.chat_job_thread = origin.clone();
+                        self.run_consult(q);
+                    }
                 }
                 let outcome = parse_goal_outcome(&text);
                 let stored_pins: Vec<(String, String)> = self
@@ -4297,11 +4314,18 @@ impl Cabin {
                         );
                     }
                 }
+                if host_needs_kick && !self.running {
+                    self.kick_model();
+                }
+                if !self.running {
+                    self.finish_hub_dispatch(&text, true);
+                }
                 self.spawn_thread_goal_on(job.as_deref());
             }
             Ok(JobOut::Consult(detail)) => {
                 self.running = false;
-                self.push_bound_msg("assistant", detail);
+                self.push_bound_msg("assistant", detail.clone());
+                self.finish_hub_dispatch(&detail, true);
                 self.chat_job_thread = None;
                 self.persist();
             }
@@ -4391,7 +4415,19 @@ impl Cabin {
                     let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
                     self.commit_proposed_skill(proposed);
                 }
-                self.kick_model();
+                if !self.pending_connectors.is_empty() {
+                    let origin = self.chat_job_thread.clone();
+                    let (id, tool, args) = self.pending_connectors.remove(0);
+                    self.run_connector(&id, &tool, &args);
+                    if self.chat_job_thread.is_none() {
+                        self.chat_job_thread = origin;
+                    }
+                } else {
+                    self.kick_model();
+                }
+                if !self.running {
+                    self.finish_hub_dispatch(&block, ok);
+                }
             }
             Ok(JobOut::Connector(detail)) => {
                 self.running = false;
@@ -4409,6 +4445,9 @@ impl Cabin {
                     }
                 } else {
                     self.kick_model();
+                    if !self.running {
+                        self.finish_hub_dispatch(&detail, true);
+                    }
                 }
             }
             Ok(JobOut::Imagine(url)) => {
@@ -4416,6 +4455,7 @@ impl Cabin {
                 self.imagine_last = url.clone();
                 self.status = "Imagine ready".into();
                 self.push_bound_msg("assistant", format!("IMAGINE: {url}"));
+                self.finish_hub_dispatch(&format!("IMAGINE: {url}"), true);
                 self.chat_job_thread = None;
                 self.persist();
             }
@@ -4449,6 +4489,7 @@ impl Cabin {
                 self.voice_orb = "idle".into();
                 remember_chip_outcome(&mut self.chip_memory, false, now_ms());
                 self.status = self.apply_job_fail(&e);
+                self.finish_hub_dispatch(&e, false);
                 self.chat_job_thread = None;
                 self.stream_buf.clear();
                 self.thought_buf.clear();
@@ -4460,6 +4501,7 @@ impl Cabin {
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.running = false;
                 self.status = self.apply_job_fail(worker_gone_status());
+                self.finish_hub_dispatch(worker_gone_status(), false);
                 self.chat_job_thread = None;
                 self.stream_buf.clear();
                 self.thought_buf.clear();
@@ -4468,40 +4510,51 @@ impl Cabin {
         }
     }
 
-    fn run_cmds(&mut self, cmds: Vec<String>) {
+    fn run_cmds(&mut self, cmds: Vec<String>) -> bool {
         if !self.cfg.host_on {
             self.status = "Host off — /host on".into();
-            return;
+            return false;
         }
         if self.running {
             self.status = "Busy — wait, then host".into();
-            return;
+            return false;
         }
         if self.host_hour_at.elapsed() > Duration::from_secs(3600) {
             self.host_hour_count = 0;
             self.host_hour_at = Instant::now();
         }
         let mut gated = Vec::new();
+        let mut blocked = false;
         for c in &cmds {
             if host_hour_blocked(self.host_hour_count, self.cfg.host_hour_cap) {
                 self.status = format!("Host hour cap {}", self.cfg.host_hour_cap);
+                self.push_bound_msg(
+                    "user",
+                    format!(
+                        "HOST_RESULT (facts only):\n$ {c}\nblocked: hour cap {}",
+                        self.cfg.host_hour_cap
+                    ),
+                );
+                blocked = true;
                 break;
             }
             if let Some(why) = forbidden_reason(c) {
-                self.messages.push(Msg {
-                    role: "user".into(),
-                    content: format!("HOST_RESULT (facts only):\n$ {c}\nblocked: {why}"),
-                });
+                self.push_bound_msg(
+                    "user",
+                    format!("HOST_RESULT (facts only):\n$ {c}\nblocked: {why}"),
+                );
+                blocked = true;
                 continue;
             }
             if !c.trim().starts_with("COMPUTER_CMD")
                 && host_cmd_leaves_project(c, &self.cfg.project_dir)
                 && !self.cfg.yolo
             {
-                self.messages.push(Msg {
-                    role: "user".into(),
-                    content: format!("HOST_RESULT (facts only):\n$ {c}\nblocked: outside bound project"),
-                });
+                self.push_bound_msg(
+                    "user",
+                    format!("HOST_RESULT (facts only):\n$ {c}\nblocked: outside bound project"),
+                );
+                blocked = true;
                 continue;
             }
             self.host_hour_count = self.host_hour_count.saturating_add(1);
@@ -4509,14 +4562,19 @@ impl Cabin {
         }
         if gated.is_empty() {
             self.plan_pending = None;
-            return;
+            if blocked {
+                self.persist();
+            }
+            return blocked;
         }
         self.snapshot_project();
         self.last_host = gated.clone();
         self.host_halt.store(false, Ordering::SeqCst);
         self.running = true;
         self.host_reserved = gated.len() as u32;
-        self.chat_job_thread = Some(self.visible_thread_id());
+        if self.chat_job_thread.is_none() {
+            self.chat_job_thread = Some(self.visible_thread_id());
+        }
         self.voice_orb = "hands".into();
         self.host_live = gated[0].clone();
         self.status = "Host…".into();
@@ -4571,6 +4629,7 @@ impl Cabin {
             );
             let _ = tx.send(JobOut::HostDone(block));
         });
+        false
     }
 
     fn run_connector(&mut self, id: &str, tool: &str, args: &str) {
@@ -4582,6 +4641,7 @@ impl Cabin {
                 ),
             );
             self.persist();
+            self.kick_model();
             return;
         }
         if self.running {
@@ -4634,7 +4694,9 @@ impl Cabin {
             video_audio: self.imagine_video_audio,
         });
         self.running = true;
-        self.chat_job_thread = Some(self.visible_thread_id());
+        if self.chat_job_thread.is_none() {
+            self.chat_job_thread = Some(self.visible_thread_id());
+        }
         self.status = match kind {
             ImagineKind::Image => "Imagining…".into(),
             ImagineKind::Video => "Imagining video…".into(),
@@ -5075,8 +5137,10 @@ impl Cabin {
     }
 
     fn halt_work(&mut self, status: impl Into<String>) {
+        let status = status.into();
         self.halt_in_flight();
-        self.status = status.into();
+        self.finish_hub_dispatch(&status, false);
+        self.status = status;
     }
 
     fn drain_inbox(&mut self) {
@@ -5094,9 +5158,23 @@ impl Cabin {
         }
         let task = self.hub.lock().ok().and_then(|mut s| s.take_next_queued(&id));
         if let Some(t) = task {
+            self.pending_hub_task = Some(t.id.clone());
             self.nav = Nav::Chat;
             self.send_chat(format!("[from {}] {}", t.from_name, t.prompt));
         }
+    }
+
+    fn finish_hub_dispatch(&mut self, result: &str, ok: bool) {
+        let Some(id) = self.pending_hub_task.clone() else {
+            return;
+        };
+        let Ok(mut st) = self.hub.lock() else {
+            return;
+        };
+        let peer = st.device_id.clone();
+        let status = if ok { "done" } else { "failed" };
+        let _ = st.complete_task(&peer, &id, result, vec![], Some(status));
+        self.pending_hub_task = None;
     }
 
     fn hide_to_tray(&mut self, ctx: &egui::Context) {
@@ -8663,6 +8741,72 @@ mod tests {
         assert!(
             show.contains("CancelClose"),
             "Show cabin must clear a sticky close so the window does not hide again"
+        );
+    }
+
+    #[test]
+    fn chat_side_effects_keep_the_origin_thread() {
+        let src = include_str!("app.rs");
+        assert!(
+            src.contains("let origin = self.chat_job_thread.take()"),
+            "host/connector/imagine after Chat must rebind the origin tab"
+        );
+        assert!(
+            src.contains("finish_hub_dispatch"),
+            "phone dispatch must complete the hub task so GET /v1/results can see it"
+        );
+        assert!(
+            src.contains("oauth_access_live"),
+            "expired OAuth without refresh must not hide a console key"
+        );
+        let cmds = src
+            .split("fn run_cmds")
+            .nth(1)
+            .and_then(|s| s.split("fn run_connector").next())
+            .expect("run_cmds");
+        assert!(
+            cmds.contains("if self.chat_job_thread.is_none()"),
+            "run_cmds must not retarget a job that started on another tab"
+        );
+        assert!(
+            cmds.contains("push_bound_msg"),
+            "blocked host receipts must stay on the job thread"
+        );
+        assert!(
+            src.contains("host_needs_kick && !self.running"),
+            "an all-blocked host plan must still kick the model after connectors"
+        );
+        let halt = src
+            .split("fn halt_work")
+            .nth(1)
+            .and_then(|s| s.split("fn drain_inbox").next())
+            .expect("halt_work");
+        assert!(
+            halt.contains("finish_hub_dispatch"),
+            "Stop / tray halt must complete a claimed phone task"
+        );
+        assert!(
+            src.contains("self.finish_hub_dispatch(worker_gone_status(), false)"),
+            "a dropped worker must fail the claimed phone task"
+        );
+        let finish = src
+            .split("fn finish_hub_dispatch")
+            .nth(1)
+            .and_then(|s| s.split("fn hide_to_tray").next())
+            .expect("finish_hub_dispatch");
+        assert!(
+            finish.contains("self.pending_hub_task.clone()")
+                && finish.contains("self.pending_hub_task = None"),
+            "do not drop pending_hub_task before the hub mutex is held"
+        );
+        let host_done = src
+            .split("Ok(JobOut::HostDone(block))")
+            .nth(1)
+            .and_then(|s| s.split("Ok(JobOut::Connector").next())
+            .expect("HostDone");
+        assert!(
+            host_done.contains("pending_connectors"),
+            "queued connectors must run after host before the next kick_model"
         );
     }
 
