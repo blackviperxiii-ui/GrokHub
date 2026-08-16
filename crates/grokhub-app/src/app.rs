@@ -2860,7 +2860,7 @@ impl Cabin {
             self.last_receipt_ok,
             self.skill_list.len(),
         ));
-        lines.push(doctor_hands_line(crate::desktop::hands_driver_name()));
+        lines.push(doctor_hands_line(&crate::desktop::hands_chip_text()));
         lines
             .into_iter()
             .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
@@ -7897,12 +7897,14 @@ impl Cabin {
                     RichText::new("Look at the screen, then drive it. Halt stops a running job.")
                         .color(crate::theme::muted()),
                 );
+                let chip = crate::desktop::hands_chip_text();
                 crate::cards::status_chip(
                     ui,
-                    crate::desktop::hands_driver_name(),
-                    match crate::desktop::hands_driver_name() {
-                        "missing" => crate::cards::ChipTone::Offline,
-                        _ => crate::cards::ChipTone::Live,
+                    &chip,
+                    if crate::desktop::hands_ready() {
+                        crate::cards::ChipTone::Live
+                    } else {
+                        crate::cards::ChipTone::Offline
                     },
                 );
             });
@@ -7910,6 +7912,9 @@ impl Cabin {
             ui.horizontal(|ui| {
                 if crate::cards::white_pill(ui, "Take over") {
                     self.take_over_desktop();
+                }
+                if crate::cards::ghost_pill(ui, "Install hands") {
+                    self.status = crate::desktop::install_hands_status();
                 }
                 if crate::cards::ghost_pill(ui, "Scan") {
                     self.refresh_eyes();
@@ -8345,7 +8350,8 @@ mod tests {
             "Eyes subtitle is not a man page: {slice}"
         );
         assert!(slice.contains("Take over"));
-        assert!(slice.contains("hands_driver_name"));
+        assert!(slice.contains("Install hands"));
+        assert!(slice.contains("hands_chip_text"));
         assert!(slice.contains("framed_preview") || slice.contains("object_chip"));
         assert!(slice.contains("Look at the screen"));
     }
