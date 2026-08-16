@@ -54,7 +54,7 @@ use grokhub_core::{
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     rewind_dest, save_hub_state, screen_from_extents, search_corpus,
     should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
-    composer_enter, ComposerEnter,
+    composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title, apply_manual_rename, delete_thread, history_order, should_name_thread,
     slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
@@ -317,6 +317,7 @@ struct Msg {
 #[derive(Default)]
 struct ImagineBarOut {
     generate: bool,
+    stop: bool,
     go_settings: bool,
 }
 
@@ -5842,24 +5843,32 @@ impl Cabin {
                             self.listen_voice();
                         }
                         let ready = !self.composer.trim().is_empty();
+                        let go = composer_go(self.running, ready);
                         let send = crate::icons::paint_bar_icon(
                             ui,
-                            if ready {
-                                crate::icons::BarIcon::Send
-                            } else {
-                                crate::icons::BarIcon::ArrowUp
+                            match go {
+                                ComposerGo::Stop => crate::icons::BarIcon::Stop,
+                                ComposerGo::Send => crate::icons::BarIcon::Send,
+                                ComposerGo::Idle => crate::icons::BarIcon::ArrowUp,
                             },
-                            if ready { 28.0 } else { 22.0 },
-                            if ready {
-                                crate::theme::fg()
-                            } else {
-                                crate::theme::muted()
+                            match go {
+                                ComposerGo::Idle => 22.0,
+                                ComposerGo::Send | ComposerGo::Stop => 28.0,
+                            },
+                            match go {
+                                ComposerGo::Idle => crate::theme::muted(),
+                                ComposerGo::Send | ComposerGo::Stop => crate::theme::fg(),
                             },
                         )
-                        .on_hover_text("Send");
+                        .on_hover_text(composer_go_tip(self.running));
                         if send.clicked() {
-                            let t = std::mem::take(&mut self.composer);
-                            self.send_chat(t);
+                            match go {
+                                ComposerGo::Stop => self.run_slash(Slash::Stop),
+                                ComposerGo::Send | ComposerGo::Idle => {
+                                    let t = std::mem::take(&mut self.composer);
+                                    self.send_chat(t);
+                                }
+                            }
                         }
                     });
                 });
@@ -6637,6 +6646,7 @@ impl Cabin {
 
     fn ui_imagine(&mut self, ctx: &egui::Context) {
         let mut generate = false;
+        let mut stop = false;
         let mut new_project = false;
         let mut go_settings = false;
         let mut seed: Option<String> = None;
@@ -6742,6 +6752,10 @@ impl Cabin {
                     let bar = self.ui_imagine_bar(ui);
                     generate = bar.generate;
                     go_settings = bar.go_settings;
+                    if bar.stop {
+                        generate = false;
+                    }
+                    stop = bar.stop;
                 });
             });
         if new_project {
@@ -6760,7 +6774,9 @@ impl Cabin {
             self.settings_sec = SettingsSec::Account;
             self.nav = Nav::Settings;
         }
-        if generate {
+        if stop {
+            self.run_slash(Slash::Stop);
+        } else if generate {
             self.kick_imagine();
         }
     }
@@ -7054,27 +7070,30 @@ impl Cabin {
                         egui::Layout::right_to_left(egui::Align::Center),
                         |ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
+                            let go = composer_go(self.running, ready);
                             let send = crate::icons::paint_bar_icon(
                                 ui,
-                                if ready && !self.running {
-                                    crate::icons::BarIcon::Send
-                                } else {
-                                    crate::icons::BarIcon::ArrowUp
+                                match go {
+                                    ComposerGo::Stop => crate::icons::BarIcon::Stop,
+                                    ComposerGo::Send => crate::icons::BarIcon::Send,
+                                    ComposerGo::Idle => crate::icons::BarIcon::ArrowUp,
                                 },
                                 crate::theme::IMAGINE_HIT,
-                                if ready && !self.running {
-                                    crate::theme::FG
-                                } else {
-                                    crate::theme::MUTED
+                                match go {
+                                    ComposerGo::Idle => crate::theme::MUTED,
+                                    ComposerGo::Send | ComposerGo::Stop => crate::theme::FG,
                                 },
                             )
-                            .on_hover_text(if self.running {
-                                "Imagining…"
-                            } else {
-                                "Generate still · Enter"
+                            .on_hover_text(match go {
+                                ComposerGo::Stop => composer_go_tip(true),
+                                ComposerGo::Send | ComposerGo::Idle => "Generate still · Enter",
                             });
-                            if send.clicked() && ready && !self.running {
-                                out.generate = true;
+                            if send.clicked() {
+                                match go {
+                                    ComposerGo::Stop => out.stop = true,
+                                    ComposerGo::Send => out.generate = true,
+                                    ComposerGo::Idle => {}
+                                }
                             }
                             if crate::icons::paint_bar_icon(
                                 ui,
