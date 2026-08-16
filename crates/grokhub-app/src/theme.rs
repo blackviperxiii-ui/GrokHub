@@ -31,6 +31,9 @@ pub const FG: Color32 = Color32::from_rgb(0xfc, 0xfc, 0xfc);
 pub const MUTED: Color32 = Color32::from_rgb(0x9e, 0x9e, 0x9e);
 /// `--fg-tertiary` `0 0% 52%`
 pub const SUBTLE: Color32 = Color32::from_rgb(0x85, 0x85, 0x85);
+/// Empty-chat greeting — fainter than tertiary chrome so it does not steal focus
+pub const GREETING: Color32 = Color32::from_rgb(0x5c, 0x5c, 0x5c);
+pub const GREETING_SIZE: f32 = 13.0;
 /// `--border-l1` ~8% white on base
 pub const BORDER: Color32 = Color32::from_rgb(0x26, 0x26, 0x26);
 /// `--border-l2` ~14% white
@@ -50,6 +53,7 @@ pub const LIGHT_ELEVATED: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);
 pub const LIGHT_FG: Color32 = Color32::from_rgb(0x0a, 0x0a, 0x0a);
 pub const LIGHT_MUTED: Color32 = Color32::from_rgb(0x73, 0x73, 0x73);
 pub const LIGHT_SUBTLE: Color32 = Color32::from_rgb(0x8a, 0x8a, 0x8a);
+pub const LIGHT_GREETING: Color32 = Color32::from_rgb(0xb0, 0xb0, 0xb0);
 pub const LIGHT_BORDER: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
 pub const LIGHT_BORDER_STRONG: Color32 = Color32::from_rgb(0xd4, 0xd4, 0xd8);
 pub const LIGHT_NAV_ACTIVE: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
@@ -94,6 +98,9 @@ pub fn muted() -> Color32 {
 }
 pub fn subtle() -> Color32 {
     tok(SUBTLE, LIGHT_SUBTLE)
+}
+pub fn whisper() -> Color32 {
+    tok(GREETING, LIGHT_GREETING)
 }
 pub fn border() -> Color32 {
     tok(BORDER, LIGHT_BORDER)
@@ -444,6 +451,10 @@ mod tests {
         assert_eq!(PANEL, Color32::from_rgb(33, 33, 33));
         assert_eq!(FG, Color32::from_rgb(252, 252, 252));
         assert_eq!(MUTED, Color32::from_rgb(158, 158, 158));
+        assert!(GREETING.r() < SUBTLE.r(), "greeting stays fainter than chrome");
+        assert!(GREETING.r() < MUTED.r());
+        assert_ne!(GREETING, FG);
+        assert_eq!(GREETING_SIZE, 13.0);
         assert_eq!(QUERY_MAX_W, 800.0);
         assert_eq!(QUERY_MIN_H, 60.0);
         assert_eq!(QUERY_RADIUS, 160.0);
