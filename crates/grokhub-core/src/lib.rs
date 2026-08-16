@@ -19,6 +19,7 @@ pub mod doctor;
 pub mod frame;
 pub mod goal;
 pub mod greeting;
+pub mod hands;
 pub mod heartbeat;
 pub mod history;
 pub mod host_cite;
@@ -134,6 +135,10 @@ pub use imagine::{
 };
 pub use inhabit::{
     can_inhabit, inhabit_bundle_usable, inhabit_claim_allowed, inhabit_ready, InhabitBundle,
+};
+pub use hands::{
+    diagnose_hands, extra_bin_dirs, hands_chip_label, hands_chip_live, hands_down_receipt,
+    resolve_bin_in, ydotool_socket_path, HandsDown, HANDS_PACMAN,
 };
 pub use recipe::{
     bin_on_path, computer_cmd_line, computer_drive, computer_drive_for, default_bin_extra_dirs,
