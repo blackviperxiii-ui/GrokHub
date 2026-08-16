@@ -245,6 +245,87 @@ pub fn compact_keep_pin(
 }
 
 pub const GOAL_MAX_STEPS: u32 = 6;
+pub const FOLLOWUP_MAX_STEPS: u32 = 4;
+pub const FOLLOWUP_PROMPT: &str =
+    "FOLLOWUP: Finish the incomplete work from your last reply. Act now (HOST_CMD if needed). End with status.";
+
+fn reply_has_work_lines(assistant: &str) -> bool {
+    assistant.lines().any(|line| {
+        let t = line.trim();
+        t.starts_with("HOST_CMD") || t.starts_with("COMPUTER_CMD") || t.starts_with("IMAGINE:")
+    })
+}
+
+fn user_asked_for_work(user: &str) -> bool {
+    let t = user.to_ascii_lowercase();
+    [
+        "fix",
+        "check",
+        "implement",
+        "take over",
+        "take control",
+        "run ",
+        "install",
+        "debug",
+        "investigate",
+        "patch",
+        "build ",
+        "add ",
+        "wire ",
+    ]
+    .iter()
+    .any(|p| t.contains(p))
+}
+
+fn promised_action(assistant: &str) -> bool {
+    let t = assistant.to_ascii_lowercase();
+    ["i'll", "i will", "let me ", "next i", "going to", "about to"]
+        .iter()
+        .any(|p| t.contains(p))
+}
+
+fn asked_user_a_question(assistant: &str) -> bool {
+    let last = assistant
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    last.ends_with('?') && !promised_action(last)
+}
+
+fn polite_closer(assistant: &str) -> bool {
+    let t = assistant.to_ascii_lowercase();
+    [
+        "let me know if you need",
+        "let me know if you want",
+        "you're all set",
+        "you are all set",
+    ]
+    .iter()
+    .any(|p| t.contains(p))
+}
+
+/// Stream-end check: continue only when the reply promised work or was cut off.
+pub fn reply_needs_followup(user: &str, assistant: &str, truncated: bool) -> bool {
+    if truncated {
+        return true;
+    }
+    if reply_has_work_lines(assistant) {
+        return false;
+    }
+    if polite_closer(assistant) {
+        return false;
+    }
+    if asked_user_a_question(assistant) {
+        return false;
+    }
+    let low = assistant.to_ascii_lowercase();
+    if regexish_done(&low) || assistant.to_ascii_uppercase().contains("GOAL_COMPLETE") {
+        return false;
+    }
+    promised_action(assistant) && user_asked_for_work(user)
+}
 
 pub fn next_goal_prompt(pin: &str, prior: &str, step: u32, max_steps: u32) -> Option<String> {
     if pin.trim().is_empty() {
@@ -283,6 +364,43 @@ mod tests {
         let p = next_goal_prompt("flash the pi", "wrote image", 0, 6).unwrap();
         assert!(p.contains("Goal step 1/6"));
         assert!(next_goal_prompt("flash the pi", "x", 6, 6).is_none());
+    }
+
+    #[test]
+    fn stream_end_followup_is_strict() {
+        assert!(reply_needs_followup("what is rust", "Rust is", true));
+        assert!(reply_needs_followup(
+            "fix the service",
+            "I'll inspect journalctl next.",
+            false
+        ));
+        assert!(!reply_needs_followup(
+            "fix the service",
+            "All done. GOAL_COMPLETE",
+            false
+        ));
+        assert!(!reply_needs_followup(
+            "what is rust",
+            "Here is the definition of Rust.",
+            false
+        ));
+        assert!(!reply_needs_followup(
+            "fix the service",
+            "Checking now.\nHOST_CMD: systemctl status foo\n",
+            false
+        ));
+        assert!(!reply_needs_followup(
+            "fix the service",
+            "Want me to restart it after the patch?",
+            false
+        ));
+        assert!(!reply_needs_followup(
+            "fix the service",
+            "Patched. Let me know if you need anything else.",
+            false
+        ));
+        assert_eq!(FOLLOWUP_MAX_STEPS, 4);
+        assert!(FOLLOWUP_PROMPT.starts_with("FOLLOWUP:"));
     }
 
     #[test]

@@ -60,6 +60,7 @@ use grokhub_core::{
     user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
+    reply_needs_followup,
     recipe_from_cmds, replay_automation_target,
     parse_nl_automation, parse_recipe, parse_slash, parse_theme, pick_theme, plan_from_text, plan_room,
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
@@ -93,7 +94,8 @@ use grokhub_core::{
     AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
     VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
     user_pref_facts,
-    DEFAULT_MODEL, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS, IMAGINE_ASPECTS,
+    DEFAULT_MODEL, FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND,
+    IDLE_REFLECT_MS, IMAGINE_ASPECTS,
     IMAGINE_STYLES,
     PRESENCE_RING_MS, TRANSCRIBERS,
 };
@@ -340,7 +342,7 @@ enum TabAct {
 }
 
 enum JobOut {
-    Chat(String),
+    Chat { text: String, truncated: bool },
     ChatDelta(String),
     ThoughtDelta(String),
     Imagine(String),
@@ -610,6 +612,7 @@ pub struct Cabin {
     active_skill_follow: Option<String>,
     last_anticipate_ms: u64,
     goal_step: u32,
+    followup_step: u32,
     stream_buf: String,
     thought_buf: String,
     presence_ring: Vec<(u64, String)>,
@@ -883,6 +886,7 @@ impl Cabin {
             active_skill_follow: None,
             last_anticipate_ms: 0,
             goal_step: 0,
+            followup_step: 0,
             stream_buf: String::new(),
             thought_buf: String::new(),
             presence_ring: vec![],
@@ -1104,6 +1108,7 @@ impl Cabin {
         self.rx = None;
         self.running = false;
         self.chat_job_thread = None;
+        self.followup_step = 0;
         self.stream_buf.clear();
         self.thought_buf.clear();
         if let Some(mut s) = self.voice_sock.take() {
@@ -2257,6 +2262,7 @@ impl Cabin {
         self.imagine_last.clear();
         self.cfg.goal_pin.clear();
         self.goal_step = 0;
+        self.followup_step = 0;
         self.status = if scratch {
             "Scratch — no memory writes".into()
         } else {
@@ -2424,6 +2430,20 @@ impl Cabin {
         if self.cfg.cabin_eyes && user_asks_cabin_eyes(&text) {
             self.eyes_attach = true;
         }
+        self.followup_step = 0;
+        self.persist();
+        self.kick_model();
+    }
+
+    fn send_followup_turn(&mut self) {
+        if self.followup_step >= FOLLOWUP_MAX_STEPS {
+            return;
+        }
+        self.followup_step += 1;
+        self.messages.push(Msg {
+            role: "user".into(),
+            content: FOLLOWUP_PROMPT.into(),
+        });
         self.persist();
         self.kick_model();
     }
@@ -3853,6 +3873,7 @@ impl Cabin {
                     if http_status_of(&e).map(should_failover_status).unwrap_or(false) {
                         if let Some(next) = failover_model(&model) {
                             grok_chat(&key, next, &msgs, image.as_deref(), None)
+                                .map(|t| (t, false))
                                 .map_err(|e2| format!("{e}; failover {next}: {e2}"))
                         } else {
                             Err(e)
@@ -3864,7 +3885,7 @@ impl Cabin {
                 ok => ok,
             };
             let _ = tx.send(match r {
-                Ok(t) => JobOut::Chat(t),
+                Ok((t, truncated)) => JobOut::Chat { text: t, truncated },
                 Err(e) => JobOut::Err(e),
             });
         });
@@ -3899,7 +3920,7 @@ impl Cabin {
                 }
                 self.upsert_stream_assistant();
             }
-            Ok(JobOut::Chat(text)) => {
+            Ok(JobOut::Chat { text, truncated }) => {
                 let here = chat_stream_is_visible(
                     self.chat_job_thread.as_deref(),
                     &self.visible_thread_id(),
@@ -4014,6 +4035,24 @@ impl Cabin {
                         );
                     }
                     self.spawn_thread_goal();
+                }
+                if here
+                    && !self.running
+                    && self.followup_step < FOLLOWUP_MAX_STEPS
+                    && reply_needs_followup(
+                        &last_user_text(
+                            &self
+                                .messages
+                                .iter()
+                                .map(|m| (m.role.clone(), m.content.clone()))
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap_or_default(),
+                        &text,
+                        truncated,
+                    )
+                {
+                    self.send_followup_turn();
                 }
             }
             Ok(JobOut::Consult(detail)) => {
@@ -8540,6 +8579,41 @@ mod tests {
         assert!(
             skills.contains("review_status_line"),
             "Skills Suggested header shows review status: {skills}"
+        );
+    }
+
+    #[test]
+    fn chat_arm_checks_stream_end_followup() {
+        let src = include_str!("app.rs");
+        let chat = src
+            .split("Ok(JobOut::Chat { text, truncated })")
+            .nth(1)
+            .and_then(|s| s.split("Ok(JobOut::Consult").next())
+            .expect("Chat arm");
+        assert!(
+            chat.contains("reply_needs_followup"),
+            "stream-end follow-up belongs in the Chat arm: {chat}"
+        );
+        assert!(
+            chat.contains("send_followup_turn"),
+            "Chat arm kicks a quiet continue, not send_chat: {chat}"
+        );
+        assert!(
+            chat.contains("FOLLOWUP_MAX_STEPS") && chat.contains("followup_step"),
+            "auto-follow is capped per user turn: {chat}"
+        );
+        assert!(
+            chat.contains("!self.running"),
+            "skip follow-up when host/goal already continues: {chat}"
+        );
+        let mid = src
+            .split("fn tick_mid_thought(")
+            .nth(1)
+            .and_then(|s| s.split("fn last_night_hint(").next())
+            .expect("tick_mid_thought");
+        assert!(
+            !mid.contains("send_chat") && !mid.contains("send_followup_turn"),
+            "MidThought must not auto-continue chat: {mid}"
         );
     }
 
