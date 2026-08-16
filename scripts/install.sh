@@ -45,6 +45,30 @@ if [[ "$SYSTEM" -eq 0 ]]; then
     "$HOME/.config/systemd/user/grokhub-hub.service"
   install -Dm644 "$ROOT/packaging/systemd/grokhub.service" \
     "$HOME/.config/systemd/user/grokhub.service"
+  install -Dm644 "$ROOT/packaging/systemd/ydotoold.service" \
+    "$HOME/.config/systemd/user/ydotoold.service"
+else
+  install -Dm644 "$ROOT/packaging/systemd/ydotoold.service" \
+    "$PREFIX/lib/systemd/user/ydotoold.service"
+  if [[ -f "$ROOT/packaging/udev/60-grokhub-uinput.rules" ]]; then
+    install -Dm644 "$ROOT/packaging/udev/60-grokhub-uinput.rules" \
+      /usr/lib/udev/rules.d/60-grokhub-uinput.rules
+  fi
+fi
+
+HANDS_PKGS=(ydotool xdotool grim wmctrl python-atspi)
+if command -v pacman >/dev/null; then
+  if pacman -Q "${HANDS_PKGS[@]}" >/dev/null 2>&1; then
+    echo "hands packages present"
+  elif pacman -S --needed --noconfirm "${HANDS_PKGS[@]}"; then
+    echo "installed hands packages"
+  else
+    echo "hands: sudo pacman -S --needed ${HANDS_PKGS[*]}"
+  fi
+fi
+if command -v systemctl >/dev/null && command -v ydotoold >/dev/null; then
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  systemctl --user enable --now ydotoold.service >/dev/null 2>&1 || true
 fi
 
 CONFIG_DIR="${GROKHUB_CONFIG:-$HOME/.config/GrokHub}"

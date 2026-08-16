@@ -1,11 +1,12 @@
 use grokhub_core::{
-    capture_kinds, clip_image_args, computer_cmd_line, computer_drive_for, ffmpeg_webcam_args,
-    ffmpeg_x11_args, frame_is_blank, gnome_shell_screenshot_args, hands_backend_name,
-    hands_blocked_by_lock, infer_wayland_display, jpeg_data_url, live_pcm_argv,
-    live_pcm_frame_bytes, luma_mean_var, parse_atspi_line, parse_picker_stdout, parse_wmctrl_line,
-    parse_xdotool_mouse, pcm_from_capture, pick_hands_backend, picker_args, session_is_wayland,
-    take_text_body, x11_grab_size, AtspiRow, CaptureKind, ComputerDrive, ComputerOp, HandsBackend,
-    RECORDERS, TRANSCRIBERS,
+    capture_kinds, clip_image_args, computer_cmd_line, computer_drive_for, diagnose_hands,
+    ffmpeg_webcam_args, ffmpeg_x11_args, frame_is_blank, gnome_shell_screenshot_args,
+    hands_backend_name, hands_blocked_by_lock, hands_chip_label, hands_chip_live, hands_down_receipt,
+    infer_wayland_display, jpeg_data_url, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var,
+    parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse, pcm_from_capture,
+    pick_hands_backend, picker_args, resolve_bin_in, session_is_wayland, take_text_body,
+    x11_grab_size, ydotool_socket_path, AtspiRow, CaptureKind, ComputerDrive, ComputerOp,
+    HandsBackend, HandsDown, RECORDERS, TRANSCRIBERS,
 };
 use image::GenericImageView;
 use std::io::{Read, Write};
@@ -38,16 +39,125 @@ def walk(acc, n=0):
 walk(pyatspi.Registry.getDesktop(0))
 "#;
 
+pub fn resolve_bin(name: &str) -> Option<PathBuf> {
+    resolve_bin_in(
+        name,
+        std::env::var("PATH").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
 pub fn which(name: &str) -> bool {
-    Command::new("which")
-        .arg(name)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    resolve_bin(name).is_some()
 }
 
 pub fn first_bin(names: &[&str]) -> Option<String> {
     names.iter().find(|n| which(n)).map(|s| (*s).to_string())
+}
+
+fn spawn_bin(name: &str) -> Command {
+    match resolve_bin(name) {
+        Some(p) => Command::new(p),
+        None => Command::new(name),
+    }
+}
+
+fn uinput_writable() -> bool {
+    let p = Path::new("/dev/uinput");
+    if !p.exists() {
+        return false;
+    }
+    std::fs::OpenOptions::new().write(true).open(p).is_ok()
+}
+
+fn ydotool_sock() -> PathBuf {
+    ydotool_socket_path(
+        std::env::var("YDOTOOL_SOCKET").ok().as_deref(),
+        std::env::var("XDG_RUNTIME_DIR").ok().as_deref(),
+    )
+}
+
+fn ydotool_socket_ready() -> bool {
+    let sock = ydotool_sock();
+    sock.exists()
+        || Path::new("/tmp/.ydotool_socket").exists()
+}
+
+fn start_ydotoold() {
+    let sock = ydotool_sock();
+    if let Some(parent) = sock.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::env::set_var("YDOTOOL_SOCKET", &sock);
+    let _ = Command::new("systemctl")
+        .args(["--user", "start", "ydotoold"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if ydotool_socket_ready() {
+        return;
+    }
+    let Some(daemon) = resolve_bin("ydotoold") else {
+        return;
+    };
+    for args in [
+        vec![format!("--socket-path={}", sock.display())],
+        vec!["-p".into(), sock.display().to_string()],
+        vec![],
+    ] {
+        let mut cmd = Command::new(&daemon);
+        cmd.args(&args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .env("YDOTOOL_SOCKET", &sock);
+        if cmd.spawn().is_ok() {
+            let deadline = Instant::now() + Duration::from_millis(400);
+            while Instant::now() < deadline {
+                if ydotool_socket_ready() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        }
+    }
+}
+
+fn hands_facts() -> (bool, bool, Option<bool>, Option<bool>) {
+    let has_ydotool = resolve_bin("ydotool").is_some();
+    let has_xdotool = resolve_bin("xdotool").is_some();
+    if !has_ydotool {
+        return (false, has_xdotool, None, None);
+    }
+    let uinput = uinput_writable();
+    let daemon = ydotool_socket_ready();
+    (true, has_xdotool, Some(uinput), Some(daemon))
+}
+
+pub fn hands_peek() -> HandsDown {
+    let (yd, xd, uinput, daemon) = hands_facts();
+    diagnose_hands(yd, xd, uinput, daemon)
+}
+
+pub fn ensure_hands() -> HandsDown {
+    let (has_ydotool, has_xdotool, uinput, daemon) = hands_facts();
+    if has_ydotool && uinput == Some(true) && daemon == Some(false) {
+        start_ydotoold();
+    }
+    let _ = (has_xdotool,);
+    hands_peek()
+}
+
+pub fn hands_chip_text() -> String {
+    hands_chip_label(hands_peek(), hands_driver_name())
+}
+
+pub fn hands_ready() -> bool {
+    hands_chip_live(hands_peek())
+}
+
+pub fn install_hands_status() -> String {
+    let reason = ensure_hands();
+    hands_down_receipt(reason).to_string()
 }
 
 pub fn collect_rows() -> Vec<AtspiRow> {
@@ -62,7 +172,7 @@ pub fn collect_rows() -> Vec<AtspiRow> {
         }
     }
     if rows.is_empty() {
-        if let Ok(out) = Command::new("wmctrl").args(["-lG"]).output() {
+        if let Ok(out) = spawn_bin("wmctrl").args(["-lG"]).output() {
             for line in String::from_utf8_lossy(&out.stdout).lines() {
                 if let Some(r) = parse_wmctrl_line(line) {
                     rows.push(r);
@@ -70,7 +180,7 @@ pub fn collect_rows() -> Vec<AtspiRow> {
             }
         }
     }
-    if let Ok(out) = Command::new("xdotool").args(["getmouselocation"]).output() {
+    if let Ok(out) = spawn_bin("xdotool").args(["getmouselocation"]).output() {
         if let Some(r) = parse_xdotool_mouse(&String::from_utf8_lossy(&out.stdout)) {
             rows.push(r);
         }
@@ -138,9 +248,7 @@ fn run_bin_steps(bin: &str, steps: &[Vec<String>], cancel: Option<&AtomicBool>) 
     if cancelled(cancel) {
         return Err("halted".into());
     }
-    if !which(bin) {
-        return Err(format!("{bin} missing"));
-    }
+    let path = resolve_bin(bin).ok_or_else(|| format!("{bin} missing"))?;
     for (i, step) in steps.iter().enumerate() {
         if cancelled(cancel) {
             return Err("halted".into());
@@ -148,10 +256,11 @@ fn run_bin_steps(bin: &str, steps: &[Vec<String>], cancel: Option<&AtomicBool>) 
         if i > 0 {
             std::thread::sleep(Duration::from_millis(25));
         }
-        let st = Command::new(bin)
-            .args(step)
-            .status()
-            .map_err(|e| e.to_string())?;
+        let mut cmd = Command::new(&path);
+        if bin == "ydotool" {
+            cmd.env("YDOTOOL_SOCKET", ydotool_sock());
+        }
+        let st = cmd.args(step).status().map_err(|e| e.to_string())?;
         if !st.success() {
             return Err(format!("{bin} {} failed", step.join(" ")));
         }
@@ -160,10 +269,14 @@ fn run_bin_steps(bin: &str, steps: &[Vec<String>], cancel: Option<&AtomicBool>) 
 }
 
 fn run_pointer_steps(steps: &[Vec<String>], cancel: Option<&AtomicBool>) -> Result<(), String> {
+    match ensure_hands() {
+        HandsDown::Ready => {}
+        reason => return Err(hands_down_receipt(reason).into()),
+    }
     match live_hands_backend() {
         Some(HandsBackend::Ydotool) => run_bin_steps("ydotool", steps, cancel),
         Some(HandsBackend::Xdotool) => run_bin_steps("xdotool", steps, cancel),
-        None => Err("ydotool/xdotool missing".into()),
+        None => Err(hands_down_receipt(HandsDown::Missing).into()),
     }
 }
 
@@ -196,7 +309,7 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     if live_hands_backend().is_none() {
         return Err(format!("act {name}: not found"));
     }
-    let out = Command::new("xdotool")
+    let out = spawn_bin("xdotool")
         .args(["search", "--onlyvisible", "--name", name])
         .output()
         .map_err(|e| e.to_string())?;
@@ -209,7 +322,7 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     if id.is_empty() {
         return Err(format!("act {name}: not found"));
     }
-    let geo = Command::new("xdotool")
+    let geo = spawn_bin("xdotool")
         .args(["getwindowgeometry", &id])
         .output()
         .map_err(|e| e.to_string())?;
@@ -356,7 +469,7 @@ fn run_capture_kind(kind: CaptureKind, dest: &Path) -> Result<PathBuf, String> {
         CaptureKind::GnomeShell => {
             let p = png.to_string_lossy().to_string();
             let args = gnome_shell_screenshot_args(&p);
-            let st = Command::new("gdbus")
+            let st = spawn_bin("gdbus")
                 .args(&args)
                 .status()
                 .map_err(|e| e.to_string())?;
@@ -385,7 +498,7 @@ fn run_capture_kind(kind: CaptureKind, dest: &Path) -> Result<PathBuf, String> {
             let (w, h) = x11_size();
             let p = jpg.to_string_lossy().to_string();
             let args = ffmpeg_x11_args(&display, w, h, &p);
-            let st = Command::new("ffmpeg")
+            let st = spawn_bin("ffmpeg")
                 .args(&args)
                 .status()
                 .map_err(|e| e.to_string())?;
@@ -690,7 +803,7 @@ fn transcribe(wav: &Path) -> Result<String, String> {
 }
 
 fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {
-    let st = Command::new(bin).args(args).status().map_err(|e| e.to_string())?;
+    let st = spawn_bin(bin).args(args).status().map_err(|e| e.to_string())?;
     if st.success() {
         Ok(())
     } else {
@@ -876,6 +989,13 @@ mod tests {
         assert!(TRANSCRIBERS.contains(&"whisper"));
         assert!(PLAYERS.contains(&"ffplay"));
         assert!(first_bin(&["definitely-not-a-bin-grokhub"]).is_none());
+        assert!(hands_down_receipt(HandsDown::Missing).contains("~/.local/bin"));
+        assert!(hands_down_receipt(HandsDown::Uinput).contains("uinput"));
+        assert!(hands_down_receipt(HandsDown::Daemon).contains("ydotoold"));
+        assert_ne!(
+            hands_down_receipt(HandsDown::Missing),
+            hands_down_receipt(HandsDown::Daemon)
+        );
         let a = grokhub_core::live_pcm_argv("arecord").unwrap();
         assert!(a.iter().any(|x| *x == "raw"));
     }
