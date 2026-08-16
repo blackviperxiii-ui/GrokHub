@@ -44,6 +44,7 @@ pub fn remember_source(dir: &std::path::Path) {
 
 pub fn host_receipt_failed(receipt: &str) -> bool {
     if receipt.contains("HOST_RECEIPT: timed out")
+        || receipt.contains("HOST_RECEIPT: halted")
         || receipt.contains("spawn failed")
         || receipt.contains("thread panicked")
     {
@@ -176,6 +177,10 @@ mod tests {
         assert!(!host_receipt_failed("$ echo\nexit 0 · 3ms\nok\n"));
         assert!(host_receipt_failed("$ git\nexit 1 · 10ms\nfatal\n"));
         assert!(host_receipt_failed("$ x\nHOST_RECEIPT: timed out"));
+        assert!(
+            host_receipt_failed("$ c\nHOST_RECEIPT: halted\n"),
+            "a halted host batch is not success"
+        );
         assert!(run_update_cmds(&["rm -rf ~/.config/GrokHub".into()]).is_err());
     }
 
