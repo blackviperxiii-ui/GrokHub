@@ -717,7 +717,13 @@ fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {
 }
 
 pub fn imagine_save_path(slug: &str) -> PathBuf {
-    crate::config::imagine_dir().join(format!("{slug}.png"))
+    imagine_save_path_ext(slug, "png")
+}
+
+pub fn imagine_save_path_ext(slug: &str, ext: &str) -> PathBuf {
+    let ext = ext.trim().trim_start_matches('.').to_ascii_lowercase();
+    let ext = if ext.is_empty() { "png".into() } else { ext };
+    crate::config::imagine_dir().join(format!("{slug}.{ext}"))
 }
 
 /// Second frame for a wall cover when the second Imagine call fails.

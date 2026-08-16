@@ -1,7 +1,9 @@
 use grokhub_core::{
     chat_include_usage, chat_request_body_vision, chat_stream_flag, chat_timeout_secs,
-    client_secrets_body, client_secrets_url, dedicated_imagine_model, frame_bytes, imagine_request_body,
-    imagine_slug, merge_thinking, parse_client_secret, parse_imagine_url, parse_model_reasoning,
+    client_secrets_body, client_secrets_url, dedicated_imagine_model, dedicated_video_model,
+    frame_bytes, imagine_image_body, imagine_slug, merge_thinking, parse_client_secret,
+    parse_imagine_url, parse_model_reasoning, parse_video_job_status, parse_video_request_id,
+    parse_video_url, video_request_body, VideoJobStatus,
     parse_model_text, parse_sse_text, parse_sse_thought, parse_stt_text, realtime_can_connect,
     fold_sse_acc, sse_live_delta,
     responses_request_body, responses_url, sse_done, stt_multipart, stt_url, tts_request_body, tts_url,
@@ -165,31 +167,90 @@ pub fn grok_chat_stream(
     }
 }
 
-pub fn grok_imagine(api_key: &str, model: &str, prompt: &str) -> Result<String, String> {
+pub fn grok_imagine_opts(
+    api_key: &str,
+    model: &str,
+    prompt: &str,
+    aspect: Option<&str>,
+    resolution: Option<&str>,
+) -> Result<String, String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
-    let body = imagine_request_body(prompt, &dedicated_imagine_model(model));
-    let resp = ureq::post(&format!("{XAI_BASE}/images/generations"))
-        .set("authorization", &format!("Bearer {key}"))
-        .set("content-type", "application/json")
-        .timeout(std::time::Duration::from_secs(120))
-        .send_json(body)
-        .map_err(|e| e.to_string())?;
-    let v: serde_json::Value = resp.into_json().map_err(|e| e.to_string())?;
-    if let Some(err) = v
-        .get("error")
-        .and_then(|e| e.get("message").and_then(|m| m.as_str()).or(e.as_str()))
-    {
-        return Err(err.to_string());
-    }
+    let body = imagine_image_body(prompt, &dedicated_imagine_model(model), aspect, resolution);
+    let v = grok_json(
+        &format!("{XAI_BASE}/images/generations"),
+        key,
+        body,
+        120,
+    )?;
     let url = parse_imagine_url(&v).ok_or_else(|| "empty Imagine reply".to_string())?;
-    save_imagine(&url, prompt)
+    save_media(&url, prompt, "png")
 }
 
-fn save_imagine(url: &str, prompt: &str) -> Result<String, String> {
-    let path = crate::desktop::imagine_save_path(&imagine_slug(prompt));
+pub fn grok_imagine_video(
+    api_key: &str,
+    model: &str,
+    prompt: &str,
+    duration: u32,
+    aspect: &str,
+    resolution: &str,
+) -> Result<String, String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Connect Grok in Settings".into());
+    }
+    let body = video_request_body(
+        prompt,
+        &dedicated_video_model(model),
+        duration,
+        aspect,
+        resolution,
+    );
+    let started = grok_json(
+        &format!("{XAI_BASE}/videos/generations"),
+        key,
+        body,
+        60,
+    )?;
+    let request_id =
+        parse_video_request_id(&started).ok_or_else(|| "empty video request_id".to_string())?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(480);
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err("video timed out".into());
+        }
+        let poll = ureq::get(&format!("{XAI_BASE}/videos/{request_id}"))
+            .set("authorization", &format!("Bearer {key}"))
+            .timeout(std::time::Duration::from_secs(30))
+            .call()
+            .map_err(http_err)?;
+        let v: serde_json::Value = poll.into_json().map_err(|e| e.to_string())?;
+        if let Some(err) = json_error(&v) {
+            return Err(err);
+        }
+        let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
+        match parse_video_job_status(status) {
+            VideoJobStatus::Pending => {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+            VideoJobStatus::Done => {
+                let url = parse_video_url(&v).ok_or_else(|| "empty video url".to_string())?;
+                return save_media(&url, prompt, "mp4");
+            }
+            VideoJobStatus::Failed => return Err("video failed".into()),
+            VideoJobStatus::Expired => return Err("video expired".into()),
+        }
+    }
+}
+
+fn save_media(url: &str, prompt: &str, ext: &str) -> Result<String, String> {
+    let path = if ext.trim().eq_ignore_ascii_case("png") {
+        crate::desktop::imagine_save_path(&imagine_slug(prompt))
+    } else {
+        crate::desktop::imagine_save_path_ext(&imagine_slug(prompt), ext)
+    };
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
@@ -204,7 +265,7 @@ fn save_imagine(url: &str, prompt: &str) -> Result<String, String> {
         let resp = ureq::get(url)
             .timeout(std::time::Duration::from_secs(60))
             .call()
-            .map_err(|e| e.to_string())?;
+            .map_err(http_err)?;
         let mut reader = resp.into_reader();
         let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
         std::io::copy(&mut reader, &mut file).map_err(|e| e.to_string())?;

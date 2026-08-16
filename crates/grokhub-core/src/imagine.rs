@@ -1,25 +1,146 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub const DEFAULT_IMAGINE_MODEL: &str = "grok-2-image";
+pub const DEFAULT_IMAGINE_MODEL: &str = "grok-imagine-image-2.0";
+pub const DEFAULT_VIDEO_MODEL: &str = "grok-imagine-video-1.5";
 
-/// Imagine never shares the chat model. Only an explicit *image* model wins.
+/// xAI retired grok-2-image / grok-2-image-1212 (EOL 2026-02-28).
+pub fn retired_imagine_model(user: &str) -> bool {
+    let u = user.trim().to_ascii_lowercase();
+    u == "grok-2-image" || u.starts_with("grok-2-image-")
+}
+
+/// Imagine never shares the chat model. Only a live *image* model wins.
 pub fn dedicated_imagine_model(user: &str) -> String {
     let u = user.trim();
-    if u.contains("image") {
+    if u.contains("image") && !retired_imagine_model(u) {
         u.to_string()
     } else {
         DEFAULT_IMAGINE_MODEL.to_string()
     }
 }
 
+/// Video never shares the chat or still-image model.
+pub fn dedicated_video_model(user: &str) -> String {
+    let u = user.trim();
+    if u.contains("video") {
+        u.to_string()
+    } else {
+        DEFAULT_VIDEO_MODEL.to_string()
+    }
+}
+
 pub fn imagine_request_body(prompt: &str, model: &str) -> Value {
-    json!({
+    imagine_image_body(prompt, model, None, None)
+}
+
+pub fn imagine_image_body(
+    prompt: &str,
+    model: &str,
+    aspect: Option<&str>,
+    resolution: Option<&str>,
+) -> Value {
+    let mut body = json!({
         "model": dedicated_imagine_model(model),
         "prompt": prompt,
         "n": 1,
         "response_format": "b64_json",
+    });
+    if let Some(a) = aspect.map(str::trim).filter(|s| !s.is_empty()) {
+        body["aspect_ratio"] = json!(a);
+    }
+    if let Some(r) = resolution.map(str::trim).filter(|s| !s.is_empty()) {
+        body["resolution"] = json!(r);
+    }
+    body
+}
+
+pub fn imagine_image_resolution(quality: bool) -> &'static str {
+    if quality {
+        "2k"
+    } else {
+        "1k"
+    }
+}
+
+pub fn imagine_video_duration_secs(label: &str) -> u32 {
+    label
+        .trim()
+        .trim_end_matches(['s', 'S'])
+        .parse::<u32>()
+        .unwrap_or(6)
+        .clamp(1, 15)
+}
+
+pub fn imagine_video_resolution(label: &str) -> &'static str {
+    match label.trim() {
+        "720p" => "720p",
+        "1080p" => "1080p",
+        _ => "480p",
+    }
+}
+
+pub fn video_request_body(
+    prompt: &str,
+    model: &str,
+    duration: u32,
+    aspect: &str,
+    resolution: &str,
+) -> Value {
+    json!({
+        "model": dedicated_video_model(model),
+        "prompt": prompt,
+        "duration": duration.clamp(1, 15),
+        "aspect_ratio": aspect.trim(),
+        "resolution": imagine_video_resolution(resolution),
     })
+}
+
+pub fn parse_video_request_id(body: &Value) -> Option<String> {
+    body.get("request_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoJobStatus {
+    Pending,
+    Done,
+    Failed,
+    Expired,
+}
+
+pub fn parse_video_job_status(status: &str) -> VideoJobStatus {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "done" => VideoJobStatus::Done,
+        "failed" => VideoJobStatus::Failed,
+        "expired" => VideoJobStatus::Expired,
+        "pending" | "" => VideoJobStatus::Pending,
+        _ => VideoJobStatus::Pending,
+    }
+}
+
+pub fn parse_video_url(body: &Value) -> Option<String> {
+    body.get("video")
+        .and_then(|v| v.get("url"))
+        .and_then(|u| u.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+pub fn imagine_is_video_path(path: &str) -> bool {
+    let ext = path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .split(|c: char| c == '?' || c == '#')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(ext.as_str(), "mp4" | "webm" | "mov")
 }
 
 pub fn imagine_slug(prompt: &str) -> String {
@@ -108,7 +229,7 @@ pub fn imagine_video_dur_label(i: u8) -> &'static str {
     IMAGINE_VIDEO_DURS[(i as usize) % IMAGINE_VIDEO_DURS.len()]
 }
 
-/// Cabin stills only. Selectors change the still prompt — they do not mint video files.
+/// Image/Agent selectors suffix the still prompt. Video duration/res go to the video API.
 pub fn compose_imagine_prompt(spec: &ImagineSpec<'_>) -> String {
     let prompt = spec.prompt.trim();
     let mut parts = Vec::new();
@@ -116,10 +237,15 @@ pub fn compose_imagine_prompt(spec: &ImagineSpec<'_>) -> String {
         parts.push(prompt.to_string());
     }
     let aspect = spec.aspect.trim();
-    if !aspect.is_empty() && !prompt.contains(aspect) {
-        parts.push(format!("{aspect} still"));
-    } else if !prompt.to_ascii_lowercase().contains("still") {
-        parts.push("still".into());
+    match spec.kind {
+        ImagineKind::Video => {}
+        ImagineKind::Image | ImagineKind::Agent => {
+            if !aspect.is_empty() && !prompt.contains(aspect) {
+                parts.push(format!("{aspect} still"));
+            } else if !prompt.to_ascii_lowercase().contains("still") {
+                parts.push("still".into());
+            }
+        }
     }
     match spec.kind {
         ImagineKind::Image => {
@@ -130,17 +256,11 @@ pub fn compose_imagine_prompt(spec: &ImagineSpec<'_>) -> String {
             }
         }
         ImagineKind::Video => {
-            let audio = if spec.video_audio {
-                "with audio"
+            if spec.video_audio {
+                parts.push("with diegetic sound".into());
             } else {
-                "silent"
-            };
-            parts.push(format!(
-                "storyboard still for a {} {} clip, {}",
-                spec.video_dur.trim(),
-                spec.video_res.trim(),
-                audio
-            ));
+                parts.push("silent, no speech".into());
+            }
         }
         ImagineKind::Agent => {
             parts.push("character sprite still, living agent pose".into());
@@ -561,13 +681,25 @@ mod tests {
 
     #[test]
     fn body_and_url() {
+        assert_eq!(DEFAULT_IMAGINE_MODEL, "grok-imagine-image-2.0");
         assert_eq!(dedicated_imagine_model("grok-3-mini-fast"), DEFAULT_IMAGINE_MODEL);
-        assert_eq!(dedicated_imagine_model("grok-2-image-1212"), "grok-2-image-1212");
+        assert_eq!(dedicated_imagine_model("grok-2-image"), DEFAULT_IMAGINE_MODEL);
+        assert_eq!(dedicated_imagine_model("grok-2-image-1212"), DEFAULT_IMAGINE_MODEL);
+        assert!(retired_imagine_model("grok-2-image-1212"));
+        assert!(!retired_imagine_model("grok-imagine-image-2.0"));
         let b = imagine_request_body("a cabin at night", "grok-3-mini-fast");
         assert_eq!(b["model"], DEFAULT_IMAGINE_MODEL);
         assert_eq!(b["response_format"], "b64_json");
+        let shaped = imagine_image_body("a cabin at night", "grok-2-image", Some("2:3"), Some("2k"));
+        assert_eq!(shaped["model"], DEFAULT_IMAGINE_MODEL);
+        assert_eq!(shaped["aspect_ratio"], "2:3");
+        assert_eq!(shaped["resolution"], "2k");
         assert_eq!(dedicated_imagine_model(""), DEFAULT_IMAGINE_MODEL);
         assert_eq!(dedicated_imagine_model("grok-imagine"), DEFAULT_IMAGINE_MODEL);
+        assert_eq!(
+            dedicated_imagine_model("grok-imagine-image-2.0"),
+            "grok-imagine-image-2.0"
+        );
         let reply = json!({ "data": [{ "url": "https://img/x.png" }] });
         assert_eq!(parse_imagine_url(&reply).as_deref(), Some("https://img/x.png"));
         assert_eq!(imagine_dest(None), "GrokHub-Work/imagine");
@@ -632,12 +764,31 @@ mod tests {
             video_dur: "10s",
             video_audio: true,
         });
-        assert!(video.contains("9:16"));
-        assert!(video.contains("720p"));
-        assert!(video.contains("10s"));
-        assert!(video.to_ascii_lowercase().contains("storyboard"));
-        assert!(video.to_ascii_lowercase().contains("audio"));
-        assert!(video.to_ascii_lowercase().contains("still"));
+        assert!(video.contains("snow on the rail"));
+        assert!(video.to_ascii_lowercase().contains("sound") || video.to_ascii_lowercase().contains("audio"));
+        assert!(!video.to_ascii_lowercase().contains("storyboard"));
+        assert!(!video.to_ascii_lowercase().contains("still"));
+        assert_eq!(imagine_video_duration_secs("10s"), 10);
+        assert_eq!(imagine_video_resolution("720p"), "720p");
+        let vbody = video_request_body("snow on the rail", "", 10, "9:16", "720p");
+        assert_eq!(vbody["model"], DEFAULT_VIDEO_MODEL);
+        assert_eq!(vbody["duration"], 10);
+        assert_eq!(vbody["aspect_ratio"], "9:16");
+        assert_eq!(vbody["resolution"], "720p");
+        assert_eq!(
+            parse_video_request_id(&json!({ "request_id": "abc-1" })).as_deref(),
+            Some("abc-1")
+        );
+        assert_eq!(parse_video_job_status("done"), VideoJobStatus::Done);
+        assert_eq!(parse_video_job_status("pending"), VideoJobStatus::Pending);
+        assert_eq!(parse_video_job_status("failed"), VideoJobStatus::Failed);
+        assert_eq!(
+            parse_video_url(&json!({ "status": "done", "video": { "url": "https://vid/x.mp4" } }))
+                .as_deref(),
+            Some("https://vid/x.mp4")
+        );
+        assert!(imagine_is_video_path("/tmp/clip.mp4"));
+        assert!(!imagine_is_video_path("/tmp/still.png"));
         let agent = compose_imagine_prompt(&ImagineSpec {
             prompt: "a mascot on the desk",
             kind: ImagineKind::Agent,

@@ -74,7 +74,7 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         title: "Imagine a scene",
         body: "Write a tight still-image prompt; the cabin generates it.",
         trigger: "imagine this",
-        instructions: "Write one tight still-image prompt (grok-2-image, no faces). Emit one line exactly: IMAGINE_PROMPT: <prompt>. Stay in the bound project.",
+        instructions: "Write one tight still-image prompt (grok-imagine-image-2.0, no faces). Emit one line exactly: IMAGINE_PROMPT: <prompt>. Stay in the bound project.",
         verify: "echo VERIFY_OK",
     },
     SuggestedSkill {
@@ -185,7 +185,7 @@ pub const SUGGESTED_AUTOS: &[SuggestedAuto] = &[
 /// grok.com/imagine rotating h1 noun — cabin-real only.
 pub const IMAGINE_WORDS: &[&str] = &["the cabin", "the night", "a scene", "the board"];
 
-/// Still-image seeds. grok-2-image only — no video, no photo-edit tools we do not have.
+/// Still-image seeds. grok-imagine-image-2.0 only — no photo-edit tools we do not have.
 /// `frames` cycle like grok.com/imagine cover GIFs — inspiration, not generated output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImagineScene {
@@ -371,7 +371,7 @@ pub fn imagine_toolbar_labels(kind: ImagineKind, authed: bool) -> Vec<&'static s
     out
 }
 
-/// Speed / Quality and aspect are still-prompt words. grok-2-image has no other lever.
+/// Speed / Quality and aspect also map to Imagine API resolution and aspect_ratio.
 pub fn imagine_still_prompt(prompt: &str, aspect: &str, quality: bool) -> String {
     let q = imagine_quality_word(quality);
     let p = prompt.trim();
@@ -1238,6 +1238,10 @@ pub fn imagine_result_hero(ui: &mut egui::Ui, path: &str) {
     }
     ui.allocate_rect(wall, Sense::hover());
     ui.painter().rect_filled(wall, 0.0, crate::theme::bg());
+    if grokhub_core::imagine_is_video_path(path) {
+        imagine_video_hero(ui, wall, path);
+        return;
+    }
     let (tex, size) = imagine_disk_tex(ui.ctx(), path);
     let (x, y, w, h) = imagine_result_fit(
         wall.left(),
@@ -1256,6 +1260,30 @@ pub fn imagine_result_hero(ui: &mut egui::Ui, path: &str) {
         dest,
         egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
         Color32::WHITE,
+    );
+}
+
+fn imagine_video_hero(ui: &mut egui::Ui, wall: egui::Rect, path: &str) {
+    let name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path);
+    let c = wall.center();
+    ui.painter()
+        .circle_filled(egui::pos2(c.x, c.y - 18.0), 28.0, crate::theme::panel());
+    ui.painter().text(
+        egui::pos2(c.x, c.y - 18.0),
+        Align2::CENTER_CENTER,
+        "▶",
+        FontId::proportional(22.0),
+        crate::theme::fg(),
+    );
+    ui.painter().text(
+        egui::pos2(c.x, c.y + 24.0),
+        Align2::CENTER_TOP,
+        format!("Video ready · {name}"),
+        FontId::proportional(crate::theme::FONT_CHROME),
+        crate::theme::fg(),
     );
 }
 
