@@ -5,7 +5,7 @@ Native Rust binaries. No Electron.
 ## From a clone
 
 ```bash
-sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 cmake meson ninja wayland wayland-protocols pixman libpng
+sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 cmake meson ninja wayland wayland-protocols pixman libpng libx11 libxtst libxinerama glib2 libxmu
 rustup default stable
 git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
 cd Grok-Hub
@@ -13,7 +13,7 @@ cd Grok-Hub
 grokhub
 ```
 
-`install.sh --user` builds ydotool + grim next to the cabin. One password for build deps and the `input` group.
+`install.sh --user` builds ydotool, grim, xdotool, and wmctrl next to the cabin. One password for build deps, the uinput udev rule, and the `input` group.
 
 ## makepkg (system)
 
@@ -22,14 +22,14 @@ cd packaging/aur
 makepkg -si
 ```
 
-`makepkg -si` / `yay -S grokhub` compile ydotool + grim into `/usr/lib/grokhub/bin`. Hands runtime packages are optdepends. First cabin launch or Eyes → Install hands starts `ydotoold`.
+`makepkg -si` / `yay -S grokhub` compile ydotool, grim, xdotool, and wmctrl into `/usr/lib/grokhub/bin`. Hands runtime packages are optdepends. First cabin launch or Eyes → Install hands starts `ydotoold`.
 
 ## Layout
 
 | Path | Role |
 |------|------|
 | `/usr/bin/grokhub` | Cabin |
-| `/usr/lib/grokhub/bin` | Sidecar ydotool / ydotoold / grim |
+| `/usr/lib/grokhub/bin` | Sidecar ydotool / ydotoold / grim / xdotool / wmctrl |
 | `/usr/bin/grokhub-hub` | Standalone LAN hub |
 | `/usr/share/applications/grokhub.desktop` | App menu |
 | `~/.config/GrokHub` | Config + memory (`app.json`, `projects.json`, `secrets.json`) |

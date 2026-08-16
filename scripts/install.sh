@@ -75,14 +75,33 @@ if [[ "$SYSTEM" -eq 0 ]]; then
 else
   write_ydotoold_unit "$PREFIX/lib/systemd/user/ydotoold.service" \
     "$HANDS_BIN/ydotoold"
-  if [[ -f "$ROOT/packaging/udev/60-grokhub-uinput.rules" ]]; then
-    install -Dm644 "$ROOT/packaging/udev/60-grokhub-uinput.rules" \
-      /usr/lib/udev/rules.d/60-grokhub-uinput.rules
-  fi
 fi
 
+install_uinput_rule() {
+  local src="$ROOT/packaging/udev/60-grokhub-uinput.rules"
+  if [[ ! -f "$src" ]]; then
+    return 0
+  fi
+  local dest="/etc/udev/rules.d/60-grokhub-uinput.rules"
+  if [[ "$SYSTEM" -eq 1 ]]; then
+    dest="/usr/lib/udev/rules.d/60-grokhub-uinput.rules"
+  fi
+  if [[ "$(id -u)" -eq 0 ]]; then
+    install -Dm644 "$src" "$dest" || echo "hands: install $dest"
+    modprobe uinput || echo "hands: modprobe uinput"
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger --subsystem-match=misc --attr-match=name=uinput 2>/dev/null || true
+  else
+    sudo install -Dm644 "$src" "$dest" || echo "hands: sudo install $dest"
+    sudo modprobe uinput || echo "hands: sudo modprobe uinput"
+    sudo udevadm control --reload-rules 2>/dev/null || true
+    sudo udevadm trigger --subsystem-match=misc --attr-match=name=uinput 2>/dev/null || true
+  fi
+}
+install_uinput_rule
+
 # Build-time compilers stay pacman packages. Overlay must not die if a sidecar fails.
-BUILD_PKGS=(cmake meson ninja wayland wayland-protocols pixman libpng)
+BUILD_PKGS=(cmake meson ninja wayland wayland-protocols pixman libpng libx11 libxtst libxinerama libxkbcommon glib2 libxmu)
 if command -v pacman >/dev/null; then
   missing=0
   for p in "${BUILD_PKGS[@]}"; do

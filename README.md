@@ -13,7 +13,7 @@ Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 ## Run
 
 ```bash
-sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 cmake meson ninja wayland wayland-protocols pixman libpng
+sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 cmake meson ninja wayland wayland-protocols pixman libpng libx11 libxtst libxinerama glib2 libxmu
 rustup default stable
 git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
 cd Grok-Hub
@@ -113,7 +113,7 @@ Contract: [`docs/superpowers/plans/2026-08-14-dispatch-android-notes.md`](docs/s
 | Path | Role |
 |------|------|
 | `~/.local/bin/grokhub` | User install (`./scripts/install.sh --user`) |
-| `~/.local/lib/grokhub/bin` | Sidecar ydotool / ydotoold / grim |
+| `~/.local/lib/grokhub/bin` | Sidecar ydotool / ydotoold / grim / xdotool / wmctrl |
 | `/usr/bin/grokhub` | System / makepkg |
 | `/usr/lib/grokhub/bin` | System sidecar hands |
 | `~/.config/GrokHub` | User data (`app.json`, `projects.json`, `secrets.json`, memory) |
