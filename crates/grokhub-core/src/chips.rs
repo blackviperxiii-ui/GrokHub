@@ -1410,6 +1410,14 @@ fn default_chips(mode: &str) -> Vec<QuickChip> {
 fn host_chips() -> Vec<QuickChip> {
     vec![
         chip(
+            "take-over",
+            "Take over",
+            "Take over this desktop. Look at the screen and fix what is broken.",
+            ChipKind::Chat,
+            96.0,
+            "See and drive the UI",
+        ),
+        chip(
             "host-diag",
             "System snapshot",
             "Run a quick read-only system snapshot via HOST_CMD (uname, whoami, pwd, grokhub install paths). Summarize.",
