@@ -5899,15 +5899,17 @@ impl Cabin {
                                     },
                                 )
                                 .on_hover_text(composer_go_tip(self.running));
+                                let go_hit = send.clicked()
+                                    || (send.is_pointer_button_down_on()
+                                        && ui.input(|i| i.pointer.primary_pressed()));
                                 match go {
                                     ComposerGo::Stop => {
-                                        if send.clicked() || send.is_pointer_button_down_on()
-                                        {
+                                        if go_hit {
                                             self.run_slash(Slash::Stop);
                                         }
                                     }
                                     ComposerGo::Send | ComposerGo::Idle => {
-                                        if send.clicked() {
+                                        if go_hit {
                                             let t = std::mem::take(&mut self.composer);
                                             self.send_chat(t);
                                         }
@@ -7135,14 +7137,17 @@ impl Cabin {
                                 ComposerGo::Stop => composer_go_tip(true),
                                 ComposerGo::Send | ComposerGo::Idle => "Generate still · Enter",
                             });
+                            let go_hit = send.clicked()
+                                || (send.is_pointer_button_down_on()
+                                    && ui.input(|i| i.pointer.primary_pressed()));
                             match go {
                                 ComposerGo::Stop => {
-                                    if send.clicked() || send.is_pointer_button_down_on() {
+                                    if go_hit {
                                         out.stop = true;
                                     }
                                 }
                                 ComposerGo::Send => {
-                                    if send.clicked() {
+                                    if go_hit {
                                         out.generate = true;
                                     }
                                 }
@@ -7782,6 +7787,10 @@ mod tests {
         assert!(
             pill.contains("is_pointer_button_down_on"),
             "Stop must halt on press; click-release is eaten by the shrink feel: {pill}"
+        );
+        assert!(
+            pill.contains("primary_pressed"),
+            "go press is edge-triggered so holding Send does not immediately Stop: {pill}"
         );
         assert!(
             !pill.contains("- 180.0"),
