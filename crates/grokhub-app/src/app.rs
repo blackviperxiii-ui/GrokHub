@@ -5137,6 +5137,7 @@ impl Cabin {
 
     fn show_from_tray(&mut self, ctx: &egui::Context) {
         self.window_visible = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         apply_tray_window(ctx, crate::tray::show_from_tray_window());
         self.ensure_tray_spawn();
         ctx.request_repaint();
@@ -5365,7 +5366,11 @@ impl eframe::App for Cabin {
         self.poll_wall();
         self.live_room();
         self.tick_heartbeat();
-        if ctx.input(|i| i.viewport().close_requested()) {
+        let close_requested = ctx.input(|i| i.viewport().close_requested());
+        let mut just_hid = false;
+        if crate::tray::ignore_close_while_hidden(self.window_visible, close_requested) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        } else if close_requested {
             let hide = crate::tray::should_hide_on_close(
                 self.cfg.close_to_tray,
                 self.tray.is_some(),
@@ -5373,6 +5378,7 @@ impl eframe::App for Cabin {
             if hide {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.hide_to_tray(ctx);
+                just_hid = true;
             } else {
                 self.capture_window(ctx);
                 self.persist();
@@ -5438,8 +5444,16 @@ impl eframe::App for Cabin {
             self.page_nav() == Nav::Imagine,
             self.wall_busy,
         );
-        if !self.window_visible {
-            apply_tray_window(ctx, crate::tray::hide_to_tray_window());
+        if !just_hid && crate::tray::take_cabin_raise() {
+            self.show_from_tray(ctx);
+        } else if !self.window_visible {
+            let focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+            match crate::tray::hidden_window_tick(true, focused, just_hid) {
+                crate::tray::HiddenTick::Raise => self.show_from_tray(ctx),
+                crate::tray::HiddenTick::StayHidden => {
+                    apply_tray_window(ctx, crate::tray::hide_to_tray_window());
+                }
+            }
         }
         ctx.request_repaint_after(Duration::from_millis(heartbeat_repaint_ms(
             live,
@@ -8633,6 +8647,22 @@ mod tests {
             src.contains("force_x11_for_close_to_tray")
                 || include_str!("main.rs").contains("force_x11_for_close_to_tray"),
             "winit 0.30 must drop WAYLAND_DISPLAY so × can unmap"
+        );
+        assert!(
+            src.contains("hidden_window_tick"),
+            "a pinned taskbar click must raise the hidden cabin instead of re-unmapping it"
+        );
+        assert!(
+            src.contains("ignore_close_while_hidden"),
+            "sticky close_requested must not hide the cabin after a taskbar raise"
+        );
+        assert!(
+            include_str!("main.rs").contains("try_claim_cabin"),
+            "a second grokhub from the taskbar must raise the running cabin and exit"
+        );
+        assert!(
+            show.contains("CancelClose"),
+            "Show cabin must clear a sticky close so the window does not hide again"
         );
     }
 
