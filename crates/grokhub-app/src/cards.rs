@@ -698,7 +698,8 @@ pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: 
     } else {
         crate::theme::border()
     };
-    let (_rect, resp) = ui.allocate_exact_size(egui::vec2(108.0, 96.0), Sense::click());
+    let (_rect, resp) =
+        ui.allocate_exact_size(egui::vec2(108.0, 96.0), Sense::click_and_drag());
     let (resp, rect, fill) = crate::theme::feel_response(ui, resp, fill);
     ui.painter().rect_filled(rect, 12.0, fill);
     ui.painter()
@@ -716,6 +717,7 @@ pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: 
         crate::theme::fg(),
     );
     resp.clicked()
+        || (resp.contains_pointer() && resp.ctx.input(|i| i.pointer.primary_released()))
 }
 
 pub fn search_field(ui: &mut egui::Ui, q: &mut String) {
