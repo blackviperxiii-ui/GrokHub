@@ -15,7 +15,8 @@ use grokhub_core::{
     append_composer, apply_work_update, attach_kind, attach_name, attach_prompt_line,
     appearance_choices, appearance_hint, approved_cmds, auth_bearer, automation_blocked_by_policy, blend_thread_goal,
     build_hub_snapshot,
-    build_quick_chips, build_windshield, bump_skill_run, bump_usage, cabin_eyes_for_turn, can_inhabit, can_mark_done,
+    build_quick_chips, build_windshield, bump_skill_run, bump_usage, cabin_eyes_for_turn,
+    inhabit_ready, can_mark_done, hub_pair_url, parse_hostname_i, pick_lan_ipv4,
     catalog_line, chip_suggest_prompt, chip_thread_from_messages, compact_keep_pin, compose_imagine_prompt,
     context_fingerprint,
     context_percent, daily_units_blocked,
@@ -41,13 +42,15 @@ use grokhub_core::{
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
     cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
-    needs_auth_banner, next_chat_image, next_goal_prompt,
+    next_chat_image, next_goal_prompt, paint_connect_banner,
+    this_turn_cabin_frame,
     is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
-    apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible, ChatSendKind,
+    apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
+    worker_gone_status, ChatSendKind,
     bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X, BUBBLE_PAD_Y,
     BUBBLE_RADIUS,
     plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
-    parse_computer_cmd_loose, should_attach_hands_frame, user_asks_cabin_eyes,
+    parse_computer_cmd_loose, user_asks_cabin_eyes,
     user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
@@ -2802,13 +2805,13 @@ impl Cabin {
             self.status = "will not inhabit onto the phone".into();
             return;
         }
-        let paired = self
+        let peer_count = self
             .hub
             .lock()
             .ok()
-            .map(|s| s.pair.is_some() || s.sharing)
-            .unwrap_or(false);
-        if !can_inhabit(paired, true, true) {
+            .map(|s| s.peers.len())
+            .unwrap_or(0);
+        if !inhabit_ready(peer_count, self.running) {
             self.status = "Inhabit needs a paired idle box".into();
             return;
         }
@@ -3651,19 +3654,15 @@ impl Cabin {
         if user_asks_desktop_hands(last_user) {
             self.hands_attach = true;
         }
-        self.ensure_cabin_frame();
+        let captured = self.capture_cabin_frame_this_turn();
         let user_img = self.attach_url.take();
         self.attach_name = None;
-        let fused = self.last_frame_url.clone().or_else(|| self.webcam_url.clone());
         let eyes_turn = self.eyes_attach;
         let hands_turn = self.hands_attach;
         self.eyes_attach = false;
         self.hands_attach = false;
-        let cabin = if should_attach_hands_frame(eyes_turn, hands_turn, fused.is_some()) {
-            fused
-        } else {
-            None
-        };
+        let cabin = this_turn_cabin_frame(eyes_turn, hands_turn, captured.as_deref())
+            .map(|s| s.to_string());
         let image = next_chat_image(user_img.as_deref(), cabin.as_deref()).map(|s| s.to_string());
         if cabin_frame_only(user_img.as_deref(), cabin.as_deref()) {
             if let Some((_, content)) = msgs
@@ -4025,20 +4024,23 @@ impl Cabin {
             Ok(JobOut::Err(e)) => {
                 self.running = false;
                 self.voice_orb = "idle".into();
+                remember_chip_outcome(&mut self.chip_memory, false, now_ms());
+                self.status = self.apply_job_fail(&e);
                 self.chat_job_thread = None;
                 self.stream_buf.clear();
                 self.thought_buf.clear();
-                remember_chip_outcome(&mut self.chip_memory, false, now_ms());
-                self.status = e;
+                self.persist();
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.running = false;
+                self.status = self.apply_job_fail(worker_gone_status());
                 self.chat_job_thread = None;
                 self.stream_buf.clear();
                 self.thought_buf.clear();
+                self.persist();
             }
         }
     }
@@ -4275,9 +4277,9 @@ impl Cabin {
         });
     }
 
-    fn ensure_cabin_frame(&mut self) {
+    fn capture_cabin_frame_this_turn(&mut self) -> Option<String> {
         if !should_capture_before_chat(self.eyes_attach || self.hands_attach) {
-            return;
+            return None;
         }
         let rows = collect_rows();
         self.last_window_title = rows
@@ -4288,21 +4290,47 @@ impl Cabin {
             .to_string();
         if !should_send_screenshot(&self.last_window_title, "") {
             self.status = "eyes: skipped lock/password frame".into();
-            return;
+            return None;
         }
         match capture_data_url() {
             Ok(url) => {
                 if let Ok(mut st) = self.hub.lock() {
                     st.store_frame(&url);
                 }
-                self.last_frame_url = Some(url);
+                self.last_frame_url = Some(url.clone());
+                Some(url)
             }
             Err(e) => {
                 if self.status.is_empty() || self.status == "Thinking…" {
                     self.status = format!("eyes: {e}");
                 }
+                None
             }
         }
+    }
+
+    fn apply_job_fail(&mut self, err: &str) -> String {
+        let vis = self.visible_thread_id();
+        let job = self.chat_job_thread.clone();
+        if job.as_deref().map(|id| id == vis).unwrap_or(true) {
+            let mut msgs: Vec<(String, String)> = self
+                .messages
+                .iter()
+                .map(|m| (m.role.clone(), m.content.clone()))
+                .collect();
+            let status = apply_job_error(&mut msgs, err);
+            self.messages = msgs
+                .into_iter()
+                .map(|(role, content)| Msg { role, content })
+                .collect();
+            return status;
+        }
+        if let Some(id) = job {
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
+                return apply_job_error(&mut t.messages, err);
+            }
+        }
+        err.to_string()
     }
 
     fn queue_update(&mut self) {
@@ -5860,7 +5888,7 @@ impl Cabin {
     }
 
     fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {
-            if needs_auth_banner(self.has_key()) && !self.messages.is_empty() {
+            if paint_connect_banner(self.has_key(), self.messages.len()) {
                 ui.horizontal(|ui| {
                     ui.colored_label(crate::theme::setup(), "Connect Grok in Settings");
                     if ui.button("Settings").clicked() {
@@ -6183,7 +6211,7 @@ impl Cabin {
                 ui.label(format!("This box: {} ({})", st.device_name, st.device_id));
                 if let Some(p) = &st.pair {
                     ui.label(RichText::new(format!("Pair code  {}", p.code)).strong().monospace());
-                    ui.label(format!("http://<lan>:{}", self.hub_port));
+                    ui.label(discover_hub_pair_url(self.hub_port));
                 } else if self.hub_on {
                     ui.label("Paired — generate a new code after a phone joins.");
                     if ui.button("New code").clicked() {
@@ -7748,10 +7776,31 @@ fn expand_home(p: &str) -> String {
     p.to_string()
 }
 
+fn discover_hub_pair_url(port: u16) -> String {
+    let out = std::process::Command::new("hostname")
+        .arg("-I")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let addrs = parse_hostname_i(&out);
+    let refs: Vec<&str> = addrs.iter().map(|s| s.as_str()).collect();
+    hub_pair_url(port, pick_lan_ipv4(&refs).as_deref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::select_all_edit;
     use eframe::egui;
+
+    #[test]
+    fn devices_pair_url_is_not_a_placeholder() {
+        let url = super::discover_hub_pair_url(18766);
+        assert!(url.starts_with("http://"), "{url}");
+        assert!(url.contains(":18766"), "{url}");
+        assert!(!url.contains("<lan>"), "{url}");
+    }
 
     #[test]
     fn rename_focus_selects_the_placeholder() {
