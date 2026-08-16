@@ -45,42 +45,80 @@ pub fn strip_thinking(content: &str) -> String {
 
 pub fn visible_chat(messages: &[(String, String)]) -> Vec<ChatView> {
     let mut out = Vec::new();
-    for (role, content) in messages {
-        match role.as_str() {
-            "user" => {
-                if !is_workload_user(content) {
-                    out.push(ChatView {
-                        kind: ChatKind::User,
-                        title: String::new(),
-                        body: content.clone(),
-                    });
-                }
-            }
-            "assistant" => {
-                let (thought, rest) = split_thought(content);
-                if !thought.is_empty() {
-                    let thought = scrub_thought(&thought);
-                    if !thought.is_empty() {
-                        out.push(ChatView {
-                            kind: ChatKind::Thought,
-                            title: "Thought".into(),
-                            body: thought,
-                        });
-                    }
-                }
-                let prose = visible_assistant(&rest);
-                if !prose.is_empty() {
-                    out.push(ChatView {
-                        kind: ChatKind::Assistant,
-                        title: String::new(),
-                        body: prose,
-                    });
-                }
-            }
-            _ => {}
+    let mut stretch: Vec<&(String, String)> = Vec::new();
+    for msg in messages {
+        if msg.0 == "user" && !is_workload_user(&msg.1) {
+            emit_stretch(&mut out, &stretch);
+            stretch.clear();
+            out.push(ChatView {
+                kind: ChatKind::User,
+                title: String::new(),
+                body: msg.1.clone(),
+            });
+        } else {
+            stretch.push(msg);
         }
     }
+    emit_stretch(&mut out, &stretch);
     out
+}
+
+fn hop_is_work(rest: &str) -> bool {
+    rest.lines().any(|line| {
+        let t = line.trim();
+        t.starts_with("HOST_CMD")
+            || t.starts_with("COMPUTER_CMD")
+            || t.starts_with("CONNECTOR_CMD")
+            || t.starts_with("IMAGINE:")
+    })
+}
+
+fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[&(String, String)]) {
+    let mut thoughts: Vec<String> = Vec::new();
+    let mut last_final: Option<String> = None;
+    let mut last_was_work = false;
+    for (role, content) in stretch {
+        if *role != "assistant" {
+            continue;
+        }
+        let (thought, rest) = split_thought(content);
+        if !thought.is_empty() {
+            let thought = scrub_thought(&thought);
+            if !thought.is_empty() {
+                thoughts.push(thought);
+            }
+        }
+        let prose = visible_assistant(&rest);
+        if hop_is_work(&rest) {
+            if !prose.is_empty() {
+                thoughts.push(prose);
+            }
+            last_was_work = true;
+        } else {
+            last_was_work = false;
+            if !prose.is_empty() {
+                last_final = Some(prose);
+            }
+        }
+    }
+    if last_was_work {
+        last_final = None;
+    }
+    let thought = thoughts.join("\n\n");
+    if !thought.is_empty() {
+        out.push(ChatView {
+            kind: ChatKind::Thought,
+            title: "Thought".into(),
+            body: thought,
+        });
+    }
+    if let Some(prose) = last_final {
+        out.push(ChatView {
+            kind: ChatKind::Assistant,
+            title: String::new(),
+            body: prose,
+        });
+    }
 }
 
 fn is_protocol_line(line: &str) -> bool {
@@ -285,17 +323,13 @@ mod tests {
         let v = visible_chat(&msgs);
         assert_eq!(
             kinds(&v),
-            vec![
-                ChatKind::User,
-                ChatKind::Thought,
-                ChatKind::Assistant,
-                ChatKind::Assistant,
-            ]
+            vec![ChatKind::User, ChatKind::Thought, ChatKind::Assistant]
         );
         assert_eq!(v[0].body, "check the box");
         assert!(v[1].body.contains("snapshot"));
+        assert!(v[1].body.contains("I'll look."));
         assert_eq!(v[1].title, "Thought");
-        assert_eq!(v[2].body, "I'll look.");
+        assert_eq!(v[2].body, "You're on Linux cabin.");
         assert!(!v[2].body.contains("HOST_CMD"));
         assert!(!v[2].body.contains("COMPUTER_CMD"));
         assert!(!v[2].body.contains("VERIFY_OK"));
@@ -303,7 +337,10 @@ mod tests {
         assert!(!v.iter().any(|x| x.body.contains("uname -a")));
         assert!(!v.iter().any(|x| x.body.contains("HOST_RESULT")));
         assert!(!v.iter().any(|x| x.body.contains("HOST_DIFF")));
-        assert_eq!(v[3].body, "You're on Linux cabin.");
+        assert_eq!(
+            v.iter().filter(|x| x.kind == ChatKind::Assistant).count(),
+            1
+        );
     }
 
     #[test]
@@ -313,8 +350,9 @@ mod tests {
             ("assistant".into(), "On it.\nHOST_CMD: ls /tmp\n".into()),
         ];
         let v = visible_chat(&msgs);
-        assert_eq!(kinds(&v), vec![ChatKind::User, ChatKind::Assistant]);
+        assert_eq!(kinds(&v), vec![ChatKind::User, ChatKind::Thought]);
         assert_eq!(v[1].body, "On it.");
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Assistant));
         assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
         assert!(!v.iter().any(|x| x.body.contains("ls /tmp")));
     }
@@ -381,8 +419,9 @@ mod tests {
             ),
         ];
         let v = visible_chat(&msgs);
-        assert_eq!(kinds(&v), vec![ChatKind::User, ChatKind::Assistant]);
+        assert_eq!(kinds(&v), vec![ChatKind::User, ChatKind::Thought]);
         assert_eq!(v[1].body, "On it.");
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Assistant));
         assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
         assert!(!v.iter().any(|x| x.body.contains("click 10 20")));
     }
@@ -401,12 +440,9 @@ mod tests {
             ),
         ];
         let v = visible_chat(&msgs);
-        assert_eq!(
-            v.iter()
-                .find(|x| x.kind == ChatKind::Assistant)
-                .map(|x| x.body.as_str()),
-            Some("Clicking.")
-        );
+        assert_eq!(kinds(&v), vec![ChatKind::User, ChatKind::Thought]);
+        assert_eq!(v[1].body, "Clicking.");
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Assistant));
         assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
         assert!(!v.iter().any(|x| x.body.contains("COMPUTER_RESULT")));
         assert!(!v.iter().any(|x| x.body.contains("clicked 40,80")));
@@ -442,12 +478,14 @@ mod tests {
     }
 
     #[test]
-    fn imagine_prompt_stays_visible() {
+    fn imagine_prompt_stays_off_the_pane_until_final() {
         let v = visible_chat(&[(
             "assistant".into(),
             "IMAGINE: a cabin at night\nHOST_CMD: true\n".into(),
         )]);
-        assert!(v.iter().any(|x| x.kind == ChatKind::Assistant && x.body.contains("IMAGINE:")));
+        assert_eq!(kinds(&v), vec![ChatKind::Thought]);
+        assert!(v[0].body.contains("IMAGINE:"));
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Assistant));
         assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
         assert!(!v.iter().any(|x| x.body.contains("HOST_CMD")));
         assert!(!v.iter().any(|x| x.body == "true"));
@@ -470,17 +508,53 @@ mod tests {
         let v = visible_chat(&msgs);
         assert_eq!(
             kinds(&v),
-            vec![
-                ChatKind::User,
-                ChatKind::Thought,
-                ChatKind::Assistant,
-                ChatKind::Assistant,
-            ]
+            vec![ChatKind::User, ChatKind::Thought, ChatKind::Assistant]
         );
         assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
         assert!(!v.iter().any(|x| x.body.contains("===== GPU")));
         assert!(!v.iter().any(|x| x.body.contains("HOST_CMD")));
         assert_eq!(v.last().map(|x| x.body.as_str()), Some("You're on Linux cabin."));
+    }
+
+    #[test]
+    fn two_work_hops_then_closer_is_one_thought_and_one_assistant() {
+        let msgs = vec![
+            ("user".into(), "fix the box".into()),
+            (
+                "assistant".into(),
+                "THINKING:\nNeed a snapshot.\n\nI'll look.\nHOST_CMD: uname -a\n".into(),
+            ),
+            (
+                "user".into(),
+                "HOST_RESULT (facts only):\n$ uname -a\nLinux cabin 6.12\nexit 0".into(),
+            ),
+            (
+                "assistant".into(),
+                "Restarting the service.\nHOST_CMD: systemctl --user restart grokhub\n".into(),
+            ),
+            (
+                "user".into(),
+                "HOST_RESULT (facts only):\n$ systemctl --user restart grokhub\nexit 0".into(),
+            ),
+            ("assistant".into(), "You're on Linux cabin.".into()),
+        ];
+        let v = visible_chat(&msgs);
+        assert_eq!(
+            kinds(&v),
+            vec![ChatKind::User, ChatKind::Thought, ChatKind::Assistant]
+        );
+        assert!(v[1].body.contains("Need a snapshot."));
+        assert!(v[1].body.contains("I'll look."));
+        assert!(v[1].body.contains("Restarting the service."));
+        assert_eq!(v[2].body, "You're on Linux cabin.");
+        assert_eq!(
+            v.iter().filter(|x| x.kind == ChatKind::Assistant).count(),
+            1
+        );
+        assert!(!v.iter().any(|x| x.body.contains("HOST_CMD")));
+        assert!(!v.iter().any(|x| x.body.contains("HOST_RESULT")));
+        assert!(!v.iter().any(|x| x.body.contains("uname -a")));
+        assert!(!v.iter().any(|x| x.body.contains("systemctl")));
     }
 
     #[test]
