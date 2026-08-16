@@ -1,8 +1,5 @@
-//! Clean chat surface. The model still sees HOST_RESULT; the user sees thought, tools, and the answer.
-
-use crate::chat::extract_host_cmds;
-use crate::connector::extract_connector_cmds;
-use crate::recipe::{computer_cmd_line, parse_computer_op};
+//! Clean chat surface. The model still sees HOST_RESULT; the user sees thought and the answer.
+//! Host, hands, and connector work stay off the pane until the final reply.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatKind {
@@ -48,12 +45,10 @@ pub fn strip_thinking(content: &str) -> String {
 
 pub fn visible_chat(messages: &[(String, String)]) -> Vec<ChatView> {
     let mut out = Vec::new();
-    for (i, (role, content)) in messages.iter().enumerate() {
+    for (role, content) in messages {
         match role.as_str() {
             "user" => {
-                if let Some(tool) = tool_from_workload(content) {
-                    out.push(tool);
-                } else if !is_workload_user(content) {
+                if !is_workload_user(content) {
                     out.push(ChatView {
                         kind: ChatKind::User,
                         title: String::new(),
@@ -81,51 +76,11 @@ pub fn visible_chat(messages: &[(String, String)]) -> Vec<ChatView> {
                         body: prose,
                     });
                 }
-                let next_is_result = messages
-                    .get(i + 1)
-                    .is_some_and(|(r, c)| r == "user" && is_workload_user(c));
-                if !next_is_result {
-                    for cmd in extract_host_cmds(&rest) {
-                        out.push(ChatView {
-                            kind: ChatKind::Tool,
-                            title: "Host".into(),
-                            body: cmd,
-                        });
-                    }
-                    for line in rest.lines() {
-                        if let Some(op) = parse_computer_op(line) {
-                            out.push(ChatView {
-                                kind: ChatKind::Tool,
-                                title: "Hands".into(),
-                                body: computer_cmd_line(&op)
-                                    .trim_start_matches("COMPUTER_CMD:")
-                                    .trim()
-                                    .to_string(),
-                            });
-                        }
-                    }
-                    for c in extract_connector_cmds(&rest) {
-                        out.push(ChatView {
-                            kind: ChatKind::Tool,
-                            title: connector_title(&c.connector_id),
-                            body: format!("{} {}", c.tool, c.args)
-                                .trim()
-                                .to_string(),
-                        });
-                    }
-                }
             }
             _ => {}
         }
     }
     out
-}
-
-fn connector_title(id: &str) -> String {
-    match id {
-        "github" | "gh" => "GitHub".into(),
-        other => other.to_string(),
-    }
 }
 
 fn is_protocol_line(line: &str) -> bool {
@@ -147,10 +102,21 @@ pub fn assistant_prose(text: &str) -> String {
 }
 
 fn visible_assistant(text: &str) -> String {
-    let mut lines: Vec<&str> = text
-        .lines()
-        .filter(|line| !is_protocol_line(line))
-        .collect();
+    let mut lines: Vec<&str> = Vec::new();
+    let mut skip_until: Option<String> = None;
+    for line in text.lines() {
+        if let Some(end) = skip_until.as_deref() {
+            if line.trim() == end {
+                skip_until = None;
+            }
+            continue;
+        }
+        if is_protocol_line(line) {
+            skip_until = host_cmd_heredoc_delim(line);
+            continue;
+        }
+        lines.push(line);
+    }
     while lines.first().is_some_and(|l| l.trim().is_empty()) {
         lines.remove(0);
     }
@@ -158,6 +124,27 @@ fn visible_assistant(text: &str) -> String {
         lines.pop();
     }
     lines.join("\n").trim().to_string()
+}
+
+/// `HOST_CMD: cat <<'EOF'` hides the script until `EOF`.
+fn host_cmd_heredoc_delim(line: &str) -> Option<String> {
+    let t = line.trim();
+    let idx = t.find("<<")?;
+    let rest = t[idx + 2..].trim_start();
+    let rest = rest.strip_prefix('-').unwrap_or(rest).trim_start();
+    let rest = rest
+        .trim_start_matches('\'')
+        .trim_start_matches('"')
+        .trim_start_matches('\'');
+    let delim: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if delim.is_empty() {
+        None
+    } else {
+        Some(delim)
+    }
 }
 
 /// Drop “an image is attached” narration. Cabin eyes / a drop already sent the frame.
@@ -254,74 +241,22 @@ fn split_thought(content: &str) -> (String, String) {
     (String::new(), content.to_string())
 }
 
-fn tool_from_workload(content: &str) -> Option<ChatView> {
-    let t = content.trim_start();
-    if t.starts_with("HOST_DIFF") {
-        return None;
+/// Quote a visible message into the composer so Reply can continue the thread.
+pub fn quote_for_reply(body: &str) -> String {
+    let body = body.trim();
+    if body.is_empty() {
+        return String::new();
     }
-    if t.starts_with("HOST_RESULT") {
-        return Some(tool_from_host_result(t));
-    }
-    if t.starts_with("CONNECTOR_RESULT") {
-        return Some(tool_from_connector_result(t));
-    }
-    if t.starts_with("COMPUTER_RESULT") {
-        return Some(ChatView {
-            kind: ChatKind::Tool,
-            title: "Hands".into(),
-            body: content
-                .trim_start()
-                .strip_prefix("COMPUTER_RESULT (facts only):")
-                .or_else(|| content.trim_start().strip_prefix("COMPUTER_RESULT:"))
-                .unwrap_or(content)
-                .trim()
-                .chars()
-                .take(240)
-                .collect(),
-        });
-    }
-    None
-}
-
-fn tool_from_host_result(content: &str) -> ChatView {
-    let mut cmd = String::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if let Some(c) = line.strip_prefix("$ ") {
-            cmd = c.to_string();
-            break;
+    let mut out = String::new();
+    for line in body.lines() {
+        out.push('>');
+        if !line.is_empty() {
+            out.push(' ');
+            out.push_str(line);
         }
+        out.push('\n');
     }
-    if cmd.is_empty() {
-        cmd = "host".into();
-    }
-    ChatView {
-        kind: ChatKind::Tool,
-        title: "Host".into(),
-        body: cmd,
-    }
-}
-
-fn tool_from_connector_result(content: &str) -> ChatView {
-    let rest = content
-        .trim_start()
-        .strip_prefix("CONNECTOR_RESULT (facts only):")
-        .or_else(|| content.trim_start().strip_prefix("CONNECTOR_RESULT:"))
-        .unwrap_or(content)
-        .trim();
-    let first = rest.lines().next().unwrap_or("connector").trim();
-    let mut parts = first.splitn(2, char::is_whitespace);
-    let id = parts.next().unwrap_or("github");
-    let body = parts.next().unwrap_or("").trim();
-    ChatView {
-        kind: ChatKind::Tool,
-        title: connector_title(id),
-        body: if body.is_empty() {
-            first.to_string()
-        } else {
-            body.to_string()
-        },
-    }
+    out
 }
 
 #[cfg(test)]
@@ -354,7 +289,6 @@ mod tests {
                 ChatKind::User,
                 ChatKind::Thought,
                 ChatKind::Assistant,
-                ChatKind::Tool,
                 ChatKind::Assistant,
             ]
         );
@@ -365,31 +299,28 @@ mod tests {
         assert!(!v[2].body.contains("HOST_CMD"));
         assert!(!v[2].body.contains("COMPUTER_CMD"));
         assert!(!v[2].body.contains("VERIFY_OK"));
-        assert_eq!(v[3].title, "Host");
-        assert!(v[3].body.contains("uname -a"));
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
+        assert!(!v.iter().any(|x| x.body.contains("uname -a")));
         assert!(!v.iter().any(|x| x.body.contains("HOST_RESULT")));
         assert!(!v.iter().any(|x| x.body.contains("HOST_DIFF")));
-        assert_eq!(v[4].body, "You're on Linux cabin.");
+        assert_eq!(v[3].body, "You're on Linux cabin.");
     }
 
     #[test]
-    fn pending_host_cmd_is_a_tool_until_the_receipt() {
+    fn pending_host_cmd_stays_off_the_pane() {
         let msgs = vec![
             ("user".into(), "go".into()),
             ("assistant".into(), "On it.\nHOST_CMD: ls /tmp\n".into()),
         ];
         let v = visible_chat(&msgs);
-        assert_eq!(
-            kinds(&v),
-            vec![ChatKind::User, ChatKind::Assistant, ChatKind::Tool]
-        );
+        assert_eq!(kinds(&v), vec![ChatKind::User, ChatKind::Assistant]);
         assert_eq!(v[1].body, "On it.");
-        assert_eq!(v[2].title, "Host");
-        assert_eq!(v[2].body, "ls /tmp");
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
+        assert!(!v.iter().any(|x| x.body.contains("ls /tmp")));
     }
 
     #[test]
-    fn connector_receipt_is_a_github_tool() {
+    fn connector_work_stays_off_the_pane() {
         let msgs = vec![
             ("user".into(), "who am I".into()),
             (
@@ -402,9 +333,11 @@ mod tests {
             ),
         ];
         let v = visible_chat(&msgs);
-        assert!(v.iter().any(|x| x.kind == ChatKind::Tool && x.title == "GitHub"));
+        assert_eq!(kinds(&v), vec![ChatKind::User]);
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
         assert!(!v.iter().any(|x| x.body.contains("CONNECTOR_RESULT")));
         assert!(!v.iter().any(|x| x.body.contains("CONNECTOR_CMD")));
+        assert!(!v.iter().any(|x| x.body.contains("github user")));
     }
 
     #[test]
@@ -439,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_computer_cmd_is_hands_tool() {
+    fn pending_computer_cmd_stays_off_the_pane() {
         let msgs = vec![
             ("user".into(), "click the Save button".into()),
             (
@@ -448,17 +381,14 @@ mod tests {
             ),
         ];
         let v = visible_chat(&msgs);
-        assert_eq!(
-            kinds(&v),
-            vec![ChatKind::User, ChatKind::Assistant, ChatKind::Tool]
-        );
+        assert_eq!(kinds(&v), vec![ChatKind::User, ChatKind::Assistant]);
         assert_eq!(v[1].body, "On it.");
-        assert_eq!(v[2].title, "Hands");
-        assert_eq!(v[2].body, "click 10 20");
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
+        assert!(!v.iter().any(|x| x.body.contains("click 10 20")));
     }
 
     #[test]
-    fn computer_result_is_hands_tool() {
+    fn computer_result_stays_off_the_pane() {
         let msgs = vec![
             ("user".into(), "click save".into()),
             (
@@ -471,11 +401,15 @@ mod tests {
             ),
         ];
         let v = visible_chat(&msgs);
-        assert_eq!(v.iter().find(|x| x.kind == ChatKind::Assistant).map(|x| x.body.as_str()), Some("Clicking."));
-        assert!(v
-            .iter()
-            .any(|x| x.kind == ChatKind::Tool && x.title == "Hands"));
+        assert_eq!(
+            v.iter()
+                .find(|x| x.kind == ChatKind::Assistant)
+                .map(|x| x.body.as_str()),
+            Some("Clicking.")
+        );
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
         assert!(!v.iter().any(|x| x.body.contains("COMPUTER_RESULT")));
+        assert!(!v.iter().any(|x| x.body.contains("clicked 40,80")));
     }
 
     #[test]
@@ -514,7 +448,65 @@ mod tests {
             "IMAGINE: a cabin at night\nHOST_CMD: true\n".into(),
         )]);
         assert!(v.iter().any(|x| x.kind == ChatKind::Assistant && x.body.contains("IMAGINE:")));
-        assert!(v.iter().any(|x| x.kind == ChatKind::Tool && x.body == "true"));
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
         assert!(!v.iter().any(|x| x.body.contains("HOST_CMD")));
+        assert!(!v.iter().any(|x| x.body == "true"));
+    }
+
+    #[test]
+    fn work_dump_stays_off_the_chat_surface() {
+        let msgs = vec![
+            ("user".into(), "check the machine".into()),
+            (
+                "assistant".into(),
+                "THINKING:\nNeed a snapshot.\n\nI'll look.\nHOST_CMD: cat <<'EOF'\n===== GPU =====\nlong dump\nEOF\n".into(),
+            ),
+            (
+                "user".into(),
+                "HOST_RESULT (facts only):\n$ cat script\n===== GPU =====\n===== UINPUT =====\nexit 0".into(),
+            ),
+            ("assistant".into(), "You're on Linux cabin.".into()),
+        ];
+        let v = visible_chat(&msgs);
+        assert_eq!(
+            kinds(&v),
+            vec![
+                ChatKind::User,
+                ChatKind::Thought,
+                ChatKind::Assistant,
+                ChatKind::Assistant,
+            ]
+        );
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
+        assert!(!v.iter().any(|x| x.body.contains("===== GPU")));
+        assert!(!v.iter().any(|x| x.body.contains("HOST_CMD")));
+        assert_eq!(v.last().map(|x| x.body.as_str()), Some("You're on Linux cabin."));
+    }
+
+    #[test]
+    fn heredoc_host_cmd_is_not_assistant_prose() {
+        assert_eq!(
+            assistant_prose("I'll look.\nHOST_CMD: cat <<'EOF'\n===== GPU =====\nEOF\nDone."),
+            "I'll look.\nDone."
+        );
+        assert_eq!(
+            host_cmd_heredoc_delim("HOST_CMD: cat <<'EOF'"),
+            Some("EOF".into())
+        );
+        assert_eq!(
+            host_cmd_heredoc_delim("HOST_CMD: uname -a"),
+            None
+        );
+    }
+
+    #[test]
+    fn quote_for_reply_prefixes_each_line() {
+        assert_eq!(quote_for_reply("hi"), "> hi\n");
+        assert_eq!(quote_for_reply("a\nb"), "> a\n> b\n");
+        assert_eq!(quote_for_reply("  "), "");
+        assert_eq!(
+            crate::append_composer("draft", &quote_for_reply("check the box")),
+            "draft\n> check the box"
+        );
     }
 }
