@@ -225,7 +225,6 @@ fn take_focused_composer(
         None => None,
     }
 }
-}
 
 fn next_maximized(currently: bool) -> bool {
     !currently
