@@ -22,6 +22,7 @@ GRIM_TAG="${GRIM_TAG:-v1.5.0}"
 
 YDTOOL_URL="https://github.com/ReimuNotMoe/ydotool/archive/refs/tags/${YDTOOL_TAG}.tar.gz"
 GRIM_URL="https://gitlab.freedesktop.org/emersion/grim/-/archive/${GRIM_TAG}/grim-${GRIM_TAG}.tar.gz"
+GRIM_GIT_URL="https://gitlab.freedesktop.org/emersion/grim.git"
 GRIM_FALLBACK_URL="https://github.com/emersion/grim/archive/refs/tags/v1.4.0.tar.gz"
 
 need() { command -v "$1" >/dev/null 2>&1; }
@@ -86,6 +87,18 @@ fetch_tar() {
   return "$rc"
 }
 
+fetch_git() {
+  local url="$1"
+  local tag="$2"
+  local dest="$3"
+  if ! need git; then
+    return 1
+  fi
+  rm -rf "$dest"
+  mkdir -p "$(dirname "$dest")"
+  git clone --depth 1 --branch "$tag" "$url" "$dest"
+}
+
 install_bin() {
   local src="$1"
   local name="$2"
@@ -120,9 +133,13 @@ build_ydotool() {
   fi
   local bld="$src/build"
   mkdir -p "$bld"
-  if ! run_or_continue "ydotool cmake" cmake -S "$src" -B "$bld" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX="$PREFIX"; then
+  # Configure from the ydotool tree so `git describe` does not pick GrokHub.
+  if ! (
+    cd "$src" || exit 1
+    run_or_continue "ydotool cmake" cmake -S . -B build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX="$PREFIX"
+  ); then
     return 1
   fi
   if ! run_or_continue "ydotool build" cmake --build "$bld" -j"$(nproc 2>/dev/null || echo 2)"; then
@@ -148,10 +165,13 @@ build_grim() {
   local src="$HANDS_SRC/grim-${GRIM_TAG}"
   if [[ ! -f "$src/meson.build" ]]; then
     if ! run_or_continue "grim fetch" fetch_tar "$GRIM_URL" "$src"; then
-      echo "hands: grim ${GRIM_TAG} fetch failed — trying v1.4.0 fallback"
-      src="$HANDS_SRC/grim-v1.4.0"
-      if ! run_or_continue "grim fallback fetch" fetch_tar "$GRIM_FALLBACK_URL" "$src"; then
-        return 1
+      echo "hands: grim ${GRIM_TAG} tarball failed — trying git ${GRIM_TAG}"
+      if ! run_or_continue "grim git" fetch_git "$GRIM_GIT_URL" "$GRIM_TAG" "$src"; then
+        echo "hands: grim ${GRIM_TAG} git failed — trying v1.4.0 fallback"
+        src="$HANDS_SRC/grim-v1.4.0"
+        if ! run_or_continue "grim fallback fetch" fetch_tar "$GRIM_FALLBACK_URL" "$src"; then
+          return 1
+        fi
       fi
     fi
   fi
