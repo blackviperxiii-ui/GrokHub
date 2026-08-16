@@ -19,6 +19,8 @@ pub struct ChatThread {
     pub pinned: bool,
     #[serde(default)]
     pub title_locked: bool,
+    #[serde(default)]
+    pub accessed_ms: u64,
 }
 
 impl ChatThread {
@@ -31,8 +33,38 @@ impl ChatThread {
             goal: ThreadGoal::default(),
             pinned: false,
             title_locked: false,
+            accessed_ms: 0,
         }
     }
+}
+
+/// Highest `accessed_ms`. Skip scratch when another thread exists.
+pub fn most_recently_accessed_index(threads: &[ChatThread]) -> Option<usize> {
+    let has_real = threads.iter().any(|t| !t.scratch);
+    threads
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| !has_real || !t.scratch)
+        .max_by_key(|(i, t)| (t.accessed_ms, *i))
+        .map(|(i, _)| i)
+}
+
+/// Quiet MidThought line for a last-accessed titled thread. Empty for scratch or default names.
+pub fn continue_thread_hint(threads: &[ChatThread]) -> String {
+    let Some(idx) = most_recently_accessed_index(threads) else {
+        return String::new();
+    };
+    let Some(t) = threads.get(idx) else {
+        return String::new();
+    };
+    let title = t.title.trim();
+    if t.scratch || title.is_empty() {
+        return String::new();
+    }
+    if title.eq_ignore_ascii_case("chat") || title.eq_ignore_ascii_case("scratch") {
+        return String::new();
+    }
+    format!("Continue {title}").chars().take(80).collect()
 }
 
 pub fn threads_path() -> std::path::PathBuf {
@@ -77,8 +109,29 @@ mod tests {
         assert!(loaded[0].goal.label.is_empty());
         assert!(!loaded[0].pinned);
         assert!(!loaded[0].title_locked);
+        assert_eq!(loaded[0].accessed_ms, 0);
         assert!(export_markdown(&loaded[0]).contains("hi"));
+        let old: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
+        assert_eq!(old.accessed_ms, 0);
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn most_recent_skips_scratch_and_prefers_access() {
+        let mut scratch = ChatThread::new("Scratch", true);
+        scratch.accessed_ms = 9_000;
+        let mut older = ChatThread::new("Older", false);
+        older.accessed_ms = 1_000;
+        let mut newer = ChatThread::new("Night cabin", false);
+        newer.accessed_ms = 5_000;
+        let threads = vec![scratch, older, newer];
+        assert_eq!(most_recently_accessed_index(&threads), Some(2));
+        assert_eq!(continue_thread_hint(&threads), "Continue Night cabin");
+        let only_scratch = vec![ChatThread::new("Scratch", true)];
+        assert_eq!(most_recently_accessed_index(&only_scratch), Some(0));
+        assert!(continue_thread_hint(&only_scratch).is_empty());
+        let untitled = vec![ChatThread::new("Chat", false)];
+        assert!(continue_thread_hint(&untitled).is_empty());
     }
 }
