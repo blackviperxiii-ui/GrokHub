@@ -23,6 +23,12 @@ pub fn inhabit_ready(peer_count: usize, dest_running: bool) -> bool {
     can_inhabit(peer_count > 0, true, !dest_running)
 }
 
+pub fn inhabit_bundle_usable(b: &InhabitBundle) -> bool {
+    !b.soul.trim().is_empty()
+        || !b.skill_ids.is_empty()
+        || b.goal.as_deref().is_some_and(|g| !g.trim().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -32,5 +38,10 @@ mod tests {
         assert!(!inhabit_ready(0, false), "sharing with no peers is not paired");
         assert!(!inhabit_ready(1, true), "a busy dest must not take inhabit");
         assert!(inhabit_ready(1, false));
+        assert!(!inhabit_bundle_usable(&InhabitBundle::default()));
+        assert!(inhabit_bundle_usable(&InhabitBundle {
+            soul: "stay kind".into(),
+            ..Default::default()
+        }));
     }
 }

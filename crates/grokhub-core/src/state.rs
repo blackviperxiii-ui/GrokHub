@@ -215,10 +215,28 @@ impl HubState {
             .collect()
     }
 
-    pub fn ack_inbox(&mut self, id: &str, peer_id: &str) {
-        if let Some(t) = self.inbox.iter_mut().find(|t| t.id == id && t.target_device_id == peer_id) {
-            t.status = "acked".into();
+    pub fn ack_inbox(&mut self, id: &str, peer_id: &str) -> Result<(), CompleteError> {
+        if !self.inbox.iter().any(|t| t.id == id) {
+            return Err(CompleteError::NotFound);
         }
+        let t = self
+            .inbox
+            .iter_mut()
+            .find(|t| t.id == id && t.target_device_id == peer_id)
+            .ok_or(CompleteError::Forbidden)?;
+        t.status = "acked".into();
+        Ok(())
+    }
+
+    pub fn enqueue_local(&mut self, title: &str, prompt: &str) -> Result<HubTask, String> {
+        let from = Peer {
+            id: self.device_id.clone(),
+            name: self.device_name.clone(),
+            token: String::new(),
+            last_seen: now_ms(),
+        };
+        let target = self.device_id.clone();
+        self.enqueue_task(&from, &target, title, prompt)
     }
 
     pub fn claim_results(&mut self, peer_id: &str) -> Vec<HubTask> {
@@ -440,6 +458,20 @@ mod tests {
             "another paired box must not read this task"
         );
         assert_eq!(st.queued_for(&other.id).len(), 0);
+        assert_eq!(
+            st.ack_inbox("missing", &phone.id).unwrap_err(),
+            CompleteError::NotFound
+        );
+        assert_eq!(
+            st.ack_inbox(&task.id, &other.id).unwrap_err(),
+            CompleteError::Forbidden
+        );
+        st.ack_inbox(&task.id, &hub_id).expect("target acks");
+        assert_eq!(st.get_task(&task.id, &phone.id).unwrap().status, "acked");
+        for i in 0..90 {
+            st.enqueue_local("local", &format!("do {i}")).unwrap();
+        }
+        assert!(st.inbox.len() <= 80);
     }
 
     #[test]

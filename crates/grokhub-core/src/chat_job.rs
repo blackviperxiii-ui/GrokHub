@@ -98,6 +98,23 @@ pub fn worker_gone_status() -> &'static str {
     "Job dropped — worker gone"
 }
 
+/// Halt / redirect must not leave a truncated assistant in the transcript.
+pub fn drop_trailing_assistant(messages: &mut Vec<(String, String)>) {
+    if messages.last().map(|(r, _)| r == "assistant").unwrap_or(false) {
+        messages.pop();
+    }
+}
+
+/// Update / host / voice jobs have no chat thread — errors stay on the status bar.
+pub fn job_error_goes_to_chat(chat_job_thread: Option<&str>) -> bool {
+    chat_job_thread.is_some()
+}
+
+/// Composer send without auth must not write a user turn.
+pub fn persist_user_turn(has_key: bool) -> bool {
+    has_key
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +216,17 @@ mod tests {
     #[test]
     fn worker_gone_has_a_status() {
         assert!(!worker_gone_status().is_empty());
+    }
+
+    #[test]
+    fn halt_drops_partial_assistant() {
+        let mut msgs = origin_partial();
+        drop_trailing_assistant(&mut msgs);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].0, "user");
+        assert!(!job_error_goes_to_chat(None));
+        assert!(job_error_goes_to_chat(Some("thr-a")));
+        assert!(!persist_user_turn(false));
+        assert!(persist_user_turn(true));
     }
 }
