@@ -53,21 +53,36 @@ fn consume_sse(
         while let Some(idx) = raw.find('\n') {
             let line = raw[..idx].trim_end_matches('\r').to_string();
             raw = raw[idx + 1..].to_string();
-            if sse_done(&line) {
+            if apply_sse_line(&line, &mut acc, on_delta, on_thought) {
                 return Ok(acc);
-            }
-            if let Some(t) = parse_sse_thought(&line) {
-                on_thought(&t);
-            }
-            if let Some((d, kind)) = parse_sse_text(&line) {
-                if sse_live_delta(acc.is_empty(), kind) {
-                    on_delta(&d);
-                }
-                fold_sse_acc(&mut acc, &d, kind);
             }
         }
     }
+    if !raw.trim().is_empty() {
+        apply_sse_line(raw.trim_end_matches('\r'), &mut acc, on_delta, on_thought);
+    }
     Ok(acc)
+}
+
+fn apply_sse_line(
+    line: &str,
+    acc: &mut String,
+    on_delta: &mut impl FnMut(&str),
+    on_thought: &mut impl FnMut(&str),
+) -> bool {
+    if sse_done(line) {
+        return true;
+    }
+    if let Some(t) = parse_sse_thought(line) {
+        on_thought(&t);
+    }
+    if let Some((d, kind)) = parse_sse_text(line) {
+        if sse_live_delta(acc.is_empty(), kind) {
+            on_delta(&d);
+        }
+        fold_sse_acc(acc, &d, kind);
+    }
+    false
 }
 
 fn grok_sse(
@@ -408,5 +423,27 @@ mod tests {
         let acc = consume_sse(data.as_bytes(), &mut |d| deltas.push_str(d), &mut |_| {}).unwrap();
         assert_eq!(acc, "Hello");
         assert_eq!(deltas, "Hel");
+    }
+
+    #[test]
+    fn responses_tail_without_newline_is_kept() {
+        let data = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"CMD\"}";
+        let mut deltas = String::new();
+        let acc = consume_sse(&data[..], &mut |d| deltas.push_str(d), &mut |_| {}).unwrap();
+        assert_eq!(acc, "CMD");
+        assert_eq!(deltas, "CMD");
+    }
+
+    #[test]
+    fn responses_short_done_keeps_longer_deltas() {
+        let data = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\\nCOMPUTER_CMD: key Alt+F4\"}\n",
+            "data: {\"type\":\"response.output_text.done\",\"text\":\"Hello\"}\n",
+        );
+        let acc = consume_sse(data.as_bytes(), &mut |_| {}, &mut |_| {}).unwrap();
+        assert!(
+            acc.contains("COMPUTER_CMD: key Alt+F4"),
+            "short done wiped the tool line: {acc}"
+        );
     }
 }

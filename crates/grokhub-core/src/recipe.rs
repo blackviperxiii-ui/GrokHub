@@ -51,6 +51,44 @@ pub fn hands_backend_name(backend: Option<HandsBackend>) -> &'static str {
     }
 }
 
+/// PATH lookup that does not spawn `which` (missing on some GUI PATHs).
+pub fn bin_on_path(name: &str, path_env: &str, extra_dirs: &[&str]) -> bool {
+    let name = name.trim();
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return false;
+    }
+    path_env
+        .split(':')
+        .chain(extra_dirs.iter().copied())
+        .filter(|d| !d.is_empty())
+        .any(|d| std::path::Path::new(d).join(name).is_file())
+}
+
+pub fn default_bin_extra_dirs(home: &str) -> Vec<String> {
+    let mut dirs = vec![
+        "/usr/bin".into(),
+        "/usr/local/bin".into(),
+        "/bin".into(),
+    ];
+    let home = home.trim();
+    if !home.is_empty() {
+        dirs.push(format!("{home}/.local/bin"));
+    }
+    dirs
+}
+
+/// Empty ydotool key maps must fail closed — not look like a successful press.
+pub fn empty_hands_steps_error(op: &ComputerOp, steps: &[Vec<String>]) -> Option<String> {
+    if !steps.is_empty() {
+        return None;
+    }
+    match op {
+        ComputerOp::Key { name } => Some(format!("unknown key {name}")),
+        ComputerOp::Scroll { dy } if *dy == 0 => None,
+        _ => Some("empty hands step".into()),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplayOp {
     Reshoot,
@@ -693,9 +731,43 @@ mod tests {
                     steps.is_empty(),
                     "unknown keys must not press Enter: {steps:?}"
                 );
+                assert_eq!(
+                    empty_hands_steps_error(&ComputerOp::Key { name: "F12".into() }, &steps)
+                        .as_deref(),
+                    Some("unknown key F12")
+                );
             }
             other => panic!("{other:?}"),
         }
+        match computer_drive_for(
+            HandsBackend::Ydotool,
+            &ComputerOp::Key { name: "Alt+F4".into() },
+        ) {
+            ComputerDrive::Ydotool(steps) => {
+                assert_eq!(steps[0], vec!["key", "56:1", "62:1", "62:0", "56:0"]);
+                assert!(empty_hands_steps_error(
+                    &ComputerOp::Key { name: "Alt+F4".into() },
+                    &steps
+                )
+                .is_none());
+            }
+            other => panic!("{other:?}"),
+        }
+        let tmp = std::env::temp_dir().join(format!("grokhub-bin-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let fake = tmp.join("ydotool");
+        let _ = std::fs::write(&fake, b"");
+        assert!(bin_on_path(
+            "ydotool",
+            "/no/such/path",
+            &[tmp.to_str().unwrap()]
+        ));
+        assert!(!bin_on_path("ydotool", "/no/such/path", &[]));
+        assert!(!bin_on_path("../ydotool", tmp.to_str().unwrap(), &[]));
+        let extras = default_bin_extra_dirs("/home/viper");
+        assert!(extras.iter().any(|d| d.ends_with("/.local/bin")));
+        let _ = std::fs::remove_file(&fake);
+        let _ = std::fs::remove_dir(&tmp);
         let rec = recipe_from_cmds(
             &["COMPUTER_CMD: act Save".into(), "HOST_CMD: ls".into()],
             Some(ScreenSize { w: 1920, h: 1080 }),

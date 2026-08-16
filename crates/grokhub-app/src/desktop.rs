@@ -1,5 +1,6 @@
 use grokhub_core::{
-    capture_kinds, clip_image_args, computer_cmd_line, computer_drive_for, ffmpeg_webcam_args,
+    bin_on_path, capture_kinds, clip_image_args, computer_cmd_line, computer_drive_for,
+    default_bin_extra_dirs, empty_hands_steps_error, ffmpeg_webcam_args,
     ffmpeg_x11_args, frame_is_blank, gnome_shell_screenshot_args, hands_backend_name,
     hands_blocked_by_lock, infer_wayland_display, jpeg_data_url, live_pcm_argv,
     live_pcm_frame_bytes, luma_mean_var, parse_atspi_line, parse_picker_stdout, parse_wmctrl_line,
@@ -39,11 +40,11 @@ walk(pyatspi.Registry.getDesktop(0))
 "#;
 
 pub fn which(name: &str) -> bool {
-    Command::new("which")
-        .arg(name)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    let path = std::env::var("PATH").unwrap_or_default();
+    let home = std::env::var("HOME").unwrap_or_default();
+    let extra = default_bin_extra_dirs(&home);
+    let extra_ref: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
+    bin_on_path(name, &path, &extra_ref)
 }
 
 pub fn first_bin(names: &[&str]) -> Option<String> {
@@ -163,7 +164,10 @@ fn run_pointer_steps(steps: &[Vec<String>], cancel: Option<&AtomicBool>) -> Resu
     match live_hands_backend() {
         Some(HandsBackend::Ydotool) => run_bin_steps("ydotool", steps, cancel),
         Some(HandsBackend::Xdotool) => run_bin_steps("xdotool", steps, cancel),
-        None => Err("ydotool/xdotool missing".into()),
+        None => Err(
+            "ydotool/xdotool missing — install ydotool (Wayland) or xdotool (X11) on PATH, including ~/.local/bin"
+                .into(),
+        ),
     }
 }
 
@@ -291,6 +295,9 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
     }
     match pointer_drive(op) {
         ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
+            if let Some(detail) = empty_hands_steps_error(op, &steps) {
+                return hands_receipt(&line, started, false, &detail);
+            }
             match run_pointer_steps(&steps, cancel) {
                 Ok(()) => {
                     let detail = match op {

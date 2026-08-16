@@ -135,7 +135,8 @@ pub use inhabit::{
     can_inhabit, inhabit_bundle_usable, inhabit_claim_allowed, inhabit_ready, InhabitBundle,
 };
 pub use recipe::{
-    computer_cmd_line, computer_drive, computer_drive_for, extract_computer_ops, hands_backend_name,
+    bin_on_path, computer_cmd_line, computer_drive, computer_drive_for, default_bin_extra_dirs,
+    empty_hands_steps_error, extract_computer_ops, hands_backend_name,
     hands_blocked_by_lock, hands_protocol, lock_blocks_hands, pointer_op_blocked_on_lock,
     needs_reshoot, parse_computer_cmd_loose, parse_computer_op, parse_recipe, parse_screen,
     pick_hands_backend, recipe_from_cmds, recipe_from_json, recipe_to_json, replay_ops,
@@ -195,8 +196,8 @@ pub use shortcuts::{
 };
 pub use stream::{
     chat_include_usage, chat_stream_flag, fold_sse_acc, fold_stream_token, parse_sse_delta,
-    parse_sse_text, parse_sse_thought, parse_sse_usage, sse_done, sse_live_delta, StreamTokenKind,
-    StreamUsage,
+    parse_sse_text, parse_sse_thought, parse_sse_usage, prefer_complete_reply, sse_done,
+    sse_live_delta, should_replace_stream_acc, StreamTokenKind, StreamUsage,
 };
 pub use usage::{bump_usage, roll_usage_day, usage_blocked, usage_line, UsageDay};
 pub use hub_sync::{build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, HubMemoryFile, HubSnapshot};
