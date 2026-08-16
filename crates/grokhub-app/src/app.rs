@@ -84,7 +84,7 @@ use grokhub_core::{
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
     build_review_digest, dedupe_suggestions, parse_suggest_lines, partition_suggestions, review_due,
-    review_system_prompt, DigestLine, ReviewDigest, SuggestionStore, REVIEW_NIGHT_HOUR,
+    review_status_line, review_system_prompt, DigestLine, ReviewDigest, SuggestionStore, REVIEW_NIGHT_HOUR,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title_in, apply_manual_rename, delete_thread, display_tab_title, history_order,
     should_name_thread,
@@ -1927,12 +1927,14 @@ impl Cabin {
             .and_then(|t| t.name.clone())
             .unwrap_or_default();
         let hour = Self::chip_hour();
+        let last_night = self.last_night_hint();
         let input = GreetingInput {
             user_md: &user_md,
             memory_md: &memory_md,
             insights: &insights,
             display_name: &display_name,
             hour,
+            last_night: &last_night,
         };
         let local = local_greeting(&input);
         let fp = greeting_fingerprint(&input);
@@ -1950,7 +1952,14 @@ impl Cabin {
         ) {
             self.greeting_llm_fp = fp;
             self.greeting_llm_at = now_ms();
-            self.spawn_greeting_llm(&user_md, &memory_md, &insights, &display_name, hour);
+            self.spawn_greeting_llm(
+                &user_md,
+                &memory_md,
+                &insights,
+                &display_name,
+                hour,
+                &last_night,
+            );
         }
     }
 
@@ -1961,6 +1970,7 @@ impl Cabin {
         insights: &[String],
         display_name: &str,
         hour: u8,
+        last_night: &str,
     ) {
         if self.greeting_busy {
             return;
@@ -1975,6 +1985,7 @@ impl Cabin {
             insights,
             display_name,
             hour,
+            last_night,
         };
         let prompt = greeting_prompt(&input);
         let model = model_for_mode(GREETING_LLM_MODE).to_string();
@@ -3132,6 +3143,7 @@ impl Cabin {
             return;
         }
         self.last_heartbeat = Instant::now();
+        let mut night_fired = false;
         for act in heartbeat_acts() {
             match act {
                 HeartbeatAct::Housekeep => {
@@ -3141,14 +3153,14 @@ impl Cabin {
                     }
                 }
                 HeartbeatAct::Inbox => self.drain_inbox(),
-                HeartbeatAct::Night => self.tick_night(),
-                HeartbeatAct::Review => self.tick_review(),
-                HeartbeatAct::Wall => self.tick_wall(),
-                HeartbeatAct::MidThought => {
-                    if self.messages.is_empty() {
-                        self.mid_thought_greet();
+                HeartbeatAct::Night => night_fired = self.tick_night(),
+                HeartbeatAct::Review => {
+                    if !night_fired && !self.running {
+                        self.tick_review();
                     }
                 }
+                HeartbeatAct::Wall => self.tick_wall(),
+                HeartbeatAct::MidThought => {}
                 HeartbeatAct::Reflect => {
                     if should_idle_reflect(
                         self.last_activity.elapsed().as_millis() as u64,
@@ -3166,7 +3178,14 @@ impl Cabin {
     }
 
     fn tick_anticipate(&mut self) {
-        if !should_anticipate(self.running) {
+        let clock = Self::local_clock();
+        let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
+        if !should_anticipate(
+            self.running,
+            self.review_busy,
+            self.composer.trim().is_empty(),
+            quiet,
+        ) {
             return;
         }
         let Some(prompt) = anticipated_need(
@@ -3189,9 +3208,9 @@ impl Cabin {
         self.send_chat(prompt);
     }
 
-    fn tick_night(&mut self) {
+    fn tick_night(&mut self) -> bool {
         if self.running || self.last_night_tick.elapsed() < Duration::from_secs(5) {
-            return;
+            return self.running || self.night_check_rx.is_some();
         }
         self.last_night_tick = Instant::now();
         let clock = Self::local_clock();
@@ -3207,17 +3226,18 @@ impl Cabin {
             .map(|a| ensure_automation_schedule(a, clock_copy))
             .collect();
         if self.poll_night_check(clock.now_ms) {
-            return;
+            return true;
         }
         let due = due_automations(&self.automations, clock.now_ms);
         let Some(a) = due.into_iter().next() else {
-            return;
+            return false;
         };
         if let Some(cmd) = night_check_command(&a.check_command) {
             self.spawn_night_check(a.id.clone(), a.name.clone(), cmd.to_string());
-            return;
+            return true;
         }
         self.fire_night(a, clock.now_ms);
+        true
     }
 
     fn poll_night_check(&mut self, now_ms: u64) -> bool {
@@ -3688,12 +3708,9 @@ impl Cabin {
         }
     }
 
-    fn mid_thought_greet(&mut self) {
-        if !self.messages.is_empty() {
-            return;
-        }
+    fn last_night_hint(&self) -> String {
         if self.last_receipts.is_empty() && self.rewind_rows.is_empty() {
-            return;
+            return String::new();
         }
         let g = greet_from_last_job(
             if self.cfg.goal_pin.is_empty() {
@@ -3704,16 +3721,14 @@ impl Cabin {
             &self.last_receipts,
             self.last_rewind_id.as_deref(),
         );
-        self.messages.push(Msg {
-            role: "assistant".into(),
-            content: format!(
-                "You sit down. Last night: {}\n{}",
-                g.goal.unwrap_or_else(|| "quiet".into()),
-                g.last_fail
-                    .map(|f| format!("Failed: {f}"))
-                    .unwrap_or_else(|| "Finished clean.".into())
-            ),
-        });
+        let mut bits = Vec::new();
+        if let Some(goal) = g.goal {
+            bits.push(goal);
+        }
+        if let Some(fail) = g.last_fail {
+            bits.push(format!("failed: {fail}"));
+        }
+        bits.join(" · ").chars().take(80).collect()
     }
 
     fn mark_auto_ran(&mut self, id: &str, now: u64) {
@@ -5303,6 +5318,23 @@ impl eframe::App for Cabin {
             ctx.request_repaint_after(Duration::from_secs(2));
         }
         self.poll_oauth_photo(ctx);
+        if !self.composer.trim().is_empty()
+            || ctx.input(|i| {
+                i.pointer.any_pressed()
+                    || i.events.iter().any(|e| {
+                        matches!(
+                            e,
+                            egui::Event::Text(_)
+                                | egui::Event::Key {
+                                    pressed: true,
+                                    ..
+                                }
+                        )
+                    })
+            })
+        {
+            self.touch();
+        }
         if ctx.input(|i| i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::Escape))
         {
             self.halt_work("Stopped");
@@ -5338,6 +5370,7 @@ impl eframe::App for Cabin {
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
+            self.wall_busy,
         );
         if !self.window_visible {
             apply_tray_window(ctx, crate::tray::hide_to_tray_window());
@@ -5604,68 +5637,83 @@ impl Cabin {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
-            let _ = crate::cards::page_header(ui, "Command", "");
-            ui.label(RichText::new("Run a command on this box. The bound project is the working tree.").color(crate::theme::muted()));
-            ui.add_space(12.0);
+            if crate::cards::page_header(ui, "Command", "Run") {
+                let line = self.cmd_line.trim().to_string();
+                if !line.is_empty() {
+                    self.cmd_hist.push(line.clone());
+                    self.cmd_line.clear();
+                    self.queue_sh(line);
+                }
+            }
+            crate::cards::section_label(ui, "This box");
             if !self.host_live.is_empty() {
                 crate::cards::status_chip(ui, &self.host_live, crate::cards::ChipTone::Setup);
                 ui.add_space(8.0);
             }
-            ui.horizontal(|ui| {
-                let mut run = false;
-                egui::Frame::none()
-                    .fill(crate::theme::elevated())
-                    .rounding(12.0)
-                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                    .inner_margin(egui::Margin::symmetric(10.0, 6.0))
-                    .show(ui, |ui| {
-                        let enter = ui
-                            .add(
-                                egui::TextEdit::singleline(&mut self.cmd_line)
-                                    .hint_text("$ ls")
-                                    .desired_width(480.0)
-                                    .frame(false),
-                            )
-                            .lost_focus()
-                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if enter {
-                            run = true;
-                        }
-                    });
-                if crate::cards::white_pill(ui, "Run") {
-                    run = true;
-                }
-                if run {
-                    let line = self.cmd_line.trim().to_string();
-                    if !line.is_empty() {
-                        self.cmd_hist.push(line.clone());
-                        self.cmd_line.clear();
-                        self.queue_sh(line);
-                    }
-                }
-            });
-            ui.add_space(16.0);
-            crate::cards::section_label(ui, "History");
+            let mut run = false;
             egui::Frame::none()
                 .fill(crate::theme::elevated())
                 .rounding(12.0)
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                .inner_margin(egui::Margin::same(12.0))
+                .inner_margin(egui::Margin::symmetric(10.0, 6.0))
                 .show(ui, |ui| {
-                    if self.cmd_hist.is_empty() && self.last_host.is_empty() {
-                        ui.label(RichText::new("Nothing run yet.").color(crate::theme::muted()));
-                    }
-                    for h in self.cmd_hist.iter().rev().take(24) {
-                        ui.label(RichText::new(h).monospace().size(12.0).color(crate::theme::fg()));
-                    }
-                    if !self.last_host.is_empty() {
-                        ui.add_space(8.0);
-                        ui.label(RichText::new("Last host").size(12.0).color(crate::theme::subtle()));
-                        for c in &self.last_host {
-                            ui.label(RichText::new(c).monospace().size(12.0).color(crate::theme::fg()));
-                        }
+                    let enter = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.cmd_line)
+                                .hint_text("$ ls — bound project is the working tree")
+                                .desired_width(f32::INFINITY)
+                                .frame(false),
+                        )
+                        .lost_focus()
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if enter {
+                        run = true;
                     }
                 });
+            if run {
+                let line = self.cmd_line.trim().to_string();
+                if !line.is_empty() {
+                    self.cmd_hist.push(line.clone());
+                    self.cmd_line.clear();
+                    self.queue_sh(line);
+                }
+            }
+            ui.add_space(16.0);
+            crate::cards::section_label(ui, "History");
+            if self.cmd_hist.is_empty() && self.last_host.is_empty() {
+                let _ = crate::cards::empty_prompt_tile(
+                    ui,
+                    crate::icons::TileIcon::Host,
+                    "Nothing run yet",
+                    "Type a command above. The bound project is the working tree.",
+                );
+            } else {
+                let hist: Vec<String> = self.cmd_hist.iter().rev().take(6).cloned().collect();
+                crate::cards::tile_row(ui, hist.len(), |ui, i| {
+                    let cmd = &hist[i];
+                    crate::cards::grok_tile(
+                        ui,
+                        crate::icons::TileIcon::Host,
+                        cmd,
+                        "Ran on this box",
+                        None,
+                        false,
+                    );
+                });
+                if !self.last_host.is_empty() {
+                    ui.add_space(12.0);
+                    crate::cards::section_label(ui, "Last host");
+                    let receipt: String = self.last_host.join(" ").chars().take(80).collect();
+                    crate::cards::grok_tile(
+                        ui,
+                        crate::icons::TileIcon::Check,
+                        "Last receipt",
+                        &receipt,
+                        None,
+                        false,
+                    );
+                }
+            }
         });
     }
 
@@ -6561,66 +6609,59 @@ impl Cabin {
             if crate::cards::page_header(ui, "Devices", if self.hub_on { "Sharing" } else { "Start share" }) {
                 self.start_hub();
             }
-            ui.label(RichText::new("Pair a phone or another computer. Receipts land here.").color(crate::theme::muted()));
-            ui.add_space(12.0);
-            if let Ok(st) = self.hub.lock() {
-                egui::Frame::none()
-                    .fill(crate::theme::elevated())
-                    .rounding(16.0)
-                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                    .inner_margin(egui::Margin::same(16.0))
-                    .show(ui, |ui| {
-                        ui.label(
-                            RichText::new(&st.device_name)
-                                .size(15.0)
-                                .color(crate::theme::fg()),
-                        );
-                        ui.label(
-                            RichText::new(&st.device_id)
-                                .size(12.0)
-                                .monospace()
-                                .color(crate::theme::muted()),
-                        );
-                        ui.add_space(10.0);
-                        if let Some(p) = &st.pair {
-                            ui.label(RichText::new("Pair code").size(12.0).color(crate::theme::subtle()));
-                            ui.label(
-                                RichText::new(&p.code)
-                                    .size(22.0)
-                                    .strong()
-                                    .monospace()
-                                    .color(crate::theme::fg()),
-                            );
-                            ui.label(
-                                RichText::new(discover_hub_pair_url(self.hub_port))
-                                    .size(12.0)
-                                    .color(crate::theme::muted()),
-                            );
-                        } else if self.hub_on {
-                            ui.label(
-                                RichText::new("Paired. Make a new code after another device joins.")
-                                    .color(crate::theme::muted()),
-                            );
-                        }
-                        if let Some(f) = &st.last_frame {
-                            ui.add_space(6.0);
-                            ui.label(
-                                RichText::new(format!("Last frame {}", f.at))
-                                    .size(12.0)
-                                    .color(crate::theme::subtle()),
-                            );
-                        }
-                    });
-                if st.pair.is_none() && self.hub_on {
-                    ui.add_space(10.0);
-                    if crate::cards::ghost_pill(ui, "New code") {
-                        drop(st);
-                        if let Ok(mut s) = self.hub.lock() {
-                            s.rotate_pair();
-                        }
-                        return;
+            crate::cards::section_label(ui, "This computer");
+            let (name, sharing, pair_code) = if let Ok(st) = self.hub.lock() {
+                (
+                    st.device_name.clone(),
+                    self.hub_on,
+                    st.pair.as_ref().map(|p| p.code.clone()),
+                )
+            } else {
+                (String::new(), false, None)
+            };
+            let body = if sharing {
+                format!("Sharing on port {}", self.hub_port)
+            } else {
+                "Not sharing. Start share to pair a phone or another computer.".into()
+            };
+            crate::cards::grok_tile(
+                ui,
+                crate::icons::TileIcon::Host,
+                if name.is_empty() { "This cabin" } else { &name },
+                &body,
+                None,
+                sharing,
+            );
+            ui.add_space(16.0);
+            crate::cards::section_label(ui, "Pair");
+            if let Some(code) = pair_code {
+                crate::cards::grok_tile(
+                    ui,
+                    crate::icons::TileIcon::Connect,
+                    &code,
+                    &format!("Open {} on the other device.", discover_hub_pair_url(self.hub_port)),
+                    None,
+                    false,
+                );
+            } else if sharing {
+                ui.label(
+                    RichText::new("Paired. Make a new code after another device joins.")
+                        .size(13.0)
+                        .color(crate::theme::muted()),
+                );
+                ui.add_space(8.0);
+                if crate::cards::ghost_pill(ui, "New code") {
+                    if let Ok(mut s) = self.hub.lock() {
+                        s.rotate_pair();
                     }
                 }
+            } else if crate::cards::empty_prompt_tile(
+                ui,
+                crate::icons::TileIcon::Connect,
+                "No pair code",
+                "Start share to mint a code for another device.",
+            ) {
+                self.start_hub();
             }
             ui.add_space(16.0);
             crate::cards::section_label(ui, "Send a task");
@@ -7105,6 +7146,10 @@ impl Cabin {
             }
             ui.add_space(8.0);
             crate::cards::section_label(ui, "Active");
+            if self.status.starts_with("Night:") {
+                crate::cards::status_chip(ui, &self.status, crate::cards::ChipTone::Live);
+                ui.add_space(8.0);
+            }
             let mut drop: Option<usize> = None;
             if self.automations.is_empty() {
                 if crate::cards::empty_prompt_tile(
@@ -7159,6 +7204,15 @@ impl Cabin {
                 ui.add_space(12.0);
             }
             crate::cards::section_label(ui, "Suggested");
+            ui.label(
+                RichText::new(review_status_line(
+                    self.suggestions.last_review_day.as_deref(),
+                    &Self::local_day(),
+                ))
+                .size(12.0)
+                .color(crate::theme::muted()),
+            );
+            ui.add_space(8.0);
             let active_names: Vec<String> = self.automations.iter().map(|a| a.name.clone()).collect();
             let auto_tiles = crate::cards::merge_suggested_autos(&self.suggestions.autos, &active_names);
             crate::cards::tile_row(ui, auto_tiles.len(), |ui, i| {
@@ -8011,6 +8065,15 @@ impl Cabin {
                 }
             } else {
             crate::cards::section_label(ui, "Suggested");
+            ui.label(
+                RichText::new(review_status_line(
+                    self.suggestions.last_review_day.as_deref(),
+                    &Self::local_day(),
+                ))
+                .size(12.0)
+                .color(crate::theme::muted()),
+            );
+            ui.add_space(8.0);
             let saved_names: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
             let pending = crate::cards::merge_suggested_skills(&self.suggestions.skills, &saved_names);
             crate::cards::tile_row(ui, pending.len(), |ui, i| {
@@ -8455,14 +8518,23 @@ mod tests {
 
     #[test]
     fn idle_visible_cabin_does_not_spin() {
-        assert!(!super::wants_live_repaint(false, false, false, true, false));
-        assert!(!super::wants_live_repaint(false, false, false, false, false));
-        assert!(super::wants_live_repaint(true, false, false, true, false));
+        assert!(!super::wants_live_repaint(false, false, false, true, false, false));
+        assert!(!super::wants_live_repaint(false, false, false, false, false, false));
+        assert!(super::wants_live_repaint(true, false, false, true, false, false));
+        assert!(super::wants_live_repaint(false, false, false, false, false, true));
         assert!(super::HIDDEN_HEARTBEAT_MS > 80);
         assert!(!super::night_host_check_blocks_ui());
         assert_eq!(
             grokhub_core::heartbeat_repaint_ms(false, false, grokhub_core::HEARTBEAT_MS, super::HIDDEN_HEARTBEAT_MS),
             grokhub_core::HEARTBEAT_MS
+        );
+        assert_eq!(
+            grokhub_core::heartbeat_repaint_ms(false, true, grokhub_core::HEARTBEAT_MS, super::HIDDEN_HEARTBEAT_MS),
+            grokhub_core::HEARTBEAT_MS
+        );
+        assert_eq!(
+            grokhub_core::heartbeat_repaint_ms(true, true, grokhub_core::HEARTBEAT_MS, super::HIDDEN_HEARTBEAT_MS),
+            80
         );
     }
 
@@ -8760,7 +8832,11 @@ mod tests {
             !apply.contains("send_chat") && !apply.contains("Nav::Chat"),
             "applying suggestions stays off the chat: {apply}"
         );
-        assert!(src.contains("HeartbeatAct::Review => self.tick_review()"));
+        assert!(src.contains("self.tick_review()"));
+        assert!(
+            src.contains("if !night_fired && !self.running"),
+            "Review waits if Night just fired or chat is running"
+        );
         let night = src
             .split("fn ui_night(")
             .nth(1)
@@ -8769,6 +8845,10 @@ mod tests {
         assert!(
             night.contains("merge_suggested_autos"),
             "Automations Suggested uses learned tiles first: {night}"
+        );
+        assert!(
+            night.contains("review_status_line"),
+            "Suggested header shows Reviewed today / due tonight: {night}"
         );
         let skills = src
             .split("fn ui_skills(")
@@ -8779,5 +8859,29 @@ mod tests {
             skills.contains("merge_suggested_skills") && skills.contains("merge_suggested_connectors"),
             "Skills and Connectors Suggested use learned tiles: {skills}"
         );
+        assert!(
+            skills.contains("review_status_line"),
+            "Skills Suggested header shows review status: {skills}"
+        );
+    }
+
+    #[test]
+    fn mid_thought_stays_out_of_chat() {
+        let src = include_str!("app.rs");
+        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
+        assert!(
+            !impl_src.contains("You sit down. Last night"),
+            "MidThought must not inject a fake assistant turn"
+        );
+        let hint = src
+            .split("fn last_night_hint(")
+            .nth(1)
+            .and_then(|s| s.split("fn mark_auto_ran(").next())
+            .expect("last_night_hint");
+        assert!(
+            !hint.contains("messages.push"),
+            "last-night context stays in the greeting: {hint}"
+        );
+        assert!(src.contains("last_night: &last_night") || src.contains("last_night: &self.last_night_hint()"));
     }
 }

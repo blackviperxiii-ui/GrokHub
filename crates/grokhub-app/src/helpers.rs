@@ -47,9 +47,10 @@ pub fn wants_live_repaint(
     hub_on: bool,
     window_visible: bool,
     imagine: bool,
+    wall_busy: bool,
 ) -> bool {
     let _ = window_visible;
-    running || chip_busy || hub_on || imagine
+    running || chip_busy || hub_on || imagine || wall_busy
 }
 
 pub fn expand_home(p: &str) -> String {

@@ -13,6 +13,7 @@ pub struct GreetingInput<'a> {
     pub insights: &'a [String],
     pub display_name: &'a str,
     pub hour: u8,
+    pub last_night: &'a str,
 }
 
 pub fn should_paint_greeting(empty_chat: bool, scratch: bool) -> bool {
@@ -170,6 +171,12 @@ pub fn greeting_prompt(input: &GreetingInput) -> String {
             }
         ),
     ];
+    if !input.last_night.trim().is_empty() && is_plain_text(input.last_night) {
+        lines.push(format!(
+            "Last night: {}",
+            input.last_night.chars().take(80).collect::<String>()
+        ));
+    }
     if !input.user_md.trim().is_empty() && is_plain_text(input.user_md) {
         lines.push("USER.md:".into());
         lines.push(input.user_md.chars().take(400).collect());
@@ -228,11 +235,12 @@ pub fn greeting_fingerprint(input: &GreetingInput) -> String {
     let mem: String = input.memory_md.trim().chars().take(80).collect();
     let ins = input.insights.first().cloned().unwrap_or_default();
     format!(
-        "{}|{}|{}|{}|h{}",
+        "{}|{}|{}|{}|n{}|h{}",
         name,
         user,
         mem,
         ins.chars().take(40).collect::<String>(),
+        input.last_night.chars().take(40).collect::<String>(),
         input.hour / 6
     )
 }
@@ -281,6 +289,7 @@ mod tests {
             insights,
             display_name,
             hour,
+            last_night: "",
         }
     }
 
@@ -352,6 +361,20 @@ mod tests {
             "Fast prompt should demand a short line: {prompt}"
         );
         assert_eq!(GREETING_LLM_MODE, "fast");
+        let insights = ["likes the cabin quiet".into()];
+        let mut with_night = input(
+            "Name: Viper\n",
+            "Paint the wall tonight.\n",
+            &insights,
+            "Viper",
+            22,
+        );
+        with_night.last_night = "host snapshot failed";
+        let night_prompt = greeting_prompt(&with_night);
+        assert!(
+            night_prompt.contains("Last night: host snapshot failed"),
+            "{night_prompt}"
+        );
     }
 
     #[test]

@@ -87,8 +87,10 @@ pub fn host_plan_autorun(_policy: Policy, steps: &[HostPlanStep], _project_dir: 
     !steps.is_empty()
 }
 
-pub fn should_anticipate(running: bool) -> bool {
-    !running
+/// Anticipate only when the seat is free: not running, not reviewing,
+/// no composer draft, and not in quiet hours.
+pub fn should_anticipate(running: bool, review_busy: bool, draft_empty: bool, quiet: bool) -> bool {
+    !running && !review_busy && draft_empty && !quiet
 }
 
 /// After idle reflect, fire a follow-skill prompt when a need matches a skill.
@@ -218,8 +220,11 @@ mod tests {
         let mixed = vec![step_from_cmd("ls"), step_from_cmd("rm -rf /tmp/x")];
         assert!(host_plan_autorun(Policy::max(), &mixed, "/tmp"));
         assert!(!host_plan_autorun(Policy::max(), &[], ""));
-        assert!(should_anticipate(false));
-        assert!(!should_anticipate(true));
+        assert!(should_anticipate(false, false, true, false));
+        assert!(!should_anticipate(true, false, true, false));
+        assert!(!should_anticipate(false, true, true, false));
+        assert!(!should_anticipate(false, false, false, false));
+        assert!(!should_anticipate(false, false, true, true));
     }
 
     #[test]
