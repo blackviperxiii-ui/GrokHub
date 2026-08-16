@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::io::Read;
 use std::time::Duration;
 
-const UA: &str = "GrokHub/2.0.0 (xAI OAuth; Linux)";
+const UA: &str = concat!("GrokHub/", env!("CARGO_PKG_VERSION"), " (xAI OAuth; Linux)");
 const PHOTO_MAX: u64 = 2 * 1024 * 1024;
 
 struct Discovery {
@@ -288,6 +288,14 @@ mod tests {
     #[test]
     fn avatar_rgba_rejects_garbage() {
         assert!(avatar_rgba(b"not-an-image").is_none());
+    }
+
+    #[test]
+    fn oauth_user_agent_is_2_5_0() {
+        assert!(
+            UA.contains("GrokHub/2.5.0"),
+            "oauth UA must track the cabin version, got {UA}"
+        );
     }
 }
 
