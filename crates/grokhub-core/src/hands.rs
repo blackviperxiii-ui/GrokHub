@@ -82,7 +82,7 @@ pub fn hands_down_receipt(reason: HandsDown) -> &'static str {
     match reason {
         HandsDown::Ready => "hands ready",
         HandsDown::Missing => {
-            "ydotool/xdotool missing — run ./scripts/install.sh to build ydotool and grim into ~/.local/lib/grokhub/bin. X11 can use xdotool. Include ~/.local/lib/grokhub/bin and ~/.local/bin on PATH."
+            "ydotool/xdotool missing — run ./scripts/install.sh to build ydotool, grim, xdotool, and wmctrl into ~/.local/lib/grokhub/bin. Include ~/.local/lib/grokhub/bin and ~/.local/bin on PATH."
         }
         HandsDown::Uinput => {
             "uinput blocked — load the uinput module, add your user to the input group, then log out. Hands cannot drive the desk until /dev/uinput is writable."
@@ -207,8 +207,11 @@ mod tests {
         assert_eq!(HANDS_PACMAN, "scripts/build-hands.sh");
         let build = include_str!("../../../scripts/build-hands.sh");
         assert!(
-            build.contains("v1.0.4") && build.contains("lib/grokhub/bin"),
-            "build-hands.sh must pin ydotool and install sidecars"
+            build.contains("v1.0.4")
+                && build.contains("xdotool")
+                && build.contains("wmctrl")
+                && build.contains("lib/grokhub/bin"),
+            "build-hands.sh must pin ydotool and build xdotool/wmctrl sidecars"
         );
         let dirs = extra_bin_dirs(Some("/home/cabin"));
         assert!(
@@ -218,8 +221,12 @@ mod tests {
         assert_eq!(dirs[1], PathBuf::from("/usr/lib/grokhub/bin"));
         let sh = include_str!("../../../scripts/install.sh");
         assert!(
-            sh.contains("build-hands.sh") && sh.contains("usermod -aG input"),
-            "clone install must build sidecars and keep the input group"
+            sh.contains("build-hands.sh")
+                && sh.contains("usermod -aG input")
+                && sh.contains("sudo install")
+                && sh.contains("60-grokhub-uinput.rules")
+                && sh.contains("modprobe uinput"),
+            "clone install must build sidecars, install the uinput udev rule on --user, and keep the input group"
         );
         assert!(
             !sh.contains("sudo pacman -S --needed ydotool"),
@@ -230,6 +237,7 @@ mod tests {
             srcinfo.contains("optdepends = ydotool")
                 && srcinfo.contains("optdepends = grim")
                 && srcinfo.contains("makedepends = cmake")
+                && srcinfo.contains("makedepends = libx11")
                 && !srcinfo.contains("\tdepends = ydotool"),
             "AUR metadata must treat hands as sidecars: {srcinfo}"
         );
@@ -237,12 +245,15 @@ mod tests {
         assert!(
             local_pkg.contains("build-hands.sh")
                 && local_pkg.contains("cmake")
+                && local_pkg.contains("libx11")
                 && local_pkg.contains("python-atspi"),
             "clone makepkg must build sidecars"
         );
         let bundle = include_str!("../../../scripts/make-release-bundle.sh");
         assert!(
-            bundle.contains("build-hands.sh") && bundle.contains("ydotoold.service"),
+            bundle.contains("build-hands.sh")
+                && bundle.contains("ydotoold.service")
+                && bundle.contains("modprobe uinput"),
             "release tarball install must ship the unit and build sidecars on the machine"
         );
         assert!(
