@@ -2,7 +2,10 @@
 
 use crate::icons::{self, TileIcon};
 use eframe::egui::{self, Align2, Color32, ColorImage, FontId, RichText, Sense, Stroke, TextureHandle, TextureOptions};
-use grokhub_core::{curate_wall, imagine_result_fit, wall_curate_seed, SkillMd, WallGif, WallSlot};
+use grokhub_core::{
+    curate_wall, imagine_result_fit, wall_curate_seed, LearnedSuggestion, SkillMd, SuggestionKind,
+    WallGif, WallSlot,
+};
 
 pub use grokhub_core::ImagineKind;
 
@@ -458,6 +461,140 @@ pub fn imagine_word(now_ms: u64) -> &'static str {
 pub fn is_cabin_catalog(name: &str) -> bool {
     let k = name.trim().to_ascii_lowercase();
     matches!(k.as_str(), "github" | "gh")
+}
+
+pub fn skill_from_learned(s: &LearnedSuggestion) -> SkillMd {
+    let name = s
+        .name
+        .as_deref()
+        .filter(|n| !n.is_empty())
+        .unwrap_or("learned-skill");
+    SkillMd {
+        name: name.into(),
+        description: s.body.clone(),
+        slash: format!("/{name}"),
+        trigger: s.trigger.clone().unwrap_or_default(),
+        instructions: s.instructions.clone().unwrap_or_default(),
+        pitfalls: "Do not write secrets into markdown.".into(),
+        verify: "echo VERIFY_OK".into(),
+        runs: 0,
+    }
+}
+
+/// Learned automations first, then static seeds not already active.
+pub fn merge_suggested_autos(
+    learned: &[LearnedSuggestion],
+    active_names: &[String],
+) -> Vec<(icons::TileIcon, String, String, String)> {
+    let mut seen: Vec<String> = active_names.iter().map(|s| s.to_ascii_lowercase()).collect();
+    let mut out = Vec::new();
+    for s in learned {
+        if s.kind != SuggestionKind::Auto {
+            continue;
+        }
+        let key = s.title.to_ascii_lowercase();
+        if seen.iter().any(|n| n == &key) {
+            continue;
+        }
+        seen.push(key);
+        out.push((
+            icons::icon_for_label(&s.title),
+            s.title.clone(),
+            s.body.clone(),
+            s.seed.clone().unwrap_or_default(),
+        ));
+    }
+    for s in SUGGESTED_AUTOS {
+        let key = s.title.to_ascii_lowercase();
+        if seen.iter().any(|n| n == &key) {
+            continue;
+        }
+        seen.push(key);
+        out.push((s.icon, s.title.into(), s.body.into(), s.seed.into()));
+    }
+    out
+}
+
+/// Learned skills first, then static seeds not already saved.
+pub fn merge_suggested_skills(
+    learned: &[LearnedSuggestion],
+    saved_names: &[String],
+) -> Vec<LearnedSuggestion> {
+    let mut seen: Vec<String> = saved_names.iter().map(|s| s.to_ascii_lowercase()).collect();
+    let mut out = Vec::new();
+    for s in learned {
+        if s.kind != SuggestionKind::Skill {
+            continue;
+        }
+        let key = s
+            .name
+            .as_deref()
+            .unwrap_or(&s.title)
+            .to_ascii_lowercase();
+        if seen.iter().any(|n| n == &key) {
+            continue;
+        }
+        seen.push(key);
+        out.push(s.clone());
+    }
+    for s in SUGGESTED_SKILLS {
+        let key = s.name.to_ascii_lowercase();
+        if seen.iter().any(|n| n == &key) {
+            continue;
+        }
+        seen.push(key);
+        out.push(LearnedSuggestion {
+            kind: SuggestionKind::Skill,
+            title: s.title.into(),
+            body: s.body.into(),
+            seed: None,
+            name: Some(s.name.into()),
+            trigger: Some(s.trigger.into()),
+            instructions: Some(s.instructions.into()),
+            provider: None,
+            tool: None,
+        });
+    }
+    out
+}
+
+/// Learned GitHub tiles first, then the live tools as day-one fallback.
+pub fn merge_suggested_connectors(
+    learned: &[LearnedSuggestion],
+) -> Vec<(icons::TileIcon, String, String, String)> {
+    let mut seen = Vec::new();
+    let mut out = Vec::new();
+    for s in learned {
+        if s.kind != SuggestionKind::Connector {
+            continue;
+        }
+        let tool = s.tool.clone().unwrap_or_default();
+        if tool.is_empty() || seen.iter().any(|t| t == &tool) {
+            continue;
+        }
+        seen.push(tool.clone());
+        out.push((
+            icons::icon_for_label(&s.title),
+            s.title.clone(),
+            s.body.clone(),
+            tool,
+        ));
+    }
+    for c in LIVE_CONNECTORS {
+        for (label, tool) in c.tools {
+            if seen.iter().any(|t| t == *tool) {
+                continue;
+            }
+            seen.push((*tool).into());
+            out.push((
+                c.icon,
+                (*label).into(),
+                format!("GitHub {tool} — runs the live connector or opens Settings for a PAT."),
+                (*tool).into(),
+            ));
+        }
+    }
+    out
 }
 
 pub fn skill_from_suggested(s: &SuggestedSkill) -> SkillMd {
@@ -1597,6 +1734,58 @@ mod tests {
             assert!(a.enabled);
             let _ = s.icon;
         }
+    }
+
+    #[test]
+    fn learned_tiles_lead_static_fallback() {
+        let learned_auto = LearnedSuggestion {
+            kind: SuggestionKind::Auto,
+            title: "Night wrap".into(),
+            body: "Close the day".into(),
+            seed: Some("every day at 21, say good night".into()),
+            name: None,
+            trigger: None,
+            instructions: None,
+            provider: None,
+            tool: None,
+        };
+        let autos = merge_suggested_autos(&[learned_auto], &[]);
+        assert_eq!(autos[0].1, "Night wrap");
+        assert!(autos.iter().any(|t| t.1 == "Morning brief"));
+        let hidden = merge_suggested_autos(&[], &["Morning brief".into()]);
+        assert!(!hidden.iter().any(|t| t.1 == "Morning brief"));
+
+        let learned_skill = LearnedSuggestion {
+            kind: SuggestionKind::Skill,
+            title: "Desk tidy".into(),
+            body: "Straighten windows".into(),
+            seed: None,
+            name: Some("desk-tidy".into()),
+            trigger: Some("messy desk".into()),
+            instructions: Some("stack the windows".into()),
+            provider: None,
+            tool: None,
+        };
+        let skills = merge_suggested_skills(&[learned_skill], &[]);
+        assert_eq!(skills[0].name.as_deref(), Some("desk-tidy"));
+        assert!(skills.iter().any(|s| s.name.as_deref() == Some("morning-brief")));
+
+        let learned_conn = LearnedSuggestion {
+            kind: SuggestionKind::Connector,
+            title: "My GitHub".into(),
+            body: "Who am I".into(),
+            seed: None,
+            name: None,
+            trigger: None,
+            instructions: None,
+            provider: Some("github".into()),
+            tool: Some("user".into()),
+        };
+        let conns = merge_suggested_connectors(&[learned_conn]);
+        assert_eq!(conns[0].1, "My GitHub");
+        assert_eq!(conns[0].3, "user");
+        assert!(!conns.iter().any(|t| t.1 == "Who am I" && t.3 == "user"));
+        assert!(conns.iter().any(|t| t.3 == "list_repos"));
     }
 
     #[test]
