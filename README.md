@@ -79,7 +79,7 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `secrets.js
 
 Tokens stay in `secrets.json`. Never in markdown.
 
-Composer is a pill: **What do you want to know?** Five quick chips sit above it on one row — no selected first pill. An empty chat can show a faint Fast blurb. Plus opens Upload / Paste. Mode combo is Auto / Fast / Balance / Think / Max. `/mode` only sets the combo — it does not overwrite Settings → Chat model. Mic is Hey Grok. Enter or the arrow sends; Ctrl+Enter starts a new line. While a reply (or Imagine / host job) is running, Send is Stop. Chat streams tokens onto the thread that started the job; opening New chat does not steal the live reply. User and assistant turns sit in bubbles that hug the text and wrap in a tight column (hard cap 440px). Host receipts stay off the bubble. Thought does not announce that an image is attached. Imagine stills sit above the composer. Grok may emit `HOST_CMD:` lines (unsandboxed `bash -lc`) and `COMPUTER_CMD:` lines (mouse, keyboard, `act` / `wait_for` via ydotool or xdotool). Host runs immediately — the cabin drives. `/stop`, tray **Halt hands**, the Stop square, and Ctrl+Shift+Esc actually kill those workers. When you ask it to take over or drive the UI, a JPEG frame and the windshield object list are attached. A leftover cabin frame is not attached on ordinary chat. Lock/password screens are skipped.
+Composer is a pill: **What do you want to know?** Five quick chips sit above it on one row — no selected first pill. An empty chat can show a faint Fast blurb. Plus opens Upload / Paste. Mode combo is Auto / Fast / Balance / Think / Max. `/mode` only sets the combo — it does not overwrite Settings → Chat model. Mic is Hey Grok. Enter or the arrow sends; Ctrl+Enter starts a new line. While a reply (or Imagine / host job) is running, Send is Stop. Chat streams tokens onto the thread that started the job; opening New chat does not steal the live reply. User and assistant turns sit in bubbles that hug the text and wrap in a tight column (hard cap 440px). Host receipts stay off the bubble. Thought does not announce that an image is attached. Imagine stills sit above the composer. Grok may emit `HOST_CMD:` lines (unsandboxed `bash -lc`) and `COMPUTER_CMD:` lines (mouse, keyboard, `act` / `wait_for` via ydotool or xdotool). Host runs immediately — the cabin drives. `/stop`, tray **Halt hands**, the Stop square, and Ctrl+Shift+Esc actually kill those workers. When you ask it to take over or drive the UI, a JPEG frame and the windshield object list are attached. A leftover cabin frame is not attached on ordinary chat. Lock/password screens are skipped. `/rewind` refuses `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, and `~/.config/GrokHub`. Forbidden host paths stay blocked. Host hour cap still applies. `app.json` is mode 0600 like `secrets.json`.
 
 ## Always-on hub
 
@@ -94,7 +94,7 @@ systemctl --user enable --now grokhub-hub.service
 
 ## Devices (phone / other PC)
 
-Pair code `ABC-234`, URL `http://<lan>:18766`. Android talks HTTP. Do not inhabit onto the phone.
+Pair code `ABC-234`. Devices paints a real LAN IPv4 (`http://192.168.x.x:18766`), not a `<lan>` placeholder. Android talks HTTP. Do not inhabit onto the phone. Hub `complete` is owner-only.
 
 Contract: [`docs/superpowers/plans/2026-08-14-dispatch-android-notes.md`](docs/superpowers/plans/2026-08-14-dispatch-android-notes.md).
 
