@@ -208,6 +208,23 @@ pub fn realtime_bearer(api_key: &str, _access_token: &str) -> Option<String> {
     }
 }
 
+/// Expired access with no refresh token is dead — do not prefer it over a console key.
+pub fn oauth_access_live(tokens: &XaiOAuthTokens, now_ms: u64) -> bool {
+    if tokens.access_token.trim().is_empty() {
+        return false;
+    }
+    let exp = tokens
+        .expires_at
+        .or_else(|| jwt_exp_ms(&tokens.access_token));
+    if let Some(exp) = exp {
+        return exp > now_ms;
+    }
+    if tokens.connected_at > 0 {
+        return now_ms.saturating_sub(tokens.connected_at) < TOKEN_MAX_AGE_WITHOUT_EXP_MS;
+    }
+    true
+}
+
 pub fn token_needs_refresh(tokens: &XaiOAuthTokens, now_ms: u64) -> bool {
     if tokens.access_token.trim().is_empty() {
         return false;
@@ -501,6 +518,23 @@ mod tests {
             },
             1_000
         ));
+        let dead = XaiOAuthTokens {
+            access_token: "dead-oauth".into(),
+            refresh_token: None,
+            expires_at: Some(10),
+            connected_at: 1,
+            ..Default::default()
+        };
+        assert!(
+            !oauth_access_live(&dead, 1_000),
+            "expired OAuth without refresh must not beat a console key"
+        );
+        assert!(!token_needs_refresh(&dead, 1_000));
+        assert_eq!(
+            chat_bearer("xai-live-key", "dead-oauth", oauth_access_live(&dead, 1_000))
+                .as_deref(),
+            Some("xai-live-key")
+        );
     }
 
     fn now_far() -> u64 {
