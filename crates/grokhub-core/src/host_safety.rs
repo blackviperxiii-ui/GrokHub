@@ -7,7 +7,9 @@ pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
         ("/etc/sudoers", "forbidden path: /etc/sudoers"),
         ("/.ssh/", "forbidden path: ssh keys"),
         ("~/.ssh", "forbidden path: ssh keys"),
+        (".ssh/", "forbidden path: ssh keys"),
         ("/.gnupg", "forbidden path: gnupg"),
+        (".gnupg", "forbidden path: gnupg"),
         ("app.json", "forbidden path: app secrets"),
     ];
     for (n, why) in needles {
@@ -43,6 +45,8 @@ mod tests {
     fn blocks_shadow_and_ssh() {
         assert!(forbidden_reason("cat /etc/shadow").is_some());
         assert!(forbidden_reason("cat ~/.ssh/id_ed25519").is_some());
+        assert!(forbidden_reason("cat .ssh/id_ed25519").is_some());
+        assert!(forbidden_reason("cat .gnupg/pubring.kbx").is_some());
         assert!(forbidden_reason("ls /tmp").is_none());
     }
 

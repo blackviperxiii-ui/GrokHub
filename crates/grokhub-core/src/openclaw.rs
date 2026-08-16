@@ -31,10 +31,12 @@ pub fn is_openclaw_workspace(names: &[&str]) -> bool {
 }
 
 pub fn clip_import(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    let chars = s.chars().count();
+    if chars <= max {
         return s.to_string();
     }
-    format!("{}… [truncated {} chars]", &s[..max], s.len() - max)
+    let clipped: String = s.chars().take(max).collect();
+    format!("{}… [truncated {} chars]", clipped, chars - max)
 }
 
 pub fn import_memory_file(name: &str, content: &str) -> Option<(String, String)> {
@@ -70,5 +72,9 @@ mod tests {
         assert!(import_memory_file("SOUL.md", "be useful").is_some());
         assert!(import_memory_file("SOUL.md", "token sk-abcdefghijklmnopqrstuv").is_none());
         assert!(import_memory_file("TOOLS.md", "ok").is_none());
+        let long = "é".repeat(9000);
+        let clipped = clip_import(&long, 8000);
+        assert!(clipped.contains("truncated"));
+        assert!(!clipped.contains('\u{FFFD}'));
     }
 }
