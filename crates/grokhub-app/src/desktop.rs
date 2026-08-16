@@ -1,10 +1,11 @@
 use grokhub_core::{
-    capture_kinds, clip_image_args, computer_cmd_line, computer_drive, ffmpeg_webcam_args,
-    ffmpeg_x11_args, frame_is_blank, gnome_shell_screenshot_args, hands_blocked_by_lock,
-    infer_wayland_display, jpeg_data_url, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var,
-    parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse, pcm_from_capture,
-    picker_args, session_is_wayland, take_text_body, x11_grab_size, AtspiRow, CaptureKind,
-    ComputerDrive, ComputerOp, RECORDERS, TRANSCRIBERS,
+    capture_kinds, clip_image_args, computer_cmd_line, computer_drive_for, ffmpeg_webcam_args,
+    ffmpeg_x11_args, frame_is_blank, gnome_shell_screenshot_args, hands_backend_name,
+    hands_blocked_by_lock, infer_wayland_display, jpeg_data_url, live_pcm_argv,
+    live_pcm_frame_bytes, luma_mean_var, parse_atspi_line, parse_picker_stdout, parse_wmctrl_line,
+    parse_xdotool_mouse, pcm_from_capture, pick_hands_backend, picker_args, session_is_wayland,
+    take_text_body, x11_grab_size, AtspiRow, CaptureKind, ComputerDrive, ComputerOp, HandsBackend,
+    RECORDERS, TRANSCRIBERS,
 };
 use image::GenericImageView;
 use std::io::{Read, Write};
@@ -121,12 +122,24 @@ fn cancelled(cancel: Option<&AtomicBool>) -> bool {
     cancel.is_some_and(|c| c.load(Ordering::SeqCst))
 }
 
-fn run_xdotool_steps(steps: &[Vec<String>], cancel: Option<&AtomicBool>) -> Result<(), String> {
+pub fn live_hands_backend() -> Option<HandsBackend> {
+    let wayland = session_is_wayland(
+        std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+        std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+    );
+    pick_hands_backend(wayland, which("ydotool"), which("xdotool"))
+}
+
+pub fn hands_driver_name() -> &'static str {
+    hands_backend_name(live_hands_backend())
+}
+
+fn run_bin_steps(bin: &str, steps: &[Vec<String>], cancel: Option<&AtomicBool>) -> Result<(), String> {
     if cancelled(cancel) {
         return Err("halted".into());
     }
-    if !which("xdotool") {
-        return Err("xdotool missing".into());
+    if !which(bin) {
+        return Err(format!("{bin} missing"));
     }
     for (i, step) in steps.iter().enumerate() {
         if cancelled(cancel) {
@@ -135,15 +148,30 @@ fn run_xdotool_steps(steps: &[Vec<String>], cancel: Option<&AtomicBool>) -> Resu
         if i > 0 {
             std::thread::sleep(Duration::from_millis(25));
         }
-        let st = Command::new("xdotool")
+        let st = Command::new(bin)
             .args(step)
             .status()
             .map_err(|e| e.to_string())?;
         if !st.success() {
-            return Err(format!("xdotool {} failed", step.join(" ")));
+            return Err(format!("{bin} {} failed", step.join(" ")));
         }
     }
     Ok(())
+}
+
+fn run_pointer_steps(steps: &[Vec<String>], cancel: Option<&AtomicBool>) -> Result<(), String> {
+    match live_hands_backend() {
+        Some(HandsBackend::Ydotool) => run_bin_steps("ydotool", steps, cancel),
+        Some(HandsBackend::Xdotool) => run_bin_steps("xdotool", steps, cancel),
+        None => Err("ydotool/xdotool missing".into()),
+    }
+}
+
+fn pointer_drive(op: &ComputerOp) -> ComputerDrive {
+    computer_drive_for(
+        live_hands_backend().unwrap_or(HandsBackend::Xdotool),
+        op,
+    )
 }
 
 fn lock_titles() -> Vec<String> {
@@ -157,13 +185,15 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     let rows = collect_rows();
     if let Some(r) = named_row(&rows, name) {
         let (x, y) = row_center(r);
-        match computer_drive(&ComputerOp::Click { x, y }) {
-            ComputerDrive::Xdotool(steps) => run_xdotool_steps(&steps, cancel)?,
+        match pointer_drive(&ComputerOp::Click { x, y }) {
+            ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
+                run_pointer_steps(&steps, cancel)?;
+            }
             ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) => {}
         }
         return Ok((x, y));
     }
-    if !which("xdotool") {
+    if live_hands_backend().is_none() {
         return Err(format!("act {name}: not found"));
     }
     let out = Command::new("xdotool")
@@ -189,8 +219,10 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     })?;
     let cx = x + w / 2;
     let cy = y + h / 2;
-    match computer_drive(&ComputerOp::Click { x: cx, y: cy }) {
-        ComputerDrive::Xdotool(steps) => run_xdotool_steps(&steps, cancel)?,
+    match pointer_drive(&ComputerOp::Click { x: cx, y: cy }) {
+        ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
+            run_pointer_steps(&steps, cancel)?;
+        }
         ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) => {}
     }
     Ok((cx, cy))
@@ -239,22 +271,24 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
     if hands_blocked_by_lock(op, &title_refs) {
         return hands_receipt(&line, started, false, "blocked: lock screen");
     }
-    match computer_drive(op) {
-        ComputerDrive::Xdotool(steps) => match run_xdotool_steps(&steps, cancel) {
-            Ok(()) => {
-                let detail = match op {
-                    ComputerOp::Click { x, y } => format!("clicked {x},{y}"),
-                    ComputerOp::DoubleClick { x, y } => format!("double-clicked {x},{y}"),
-                    ComputerOp::Move { x, y } => format!("moved {x},{y}"),
-                    ComputerOp::Type { text } => format!("typed {} chars", text.chars().count()),
-                    ComputerOp::Key { name } => format!("key {name}"),
-                    ComputerOp::Scroll { dy } => format!("scrolled {dy}"),
-                    ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } => "ok".into(),
-                };
-                hands_receipt(&line, started, true, &detail)
+    match pointer_drive(op) {
+        ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
+            match run_pointer_steps(&steps, cancel) {
+                Ok(()) => {
+                    let detail = match op {
+                        ComputerOp::Click { x, y } => format!("clicked {x},{y}"),
+                        ComputerOp::DoubleClick { x, y } => format!("double-clicked {x},{y}"),
+                        ComputerOp::Move { x, y } => format!("moved {x},{y}"),
+                        ComputerOp::Type { text } => format!("typed {} chars", text.chars().count()),
+                        ComputerOp::Key { name } => format!("key {name}"),
+                        ComputerOp::Scroll { dy } => format!("scrolled {dy}"),
+                        ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } => "ok".into(),
+                    };
+                    hands_receipt(&line, started, true, &detail)
+                }
+                Err(e) => hands_receipt(&line, started, false, &e),
             }
-            Err(e) => hands_receipt(&line, started, false, &e),
-        },
+        }
         ComputerDrive::Act(name) => match act_click(&name, cancel) {
             Ok((x, y)) => hands_receipt(&line, started, true, &format!("act {name} @{x},{y}")),
             Err(e) => hands_receipt(&line, started, false, &e),
@@ -929,11 +963,12 @@ mod tests {
             .unwrap();
         let row = parse_xdotool_mouse(&String::from_utf8_lossy(&loc.stdout)).unwrap();
         assert_eq!((row.x, row.y), (dest_x, dest_y), "{out} {} {}", row.x, row.y);
-        match computer_drive(&ComputerOp::Click { x: 1, y: 2 }) {
+        match grokhub_core::computer_drive(&ComputerOp::Click { x: 1, y: 2 }) {
             ComputerDrive::Xdotool(steps) => {
                 assert!(!steps.iter().any(|s| s.iter().any(|a| a == "--sync")));
             }
             other => panic!("{other:?}"),
         }
+        assert!(["ydotool", "xdotool", "missing"].contains(&hands_driver_name()));
     }
 }

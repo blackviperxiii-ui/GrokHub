@@ -13,6 +13,7 @@ mod github;
 mod host;
 mod markdown;
 mod night;
+mod recipes;
 mod notify;
 mod store;
 mod voice_ws;

@@ -23,7 +23,7 @@ use grokhub_core::{
     cabin_system_prompt,
     appearance_choices, appearance_hint, approved_cmds, auth_bearer, blend_thread_goal,
     build_hub_snapshot,
-    build_quick_chips, build_windshield, bump_skill_run, bump_usage, cabin_eyes_for_turn, can_inhabit,
+    build_quick_chips, build_windshield, bump_skill_run, bump_usage, can_inhabit,
     catalog_line, chip_suggest_prompt, compact_keep_pin, compose_imagine_prompt,
     context_fingerprint,
     context_percent,
@@ -32,12 +32,13 @@ use grokhub_core::{
     WallGif, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
     imagine_shows_result_above, imagine_toolbox_dock, imagine_toolbox_shows_title,
     imagine_toolbox_top, imagine_wall_bounds,
-    due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
+    doctor_hands_line, due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     imagine_aspect_label, imagine_aspect_name, imagine_style_label, imagine_video_dur_label,
     imagine_video_res_label, last_imagine_receipt,
     extract_insights, extract_work_updates, fact_candidates, failover_model, filter_slash_commands,
+    frame_bytes, PresenceFrame,
     forget_topic, greet_from_last_job, has_auth, has_verify_ok, hey_grok_on_press,
     hey_grok_route, hey_grok_starts_ptt, import_memory_file, insight_pin, is_openclaw_workspace,
     add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
@@ -59,6 +60,7 @@ use grokhub_core::{
     user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
+    recipe_from_cmds, replay_automation_target,
     parse_nl_automation, parse_recipe, parse_slash, parse_theme, pick_theme, plan_from_text, plan_room,
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
@@ -68,6 +70,7 @@ use grokhub_core::{
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     rewind_dest, save_hub_state, screen_from_extents, search_corpus,
     should_anticipate, should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
+    user_asks_takeover, windshield_prompt,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
@@ -2368,8 +2371,9 @@ impl Cabin {
             role: "user".into(),
             content: text.clone(),
         });
-        if user_asks_desktop_hands(&text) {
+        if user_asks_desktop_hands(&text) || user_asks_takeover(&text) {
             self.hands_attach = true;
+            self.eyes_attach = true;
         }
         if self.cfg.cabin_eyes && user_asks_cabin_eyes(&text) {
             self.eyes_attach = true;
@@ -2810,6 +2814,7 @@ impl Cabin {
             self.last_receipt_ok,
             self.skill_list.len(),
         ));
+        lines.push(doctor_hands_line(crate::desktop::hands_driver_name()));
         lines
             .into_iter()
             .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
@@ -3066,6 +3071,10 @@ impl Cabin {
         self.mark_auto_ran(&a.id, now_ms);
         self.daily_auto_used = self.daily_auto_used.saturating_add(1);
         self.status = format!("Night: {}", a.name);
+        if let Some(id) = replay_automation_target(&a.instructions) {
+            self.replay_saved_recipe(id);
+            return;
+        }
         self.nav = Nav::Chat;
         self.send_chat(a.instructions);
     }
@@ -3538,6 +3547,31 @@ impl Cabin {
             .map(|h| h.chars().take(400).collect::<String>())
             .unwrap_or_default();
         let pin = insight_pin(&self.learning);
+        if user_asks_desktop_hands(last_user) || user_asks_takeover(last_user) {
+            self.hands_attach = true;
+            self.eyes_attach = true;
+        }
+        if self.cfg.cabin_eyes && user_asks_cabin_eyes(last_user) {
+            self.eyes_attach = true;
+        }
+        let mut hands = hands_protocol().to_string();
+        if self.eyes_attach || self.hands_attach {
+            let rows = collect_rows();
+            let titles: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+            let frame = build_windshield(
+                &rows,
+                None,
+                refused_lock(&titles),
+                self.board.first().map(|c| c.title.as_str()),
+                self.skill_list.first().map(|s| s.name.as_str()),
+                4,
+            );
+            let glass = windshield_prompt(&frame);
+            if !glass.is_empty() {
+                hands.push_str("\n\nWindshield:\n");
+                hands.push_str(&glass);
+            }
+        }
         let sys = cabin_system_prompt(
             &soul,
             &user_md,
@@ -3547,17 +3581,11 @@ impl Cabin {
             &self.cfg.goal_pin,
             &board,
             &last_host,
-            hands_protocol(),
+            &hands,
             &pin,
         );
         if !sys.is_empty() {
             msgs.insert(0, ("system".into(), sys));
-        }
-        if self.cfg.cabin_eyes && user_asks_cabin_eyes(last_user) {
-            self.eyes_attach = true;
-        }
-        if user_asks_desktop_hands(last_user) {
-            self.hands_attach = true;
         }
         self.ensure_cabin_frame();
         let user_img = self.attach_url.take();
@@ -3832,6 +3860,23 @@ impl Cabin {
                             Err(_) => {}
                         }
                     }
+                    if let Some(recipe) = recipe_from_cmds(&self.last_host, screen_from_rows(&rows)) {
+                        if crate::recipes::save_recipe("last", &recipe).is_ok() {
+                            self.last_recipe = Some(recipe);
+                        }
+                    }
+                    if !self.scratch() {
+                        let user = last_user_text(
+                            &self
+                                .messages
+                                .iter()
+                                .map(|m| (m.role.clone(), m.content.clone()))
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap_or_default();
+                        let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
+                        self.commit_proposed_skill(proposed);
+                    }
                 }
                 self.persist();
                 self.run_skill_verify();
@@ -3850,7 +3895,9 @@ impl Cabin {
                         }
                     }
                 }
-                if is_hard_run(self.last_host.len() as u32, !ok, false, self.scratch()) {
+                if !any_hands
+                    && is_hard_run(self.last_host.len() as u32, !ok, false, self.scratch())
+                {
                     let user = last_user_text(
                         &self
                             .messages
@@ -4321,7 +4368,32 @@ impl Cabin {
         }
     }
 
+    fn take_over_desktop(&mut self) {
+        self.nav = Nav::Chat;
+        self.hands_attach = true;
+        self.eyes_attach = true;
+        self.send_chat("Take over this desktop. Look at the screen and fix what is broken.".into());
+    }
+
+    fn replay_saved_recipe(&mut self, id: &str) {
+        let recipe = if id.eq_ignore_ascii_case("last") {
+            crate::recipes::load_last().or_else(|| self.last_recipe.clone())
+        } else {
+            crate::recipes::load_recipe(id).or_else(|| self.last_recipe.clone())
+        };
+        match recipe {
+            Some(r) => {
+                self.last_recipe = Some(r);
+                self.replay_recipe();
+            }
+            None => self.status = format!("No recipe {id}"),
+        }
+    }
+
     fn replay_recipe(&mut self) {
+        if self.last_recipe.is_none() {
+            self.last_recipe = crate::recipes::load_last();
+        }
         let Some(recipe) = self.last_recipe.clone() else {
             self.status = "No recipe".into();
             return;
@@ -6459,8 +6531,12 @@ impl Cabin {
                     let idx = usize::MAX - i;
                     if let Some(a) = self.automations.get(idx) {
                         let inst = a.instructions.clone();
-                        self.nav = Nav::Chat;
-                        self.send_chat(inst);
+                        if let Some(id) = replay_automation_target(&inst) {
+                            self.replay_saved_recipe(id);
+                        } else {
+                            self.nav = Nav::Chat;
+                            self.send_chat(inst);
+                        }
                     }
                 }
             }
@@ -7360,9 +7436,15 @@ impl Cabin {
             .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
             let _ = crate::cards::page_header(ui, "Eyes", "");
-            ui.label(RichText::new("AT-SPI via pyatspi when present, else wmctrl + xdotool cursor. Lock screens are won’ts. Cabin eyes stay dormant until you ask them to look, or hands need a frame.").color(crate::theme::muted()));
+            ui.label(RichText::new(format!(
+                "Hands: {}. grim for the frame; ydotool on Wayland (needs ydotoold + uinput), xdotool on X11. AT-SPI when present, else wmctrl. Lock screens are won’ts. Halt stops a running job.",
+                crate::desktop::hands_driver_name()
+            )).color(crate::theme::muted()));
             ui.add_space(12.0);
             ui.horizontal(|ui| {
+                if ui.button("Take over").clicked() {
+                    self.take_over_desktop();
+                }
                 if ui.button("Scan + frame").clicked() {
                     self.refresh_eyes();
                 }
@@ -7370,6 +7452,14 @@ impl Cabin {
                     self.replay_recipe();
                 }
             });
+            if let Some(url) = self.last_frame_url.clone() {
+                if let Some((tex, size)) = eyes_frame_tex(ui.ctx(), &url) {
+                    let max_w = ui.available_width().min(480.0);
+                    let scale = max_w / size[0].max(1) as f32;
+                    let h = size[1] as f32 * scale;
+                    ui.add(egui::Image::new((tex.id(), egui::vec2(max_w, h))));
+                }
+            }
             ui.horizontal_wrapped(|ui| {
                 for line in self.eyes_text.lines() {
                     let Some(rest) = line.strip_prefix("- [") else {
@@ -7412,6 +7502,29 @@ impl Cabin {
     }
 }
 
+
+fn eyes_frame_tex(ctx: &egui::Context, url: &str) -> Option<(TextureHandle, [usize; 2])> {
+    let key: String = url.chars().take(48).collect();
+    let id = egui::Id::new(("eyes-frame", url.len(), key));
+    if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
+        return Some(hit);
+    }
+    let frame = PresenceFrame {
+        data_url: url.to_string(),
+        at: 0,
+    };
+    let (_, buf) = frame_bytes(&frame)?;
+    let img = image::load_from_memory(&buf).ok()?.to_rgba8();
+    let size = [img.width() as usize, img.height() as usize];
+    let tex = ctx.load_texture(
+        "eyes-last-frame",
+        ColorImage::from_rgba_unmultiplied(size, img.as_raw()),
+        TextureOptions::LINEAR,
+    );
+    let hit = (tex, size);
+    ctx.data_mut(|d| d.insert_temp(id, hit.clone()));
+    Some(hit)
+}
 
 fn project_row_active(selected: bool, is_project: bool, nav: Nav) -> bool {
     if !selected || !is_project {
