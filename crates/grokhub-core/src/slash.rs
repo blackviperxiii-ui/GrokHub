@@ -381,8 +381,8 @@ pub fn slash_help() -> String {
         "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs.",
         "Mode pill: Auto / Fast / Balance / Think / Max. Pages use catalog chrome.",
         "Appearance: Dark, Light, System. Chat streams tokens on the thread that started them.",
-        "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Hands: install.sh builds sidecars into ~/.local/lib/grokhub/bin; Eyes Install hands starts ydotoold; /stop kills the worker.",
-        "A truncated, promised-work, or handed-back apt/not-found reply can quiet-continue up to four times.",
+        "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Hands: install.sh builds sidecars and installs python-atspi; Eyes Install hands starts ydotoold; /stop kills the worker.",
+        "A truncated, promised-work, or handed-back apt/not-found reply can quiet-continue up to four times. Thinking does not count.",
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
         "Cabin eyes stay dormant until you ask, or hands need a frame. Thought does not announce an attach.",
         "Pulse every 15s: every organ runs. Hidden idle waits for the pulse.",
@@ -484,10 +484,10 @@ mod tests {
         assert!(slash_help().contains("centered over the composer"));
         assert!(slash_help().contains("Hidden idle waits for the pulse"));
         assert!(slash_help().contains("Chat rail opens the last-accessed thread"));
-        assert!(slash_help().contains("install.sh builds sidecars"));
+        assert!(slash_help().contains("install.sh builds sidecars and installs python-atspi"));
         assert!(slash_help().contains("Eyes Install hands starts ydotoold"));
         assert!(slash_help().contains("handed-back apt/not-found"));
-        assert!(slash_help().contains("quiet-continue up to four times"));
+        assert!(slash_help().contains("Thinking does not count"));
         assert!(slash_help().contains("pinned taskbar click"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
