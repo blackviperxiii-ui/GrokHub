@@ -179,6 +179,26 @@ mod tests {
         assert!(!hands_chip_live(HandsDown::Missing));
         assert!(hands_chip_live(HandsDown::Ready));
         assert_eq!(HANDS_PACMAN, "pacman -S --needed ydotool xdotool grim wmctrl python-atspi");
+        let sh = include_str!("../../../scripts/install.sh");
+        assert!(
+            sh.contains("sudo pacman -S --needed") && sh.contains("usermod -aG input"),
+            "clone install must sudo-pull hands with the cabin"
+        );
+        let srcinfo = include_str!("../../../packaging/aur/.SRCINFO");
+        assert!(
+            srcinfo.contains("depends = ydotool") && srcinfo.contains("depends = grim"),
+            "AUR metadata must pull hands with grokhub: {srcinfo}"
+        );
+        let local_pkg = include_str!("../../../packaging/PKGBUILD");
+        assert!(
+            local_pkg.contains("ydotool") && local_pkg.contains("python-atspi"),
+            "clone makepkg must depend on hands"
+        );
+        let bundle = include_str!("../../../scripts/make-release-bundle.sh");
+        assert!(
+            bundle.contains("sudo pacman -S --needed") && bundle.contains("ydotoold.service"),
+            "release tarball install must ship the unit and pacman hands line"
+        );
         assert_eq!(
             ydotool_socket_path(None, Some("/run/user/1000")),
             PathBuf::from("/run/user/1000/ydotool.sock")
