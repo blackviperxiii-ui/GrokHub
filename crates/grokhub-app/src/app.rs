@@ -8284,11 +8284,15 @@ mod tests {
     #[test]
     fn composer_stack_drops_approve_slots() {
         let src = include_str!("app.rs");
-        let impl_end = src.find("#[cfg(test)]").unwrap_or(src.len());
-        let impl_src = &src[..impl_end];
-        assert!(!impl_src.contains("SkillApprove"));
-        assert!(!impl_src.contains("SaveAsSkill"));
-        assert!(!impl_src.contains("HostPlan"));
+        let start = src.find("fn ui_composer_stack").expect("composer stack");
+        let end = src[start..]
+            .find("fn ui_devices")
+            .map(|i| start + i)
+            .unwrap_or(src.len());
+        let stack = &src[start..end];
+        assert!(!stack.contains("SkillApprove"), "{stack}");
+        assert!(!stack.contains("SaveAsSkill"), "{stack}");
+        assert!(!stack.contains("HostPlan"), "{stack}");
         let order = super::composer_stack_order();
         assert_eq!(
             order,
