@@ -117,7 +117,10 @@ pub fn blend_thread_goal(prev: &ThreadGoal, observed: &[String], drop_after: u32
         kept_unseen.push(unseen);
     }
     ThreadGoal {
-        label: kept_topics.join(" and "),
+        label: kept_topics
+            .first()
+            .cloned()
+            .unwrap_or_default(),
         topics: kept_topics,
         unseen: kept_unseen,
     }
@@ -138,13 +141,11 @@ pub fn thread_goal_prompt(messages: &[(String, String)]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Read this chat. Name the current topics in a few lowercase words.\n\
+        "Read this chat. Name it in one or two lowercase words.\n\
 Reply with one line only:\n\
 GOAL: topic\n\
-or\n\
-GOAL: topic and topic\n\
-Topics are what the conversation is actually about right now, including adult topics.\n\
-No quotes, no extra words.\n\n{recent}"
+The topic is what the conversation is actually about right now, including adult topics.\n\
+No lists, no 'and', no quotes, no extra words.\n\n{recent}"
     )
 }
 
@@ -304,9 +305,10 @@ mod tests {
         assert_eq!(porn.label, "porn");
         assert_eq!(porn.topics, vec!["porn".to_string()]);
         let both = blend_thread_goal(&porn, &["comics".into()], GOAL_DROP_AFTER);
-        assert_eq!(both.label, "porn and comics");
+        assert_eq!(both.label, "porn");
+        assert_eq!(both.topics, vec!["porn".to_string(), "comics".to_string()]);
         let stay = blend_thread_goal(&both, &["comics".into()], GOAL_DROP_AFTER);
-        assert_eq!(stay.label, "porn and comics");
+        assert_eq!(stay.label, "porn");
         let dropped = blend_thread_goal(&stay, &["comics".into()], GOAL_DROP_AFTER);
         assert_eq!(dropped.label, "comics");
         assert_eq!(dropped.topics, vec!["comics".to_string()]);

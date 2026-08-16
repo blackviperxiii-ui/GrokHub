@@ -1,4 +1,4 @@
-use eframe::egui::{Color32, RichText, TextStyle, Ui, Vec2};
+use eframe::egui::{Color32, Label, RichText, TextStyle, TextWrapMode, Ui, Vec2};
 use grokhub_core::bubble_max_width;
 
 /// Cap for wrapping. Short bubbles hug via `bubble_outer_width`, they do not stretch to this.
@@ -17,67 +17,98 @@ pub fn measure_text(ui: &Ui, text: &str, wrap: f32) -> Vec2 {
 }
 
 pub fn show(ui: &mut Ui, text: &str) {
+    ui.style_mut().wrap_mode = Some(TextWrapMode::Wrap);
+    let wrap = ui.available_width().max(1.0);
+    ui.set_max_width(wrap);
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("### ") {
-            ui.label(RichText::new(rest).strong());
+            wrapping_label(ui, RichText::new(rest).strong(), wrap);
         } else if let Some(rest) = line.strip_prefix("## ") {
-            ui.label(RichText::new(rest).heading());
+            wrapping_label(ui, RichText::new(rest).heading(), wrap);
         } else if let Some(rest) = line.strip_prefix("# ") {
-            ui.label(RichText::new(rest).heading().strong());
+            wrapping_label(ui, RichText::new(rest).heading().strong(), wrap);
         } else if let Some(rest) = line.strip_prefix("- ") {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.set_max_width(wrap);
+                ui.style_mut().wrap_mode = Some(TextWrapMode::Wrap);
                 ui.label("·");
-                inline(ui, rest);
+                inline(ui, rest, (wrap - 18.0).max(1.0));
             });
         } else if line.starts_with("```") {
-            ui.label(RichText::new(line).monospace().color(Color32::from_rgb(0xa3, 0xa3, 0xa3)));
+            wrapping_label(
+                ui,
+                RichText::new(line)
+                    .monospace()
+                    .color(Color32::from_rgb(0xa3, 0xa3, 0xa3)),
+                wrap,
+            );
         } else if line.is_empty() {
             ui.add_space(6.0);
         } else {
-            inline(ui, line);
+            inline(ui, line, wrap);
         }
     }
 }
 
-fn inline(ui: &mut Ui, line: &str) {
-    ui.horizontal_wrapped(|ui| {
-        let mut rest = line;
-        while !rest.is_empty() {
-            if let Some(after) = rest.strip_prefix("**") {
-                if let Some(end) = after.find("**") {
-                    ui.label(RichText::new(&after[..end]).strong());
-                    rest = &after[end + 2..];
-                    continue;
+fn wrapping_label(ui: &mut Ui, text: RichText, wrap: f32) {
+    ui.set_max_width(wrap);
+    ui.add(Label::new(text).wrap());
+}
+
+fn inline(ui: &mut Ui, line: &str, wrap: f32) {
+    if !line.contains("**") && !line.contains('`') {
+        wrapping_label(ui, RichText::new(line), wrap);
+        return;
+    }
+    ui.allocate_ui_with_layout(
+        Vec2::new(wrap, 0.0),
+        eframe::egui::Layout::left_to_right(eframe::egui::Align::Min).with_main_wrap(true),
+        |ui| {
+            ui.set_max_width(wrap);
+            ui.style_mut().wrap_mode = Some(TextWrapMode::Wrap);
+            let mut rest = line;
+            while !rest.is_empty() {
+                if let Some(after) = rest.strip_prefix("**") {
+                    if let Some(end) = after.find("**") {
+                        ui.add(Label::new(RichText::new(&after[..end]).strong()).wrap());
+                        rest = &after[end + 2..];
+                        continue;
+                    }
                 }
-            }
-            if let Some(after) = rest.strip_prefix('`') {
-                if let Some(end) = after.find('`') {
-                    ui.label(
-                        RichText::new(&after[..end])
-                            .monospace()
-                            .color(Color32::from_rgb(0xd4, 0xd4, 0xd4)),
-                    );
-                    rest = &after[end + 1..];
-                    continue;
+                if let Some(after) = rest.strip_prefix('`') {
+                    if let Some(end) = after.find('`') {
+                        ui.add(
+                            Label::new(
+                                RichText::new(&after[..end])
+                                    .monospace()
+                                    .color(Color32::from_rgb(0xd4, 0xd4, 0xd4)),
+                            )
+                            .wrap(),
+                        );
+                        rest = &after[end + 1..];
+                        continue;
+                    }
                 }
+                let next = rest
+                    .find("**")
+                    .into_iter()
+                    .chain(rest.find('`'))
+                    .min()
+                    .unwrap_or(rest.len())
+                    .max(1);
+                ui.add(Label::new(&rest[..next]).wrap());
+                rest = &rest[next..];
             }
-            let next = rest
-                .find("**")
-                .into_iter()
-                .chain(rest.find('`'))
-                .min()
-                .unwrap_or(rest.len())
-                .max(1);
-            ui.label(&rest[..next]);
-            rest = &rest[next..];
-        }
-    });
+        },
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::{bubble_width, measure_text};
-    use grokhub_core::{bubble_max_width, bubble_outer_width, bubble_wrap_width, BUBBLE_PAD_X};
+    use grokhub_core::{
+        bubble_max_width, bubble_outer_width, bubble_wrap_width, BUBBLE_MAX_PX, BUBBLE_PAD_X,
+    };
 
     #[test]
     fn splits_markers() {
@@ -89,6 +120,7 @@ mod tests {
         let cap = bubble_width(800.0);
         assert!((cap - bubble_max_width(800.0)).abs() < 0.1);
         assert!(cap < 800.0);
+        assert!(cap <= BUBBLE_MAX_PX + 0.1);
         assert!(bubble_width(100.0) <= 100.0);
         let hugged = bubble_outer_width(800.0, 40.0, BUBBLE_PAD_X);
         assert!(hugged < 120.0);
@@ -118,6 +150,25 @@ mod tests {
             let cap = bubble_max_width(800.0);
             assert!(outer <= cap + 1.0, "outer {outer} cap {cap}");
             assert!(outer > cap * 0.85, "wrapped bubble too skinny {outer}");
+        });
+    }
+
+    #[test]
+    fn long_sentence_wraps_even_when_available_width_is_huge() {
+        with_fonts_ui(|ui| {
+            let wrap = bubble_wrap_width(f32::INFINITY, BUBBLE_PAD_X);
+            let body = "the clam gods? oh you know... ancient, briny, and extremely picky about their cream-to-broth ratio. they live in the black void between chowder pots, only emerging when someone dares to say manhattan style in their presence.";
+            let sz = measure_text(ui, body, wrap);
+            assert!(
+                sz.x <= wrap + 1.0,
+                "sentence must wrap inside {wrap}, got {}",
+                sz.x
+            );
+            assert!(
+                sz.y > 28.0,
+                "one long sentence must become several lines, height {}",
+                sz.y
+            );
         });
     }
 
