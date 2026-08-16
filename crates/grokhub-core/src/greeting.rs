@@ -148,6 +148,20 @@ pub fn local_greeting(input: &GreetingInput) -> String {
     } else if name.is_empty() {
         line = format!("{tod}. The cabin is ready.");
     }
+    if !input.last_night.trim().is_empty() && is_plain_text(input.last_night) {
+        let bit: String = input.last_night.trim().chars().take(40).collect();
+        if !line.to_ascii_lowercase().contains(&bit.to_ascii_lowercase()) {
+            let next = format!("{line} {bit}");
+            let next = if next.ends_with('.') {
+                next
+            } else {
+                format!("{next}.")
+            };
+            if next.chars().count() <= GREETING_MAX_CHARS {
+                line = next;
+            }
+        }
+    }
     clip_greeting(&line)
 }
 
@@ -374,6 +388,13 @@ mod tests {
         assert!(
             night_prompt.contains("Last night: host snapshot failed"),
             "{night_prompt}"
+        );
+        let mut continue_in = input("", "", &[], "", 8);
+        continue_in.last_night = "Continue Night cabin";
+        let local = local_greeting(&continue_in);
+        assert!(
+            local.to_ascii_lowercase().contains("continue night cabin"),
+            "empty-chat greeting should surface the last-access hint: {local}"
         );
     }
 
