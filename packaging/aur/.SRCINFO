@@ -27,12 +27,11 @@ pkgbase = grokhub
 	depends = libxkbcommon-x11
 	depends = hicolor-icon-theme
 	depends = python
+	depends = python-atspi
 	optdepends = ydotool: system ydotool if the sidecar build is skipped
 	optdepends = grim: system grim if the sidecar build is skipped
 	optdepends = xdotool: X11 pointer
 	optdepends = wmctrl: X11 window list
-	optdepends = python-atspi: windshield fallback
-	optdepends = slurp: region capture
 	source = grokhub::git+https://github.com/blackviperxiii-ui/Grok-Hub.git#tag=v2.0.0
 	sha256sums = SKIP
 
