@@ -379,6 +379,7 @@ pub fn slash_help() -> String {
         "/models — Grok catalog",
         "/palette — command palette",
         "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs.",
+        "Mode pill: Auto / Fast / Balance / Think / Max. Pages use catalog chrome.",
         "Appearance: Dark, Light, System. Chat streams tokens on the thread that started them.",
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Hands: unsandboxed; /stop kills the worker.",
         "Cabin eyes stay dormant until you ask, or hands need a frame. Thought does not announce an attach.",
@@ -473,6 +474,7 @@ mod tests {
         assert!(slash_help().contains("Cabin eyes stay dormant"));
         assert!(slash_help().contains("Restart on Settings"));
         assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
+        assert!(slash_help().contains("Mode pill"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());
