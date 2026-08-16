@@ -1,14 +1,15 @@
-//! Chat bubbles hug their text and wrap in a tight column.
+//! Chat bubbles hug their text and wrap inside the visible pane.
 
-pub const BUBBLE_MAX_FRAC: f32 = 0.62;
-/// Hard cap so a wide cabin (or an unbounded ScrollArea) cannot stretch a reply into a slab.
-pub const BUBBLE_MAX_PX: f32 = 440.0;
+pub const BUBBLE_MAX_FRAC: f32 = 0.86;
+/// Safety cap only for a sane row. The pane width always wins.
+pub const BUBBLE_MAX_PX: f32 = 960.0;
 pub const BUBBLE_PAD_X: f32 = 12.0;
 pub const BUBBLE_PAD_Y: f32 = 8.0;
 pub const BUBBLE_RADIUS: f32 = 16.0;
 const ROW_SANE_MAX: f32 = 1600.0;
 const ROW_FALLBACK: f32 = 640.0;
 const ROW_MIN: f32 = 160.0;
+const BUBBLE_GUTTER: f32 = 12.0;
 
 /// Scroll areas sometimes report infinite or huge `available_width`. Treat those as a normal pane.
 pub fn clamp_row_width(available: f32) -> f32 {
@@ -23,10 +24,10 @@ pub fn clamp_row_width(available: f32) -> f32 {
 pub fn bubble_max_width(available: f32) -> f32 {
     let avail = clamp_row_width(available);
     if avail < ROW_MIN {
-        avail
-    } else {
-        (avail * BUBBLE_MAX_FRAC).min(BUBBLE_MAX_PX).clamp(ROW_MIN, avail)
+        return avail;
     }
+    let fluid = (avail * BUBBLE_MAX_FRAC).min(avail - BUBBLE_GUTTER);
+    fluid.min(BUBBLE_MAX_PX).clamp(ROW_MIN.min(avail), avail)
 }
 
 pub fn bubble_wrap_width(available: f32, pad_x: f32) -> f32 {
@@ -62,11 +63,15 @@ mod tests {
     }
 
     #[test]
-    fn long_message_caps_at_the_column_and_grows_taller() {
+    fn long_message_uses_the_pane_and_grows_taller() {
         let max = bubble_max_width(800.0);
         assert!(
-            (max - BUBBLE_MAX_PX).abs() < 0.1,
-            "wide pane must hit the tight column cap, got {max}"
+            max > 500.0,
+            "an 800px pane must not squeeze replies into a 440px column, got {max}"
+        );
+        assert!(
+            max < 800.0,
+            "the bubble must stay inside the pane, got {max}"
         );
         let w = bubble_outer_width(800.0, 2400.0, BUBBLE_PAD_X);
         assert!((w - max).abs() < 0.1, "got {w} want {max}");
@@ -85,20 +90,22 @@ mod tests {
     }
 
     #[test]
-    fn unbounded_scroll_width_still_wraps_tight() {
+    fn unbounded_scroll_width_still_stays_in_a_pane() {
         let from_inf = bubble_max_width(f32::INFINITY);
         let from_huge = bubble_max_width(12_000.0);
+        let fallback = bubble_max_width(ROW_FALLBACK);
         assert!(
-            from_inf <= BUBBLE_MAX_PX + 0.1,
-            "infinite available_width must not stretch the bubble, got {from_inf}"
+            (from_inf - fallback).abs() < 0.1,
+            "infinite available_width must use the fallback pane, got {from_inf}"
         );
-        assert!(from_inf >= 300.0);
+        assert!(from_inf < ROW_FALLBACK);
         assert!(
-            (from_huge - BUBBLE_MAX_PX).abs() < 0.1,
-            "huge scroll width must hit the column cap, got {from_huge}"
+            from_huge <= BUBBLE_MAX_PX + 0.1,
+            "huge scroll width must not blow past the safety cap, got {from_huge}"
         );
+        assert!(from_huge < 1600.0);
         let wrap = bubble_wrap_width(f32::INFINITY, BUBBLE_PAD_X);
-        assert!(wrap <= BUBBLE_MAX_PX - BUBBLE_PAD_X * 2.0 + 0.1);
+        assert!(wrap <= from_inf - BUBBLE_PAD_X * 2.0 + 0.1);
         assert!(wrap > 200.0);
     }
 }
