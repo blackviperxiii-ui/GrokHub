@@ -6584,7 +6584,7 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Console key", "Fallback for chat. Required for duplex Voice (grok-voice-think-fast-2.0). Never in markdown.", &mut self.cfg.api_key, true);
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
                                                             crate::cards::settings_field(ui, "Chat model", "Empty or a ladder default (mini / 4.3 / 4.6) lets Auto route. A catalog pin such as grok-3 skips Auto. Imagine never shares this.", &mut self.cfg.model, false);
-                                                            crate::cards::settings_field(ui, "Composer mode", "Auto routes Fast / Balance / Think / Max. Fast is Grok 3 mini. Balance is Grok 4.3. Think is Grok 4.6 high. Max is Grok 4.6 xhigh. The combo does not overwrite Chat model.", &mut self.cfg.mode, false);
+                                                            crate::cards::settings_field(ui, "Composer mode", "Auto routes Fast / Balance / Think / Max. Fast is Grok 3 mini. Balance is Grok 4.3. Think is Grok 4.6 high. Max is Grok 4.6 xhigh. The mode pill does not overwrite Chat model.", &mut self.cfg.mode, false);
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(
