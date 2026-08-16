@@ -449,50 +449,39 @@ fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool
         .rounding(BUBBLE_RADIUS)
         .inner_margin(egui::Margin::symmetric(BUBBLE_PAD_X, BUBBLE_PAD_Y));
     let mut resp = None;
-    let mut paint_frame = |ui: &mut egui::Ui| {
-        ui.set_max_width(outer_w);
-        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-            ui.set_max_width(outer_w);
-            resp = Some(
-                frame
-                    .show(ui, |ui| {
-                        ui.set_width(inner_w);
-                        ui.set_max_width(inner_w);
-                        ui.set_clip_rect(ui.max_rect());
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                        if markdown {
-                            crate::markdown::show(ui, body);
-                        } else {
-                            ui.add(
-                                egui::Label::new(RichText::new(body).color(crate::theme::fg()))
-                                    .wrap(),
-                            );
-                        }
-                    })
-                    .response,
-            );
-        });
-    };
-    let row_w = ui.available_width().min(ui.max_rect().width()).max(1.0);
-    ui.allocate_ui_with_layout(
-        egui::vec2(row_w, 0.0),
-        egui::Layout::top_down(egui::Align::Min),
-        |ui| {
-            ui.set_max_width(row_w);
-            ui.set_clip_rect(ui.max_rect());
-            ui.horizontal(|ui| {
-                ui.set_max_width(row_w);
-                if user {
-                    ui.add_space((ui.available_width() - outer_w).max(0.0));
-                }
-                paint_frame(ui);
+    ui.scope(|ui| {
+        ui.set_max_width(avail);
+        ui.horizontal(|ui| {
+            ui.set_max_width(avail);
+            if user {
+                ui.add_space((avail - outer_w).max(0.0));
+            }
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                ui.set_max_width(outer_w);
+                resp = Some(
+                    frame
+                        .show(ui, |ui| {
+                            ui.set_width(inner_w);
+                            ui.set_max_width(inner_w);
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                            if markdown {
+                                crate::markdown::show(ui, body);
+                            } else {
+                                ui.add(
+                                    egui::Label::new(RichText::new(body).color(crate::theme::fg()))
+                                        .wrap(),
+                                );
+                            }
+                        })
+                        .response,
+                );
             });
-        },
-    );
+        });
+    });
     resp.expect("speech bubble")
 }
 
-fn paint_msg_acts(ui: &mut egui::Ui, user: bool, body: &str) -> ChatBlockAct {
+fn paint_msg_acts(ui: &mut egui::Ui, user: bool, body: &str, avail: f32, align_w: f32) -> ChatBlockAct {
     let mut act = ChatBlockAct::None;
     let mut paint = |ui: &mut egui::Ui| {
         let copy = ui.add(
@@ -518,27 +507,30 @@ fn paint_msg_acts(ui: &mut egui::Ui, user: bool, body: &str) -> ChatBlockAct {
             act = ChatBlockAct::Reply(body.to_string());
         }
     };
-    if user {
+    ui.scope(|ui| {
+        ui.set_max_width(avail);
         ui.horizontal(|ui| {
-            ui.add_space((ui.available_width() - 96.0).max(0.0));
+            ui.set_max_width(avail);
+            if user {
+                ui.add_space((avail - align_w.max(96.0)).max(0.0));
+            }
             paint(ui);
         });
-    } else {
-        ui.horizontal(paint);
-    }
+    });
     act
 }
 
 fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, thought_open: bool) -> ChatBlockAct {
-    let bubble_w = crate::markdown::bubble_width(ui.available_width());
+    let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
+    let bubble_w = crate::markdown::bubble_width(avail);
     match block.kind {
         ChatKind::User => {
-            let _ = paint_speech_bubble(ui, &block.body, true, false);
-            paint_msg_acts(ui, true, &block.body)
+            let resp = paint_speech_bubble(ui, &block.body, true, false);
+            paint_msg_acts(ui, true, &block.body, avail, resp.rect.width())
         }
         ChatKind::Assistant => {
-            let _ = paint_speech_bubble(ui, &block.body, false, true);
-            paint_msg_acts(ui, false, &block.body)
+            let resp = paint_speech_bubble(ui, &block.body, false, true);
+            paint_msg_acts(ui, false, &block.body, avail, resp.rect.width())
         }
         ChatKind::Thought => {
             let open = thought_open;
@@ -6512,7 +6504,14 @@ impl Cabin {
                 }
                 egui::ScrollArea::vertical()
                     .stick_to_bottom(true)
+                    .auto_shrink([false, true])
                     .show(ui, |ui| {
+                        let pane = crate::cards::composer_pill_w(ui.ctx().screen_rect().width())
+                            .min(clamp_row_width(
+                                ui.available_width().min(ui.max_rect().width()),
+                            ));
+                        ui.set_width(pane);
+                        ui.set_max_width(pane);
                         let pairs: Vec<(String, String)> = self
                             .messages
                             .iter()
@@ -8648,8 +8647,13 @@ mod tests {
                     resp.rect.width()
                 );
                 assert!(
-                    resp.rect.width() <= grokhub_core::BUBBLE_MAX_PX + 8.0,
-                    "tight column {}",
+                    resp.rect.width() <= grokhub_core::bubble_max_width(800.0) + 8.0,
+                    "pane column {}",
+                    resp.rect.width()
+                );
+                assert!(
+                    resp.rect.width() > 500.0,
+                    "an 800px pane must not use a 440px column, got {}",
                     resp.rect.width()
                 );
                 assert!(
@@ -8662,20 +8666,25 @@ mod tests {
     }
 
     #[test]
-    fn long_sentence_stays_in_a_tight_column_on_a_wide_row() {
+    fn long_sentence_stays_inside_the_pane_on_a_wide_row() {
         with_fonts_ui(|ui| {
             ui.allocate_ui(egui::vec2(1600.0, 500.0), |ui| {
                 ui.set_max_width(1600.0);
                 let body = "the clam gods? oh you know... ancient, briny, and extremely picky about their cream-to-broth ratio. they live in the black void between chowder pots, only emerging when someone dares to say manhattan style in their presence. knock twice and offer a saltine or they won't even open up.";
                 let resp = super::paint_speech_bubble(ui, body, false, true);
                 assert!(
-                    resp.rect.width() <= grokhub_core::BUBBLE_MAX_PX + 8.0,
+                    resp.rect.width() <= grokhub_core::bubble_max_width(1600.0) + 8.0,
                     "wide pane stretched the bubble to {}",
                     resp.rect.width()
                 );
                 assert!(
-                    resp.rect.height() > 56.0,
-                    "long sentence must wrap into several lines, height {}",
+                    resp.rect.width() > 500.0,
+                    "a wide pane must not squeeze the reply, got {}",
+                    resp.rect.width()
+                );
+                assert!(
+                    resp.rect.height() > 28.0,
+                    "long sentence must wrap, height {}",
                     resp.rect.height()
                 );
             });
@@ -8704,7 +8713,7 @@ mod tests {
                     row.max.x
                 );
                 assert!(
-                    resp.rect.width() <= grokhub_core::BUBBLE_MAX_PX + 8.0,
+                    resp.rect.width() <= grokhub_core::bubble_max_width(480.0) + 8.0,
                     "bubble {}",
                     resp.rect.width()
                 );
@@ -8725,6 +8734,17 @@ mod tests {
         assert!(src.contains("quote_for_reply"));
         assert!(src.contains("composer_want_focus"));
         assert!(src.contains("copy_text"));
+        let bubble = src.find("fn paint_speech_bubble").expect("speech bubble");
+        let bubble_fn = &src[bubble..bubble + 1800];
+        assert!(
+            !bubble_fn.contains("vec2(row_w, 0.0)"),
+            "a zero-height row clips the thread: {bubble_fn}"
+        );
+        assert!(
+            !bubble_fn.contains("set_clip_rect"),
+            "clip_rect on the row hides wrapped text: {bubble_fn}"
+        );
+        assert!(src.contains("composer_pill_w"), "thread follows the chat pane");
     }
 
     fn with_fonts_ui(mut add: impl FnMut(&mut egui::Ui)) {
