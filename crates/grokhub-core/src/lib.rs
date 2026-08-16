@@ -38,6 +38,7 @@ pub mod project;
 pub mod recipe;
 pub mod redact;
 pub mod reflect;
+pub mod review;
 pub mod rewind;
 pub mod shortcuts;
 pub mod skill;
@@ -140,6 +141,11 @@ pub use heartbeat::{
 pub use reflect::{
     fact_candidates, restore_memory_prev, should_idle_reflect, surgical_memory_edit, MemoryEdit,
     IDLE_REFLECT_MS,
+};
+pub use review::{
+    build_review_digest, cabin_real_text, dedupe_suggestions, parse_suggest_lines,
+    partition_suggestions, review_due, review_system_prompt, DigestLine, LearnedSuggestion,
+    ReviewDigest, SuggestionKind, SuggestionStore, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
 };
 pub use pair::{make_pair_code, normalize_code, CODE_ALPH, PAIR_TTL_MS};
 pub use automation::{

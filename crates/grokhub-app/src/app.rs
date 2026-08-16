@@ -74,6 +74,8 @@ use grokhub_core::{
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
+    build_review_digest, dedupe_suggestions, parse_suggest_lines, partition_suggestions, review_due,
+    review_system_prompt, DigestLine, ReviewDigest, SuggestionStore, REVIEW_NIGHT_HOUR,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title, apply_manual_rename, delete_thread, display_tab_title, history_order,
     should_name_thread,
@@ -596,6 +598,9 @@ pub struct Cabin {
     last_heartbeat: Instant,
     night_check_rx: Option<(String, mpsc::Receiver<(String, i32)>)>,
     learning: LearningState,
+    suggestions: SuggestionStore,
+    review_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    review_busy: bool,
     usage: UsageDay,
     palette_open: bool,
     palette_q: String,
@@ -865,6 +870,9 @@ impl Cabin {
             last_heartbeat: Instant::now(),
             night_check_rx: None,
             learning: crate::store::load_learning(),
+            suggestions: crate::store::load_suggestions(),
+            review_rx: None,
+            review_busy: false,
             usage: crate::store::load_usage(),
             palette_open: false,
             palette_q: String::new(),
@@ -1042,6 +1050,7 @@ impl Cabin {
         let _ = crate::night::save(&self.automations);
         let _ = crate::night::save_rewinds(&self.rewind_rows);
         let _ = crate::store::save_learning(&self.learning);
+        let _ = crate::store::save_suggestions(&self.suggestions);
         let _ = crate::store::save_usage(&self.usage);
         let _ = crate::store::save_chips(&self.chip_memory);
         let _ = crate::store::save_wall(&self.wall);
@@ -2947,6 +2956,16 @@ impl Cabin {
         })
     }
 
+    fn local_day() -> String {
+        std::process::Command::new("date")
+            .arg("+%F")
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "1970-01-01".into())
+    }
+
     fn tick_heartbeat(&mut self) {
         let elapsed = self.last_heartbeat.elapsed().as_millis() as u64;
         if !heartbeat_due(elapsed, HEARTBEAT_MS) {
@@ -2963,6 +2982,7 @@ impl Cabin {
                 }
                 HeartbeatAct::Inbox => self.drain_inbox(),
                 HeartbeatAct::Night => self.tick_night(),
+                HeartbeatAct::Review => self.tick_review(),
                 HeartbeatAct::Wall => self.tick_wall(),
                 HeartbeatAct::MidThought => {
                     if self.messages.is_empty() {
@@ -3082,6 +3102,154 @@ impl Cabin {
         }
         self.nav = Nav::Chat;
         self.send_chat(a.instructions);
+    }
+
+    fn tick_review(&mut self) {
+        if self.review_busy {
+            return;
+        }
+        let today = Self::local_day();
+        if !review_due(
+            self.suggestions.last_review_day.as_deref(),
+            &today,
+            &Self::local_clock(),
+            REVIEW_NIGHT_HOUR,
+        ) {
+            return;
+        }
+        if !self.has_key() {
+            return;
+        }
+        self.spawn_review();
+    }
+
+    fn review_digest(&self) -> String {
+        let current = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.id.as_str())
+            .unwrap_or("");
+        let mut thread_lines = Vec::new();
+        for m in self.messages.iter().rev() {
+            if m.role != "user" && m.role != "assistant" {
+                continue;
+            }
+            thread_lines.push(DigestLine {
+                role: m.role.clone(),
+                text: m.content.clone(),
+            });
+            if thread_lines.len() >= 24 {
+                break;
+            }
+        }
+        for t in self.threads.iter().rev() {
+            if t.id == current {
+                continue;
+            }
+            for (role, text) in t.messages.iter().rev() {
+                if role != "user" && role != "assistant" {
+                    continue;
+                }
+                thread_lines.push(DigestLine {
+                    role: role.clone(),
+                    text: text.clone(),
+                });
+                if thread_lines.len() >= 40 {
+                    break;
+                }
+            }
+            if thread_lines.len() >= 40 {
+                break;
+            }
+        }
+        thread_lines.reverse();
+        let mut host_receipts = self.last_host.clone();
+        for (line, _) in self.last_receipts.iter().rev().take(6) {
+            host_receipts.push(line.clone());
+        }
+        let input = ReviewDigest {
+            insight_pin: insight_pin(&self.learning),
+            user_md: config::read_memory("USER.md"),
+            memory_md: config::read_memory("MEMORY.md"),
+            skill_names: self.skill_list.iter().map(|s| s.name.clone()).collect(),
+            automation_names: self.automations.iter().map(|a| a.name.clone()).collect(),
+            github_pat: !self.secrets.github_token.trim().is_empty(),
+            host_receipts,
+            chip_habits: top_habit_labels(&self.chip_memory, 6),
+            thread_lines,
+        };
+        build_review_digest(&input)
+    }
+
+    fn spawn_review(&mut self) {
+        if self.review_busy {
+            return;
+        }
+        let key = self.bearer();
+        if key.trim().is_empty() {
+            return;
+        }
+        let digest = self.review_digest();
+        let model = model_for_mode("balanced").to_string();
+        let prompt = review_system_prompt().to_string();
+        let (tx, rx) = mpsc::channel();
+        self.review_rx = Some(rx);
+        self.review_busy = true;
+        std::thread::spawn(move || {
+            let messages = [("system".into(), prompt), ("user".into(), digest)];
+            let out = grok_chat(&key, &model, &messages, None, None);
+            let _ = tx.send(out);
+        });
+    }
+
+    fn poll_review(&mut self) {
+        let Some(rx) = self.review_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(raw) => {
+                self.review_busy = false;
+                self.apply_review_reply(raw);
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.review_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.review_busy = false;
+            }
+        }
+    }
+
+    fn apply_review_reply(&mut self, raw: Result<String, String>) {
+        match raw {
+            Ok(text) => {
+                let skill_names: Vec<String> =
+                    self.skill_list.iter().map(|s| s.name.clone()).collect();
+                let auto_names: Vec<String> =
+                    self.automations.iter().map(|a| a.name.clone()).collect();
+                let items = dedupe_suggestions(
+                    parse_suggest_lines(&text),
+                    &skill_names,
+                    &auto_names,
+                    &[],
+                );
+                let day = Some(Self::local_day());
+                let ms = now_ms();
+                if items.is_empty() {
+                    self.suggestions.last_review_day = day;
+                    self.suggestions.last_review_ms = ms;
+                } else {
+                    let mut store = partition_suggestions(items);
+                    store.last_review_day = day;
+                    store.last_review_ms = ms;
+                    self.suggestions = store;
+                }
+                let _ = crate::store::save_suggestions(&self.suggestions);
+            }
+            Err(e) => {
+                self.status = format!("Nightly review held — {e}");
+            }
+        }
     }
 
     fn poll_wall(&mut self) {
@@ -4766,6 +4934,7 @@ impl eframe::App for Cabin {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
         self.poll_chips();
+        self.poll_review();
         self.poll_greeting();
         self.poll_goals();
         self.refresh_chips();
@@ -4828,7 +4997,7 @@ impl eframe::App for Cabin {
         );
         let live = wants_live_repaint(
             self.running,
-            self.chip_busy || self.goal_busy || self.oauth_photo_busy,
+            self.chip_busy || self.goal_busy || self.oauth_photo_busy || self.review_busy,
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -6653,13 +6822,15 @@ impl Cabin {
                 ui.add_space(12.0);
             }
             crate::cards::section_label(ui, "Suggested");
-            crate::cards::tile_row(ui, crate::cards::SUGGESTED_AUTOS.len(), |ui, i| {
-                let s = crate::cards::SUGGESTED_AUTOS[i];
+            let active_names: Vec<String> = self.automations.iter().map(|a| a.name.clone()).collect();
+            let auto_tiles = crate::cards::merge_suggested_autos(&self.suggestions.autos, &active_names);
+            crate::cards::tile_row(ui, auto_tiles.len(), |ui, i| {
+                let (icon, title, body, seed) = &auto_tiles[i];
                 if matches!(
-                    crate::cards::grok_tile(ui, s.icon, s.title, s.body, Some("Add"), false),
+                    crate::cards::grok_tile(ui, *icon, title, body, Some("Add"), false),
                     crate::cards::TileHit::Add | crate::cards::TileHit::Body
                 ) {
-                    self.add_automation_seed(s.seed);
+                    self.add_automation_seed(seed);
                 }
             });
             if let Some(i) = drop {
@@ -7479,20 +7650,40 @@ impl Cabin {
                     self.nav = Nav::Chat;
                     self.run_connector("github", tool, &args);
                 }
+                ui.add_space(20.0);
+                crate::cards::section_label(ui, "Suggested");
+                let conn_tiles = crate::cards::merge_suggested_connectors(&self.suggestions.connectors);
+                let mut conn_tool: Option<String> = None;
+                crate::cards::tile_row(ui, conn_tiles.len(), |ui, i| {
+                    let (icon, title, body, tool) = &conn_tiles[i];
+                    if matches!(
+                        crate::cards::grok_tile(ui, *icon, title, body, Some("Add"), false),
+                        crate::cards::TileHit::Add | crate::cards::TileHit::Body
+                    ) {
+                        conn_tool = Some(tool.clone());
+                    }
+                });
+                if let Some(tool) = conn_tool {
+                    if has_pat {
+                        let args = self.github_args.clone();
+                        self.nav = Nav::Chat;
+                        self.run_connector("github", &tool, &args);
+                    } else {
+                        self.nav = Nav::Settings;
+                    }
+                }
             } else {
             crate::cards::section_label(ui, "Suggested");
-            let pending: Vec<_> = crate::cards::SUGGESTED_SKILLS
-                .iter()
-                .copied()
-                .filter(|s| !self.skill_list.iter().any(|e| e.name == s.name))
-                .collect();
+            let saved_names: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
+            let pending = crate::cards::merge_suggested_skills(&self.suggestions.skills, &saved_names);
             crate::cards::tile_row(ui, pending.len(), |ui, i| {
-                let s = pending[i];
+                let s = &pending[i];
+                let icon = crate::icons::icon_for_label(&s.title);
                 if matches!(
-                    crate::cards::grok_tile(ui, s.icon, s.title, s.body, Some("Add"), false),
+                    crate::cards::grok_tile(ui, icon, &s.title, &s.body, Some("Add"), false),
                     crate::cards::TileHit::Add | crate::cards::TileHit::Body
                 ) {
-                    let sk = crate::cards::skill_from_suggested(&s);
+                    let sk = crate::cards::skill_from_learned(s);
                     if skills::save_skill(&sk).is_ok() {
                         self.skill_list = skills::list_skills();
                         self.skill_name = sk.name.clone();
@@ -8165,6 +8356,65 @@ mod tests {
         assert!(
             cap.contains("composer_pill_w("),
             "chip row must not stretch the centered column past the pane: {cap}"
+        );
+    }
+
+    #[test]
+    fn nightly_review_stays_quiet() {
+        let src = include_str!("app.rs");
+        let tick = src
+            .split("fn tick_review(")
+            .nth(1)
+            .and_then(|s| s.split("fn review_digest(").next())
+            .expect("tick_review");
+        assert!(
+            !tick.contains("send_chat") && !tick.contains("Nav::Chat") && !tick.contains("self.running"),
+            "tick_review must not open Chat or take the composer: {tick}"
+        );
+        let spawn = src
+            .split("fn spawn_review(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_review(").next())
+            .expect("spawn_review");
+        assert!(
+            !spawn.contains("send_chat") && !spawn.contains("Nav::Chat"),
+            "spawn_review must not dump the review into chat: {spawn}"
+        );
+        assert!(
+            !spawn.contains("self.running"),
+            "spawn_review leaves the user chat free: {spawn}"
+        );
+        assert!(
+            spawn.contains("model_for_mode(\"balanced\")"),
+            "nightly review forces Balance: {spawn}"
+        );
+        let apply = src
+            .split("fn apply_review_reply(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_wall(").next())
+            .expect("apply_review_reply");
+        assert!(
+            !apply.contains("send_chat") && !apply.contains("Nav::Chat"),
+            "applying suggestions stays off the chat: {apply}"
+        );
+        assert!(src.contains("HeartbeatAct::Review => self.tick_review()"));
+        let night = src
+            .split("fn ui_night(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_history(").next())
+            .expect("ui_night");
+        assert!(
+            night.contains("merge_suggested_autos"),
+            "Automations Suggested uses learned tiles first: {night}"
+        );
+        let skills = src
+            .split("fn ui_skills(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_eyes(").next())
+            .expect("ui_skills");
+        assert!(
+            skills.contains("merge_suggested_skills") && skills.contains("merge_suggested_connectors"),
+            "Skills and Connectors Suggested use learned tiles: {skills}"
         );
     }
 }
