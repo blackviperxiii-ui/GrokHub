@@ -176,6 +176,7 @@ fn contains_any(hay: &str, needles: &[&str]) -> bool {
 
 pub fn effective_chat_mode(mode: &str, prompt: &str, pinned_model: &str) -> String {
     let mode = mode.trim();
+    let mode = if mode.is_empty() { "auto" } else { mode };
     if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
         route_auto_mode(prompt).to_string()
     } else {
@@ -537,6 +538,15 @@ mod tests {
             Some("xhigh")
         );
         assert_eq!(effective_chat_mode("auto", "hi", ""), "fast");
+        assert_eq!(
+            effective_chat_mode("", "architect a host-tool plan and implement the first slice", ""),
+            "think",
+            "empty composer mode is Auto"
+        );
+        assert_eq!(
+            resolve_chat_model(&effective_chat_mode("", "hi", ""), ""),
+            "grok-3-mini-fast"
+        );
         assert_eq!(effective_chat_mode("auto", "hi", "grok-3"), "auto");
         assert_eq!(
             effective_chat_mode(

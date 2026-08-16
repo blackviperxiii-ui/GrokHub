@@ -85,7 +85,8 @@ pub use chat_bubble::{
 };
 pub use chat_job::{
     apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
-    upsert_assistant_turn, worker_gone_status, ChatSendKind,
+    drop_trailing_assistant, job_error_goes_to_chat, persist_user_turn, upsert_assistant_turn,
+    worker_gone_status, ChatSendKind,
 };
 pub use chips::{
     build_quick_chips, chip_memory_key, chip_suggest_prompt, chip_thread_from_messages,
@@ -104,7 +105,7 @@ pub use capture::{
 pub use frame::{encode_b64, frame_bytes, jpeg_data_url, FrameGet, PresenceFrame};
 pub use host_plan::{
     approved_cmds, explain_host_risk, host_risk, move_step, parse_host_plan, plan_from_text,
-    step_from_cmd, HostPlanStep, HostRisk,
+    step_from_cmd, yolo_plan_split, HostPlanStep, HostRisk,
 };
 pub use host_safety::{forbidden_reason, recall_hits};
 pub use imagine::{
@@ -118,7 +119,7 @@ pub use imagine::{
     IMAGINE_WALL_GAP,
     WALL_GIF_EVERY_MS, WALL_GIF_MAX, WALL_SEEDS,
 };
-pub use inhabit::{can_inhabit, inhabit_ready, InhabitBundle};
+pub use inhabit::{can_inhabit, inhabit_bundle_usable, inhabit_ready, InhabitBundle};
 pub use recipe::{
     computer_cmd_line, computer_drive, extract_computer_ops, hands_blocked_by_lock, hands_protocol,
     lock_blocks_hands, pointer_op_blocked_on_lock,
@@ -141,8 +142,8 @@ pub use pair::{
 };
 pub use automation::{
     automation_blocked_by_policy, compute_next_run, due_automations, ensure_automation_schedule,
-    mark_automation_ran, night_check_command, night_check_exit_code, night_check_stdout,
-    parse_nl_automation, skip_automation, skip_night_check_receipt, Automation,
+    mark_automation_ran, mark_automation_skipped, night_check_command, night_check_exit_code,
+    night_check_stdout, parse_nl_automation, skip_automation, skip_night_check_receipt, Automation,
 };
 pub use connector::{
     connector_url_allowed, extract_connector_cmds, github_api_path, map_website_connector_name,
@@ -188,7 +189,7 @@ pub use organs::{
 };
 pub use rewind::{keep_last_rewinds, rewind_allowed, rewind_dest, RewindRecord};
 pub use oauth::{
-    apply_profile, auth_bearer, has_auth, merge_refreshed, parse_device_start, parse_poll_result,
+    apply_profile, auth_bearer, chat_bearer, has_auth, merge_refreshed, parse_device_start, parse_poll_result,
     parse_token_json, parse_userinfo_profile, realtime_bearer, token_needs_refresh, trusted_profile_photo_url,
     trusted_xai_url, DeviceCodeStart, OAuthProfile, PollResult, PollStatus, XaiOAuthTokens,
     TOKEN_REFRESH_SKEW_MS, XAI_DEVICE_CODE_GRANT, XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY,
@@ -196,7 +197,7 @@ pub use oauth::{
 };
 pub use project::{
     add_to_folder, clean_project_name, create_folder, create_project, drop_node, drop_selected,
-    folder_choices, host_cmd_leaves_project, host_hour_blocked, is_under_project,
+    folder_choices, expand_host_path_token, host_cmd_leaves_project, host_hour_blocked, is_under_project,
     project_menu_acts, project_menu_label, project_name_from_path, project_slug, project_work_path,
     rename_node, restore_bound_path, seed_from_bound, settle_project_path, should_seed_sidebar,
     stage_project, toggle_folder, upsert_bound, visible_tree, DropOutcome, ProjectKind,
