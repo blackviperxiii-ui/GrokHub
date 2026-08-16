@@ -444,7 +444,8 @@ pub fn hands_protocol() -> &'static str {
      COMPUTER_CMD: scroll <dy>\n\
      COMPUTER_CMD: act <accessible-name>\n\
      COMPUTER_CMD: wait_for title=<window>\n\
-     Prefer act and wait_for over raw clicks. Coordinates are the current screen; a JPEG frame is attached only when the user asks for hands or cabin eyes. Lock/password screens are won'ts — never click them or type into them. Do not read ~/.ssh or /etc/shadow."
+     Prefer act and wait_for over raw clicks. Coordinates are the current screen; a JPEG frame is attached only when the user asks for hands or cabin eyes. Lock/password screens are won'ts — never click them or type into them. Do not read ~/.ssh or /etc/shadow.\n\
+     If COMPUTER_RESULT says hands are down (not installed, uinput, or ydotoold), tell the user how to enable them. Do not pkill, kill, or otherwise terminate apps as a stand-in for mouse or keyboard control."
 }
 
 pub fn user_asks_cabin_eyes(text: &str) -> bool {
@@ -492,6 +493,7 @@ pub fn user_asks_takeover(text: &str) -> bool {
         "handle it",
         "drive the desktop",
         "take the wheel",
+        "take control",
     ];
     NEEDLES.iter().any(|n| t.contains(n))
 }
@@ -505,6 +507,7 @@ pub fn user_asks_desktop_hands(text: &str) -> bool {
         "double-click",
         "mouse",
         "keyboard",
+        "take control",
         "type into",
         "type in the",
         "press enter",
@@ -642,9 +645,15 @@ mod tests {
         assert!(proto.contains("HOST_CMD:"));
         assert!(proto.contains("COMPUTER_CMD:"));
         assert!(proto.to_ascii_lowercase().contains("unsandboxed"));
+        assert!(
+            proto.contains("Do not pkill") && proto.contains("hands are down"),
+            "missing hands must not become a kill fallback: {proto}"
+        );
         assert!(user_asks_desktop_hands("click the Save button for me"));
         assert!(user_asks_desktop_hands("type into the settings window"));
         assert!(user_asks_desktop_hands("take over this desktop"));
+        assert!(user_asks_desktop_hands("take control of my mouse"));
+        assert!(user_asks_takeover("take control of the window"));
         assert!(user_asks_takeover("this is broken, handle it"));
         assert!(user_asks_takeover("help me with this window"));
         assert!(!user_asks_desktop_hands("what is rust ownership?"));

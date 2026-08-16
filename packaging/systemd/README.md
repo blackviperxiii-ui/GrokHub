@@ -26,3 +26,13 @@ systemctl --user enable --now grokhub-hub.service
 ```
 
 Requires `grokhub` / `grokhub-hub` on `PATH` (`~/.local/bin` or `/usr/bin`).
+
+## Hands daemon
+
+Wayland takeover needs `ydotoold` and a writable `/dev/uinput`.
+
+```bash
+cp packaging/systemd/ydotoold.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now ydotoold.service
+```

@@ -6,7 +6,8 @@ pkgdesc="Grok-native Linux cabin — Rust binary, no Electron"
 arch=('x86_64')
 url="https://github.com/blackviperxiii-ui/Grok-Hub"
 license=('MIT')
-depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme')
+depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme' 'ydotool' 'xdotool' 'grim' 'wmctrl' 'python-atspi')
+optdepends=('slurp: region capture')
 makedepends=('cargo' 'rust' 'pkgconf' 'git')
 options=('!debug')
 install=grokhub.install
@@ -31,5 +32,9 @@ package() {
   fi
   install -Dm644 packaging/systemd/grokhub-hub.service \
     "${pkgdir}/usr/lib/systemd/user/grokhub-hub.service"
+  install -Dm644 packaging/systemd/ydotoold.service \
+    "${pkgdir}/usr/lib/systemd/user/ydotoold.service"
+  install -Dm644 packaging/udev/60-grokhub-uinput.rules \
+    "${pkgdir}/usr/lib/udev/rules.d/60-grokhub-uinput.rules"
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/grokhub/LICENSE"
 }
