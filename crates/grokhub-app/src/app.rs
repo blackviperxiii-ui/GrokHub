@@ -7238,7 +7238,7 @@ impl Cabin {
                                                                 && crate::cards::settings_action(
                                                                     ui,
                                                                     "Restart GrokHub",
-                                                                    "Relaunch the cabin, tray, and hub from the new overlay.",
+                                                                    "Relaunch ydotoold, then hub, then the cabin from the new overlay.",
                                                                     "Restart",
                                                                 )
                                                             {
