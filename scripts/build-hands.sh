@@ -41,8 +41,8 @@ skip_fetch() {
   if [[ "$HANDS_FORCE" == "1" ]]; then
     return 1
   fi
-  if on_path "$name"; then
-    echo "hands: $name already on PATH — skip fetch"
+  if [[ -x "$DEST/$name" ]]; then
+    echo "hands: $name already in $DEST — skip fetch"
     return 0
   fi
   return 1
@@ -116,7 +116,7 @@ install_bin() {
 }
 
 build_ydotool() {
-  if skip_fetch ydotool && on_path ydotoold; then
+  if skip_fetch ydotool && [[ -x "$DEST/ydotoold" ]]; then
     return 0
   fi
   if ! need cmake; then

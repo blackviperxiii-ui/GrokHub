@@ -213,8 +213,9 @@ mod tests {
             build.contains("v1.0.4")
                 && build.contains("xdotool")
                 && build.contains("wmctrl")
-                && build.contains("lib/grokhub/bin"),
-            "build-hands.sh must pin ydotool and build xdotool/wmctrl sidecars"
+                && build.contains("lib/grokhub/bin")
+                && build.contains("already in $DEST"),
+            "build-hands.sh must pin ydotool, build xdotool/wmctrl, and skip only installed sidecars"
         );
         let dirs = extra_bin_dirs(Some("/home/cabin"));
         assert!(
@@ -229,8 +230,13 @@ mod tests {
                 && sh.contains("sudo install")
                 && sh.contains("60-grokhub-uinput.rules")
                 && sh.contains("modprobe uinput")
-                && sh.contains("python-atspi"),
-            "clone install must build sidecars, install python-atspi, the uinput udev rule, and keep the input group"
+                && sh.contains("python-atspi")
+                && sh.contains("python3-pyatspi")
+                && sh.contains("alsa-utils")
+                && sh.contains("enable grokhub.service")
+                && sh.contains("enable --now grokhub-hub.service")
+                && sh.contains("restart ydotoold.service"),
+            "clone install must build sidecars, install runtime deps, enable cabin/hub units, and restart ydotoold"
         );
         assert!(
             !sh.contains("sudo pacman -S --needed ydotool"),
@@ -264,9 +270,12 @@ mod tests {
         assert!(
             bundle.contains("build-hands.sh")
                 && bundle.contains("ydotoold.service")
+                && bundle.contains("grokhub-hub.service")
                 && bundle.contains("modprobe uinput")
-                && bundle.contains("python-atspi"),
-            "release tarball install must ship the unit, build sidecars, and install python-atspi"
+                && bundle.contains("python-atspi")
+                && bundle.contains("python3-pyatspi")
+                && bundle.contains("enable --now grokhub-hub.service"),
+            "release tarball install must ship cabin/hub units, build sidecars, and install runtime deps"
         );
         assert!(
             !bundle.contains("sudo pacman -S --needed ydotool"),

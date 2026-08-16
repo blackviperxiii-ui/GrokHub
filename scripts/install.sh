@@ -100,39 +100,55 @@ install_uinput_rule() {
 }
 install_uinput_rule
 
-# Build-time compilers stay pacman packages. Overlay must not die if a sidecar fails.
-BUILD_PKGS=(cmake meson ninja wayland wayland-protocols pixman libpng libx11 libxtst libxinerama libxkbcommon glib2 libxmu)
-if command -v pacman >/dev/null; then
-  missing=0
-  for p in "${BUILD_PKGS[@]}"; do
-    if ! pacman -Q "$p" >/dev/null 2>&1; then
-      missing=1
-      break
-    fi
-  done
-  if [[ "$missing" -eq 1 ]]; then
-    if [[ "$(id -u)" -eq 0 ]]; then
-      pacman -S --needed "${BUILD_PKGS[@]}" || echo "hands: pacman -S --needed ${BUILD_PKGS[*]}"
-    else
-      sudo pacman -S --needed "${BUILD_PKGS[@]}" || echo "hands: sudo pacman -S --needed ${BUILD_PKGS[*]}"
-    fi
+# Overlay-safe package install. Never fail the cabin overlay if sudo/pkg is missing.
+try_pkgs() {
+  local kind="$1"
+  shift
+  if [[ "$#" -eq 0 ]]; then
+    return 0
   fi
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@" || echo "hands: $kind $*"
+  else
+    sudo "$@" || echo "hands: sudo $kind $*"
+  fi
+}
+
+# Build-time compilers. Overlay must not die if a sidecar fails.
+if command -v pacman >/dev/null; then
+  try_pkgs pacman pacman -S --needed cmake meson ninja wayland wayland-protocols pixman libpng \
+    libx11 libxtst libxinerama libxkbcommon glib2 libxmu
+  try_pkgs pacman pacman -S --needed python-atspi ffmpeg alsa-utils
+elif command -v apt-get >/dev/null; then
+  try_pkgs apt-get apt-get install -y cmake meson ninja-build pkg-config libwayland-dev \
+    wayland-protocols libpixman-1-dev libpng-dev libx11-dev libxtst-dev libxinerama-dev \
+    libxkbcommon-dev libglib2.0-dev libxmu-dev
+  try_pkgs apt-get apt-get install -y python3-pyatspi ffmpeg alsa-utils
+elif command -v dnf >/dev/null; then
+  try_pkgs dnf dnf install -y cmake meson ninja-build wayland-devel wayland-protocols-devel \
+    pixman-devel libpng-devel libX11-devel libXtst-devel libXinerama-devel libxkbcommon-devel \
+    glib2-devel libXmu-devel
+  try_pkgs dnf dnf install -y python3-pyatspi ffmpeg alsa-utils
 fi
 PREFIX="$PREFIX" HANDS_SRC="${HANDS_SRC:-$ROOT/target/hands-src}" \
   bash "$ROOT/scripts/build-hands.sh" || echo "hands: build-hands.sh continued"
-
-# Windshield / act / wait_for need pyatspi. Overlay-safe if pacman fails.
-if command -v pacman >/dev/null; then
-  if pacman -Q python-atspi >/dev/null 2>&1; then
-    echo "hands: python-atspi already installed"
-  elif [[ "$(id -u)" -eq 0 ]]; then
-    pacman -S --needed python-atspi || echo "hands: pacman -S --needed python-atspi"
+for tool in ydotool ydotoold grim xdotool wmctrl; do
+  if [[ -x "$HANDS_BIN/$tool" ]]; then
+    echo "hands: sidecar $HANDS_BIN/$tool"
   else
-    sudo pacman -S --needed python-atspi || echo "hands: sudo pacman -S --needed python-atspi"
+    echo "hands: missing sidecar $tool — Eyes Install hands after deps"
   fi
-fi
+done
 
-if command -v systemctl >/dev/null && [[ -x "$HANDS_BIN/ydotoold" || -x "$(command -v ydotoold 2>/dev/null || true)" ]]; then
+if command -v systemctl >/dev/null && [[ "$SYSTEM" -eq 0 ]]; then
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  systemctl --user enable grokhub.service >/dev/null 2>&1 || true
+  systemctl --user enable --now grokhub-hub.service >/dev/null 2>&1 || true
+  if [[ -x "$HANDS_BIN/ydotoold" || -x "$(command -v ydotoold 2>/dev/null || true)" ]]; then
+    systemctl --user enable --now ydotoold.service >/dev/null 2>&1 || true
+    systemctl --user restart ydotoold.service >/dev/null 2>&1 || true
+  fi
+elif command -v systemctl >/dev/null && [[ -x "$HANDS_BIN/ydotoold" || -x "$(command -v ydotoold 2>/dev/null || true)" ]]; then
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   systemctl --user enable --now ydotoold.service >/dev/null 2>&1 || true
 fi
