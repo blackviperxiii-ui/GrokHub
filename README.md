@@ -2,11 +2,11 @@
 
 Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 
-**v2.6.0** — Grok-native unsandboxed control plane. You sit down in the cabin. It already knows the night.
+**v2.6.1** — Grok-native unsandboxed control plane. You sit down in the cabin. It already knows the night.
 
 | Platform | Repository | Latest |
 |----------|------------|--------|
-| **Linux** (this) | [Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub) | **v2.6.0** |
+| **Linux** (this) | [Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub) | **v2.6.1** |
 | **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | sibling — same `grokhub-core` |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
@@ -79,7 +79,7 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `suggestion
 
 Tokens stay in `secrets.json`. Never in markdown.
 
-Composer is a pill: **What do you want to know?** Five quick chips sit centered over the bar — no selected first pill. An empty chat can show a faint Fast blurb. Plus opens Upload / Paste. The mode pill is Auto / Fast / Balance / Think / Max. `/mode` only sets the pill — it does not overwrite Settings → Chat model. Leftover pages (Eyes, Devices, Memory, History, Night, Workboard, Command) use the same catalog chrome: framed cards, pills, empty states. Devices paints tiles plus a real LAN pair URL. Command is a full-width field. Mic is Hey Grok. Enter or the arrow sends; Ctrl+Enter starts a new line. While a reply (or Imagine / host job) is running, Send is Stop. Chat streams tokens onto the thread that started the job; opening New chat does not steal the live reply. User and assistant turns sit in bubbles that hug the text and wrap in a tight column (hard cap 440px). Host receipts stay off the bubble. Thought does not announce that an image is attached. Imagine stills sit above the composer. Grok may emit `HOST_CMD:` lines (unsandboxed `bash -lc`) and `COMPUTER_CMD:` lines (mouse, keyboard, `act` / `wait_for` via ydotool or xdotool). Host runs immediately — the cabin drives. `/stop`, tray **Halt hands**, the Stop square, and Ctrl+Shift+Esc actually kill those workers. When you ask it to take over or drive the UI, a JPEG frame and the windshield object list are attached. A leftover cabin frame is not attached on ordinary chat. Lock/password screens are skipped. `/rewind` refuses `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, and `~/.config/GrokHub`. Forbidden host paths stay blocked. Host hour cap still applies. `app.json` is mode 0600 like `secrets.json`.
+Composer is a pill: **What do you want to know?** Five quick chips sit centered over the bar — no selected first pill. An empty chat can show a faint Fast blurb. Plus opens Upload / Paste. The mode pill is Auto / Fast / Balance / Think / Max. `/mode` only sets the pill — it does not overwrite Settings → Chat model. Leftover pages (Eyes, Devices, Memory, History, Night, Workboard, Command) use the same catalog chrome: framed cards, pills, empty states. Devices paints tiles plus a real LAN pair URL. Command is a full-width field. Mic is Hey Grok. Enter or the arrow sends; Ctrl+Enter starts a new line. While a reply (or Imagine / host job) is running, Send is Stop. Chat streams tokens onto the thread that started the job; opening New chat does not steal the live reply. User and assistant turns sit in bubbles that hug the text and wrap in a tight column (hard cap 440px). Long user bubbles clip inside the row. Visible messages have **Copy** and **Reply** (Reply quotes into the composer). Host, hands, and connector work stay off the pane — including `HOST_CMD` heredoc bodies. The model still sees them. Thought does not announce that an image is attached. Imagine stills sit above the composer. Grok may emit `HOST_CMD:` lines (unsandboxed `bash -lc`) and `COMPUTER_CMD:` lines (mouse, keyboard, `act` / `wait_for` via ydotool or xdotool). Host runs immediately — the cabin drives. `/stop`, tray **Halt hands**, the Stop square, and Ctrl+Shift+Esc actually kill those workers. When you ask it to take over or drive the UI, a JPEG frame and the windshield object list are attached. A leftover cabin frame is not attached on ordinary chat. Lock/password screens are skipped. `/rewind` refuses `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, and `~/.config/GrokHub`. Forbidden host paths stay blocked. Host hour cap still applies. `app.json` is mode 0600 like `secrets.json`.
 
 ## Always-on hub
 
