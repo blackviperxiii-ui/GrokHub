@@ -8,16 +8,20 @@ const PATTERNS: &[(&str, &str)] = &[
 pub fn redact_secrets(input: &str) -> String {
     let mut s = input.to_string();
     for (needle, _) in PATTERNS {
-        if let Some(idx) = s.find(needle) {
+        loop {
+            let Some(idx) = s.find(needle) else {
+                break;
+            };
             let rest = &s[idx + needle.len()..];
             let n = rest
                 .chars()
                 .take_while(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.' | '~' | '+' | '/' | '='))
                 .count();
-            if n >= 12 {
-                let end = idx + needle.len() + rest.chars().take(n).map(|c| c.len_utf8()).sum::<usize>();
-                s.replace_range(idx..end, "[redacted]");
+            if n < 12 {
+                break;
             }
+            let end = idx + needle.len() + rest.chars().take(n).map(|c| c.len_utf8()).sum::<usize>();
+            s.replace_range(idx..end, "[redacted]");
         }
     }
     s
@@ -72,5 +76,8 @@ mod tests {
             "short tokens stay visible so ordinary words are not eaten"
         );
         assert!(is_plain_text("xai-tiny"));
+        let two = redact_secrets("sk-abcdefghijklmnopqrstuv and sk-zyxwvutsrqponmlkjih");
+        assert!(!two.contains("sk-"), "{two}");
+        assert_eq!(two.matches("[redacted]").count(), 2);
     }
 }

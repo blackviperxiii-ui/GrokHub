@@ -177,6 +177,13 @@ pub fn mark_automation_ran(mut a: Automation, now_ms: u64) -> Automation {
     a
 }
 
+/// Policy/quiet skip: leave the due set without counting a successful run.
+pub fn mark_automation_skipped(mut a: Automation, now_ms: u64, clock: LocalClock) -> Automation {
+    a.last_run = Some(now_ms);
+    a.next_run = Some(compute_next_run(&a, clock).max(now_ms.saturating_add(60_000)));
+    a
+}
+
 pub fn parse_nl_automation(text: &str) -> Option<Automation> {
     let t = text.trim();
     if t.is_empty() {
@@ -344,5 +351,24 @@ mod tests {
         assert_eq!(due.len(), 1);
         assert!(automation_blocked_by_policy(true, true, 3));
         assert!(!automation_blocked_by_policy(false, true, 3));
+        let blocked = Automation {
+            id: "n0".into(),
+            name: "rm".into(),
+            schedule: "heartbeat".into(),
+            time: "00:00".into(),
+            times: vec![],
+            instructions: "rm -rf /tmp/x".into(),
+            heartbeat_every_min: 15,
+            check_command: String::new(),
+            enabled: true,
+            last_run: None,
+            next_run: Some(500),
+            run_count: 0,
+        };
+        assert!(automation_blocked_by_policy(false, true, 0));
+        let skipped = mark_automation_skipped(blocked, 1_000, clock);
+        assert_eq!(skipped.run_count, 0);
+        assert!(skipped.next_run.unwrap() > 1_000);
+        assert!(due_automations(&[skipped], 1_000).is_empty());
     }
 }
