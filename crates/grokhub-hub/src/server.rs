@@ -216,6 +216,13 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         return send_json(req, 200, json!({ "ok": true }));
     }
     if method == Method::Get && path == "/v1/inhabit" {
+        if !grokhub_core::inhabit_claim_allowed(&peer.name) {
+            return send_json(
+                req,
+                403,
+                json!({ "ok": false, "error": "inhabit is not for the phone" }),
+            );
+        }
         return send_json(req, 200, json!({ "ok": true, "bundle": st.claim_inhabit() }));
     }
 
@@ -577,5 +584,52 @@ mod tests {
         );
         let (st_p, _, body) = http(port, &req);
         assert_eq!(st_p, 403, "{}", String::from_utf8_lossy(&body));
+    }
+
+    #[test]
+    fn phone_cannot_claim_inhabit() {
+        let mut st = HubState::empty();
+        let code = st.rotate_pair().code;
+        let state = Arc::new(Mutex::new(st));
+        let port = serve_background(state.clone(), 0).expect("bind");
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        let pair_body = format!(
+            r#"{{"code":"{code}","deviceId":"d-phone","deviceName":"Pixel phone"}}"#
+        );
+        let req = format!(
+            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
+            pair_body.len()
+        );
+        let (_, _, body) = http(port, &req);
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let phone = v["token"].as_str().unwrap();
+        let inhabit = r#"{"bundle":{"soul":"stay kind"}}"#;
+        let req = format!(
+            "POST /v1/inhabit HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {phone}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{inhabit}",
+            inhabit.len()
+        );
+        assert_eq!(http(port, &req).0, 200);
+        let (st_g, _, body) = http(
+            port,
+            &format!("GET /v1/inhabit HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {phone}\r\n\r\n"),
+        );
+        assert_eq!(st_g, 403, "{}", String::from_utf8_lossy(&body));
+        let code2 = state.lock().unwrap().rotate_pair().code;
+        let pair_body = format!(
+            r#"{{"code":"{code2}","deviceId":"d-cabin","deviceName":"cabin-2"}}"#
+        );
+        let req = format!(
+            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
+            pair_body.len()
+        );
+        let (_, _, body) = http(port, &req);
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let cabin = v["token"].as_str().unwrap();
+        let (st_ok, _, body) = http(
+            port,
+            &format!("GET /v1/inhabit HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {cabin}\r\n\r\n"),
+        );
+        assert_eq!(st_ok, 200, "{}", String::from_utf8_lossy(&body));
+        assert!(String::from_utf8_lossy(&body).contains("stay kind"));
     }
 }

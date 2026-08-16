@@ -179,8 +179,8 @@ pub fn has_auth(api_key: &str, access_token: &str) -> bool {
     !api_key.trim().is_empty() || !access_token.trim().is_empty()
 }
 
-pub fn auth_bearer(api_key: &str, access_token: &str) -> Option<String> {
-    chat_bearer(api_key, access_token, true)
+pub fn auth_bearer(api_key: &str, access_token: &str, oauth_usable: bool) -> Option<String> {
+    chat_bearer(api_key, access_token, oauth_usable)
 }
 
 /// When OAuth refresh failed, a live console key must still send chat.
@@ -334,7 +334,7 @@ pub fn parse_poll_result(ok: bool, json: &Value, now_ms: u64) -> PollResult {
                 error: None,
             },
             Err(e) => PollResult {
-                status: PollStatus::Pending,
+                status: PollStatus::Denied,
                 tokens: None,
                 error: Some(e),
             },
@@ -370,13 +370,13 @@ pub fn parse_poll_result(ok: bool, json: &Value, now_ms: u64) -> PollResult {
             error: Some(err.into()),
         },
         _ => PollResult {
-            status: PollStatus::Pending,
+            status: PollStatus::Denied,
             tokens: None,
             error: json
                 .get("error_description")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .or_else(|| Some(format!("waiting ({err})"))),
+                .or_else(|| Some(format!("oauth error ({err})"))),
         },
     }
 }
@@ -428,9 +428,14 @@ mod tests {
         assert!(has_auth("", "tok"));
         assert!(has_auth("xai-k", ""));
         assert!(!has_auth("", ""));
-        assert_eq!(auth_bearer("xai-k", "tok").as_deref(), Some("tok"));
-        assert_eq!(auth_bearer("", "tok").as_deref(), Some("tok"));
-        assert_eq!(auth_bearer("xai-k", "").as_deref(), Some("xai-k"));
+        assert_eq!(auth_bearer("xai-k", "tok", true).as_deref(), Some("tok"));
+        assert_eq!(auth_bearer("", "tok", true).as_deref(), Some("tok"));
+        assert_eq!(auth_bearer("xai-k", "", true).as_deref(), Some("xai-k"));
+        assert_eq!(
+            auth_bearer("xai-live", "expired-oauth", false).as_deref(),
+            Some("xai-live"),
+            "dead OAuth must not beat a console key for STT/TTS"
+        );
         assert_eq!(
             chat_bearer("xai-k", "expired-tok", false).as_deref(),
             Some("xai-k"),
@@ -462,6 +467,18 @@ mod tests {
             1_000,
         );
         assert_eq!(ready.status, PollStatus::Ready);
+        let bad = parse_poll_result(true, &json!({"access_token": ""}), 1);
+        assert_eq!(
+            bad.status,
+            PollStatus::Denied,
+            "malformed success must not spin forever"
+        );
+        let grant = parse_poll_result(false, &json!({"error":"invalid_grant"}), 1);
+        assert_eq!(
+            grant.status,
+            PollStatus::Denied,
+            "unknown token errors must not poll forever"
+        );
         let t = ready.tokens.unwrap();
         assert_eq!(t.access_token, "tok");
         assert!(token_needs_refresh(

@@ -1,3 +1,4 @@
+use crate::host_plan::strip_host_cmd_line;
 use serde_json::{json, Value};
 
 pub const XAI_BASE: &str = "https://api.x.ai/v1";
@@ -16,14 +17,8 @@ pub fn extract_host_cmds(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in text.lines() {
         let t = line.trim();
-        let rest = t
-            .strip_prefix("HOST_CMD:")
-            .or_else(|| t.strip_prefix("HOST_CMD"));
-        if let Some(rest) = rest {
-            let cmd = rest.trim().trim_start_matches(':').trim();
-            if !cmd.is_empty() {
-                out.push(cmd.to_string());
-            }
+        if let Some(cmd) = strip_host_cmd_line(t) {
+            out.push(cmd.to_string());
         }
     }
     out
@@ -359,6 +354,10 @@ mod tests {
     fn host_cmds() {
         let t = "Checking.\nHOST_CMD: ls /tmp\nHOST_CMD: cat README.md\n";
         assert_eq!(extract_host_cmds(t), vec!["ls /tmp", "cat README.md"]);
+        assert!(
+            extract_host_cmds("HOST_CMDLINE: backup the repo\n").is_empty(),
+            "HOST_CMD must not match HOST_CMDLINE"
+        );
     }
 
     #[test]

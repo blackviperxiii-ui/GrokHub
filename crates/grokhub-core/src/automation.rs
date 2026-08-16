@@ -93,7 +93,7 @@ fn next_for_slot(schedule: &str, time: &str, clock: LocalClock) -> u64 {
             if tgt > now {
                 clock.now_ms + (tgt - now) as u64 * 60_000
             } else {
-                clock.now_ms + 24 * 3600_000
+                clock.now_ms + 30 * 24 * 3600_000
             }
         }
         _ => {
@@ -387,5 +387,50 @@ mod tests {
         assert_eq!(skipped.run_count, 0);
         assert!(skipped.next_run.unwrap() > 1_000);
         assert!(due_automations(&[skipped], 1_000).is_empty());
+        let once = Automation {
+            id: "o1".into(),
+            name: "once".into(),
+            schedule: "once".into(),
+            time: "00:00".into(),
+            times: vec![],
+            instructions: "hello".into(),
+            heartbeat_every_min: 0,
+            check_command: "test -f /missing".into(),
+            enabled: true,
+            last_run: None,
+            next_run: Some(500),
+            run_count: 0,
+        };
+        let check_skip = mark_automation_skipped(once.clone(), 1_000, clock);
+        assert!(check_skip.enabled, "a gated skip must not disable once jobs");
+        assert_eq!(check_skip.run_count, 0);
+        let ran = mark_automation_ran(once, 1_000);
+        assert!(!ran.enabled);
+        assert_eq!(ran.run_count, 1);
+        let monthly = Automation {
+            id: "m1".into(),
+            name: "month".into(),
+            schedule: "monthly".into(),
+            time: "09:00".into(),
+            times: vec![],
+            instructions: "summarize".into(),
+            heartbeat_every_min: 0,
+            check_command: String::new(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            run_count: 0,
+        };
+        let after = LocalClock {
+            now_ms: 1_000,
+            weekday: 5,
+            hour: 10,
+            minute: 0,
+        };
+        let next = compute_next_run(&monthly, after);
+        assert!(
+            next >= 1_000 + 29 * 24 * 3600_000,
+            "monthly after today's slot must not become daily: {next}"
+        );
     }
 }
