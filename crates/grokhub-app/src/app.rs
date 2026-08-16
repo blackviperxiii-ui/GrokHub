@@ -41,6 +41,7 @@ use grokhub_core::{
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
     chat_attach_status, imagine_ref_status, needs_auth_banner, next_chat_image, next_goal_prompt,
     is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
+    apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible, ChatSendKind,
     plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
     parse_computer_cmd_loose, should_attach_hands_frame, user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
@@ -489,6 +490,7 @@ pub struct Cabin {
     status: String,
     running: bool,
     rx: Option<mpsc::Receiver<JobOut>>,
+    chat_job_thread: Option<String>,
     hub: Arc<Mutex<HubState>>,
     hub_on: bool,
     hub_port: u16,
@@ -754,6 +756,7 @@ impl Cabin {
             status: String::new(),
             running: false,
             rx: None,
+            chat_job_thread: None,
             hub: Arc::new(Mutex::new(hub)),
             hub_on: false,
             hub_port: grokhub_core::DEFAULT_PORT,
@@ -1023,6 +1026,72 @@ impl Cabin {
             .get(self.thread_idx)
             .map(|t| t.scratch)
             .unwrap_or(false)
+    }
+
+    fn visible_thread_id(&self) -> String {
+        self.threads
+            .get(self.thread_idx)
+            .map(|t| t.id.clone())
+            .unwrap_or_default()
+    }
+
+    fn thinking_here(&self) -> bool {
+        chat_shows_thinking(
+            self.chat_job_thread.as_deref(),
+            &self.visible_thread_id(),
+            self.running,
+        )
+    }
+
+    fn halt_in_flight(&mut self) {
+        self.rx = None;
+        self.running = false;
+        self.chat_job_thread = None;
+        self.stream_buf.clear();
+        self.thought_buf.clear();
+    }
+
+    fn apply_assistant_snapshot(&mut self, content: String) {
+        if content.is_empty() {
+            return;
+        }
+        let vis = self.visible_thread_id();
+        let mut visible: Vec<(String, String)> = self
+            .messages
+            .iter()
+            .map(|m| (m.role.clone(), m.content.clone()))
+            .collect();
+        let mut stored: Vec<(String, Vec<(String, String)>)> = self
+            .threads
+            .iter()
+            .map(|t| (t.id.clone(), t.messages.clone()))
+            .collect();
+        apply_stream_snapshot(
+            self.chat_job_thread.as_deref(),
+            &vis,
+            &mut visible,
+            &mut stored,
+            &content,
+        );
+        self.messages = visible
+            .into_iter()
+            .map(|(role, content)| Msg { role, content })
+            .collect();
+        let Some(job) = self.chat_job_thread.as_deref() else {
+            return;
+        };
+        if job == vis {
+            return;
+        }
+        if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job) {
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == job) {
+                t.messages = msgs.clone();
+            }
+        }
+    }
+
+    fn apply_live_assistant(&mut self) {
+        self.apply_assistant_snapshot(merge_thinking(&self.thought_buf, &self.stream_buf));
     }
 
     fn has_key(&self) -> bool {
@@ -2157,6 +2226,7 @@ impl Cabin {
         let was_current = idx == self.thread_idx;
         match delete_thread(self.threads.len(), idx, self.thread_idx) {
             DeleteOutcome::ResetLast => {
+                self.halt_in_flight();
                 self.threads.clear();
                 self.threads.push(ChatThread::new("Chat", false));
                 self.thread_idx = 0;
@@ -2168,6 +2238,9 @@ impl Cabin {
             }
             DeleteOutcome::Removed { next } => {
                 let gone = self.threads.remove(idx);
+                if self.chat_job_thread.as_deref() == Some(gone.id.as_str()) {
+                    self.halt_in_flight();
+                }
                 self.thread_idx = next;
                 if was_current {
                     self.messages = self
@@ -2205,20 +2278,31 @@ impl Cabin {
         if text.is_empty() {
             return;
         }
-        if self.running {
-            let prev = last_user_text(
-                &self
-                    .messages
-                    .iter()
-                    .map(|m| (m.role.clone(), m.content.clone()))
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap_or_default();
-            self.rx = None;
-            self.running = false;
-            self.voice_orb = "idle".into();
-            text = redirect_prompt(&prev, &text);
-            self.status = "Redirected".into();
+        match chat_send_kind(
+            self.chat_job_thread.as_deref(),
+            &self.visible_thread_id(),
+            self.running,
+        ) {
+            ChatSendKind::Redirect => {
+                let prev = last_user_text(
+                    &self
+                        .messages
+                        .iter()
+                        .map(|m| (m.role.clone(), m.content.clone()))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_default();
+                self.halt_in_flight();
+                self.voice_orb = "idle".into();
+                text = redirect_prompt(&prev, &text);
+                self.status = "Redirected".into();
+            }
+            ChatSendKind::Fresh => {
+                if self.running && self.chat_job_thread.is_some() {
+                    self.halt_in_flight();
+                    self.voice_orb = "idle".into();
+                }
+            }
         }
         self.touch();
         remember_typed_prompt(
@@ -2396,8 +2480,7 @@ impl Cabin {
                 }
             }
             Slash::Stop => {
-                self.rx = None;
-                self.running = false;
+                self.halt_in_flight();
                 self.status = "Stopped".into();
             }
             Slash::Sh(cmd) => self.queue_sh(cmd),
@@ -2453,8 +2536,7 @@ impl Cabin {
                 self.status = self.doctor_text();
             }
             Slash::Fix => {
-                self.rx = None;
-                self.running = false;
+                self.halt_in_flight();
                 self.voice_orb = "idle".into();
                 self.nav = Nav::Settings;
                 self.settings_sec = health_settings_sec();
@@ -3081,6 +3163,7 @@ impl Cabin {
             return;
         }
         self.running = true;
+        self.chat_job_thread = None;
         self.status = "Consult…".into();
         let key = self.bearer();
         let model = model_for_mode("fast").to_string();
@@ -3369,6 +3452,7 @@ impl Cabin {
         }
         self.running = true;
         self.status = "Thinking…".into();
+        self.chat_job_thread = Some(self.visible_thread_id());
         let key = self.bearer();
         let last_user = self
             .messages
@@ -3502,20 +3586,7 @@ impl Cabin {
     }
 
     fn upsert_stream_assistant(&mut self) {
-        let content = merge_thinking(&self.thought_buf, &self.stream_buf);
-        if content.is_empty() {
-            return;
-        }
-        if let Some(last) = self.messages.last_mut() {
-            if last.role == "assistant" {
-                last.content = content;
-                return;
-            }
-        }
-        self.messages.push(Msg {
-            role: "assistant".into(),
-            content,
-        });
+        self.apply_live_assistant();
     }
 
     fn poll_job(&mut self) {
@@ -3524,19 +3595,35 @@ impl Cabin {
             Ok(JobOut::ChatDelta(d)) => {
                 self.rx = Some(rx);
                 self.stream_buf.push_str(&d);
-                self.status = "Thinking…".into();
+                if chat_stream_is_visible(
+                    self.chat_job_thread.as_deref(),
+                    &self.visible_thread_id(),
+                ) {
+                    self.status = "Thinking…".into();
+                }
                 self.upsert_stream_assistant();
             }
             Ok(JobOut::ThoughtDelta(d)) => {
                 self.rx = Some(rx);
                 self.thought_buf.push_str(&d);
-                self.status = "Thinking…".into();
+                if chat_stream_is_visible(
+                    self.chat_job_thread.as_deref(),
+                    &self.visible_thread_id(),
+                ) {
+                    self.status = "Thinking…".into();
+                }
                 self.upsert_stream_assistant();
             }
             Ok(JobOut::Chat(text)) => {
+                let here = chat_stream_is_visible(
+                    self.chat_job_thread.as_deref(),
+                    &self.visible_thread_id(),
+                );
                 self.running = false;
                 self.voice_orb = "idle".into();
-                self.status.clear();
+                if here {
+                    self.status.clear();
+                }
                 remember_chip_outcome(&mut self.chip_memory, true, now_ms());
                 record_turn(&mut self.learning);
                 bump_usage(&mut self.usage, "message");
@@ -3545,20 +3632,11 @@ impl Cabin {
                 } else {
                     merge_thinking(&self.thought_buf, &strip_thinking(&text))
                 };
+                self.apply_assistant_snapshot(text.clone());
                 self.thought_buf.clear();
                 self.stream_buf.clear();
-                let replace_last = self.messages.last().map(|m| m.role == "assistant").unwrap_or(false);
-                if replace_last {
-                    if let Some(last) = self.messages.last_mut() {
-                        last.content = text.clone();
-                    }
-                } else {
-                    self.messages.push(Msg {
-                        role: "assistant".into(),
-                        content: text.clone(),
-                    });
-                }
-                if self.speak_next {
+                self.chat_job_thread = None;
+                if here && self.speak_next {
                     self.speak_next = false;
                     self.speak_reply(&text);
                 }
@@ -3577,7 +3655,9 @@ impl Cabin {
                     if st == BoardStatus::Done
                         && !can_mark_done(self.verify_ok_turn, has_verify_ok(&text))
                     {
-                        self.status = "Need VERIFY_OK or a passing verify.sh".into();
+                        if here {
+                            self.status = "Need VERIFY_OK or a passing verify.sh".into();
+                        }
                         continue;
                     }
                     let _ = apply_work_update(&mut self.board, &key, st);
@@ -3585,25 +3665,29 @@ impl Cabin {
                 if has_goal_complete(&text)
                     && !can_mark_done(self.verify_ok_turn, has_verify_ok(&text))
                 {
-                    self.status = "GOAL_COMPLETE held — need verify".into();
-                }
-                if let Some(plan) = plan_from_text(&text) {
-                    self.pending_update = false;
-                    if self.cfg.yolo {
-                        self.run_cmds(approved_cmds(&plan));
-                    } else {
-                        self.plan_pending = Some(plan);
-                        self.status = "Host plan needs approval".into();
+                    if here {
+                        self.status = "GOAL_COMPLETE held — need verify".into();
                     }
                 }
-                for c in extract_connector_cmds(&text) {
-                    self.run_connector(&c.connector_id, &c.tool, &c.args);
-                }
-                if let Some(p) = extract_imagine_prompt(&text) {
-                    self.imagine_prompt = p;
-                    self.nav = Nav::Imagine;
-                    self.imagine_want_focus = true;
-                    self.kick_imagine();
+                if here {
+                    if let Some(plan) = plan_from_text(&text) {
+                        self.pending_update = false;
+                        if self.cfg.yolo {
+                            self.run_cmds(approved_cmds(&plan));
+                        } else {
+                            self.plan_pending = Some(plan);
+                            self.status = "Host plan needs approval".into();
+                        }
+                    }
+                    for c in extract_connector_cmds(&text) {
+                        self.run_connector(&c.connector_id, &c.tool, &c.args);
+                    }
+                    if let Some(p) = extract_imagine_prompt(&text) {
+                        self.imagine_prompt = p;
+                        self.nav = Nav::Imagine;
+                        self.imagine_want_focus = true;
+                        self.kick_imagine();
+                    }
                 }
                 if let Some(mut a) = parse_nl_automation(&text) {
                     if a.id.is_empty() {
@@ -3611,13 +3695,17 @@ impl Cabin {
                     }
                     self.automations.push(a.clone());
                     let _ = crate::night::save(&self.automations);
-                    self.status = format!("Night saved: {} {}", a.schedule, a.time);
+                    if here {
+                        self.status = format!("Night saved: {} {}", a.schedule, a.time);
+                    }
                 }
-                if let Some(q) = parse_consult(&text) {
-                    self.run_consult(q);
+                if here {
+                    if let Some(q) = parse_consult(&text) {
+                        self.run_consult(q);
+                    }
                 }
                 let outcome = parse_goal_outcome(&text);
-                if outcome == "continue" && !self.cfg.goal_pin.is_empty() {
+                if here && outcome == "continue" && !self.cfg.goal_pin.is_empty() {
                     if let Some(next) = next_goal_prompt(
                         &self.cfg.goal_pin,
                         &text,
@@ -3635,21 +3723,23 @@ impl Cabin {
                 } else if outcome != "continue" {
                     self.goal_step = 0;
                 }
-                let tokens = estimate_messages(
-                    &self
-                        .messages
-                        .iter()
-                        .map(|m| (m.role.clone(), m.content.clone()))
-                        .collect::<Vec<_>>(),
-                );
-                if should_auto_compact(tokens, CONTEXT_BUDGET_TOKENS) {
-                    self.run_slash(Slash::Compact);
-                    self.status = format!(
-                        "Auto-compact · {}% context",
-                        context_percent(tokens, CONTEXT_BUDGET_TOKENS)
+                if here {
+                    let tokens = estimate_messages(
+                        &self
+                            .messages
+                            .iter()
+                            .map(|m| (m.role.clone(), m.content.clone()))
+                            .collect::<Vec<_>>(),
                     );
+                    if should_auto_compact(tokens, CONTEXT_BUDGET_TOKENS) {
+                        self.run_slash(Slash::Compact);
+                        self.status = format!(
+                            "Auto-compact · {}% context",
+                            context_percent(tokens, CONTEXT_BUDGET_TOKENS)
+                        );
+                    }
+                    self.spawn_thread_goal();
                 }
-                self.spawn_thread_goal();
             }
             Ok(JobOut::Consult(detail)) => {
                 self.running = false;
@@ -3803,6 +3893,9 @@ impl Cabin {
             Ok(JobOut::Err(e)) => {
                 self.running = false;
                 self.voice_orb = "idle".into();
+                self.chat_job_thread = None;
+                self.stream_buf.clear();
+                self.thought_buf.clear();
                 remember_chip_outcome(&mut self.chip_memory, false, now_ms());
                 self.status = e;
             }
@@ -3811,6 +3904,9 @@ impl Cabin {
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.running = false;
+                self.chat_job_thread = None;
+                self.stream_buf.clear();
+                self.thought_buf.clear();
             }
         }
     }
@@ -3861,6 +3957,7 @@ impl Cabin {
         self.snapshot_project();
         self.last_host = gated.clone();
         self.running = true;
+        self.chat_job_thread = None;
         self.voice_orb = "hands".into();
         self.host_live = gated[0].clone();
         self.status = "Host…".into();
@@ -3928,6 +4025,7 @@ impl Cabin {
             return;
         }
         self.running = true;
+        self.chat_job_thread = None;
         self.status = format!("GitHub {tool}…");
         let token = self.secrets.github_token.clone();
         let tool = tool.to_string();
@@ -3960,6 +4058,7 @@ impl Cabin {
             video_audio: self.imagine_video_audio,
         });
         self.running = true;
+        self.chat_job_thread = None;
         self.status = match self.imagine_kind {
             ImagineKind::Image => "Imagining…".into(),
             ImagineKind::Video => "Imagining storyboard still…".into(),
@@ -3983,8 +4082,7 @@ impl Cabin {
         if action == HeyGrokAction::Halt {
             let (halt, _) = on_wheel_grab(self.running);
             if halt {
-                self.rx = None;
-                self.running = false;
+                self.halt_in_flight();
             }
             if let Some(mut s) = self.voice_sock.take() {
                 s.halt();
@@ -4038,6 +4136,7 @@ impl Cabin {
         self.voice_orb = "listening".into();
         self.voice_state = VoiceState::Listening;
         self.running = true;
+        self.chat_job_thread = None;
         self.status = "Listening… STT".into();
         let key = self.bearer();
         let (tx, rx) = mpsc::channel();
@@ -4109,6 +4208,7 @@ impl Cabin {
         self.settings_sec = SettingsSec::Update;
         let begin = overlay_update_begin(cmds.len());
         self.running = begin.running;
+        self.chat_job_thread = None;
         self.update_pct = Some(begin.pct);
         self.status = begin.status;
         self.last_host = cmds.clone();
@@ -4429,8 +4529,7 @@ impl Cabin {
         match tray.try_recv() {
             Some(crate::tray::TrayCmd::Show) => self.show_from_tray(ctx),
             Some(crate::tray::TrayCmd::Halt) => {
-                self.rx = None;
-                self.running = false;
+                self.halt_in_flight();
                 self.status = "Stopped".into();
             }
             Some(crate::tray::TrayCmd::Quit) => {
@@ -4653,8 +4752,7 @@ impl eframe::App for Cabin {
         {
             let (halt, _) = on_wheel_grab(self.running);
             if halt || self.running {
-                self.rx = None;
-                self.running = false;
+                self.halt_in_flight();
             }
             self.voice_orb = "idle".into();
             self.status = "Stopped".into();
@@ -4767,8 +4865,7 @@ impl Cabin {
             } else if ev.id == self.hotkey_halt {
                 let (halt, _) = on_wheel_grab(self.running);
                 if halt || self.running {
-                    self.rx = None;
-                    self.running = false;
+                    self.halt_in_flight();
                 }
                 if let Some(mut s) = self.voice_sock.take() {
                     s.halt();
@@ -5558,11 +5655,11 @@ impl Cabin {
                                 ui,
                                 block,
                                 i,
-                                self.running && last_thought == Some(i),
+                                self.thinking_here() && last_thought == Some(i),
                             );
                             ui.add_space(8.0);
                         }
-                        if self.running {
+                        if self.thinking_here() {
                             match views.last().map(|v| v.kind) {
                                 None | Some(ChatKind::User) => {
                                     ui.label(

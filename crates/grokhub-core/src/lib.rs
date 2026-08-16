@@ -5,6 +5,7 @@ pub mod attach;
 pub mod feel;
 pub mod automation;
 pub mod chat;
+pub mod chat_job;
 pub mod chat_view;
 pub mod chips;
 pub mod connector;
@@ -70,6 +71,10 @@ pub use chat::{
 };
 pub use chat_view::{
     is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
+};
+pub use chat_job::{
+    apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
+    upsert_assistant_turn, ChatSendKind,
 };
 pub use chips::{
     build_quick_chips, chip_memory_key, chip_suggest_prompt, chip_thread_from_messages,
