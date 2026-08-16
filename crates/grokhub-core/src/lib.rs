@@ -86,6 +86,7 @@ pub use chat_bubble::{
 pub use chat_job::{
     apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     drop_trailing_assistant, drop_trailing_assistant_on, job_error_goes_to_chat, kick_messages_for_job,
+    last_user_for_job,
     persist_user_turn, push_bound_message, upsert_assistant_turn, worker_gone_status, ChatSendKind,
 };
 pub use chips::{
