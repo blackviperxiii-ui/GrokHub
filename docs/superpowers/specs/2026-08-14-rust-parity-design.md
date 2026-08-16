@@ -40,9 +40,9 @@ Memory files live under `~/.config/GrokHub/memory/` (`SOUL.md`, `USER.md`, `MEMO
 
 Projects sit in the left rail. `+` creates a project under `~/GrokHub-Work/<slug>` or a one-level sidebar folder. Rename is the display name; the path stays. Right-click rename or delete (delete drops the sidebar row, not the files). Folders do not move files. Click a project to bind it. Bound tree is the world. `/project bind|new|folder|rename|move|delete|clear`.
 
-History tabs: pin, rename (locks the title), delete. Fast names the tab from topics after each turn unless locked. `/pin` `/rename` `/delete`.
+History tabs: pin, rename (locks the title), delete. Fast names the tab from the first topic (max 16 characters) unless locked. `/pin` `/rename` `/delete`.
 
-Plus is Upload / Paste. Five chips sit above the composer on one row with no selected first pill. Enter sends; Ctrl+Enter is a newline. Send becomes Stop while a job runs. Empty chats can show a faint Fast blurb. Chat streams Responses SSE tokens onto the thread that started the job. User and assistant turns hug the text in rounded bubbles and wrap in a tight column. Imagine toolbox docks mid-pane, then the floor; stills sit above the composer. Appearance is Dark, Light, or System. OAuth paints the Grok profile photo in the footer and covers STT/TTS; duplex Voice streams 24 kHz PCM with a console key. Settings → Update shows a percent bar on the Settings page. Chat shows thought / tool steps; host receipts stay off the bubble. `COMPUTER_CMD` drives mouse/keyboard/vision unsandboxed. `/stop` / tray Halt / Ctrl+Shift+Esc flip `host_halt` so xdotool and `HOST_CMD` actually die. Window size and position persist. The tray icon is registered from launch. Titlebar × unmaps the cabin (X11; Wayland cannot hide). Tray pings once on hide.
+Plus is Upload / Paste. Five chips sit above the composer on one row with no selected first pill. Enter sends; Ctrl+Enter is a newline. Send becomes Stop while a job runs. Empty chats can show a faint Fast blurb. Chat streams Responses SSE tokens onto the thread that started the job. User and assistant turns hug the text in rounded bubbles and wrap in a tight column (hard cap 440px). Imagine toolbox docks mid-pane, then the floor; stills sit above the composer. Appearance is Dark, Light, or System. OAuth paints the Grok profile photo in the footer and covers STT/TTS; duplex Voice streams 24 kHz PCM with a console key. Settings → Update shows a percent bar on the Settings page; **Restart** reloads the new binary after a clean overlay. Chat shows thought / tool steps; Thought does not announce an attach; host receipts stay off the bubble. `COMPUTER_CMD` drives mouse/keyboard/vision unsandboxed. `/stop` / tray Halt / Ctrl+Shift+Esc flip `host_halt` so xdotool and `HOST_CMD` actually die. Window size and position persist. The tray icon is registered from launch. Titlebar × unmaps the cabin (X11; Wayland cannot hide). Tray pings once on hide. A 15s heartbeat runs housekeep, inbox, and night; wall, mid-thought, and reflect wake as autonomy rises.
 
 Devices pane starts the in-process hub on `GROKHUB_HUB_PORT` or `18766` and shows the pair code.
 
@@ -53,7 +53,7 @@ Unchanged. See `docs/superpowers/plans/2026-08-14-dispatch-android-notes.md`.
 ## In this repo (Rust)
 
 Cabin panes: Chat, Devices, Memory, Board, Imagine, Skills, Eyes, Settings. Left rail also holds the project tree.
-Core: pair, hub, slash, host rails, workboard, project tree, SKILL.md, dedicated Imagine, windshield, Hey Grok (xAI STT + TTS, whisper fallback), persist. Cabin eyes captures on each chat send.
+Core: pair, hub, slash, host rails, workboard, project tree, SKILL.md, dedicated Imagine, windshield, Hey Grok (xAI STT + TTS, whisper fallback), persist, 15s heartbeat. Cabin eyes stay dormant until asked (or hands need a frame); capture prefers Wayland-native tools and skips blank frames.
 C ABI: `crates/grokhub-ffi` + `include/grokhub.h` — pair, port, dedicated imagine/voice models, forbidden host, slash kind.
 
 ## Sibling repos
