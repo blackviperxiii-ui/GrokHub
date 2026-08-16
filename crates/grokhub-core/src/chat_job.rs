@@ -1,6 +1,8 @@
 //! Bind an in-flight chat stream to the thread that started it.
 //! New chat must stay empty and idle while the origin thread keeps the reply.
 
+use crate::organs::last_user_text;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatSendKind {
     Fresh,
@@ -169,6 +171,21 @@ pub fn kick_messages_for_job(
         .find(|(id, _)| id == job)
         .map(|(_, msgs)| msgs.clone())
         .unwrap_or_else(|| visible_messages.to_vec())
+}
+
+/// Skill draft after host must use the origin thread's last real user turn.
+pub fn last_user_for_job(
+    job_thread_id: Option<&str>,
+    visible_thread_id: &str,
+    visible_messages: &[(String, String)],
+    stored: &[(String, Vec<(String, String)>)],
+) -> Option<String> {
+    last_user_text(&kick_messages_for_job(
+        job_thread_id,
+        visible_thread_id,
+        visible_messages,
+        stored,
+    ))
 }
 
 #[cfg(test)]
@@ -344,5 +361,7 @@ mod tests {
         let stored = vec![("thr-a".into(), origin.clone()), ("thr-b".into(), visible.clone())];
         let msgs = kick_messages_for_job(Some("thr-a"), "thr-b", &visible, &stored);
         assert_eq!(msgs, origin);
+        let user = last_user_for_job(Some("thr-a"), "thr-b", &visible, &stored);
+        assert_eq!(user.as_deref(), Some("run ls"));
     }
 }
