@@ -25,6 +25,7 @@ pub fn is_workload_user(content: &str) -> bool {
         || t.starts_with("HOST_DIFF")
         || t.starts_with("CONNECTOR_RESULT")
         || t.starts_with("COMPUTER_RESULT")
+        || t.starts_with("FOLLOWUP:")
 }
 
 pub fn merge_thinking(thought: &str, content: &str) -> String {
@@ -421,6 +422,9 @@ mod tests {
         assert!(is_workload_user("CONNECTOR_RESULT (facts only):\nok"));
         assert!(is_workload_user("COMPUTER_RESULT (facts only):\nclicked 10,20"));
         assert!(is_workload_user("HOST_DIFF:\n- a"));
+        assert!(is_workload_user(
+            "FOLLOWUP: Finish the incomplete work from your last reply. Act now (HOST_CMD if needed). End with status."
+        ));
         assert!(!is_workload_user("check the box"));
     }
 

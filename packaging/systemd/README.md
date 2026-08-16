@@ -29,10 +29,10 @@ Requires `grokhub` / `grokhub-hub` on `PATH` (`~/.local/bin` or `/usr/bin`).
 
 ## Hands daemon
 
-Wayland takeover needs `ydotoold` and a writable `/dev/uinput`.
+Wayland takeover needs the sidecar `ydotoold` (`~/.local/lib/grokhub/bin` or `/usr/lib/grokhub/bin`) and a writable `/dev/uinput`.
 
 ```bash
-cp packaging/systemd/ydotoold.service ~/.config/systemd/user/
+# install.sh --user writes this unit with ExecStart pointed at the sidecar
 systemctl --user daemon-reload
 systemctl --user enable --now ydotoold.service
 ```

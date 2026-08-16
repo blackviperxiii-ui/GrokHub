@@ -1,15 +1,14 @@
 use grokhub_core::{
     chat_include_usage, chat_request_body_vision, chat_stream_flag, chat_timeout_secs,
     client_secrets_body, client_secrets_url, dedicated_imagine_model, dedicated_video_model,
-    frame_bytes, imagine_image_fallback_model, imagine_image_shaped, imagine_should_retry_model,
-    imagine_slug, imagine_video_fallback_model, media_ext_from_bytes, merge_thinking,
-    parse_client_secret, parse_imagine_url, parse_model_reasoning, parse_video_job_status,
-    parse_video_request_id, parse_video_url, video_moderation_blocked, video_request_body,
-    VideoJobStatus,
-    parse_model_text, parse_sse_text, parse_sse_thought, parse_stt_text, realtime_can_connect,
-    fold_sse_acc, sse_live_delta,
-    responses_request_body, responses_url, sse_done, stt_multipart, stt_url, tts_request_body, tts_url,
-    voice_client_secret_denied, PresenceFrame, XAI_BASE,
+    fold_sse_acc, frame_bytes, imagine_image_fallback_model, imagine_image_shaped,
+    imagine_should_retry_model, imagine_slug, imagine_video_fallback_model, media_ext_from_bytes,
+    merge_thinking, parse_client_secret, parse_imagine_url, parse_model_reasoning,
+    parse_model_text, parse_sse_finish, parse_sse_text, parse_sse_thought, parse_stt_text,
+    parse_video_job_status, parse_video_request_id, parse_video_url, realtime_can_connect,
+    responses_request_body, responses_url, sse_done, sse_live_delta, stream_was_truncated,
+    stt_multipart, stt_url, tts_request_body, tts_url, video_moderation_blocked, video_request_body,
+    voice_client_secret_denied, PresenceFrame, VideoJobStatus, XAI_BASE,
 };
 use std::io::Read;
 
@@ -42,9 +41,10 @@ fn consume_sse(
     mut reader: impl Read,
     on_delta: &mut impl FnMut(&str),
     on_thought: &mut impl FnMut(&str),
-) -> Result<String, String> {
+) -> Result<(String, bool), String> {
     let mut raw = String::new();
     let mut acc = String::new();
+    let mut finish: Option<String> = None;
     let mut buf = [0u8; 2048];
     loop {
         let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
@@ -55,15 +55,22 @@ fn consume_sse(
         while let Some(idx) = raw.find('\n') {
             let line = raw[..idx].trim_end_matches('\r').to_string();
             raw = raw[idx + 1..].to_string();
+            if let Some(reason) = parse_sse_finish(&line) {
+                finish = Some(reason);
+            }
             if apply_sse_line(&line, &mut acc, on_delta, on_thought) {
-                return Ok(acc);
+                return Ok((acc, stream_was_truncated(finish.as_deref())));
             }
         }
     }
     if !raw.trim().is_empty() {
-        apply_sse_line(raw.trim_end_matches('\r'), &mut acc, on_delta, on_thought);
+        let line = raw.trim_end_matches('\r');
+        if let Some(reason) = parse_sse_finish(line) {
+            finish = Some(reason);
+        }
+        apply_sse_line(line, &mut acc, on_delta, on_thought);
     }
-    Ok(acc)
+    Ok((acc, stream_was_truncated(finish.as_deref())))
 }
 
 fn apply_sse_line(
@@ -94,7 +101,7 @@ fn grok_sse(
     timeout_secs: u64,
     on_delta: &mut impl FnMut(&str),
     on_thought: &mut impl FnMut(&str),
-) -> Result<String, String> {
+) -> Result<(String, bool), String> {
     let resp = ureq::post(url)
         .set("authorization", &format!("Bearer {key}"))
         .set("content-type", "application/json")
@@ -147,7 +154,7 @@ pub fn grok_chat_stream(
     effort: Option<&str>,
     mut on_delta: impl FnMut(&str),
     mut on_thought: impl FnMut(&str),
-) -> Result<String, String> {
+) -> Result<(String, bool), String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
@@ -155,7 +162,7 @@ pub fn grok_chat_stream(
     let timeout = chat_timeout_secs(effort);
     let mut responses = responses_request_body(model, messages, image_data_url, effort);
     chat_stream_flag(&mut responses, true);
-    if let Ok(acc) = grok_sse(
+    if let Ok((acc, truncated)) = grok_sse(
         &responses_url(),
         key,
         responses,
@@ -164,7 +171,7 @@ pub fn grok_chat_stream(
         &mut on_thought,
     ) {
         if !acc.is_empty() {
-            return Ok(acc);
+            return Ok((acc, truncated));
         }
     }
     let mut body = chat_request_body_vision(model, messages, image_data_url, effort);
@@ -178,9 +185,11 @@ pub fn grok_chat_stream(
         &mut on_delta,
         &mut on_thought,
     ) {
-        Ok(acc) if !acc.is_empty() => Ok(acc),
-        Ok(_) => grok_chat(api_key, model, messages, image_data_url, effort),
-        Err(e) => grok_chat(api_key, model, messages, image_data_url, effort).map_err(|_| e),
+        Ok((acc, truncated)) if !acc.is_empty() => Ok((acc, truncated)),
+        Ok(_) => grok_chat(api_key, model, messages, image_data_url, effort).map(|t| (t, false)),
+        Err(e) => grok_chat(api_key, model, messages, image_data_url, effort)
+            .map(|t| (t, false))
+            .map_err(|_| e),
     }
 }
 
@@ -473,7 +482,7 @@ mod tests {
     fn responses_done_fills_empty_acc() {
         let data = b"data: {\"type\":\"response.output_text.done\",\"text\":\"Hello\"}\n\n";
         let mut deltas = String::new();
-        let acc = consume_sse(&data[..], &mut |d| deltas.push_str(d), &mut |_| {}).unwrap();
+        let (acc, _) = consume_sse(&data[..], &mut |d| deltas.push_str(d), &mut |_| {}).unwrap();
         assert_eq!(acc, "Hello");
         assert_eq!(deltas, "Hello");
     }
@@ -485,7 +494,7 @@ mod tests {
             "data: {\"type\":\"response.output_text.done\",\"text\":\"Hello\"}\n",
         );
         let mut deltas = String::new();
-        let acc = consume_sse(data.as_bytes(), &mut |d| deltas.push_str(d), &mut |_| {}).unwrap();
+        let (acc, _) = consume_sse(data.as_bytes(), &mut |d| deltas.push_str(d), &mut |_| {}).unwrap();
         assert_eq!(acc, "Hello");
         assert_eq!(deltas, "Hel");
     }
@@ -494,7 +503,7 @@ mod tests {
     fn responses_tail_without_newline_is_kept() {
         let data = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"CMD\"}";
         let mut deltas = String::new();
-        let acc = consume_sse(&data[..], &mut |d| deltas.push_str(d), &mut |_| {}).unwrap();
+        let (acc, _) = consume_sse(&data[..], &mut |d| deltas.push_str(d), &mut |_| {}).unwrap();
         assert_eq!(acc, "CMD");
         assert_eq!(deltas, "CMD");
     }
@@ -505,7 +514,7 @@ mod tests {
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\\nCOMPUTER_CMD: key Alt+F4\"}\n",
             "data: {\"type\":\"response.output_text.done\",\"text\":\"Hello\"}\n",
         );
-        let acc = consume_sse(data.as_bytes(), &mut |_| {}, &mut |_| {}).unwrap();
+        let (acc, _) = consume_sse(data.as_bytes(), &mut |_| {}, &mut |_| {}).unwrap();
         assert!(
             acc.contains("COMPUTER_CMD: key Alt+F4"),
             "short done wiped the tool line: {acc}"
