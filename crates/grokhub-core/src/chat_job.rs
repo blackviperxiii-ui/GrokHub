@@ -110,6 +110,25 @@ pub fn job_error_goes_to_chat(chat_job_thread: Option<&str>) -> bool {
     chat_job_thread.is_some()
 }
 
+/// Host / connector / consult receipts stay on the thread that started the job.
+pub fn push_bound_message(
+    job_thread_id: Option<&str>,
+    visible_thread_id: &str,
+    visible_messages: &mut Vec<(String, String)>,
+    stored: &mut [(String, Vec<(String, String)>)],
+    role: &str,
+    content: String,
+) {
+    let target = job_thread_id.unwrap_or(visible_thread_id);
+    if target == visible_thread_id {
+        visible_messages.push((role.to_string(), content));
+        return;
+    }
+    if let Some((_, msgs)) = stored.iter_mut().find(|(id, _)| id == target) {
+        msgs.push((role.to_string(), content));
+    }
+}
+
 /// Composer send without auth must not write a user turn.
 pub fn persist_user_turn(has_key: bool) -> bool {
     has_key
@@ -228,5 +247,39 @@ mod tests {
         assert!(job_error_goes_to_chat(Some("thr-a")));
         assert!(!persist_user_turn(false));
         assert!(persist_user_turn(true));
+    }
+
+    #[test]
+    fn host_receipt_stays_on_the_origin_thread() {
+        let mut visible = vec![("user".into(), "other".into())];
+        let mut stored = vec![
+            ("thr-a".into(), vec![("user".into(), "run ls".into())]),
+            ("thr-b".into(), visible.clone()),
+        ];
+        push_bound_message(
+            Some("thr-a"),
+            "thr-b",
+            &mut visible,
+            &mut stored,
+            "user",
+            "HOST_RESULT (facts only):\nok".into(),
+        );
+        assert_eq!(visible, vec![("user".into(), "other".into())]);
+        assert_eq!(
+            stored[0].1.last().map(|m| m.1.as_str()),
+            Some("HOST_RESULT (facts only):\nok")
+        );
+        push_bound_message(
+            Some("thr-b"),
+            "thr-b",
+            &mut visible,
+            &mut stored,
+            "user",
+            "CONNECTOR_RESULT (facts only):\nok".into(),
+        );
+        assert_eq!(
+            visible.last().map(|m| m.1.as_str()),
+            Some("CONNECTOR_RESULT (facts only):\nok")
+        );
     }
 }

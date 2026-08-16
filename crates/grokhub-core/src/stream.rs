@@ -80,23 +80,66 @@ fn is_text_event(t: &str) -> bool {
     matches!(t, "response.output_text.delta" | "response.text.delta")
 }
 
+fn is_text_done_event(t: &str) -> bool {
+    matches!(t, "response.output_text.done" | "response.text.done")
+}
+
 fn event_delta_text(v: &Value) -> Option<String> {
     v.get("delta")
         .and_then(value_text)
         .or_else(|| v.get("text").and_then(value_text))
 }
 
-pub fn parse_sse_delta(line: &str) -> Option<String> {
+fn event_done_text(v: &Value) -> Option<String> {
+    v.get("text")
+        .and_then(value_text)
+        .or_else(|| v.get("output_text").and_then(value_text))
+        .or_else(|| v.get("delta").and_then(value_text))
+}
+
+/// Chat Completions deltas and Responses `output_text` delta/done events.
+pub fn parse_sse_text(line: &str) -> Option<(String, StreamTokenKind)> {
     if let Some(v) = sse_json(line) {
         let t = event_type(&v);
         if is_thought_event(t) {
             return None;
         }
         if is_text_event(t) {
-            return event_delta_text(&v);
+            return event_delta_text(&v).map(|s| (s, StreamTokenKind::Delta));
+        }
+        if is_text_done_event(t) {
+            return event_done_text(&v).map(|s| (s, StreamTokenKind::Replace));
         }
     }
-    sse_choice_delta(line)?.get("content").and_then(value_text)
+    sse_choice_delta(line)?
+        .get("content")
+        .and_then(value_text)
+        .map(|s| (s, StreamTokenKind::Delta))
+}
+
+pub fn parse_sse_delta(line: &str) -> Option<String> {
+    match parse_sse_text(line) {
+        Some((s, StreamTokenKind::Delta)) => Some(s),
+        Some(_) | None => None,
+    }
+}
+
+/// Live UI only emits a done-event when no deltas arrived (otherwise it would duplicate).
+pub fn sse_live_delta(acc_was_empty: bool, kind: StreamTokenKind) -> bool {
+    match kind {
+        StreamTokenKind::Delta => true,
+        StreamTokenKind::Replace => acc_was_empty,
+    }
+}
+
+pub fn fold_sse_acc(acc: &mut String, text: &str, kind: StreamTokenKind) {
+    if text.is_empty() {
+        return;
+    }
+    match kind {
+        StreamTokenKind::Delta => acc.push_str(text),
+        StreamTokenKind::Replace => *acc = text.to_string(),
+    }
 }
 
 /// Grok 4.6 may stream `reasoning_content` or Responses reasoning deltas before the answer.
@@ -226,5 +269,19 @@ mod tests {
         assert_eq!(msgs[0].1, "Hello!");
         fold_stream_token(&mut msgs, "user", "hey", StreamTokenKind::Delta);
         assert_eq!(msgs.last().map(|(r, t)| (r.as_str(), t.as_str())), Some(("user", "hey")));
+        let done = r#"data: {"type":"response.output_text.done","text":"Hello"}"#;
+        assert_eq!(
+            parse_sse_text(done),
+            Some(("Hello".into(), StreamTokenKind::Replace))
+        );
+        assert!(parse_sse_delta(done).is_none());
+        let mut acc = String::new();
+        fold_sse_acc(&mut acc, "Hello", StreamTokenKind::Replace);
+        assert_eq!(acc, "Hello");
+        assert!(sse_live_delta(true, StreamTokenKind::Replace));
+        assert!(!sse_live_delta(false, StreamTokenKind::Replace));
+        let mut acc = String::from("Hel");
+        fold_sse_acc(&mut acc, "Hello", StreamTokenKind::Replace);
+        assert_eq!(acc, "Hello");
     }
 }

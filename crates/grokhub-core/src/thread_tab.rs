@@ -76,8 +76,16 @@ pub fn apply_manual_rename(tab: &mut ThreadTab, name: &str) -> bool {
     true
 }
 
+pub fn auto_title_blocked(title_locked: bool, renaming: bool) -> bool {
+    title_locked || renaming
+}
+
 pub fn apply_auto_title(tab: &mut ThreadTab, name: &str) -> bool {
-    if tab.title_locked {
+    apply_auto_title_in(tab, name, false)
+}
+
+pub fn apply_auto_title_in(tab: &mut ThreadTab, name: &str, renaming: bool) -> bool {
+    if auto_title_blocked(tab.title_locked, renaming) {
         return false;
     }
     let Some(title) = short_auto_title(name) else {
@@ -138,6 +146,14 @@ mod tests {
         assert!(!apply_auto_title(&mut tab, "porn"));
         assert_eq!(tab.title, "night watch");
         assert!(tab.title_locked);
+        let mut open = ThreadTab {
+            title: "Chat".into(),
+            pinned: false,
+            title_locked: false,
+        };
+        assert!(auto_title_blocked(false, true));
+        assert!(!apply_auto_title_in(&mut open, "porn", true));
+        assert_eq!(open.title, "Chat");
     }
 
     #[test]
