@@ -356,7 +356,7 @@ pub fn slash_help() -> String {
         "/recall <q> — search memory",
         "/forget <topic> — drop matching memory lines",
         "/imagine <prompt>",
-        "/update — overlay install (enables hub, rebuilds sidecars); Restart on Settings (ydotoold → hub → cabin)",
+        "/update — overlay install (enables hub, rebuilds sidecars); Restart on Settings (ydotoold → hub, then a new cabin process)",
         "/send <task> — task this box",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another box (not the phone)",

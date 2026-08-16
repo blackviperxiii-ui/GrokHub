@@ -5603,7 +5603,10 @@ impl eframe::App for Cabin {
             self.page_nav() == Nav::Imagine,
             self.wall_busy,
         );
-        if !just_hid && crate::tray::take_cabin_raise() {
+        if crate::tray::honor_cabin_raise(self.want_quit)
+            && !just_hid
+            && crate::tray::take_cabin_raise()
+        {
             self.show_from_tray(ctx);
         } else if !self.window_visible {
             let focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
@@ -7294,7 +7297,7 @@ impl Cabin {
                                                                 && crate::cards::settings_action(
                                                                     ui,
                                                                     "Restart GrokHub",
-                                                                    "Relaunch ydotoold, then hub, then the cabin from the new overlay.",
+                                                                    "Reload ydotoold and hub, then start a new cabin and exit this one.",
                                                                     "Restart",
                                                                 )
                                                             {
@@ -8881,6 +8884,10 @@ mod tests {
         assert!(
             include_str!("main.rs").contains("try_claim_cabin"),
             "a second grokhub from the taskbar must raise the running cabin and exit"
+        );
+        assert!(
+            include_str!("app.rs").contains("honor_cabin_raise(self.want_quit)"),
+            "Restart must not CancelClose when a sibling spawn writes cabin.raise"
         );
         assert!(
             show.contains("CancelClose"),
