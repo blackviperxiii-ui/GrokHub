@@ -5771,6 +5771,7 @@ impl Cabin {
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                 .inner_margin(egui::Margin::same(8.0))
                 .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
                     ui.set_min_height(crate::theme::QUERY_MIN_H - 16.0);
                     ui.horizontal(|ui| {
                         let plus = crate::icons::paint_bar_icon(
@@ -5790,11 +5791,13 @@ impl Cabin {
                         {
                             self.send_chat(t);
                         }
+                        let cluster = crate::cards::composer_go_cluster_w();
+                        let text_w = (ui.available_width() - cluster).max(80.0);
                         let rows = (self.composer.matches('\n').count() + 1).min(8);
                         let edit = ui.add(
                             egui::TextEdit::multiline(&mut self.composer)
                                 .id(composer_id)
-                                .desired_width((ui.available_width() - 180.0).max(80.0))
+                                .desired_width(text_w)
                                 .desired_rows(rows)
                                 .frame(false)
                                 .hint_text("What do you want to know?")
@@ -5808,68 +5811,75 @@ impl Cabin {
                         {
                             self.send_chat(t);
                         }
-                        let mut mode = if self.cfg.mode.trim().is_empty() {
-                            "auto".to_string()
-                        } else {
-                            self.cfg.mode.clone()
-                        };
-                        let mode_now = mode.clone();
-                        egui::ComboBox::from_id_salt("composer-mode")
-                            .selected_text(Self::mode_label(&mode_now))
-                            .width(84.0)
-                            .show_ui(ui, |ui| {
-                                for (id, label) in [
-                                    ("auto", "Auto"),
-                                    ("fast", "Fast"),
-                                    ("balanced", "Balance"),
-                                    ("think", "Think"),
-                                    ("max", "Max"),
-                                ] {
-                                    ui.selectable_value(&mut mode, id.to_string(), label);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(cluster, crate::theme::QUERY_MIN_H - 16.0),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.spacing_mut().item_spacing.x = 8.0;
+                                let ready = !self.composer.trim().is_empty();
+                                let go = composer_go(self.running, ready);
+                                let send = crate::icons::paint_bar_icon(
+                                    ui,
+                                    match go {
+                                        ComposerGo::Stop => crate::icons::BarIcon::Stop,
+                                        ComposerGo::Send => crate::icons::BarIcon::Send,
+                                        ComposerGo::Idle => crate::icons::BarIcon::ArrowUp,
+                                    },
+                                    match go {
+                                        ComposerGo::Idle => 22.0,
+                                        ComposerGo::Send | ComposerGo::Stop => 28.0,
+                                    },
+                                    match go {
+                                        ComposerGo::Idle => crate::theme::muted(),
+                                        ComposerGo::Send | ComposerGo::Stop => crate::theme::fg(),
+                                    },
+                                )
+                                .on_hover_text(composer_go_tip(self.running));
+                                if send.clicked() {
+                                    match go {
+                                        ComposerGo::Stop => self.run_slash(Slash::Stop),
+                                        ComposerGo::Send | ComposerGo::Idle => {
+                                            let t = std::mem::take(&mut self.composer);
+                                            self.send_chat(t);
+                                        }
+                                    }
                                 }
-                            });
-                        if mode != mode_now {
-                            self.run_slash(Slash::Mode(mode));
-                        }
-                        if crate::icons::paint_bar_icon(
-                            ui,
-                            crate::icons::BarIcon::Mic,
-                            22.0,
-                            crate::theme::muted(),
-                        )
-                        .on_hover_text("Hey Grok")
-                        .clicked()
-                        {
-                            self.listen_voice();
-                        }
-                        let ready = !self.composer.trim().is_empty();
-                        let go = composer_go(self.running, ready);
-                        let send = crate::icons::paint_bar_icon(
-                            ui,
-                            match go {
-                                ComposerGo::Stop => crate::icons::BarIcon::Stop,
-                                ComposerGo::Send => crate::icons::BarIcon::Send,
-                                ComposerGo::Idle => crate::icons::BarIcon::ArrowUp,
-                            },
-                            match go {
-                                ComposerGo::Idle => 22.0,
-                                ComposerGo::Send | ComposerGo::Stop => 28.0,
-                            },
-                            match go {
-                                ComposerGo::Idle => crate::theme::muted(),
-                                ComposerGo::Send | ComposerGo::Stop => crate::theme::fg(),
-                            },
-                        )
-                        .on_hover_text(composer_go_tip(self.running));
-                        if send.clicked() {
-                            match go {
-                                ComposerGo::Stop => self.run_slash(Slash::Stop),
-                                ComposerGo::Send | ComposerGo::Idle => {
-                                    let t = std::mem::take(&mut self.composer);
-                                    self.send_chat(t);
+                                if crate::icons::paint_bar_icon(
+                                    ui,
+                                    crate::icons::BarIcon::Mic,
+                                    22.0,
+                                    crate::theme::muted(),
+                                )
+                                .on_hover_text("Hey Grok")
+                                .clicked()
+                                {
+                                    self.listen_voice();
                                 }
-                            }
-                        }
+                                let mut mode = if self.cfg.mode.trim().is_empty() {
+                                    "auto".to_string()
+                                } else {
+                                    self.cfg.mode.clone()
+                                };
+                                let mode_now = mode.clone();
+                                egui::ComboBox::from_id_salt("composer-mode")
+                                    .selected_text(Self::mode_label(&mode_now))
+                                    .width(84.0)
+                                    .show_ui(ui, |ui| {
+                                        for (id, label) in [
+                                            ("auto", "Auto"),
+                                            ("fast", "Fast"),
+                                            ("balanced", "Balance"),
+                                            ("think", "Think"),
+                                            ("max", "Max"),
+                                        ] {
+                                            ui.selectable_value(&mut mode, id.to_string(), label);
+                                        }
+                                    });
+                                if mode != mode_now {
+                                    self.run_slash(Slash::Mode(mode));
+                                }
+                            },
+                        );
                     });
                 });
                     }
@@ -7705,5 +7715,24 @@ mod tests {
         assert_eq!(others.len(), 1);
         assert_eq!(others[0].title, "Night cabin");
         assert_eq!(others[0].last_user, "paint the wall");
+    }
+
+    #[test]
+    fn chat_composer_pins_stop_on_the_right() {
+        let src = include_str!("app.rs");
+        let start = src.find("ComposerStackSlot::Pill =>").expect("pill arm");
+        let slice = &src[start..start + 2800];
+        assert!(
+            slice.contains("composer_go_cluster_w()"),
+            "Fast + mic + Stop need a reserved strip: {slice}"
+        );
+        assert!(
+            slice.contains("right_to_left"),
+            "allocate Stop from the right so the mode combo cannot clip it: {slice}"
+        );
+        assert!(
+            !slice.contains("- 180.0"),
+            "180px left Fast as the pill's right edge on a 900-wide cabin"
+        );
     }
 }
