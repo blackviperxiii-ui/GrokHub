@@ -385,18 +385,40 @@ pub fn project_name_from_path(p: &str) -> String {
         .to_string()
 }
 
+pub fn expand_host_path_token(tok: &str) -> Option<String> {
+    expand_host_path_token_in(tok, std::env::var("HOME").ok().as_deref())
+}
+
+pub fn expand_host_path_token_in(tok: &str, home: Option<&str>) -> Option<String> {
+    if tok.starts_with('/') {
+        return Some(tok.to_string());
+    }
+    let home = home.filter(|h| !h.is_empty())?;
+    let home = home.trim_end_matches('/');
+    if let Some(rest) = tok.strip_prefix("~/") {
+        return Some(format!("{home}/{rest}"));
+    }
+    if let Some(rest) = tok.strip_prefix("$HOME/") {
+        return Some(format!("{home}/{rest}"));
+    }
+    if tok == "~" || tok == "$HOME" {
+        return Some(home.to_string());
+    }
+    None
+}
+
 pub fn host_cmd_leaves_project(cmd: &str, project_root: &str) -> bool {
+    host_cmd_leaves_project_in(cmd, project_root, std::env::var("HOME").ok().as_deref())
+}
+
+pub fn host_cmd_leaves_project_in(cmd: &str, project_root: &str, home: Option<&str>) -> bool {
     let root = project_root.trim();
     if root.is_empty() {
         return false;
     }
     for tok in cmd.split_whitespace() {
-        if tok.starts_with('/') || tok.starts_with("~/") || tok.starts_with("$HOME") {
-            let expanded = tok.replace('~', "").replace("$HOME", "");
-            if tok.starts_with('/') && !is_under_project(tok, root) {
-                return true;
-            }
-            if (tok.starts_with("~/") || tok.starts_with("$HOME")) && !expanded.is_empty() {
+        if let Some(path) = expand_host_path_token_in(tok, home) {
+            if !is_under_project(&path, root) {
                 return true;
             }
         }
@@ -406,6 +428,11 @@ pub fn host_cmd_leaves_project(cmd: &str, project_root: &str) -> bool {
 
 pub fn host_hour_blocked(count: u32, cap: u32) -> bool {
     cap > 0 && count >= cap
+}
+
+/// Halt refunds the reserved slots so a cancelled job does not eat the hour cap.
+pub fn refund_host_reserved(count: u32, reserved: u32) -> u32 {
+    count.saturating_sub(reserved)
 }
 
 #[cfg(test)]
@@ -420,12 +447,34 @@ mod tests {
         assert!(host_cmd_leaves_project("cat /etc/passwd", "/home/j/proj"));
         assert!(!host_cmd_leaves_project("cat src/main.rs", "/home/j/proj"));
         assert!(!host_cmd_leaves_project("cat /home/j/proj/src/a.rs", "/home/j/proj"));
-        assert!(host_cmd_leaves_project("cat ~/secrets", "/home/j/proj"));
+        assert!(host_cmd_leaves_project_in(
+            "cat ~/secrets",
+            "/home/j/proj",
+            Some("/home/j")
+        ));
+        assert!(
+            !host_cmd_leaves_project_in(
+                "cat ~/proj/src/main.rs",
+                "/home/j/proj",
+                Some("/home/j")
+            ),
+            "tilde inside the bound tree is still in-world"
+        );
+        assert!(
+            !host_cmd_leaves_project_in(
+                "cat $HOME/proj/src/a.rs",
+                "/home/j/proj",
+                Some("/home/j")
+            )
+        );
         assert!(!host_cmd_leaves_project("ls", "/home/j/proj"));
         assert!(!host_cmd_leaves_project("cat /etc/passwd", ""));
         assert!(host_hour_blocked(40, 40));
         assert!(!host_hour_blocked(3, 40));
         assert!(!host_hour_blocked(40, 0), "cap 0 means unlimited");
+        assert_eq!(refund_host_reserved(3, 3), 0);
+        assert_eq!(refund_host_reserved(3, 1), 2);
+        assert_eq!(refund_host_reserved(0, 2), 0);
     }
 
     #[test]
