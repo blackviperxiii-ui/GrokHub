@@ -8,6 +8,7 @@ use image::GenericImageView;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 const ATSPI_PY: &str = r#"
@@ -114,11 +115,21 @@ fn hands_receipt(line: &str, start: Instant, ok: bool, detail: &str) -> String {
     )
 }
 
-fn run_xdotool_steps(steps: &[Vec<String>]) -> Result<(), String> {
+fn cancelled(cancel: Option<&AtomicBool>) -> bool {
+    cancel.is_some_and(|c| c.load(Ordering::SeqCst))
+}
+
+fn run_xdotool_steps(steps: &[Vec<String>], cancel: Option<&AtomicBool>) -> Result<(), String> {
+    if cancelled(cancel) {
+        return Err("halted".into());
+    }
     if !which("xdotool") {
         return Err("xdotool missing".into());
     }
     for (i, step) in steps.iter().enumerate() {
+        if cancelled(cancel) {
+            return Err("halted".into());
+        }
         if i > 0 {
             std::thread::sleep(Duration::from_millis(25));
         }
@@ -137,12 +148,15 @@ fn lock_titles() -> Vec<String> {
     collect_rows().into_iter().map(|r| r.name).collect()
 }
 
-fn act_click(name: &str) -> Result<(i32, i32), String> {
+fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), String> {
+    if cancelled(cancel) {
+        return Err("halted".into());
+    }
     let rows = collect_rows();
     if let Some(r) = named_row(&rows, name) {
         let (x, y) = row_center(r);
         match computer_drive(&ComputerOp::Click { x, y }) {
-            ComputerDrive::Xdotool(steps) => run_xdotool_steps(&steps)?,
+            ComputerDrive::Xdotool(steps) => run_xdotool_steps(&steps, cancel)?,
             ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) => {}
         }
         return Ok((x, y));
@@ -174,13 +188,16 @@ fn act_click(name: &str) -> Result<(i32, i32), String> {
     let cx = x + w / 2;
     let cy = y + h / 2;
     match computer_drive(&ComputerOp::Click { x: cx, y: cy }) {
-        ComputerDrive::Xdotool(steps) => run_xdotool_steps(&steps)?,
+        ComputerDrive::Xdotool(steps) => run_xdotool_steps(&steps, cancel)?,
         ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) => {}
     }
     Ok((cx, cy))
 }
 
-fn wait_for_title(title: Option<&str>) -> Result<String, String> {
+fn wait_for_title(title: Option<&str>, cancel: Option<&AtomicBool>) -> Result<String, String> {
+    if cancelled(cancel) {
+        return Err("halted".into());
+    }
     let Some(want) = title.filter(|s| !s.is_empty()) else {
         std::thread::sleep(Duration::from_millis(400));
         return Ok("waited".into());
@@ -188,6 +205,9 @@ fn wait_for_title(title: Option<&str>) -> Result<String, String> {
     let q = want.to_ascii_lowercase();
     let deadline = Instant::now() + Duration::from_secs(8);
     loop {
+        if cancelled(cancel) {
+            return Err("halted".into());
+        }
         let rows = collect_rows();
         if rows
             .iter()
@@ -203,15 +223,22 @@ fn wait_for_title(title: Option<&str>) -> Result<String, String> {
 }
 
 pub fn run_computer_op(op: &ComputerOp) -> String {
+    run_computer_op_cancel(op, None)
+}
+
+pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> String {
     let started = Instant::now();
     let line = computer_cmd_line(op);
+    if cancelled(cancel) {
+        return hands_receipt(&line, started, false, "halted");
+    }
     let titles = lock_titles();
     let title_refs: Vec<&str> = titles.iter().map(|s| s.as_str()).collect();
     if hands_blocked_by_lock(op, &title_refs) {
         return hands_receipt(&line, started, false, "blocked: lock screen");
     }
     match computer_drive(op) {
-        ComputerDrive::Xdotool(steps) => match run_xdotool_steps(&steps) {
+        ComputerDrive::Xdotool(steps) => match run_xdotool_steps(&steps, cancel) {
             Ok(()) => {
                 let detail = match op {
                     ComputerOp::Click { x, y } => format!("clicked {x},{y}"),
@@ -226,11 +253,11 @@ pub fn run_computer_op(op: &ComputerOp) -> String {
             }
             Err(e) => hands_receipt(&line, started, false, &e),
         },
-        ComputerDrive::Act(name) => match act_click(&name) {
+        ComputerDrive::Act(name) => match act_click(&name, cancel) {
             Ok((x, y)) => hands_receipt(&line, started, true, &format!("act {name} @{x},{y}")),
             Err(e) => hands_receipt(&line, started, false, &e),
         },
-        ComputerDrive::WaitFor(title) => match wait_for_title(title.as_deref()) {
+        ComputerDrive::WaitFor(title) => match wait_for_title(title.as_deref(), cancel) {
             Ok(detail) => hands_receipt(&line, started, true, &detail),
             Err(e) => hands_receipt(&line, started, false, &e),
         },
@@ -695,6 +722,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(g, (10, 20, 100, 40));
+    }
+
+    #[test]
+    fn halt_skips_wait_for_without_driving() {
+        let stop = AtomicBool::new(true);
+        let started = Instant::now();
+        let out = run_computer_op_cancel(
+            &ComputerOp::WaitFor {
+                title: Some("definitely-not-a-grokhub-window".into()),
+            },
+            Some(&stop),
+        );
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        assert!(out.contains("halted"), "{out}");
+        assert!(out.contains("exit 1"), "{out}");
     }
 
     #[test]
