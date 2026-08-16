@@ -21,12 +21,13 @@ use grokhub_core::{
     dedicated_imagine_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
     pick_fresh_seed, wall_can_paint, wall_evict, ImagineKind, ImagineSpec, ImagineWall,
     WallGif, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
-    imagine_toolbox_dock, imagine_toolbox_shows_title, imagine_toolbox_top,
+    imagine_shows_result_above, imagine_toolbox_dock, imagine_toolbox_shows_title,
+    imagine_toolbox_top, imagine_wall_bounds,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     imagine_aspect_label, imagine_aspect_name, imagine_style_label, imagine_video_dur_label,
-    imagine_video_res_label,
+    imagine_video_res_label, last_imagine_receipt,
     extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
     forget_topic, greet_from_last_job, has_auth, has_goal_complete, has_verify_ok, hey_grok_on_press,
     import_memory_file, insight_pin, is_openclaw_workspace,
@@ -704,7 +705,7 @@ impl Cabin {
             .iter()
             .position(|t| t.id == cfg.current_thread)
             .unwrap_or(0);
-        let messages = threads
+        let messages: Vec<Msg> = threads
             .get(thread_idx)
             .map(|t| {
                 t.messages
@@ -715,6 +716,8 @@ impl Cabin {
                     })
                     .collect()
             })
+            .unwrap_or_default();
+        let imagine_last = last_imagine_receipt(messages.iter().map(|m| m.content.as_str()))
             .unwrap_or_default();
         let mut cfg = cfg;
         if cfg.source_dir.trim().is_empty() {
@@ -760,7 +763,7 @@ impl Cabin {
             board: config::load_board(),
             board_title: String::new(),
             imagine_prompt: String::new(),
-            imagine_last: String::new(),
+            imagine_last,
             skill_name: String::new(),
             skill_body: String::new(),
             skill_list: skills::list_skills(),
@@ -2054,6 +2057,8 @@ impl Cabin {
                     .collect()
             })
             .unwrap_or_default();
+        self.imagine_last =
+            last_imagine_receipt(self.messages.iter().map(|m| m.content.as_str())).unwrap_or_default();
         self.cfg.goal_pin = self
             .threads
             .get(self.thread_idx)
@@ -2074,6 +2079,7 @@ impl Cabin {
         self.threads.push(ChatThread::new(title, scratch));
         self.thread_idx = self.threads.len() - 1;
         self.messages.clear();
+        self.imagine_last.clear();
         self.cfg.goal_pin.clear();
         self.goal_step = 0;
         self.status = if scratch {
@@ -2140,6 +2146,7 @@ impl Cabin {
                 self.threads.push(ChatThread::new("Chat", false));
                 self.thread_idx = 0;
                 self.messages.clear();
+                self.imagine_last.clear();
                 self.cfg.goal_pin.clear();
                 self.goal_step = 0;
                 self.status = "Chat deleted".into();
@@ -2161,6 +2168,10 @@ impl Cabin {
                                 .collect()
                         })
                         .unwrap_or_default();
+                    self.imagine_last = last_imagine_receipt(
+                        self.messages.iter().map(|m| m.content.as_str()),
+                    )
+                    .unwrap_or_default();
                     self.cfg.goal_pin = self
                         .threads
                         .get(next)
@@ -6542,27 +6553,13 @@ impl Cabin {
         let mut seed: Option<String> = None;
         let word = crate::cards::imagine_word(now_ms());
         let selected = self.imagine_prompt.clone();
-        let panel = egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::ZERO))
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                        crate::cards::imagine_masonry(ui, &selected, now_ms(), &self.wall.gifs, |p| {
-                            seed = Some(p);
-                        });
-                    });
-            });
-        let content = panel.response.rect;
-        let bar_w = (content.width() - 48.0)
-            .min(crate::theme::IMAGINE_BAR_W)
-            .max(280.0);
+        let last = self.imagine_last.clone();
         let dock = imagine_toolbox_dock(
             !self.imagine_prompt.trim().is_empty(),
-            !self.imagine_last.is_empty(),
+            !last.is_empty(),
             self.running,
         );
+        let show_result = imagine_shows_result_above(!last.is_empty(), dock);
         let composer_id = egui::Id::new("imagine-composer");
         let cap = if imagine_toolbox_shows_title(dock) {
             260.0
@@ -6577,6 +6574,52 @@ impl Cabin {
         } else {
             cap - 40.0
         };
+        let panel = egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::ZERO))
+            .show(ctx, |ui| {
+                let content = ui.max_rect();
+                let toolbox_top =
+                    imagine_toolbox_top(content.top(), content.height(), box_h, dock);
+                let (wall_top, wall_h) = imagine_wall_bounds(
+                    content.top(),
+                    content.height(),
+                    toolbox_top,
+                    box_h,
+                    dock,
+                );
+                if wall_h <= 8.0 {
+                    return;
+                }
+                let wall = egui::Rect::from_min_size(
+                    egui::pos2(content.left(), wall_top),
+                    egui::vec2(content.width(), wall_h),
+                );
+                ui.allocate_ui_at_rect(wall, |ui| {
+                    ui.set_clip_rect(wall);
+                    if show_result {
+                        crate::cards::imagine_result_hero(ui, &last);
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                                crate::cards::imagine_masonry(
+                                    ui,
+                                    &selected,
+                                    now_ms(),
+                                    &self.wall.gifs,
+                                    |p| {
+                                        seed = Some(p);
+                                    },
+                                );
+                            });
+                    }
+                });
+            });
+        let content = panel.response.rect;
+        let bar_w = (content.width() - 48.0)
+            .min(crate::theme::IMAGINE_BAR_W)
+            .max(280.0);
         let y = imagine_toolbox_top(content.top(), content.height(), box_h, dock);
         let x = content.center().x - bar_w * 0.5;
         egui::Area::new(egui::Id::new("imagine-new"))
@@ -6594,13 +6637,6 @@ impl Cabin {
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 ui.set_width(bar_w);
-                let origin = ui.next_widget_position();
-                let fade = egui::Rect::from_min_size(
-                    egui::pos2(origin.x - 24.0, origin.y - 16.0),
-                    egui::vec2(bar_w + 48.0, box_h + 32.0),
-                );
-                ui.painter()
-                    .rect_filled(fade, 0.0, Color32::from_black_alpha(110));
                 ui.vertical(|ui| {
                     ui.set_width(bar_w);
                     if imagine_toolbox_shows_title(dock) {
