@@ -88,12 +88,13 @@ pub use host_plan::{
 pub use host_safety::{forbidden_reason, recall_hits};
 pub use imagine::{
     compose_imagine_prompt, curate_wall, dedicated_imagine_model, extract_imagine_prompt,
-    imagine_aspect_label, imagine_aspect_name, imagine_dest, imagine_request_body, imagine_slug,
+    imagine_aspect_label, imagine_aspect_name, imagine_dest, imagine_receipt_path, imagine_request_body, imagine_slug,
     imagine_style_label, imagine_toolbox_dock, imagine_toolbox_shows_title, imagine_toolbox_top,
-    imagine_video_dur_label, imagine_video_res_label, parse_imagine_url, pick_fresh_seed,
+    imagine_result_fit, imagine_shows_result_above, imagine_wall_bounds, imagine_wall_overlaps_toolbox, imagine_video_dur_label, imagine_video_res_label, last_imagine_receipt, parse_imagine_url, pick_fresh_seed,
     wall_can_paint, wall_curate_seed, wall_due, wall_evict, ImagineKind, ImagineSpec,
     ImagineToolboxDock, ImagineWall, WallGif, WallSeed, WallSlot, DEFAULT_IMAGINE_MODEL,
     IMAGINE_ASPECTS, IMAGINE_STYLES, IMAGINE_TOOLBOX_PAD, IMAGINE_VIDEO_DURS, IMAGINE_VIDEO_RES,
+    IMAGINE_WALL_GAP,
     WALL_GIF_EVERY_MS, WALL_GIF_MAX, WALL_SEEDS,
 };
 pub use inhabit::{can_inhabit, InhabitBundle};
