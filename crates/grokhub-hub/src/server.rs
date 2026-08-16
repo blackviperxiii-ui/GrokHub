@@ -145,8 +145,19 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
 
     if let Some(id) = strip_prefix_suffix(&path, "/v1/inbox/", "/ack") {
         if method == Method::Post {
-            st.ack_inbox(id, &peer_id);
-            return send_json(req, 200, json!({ "ok": true }));
+            return match st.ack_inbox(id, &peer_id) {
+                Ok(()) => send_json(req, 200, json!({ "ok": true })),
+                Err(CompleteError::NotFound) => send_json(
+                    req,
+                    404,
+                    json!({ "ok": false, "error": "task not found" }),
+                ),
+                Err(CompleteError::Forbidden) => send_json(
+                    req,
+                    403,
+                    json!({ "ok": false, "error": "not the task target" }),
+                ),
+            };
         }
     }
 
@@ -191,7 +202,16 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     if method == Method::Post && path == "/v1/inhabit" {
         let body = read_json(&mut req);
         let raw = body.get("bundle").cloned().unwrap_or(body);
-        let bundle: InhabitBundle = serde_json::from_value(raw).unwrap_or_default();
+        let bundle: InhabitBundle = match serde_json::from_value(raw) {
+            Ok(b) if grokhub_core::inhabit_bundle_usable(&b) => b,
+            _ => {
+                return send_json(
+                    req,
+                    400,
+                    json!({ "ok": false, "error": "invalid inhabit bundle" }),
+                );
+            }
+        };
         st.store_inhabit(bundle, &peer);
         return send_json(req, 200, json!({ "ok": true }));
     }
