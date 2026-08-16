@@ -662,6 +662,7 @@ impl Cabin {
             .map(|n| n.id.clone());
         let secrets = secrets::load();
         let approve_risky_only = cfg.approve_risky_only;
+        let win_max = cfg.window.maximized;
         let mut c = Self {
             nav: Nav::Chat,
             cfg,
@@ -771,7 +772,7 @@ impl Cabin {
             board_compose: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
-            win_max: false,
+            win_max,
             imagine_want_focus: false,
             settings_sec: SettingsSec::Account,
             settings_back: Nav::Chat,
@@ -832,6 +833,33 @@ impl Cabin {
             }
         }
         c
+    }
+
+    fn capture_window(&mut self, ctx: &egui::Context) {
+        let (outer, inner, maximized) = ctx.input(|i| {
+            (
+                i.viewport().outer_rect,
+                i.viewport().inner_rect,
+                i.viewport().maximized,
+            )
+        });
+        let Some(outer) = outer else {
+            return;
+        };
+        let size = inner.map(|r| r.size()).unwrap_or(outer.size());
+        let maximized = maximized.unwrap_or(self.win_max);
+        if let Some(g) = crate::window::remember_geom(
+            self.window_visible,
+            maximized,
+            outer.min.x,
+            outer.min.y,
+            size.x,
+            size.y,
+            self.cfg.window,
+        ) {
+            self.cfg.window = g;
+            self.win_max = g.maximized;
+        }
     }
 
     fn persist(&mut self) {
@@ -3958,6 +3986,8 @@ impl Cabin {
     }
 
     fn hide_to_tray(&mut self, ctx: &egui::Context) {
+        self.capture_window(ctx);
+        self.persist();
         self.window_visible = false;
         apply_tray_window(ctx, crate::tray::hide_to_tray_window());
         if !self.told_tray {
@@ -4200,6 +4230,9 @@ impl eframe::App for Cabin {
             if hide {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.hide_to_tray(ctx);
+            } else {
+                self.capture_window(ctx);
+                self.persist();
             }
         }
         if self.oauth_pending.is_some() {
@@ -4242,6 +4275,7 @@ impl eframe::App for Cabin {
             self.reflected_idle = true;
             self.run_reflect();
         }
+        self.capture_window(ctx);
         if self.last_persist.elapsed() > Duration::from_secs(2) {
             self.persist();
         }
@@ -4703,6 +4737,7 @@ impl Cabin {
                                 .unwrap_or(self.win_max);
                             self.win_max = next_maximized(currently);
                             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(self.win_max));
+                            self.cfg.window.maximized = self.win_max;
                         }
                         if titlebar_chrome_btn(ui, "–").clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
