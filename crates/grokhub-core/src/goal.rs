@@ -204,8 +204,16 @@ fn regexish_open(t: &str) -> bool {
         "in progress",
         "not done yet",
         "blocked on",
-        "let me know if",
         "want me to",
+        "not found",
+        "not installed",
+        "not running",
+        "sudo apt",
+        "apt install",
+        "please run",
+        "you can run",
+        "proposed fix",
+        "if this fails",
     ]
     .iter()
     .any(|p| t.contains(p))
@@ -297,9 +305,66 @@ fn user_asked_for_work(user: &str) -> bool {
         "build ",
         "add ",
         "wire ",
+        "close ",
+        "click",
+        "tools",
+        "mouse",
+        "hands",
+        "make sure",
     ]
     .iter()
     .any(|p| t.contains(p))
+}
+
+fn handed_work_to_user(assistant: &str) -> bool {
+    let t = assistant.to_ascii_lowercase();
+    [
+        "sudo apt",
+        "apt install",
+        "not found",
+        "not installed",
+        "not running",
+        "please run",
+        "you can run",
+        "you should run",
+        "proposed fix",
+        "run this command",
+        "if this fails",
+        "command not in path",
+    ]
+    .iter()
+    .any(|p| t.contains(p))
+}
+
+/// Pin the live user task when the goal namer has not filled `goal_pin` yet.
+pub fn goal_continue_pin(pin: &str, last_user: &str) -> String {
+    let pin = pin.trim();
+    if !pin.is_empty() {
+        return pin.to_string();
+    }
+    last_user
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !is_auto_continue_prompt(l))
+        .unwrap_or("")
+        .chars()
+        .take(120)
+        .collect()
+}
+
+pub fn is_auto_continue_prompt(content: &str) -> bool {
+    let t = content.trim_start();
+    t.starts_with("FOLLOWUP:") || t.starts_with("[Goal step ")
+}
+
+pub fn should_auto_continue_goal(
+    outcome: &str,
+    pin: &str,
+    running: bool,
+    step: u32,
+    max_steps: u32,
+) -> bool {
+    outcome == "continue" && !pin.trim().is_empty() && !running && step < max_steps.max(1)
 }
 
 fn promised_action(assistant: &str) -> bool {
@@ -331,7 +396,8 @@ fn polite_closer(assistant: &str) -> bool {
     .any(|p| t.contains(p))
 }
 
-/// Stream-end check: continue only when the reply promised work or was cut off.
+/// Stream-end check: continue when the reply was cut off, promised work,
+/// or handed the next command back to the user instead of running it.
 pub fn reply_needs_followup(user: &str, assistant: &str, truncated: bool) -> bool {
     if truncated {
         return true;
@@ -339,17 +405,29 @@ pub fn reply_needs_followup(user: &str, assistant: &str, truncated: bool) -> boo
     if reply_has_work_lines(assistant) {
         return false;
     }
+    if assistant.to_ascii_uppercase().contains("GOAL_COMPLETE") {
+        return false;
+    }
+    let low = assistant.to_ascii_lowercase();
+    if regexish_done(&low) {
+        return false;
+    }
+    if !user_asked_for_work(user) {
+        return false;
+    }
+    if handed_work_to_user(assistant) {
+        return true;
+    }
     if polite_closer(assistant) {
         return false;
+    }
+    if looks_incomplete(assistant) {
+        return true;
     }
     if asked_user_a_question(assistant) {
         return false;
     }
-    let low = assistant.to_ascii_lowercase();
-    if regexish_done(&low) || assistant.to_ascii_uppercase().contains("GOAL_COMPLETE") {
-        return false;
-    }
-    promised_action(assistant) && user_asked_for_work(user)
+    promised_action(assistant)
 }
 
 pub fn next_goal_prompt(pin: &str, prior: &str, step: u32, max_steps: u32) -> Option<String> {
@@ -429,16 +507,48 @@ mod tests {
             "Checking now.\nHOST_CMD: systemctl status foo\n",
             false
         ));
-        assert!(!reply_needs_followup(
-            "fix the service",
-            "Want me to restart it after the patch?",
-            false
-        ));
+        assert!(
+            reply_needs_followup(
+                "fix the service",
+                "Want me to restart it after the patch?",
+                false
+            ),
+            "asking permission is not finishing the job"
+        );
         assert!(!reply_needs_followup(
             "fix the service",
             "Patched. Let me know if you need anything else.",
             false
         ));
+        let tools = "\
+ydotool: NOT FOUND (command not in PATH)\n\
+xdotool: NOT FOUND\n\
+ydotool service: NOT RUNNING\n\
+Status: Mouse/keyboard control via COMPUTER_CMD is disabled.\n\
+Proposed Fix: sudo apt update && sudo apt install -y ydotool xdotool\n\
+If this fails, tell me your distro.";
+        assert!(
+            reply_needs_followup(
+                "check to make sure all tools are installed to use this feature",
+                tools,
+                false
+            ),
+            "handing apt back to the user is not a finished job"
+        );
+        assert!(looks_incomplete(tools));
+        assert_eq!(parse_goal_outcome(tools), "continue");
+        assert_eq!(
+            goal_continue_pin("", "check to make sure all tools are installed"),
+            "check to make sure all tools are installed"
+        );
+        assert_eq!(goal_continue_pin("hands", "check tools"), "hands");
+        assert!(should_auto_continue_goal("continue", "check tools", false, 0, 6));
+        assert!(
+            !should_auto_continue_goal("continue", "check tools", true, 0, 6),
+            "do not send_chat a goal step while host is already running"
+        );
+        assert!(!should_auto_continue_goal("complete", "check tools", false, 0, 6));
+        assert!(is_auto_continue_prompt(FOLLOWUP_PROMPT));
         assert_eq!(FOLLOWUP_MAX_STEPS, 4);
         assert!(FOLLOWUP_PROMPT.starts_with("FOLLOWUP:"));
     }
