@@ -5592,7 +5592,10 @@ impl Cabin {
         let block = crate::theme::WORDMARK + greet_h + crate::theme::QUERY_MIN_H;
         let lift = ((ui.available_height() - block) * 0.5).clamp(24.0, 320.0);
         ui.add_space(lift);
+        let pane_w = crate::cards::composer_pill_w(ui.available_width(), ui.available_width());
         ui.vertical_centered(|ui| {
+            ui.set_max_width(pane_w);
+            ui.set_min_width(pane_w);
             ui.label(
                 RichText::new("GrokHub")
                     .font(crate::theme::title_font(crate::theme::WORDMARK))
@@ -5610,10 +5613,6 @@ impl Cabin {
             } else {
                 ui.add_space(28.0);
             }
-            ui.set_max_width(crate::cards::composer_pill_w(
-                ui.available_width(),
-                ui.available_width(),
-            ));
             self.ui_composer_stack(ui);
         });
     }
@@ -5739,10 +5738,12 @@ impl Cabin {
             }
             ui.add_space(6.0);
             ui.vertical_centered(|ui| {
-            ui.set_max_width(crate::cards::composer_pill_w(
+            let col_w = crate::cards::composer_pill_w(
                 ui.available_width(),
                 ui.available_width(),
-            ));
+            );
+            ui.set_max_width(col_w);
+            ui.set_min_width(col_w);
             for slot in composer_stack_order() {
                 match slot {
                     ComposerStackSlot::AuthBanner
@@ -7748,34 +7749,42 @@ mod tests {
     fn chat_composer_pins_stop_on_the_right() {
         let src = include_str!("app.rs");
         let start = src.find("ComposerStackSlot::Pill =>").expect("pill arm");
-        let slice = &src[start..start + 8000];
+        let pill = &src[start..start + 8000];
         assert!(
-            slice.contains("composer_go_cluster_w()"),
-            "Fast + mic + Stop need a reserved strip: {slice}"
+            pill.contains("composer_go_cluster_w()"),
+            "Fast + mic + Stop need a reserved strip: {pill}"
         );
         assert!(
-            slice.contains("composer_pill_w("),
-            "cap the pill to the clip rect so Stop cannot sit in overflow: {slice}"
+            pill.contains("composer_pill_w("),
+            "cap the pill to the clip rect so Stop cannot sit in overflow: {pill}"
+        );
+        assert!(
+            pill.contains("right_to_left"),
+            "allocate Stop from the right so the mode combo cannot clip it: {pill}"
+        );
+        let stop = pill.find("ComposerGo::Stop").expect("stop glyph");
+        let edit = pill.find("TextEdit::multiline").expect("composer field");
+        assert!(
+            stop < edit,
+            "Stop must be allocated before TextEdit so the field cannot clip it"
+        );
+        assert!(
+            !pill.contains("- 180.0"),
+            "180px left Fast as the pill's right edge on a 900-wide cabin"
+        );
+        let home = src.find("fn ui_empty_home").expect("empty home");
+        let home = &src[home..home + 1400];
+        let cap = home.find("composer_pill_w").expect("pane cap");
+        let mark = home.find("GrokHub").expect("wordmark");
+        assert!(
+            cap < mark,
+            "cap pane width before the wordmark shrink-wraps the column"
         );
         let stack = src.find("for slot in composer_stack_order()").expect("stack");
         let cap = &src[stack.saturating_sub(280)..stack];
         assert!(
             cap.contains("composer_pill_w("),
             "chip row must not stretch the centered column past the pane: {cap}"
-        );
-        assert!(
-            slice.contains("right_to_left"),
-            "allocate Stop from the right so the mode combo cannot clip it: {slice}"
-        );
-        let stop = slice.find("ComposerGo::Stop").expect("stop glyph");
-        let edit = slice.find("TextEdit::multiline").expect("composer field");
-        assert!(
-            stop < edit,
-            "Stop must be allocated before TextEdit so the field cannot clip it"
-        );
-        assert!(
-            !slice.contains("- 180.0"),
-            "180px left Fast as the pill's right edge on a 900-wide cabin"
         );
     }
 }
