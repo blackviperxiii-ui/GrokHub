@@ -58,4 +58,19 @@ mod tests {
         assert!(kept.contains("nvim"));
         assert!(!kept.contains("wifi"));
     }
+
+    #[test]
+    fn redacts_xai_github_and_bearer() {
+        let xai = redact_secrets("key xai-abcdefghijklmnopqrstuv");
+        assert!(!xai.contains("xai-abcdefghijklmnopqrstuv"), "{xai}");
+        let ghp = redact_secrets("export GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuv");
+        assert!(!ghp.contains("ghp_abcdefghijklmnopqrstuv"), "{ghp}");
+        let bearer = redact_secrets("Authorization: Bearer abcdefghijklmnop");
+        assert!(!bearer.contains("abcdefghijklmnop"), "{bearer}");
+        assert!(
+            is_plain_text("sk-short"),
+            "short tokens stay visible so ordinary words are not eaten"
+        );
+        assert!(is_plain_text("xai-tiny"));
+    }
 }
