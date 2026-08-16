@@ -990,7 +990,7 @@ pub fn remember_chip_dismiss(memory: &mut ChipMemory, chip: &QuickChip, now_ms: 
 
 pub fn remember_typed_prompt(memory: &mut ChipMemory, text: &str, now_ms: u64, hour: u8) {
     let raw = text.trim();
-    if raw.len() < 2 || raw.starts_with("[Automation:") {
+    if raw.len() < 2 || raw.starts_with("[Automation:") || raw.starts_with('/') {
         return;
     }
     if !is_plain_text(raw) {
@@ -2206,6 +2206,8 @@ mod tests {
         let mut mem = ChipMemory::default();
         remember_typed_prompt(&mut mem, "morning brief for the cabin", 10, 8);
         remember_typed_prompt(&mut mem, "morning brief for the cabin", 20, 8);
+        remember_typed_prompt(&mut mem, "/clear", 30, 8);
+        remember_typed_prompt(&mut mem, "/compact", 40, 8);
         assert_eq!(mem.hits.len(), 1);
         assert!(mem.hits[0].typed_uses >= 2);
         assert_eq!(top_habit_labels(&mem, 3)[0], shorten("morning brief for the cabin", 32));

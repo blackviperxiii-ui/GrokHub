@@ -68,12 +68,15 @@ mod tests {
         };
         bump_usage(&mut d, "message");
         bump_usage(&mut d, "host");
+        bump_usage(&mut d, "automation");
         assert_eq!(d.messages, 1);
         assert!(usage_blocked(&d, "host", 1));
+        assert!(usage_blocked(&d, "automation", 1));
         assert!(!usage_blocked(&d, "imagine", 5));
         assert!(usage_line(&d).contains("chat 1"));
         roll_usage_day(&mut d, "2026-08-15");
         assert_eq!(d.messages, 0);
+        assert_eq!(d.automation, 0);
         assert_eq!(d.day, "2026-08-15");
     }
 }

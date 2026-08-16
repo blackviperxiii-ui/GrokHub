@@ -25,13 +25,7 @@ pub fn parse_fast_topics(reply: &str) -> Vec<String> {
     let line = reply
         .lines()
         .map(str::trim)
-        .find(|l| l.to_ascii_uppercase().starts_with("GOAL:"))
-        .or_else(|| {
-            reply
-                .lines()
-                .map(str::trim)
-                .find(|l| !l.is_empty() && l.len() <= 80 && !looks_like_refusal(l))
-        });
+        .find(|l| l.to_ascii_uppercase().starts_with("GOAL:"));
     let Some(line) = line else {
         return Vec::new();
     };
@@ -303,6 +297,10 @@ mod tests {
             vec!["comics".to_string(), "ink".to_string()]
         );
         assert!(parse_fast_topics("I cannot help with that.").is_empty());
+        assert!(
+            parse_fast_topics("Sure, I can help with that.").is_empty(),
+            "filler without GOAL: is not a tab topic"
+        );
         assert!(should_name_thread(false, 1));
         assert!(!should_name_thread(true, 4));
         assert!(!should_name_thread(false, 0));

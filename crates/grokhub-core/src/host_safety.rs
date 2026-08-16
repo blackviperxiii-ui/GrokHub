@@ -6,6 +6,7 @@ pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
         ("/etc/shadow", "forbidden path: /etc/shadow"),
         ("/etc/sudoers", "forbidden path: /etc/sudoers"),
         ("/.ssh/", "forbidden path: ssh keys"),
+        ("/.ssh", "forbidden path: ssh keys"),
         ("~/.ssh", "forbidden path: ssh keys"),
         (".ssh/", "forbidden path: ssh keys"),
         ("/.gnupg", "forbidden path: gnupg"),
@@ -46,6 +47,8 @@ mod tests {
         assert!(forbidden_reason("cat /etc/shadow").is_some());
         assert!(forbidden_reason("cat ~/.ssh/id_ed25519").is_some());
         assert!(forbidden_reason("cat .ssh/id_ed25519").is_some());
+        assert!(forbidden_reason("ls /home/j/.ssh").is_some());
+        assert!(forbidden_reason("cd /home/j/.ssh").is_some());
         assert!(forbidden_reason("cat .gnupg/pubring.kbx").is_some());
         assert!(forbidden_reason("ls /tmp").is_none());
     }
