@@ -168,6 +168,7 @@ fn run_hub() {
 }
 
 fn run_cabin(hidden: bool) -> eframe::Result<()> {
+    tray::pin_session_bus();
     if let Some(backend) = tray::prefer_x11_backend(
         env::var("WINIT_UNIX_BACKEND").ok().as_deref(),
         env::var_os("DISPLAY").is_some(),

@@ -2,6 +2,9 @@
 
 use ksni::blocking::TrayMethods;
 use ksni::menu::*;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 
@@ -13,7 +16,99 @@ pub enum TrayCmd {
 }
 
 pub fn tray_wanted() -> bool {
-    std::env::var("GROKHUB_TRAY").ok().as_deref() != Some("0")
+    env::var("GROKHUB_TRAY").ok().as_deref() != Some("0")
+}
+
+/// zbus/ksni cannot connect to libdbus `autolaunch:`. Without a unix path the
+/// titlebar × unmaps the cabin and the tray icon never appears.
+pub fn session_bus_is_usable(addr: &str) -> bool {
+    let addr = addr.trim();
+    if addr.is_empty() || addr == "autolaunch:" || addr.starts_with("autolaunch:") {
+        return false;
+    }
+    addr.starts_with("unix:") || addr.starts_with("tcp:") || addr.starts_with("nonce-tcp:")
+}
+
+pub fn parse_session_bus_file(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("DBUS_SESSION_BUS_ADDRESS=") else {
+            continue;
+        };
+        let rest = rest.trim().trim_matches('\'').trim_matches('"');
+        if session_bus_is_usable(rest) {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+pub fn dbus_display_slot(display: &str) -> Option<String> {
+    let rest = display.trim().strip_prefix(':').unwrap_or(display.trim());
+    let slot: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if slot.is_empty() {
+        None
+    } else {
+        Some(slot)
+    }
+}
+
+pub fn session_bus_file_path(home: &Path, machine_id: &str, display: &str) -> Option<PathBuf> {
+    let slot = dbus_display_slot(display)?;
+    let id = machine_id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(home.join(".dbus/session-bus").join(format!("{id}-{slot}")))
+}
+
+pub fn resolved_session_bus(
+    env_addr: Option<&str>,
+    runtime_bus: Option<&Path>,
+    session_file: Option<&str>,
+) -> Option<String> {
+    if let Some(addr) = env_addr {
+        if session_bus_is_usable(addr) {
+            return Some(addr.trim().to_string());
+        }
+    }
+    if let Some(path) = runtime_bus {
+        return Some(format!("unix:path={}", path.display()));
+    }
+    session_file.and_then(parse_session_bus_file)
+}
+
+fn read_legacy_session_bus_file() -> Option<String> {
+    let home = env::var("HOME").ok().map(PathBuf::from)?;
+    let machine = fs::read_to_string("/var/lib/dbus/machine-id")
+        .or_else(|_| fs::read_to_string("/etc/machine-id"))
+        .ok()?;
+    let display = env::var("DISPLAY").unwrap_or_default();
+    let path = session_bus_file_path(&home, &machine, &display)?;
+    fs::read_to_string(path).ok()
+}
+
+/// Replace `autolaunch:` so StatusNotifierItem can actually register.
+pub fn pin_session_bus() {
+    let env_addr = env::var("DBUS_SESSION_BUS_ADDRESS").ok();
+    let runtime_bus = env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .map(|d| PathBuf::from(d).join("bus"))
+        .filter(|p| p.exists());
+    let session_file = read_legacy_session_bus_file();
+    let Some(addr) = resolved_session_bus(
+        env_addr.as_deref(),
+        runtime_bus.as_deref(),
+        session_file.as_deref(),
+    ) else {
+        return;
+    };
+    if env_addr.as_deref() != Some(addr.as_str()) {
+        env::set_var("DBUS_SESSION_BUS_ADDRESS", addr);
+    }
 }
 
 /// SNI while the cabin is visible shows up as a persistent desktop notification
@@ -373,5 +468,59 @@ mod tests {
         );
         rx.recv_timeout(std::time::Duration::from_secs(2))
             .expect("destructor should still run off-thread");
+    }
+
+    #[test]
+    fn autolaunch_session_bus_cannot_host_the_tray() {
+        assert!(
+            !session_bus_is_usable("autolaunch:"),
+            "zbus/ksni never connect to autolaunch: — × then unmaps with no icon"
+        );
+        assert!(!session_bus_is_usable(""));
+        assert!(!session_bus_is_usable("  "));
+        assert!(session_bus_is_usable(
+            "unix:path=/tmp/dbus-isXxqaqqzS,guid=c6bdfebad6fd38852379ce546a7ea1c1"
+        ));
+        assert!(session_bus_is_usable("unix:abstract=/tmp/dbus-foo"));
+        assert!(session_bus_is_usable("tcp:host=127.0.0.1,port=1234"));
+    }
+
+    #[test]
+    fn session_bus_file_pins_unix_path_when_env_is_autolaunch() {
+        let file = "\
+# comment
+DBUS_SESSION_BUS_ADDRESS='unix:path=/tmp/dbus-isXxqaqqzS,guid=abc'
+DBUS_SESSION_BUS_PID=1330
+";
+        assert_eq!(
+            parse_session_bus_file(file).as_deref(),
+            Some("unix:path=/tmp/dbus-isXxqaqqzS,guid=abc")
+        );
+        assert_eq!(
+            resolved_session_bus(Some("autolaunch:"), None, Some(file)).as_deref(),
+            Some("unix:path=/tmp/dbus-isXxqaqqzS,guid=abc")
+        );
+        assert_eq!(
+            resolved_session_bus(Some("unix:path=/run/user/1000/bus"), None, Some(file)).as_deref(),
+            Some("unix:path=/run/user/1000/bus"),
+            "a real env address must win"
+        );
+        let runtime = std::path::Path::new("/run/user/1000/bus");
+        assert_eq!(
+            resolved_session_bus(Some("autolaunch:"), Some(runtime), Some(file)).as_deref(),
+            Some("unix:path=/run/user/1000/bus")
+        );
+        assert_eq!(dbus_display_slot(":1"), Some("1".into()));
+        assert_eq!(dbus_display_slot(":1.0"), Some("1".into()));
+        assert_eq!(
+            session_bus_file_path(
+                std::path::Path::new("/home/viper"),
+                "44cb5599dcc24b78a2ed9dac18a9b2a5\n",
+                ":1.0"
+            ),
+            Some(std::path::PathBuf::from(
+                "/home/viper/.dbus/session-bus/44cb5599dcc24b78a2ed9dac18a9b2a5-1"
+            ))
+        );
     }
 }
