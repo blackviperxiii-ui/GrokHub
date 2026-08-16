@@ -16,7 +16,10 @@ use crate::secrets::{self, Secrets};
 use crate::skills;
 use crate::threads::{self, ChatThread};
 use crate::update::{remember_source, resolve_source};
-use crate::xai::{grok_chat, grok_chat_stream, grok_imagine, grok_stt, grok_tts, http_status_of};
+use crate::xai::{
+    grok_chat, grok_chat_stream, grok_imagine_opts, grok_imagine_video, grok_stt,
+    grok_tts, http_status_of,
+};
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use grokhub_core::{
     append_composer, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
@@ -29,7 +32,7 @@ use grokhub_core::{
     catalog_line, chip_suggest_prompt, compact_keep_pin, compose_imagine_prompt,
     context_fingerprint,
     context_percent,
-    dedicated_imagine_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
+    dedicated_imagine_model, dedicated_video_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
     pick_fresh_seed, wall_can_paint, wall_evict, ImagineKind, ImagineSpec, ImagineWall,
     WallGif, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
     imagine_shows_result_above, imagine_toolbox_dock, imagine_toolbox_shows_title,
@@ -40,8 +43,9 @@ use grokhub_core::{
     persist_user_turn, push_bound_message, refund_host_reserved, daily_units_blocked,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
-    imagine_aspect_label, imagine_aspect_name, imagine_style_label, imagine_video_dur_label,
-    imagine_video_res_label, last_imagine_receipt,
+    imagine_aspect_label, imagine_aspect_name, imagine_image_resolution, imagine_style_label,
+    imagine_video_dur_label, imagine_video_duration_secs, imagine_video_res_label,
+    imagine_video_resolution, last_imagine_receipt,
     extract_insights, extract_work_updates, fact_candidates, failover_model, filter_slash_commands,
     frame_bytes, PresenceFrame,
     forget_topic, greet_from_last_job, has_auth, has_verify_ok, hey_grok_on_press,
@@ -730,11 +734,12 @@ fn paint_wall_cover(
     created_ms: u64,
 ) -> Result<WallGif, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let src_a = grok_imagine(key, model, prompt)?;
+    let aspect = if tall { Some("2:3") } else { Some("16:9") };
+    let src_a = grok_imagine_opts(key, model, prompt, aspect, Some("1k"))?;
     let path_a = dir.join(format!("{id}_a.png"));
     std::fs::copy(&src_a, &path_a).map_err(|e| e.to_string())?;
     let path_b = dir.join(format!("{id}_b.png"));
-    match grok_imagine(key, model, prompt_b) {
+    match grok_imagine_opts(key, model, prompt_b, aspect, Some("1k")) {
         Ok(src_b) => {
             if std::fs::copy(&src_b, &path_b).is_err() {
                 crate::desktop::sibling_still(&path_a, &path_b)?;
@@ -4569,32 +4574,53 @@ impl Cabin {
             return;
         }
         let prompt = self.imagine_prompt.trim().to_string();
-        if prompt.is_empty() || self.running {
+        if prompt.is_empty() {
             return;
         }
+        if self.running {
+            self.status = "Halt the live job before Imagine, or wait.".into();
+            return;
+        }
+        let kind = self.imagine_kind;
+        let aspect = imagine_aspect_label(self.imagine_aspect).to_string();
+        let resolution = imagine_image_resolution(self.imagine_quality).to_string();
+        let video_res = imagine_video_resolution(imagine_video_res_label(self.imagine_video_res)).to_string();
+        let video_dur = imagine_video_duration_secs(imagine_video_dur_label(self.imagine_video_dur));
         let prompt = compose_imagine_prompt(&ImagineSpec {
             prompt: &prompt,
-            kind: self.imagine_kind,
+            kind,
             quality: self.imagine_quality,
             style: imagine_style_label(self.imagine_style),
-            aspect: imagine_aspect_label(self.imagine_aspect),
-            video_res: imagine_video_res_label(self.imagine_video_res),
+            aspect: &aspect,
+            video_res: &video_res,
             video_dur: imagine_video_dur_label(self.imagine_video_dur),
             video_audio: self.imagine_video_audio,
         });
         self.running = true;
         self.chat_job_thread = Some(self.visible_thread_id());
-        self.status = match self.imagine_kind {
+        self.status = match kind {
             ImagineKind::Image => "Imagining…".into(),
-            ImagineKind::Video => "Imagining storyboard still…".into(),
+            ImagineKind::Video => "Imagining video…".into(),
             ImagineKind::Agent => "Imagining agent still…".into(),
         };
         let key = self.bearer();
-        let model = dedicated_imagine_model(&self.cfg.imagine_model);
+        let image_model = dedicated_imagine_model(&self.cfg.imagine_model);
+        let video_model = dedicated_video_model("");
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let r = grok_imagine(&key, &model, &prompt);
+            let r = match kind {
+                ImagineKind::Video => {
+                    grok_imagine_video(&key, &video_model, &prompt, video_dur, &aspect, &video_res)
+                }
+                ImagineKind::Image | ImagineKind::Agent => grok_imagine_opts(
+                    &key,
+                    &image_model,
+                    &prompt,
+                    Some(&aspect),
+                    Some(&resolution),
+                ),
+            };
             let _ = tx.send(match r {
                 Ok(u) => JobOut::Imagine(u),
                 Err(e) => JobOut::Err(e),
@@ -6983,7 +7009,7 @@ impl Cabin {
                                                         }
                                                         SettingsSec::Imagine => {
                                                             crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
-                                                            crate::cards::settings_field(ui, "Imagine override", "Must contain “image” or the cabin keeps grok-2-image.", &mut self.cfg.imagine_model, false);
+                                                            crate::cards::settings_field(ui, "Imagine override", "Must contain “image” or the cabin keeps grok-imagine-image-2.0. Retired grok-2-image names are rewritten.", &mut self.cfg.imagine_model, false);
                                                             if crate::cards::settings_toggle(
                                                                 ui,
                                                                 "Living wall",
@@ -7725,7 +7751,7 @@ impl Cabin {
                                         self.status = match kind {
                                             ImagineKind::Image => "Image still".into(),
                                             ImagineKind::Video => {
-                                                "Video chips hint a storyboard still — cabin has no video file."
+                                                "Video calls grok-imagine-video-1.5 and saves an mp4."
                                                     .into()
                                             }
                                             ImagineKind::Agent => {

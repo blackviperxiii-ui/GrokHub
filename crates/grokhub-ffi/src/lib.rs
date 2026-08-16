@@ -94,11 +94,11 @@ mod tests {
             assert_eq!(code.len(), 7);
             assert_eq!(grokhub_default_port(), 18766);
             let img = grokhub_imagine_model(std::ptr::null());
-            assert_eq!(CStr::from_ptr(img).to_str().unwrap(), "grok-2-image");
+            assert_eq!(CStr::from_ptr(img).to_str().unwrap(), "grok-imagine-image-2.0");
             grokhub_string_free(img);
             let chat = CString::new("grok-3-mini-fast").unwrap();
             let img2 = grokhub_imagine_model(chat.as_ptr());
-            assert_eq!(CStr::from_ptr(img2).to_str().unwrap(), "grok-2-image");
+            assert_eq!(CStr::from_ptr(img2).to_str().unwrap(), "grok-imagine-image-2.0");
             grokhub_string_free(img2);
             let voice = grokhub_voice_model(std::ptr::null());
             assert_eq!(CStr::from_ptr(voice).to_str().unwrap(), "grok-voice-think-fast-2.0");
