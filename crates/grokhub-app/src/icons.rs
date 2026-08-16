@@ -225,6 +225,7 @@ pub enum RailIcon {
     Folder,
     Chat,
     Pin,
+    File,
 }
 
 pub fn rail_icon_for(id: &str) -> RailIcon {
@@ -367,6 +368,42 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
                 stroke,
             );
         }
+        RailIcon::File => {
+            let r = rect.shrink(w * 0.22);
+            painter.rect_stroke(r, 2.0, stroke);
+            painter.line_segment(
+                [
+                    Pos2::new(r.right() - 5.0, r.top()),
+                    Pos2::new(r.right(), r.top() + 5.0),
+                ],
+                stroke,
+            );
+        }
+    }
+}
+
+pub fn paint_folder_caret(ui: &mut egui::Ui, open: bool, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 12.0), Sense::hover());
+    let c = rect.center();
+    let stroke = Stroke::new(1.4_f32, color);
+    if open {
+        ui.painter().line_segment(
+            [Pos2::new(c.x - 3.0, c.y - 1.0), Pos2::new(c.x, c.y + 2.0)],
+            stroke,
+        );
+        ui.painter().line_segment(
+            [Pos2::new(c.x, c.y + 2.0), Pos2::new(c.x + 3.0, c.y - 1.0)],
+            stroke,
+        );
+    } else {
+        ui.painter().line_segment(
+            [Pos2::new(c.x - 1.0, c.y - 3.0), Pos2::new(c.x + 2.0, c.y)],
+            stroke,
+        );
+        ui.painter().line_segment(
+            [Pos2::new(c.x + 2.0, c.y), Pos2::new(c.x - 1.0, c.y + 3.0)],
+            stroke,
+        );
     }
 }
 
@@ -700,5 +737,7 @@ mod tests {
         let _ = paint_aspect_rect;
         let _ = paint_menu_caret;
         let _ = paint_plus_at;
+        let _ = paint_folder_caret;
+        assert_ne!(RailIcon::File, RailIcon::Folder);
     }
 }

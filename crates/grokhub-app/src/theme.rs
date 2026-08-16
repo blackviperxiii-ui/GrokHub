@@ -190,6 +190,8 @@ pub const NAV_ROW_H: f32 = 40.0;
 pub const FONT_UI: f32 = 15.0;
 pub const FONT_CHROME: f32 = 14.0;
 pub const FONT_META: f32 = 13.0;
+/// Settings / pane titles — larger than Body.
+pub const FONT_HEADING: f32 = 22.0;
 pub const WORDMARK: f32 = 56.0;
 /// grok.com/imagine `h1.text-[22px].leading-7`
 pub const IMAGINE_TITLE: f32 = 22.0;
@@ -335,8 +337,8 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     visuals.faint_bg_color = elevated();
     visuals.code_bg_color = elevated();
     visuals.hyperlink_color = fg();
-    visuals.warn_fg_color = muted();
-    visuals.error_fg_color = fg();
+    visuals.warn_fg_color = setup();
+    visuals.error_fg_color = offline();
     visuals.selection.bg_fill = elevated();
     visuals.selection.stroke = Stroke::new(1.0_f32, border_strong());
     visuals.widgets.noninteractive.bg_fill = panel();
@@ -378,10 +380,12 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     style.text_styles.insert(TextStyle::Small, FontId::new(FONT_META, FontFamily::Proportional));
     style.text_styles.insert(TextStyle::Body, FontId::new(FONT_UI, FontFamily::Proportional));
     style.text_styles.insert(TextStyle::Button, FontId::new(FONT_CHROME, FontFamily::Proportional));
-    style.text_styles.insert(TextStyle::Heading, FontId::new(FONT_UI, FontFamily::Proportional));
+    style.text_styles.insert(TextStyle::Heading, FontId::new(FONT_HEADING, FontFamily::Proportional));
     style.text_styles.insert(TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace));
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(10.0, 6.0);
+    style.spacing.scroll.bar_width = 8.0;
+    style.spacing.scroll.handle_min_length = 24.0;
     style.visuals = ctx.style().visuals.clone();
     ctx.set_style(style);
 }
@@ -462,6 +466,8 @@ mod tests {
         assert_eq!(NAV_ROW_H, 40.0);
         assert_eq!(FONT_UI, 15.0);
         assert_eq!(FONT_CHROME, 14.0);
+        assert_eq!(FONT_HEADING, 22.0);
+        assert!(FONT_HEADING > FONT_UI);
         assert_eq!(IMAGINE_TITLE, 22.0);
         assert_eq!(IMAGINE_GAP, 32.0);
         assert_eq!(IMAGINE_BAR_W, 768.0);
