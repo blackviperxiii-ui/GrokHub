@@ -2,11 +2,11 @@
 
 Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 
-**v2.5.0** — Grok-native unsandboxed control plane. You sit down in the cabin. It already knows the night.
+**v2.6.0** — Grok-native unsandboxed control plane. You sit down in the cabin. It already knows the night.
 
 | Platform | Repository | Latest |
 |----------|------------|--------|
-| **Linux** (this) | [Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub) | **v2.5.0** |
+| **Linux** (this) | [Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub) | **v2.6.0** |
 | **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | sibling — same `grokhub-core` |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
@@ -56,7 +56,7 @@ Imagine stills use dedicated **`grok-imagine-image-2.0`** (chat model is ignored
 
 Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is the sign-in. Device-code against `auth.x.ai` — same public client as Grok CLI. The footer paints the Grok profile photo when the session has one. A console API key is the fallback for chat and the only path for duplex Voice. Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600), never in markdown. Settings → Appearance is **Dark**, **Light**, or **System**.
 
-Settings → **Update** (or `grokhub --update` / `/update`) does `git pull --ff-only origin main` in the source clone, then `./scripts/install.sh --user`. The clone must be on `main` with an `origin`. Overlay only — config stays. Progress stays on Settings (bar + percent). After a clean overlay, **Restart** reloads the new binary (systemd user units if they are live, otherwise a fresh `grokhub` spawn).
+Settings → **Update** (or `grokhub --update` / `/update`) does `git pull --ff-only origin main` in the source clone, then `./scripts/install.sh --user`. The clone must be on `main` with an `origin`. Overlay only — config stays. User install enables `grokhub.service` (no `--now`), `enable --now` hub, rebuilds sidecars into `~/.local/lib/grokhub/bin` (skip only when that prefix already has the file), and restarts `ydotoold`. Overlay-safe `pacman` / `apt-get` / `dnf` for build tools, `python-atspi`, ffmpeg, alsa-utils. Progress stays on Settings (bar + percent). After a clean overlay, **Restart** reloads in order: `ydotoold` → hub → cabin (systemd user units if they are live, otherwise a fresh `grokhub` spawn).
 
 The cabin drives. Host plans run without a confirm. A saved desktop recipe whose `screen=` does not match the current desktop reshoots and skips coordinate clicks. Night `replay last` runs the last GUI recipe without a chat hop. A 15s heartbeat always runs housekeep, inbox, night, review, wall, mid-thought, reflect, and anticipate. Hidden idle cabins wait for that pulse instead of spinning every 400ms. Review defers if Night just fired or chat is running. Last-night context folds into the empty-chat greeting — no fake “You sit down” turn. Quiet MidThought can fold `Continue {title}` into that greeting when there is no last-night receipt. After 21:00 a quiet Balanced review writes learned tiles to `suggestions.json` (Suggested Automations / Skills / Connectors show Reviewed today / Review due tonight). Idle ≥ 10 minutes (or `/learn reflect`) does a surgical `MEMORY.md` edit with a diff and `.prev` restore. Halt / Stop / Ctrl+Shift+Esc kill a running job. Host follow-up stays on the origin thread. A truncated stream, a promised-work reply with no `HOST_CMD`, or a diagnostic that hands `sudo apt` / “not found” back to the user can quiet-continue up to four times (`FOLLOWUP:`). Follow-up scores only visible assistant prose — thinking and empty replies do not start another turn. An empty `goal_pin` falls back to the last real user task; goal continue stays on the origin thread and does not `send_chat` while host is live. Night usage shares the daily cap. Night checks parse the receipt `exit N` line; a forbidden check is skipped. Phone dispatch completes on halt / error; ack of a finished inbox row does not hide the result. `/rewind` restores only the bound project root.
 
