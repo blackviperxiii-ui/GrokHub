@@ -518,14 +518,37 @@ pub(crate) fn chip_paint_label(label: &str) -> String {
     format!("{}…", out.trim_end())
 }
 
+pub fn chip_row_width_lock(avail: f32) -> (f32, f32) {
+    let w = crate::theme::QUERY_MAX_W.min(avail.max(120.0));
+    (w, w)
+}
+
+pub fn quick_chip_fill(_primary: bool) -> Color32 {
+    Color32::TRANSPARENT
+}
+
+pub fn quick_chip_stroke(_primary: bool) -> Color32 {
+    crate::theme::border()
+}
+
+pub fn quick_chip_fg(_primary: bool) -> Color32 {
+    crate::theme::muted()
+}
+
+pub fn quick_chip_inner_button_framed() -> bool {
+    false
+}
+
 pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> Option<ChipRowAct> {
     if chips.is_empty() {
         return None;
     }
     let mut act = None;
-    let max_w = crate::theme::QUERY_MAX_W.min(ui.available_width().max(120.0));
+    let (min_w, max_w) = chip_row_width_lock(ui.available_width());
     ui.scope(|ui| {
+        ui.set_min_width(min_w);
         ui.set_max_width(max_w);
+        ui.set_width(max_w);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
             for (i, c) in chips.iter().take(grokhub_core::CHIP_VISIBLE_MAX).enumerate() {
@@ -534,21 +557,9 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                     .ctx()
                     .data(|d| d.get_temp::<bool>(chip_id))
                     .unwrap_or(false);
-                let fill = if c.primary {
-                    crate::theme::surface()
-                } else {
-                    Color32::TRANSPARENT
-                };
-                let stroke = if c.primary {
-                    crate::theme::border_strong()
-                } else {
-                    crate::theme::border()
-                };
-                let color = if c.primary {
-                    crate::theme::fg()
-                } else {
-                    crate::theme::muted()
-                };
+                let fill = quick_chip_fill(c.primary);
+                let stroke = quick_chip_stroke(c.primary);
+                let color = quick_chip_fg(c.primary);
                 let paint = chip_paint_label(&c.label);
                 let tip = if paint != c.label {
                     if c.hint.is_empty() {
@@ -575,7 +586,8 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                                         RichText::new(paint).size(12.0).color(color),
                                     )
                                     .fill(Color32::TRANSPARENT)
-                                    .stroke(Stroke::NONE),
+                                    .stroke(Stroke::NONE)
+                                    .frame(quick_chip_inner_button_framed()),
                                 ),
                             )
                             .on_hover_text(tip);
@@ -595,6 +607,7 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                                     )
                                     .fill(Color32::TRANSPARENT)
                                     .stroke(Stroke::NONE)
+                                    .frame(quick_chip_inner_button_framed())
                                     .min_size(egui::vec2(16.0, 16.0)),
                                 ),
                             );
@@ -1352,6 +1365,18 @@ mod tests {
         );
         assert!(long.chars().count() <= 22, "{long}");
         assert!(long.ends_with('…'), "{long}");
+    }
+
+    #[test]
+    fn first_quick_chip_is_inline_not_selected() {
+        assert_eq!(quick_chip_fill(true), Color32::TRANSPARENT);
+        assert_eq!(quick_chip_fill(true), quick_chip_fill(false));
+        assert_eq!(quick_chip_stroke(true), quick_chip_stroke(false));
+        assert_eq!(quick_chip_fg(true), quick_chip_fg(false));
+        let (min_w, max_w) = chip_row_width_lock(640.0);
+        assert_eq!(min_w, max_w);
+        assert_eq!(min_w, crate::theme::QUERY_MAX_W.min(640.0_f32.max(120.0)));
+        assert!(!quick_chip_inner_button_framed());
     }
 
     #[test]
