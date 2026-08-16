@@ -5,6 +5,7 @@ pub mod attach;
 pub mod feel;
 pub mod automation;
 pub mod chat;
+pub mod chat_bubble;
 pub mod chat_job;
 pub mod chat_view;
 pub mod chips;
@@ -73,6 +74,10 @@ pub use chat::{
 };
 pub use chat_view::{
     is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
+};
+pub use chat_bubble::{
+    bubble_max_width, bubble_outer_height, bubble_outer_width, bubble_wrap_width, BUBBLE_MAX_FRAC,
+    BUBBLE_PAD_X, BUBBLE_PAD_Y, BUBBLE_RADIUS,
 };
 pub use chat_job::{
     apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
