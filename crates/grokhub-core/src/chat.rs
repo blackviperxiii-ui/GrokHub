@@ -7,6 +7,11 @@ pub fn needs_auth_banner(has_key: bool) -> bool {
     !has_key
 }
 
+/// First-run empty chat still needs the Connect Grok banner.
+pub fn paint_connect_banner(has_key: bool, _message_count: usize) -> bool {
+    needs_auth_banner(has_key)
+}
+
 pub fn extract_host_cmds(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in text.lines() {
@@ -104,7 +109,9 @@ pub fn resolve_chat_model(mode: &str, model: &str) -> String {
     match mode.trim() {
         "max" | "deep" | "heavy" | "think" | "build" | "expert" | "balanced" | "balance"
         | "fast" => model_for_mode(mode.trim()).to_string(),
-        _ if settings_pin_blocks_auto(model) => model.trim().to_string(),
+        _ if settings_pin_blocks_auto(model) => {
+            crate::models::sanitize_chat_model(model).to_string()
+        }
         mode if !mode.is_empty() => model_for_mode(mode).to_string(),
         _ => DEFAULT_MODEL.to_string(),
     }
@@ -171,6 +178,7 @@ fn contains_any(hay: &str, needles: &[&str]) -> bool {
 
 pub fn effective_chat_mode(mode: &str, prompt: &str, pinned_model: &str) -> String {
     let mode = mode.trim();
+    let mode = if mode.is_empty() { "auto" } else { mode };
     if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
         route_auto_mode(prompt).to_string()
     } else {
@@ -339,6 +347,12 @@ mod tests {
     fn banner() {
         assert!(needs_auth_banner(false));
         assert!(!needs_auth_banner(true));
+        assert!(
+            paint_connect_banner(false, 0),
+            "first-run empty chat must still show Connect Grok"
+        );
+        assert!(paint_connect_banner(false, 3));
+        assert!(!paint_connect_banner(true, 0));
     }
 
     #[test]
@@ -428,6 +442,11 @@ mod tests {
         assert_eq!(resolve_chat_model("max", ""), "grok-4.6");
         assert_eq!(resolve_chat_model("auto", "grok-3"), "grok-3");
         assert_eq!(resolve_chat_model("auto", ""), "grok-3-mini-fast");
+        assert_eq!(
+            resolve_chat_model("auto", "gpt-4"),
+            DEFAULT_MODEL,
+            "invalid Settings pin must not be sent to the API"
+        );
         assert_eq!(
             reasoning_effort_for_mode("max"),
             Some("xhigh")
@@ -526,6 +545,15 @@ mod tests {
             Some("xhigh")
         );
         assert_eq!(effective_chat_mode("auto", "hi", ""), "fast");
+        assert_eq!(
+            effective_chat_mode("", "architect a host-tool plan and implement the first slice", ""),
+            "think",
+            "empty composer mode is Auto"
+        );
+        assert_eq!(
+            resolve_chat_model(&effective_chat_mode("", "hi", ""), ""),
+            "grok-3-mini-fast"
+        );
         assert_eq!(effective_chat_mode("auto", "hi", "grok-3"), "auto");
         assert_eq!(
             effective_chat_mode(

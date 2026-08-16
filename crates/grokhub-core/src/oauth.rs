@@ -180,9 +180,16 @@ pub fn has_auth(api_key: &str, access_token: &str) -> bool {
 }
 
 pub fn auth_bearer(api_key: &str, access_token: &str) -> Option<String> {
-    let tok = access_token.trim();
-    if !tok.is_empty() {
-        return Some(tok.to_string());
+    chat_bearer(api_key, access_token, true)
+}
+
+/// When OAuth refresh failed, a live console key must still send chat.
+pub fn chat_bearer(api_key: &str, access_token: &str, oauth_usable: bool) -> Option<String> {
+    if oauth_usable {
+        let tok = access_token.trim();
+        if !tok.is_empty() {
+            return Some(tok.to_string());
+        }
     }
     let key = api_key.trim();
     if !key.is_empty() {
@@ -424,6 +431,12 @@ mod tests {
         assert_eq!(auth_bearer("xai-k", "tok").as_deref(), Some("tok"));
         assert_eq!(auth_bearer("", "tok").as_deref(), Some("tok"));
         assert_eq!(auth_bearer("xai-k", "").as_deref(), Some("xai-k"));
+        assert_eq!(
+            chat_bearer("xai-k", "expired-tok", false).as_deref(),
+            Some("xai-k"),
+            "dead OAuth must not beat a console key"
+        );
+        assert_eq!(chat_bearer("", "expired-tok", false), None);
         assert_eq!(realtime_bearer("xai-k", "tok").as_deref(), Some("xai-k"));
         assert_eq!(realtime_bearer("", "tok"), None);
         assert_eq!(realtime_bearer("", ""), None);

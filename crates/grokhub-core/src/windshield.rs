@@ -146,6 +146,25 @@ pub fn parse_atspi_line(line: &str) -> Option<AtspiRow> {
     Some(AtspiRow { name, role, x, y, w, h })
 }
 
+/// Window title from an AT-SPI line, including lock / greeter surfaces.
+pub fn window_name_from_atspi(line: &str) -> Option<String> {
+    let line = line.trim();
+    if !line.contains("role=") {
+        return None;
+    }
+    let mut name = String::new();
+    for part in line.split_whitespace() {
+        if let Some(v) = part.strip_prefix("name=") {
+            name = v.replace('_', " ");
+        }
+    }
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
 pub fn parse_xdotool_mouse(line: &str) -> Option<AtspiRow> {
     // x:123 y:456 screen:0 window:123
     let mut x = 0;
@@ -210,6 +229,40 @@ pub fn parse_wmctrl_line(line: &str) -> Option<AtspiRow> {
     })
 }
 
+/// Window title from a `wmctrl -lG` line, including lock / greeter surfaces.
+pub fn window_name_from_wmctrl(line: &str) -> Option<String> {
+    let mut bits = line.split_whitespace();
+    let _id = bits.next()?;
+    let _desk = bits.next();
+    let _x: i32 = bits.next()?.parse().ok()?;
+    let _y: i32 = bits.next()?.parse().ok()?;
+    let _w: i32 = bits.next()?.parse().ok()?;
+    let _h: i32 = bits.next()?.parse().ok()?;
+    let name = bits.collect::<Vec<_>>().join(" ");
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// Titles for the lock-screen hands gate. Lock windows stay in this list
+/// even though they are dropped as click targets.
+pub fn lock_check_titles(lines: &[&str]) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in lines {
+        if let Some(name) = window_name_from_atspi(line).or_else(|| window_name_from_wmctrl(line)) {
+            if name.eq_ignore_ascii_case("cursor") {
+                continue;
+            }
+            if !out.iter().any(|e| e == &name) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +307,21 @@ mod tests {
         let prompt = windshield_prompt(&f);
         assert!(prompt.contains("[window] Terminal"));
         assert!(prompt.contains("[wont] lock screen"));
+    }
+
+    #[test]
+    fn lock_check_titles_keep_lock_windows() {
+        let titles = lock_check_titles(&[
+            "0x01 0 10 20 800 600 GrokHub",
+            "0x02 0 0 0 1920 1080 Lock screen",
+            "role=window name=GDM_Greeter x=0 y=0 w=1920 h=1080",
+        ]);
+        assert!(titles.iter().any(|t| t.eq_ignore_ascii_case("Lock screen")));
+        assert!(titles.iter().any(|t| t.to_ascii_lowercase().contains("greeter")));
+        assert!(titles.iter().any(|t| t == "GrokHub"));
+        assert_eq!(
+            window_name_from_wmctrl("0x02 0 0 0 1920 1080 Lock screen").as_deref(),
+            Some("Lock screen")
+        );
     }
 }

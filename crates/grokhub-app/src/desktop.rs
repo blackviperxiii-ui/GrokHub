@@ -175,7 +175,25 @@ fn pointer_drive(op: &ComputerOp) -> ComputerDrive {
 }
 
 fn lock_titles() -> Vec<String> {
-    collect_rows().into_iter().map(|r| r.name).collect()
+    let atspi = Command::new("python3")
+        .args(["-c", ATSPI_PY])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let wmctrl = Command::new("wmctrl")
+        .args(["-lG"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    lock_titles_from_stdout(&atspi, &wmctrl)
+}
+
+pub fn lock_titles_from_stdout(atspi: &str, wmctrl: &str) -> Vec<String> {
+    let lines: Vec<&str> = atspi.lines().chain(wmctrl.lines()).collect();
+    grokhub_core::lock_check_titles(&lines)
 }
 
 fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), String> {
@@ -927,6 +945,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(g, (10, 20, 100, 40));
+    }
+
+    #[test]
+    fn lock_titles_include_filtered_lock_windows() {
+        let titles = lock_titles_from_stdout(
+            "role=window name=GrokHub x=10 y=20 w=800 h=600\n",
+            "0x02 0 0 0 1920 1080 Lock screen\n0x01 0 10 20 800 600 Terminal\n",
+        );
+        assert!(titles.iter().any(|t| t.eq_ignore_ascii_case("Lock screen")));
+        assert!(
+            grokhub_core::hands_blocked_by_lock(
+                &ComputerOp::Click { x: 10, y: 20 },
+                &titles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            )
+        );
     }
 
     #[test]

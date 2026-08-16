@@ -157,13 +157,10 @@ pub fn looks_incomplete(assistant_text: &str) -> bool {
     if regexish_open(&t) {
         return true;
     }
-    if regexish_done(&t) {
+    if regexish_done(&t) || done_word(&t) {
         return false;
     }
-    if t.len() < 80 && done_word(&t) {
-        return false;
-    }
-    t.len() < 80
+    false
 }
 
 fn regexish_open(t: &str) -> bool {
@@ -279,7 +276,11 @@ mod tests {
         assert_eq!(parse_goal_outcome("GOAL_COMPLETE verify ok"), "complete");
         assert_eq!(parse_goal_outcome("GOAL_BLOCKED: need serial"), "blocked");
         assert_eq!(parse_goal_outcome("next step is flashing"), "continue");
+        assert_eq!(parse_goal_outcome("All set."), "complete");
+        assert!(!looks_incomplete("All set."));
         assert!(!looks_incomplete("All done. GOAL_COMPLETE"));
+        assert!(looks_incomplete(""));
+        assert!(looks_incomplete("I'll continue with the flash"));
         let p = next_goal_prompt("flash the pi", "wrote image", 0, 6).unwrap();
         assert!(p.contains("Goal step 1/6"));
         assert!(next_goal_prompt("flash the pi", "x", 6, 6).is_none());

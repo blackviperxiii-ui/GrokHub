@@ -761,6 +761,14 @@ mod tests {
             &ComputerOp::Click { x: 10, y: 20 },
             &["GrokHub", "Terminal"]
         ));
+        let only_lock = crate::windshield::lock_check_titles(&[
+            "0x02 0 0 0 1920 1080 Lock screen",
+        ]);
+        let only_lock_refs: Vec<&str> = only_lock.iter().map(|s| s.as_str()).collect();
+        assert!(
+            hands_blocked_by_lock(&ComputerOp::Click { x: 10, y: 20 }, &only_lock_refs),
+            "a locker that was filtered from click targets must still block hands"
+        );
         assert!(pointer_op_blocked_on_lock(&ComputerOp::Scroll { dy: 1 }));
         assert!(!pointer_op_blocked_on_lock(&ComputerOp::WaitFor { title: None }));
     }

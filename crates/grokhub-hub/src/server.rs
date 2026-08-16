@@ -1,7 +1,7 @@
 use grokhub_core::frame::{get_jpeg, FrameGet};
 use grokhub_core::inhabit::InhabitBundle;
 use grokhub_core::task::Receipt;
-use grokhub_core::{HubState, HUB_KIND};
+use grokhub_core::{CompleteError, HubState, HUB_KIND};
 use serde_json::{json, Value};
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -145,8 +145,19 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
 
     if let Some(id) = strip_prefix_suffix(&path, "/v1/inbox/", "/ack") {
         if method == Method::Post {
-            st.ack_inbox(id, &peer_id);
-            return send_json(req, 200, json!({ "ok": true }));
+            return match st.ack_inbox(id, &peer_id) {
+                Ok(()) => send_json(req, 200, json!({ "ok": true })),
+                Err(CompleteError::NotFound) => send_json(
+                    req,
+                    404,
+                    json!({ "ok": false, "error": "task not found" }),
+                ),
+                Err(CompleteError::Forbidden) => send_json(
+                    req,
+                    403,
+                    json!({ "ok": false, "error": "not the task target" }),
+                ),
+            };
         }
     }
 
@@ -159,8 +170,19 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
                 .get("receipts")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
-            let t = st.complete_task(id, result, receipts, status);
-            return send_json(req, 200, json!({ "ok": t.is_some(), "task": t }));
+            return match st.complete_task(&peer_id, id, result, receipts, status) {
+                Ok(t) => send_json(req, 200, json!({ "ok": true, "task": t })),
+                Err(CompleteError::NotFound) => send_json(
+                    req,
+                    404,
+                    json!({ "ok": false, "error": "task not found" }),
+                ),
+                Err(CompleteError::Forbidden) => send_json(
+                    req,
+                    403,
+                    json!({ "ok": false, "error": "not the task target" }),
+                ),
+            };
         }
     }
 
@@ -180,7 +202,16 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     if method == Method::Post && path == "/v1/inhabit" {
         let body = read_json(&mut req);
         let raw = body.get("bundle").cloned().unwrap_or(body);
-        let bundle: InhabitBundle = serde_json::from_value(raw).unwrap_or_default();
+        let bundle: InhabitBundle = match serde_json::from_value(raw) {
+            Ok(b) if grokhub_core::inhabit_bundle_usable(&b) => b,
+            _ => {
+                return send_json(
+                    req,
+                    400,
+                    json!({ "ok": false, "error": "invalid inhabit bundle" }),
+                );
+            }
+        };
         st.store_inhabit(bundle, &peer);
         return send_json(req, 200, json!({ "ok": true }));
     }
@@ -403,6 +434,18 @@ mod tests {
         );
         assert_eq!(st_g, 200);
         assert!(String::from_utf8_lossy(&body).contains("flash the pi"));
+
+        let complete = r#"{"result":"nope","status":"done"}"#;
+        let req = format!(
+            "POST /v1/task/{tid}/complete HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{complete}",
+            complete.len()
+        );
+        let (st_c, _, body) = http(port, &req);
+        assert_eq!(
+            st_c, 403,
+            "sender must not complete a hub-targeted task: {}",
+            String::from_utf8_lossy(&body)
+        );
 
         let png = r#"{"dataUrl":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}"#;
         let req = format!(
