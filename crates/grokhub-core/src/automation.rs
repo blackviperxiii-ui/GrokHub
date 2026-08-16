@@ -167,6 +167,19 @@ pub fn automation_blocked_by_policy(quiet: bool, destructive: bool, autonomy: u8
     (quiet && destructive) || (autonomy == 0 && destructive)
 }
 
+/// `replay last` or `every day at 21, replay last` — night runs the saved recipe, not a chat hop.
+pub fn replay_automation_target(instructions: &str) -> Option<&str> {
+    let t = instructions.trim();
+    let lower = t.to_ascii_lowercase();
+    let idx = lower.find("replay ")?;
+    let rest = t[idx + "replay ".len()..].trim();
+    if rest.is_empty() {
+        None
+    } else {
+        Some(rest)
+    }
+}
+
 pub fn mark_automation_ran(mut a: Automation, now_ms: u64) -> Automation {
     a.last_run = Some(now_ms);
     a.run_count = a.run_count.saturating_add(1);
@@ -344,5 +357,9 @@ mod tests {
         assert_eq!(due.len(), 1);
         assert!(automation_blocked_by_policy(true, true, 3));
         assert!(!automation_blocked_by_policy(false, true, 3));
+        assert_eq!(replay_automation_target("replay last"), Some("last"));
+        assert_eq!(replay_automation_target("every day at 21, replay last"), Some("last"));
+        assert_eq!(replay_automation_target("REPLAY desk-1"), Some("desk-1"));
+        assert_eq!(replay_automation_target("summarize the workboard"), None);
     }
 }

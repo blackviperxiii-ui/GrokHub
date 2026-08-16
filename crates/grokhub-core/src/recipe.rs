@@ -1,10 +1,12 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScreenSize {
     pub w: i32,
     pub h: i32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ComputerOp {
     Click { x: i32, y: i32 },
     DoubleClick { x: i32, y: i32 },
@@ -16,10 +18,37 @@ pub enum ComputerOp {
     WaitFor { title: Option<String> },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Recipe {
     pub screen: Option<ScreenSize>,
     pub ops: Vec<ComputerOp>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandsBackend {
+    Xdotool,
+    Ydotool,
+}
+
+/// Wayland prefers ydotool. X11 and missing-ydotool fall back to xdotool.
+pub fn pick_hands_backend(wayland: bool, has_ydotool: bool, has_xdotool: bool) -> Option<HandsBackend> {
+    if wayland && has_ydotool {
+        Some(HandsBackend::Ydotool)
+    } else if has_xdotool {
+        Some(HandsBackend::Xdotool)
+    } else if has_ydotool {
+        Some(HandsBackend::Ydotool)
+    } else {
+        None
+    }
+}
+
+pub fn hands_backend_name(backend: Option<HandsBackend>) -> &'static str {
+    match backend {
+        Some(HandsBackend::Ydotool) => "ydotool",
+        Some(HandsBackend::Xdotool) => "xdotool",
+        None => "missing",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,17 +189,33 @@ pub fn screen_from_extents(max_x: i32, max_y: i32) -> Option<ScreenSize> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComputerDrive {
     Xdotool(Vec<Vec<String>>),
+    Ydotool(Vec<Vec<String>>),
     Act(String),
     WaitFor(Option<String>),
 }
 
 pub fn computer_drive(op: &ComputerOp) -> ComputerDrive {
+    computer_drive_for(HandsBackend::Xdotool, op)
+}
+
+pub fn computer_drive_for(backend: HandsBackend, op: &ComputerOp) -> ComputerDrive {
     match op {
-        ComputerOp::Click { x, y } => ComputerDrive::Xdotool(vec![
+        ComputerOp::Act { name } => ComputerDrive::Act(name.clone()),
+        ComputerOp::WaitFor { title } => ComputerDrive::WaitFor(title.clone()),
+        other => match backend {
+            HandsBackend::Xdotool => ComputerDrive::Xdotool(xdotool_steps(other)),
+            HandsBackend::Ydotool => ComputerDrive::Ydotool(ydotool_steps(other)),
+        },
+    }
+}
+
+fn xdotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
+    match op {
+        ComputerOp::Click { x, y } => vec![
             vec!["mousemove".into(), x.to_string(), y.to_string()],
             vec!["click".into(), "--clearmodifiers".into(), "1".into()],
-        ]),
-        ComputerOp::DoubleClick { x, y } => ComputerDrive::Xdotool(vec![
+        ],
+        ComputerOp::DoubleClick { x, y } => vec![
             vec!["mousemove".into(), x.to_string(), y.to_string()],
             vec![
                 "click".into(),
@@ -179,37 +224,151 @@ pub fn computer_drive(op: &ComputerOp) -> ComputerDrive {
                 "2".into(),
                 "1".into(),
             ],
-        ]),
+        ],
         ComputerOp::Move { x, y } => {
-            ComputerDrive::Xdotool(vec![vec!["mousemove".into(), x.to_string(), y.to_string()]])
+            vec![vec!["mousemove".into(), x.to_string(), y.to_string()]]
         }
-        ComputerOp::Type { text } => ComputerDrive::Xdotool(vec![vec![
+        ComputerOp::Type { text } => vec![vec![
             "type".into(),
             "--clearmodifiers".into(),
             "--".into(),
             text.clone(),
-        ]]),
-        ComputerOp::Key { name } => ComputerDrive::Xdotool(vec![vec![
+        ]],
+        ComputerOp::Key { name } => vec![vec![
             "key".into(),
             "--clearmodifiers".into(),
             name.clone(),
-        ]]),
+        ]],
         ComputerOp::Scroll { dy } => {
             if *dy == 0 {
-                ComputerDrive::Xdotool(vec![])
+                vec![]
             } else {
                 let btn = if *dy < 0 { "5" } else { "4" };
-                ComputerDrive::Xdotool(vec![vec![
+                vec![vec![
                     "click".into(),
                     "--clearmodifiers".into(),
                     "--repeat".into(),
                     dy.unsigned_abs().to_string(),
                     btn.into(),
-                ]])
+                ]]
             }
         }
-        ComputerOp::Act { name } => ComputerDrive::Act(name.clone()),
-        ComputerOp::WaitFor { title } => ComputerDrive::WaitFor(title.clone()),
+        ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } => vec![],
+    }
+}
+
+fn ydotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
+    match op {
+        ComputerOp::Click { x, y } => vec![
+            vec!["mousemove".into(), "--absolute".into(), x.to_string(), y.to_string()],
+            vec!["click".into(), "0xC0".into()],
+        ],
+        ComputerOp::DoubleClick { x, y } => vec![
+            vec!["mousemove".into(), "--absolute".into(), x.to_string(), y.to_string()],
+            vec!["click".into(), "--repeat".into(), "2".into(), "0xC0".into()],
+        ],
+        ComputerOp::Move { x, y } => {
+            vec![vec!["mousemove".into(), "--absolute".into(), x.to_string(), y.to_string()]]
+        }
+        ComputerOp::Type { text } => vec![vec!["type".into(), "--".into(), text.clone()]],
+        ComputerOp::Key { name } => {
+            let mut step = vec!["key".into()];
+            step.extend(ydotool_key_tokens(name));
+            vec![step]
+        }
+        ComputerOp::Scroll { dy } => {
+            if *dy == 0 {
+                vec![]
+            } else {
+                vec![vec![
+                    "mousemove".into(),
+                    "--wheel".into(),
+                    "0".into(),
+                    dy.to_string(),
+                ]]
+            }
+        }
+        ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } => vec![],
+    }
+}
+
+fn ydotool_key_tokens(name: &str) -> Vec<String> {
+    let parts: Vec<&str> = name
+        .split('+')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let codes: Vec<u16> = parts.iter().map(|p| linux_keycode(p)).collect();
+    let mut tokens = Vec::new();
+    for c in &codes {
+        tokens.push(format!("{c}:1"));
+    }
+    for c in codes.iter().rev() {
+        tokens.push(format!("{c}:0"));
+    }
+    tokens
+}
+
+fn linux_keycode(name: &str) -> u16 {
+    match name.to_ascii_lowercase().as_str() {
+        "return" | "enter" | "kp_enter" => 28,
+        "esc" | "escape" => 1,
+        "tab" => 15,
+        "space" | "spacebar" => 57,
+        "backspace" => 14,
+        "ctrl" | "control" | "control_l" | "ctrl_l" => 29,
+        "shift" | "shift_l" => 42,
+        "alt" | "alt_l" => 56,
+        "super" | "super_l" | "meta" | "win" => 125,
+        "up" => 103,
+        "down" => 108,
+        "left" => 105,
+        "right" => 106,
+        "delete" | "del" => 111,
+        "home" => 102,
+        "end" => 107,
+        "pageup" | "prior" => 104,
+        "pagedown" | "next" => 109,
+        "f1" => 59,
+        "f2" => 60,
+        "f3" => 61,
+        "f4" => 62,
+        "f5" => 63,
+        "a" => 30,
+        "s" => 31,
+        "d" => 32,
+        "c" => 46,
+        "v" => 47,
+        "x" => 45,
+        "z" => 44,
+        "q" => 16,
+        "w" => 17,
+        other if other.len() == 1 => {
+            let ch = other.chars().next().unwrap_or('a');
+            match ch {
+                '0' => 11,
+                '1'..='9' => 2 + (ch as u16 - b'1' as u16),
+                'b' => 48,
+                'e' => 18,
+                'f' => 33,
+                'g' => 34,
+                'h' => 35,
+                'i' => 23,
+                'j' => 36,
+                'k' => 37,
+                'l' => 38,
+                'm' => 50,
+                'n' => 49,
+                'o' => 24,
+                'p' => 25,
+                'r' => 19,
+                't' => 20,
+                'u' => 22,
+                'y' => 21,
+                _ => 28,
+            }
+        }
+        _ => 28,
     }
 }
 
@@ -238,9 +397,45 @@ pub fn extract_computer_ops(text: &str) -> Vec<ComputerOp> {
     text.lines().filter_map(parse_computer_op).collect()
 }
 
+pub fn recipe_from_cmds(cmds: &[String], screen: Option<ScreenSize>) -> Option<Recipe> {
+    let ops: Vec<ComputerOp> = cmds.iter().filter_map(|c| parse_computer_cmd_loose(c)).collect();
+    if ops.is_empty() {
+        None
+    } else {
+        Some(Recipe { screen, ops })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecipeDoc {
+    pub id: String,
+    pub screen: Option<ScreenSize>,
+    pub ops: Vec<ComputerOp>,
+}
+
+pub fn recipe_to_json(id: &str, recipe: &Recipe) -> Result<String, String> {
+    let doc = RecipeDoc {
+        id: id.to_string(),
+        screen: recipe.screen,
+        ops: recipe.ops.clone(),
+    };
+    serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())
+}
+
+pub fn recipe_from_json(raw: &str) -> Result<(String, Recipe), String> {
+    let doc: RecipeDoc = serde_json::from_str(raw).map_err(|e| e.to_string())?;
+    Ok((
+        doc.id,
+        Recipe {
+            screen: doc.screen,
+            ops: doc.ops,
+        },
+    ))
+}
+
 pub fn hands_protocol() -> &'static str {
     "You run unsandboxed on this Linux desktop. The cabin has full host and GUI hands when the user asks.\n\
-     HOST_CMD: <shell> — runs via bash -lc after approval (YOLO skips the prompt). Forbidden even with YOLO: ~/.ssh, /etc/shadow, /etc/sudoers, gnupg, app.json.\n\
+     HOST_CMD: <shell> — runs via bash -lc immediately. The cabin drives; there is no approve step.\n\
      COMPUTER_CMD: click X Y\n\
      COMPUTER_CMD: dblclick X Y\n\
      COMPUTER_CMD: move X Y\n\
@@ -277,6 +472,26 @@ pub fn user_asks_cabin_eyes(text: &str) -> bool {
         "use your eyes",
         "open your eyes",
         "wake your eyes",
+        "look at this",
+        "what's wrong on",
+        "whats wrong on",
+    ];
+    NEEDLES.iter().any(|n| t.contains(n))
+}
+
+pub fn user_asks_takeover(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "take over",
+        "takeover",
+        "fix this",
+        "fix what's on",
+        "fix whats on",
+        "help me with this window",
+        "this is broken",
+        "handle it",
+        "drive the desktop",
+        "take the wheel",
     ];
     NEEDLES.iter().any(|n| t.contains(n))
 }
@@ -300,8 +515,15 @@ pub fn user_asks_desktop_hands(text: &str) -> bool {
         "control the ui",
         "control the screen",
         "desktop hands",
+        "take over",
+        "takeover",
+        "fix this",
+        "help me with this window",
+        "this is broken",
+        "drive the desktop",
+        "take the wheel",
     ];
-    NEEDLES.iter().any(|n| t.contains(n))
+    NEEDLES.iter().any(|n| t.contains(n)) || user_asks_takeover(text)
 }
 
 /// Attach a room frame only when this turn asked for eyes or hands.
@@ -422,7 +644,48 @@ mod tests {
         assert!(proto.to_ascii_lowercase().contains("unsandboxed"));
         assert!(user_asks_desktop_hands("click the Save button for me"));
         assert!(user_asks_desktop_hands("type into the settings window"));
+        assert!(user_asks_desktop_hands("take over this desktop"));
+        assert!(user_asks_takeover("this is broken, handle it"));
+        assert!(user_asks_takeover("help me with this window"));
         assert!(!user_asks_desktop_hands("what is rust ownership?"));
+        assert_eq!(
+            pick_hands_backend(true, true, true),
+            Some(HandsBackend::Ydotool)
+        );
+        assert_eq!(
+            pick_hands_backend(true, false, true),
+            Some(HandsBackend::Xdotool)
+        );
+        assert_eq!(
+            pick_hands_backend(false, true, true),
+            Some(HandsBackend::Xdotool)
+        );
+        assert_eq!(hands_backend_name(None), "missing");
+        match computer_drive_for(HandsBackend::Ydotool, &ComputerOp::Click { x: 10, y: 20 }) {
+            ComputerDrive::Ydotool(steps) => {
+                assert_eq!(steps[0], vec!["mousemove", "--absolute", "10", "20"]);
+                assert_eq!(steps[1], vec!["click", "0xC0"]);
+            }
+            other => panic!("{other:?}"),
+        }
+        match computer_drive_for(
+            HandsBackend::Ydotool,
+            &ComputerOp::Key { name: "ctrl+s".into() },
+        ) {
+            ComputerDrive::Ydotool(steps) => {
+                assert_eq!(steps[0], vec!["key", "29:1", "31:1", "31:0", "29:0"]);
+            }
+            other => panic!("{other:?}"),
+        }
+        let rec = recipe_from_cmds(
+            &["COMPUTER_CMD: act Save".into(), "HOST_CMD: ls".into()],
+            Some(ScreenSize { w: 1920, h: 1080 }),
+        )
+        .unwrap();
+        let json = recipe_to_json("last", &rec).unwrap();
+        let (id, loaded) = recipe_from_json(&json).unwrap();
+        assert_eq!(id, "last");
+        assert_eq!(loaded, rec);
         assert!(user_asks_cabin_eyes("look at my screen"));
         assert!(user_asks_cabin_eyes("what do you see?"));
         assert!(user_asks_cabin_eyes("Cabin eyes — what's on the desktop"));

@@ -10,23 +10,20 @@ pub enum HeartbeatAct {
     Wall,
     MidThought,
     Reflect,
+    Anticipate,
 }
 
-/// User-owned work (inbox, night) always moves. Higher autonomy wakes more organs.
-pub fn heartbeat_acts(autonomy: u8) -> Vec<HeartbeatAct> {
-    let mut out = vec![
+/// Every organ runs. The cabin does not throttle the pulse.
+pub fn heartbeat_acts() -> Vec<HeartbeatAct> {
+    vec![
         HeartbeatAct::Housekeep,
         HeartbeatAct::Inbox,
         HeartbeatAct::Night,
-    ];
-    if autonomy >= 2 {
-        out.push(HeartbeatAct::Wall);
-        out.push(HeartbeatAct::MidThought);
-    }
-    if autonomy >= 3 {
-        out.push(HeartbeatAct::Reflect);
-    }
-    out
+        HeartbeatAct::Wall,
+        HeartbeatAct::MidThought,
+        HeartbeatAct::Reflect,
+        HeartbeatAct::Anticipate,
+    ]
 }
 
 pub fn heartbeat_due(elapsed_ms: u64, period_ms: u64) -> bool {
@@ -64,23 +61,20 @@ mod tests {
     }
 
     #[test]
-    fn autonomy_wakes_organs_in_order() {
+    fn pulse_always_wakes_every_organ() {
+        let acts = heartbeat_acts();
         assert_eq!(
-            heartbeat_acts(0),
+            acts,
             vec![
                 HeartbeatAct::Housekeep,
                 HeartbeatAct::Inbox,
-                HeartbeatAct::Night
+                HeartbeatAct::Night,
+                HeartbeatAct::Wall,
+                HeartbeatAct::MidThought,
+                HeartbeatAct::Reflect,
+                HeartbeatAct::Anticipate,
             ]
         );
-        assert_eq!(heartbeat_acts(1), heartbeat_acts(0));
-        let two = heartbeat_acts(2);
-        assert!(two.contains(&HeartbeatAct::Wall));
-        assert!(two.contains(&HeartbeatAct::MidThought));
-        assert!(!two.contains(&HeartbeatAct::Reflect));
-        let three = heartbeat_acts(3);
-        assert!(three.contains(&HeartbeatAct::Reflect));
-        assert_eq!(heartbeat_acts(4), heartbeat_acts(3));
     }
 
     #[test]

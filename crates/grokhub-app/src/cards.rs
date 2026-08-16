@@ -113,6 +113,15 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         instructions: "Emit HOST_CMD: uname -a && whoami && pwd && df -h / && uptime. After HOST_RESULT, four lines: machine, user, disk, load. No secrets.",
         verify: "echo VERIFY_OK",
     },
+    SuggestedSkill {
+        icon: TileIcon::Host,
+        name: "desktop-takeover",
+        title: "Desktop takeover",
+        body: "Look at the screen, then drive it with COMPUTER_CMD.",
+        trigger: "take over the desktop",
+        instructions: "Take over this desktop. Look at the attached frame and Windshield list. Prefer COMPUTER_CMD: act <name> and wait_for. Fix the issue or finish the task. Halt if a lock screen appears.",
+        verify: "echo VERIFY_OK",
+    },
 ];
 
 pub const LIVE_CONNECTORS: &[LiveConnector] = &[LiveConnector {
@@ -164,6 +173,12 @@ pub const SUGGESTED_AUTOS: &[SuggestedAuto] = &[
         title: "Nightly triage",
         body: "Every day at 21:00 — extract leftover tasks onto the board.",
         seed: "every day at 21, extract open tasks onto the workboard",
+    },
+    SuggestedAuto {
+        icon: TileIcon::Host,
+        title: "Replay last desktop run",
+        body: "Replay the last saved COMPUTER_CMD recipe. Night does not chat first.",
+        seed: "every day at 21, replay last",
     },
 ];
 
@@ -1405,7 +1420,7 @@ mod tests {
 
     #[test]
     fn suggested_autos_parse() {
-        assert_eq!(SUGGESTED_AUTOS.len(), 6);
+        assert_eq!(SUGGESTED_AUTOS.len(), 7);
         for s in SUGGESTED_AUTOS {
             let a = parse_nl_automation(s.seed).expect(s.title);
             assert!(!a.instructions.is_empty());
@@ -1434,7 +1449,7 @@ mod tests {
                 assert!(!blob.contains(w), "auto {} mentions {w}", s.title);
             }
         }
-        assert_eq!(SUGGESTED_SKILLS.len(), 8);
+        assert_eq!(SUGGESTED_SKILLS.len(), 9);
         for s in SUGGESTED_SKILLS {
             let blob = format!("{} {} {}", s.name, s.body, s.instructions).to_ascii_lowercase();
             for w in forbidden {
@@ -1444,7 +1459,8 @@ mod tests {
                 || blob.contains("workboard")
                 || blob.contains("imagine")
                 || blob.contains("verify")
-                || blob.contains("connector_cmd");
+                || blob.contains("connector_cmd")
+                || blob.contains("computer_cmd");
             assert!(real, "skill {} is not a cabin verb", s.name);
             let md = skill_from_suggested(s);
             assert_eq!(md.name, s.name);

@@ -1,3 +1,10 @@
+use crate::helpers::{
+    cabin_menu_should_dismiss, click_project_opens_board, collect_other_chip_threads, expand_home,
+    next_maximized, next_starter_skill_name, wants_live_repaint,
+};
+use crate::titlebar::{
+    apply_tray_window, titlebar_chrome_btn, titlebar_chrome_hit,
+};
 use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin, load_image_data_url,
@@ -12,34 +19,36 @@ use crate::update::{remember_source, resolve_source};
 use crate::xai::{grok_chat, grok_chat_stream, grok_imagine, grok_stt, grok_tts, http_status_of};
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use grokhub_core::{
-    append_composer, apply_work_update, attach_kind, attach_name, attach_prompt_line,
-    appearance_choices, appearance_hint, approved_cmds, auth_bearer, automation_blocked_by_policy, blend_thread_goal,
+    append_composer, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
+    cabin_system_prompt,
+    appearance_choices, appearance_hint, approved_cmds, auth_bearer, blend_thread_goal,
     build_hub_snapshot,
-    build_quick_chips, build_windshield, bump_skill_run, bump_usage, cabin_eyes_for_turn, can_inhabit, can_mark_done,
-    catalog_line, chip_suggest_prompt, chip_thread_from_messages, compact_keep_pin, compose_imagine_prompt,
+    build_quick_chips, build_windshield, bump_skill_run, bump_usage, can_inhabit,
+    catalog_line, chip_suggest_prompt, compact_keep_pin, compose_imagine_prompt,
     context_fingerprint,
-    context_percent, daily_units_blocked,
+    context_percent,
     dedicated_imagine_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
     pick_fresh_seed, wall_can_paint, wall_evict, ImagineKind, ImagineSpec, ImagineWall,
     WallGif, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
     imagine_shows_result_above, imagine_toolbox_dock, imagine_toolbox_shows_title,
     imagine_toolbox_top, imagine_wall_bounds,
-    due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
+    doctor_hands_line, due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     imagine_aspect_label, imagine_aspect_name, imagine_style_label, imagine_video_dur_label,
     imagine_video_res_label, last_imagine_receipt,
-    extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
-    forget_topic, greet_from_last_job, has_auth, has_goal_complete, has_verify_ok, hey_grok_on_press,
+    extract_insights, extract_work_updates, fact_candidates, failover_model, filter_slash_commands,
+    frame_bytes, PresenceFrame,
+    forget_topic, greet_from_last_job, has_auth, has_verify_ok, hey_grok_on_press,
     hey_grok_route, hey_grok_starts_ptt, import_memory_file, insight_pin, is_openclaw_workspace,
     add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
-    host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
+    host_status_line, is_hard_run,
     project_menu_acts, project_menu_label, rename_node, restore_bound_path, seed_from_bound,
     settle_project_path, should_seed_sidebar, stage_project, toggle_folder, upsert_bound,
     visible_tree, ProjectKind, ProjectMenuAct,
     ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
-    match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
+    match_skill, mode_from_chip_value, model_for_mode, nav_from_chip_value,
     cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
     needs_auth_banner, next_chat_image, next_goal_prompt,
     is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
@@ -50,8 +59,9 @@ use grokhub_core::{
     parse_computer_cmd_loose, should_attach_hands_frame, user_asks_cabin_eyes,
     user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
-    now_ms, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
-    parse_nl_automation, parse_recipe, parse_slash, parse_theme, passenger_label, pick_theme, plan_from_text, plan_room,
+    now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
+    recipe_from_cmds, replay_automation_target,
+    parse_nl_automation, parse_recipe, parse_slash, parse_theme, pick_theme, plan_from_text, plan_room,
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
     remember_chip_outcome, remember_typed_prompt, roll_usage_day,
@@ -59,14 +69,15 @@ use grokhub_core::{
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     rewind_dest, save_hub_state, screen_from_extents, search_corpus,
-    should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
+    should_anticipate, should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
+    user_asks_takeover, windshield_prompt,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title, apply_manual_rename, delete_thread, display_tab_title, history_order,
     should_name_thread,
-    slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
+    skill_follow_block, slash_help, summarize_write, surgical_memory_edit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
     unified_diff_cite, usage_line,
@@ -75,10 +86,11 @@ use grokhub_core::{
     fold_stream_token, StreamTokenKind,
     update_wipes_config, voice_session_url, Automation, BoardCard,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ChipThread, ComputerOp, DeviceCodeStart, HeyGrokAction,
-    HeyGrokRoute, HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
-    HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, MintRealtimeFn, Recipe, ReplayOp, RewindRecord,
+    HeyGrokRoute, HubMemoryFile, QuickChip,
+    HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, MintRealtimeFn, Policy, Recipe, ReplayOp, RewindRecord,
     AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
     VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
+    user_pref_facts,
     DEFAULT_MODEL, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS, IMAGINE_ASPECTS,
     IMAGINE_STYLES,
     PRESENCE_RING_MS, TRANSCRIBERS,
@@ -235,42 +247,6 @@ fn take_focused_composer(
         Some(ComposerEnter::Newline) => None,
         None => None,
     }
-}
-
-fn next_maximized(currently: bool) -> bool {
-    !currently
-}
-
-fn cabin_menu_should_dismiss(ignore: bool, outside_click: bool) -> bool {
-    !ignore && outside_click
-}
-
-fn next_starter_skill_name(existing: &[String]) -> String {
-    if !existing.iter().any(|n| n == "new-skill") {
-        return "new-skill".into();
-    }
-    let mut i = 2_u32;
-    loop {
-        let name = format!("new-skill-{i}");
-        if !existing.iter().any(|n| n == &name) {
-            return name;
-        }
-        i = i.saturating_add(1);
-        if i > 99 {
-            return format!("new-skill-{i}");
-        }
-    }
-}
-
-fn wants_live_repaint(
-    running: bool,
-    chip_busy: bool,
-    hub_on: bool,
-    window_visible: bool,
-    imagine: bool,
-) -> bool {
-    let _ = window_visible;
-    running || chip_busy || hub_on || imagine
 }
 
 const HIDDEN_HEARTBEAT_MS: u64 = 400;
@@ -564,7 +540,6 @@ pub struct Cabin {
     task_prompt: String,
     mem_name: String,
     mem_body: String,
-    plan_pending: Option<Vec<HostPlanStep>>,
     last_persist: Instant,
     board: Vec<BoardCard>,
     board_title: String,
@@ -575,7 +550,6 @@ pub struct Cabin {
     skill_list: Vec<SkillMd>,
     eyes_text: String,
     last_host: Vec<String>,
-    save_skill: bool,
     last_frame_url: Option<String>,
     hands_attach: bool,
     eyes_attach: bool,
@@ -593,9 +567,6 @@ pub struct Cabin {
     threads: Vec<ChatThread>,
     thread_idx: usize,
     oauth_pending: Option<DeviceCodeStart>,
-    host_hour_count: u32,
-    host_hour_at: Instant,
-    approve_risky_only: bool,
     tray: Option<crate::tray::TrayHost>,
     tray_rx: Option<mpsc::Receiver<Option<crate::tray::TrayHost>>>,
     window_visible: bool,
@@ -627,7 +598,8 @@ pub struct Cabin {
     palette_pick: usize,
     palette_focus: bool,
     shortcuts_open: bool,
-    pending_skill: Option<SkillMd>,
+    active_skill_follow: Option<String>,
+    last_anticipate_ms: u64,
     goal_step: u32,
     stream_buf: String,
     thought_buf: String,
@@ -816,7 +788,6 @@ impl Cabin {
             .or_else(|| projects.iter().find(|n| n.kind == ProjectKind::Project))
             .map(|n| n.id.clone());
         let secrets = secrets::load();
-        let approve_risky_only = cfg.approve_risky_only;
         let win_max = cfg.window.maximized;
         let mut c = Self {
             nav: Nav::Chat,
@@ -834,7 +805,6 @@ impl Cabin {
             task_prompt: String::new(),
             mem_name,
             mem_body,
-            plan_pending: None,
             last_persist: Instant::now(),
             board: config::load_board(),
             board_title: String::new(),
@@ -845,7 +815,6 @@ impl Cabin {
             skill_list: skills::list_skills(),
             eyes_text: String::new(),
             last_host: vec![],
-            save_skill: false,
             last_frame_url: None,
             hands_attach: false,
             eyes_attach: false,
@@ -863,9 +832,6 @@ impl Cabin {
             threads,
             thread_idx,
             oauth_pending: None,
-            host_hour_count: 0,
-            host_hour_at: Instant::now(),
-            approve_risky_only,
             tray: None,
             tray_rx: if crate::tray::tray_needed_at_launch(hidden) {
                 Some(crate::tray::begin_tray_spawn())
@@ -901,7 +867,8 @@ impl Cabin {
             palette_pick: 0,
             palette_focus: false,
             shortcuts_open: false,
-            pending_skill: None,
+            active_skill_follow: None,
+            last_anticipate_ms: 0,
             goal_step: 0,
             stream_buf: String::new(),
             thought_buf: String::new(),
@@ -2026,7 +1993,7 @@ impl Cabin {
             chat: &chat,
             draft: &self.composer,
             grok_connected: self.has_key(),
-            host_on: self.cfg.host_on,
+            host_on: true,
             mode: if self.cfg.mode.trim().is_empty() {
                 "auto"
             } else {
@@ -2392,16 +2359,21 @@ impl Cabin {
             self.run_slash(slash);
             return;
         }
+        self.active_skill_follow = None;
         if let Some(sk) = match_skill(&text, &self.skill_list) {
             self.skill_name = sk.name.clone();
             self.status = format!("Skill {}", sk.name);
+            if self.policy().injects_skill() {
+                self.active_skill_follow = Some(skill_follow_block(sk));
+            }
         }
         self.messages.push(Msg {
             role: "user".into(),
             content: text.clone(),
         });
-        if user_asks_desktop_hands(&text) {
+        if user_asks_desktop_hands(&text) || user_asks_takeover(&text) {
             self.hands_attach = true;
+            self.eyes_attach = true;
         }
         if self.cfg.cabin_eyes && user_asks_cabin_eyes(&text) {
             self.eyes_attach = true;
@@ -2412,31 +2384,6 @@ impl Cabin {
 
     fn run_slash(&mut self, slash: Slash) {
         match slash {
-            Slash::Approve { yolo } => {
-                self.cfg.yolo = yolo;
-                self.approve_risky_only = false;
-                self.cfg.approve_risky_only = false;
-                let _ = config::save(&self.cfg);
-                self.status = if yolo {
-                    "YOLO — /approve off".into()
-                } else {
-                    "Supervised — /approve on".into()
-                };
-            }
-            Slash::ApproveRisky => {
-                self.cfg.yolo = false;
-                self.approve_risky_only = true;
-                self.cfg.approve_risky_only = true;
-                let _ = config::save(&self.cfg);
-                self.status = "Confirm destructive only".into();
-            }
-            Slash::ApproveAll => {
-                self.cfg.yolo = false;
-                self.approve_risky_only = false;
-                self.cfg.approve_risky_only = false;
-                let _ = config::save(&self.cfg);
-                self.status = "Confirm every host command".into();
-            }
             Slash::Forget(topic) => match topic {
                 None => match config::write_memory("MEMORY.md", "") {
                     Ok(()) => {
@@ -2561,28 +2508,15 @@ impl Cabin {
             }
             Slash::Stop => self.halt_work("Stopped"),
             Slash::Sh(cmd) => self.queue_sh(cmd),
-            Slash::Host { on } => {
-                self.cfg.host_on = on;
-                let _ = config::save(&self.cfg);
-                self.status = if on { "Host on".into() } else { "Host off".into() };
-            }
             Slash::HostStatus => {
                 self.status = format!(
-                    "Host {} · hour {}/{} · {}",
-                    if self.cfg.host_on { "on" } else { "off" },
-                    self.host_hour_count,
-                    self.cfg.host_hour_cap,
+                    "Host on · {}",
                     if self.host_live.is_empty() {
                         "idle"
                     } else {
                         &self.host_live
                     }
                 );
-            }
-            Slash::Tools { on } => {
-                self.cfg.host_on = on;
-                let _ = config::save(&self.cfg);
-                self.status = if on { "Host on".into() } else { "Host off".into() };
             }
             Slash::Rename(title) => self.rename_thread(self.thread_idx, &title),
             Slash::Pin => self.pin_thread(self.thread_idx),
@@ -2760,40 +2694,33 @@ impl Cabin {
         self.kick_model();
     }
 
-    fn queue_sh(&mut self, cmd: String) {
-        if !self.cfg.host_on {
-            self.status = "Host off — /host on".into();
-            return;
-        }
-        if self.host_hour_at.elapsed() > Duration::from_secs(3600) {
-            self.host_hour_count = 0;
-            self.host_hour_at = Instant::now();
-        }
-        if host_hour_blocked(self.host_hour_count, self.cfg.host_hour_cap) {
-            self.status = format!("Host hour cap {}", self.cfg.host_hour_cap);
-            return;
-        }
-        if let Some(why) = forbidden_reason(&cmd) {
-            self.status = why.into();
-            return;
-        }
-        let step = step_from_cmd(cmd);
-        let outside = host_cmd_leaves_project(&step.cmd, &self.cfg.project_dir);
-        if self.cfg.yolo && !(self.approve_risky_only && step.risk == HostRisk::Destructive) && !outside
-        {
-            self.run_cmds(vec![step.cmd]);
-            return;
-        }
-        if self.approve_risky_only && step.risk != HostRisk::Destructive && !outside {
-            self.run_cmds(vec![step.cmd]);
-            return;
-        }
-        self.plan_pending = Some(vec![step]);
-        self.status = if outside {
-            "Outside bound project — approve".into()
+    fn policy(&self) -> Policy {
+        Policy::max()
+    }
+
+    fn commit_proposed_skill(&mut self, proposed: SkillMd) {
+        let to_save = if let Some(name) = prefer_patch(&self.skill_list, &proposed) {
+            if let Some(existing) = self.skill_list.iter().find(|s| s.name == name) {
+                patch_skill(existing, &proposed)
+            } else {
+                proposed
+            }
         } else {
-            "Host plan needs approval".into()
+            proposed
         };
+        match skills::save_skill(&to_save) {
+            Ok(_) => {
+                self.skill_list = skills::list_skills();
+                self.skill_name = to_save.name.clone();
+                self.skill_body = grokhub_core::render_skill_md(&to_save);
+                self.status = format!("Wrote skill {}", to_save.name);
+            }
+            Err(e) => self.status = e,
+        }
+    }
+
+    fn queue_sh(&mut self, cmd: String) {
+        self.run_cmds(vec![cmd]);
     }
 
     fn queue_inhabit(&mut self, peer: String) {
@@ -2887,6 +2814,7 @@ impl Cabin {
             self.last_receipt_ok,
             self.skill_list.len(),
         ));
+        lines.push(doctor_hands_line(crate::desktop::hands_driver_name()));
         lines
             .into_iter()
             .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
@@ -3020,7 +2948,7 @@ impl Cabin {
             return;
         }
         self.last_heartbeat = Instant::now();
-        for act in heartbeat_acts(self.cfg.autonomy) {
+        for act in heartbeat_acts() {
             match act {
                 HeartbeatAct::Housekeep => {
                     self.roll_today();
@@ -3047,8 +2975,27 @@ impl Cabin {
                         self.run_reflect();
                     }
                 }
+                HeartbeatAct::Anticipate => self.tick_anticipate(),
             }
         }
+    }
+
+    fn tick_anticipate(&mut self) {
+        if !should_anticipate(self.running) {
+            return;
+        }
+        let Some(prompt) = anticipated_need(
+            &self.learning.insights,
+            &self.skill_list,
+            self.last_anticipate_ms,
+            now_ms(),
+            IDLE_REFLECT_MS,
+        ) else {
+            return;
+        };
+        self.last_anticipate_ms = now_ms();
+        self.daily_auto_used = self.daily_auto_used.saturating_add(1);
+        self.send_chat(prompt);
     }
 
     fn tick_night(&mut self) {
@@ -3061,9 +3008,6 @@ impl Cabin {
         if self.daily_auto_day != day && clock.hour == 0 && clock.minute < 6 {
             self.daily_auto_used = 0;
             self.daily_auto_day = day;
-        }
-        if daily_units_blocked(self.daily_auto_used, self.cfg.daily_auto_cap) {
-            return;
         }
         let clock_copy = clock;
         self.automations = std::mem::take(&mut self.automations)
@@ -3124,17 +3068,13 @@ impl Cabin {
     }
 
     fn fire_night(&mut self, a: Automation, now_ms: u64) {
-        let clock = Self::local_clock();
-        let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
-        let destructive = a.instructions.to_ascii_lowercase().contains("rm ")
-            || host_risk(&a.instructions) == HostRisk::Destructive;
-        if automation_blocked_by_policy(quiet, destructive, self.cfg.autonomy) {
-            self.status = format!("Night skipped {} (quiet/policy)", a.name);
-            return;
-        }
         self.mark_auto_ran(&a.id, now_ms);
         self.daily_auto_used = self.daily_auto_used.saturating_add(1);
         self.status = format!("Night: {}", a.name);
+        if let Some(id) = replay_automation_target(&a.instructions) {
+            self.replay_saved_recipe(id);
+            return;
+        }
         self.nav = Nav::Chat;
         self.send_chat(a.instructions);
     }
@@ -3594,62 +3534,58 @@ impl Cabin {
             })
             .collect();
         let soul = config::read_memory("SOUL.md");
+        let user_md = config::read_memory("USER.md");
+        let memory_md = config::read_memory("MEMORY.md");
         let pins = skills::pin_text(&self.skill_list);
-        let mut sys = String::new();
-        if !soul.trim().is_empty() {
-            sys.push_str("SOUL.md\n");
-            sys.push_str(&soul);
+        let mut board = String::new();
+        for c in self.board.iter().take(8) {
+            board.push_str(&format!("- [{}] {}\n", c.status.as_str(), c.title));
         }
-        if !pins.is_empty() {
-            if !sys.is_empty() {
-                sys.push_str("\n\n");
-            }
-            sys.push_str("Skills (names only):\n");
-            sys.push_str(&pins);
-        }
-        if !self.cfg.goal_pin.trim().is_empty() {
-            if !sys.is_empty() {
-                sys.push_str("\n\n");
-            }
-            sys.push_str("GOAL PIN: ");
-            sys.push_str(&self.cfg.goal_pin);
-        }
-        if !self.board.is_empty() {
-            if !sys.is_empty() {
-                sys.push_str("\n\n");
-            }
-            sys.push_str("Workboard:\n");
-            for c in self.board.iter().take(8) {
-                sys.push_str(&format!("- [{}] {}\n", c.status.as_str(), c.title));
-            }
-        }
-        if let Some(h) = self.last_host.last() {
-            if !sys.is_empty() {
-                sys.push_str("\n\n");
-            }
-            sys.push_str("Last HOST_RESULT (tail):\n");
-            sys.push_str(&h.chars().take(400).collect::<String>());
-        }
-        if !sys.is_empty() {
-            sys.push_str("\n\n");
-        }
-        sys.push_str(hands_protocol());
+        let last_host = self
+            .last_host
+            .last()
+            .map(|h| h.chars().take(400).collect::<String>())
+            .unwrap_or_default();
         let pin = insight_pin(&self.learning);
-        if !pin.is_empty() {
-            if !sys.is_empty() {
-                sys.push_str("\n\n");
-            }
-            sys.push_str("Learned:\n");
-            sys.push_str(&pin);
-        }
-        if !sys.is_empty() {
-            msgs.insert(0, ("system".into(), sys));
+        if user_asks_desktop_hands(last_user) || user_asks_takeover(last_user) {
+            self.hands_attach = true;
+            self.eyes_attach = true;
         }
         if self.cfg.cabin_eyes && user_asks_cabin_eyes(last_user) {
             self.eyes_attach = true;
         }
-        if user_asks_desktop_hands(last_user) {
-            self.hands_attach = true;
+        let mut hands = hands_protocol().to_string();
+        if self.eyes_attach || self.hands_attach {
+            let rows = collect_rows();
+            let titles: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+            let frame = build_windshield(
+                &rows,
+                None,
+                refused_lock(&titles),
+                self.board.first().map(|c| c.title.as_str()),
+                self.skill_list.first().map(|s| s.name.as_str()),
+                4,
+            );
+            let glass = windshield_prompt(&frame);
+            if !glass.is_empty() {
+                hands.push_str("\n\nWindshield:\n");
+                hands.push_str(&glass);
+            }
+        }
+        let sys = cabin_system_prompt(
+            &soul,
+            &user_md,
+            &memory_md,
+            &pins,
+            self.active_skill_follow.as_deref(),
+            &self.cfg.goal_pin,
+            &board,
+            &last_host,
+            &hands,
+            &pin,
+        );
+        if !sys.is_empty() {
+            msgs.insert(0, ("system".into(), sys));
         }
         self.ensure_cabin_frame();
         let user_img = self.attach_url.take();
@@ -3756,6 +3692,16 @@ impl Cabin {
                 }
                 remember_chip_outcome(&mut self.chip_memory, true, now_ms());
                 record_turn(&mut self.learning);
+                if self.policy().learns() && !self.scratch() {
+                    let facts = fact_candidates(
+                        &self
+                            .messages
+                            .iter()
+                            .map(|m| (m.role.clone(), m.content.clone()))
+                            .collect::<Vec<_>>(),
+                    );
+                    extract_insights(&mut self.learning, &facts);
+                }
                 bump_usage(&mut self.usage, "message");
                 let text = if self.thought_buf.is_empty() {
                     text
@@ -3782,32 +3728,12 @@ impl Cabin {
                     self.verify_chip = "VERIFY_OK".into();
                 }
                 for (key, st) in extract_work_updates(&text) {
-                    if st == BoardStatus::Done
-                        && !can_mark_done(self.verify_ok_turn, has_verify_ok(&text))
-                    {
-                        if here {
-                            self.status = "Need VERIFY_OK or a passing verify.sh".into();
-                        }
-                        continue;
-                    }
                     let _ = apply_work_update(&mut self.board, &key, st);
-                }
-                if has_goal_complete(&text)
-                    && !can_mark_done(self.verify_ok_turn, has_verify_ok(&text))
-                {
-                    if here {
-                        self.status = "GOAL_COMPLETE held — need verify".into();
-                    }
                 }
                 if here {
                     if let Some(plan) = plan_from_text(&text) {
                         self.pending_update = false;
-                        if self.cfg.yolo {
-                            self.run_cmds(approved_cmds(&plan));
-                        } else {
-                            self.plan_pending = Some(plan);
-                            self.status = "Host plan needs approval".into();
-                        }
+                        self.run_cmds(approved_cmds(&plan));
                     }
                     for c in extract_connector_cmds(&text) {
                         self.run_connector(&c.connector_id, &c.tool, &c.args);
@@ -3934,9 +3860,24 @@ impl Cabin {
                             Err(_) => {}
                         }
                     }
+                    if let Some(recipe) = recipe_from_cmds(&self.last_host, screen_from_rows(&rows)) {
+                        if crate::recipes::save_recipe("last", &recipe).is_ok() {
+                            self.last_recipe = Some(recipe);
+                        }
+                    }
+                    if !self.scratch() {
+                        let user = last_user_text(
+                            &self
+                                .messages
+                                .iter()
+                                .map(|m| (m.role.clone(), m.content.clone()))
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap_or_default();
+                        let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
+                        self.commit_proposed_skill(proposed);
+                    }
                 }
-                self.save_skill = true;
-                self.plan_pending = None;
                 self.persist();
                 self.run_skill_verify();
                 bump_usage(&mut self.usage, "host");
@@ -3954,7 +3895,9 @@ impl Cabin {
                         }
                     }
                 }
-                if is_hard_run(self.last_host.len() as u32, !ok, false, self.scratch()) {
+                if !any_hands
+                    && is_hard_run(self.last_host.len() as u32, !ok, false, self.scratch())
+                {
                     let user = last_user_text(
                         &self
                             .messages
@@ -3964,12 +3907,7 @@ impl Cabin {
                     )
                     .unwrap_or_default();
                     let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
-                    if prefer_patch(&self.skill_list, &proposed).is_some() {
-                        self.status = format!("Patch skill {}?", proposed.name);
-                    }
-                    self.pending_skill = Some(proposed.clone());
-                    self.skill_name = proposed.name.clone();
-                    self.skill_body = grokhub_core::render_skill_md(&proposed);
+                    self.commit_proposed_skill(proposed);
                 }
                 self.kick_model();
             }
@@ -4044,60 +3982,23 @@ impl Cabin {
     }
 
     fn run_cmds(&mut self, cmds: Vec<String>) {
-        if !self.cfg.host_on {
-            self.status = "Host off — /host on".into();
-            return;
-        }
         if self.running {
             self.status = "Busy — wait, then host".into();
             return;
         }
-        if self.host_hour_at.elapsed() > Duration::from_secs(3600) {
-            self.host_hour_count = 0;
-            self.host_hour_at = Instant::now();
-        }
-        let mut gated = Vec::new();
-        for c in &cmds {
-            if host_hour_blocked(self.host_hour_count, self.cfg.host_hour_cap) {
-                self.status = format!("Host hour cap {}", self.cfg.host_hour_cap);
-                break;
-            }
-            if let Some(why) = forbidden_reason(c) {
-                self.messages.push(Msg {
-                    role: "user".into(),
-                    content: format!("HOST_RESULT (facts only):\n$ {c}\nblocked: {why}"),
-                });
-                continue;
-            }
-            if !c.trim().starts_with("COMPUTER_CMD")
-                && host_cmd_leaves_project(c, &self.cfg.project_dir)
-                && !self.cfg.yolo
-            {
-                self.messages.push(Msg {
-                    role: "user".into(),
-                    content: format!("HOST_RESULT (facts only):\n$ {c}\nblocked: outside bound project"),
-                });
-                continue;
-            }
-            self.host_hour_count = self.host_hour_count.saturating_add(1);
-            gated.push(c.clone());
-        }
-        if gated.is_empty() {
-            self.plan_pending = None;
+        if cmds.is_empty() {
             return;
         }
         self.snapshot_project();
-        self.last_host = gated.clone();
+        self.last_host = cmds.clone();
         self.host_halt.store(false, Ordering::SeqCst);
         self.running = true;
         self.chat_job_thread = None;
         self.voice_orb = "hands".into();
-        self.host_live = gated[0].clone();
+        self.host_live = cmds[0].clone();
         self.status = "Host…".into();
-        self.plan_pending = None;
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
-        let cap = self.cfg.host_hour_cap;
         let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
         let halt = self.host_halt.clone();
@@ -4105,17 +4006,11 @@ impl Cabin {
             let started = Instant::now();
             let mut inhibit = crate::notify::inhibit_sleep();
             let mut block = String::new();
-            let mut count = 0u32;
-            for c in &gated {
+            for c in &cmds {
                 if halt.load(Ordering::SeqCst) {
                     block.push_str("HOST_RECEIPT: halted\n");
                     break;
                 }
-                if host_hour_blocked(count, cap) {
-                    block.push_str("hour cap reached\n");
-                    break;
-                }
-                count = count.saturating_add(1);
                 let tx_line = tx.clone();
                 let cmd = c.clone();
                 let receipt = if let Some(op) = parse_computer_cmd_loose(c) {
@@ -4389,27 +4284,62 @@ impl Cabin {
             self.status = "Scratch — no reflect".into();
             return;
         }
-        let current = config::read_memory("MEMORY.md");
         let msgs: Vec<(String, String)> = self
             .messages
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        let edit = surgical_memory_edit(&current, &fact_candidates(&msgs));
-        if edit.diff.is_empty() {
-            self.status = "Reflect: nothing new".into();
-            return;
+        let facts = fact_candidates(&msgs);
+        if self.policy().learns() {
+            extract_insights(&mut self.learning, &facts);
         }
-        match config::write_memory("MEMORY.md", &edit.next) {
-            Ok(()) => {
-                self.reflect_diff = edit.diff;
-                if self.mem_name == "MEMORY.md" {
-                    self.mem_body = edit.next;
+        let current = config::read_memory("MEMORY.md");
+        let edit = surgical_memory_edit(&current, &facts);
+        let mut wrote = false;
+        if !edit.diff.is_empty() {
+            match config::write_memory("MEMORY.md", &edit.next) {
+                Ok(()) => {
+                    self.reflect_diff = edit.diff;
+                    if self.mem_name == "MEMORY.md" {
+                        self.mem_body = edit.next;
+                    }
+                    wrote = true;
                 }
-                self.status = "Reflected MEMORY.md".into();
+                Err(e) => {
+                    self.status = e;
+                    return;
+                }
             }
-            Err(e) => self.status = e,
         }
+        if self.policy().writes_user_md() {
+            let prefs = user_pref_facts(&facts);
+            if !prefs.is_empty() {
+                let user = config::read_memory("USER.md");
+                let user_edit = surgical_memory_edit(&user, &prefs);
+                if !user_edit.diff.is_empty() {
+                    match config::write_memory("USER.md", &user_edit.next) {
+                        Ok(()) => {
+                            if self.mem_name == "USER.md" {
+                                self.mem_body = user_edit.next;
+                            }
+                            if self.reflect_diff.is_empty() {
+                                self.reflect_diff = user_edit.diff;
+                            }
+                            wrote = true;
+                        }
+                        Err(e) => {
+                            self.status = e;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        self.status = if wrote {
+            "Reflected MEMORY.md".into()
+        } else {
+            "Reflect: nothing new".into()
+        };
     }
 
     fn run_skill_verify(&mut self) {
@@ -4438,7 +4368,32 @@ impl Cabin {
         }
     }
 
+    fn take_over_desktop(&mut self) {
+        self.nav = Nav::Chat;
+        self.hands_attach = true;
+        self.eyes_attach = true;
+        self.send_chat("Take over this desktop. Look at the screen and fix what is broken.".into());
+    }
+
+    fn replay_saved_recipe(&mut self, id: &str) {
+        let recipe = if id.eq_ignore_ascii_case("last") {
+            crate::recipes::load_last().or_else(|| self.last_recipe.clone())
+        } else {
+            crate::recipes::load_recipe(id).or_else(|| self.last_recipe.clone())
+        };
+        match recipe {
+            Some(r) => {
+                self.last_recipe = Some(r);
+                self.replay_recipe();
+            }
+            None => self.status = format!("No recipe {id}"),
+        }
+    }
+
     fn replay_recipe(&mut self) {
+        if self.last_recipe.is_none() {
+            self.last_recipe = crate::recipes::load_last();
+        }
         let Some(recipe) = self.last_recipe.clone() else {
             self.status = "No recipe".into();
             return;
@@ -4499,7 +4454,7 @@ impl Cabin {
             refused,
             self.board.first().map(|c| c.title.as_str()),
             self.skill_list.first().map(|s| s.name.as_str()),
-            self.cfg.autonomy,
+            4,
         );
         let mut t = format!(
             "AT-SPI/wmctrl · autonomy {} · {} objects\n",
@@ -4526,30 +4481,6 @@ impl Cabin {
         }
         self.eyes_text = t;
         self.status = format!("{} objects", frame.objects.len());
-    }
-
-    fn stage_last_skill(&mut self) {
-        if self.last_host.is_empty() {
-            return;
-        }
-        let s = SkillMd {
-            name: "last-host".into(),
-            description: "Last approved host run".into(),
-            slash: "/last-host".into(),
-            trigger: "repeat last host".into(),
-            instructions: self.last_host.join("\n"),
-            pitfalls: "review before YOLO".into(),
-            verify: "receipt exit 0".into(),
-            runs: 0,
-        };
-        match skills::save_skill(&s) {
-            Ok(p) => {
-                self.skill_list = skills::list_skills();
-                self.save_skill = false;
-                self.status = format!("Wrote {}", p.display());
-            }
-            Err(e) => self.status = e,
-        }
     }
 
     fn halt_work(&mut self, status: impl Into<String>) {
@@ -4819,51 +4750,6 @@ impl Cabin {
     }
 }
 
-fn apply_tray_window(ctx: &egui::Context, w: crate::tray::TrayWindow) {
-    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(w.visible));
-    if w.visible {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(w.minimized));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-    }
-}
-
-fn titlebar_chrome_size() -> egui::Vec2 {
-    egui::vec2(crate::theme::HIT.max(36.0), crate::theme::TITLEBAR_H)
-}
-
-/// egui ignores a click held longer than 0.8s (`max_click_duration`). The
-/// titlebar × is a close control — release over it must still hide to tray.
-fn chrome_activated(clicked: bool, released_over: bool) -> bool {
-    clicked || released_over
-}
-
-fn titlebar_chrome_hit(resp: &egui::Response) -> bool {
-    chrome_activated(
-        resp.clicked(),
-        resp.contains_pointer() && resp.ctx.input(|i| i.pointer.primary_released()),
-    )
-}
-
-fn titlebar_chrome_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let (_rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click_and_drag());
-    let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
-    if wash.a() > 0 {
-        ui.painter().rect_filled(rect, 6.0, wash);
-    }
-    let color = if resp.hovered() {
-        crate::theme::fg()
-    } else {
-        crate::theme::muted()
-    };
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        label,
-        egui::FontId::proportional(16.0),
-        color,
-    );
-    resp
-}
 
 impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -5860,79 +5746,11 @@ impl Cabin {
     }
 
     fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {
-            if needs_auth_banner(self.has_key()) && !self.messages.is_empty() {
+            if needs_auth_banner(self.has_key()) {
                 ui.horizontal(|ui| {
                     ui.colored_label(crate::theme::setup(), "Connect Grok in Settings");
                     if ui.button("Settings").clicked() {
                         self.nav = Nav::Settings;
-                    }
-                });
-            }
-            if let Some(sk) = self.pending_skill.clone() {
-                ui.horizontal(|ui| {
-                    ui.label(format!("Approve skill {}?", sk.name));
-                    if ui.button("Save SKILL.md").clicked() {
-                        if skills::save_skill(&sk).is_ok() {
-                            self.skill_list = skills::list_skills();
-                            self.status = format!("Wrote skill {}", sk.name);
-                        }
-                        self.pending_skill = None;
-                    }
-                    if ui.button("Skip").clicked() {
-                        self.pending_skill = None;
-                    }
-                });
-            }
-            if self.save_skill {
-                ui.horizontal(|ui| {
-                    ui.label("Save last host run as skill?");
-                    if ui.button("Save as skill").clicked() {
-                        self.stage_last_skill();
-                    }
-                    if ui.button("Skip").clicked() {
-                        self.save_skill = false;
-                    }
-                });
-            }
-            if let Some(mut plan) = self.plan_pending.clone() {
-                ui.label(format!("Allow this plan ({} steps)? Uncheck or reorder, then approve.", plan.len()));
-                let mut up: Option<usize> = None;
-                let mut down: Option<usize> = None;
-                for (i, step) in plan.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut step.checked, "");
-                        ui.label(format!("{} · {}", step.cmd, step.explain));
-                        if ui.small_button("up").clicked() {
-                            up = Some(i);
-                        }
-                        if ui.small_button("down").clicked() {
-                            down = Some(i);
-                        }
-                    });
-                }
-                if let Some(i) = up {
-                    move_step(&mut plan, i, true);
-                }
-                if let Some(i) = down {
-                    move_step(&mut plan, i, false);
-                }
-                self.plan_pending = Some(plan);
-                ui.horizontal(|ui| {
-                    if ui.button("Approve").clicked() {
-                        if let Some(p) = self.plan_pending.take() {
-                            let cmds = approved_cmds(&p);
-                            if self.pending_update {
-                                self.pending_update = false;
-                                self.start_overlay_update(cmds);
-                            } else {
-                                self.run_cmds(cmds);
-                            }
-                        }
-                    }
-                    if ui.button("Deny").clicked() {
-                        self.plan_pending = None;
-                        self.pending_update = false;
-                        self.status.clear();
                     }
                 });
             }
@@ -6288,7 +6106,6 @@ impl Cabin {
         });
         let imagine_live = dedicated_imagine_model(&self.cfg.imagine_model);
         let voice_live = dedicated_voice_model(&self.cfg.voice_model);
-        let passenger = passenger_label(self.cfg.autonomy);
         let doctor = self.doctor_text();
         let usage = usage_line(&self.usage);
         let catalog = catalog_line();
@@ -6493,18 +6310,7 @@ impl Cabin {
                                                             }
                                                         }
                                                         SettingsSec::Host => {
-                                                            if crate::cards::settings_toggle(ui, "Host tools", "Unsandboxed commands on this box.", &mut self.cfg.host_on) {
-                                                                save = true;
-                                                            }
-                                                            if crate::cards::settings_toggle(ui, "YOLO", "/approve off — host runs without a prompt.", &mut self.cfg.yolo) {
-                                                                save = true;
-                                                            }
-                                                            crate::cards::settings_note(ui, &format!("Passenger: {passenger}"));
-                                                            crate::cards::settings_note(ui, "Pulse every 15s. Inbox and night always move. Wall, mid-thought, and reflect wake with autonomy.");
-                                                            ui.horizontal(|ui| {
-                                                                ui.label(RichText::new("Autonomy").size(15.0).color(crate::theme::fg()));
-                                                                ui.add(egui::Slider::new(&mut self.cfg.autonomy, 0..=4).show_value(true));
-                                                            });
+                                                            crate::cards::settings_note(ui, "Host is always on. The cabin drives. Halt stops a running job.");
                                                         }
                                                         SettingsSec::Imagine => {
                                                             crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
@@ -6534,12 +6340,7 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Voice override", "Must contain “voice” or “realtime”. Empty keeps grok-voice-think-fast-2.0.", &mut self.cfg.voice_model, false);
                                                         }
                                                         SettingsSec::Night => {
-                                                            crate::cards::settings_field(ui, "Quiet start", "Local time. Automations hold here.", &mut self.cfg.quiet_start, false);
-                                                            crate::cards::settings_field(ui, "Quiet end", "Local time.", &mut self.cfg.quiet_end, false);
-                                                            ui.horizontal(|ui| {
-                                                                ui.label(RichText::new("Daily cap").size(15.0).color(crate::theme::fg()));
-                                                                ui.add(egui::Slider::new(&mut self.cfg.daily_auto_cap, 0..=200));
-                                                            });
+                                                            crate::cards::settings_note(ui, "Night always runs. Quiet hours and daily caps do not hold work.");
                                                         }
                                                         SettingsSec::Github => {
                                                             crate::cards::settings_field(ui, "Personal access token", "CONNECTOR_CMD only. GitHub is the only live connector.", &mut self.secrets.github_token, true);
@@ -6730,8 +6531,12 @@ impl Cabin {
                     let idx = usize::MAX - i;
                     if let Some(a) = self.automations.get(idx) {
                         let inst = a.instructions.clone();
-                        self.nav = Nav::Chat;
-                        self.send_chat(inst);
+                        if let Some(id) = replay_automation_target(&inst) {
+                            self.replay_saved_recipe(id);
+                        } else {
+                            self.nav = Nav::Chat;
+                            self.send_chat(inst);
+                        }
                     }
                 }
             }
@@ -6930,11 +6735,7 @@ impl Cabin {
                             bump = Some((i, BoardStatus::InProgress));
                         }
                         if crate::cards::ghost_pill(ui, "Done") {
-                            if can_mark_done(self.verify_ok_turn, false) {
-                                bump = Some((i, BoardStatus::Done));
-                            } else {
-                                self.status = "Need VERIFY_OK or a passing verify.sh".into();
-                            }
+                            bump = Some((i, BoardStatus::Done));
                         }
                         if crate::cards::ghost_pill(ui, "Dismiss") {
                             bump = Some((i, BoardStatus::Dismissed));
@@ -7635,9 +7436,15 @@ impl Cabin {
             .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
             let _ = crate::cards::page_header(ui, "Eyes", "");
-            ui.label(RichText::new("AT-SPI via pyatspi when present, else wmctrl + xdotool cursor. Lock screens are won’ts. Cabin eyes stay dormant until you ask them to look, or hands need a frame.").color(crate::theme::muted()));
+            ui.label(RichText::new(format!(
+                "Hands: {}. grim for the frame; ydotool on Wayland (needs ydotoold + uinput), xdotool on X11. AT-SPI when present, else wmctrl. Lock screens are won’ts. Halt stops a running job.",
+                crate::desktop::hands_driver_name()
+            )).color(crate::theme::muted()));
             ui.add_space(12.0);
             ui.horizontal(|ui| {
+                if ui.button("Take over").clicked() {
+                    self.take_over_desktop();
+                }
                 if ui.button("Scan + frame").clicked() {
                     self.refresh_eyes();
                 }
@@ -7645,6 +7452,14 @@ impl Cabin {
                     self.replay_recipe();
                 }
             });
+            if let Some(url) = self.last_frame_url.clone() {
+                if let Some((tex, size)) = eyes_frame_tex(ui.ctx(), &url) {
+                    let max_w = ui.available_width().min(480.0);
+                    let scale = max_w / size[0].max(1) as f32;
+                    let h = size[1] as f32 * scale;
+                    ui.add(egui::Image::new((tex.id(), egui::vec2(max_w, h))));
+                }
+            }
             ui.horizontal_wrapped(|ui| {
                 for line in self.eyes_text.lines() {
                     let Some(rest) = line.strip_prefix("- [") else {
@@ -7687,18 +7502,28 @@ impl Cabin {
     }
 }
 
-fn click_project_opens_board(already_selected: bool) -> bool {
-    already_selected
-}
 
-fn collect_other_chip_threads(threads: &[threads::ChatThread], current_id: &str) -> Vec<ChipThread> {
-    threads
-        .iter()
-        .rev()
-        .filter(|t| t.id != current_id && !t.scratch)
-        .filter_map(|t| chip_thread_from_messages(&t.title, &t.messages))
-        .take(6)
-        .collect()
+fn eyes_frame_tex(ctx: &egui::Context, url: &str) -> Option<(TextureHandle, [usize; 2])> {
+    let key: String = url.chars().take(48).collect();
+    let id = egui::Id::new(("eyes-frame", url.len(), key));
+    if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
+        return Some(hit);
+    }
+    let frame = PresenceFrame {
+        data_url: url.to_string(),
+        at: 0,
+    };
+    let (_, buf) = frame_bytes(&frame)?;
+    let img = image::load_from_memory(&buf).ok()?.to_rgba8();
+    let size = [img.width() as usize, img.height() as usize];
+    let tex = ctx.load_texture(
+        "eyes-last-frame",
+        ColorImage::from_rgba_unmultiplied(size, img.as_raw()),
+        TextureOptions::LINEAR,
+    );
+    let hit = (tex, size);
+    ctx.data_mut(|d| d.insert_temp(id, hit.clone()));
+    Some(hit)
 }
 
 fn project_row_active(selected: bool, is_project: bool, nav: Nav) -> bool {
@@ -7734,18 +7559,6 @@ fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {
         egui::text::CCursor::new(end),
     )));
     state.store(ui.ctx(), id);
-}
-
-fn expand_home(p: &str) -> String {
-    if let Some(rest) = p.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{home}/{rest}");
-        }
-    }
-    if p == "~" {
-        return std::env::var("HOME").unwrap_or_else(|_| p.to_string());
-    }
-    p.to_string()
 }
 
 #[cfg(test)]
@@ -7869,52 +7682,6 @@ mod tests {
     #[test]
     fn health_opens_the_about_page() {
         assert_eq!(super::health_settings_sec(), super::SettingsSec::About);
-    }
-
-    #[test]
-    fn titlebar_close_is_a_real_hit() {
-        let s = super::titlebar_chrome_size();
-        assert!(s.x >= 32.0, "close hit {s:?}");
-        assert_eq!(s.y, crate::theme::TITLEBAR_H);
-    }
-
-    #[test]
-    fn titlebar_close_fires_after_a_held_press() {
-        assert!(
-            super::chrome_activated(true, false),
-            "a normal click still closes"
-        );
-        assert!(
-            super::chrome_activated(false, true),
-            "egui drops clicks held longer than 0.8s — titlebar × must still hide to tray"
-        );
-        assert!(!super::chrome_activated(false, false));
-    }
-
-    #[test]
-    fn maximize_toggles_restore() {
-        assert!(super::next_maximized(false));
-        assert!(!super::next_maximized(true));
-    }
-
-    #[test]
-    fn cabin_menu_closes_on_outside_click() {
-        assert!(super::cabin_menu_should_dismiss(false, true));
-        assert!(!super::cabin_menu_should_dismiss(true, true));
-        assert!(!super::cabin_menu_should_dismiss(false, false));
-    }
-
-    #[test]
-    fn new_skill_gets_a_free_name() {
-        assert_eq!(super::next_starter_skill_name(&[]), "new-skill");
-        assert_eq!(
-            super::next_starter_skill_name(&["new-skill".into()]),
-            "new-skill-2"
-        );
-        assert_eq!(
-            super::next_starter_skill_name(&["new-skill".into(), "new-skill-2".into()]),
-            "new-skill-3"
-        );
     }
 
     fn about_section_opens_update() {
