@@ -73,3 +73,23 @@ impl HubTask {
         self.receipts = receipts.into_iter().take(40).collect();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enqueue_caps_and_complete_marks_done() {
+        let prompt = "p".repeat(20_000);
+        let mut t = HubTask::enqueue("from", "box", "dest", "", &prompt, 9);
+        assert_eq!(t.title, "Remote task");
+        assert_eq!(t.status, "queued");
+        assert_eq!(t.prompt.len(), 16_000);
+        t.complete("ok", vec![Receipt { cmd: "ls".into(), risk: None, code: Some(0), ms: Some(1) }], None);
+        assert_eq!(t.status, "done");
+        assert_eq!(t.result.as_deref(), Some("ok"));
+        assert_eq!(t.receipts.len(), 1);
+        t.complete("no", vec![], Some("failed"));
+        assert_eq!(t.status, "failed");
+    }
+}

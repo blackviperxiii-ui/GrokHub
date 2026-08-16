@@ -2,6 +2,7 @@
 
 pub mod appearance;
 pub mod attach;
+pub mod autonomy;
 pub mod feel;
 pub mod automation;
 pub mod chat;
@@ -60,6 +61,10 @@ pub use feel::{
     feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb, mix_channel, HOVER_EXPANSION,
     HOVER_SECS, PRESS_EXPANSION, PRESS_SECS,
 };
+pub use autonomy::{
+    anticipated_need, autonomy_policy, cabin_system_prompt, host_plan_autorun, host_step_autorun,
+    should_anticipate, HostAuto, LearnMode, Policy, SkillFollow, SkillWrite,
+};
 pub use attach::{
     append_composer, attach_kind, attach_name, attach_prompt_line, chat_attach_status,
     cabin_eyes_request_text, cabin_frame_only, clip_image_args, imagine_ref_status, list_pick_names,
@@ -95,7 +100,7 @@ pub use chips::{
     top_habit_labels, ChipInput, ChipKind, ChipMemory, ChipStage, ChipThread, PredictedIntent,
     QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
 };
-pub use doctor::{doctor_extras, doctor_lines, doctor_ok, DoctorLine};
+pub use doctor::{doctor_extras, doctor_hands_line, doctor_lines, doctor_ok, DoctorLine};
 pub use capture::{
     capture_kinds, ffmpeg_webcam_args, ffmpeg_x11_args, frame_is_blank, gnome_shell_screenshot_args,
     infer_wayland_display, luma_mean_var, parse_xdpy_size, parse_xrandr_size, session_is_wayland,
@@ -120,12 +125,13 @@ pub use imagine::{
 };
 pub use inhabit::{can_inhabit, InhabitBundle};
 pub use recipe::{
-    computer_cmd_line, computer_drive, extract_computer_ops, hands_blocked_by_lock, hands_protocol,
-    lock_blocks_hands, pointer_op_blocked_on_lock,
+    computer_cmd_line, computer_drive, computer_drive_for, extract_computer_ops, hands_backend_name,
+    hands_blocked_by_lock, hands_protocol, lock_blocks_hands, pointer_op_blocked_on_lock,
     needs_reshoot, parse_computer_cmd_loose, parse_computer_op, parse_recipe, parse_screen,
-    replay_ops, screen_from_extents, should_attach_hands_frame, user_asks_cabin_eyes,
-    user_asks_desktop_hands,
-    ComputerDrive, ComputerOp, Recipe, ReplayOp, ScreenSize,
+    pick_hands_backend, recipe_from_cmds, recipe_from_json, recipe_to_json, replay_ops,
+    screen_from_extents, should_attach_hands_frame, user_asks_cabin_eyes, user_asks_desktop_hands,
+    user_asks_takeover, ComputerDrive, ComputerOp, HandsBackend, Recipe, RecipeDoc, ReplayOp,
+    ScreenSize,
 };
 pub use heartbeat::{
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
@@ -139,7 +145,8 @@ pub use pair::{make_pair_code, normalize_code, CODE_ALPH, PAIR_TTL_MS};
 pub use automation::{
     automation_blocked_by_policy, compute_next_run, due_automations, ensure_automation_schedule,
     mark_automation_ran, night_check_command, night_check_exit_code, night_check_stdout,
-    parse_nl_automation, skip_automation, skip_night_check_receipt, Automation,
+    parse_nl_automation, replay_automation_target, skip_automation, skip_night_check_receipt,
+    Automation,
 };
 pub use connector::{
     connector_url_allowed, extract_connector_cmds, github_api_path, map_website_connector_name,
@@ -163,7 +170,10 @@ pub use greeting::{
 };
 pub use history::search_corpus;
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
-pub use learning::{insight_pin, record_turn, upsert_insight, LearningState};
+pub use learning::{
+    extract_insights, insight_key_for_fact, insight_pin, looks_like_user_pref, record_turn,
+    upsert_insight, user_pref_facts, LearningInsight, LearningState,
+};
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
 pub use openclaw::{default_openclaw_paths, import_memory_file, is_openclaw_workspace};
 pub use shortcuts::{
@@ -201,8 +211,9 @@ pub use project::{
 };
 pub use redact::{forget_topic, is_plain_text, redact_secrets};
 pub use skill::{
-    bump_skill_run, is_hard_run, match_skill, parse_skill_md, prefer_patch, propose_skill_from_turn,
-    render_skill_md, skill_dir_name, skill_safe, SkillMd,
+    bump_skill_run, is_hard_run, match_skill, parse_skill_md, patch_skill, prefer_patch,
+    propose_skill_from_turn, render_skill_md, skill_dir_name, skill_follow_block, skill_safe,
+    SkillMd,
 };
 pub use slash::{
     filter_slash_commands, parse_slash, resolve_mode_arg, slash_help, slash_kind, Slash, SlashDef,
@@ -226,7 +237,7 @@ pub use voice::{
 };
 pub use windshield::{
     build_windshield, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, refused_lock,
-    AtspiRow, PendingStep, WindshieldFrame,
+    windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
 pub use workboard::{
     apply_work_update, extract_work_pins, extract_work_updates, parse_work_pin, parse_work_update,
