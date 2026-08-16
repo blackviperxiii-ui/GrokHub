@@ -16,15 +16,18 @@ pub enum FrameGet {
 }
 
 pub fn store_frame(data_url: &str, at: u64) -> Option<PresenceFrame> {
-    let url = if data_url.len() > FRAME_CAP {
-        data_url[..FRAME_CAP].to_string()
-    } else {
-        data_url.to_string()
-    };
-    if !url.starts_with("data:image") {
+    if data_url.len() > FRAME_CAP {
         return None;
     }
-    Some(PresenceFrame { data_url: url, at })
+    if !data_url.starts_with("data:image") {
+        return None;
+    }
+    let frame = PresenceFrame {
+        data_url: data_url.to_string(),
+        at,
+    };
+    frame_bytes(&frame)?;
+    Some(frame)
 }
 
 pub fn frame_bytes(frame: &PresenceFrame) -> Option<(String, Vec<u8>)> {
@@ -122,6 +125,11 @@ mod tests {
     #[test]
     fn rejects_non_image() {
         assert!(store_frame("hello", 1).is_none());
+        let huge = format!("data:image/jpeg;base64,{}", "A".repeat(FRAME_CAP));
+        assert!(
+            store_frame(&huge, 1).is_none(),
+            "over-cap frames must not store a truncated unusable JPEG"
+        );
     }
 
     #[test]

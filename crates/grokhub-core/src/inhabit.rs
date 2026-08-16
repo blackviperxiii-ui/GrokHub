@@ -29,6 +29,12 @@ pub fn inhabit_bundle_usable(b: &InhabitBundle) -> bool {
         || b.goal.as_deref().is_some_and(|g| !g.trim().is_empty())
 }
 
+/// Phones may stage a handoff; they must not consume the dest bundle.
+pub fn inhabit_claim_allowed(peer_name: &str) -> bool {
+    let n = peer_name.to_ascii_lowercase();
+    !n.contains("phone") && !n.contains("android")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -43,5 +49,8 @@ mod tests {
             soul: "stay kind".into(),
             ..Default::default()
         }));
+        assert!(!inhabit_claim_allowed("Pixel phone"));
+        assert!(!inhabit_claim_allowed("Android"));
+        assert!(inhabit_claim_allowed("cabin-2"));
     }
 }
