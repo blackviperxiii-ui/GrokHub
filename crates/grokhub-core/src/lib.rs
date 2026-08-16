@@ -105,7 +105,7 @@ pub use capture::{
 pub use frame::{encode_b64, frame_bytes, jpeg_data_url, FrameGet, PresenceFrame};
 pub use host_plan::{
     approved_cmds, explain_host_risk, host_risk, move_step, parse_host_plan, plan_from_text,
-    step_from_cmd, yolo_plan_split, HostPlanStep, HostRisk,
+    retain_held_plan, step_from_cmd, strip_host_cmd_line, yolo_plan_split, HostPlanStep, HostRisk,
 };
 pub use host_safety::{forbidden_reason, recall_hits};
 pub use imagine::{
@@ -202,7 +202,7 @@ pub use oauth::{
 };
 pub use project::{
     add_to_folder, clean_project_name, create_folder, create_project, drop_node, drop_selected,
-    folder_choices, expand_host_path_token, host_cmd_leaves_project, host_hour_blocked,
+    folder_choices, expand_host_path_token, expand_project_root, host_cmd_leaves_project, host_hour_blocked,
     normalize_host_path, refund_host_reserved, is_under_project,
     project_menu_acts, project_menu_label, project_name_from_path, project_slug, project_work_path,
     rename_node, restore_bound_path, seed_from_bound, settle_project_path, should_seed_sidebar,
