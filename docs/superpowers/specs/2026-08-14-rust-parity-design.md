@@ -30,11 +30,11 @@ Shared crate: `grokhub-core` — pair codes, hub state, frames, inhabit, redacti
 
 ## Cabin (native)
 
-First run stays in chat. Banner: **Connect Grok in Settings**. Settings holds the xAI API key, YOLO (`/approve off`), device name, model.
+First run stays in chat. Banner: **Connect Grok in Settings**. Settings holds the xAI API key, device name, model. Autonomy is locked at maximum. `/approve` is gone. Host plans run; Halt stops a job.
 
 Composer placeholder: **What do you want to know?** Mode combo: Auto / Fast / Balance / Think / Max. Auto routes from the ask (`grok-3-mini-fast` / `grok-4.3` / `grok-4.6` `high` / `grok-4.6` `xhigh`). A Settings chat-model pin skips Auto only when it is not a ladder default — `/mode` does not write that pin. Fast pins mini. Balance is Grok 4.3. Think is Grok 4.6 at high. Max is Grok 4.6 at xhigh. Failover on 401/403/429/5xx: 4.6 → 4.3 → Fast. `/mode auto|fast|balance|think|max`.
 
-Grok may emit `HOST_CMD:` lines. The cabin confirms unless YOLO, then runs `bash -lc` and sends stdout back.
+Grok may emit `HOST_CMD:` lines. The cabin runs `bash -lc` and sends stdout back. Host hour cap and forbidden paths still apply. Destructive night jobs skip and mark ran so they do not retry every pulse.
 
 Memory files live under `~/.config/GrokHub/memory/` (`SOUL.md`, `USER.md`, `MEMORY.md`). Config: `~/.config/GrokHub/app.json`. Project tree: `~/.config/GrokHub/projects.json`. Tokens: `~/.config/GrokHub/secrets.json` (mode 0600).
 
@@ -42,9 +42,9 @@ Projects sit in the left rail. `+` creates a project under `~/GrokHub-Work/<slug
 
 History tabs: pin, rename (locks the title), delete. Fast names the tab from the first topic (max 16 characters) unless locked. `/pin` `/rename` `/delete`.
 
-Plus is Upload / Paste. Five chips sit above the composer on one row with no selected first pill. Enter sends; Ctrl+Enter is a newline. Send becomes Stop while a job runs. Empty chats can show a faint Fast blurb. Chat streams Responses SSE tokens onto the thread that started the job. User and assistant turns hug the text in rounded bubbles and wrap in a tight column (hard cap 440px). Imagine toolbox docks mid-pane, then the floor; stills sit above the composer. Appearance is Dark, Light, or System. OAuth paints the Grok profile photo in the footer and covers STT/TTS; duplex Voice streams 24 kHz PCM with a console key. Settings → Update shows a percent bar on the Settings page; **Restart** reloads the new binary after a clean overlay. Chat shows thought / tool steps; Thought does not announce an attach; host receipts stay off the bubble. `COMPUTER_CMD` drives mouse/keyboard/vision unsandboxed. `/stop` / tray Halt / Ctrl+Shift+Esc flip `host_halt` so xdotool and `HOST_CMD` actually die. Window size and position persist. The tray icon is registered from launch. Titlebar × unmaps the cabin (X11; Wayland cannot hide). Tray pings once on hide. A 15s heartbeat runs housekeep, inbox, and night; wall, mid-thought, and reflect wake as autonomy rises.
+Plus is Upload / Paste. Five chips sit above the composer on one row with no selected first pill. Enter sends; Ctrl+Enter is a newline. Send becomes Stop while a job runs. Empty chats can show a faint Fast blurb. Chat streams Responses SSE tokens onto the thread that started the job. User and assistant turns hug the text in rounded bubbles and wrap in a tight column (hard cap 440px). Imagine toolbox docks mid-pane, then the floor; stills sit above the composer. Appearance is Dark, Light, or System. OAuth paints the Grok profile photo in the footer and covers STT/TTS; duplex Voice streams 24 kHz PCM with a console key. Settings → Update shows a percent bar on the Settings page; **Restart** reloads the new binary after a clean overlay. Chat shows thought / tool steps; Thought does not announce an attach; host receipts stay off the bubble and on the origin thread. `COMPUTER_CMD` drives mouse/keyboard/vision unsandboxed via ydotool (Wayland) or xdotool (X11). Take over attaches a grim JPEG plus the AT-SPI windshield; a hands run saves `recipes/last.json`. `/stop` / tray Halt / Ctrl+Shift+Esc flip `host_halt` so those workers actually die. Window size and position persist. The tray icon is registered from launch. Titlebar × unmaps the cabin (X11; Wayland cannot hide). Tray pings once on hide. A 15s heartbeat runs every organ. `/rewind` refuses secret dirs. Empty Auto still routes.
 
-Devices pane starts the in-process hub on `GROKHUB_HUB_PORT` or `18766` and shows the pair code.
+Devices pane starts the in-process hub on `GROKHUB_HUB_PORT` or `18766` and shows the pair code plus a real LAN IPv4. Hub `complete` requires the owning peer.
 
 ## Hub contract
 
@@ -53,7 +53,7 @@ Unchanged. See `docs/superpowers/plans/2026-08-14-dispatch-android-notes.md`.
 ## In this repo (Rust)
 
 Cabin panes: Chat, Devices, Memory, Board, Imagine, Skills, Eyes, Settings. Left rail also holds the project tree.
-Core: pair, hub, slash, host rails, workboard, project tree, SKILL.md, dedicated Imagine, windshield, Hey Grok (xAI STT + TTS, whisper fallback), persist, 15s heartbeat. Cabin eyes stay dormant until asked (or hands need a frame); capture prefers Wayland-native tools and skips blank frames.
+Core: pair, hub, slash, host rails, workboard, project tree, SKILL.md, dedicated Imagine, windshield, Hey Grok (xAI STT + TTS, whisper fallback), persist, 15s heartbeat, always-on autonomy, saved desktop recipes. Cabin eyes stay dormant until asked (or hands need a frame); capture prefers Wayland-native tools and skips blank frames.
 C ABI: `crates/grokhub-ffi` + `include/grokhub.h` — pair, port, dedicated imagine/voice models, forbidden host, slash kind.
 
 ## Sibling repos

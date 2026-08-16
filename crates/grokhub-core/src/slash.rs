@@ -360,7 +360,7 @@ pub fn slash_help() -> String {
         "/send <task> — task this box",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another box (not the phone)",
-        "/rewind — restore last project snapshot",
+        "/rewind — restore last project snapshot (refuses ~/.ssh and other secret dirs)",
         "/room <name> — speak the room",
         "/export — write this chat as markdown",
         "/rename <title> — name this chat (permanent)",
@@ -383,6 +383,7 @@ pub fn slash_help() -> String {
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Hands: unsandboxed; /stop kills the worker.",
         "Cabin eyes stay dormant until you ask, or hands need a frame. Thought does not announce an attach.",
         "Pulse every 15s: every organ runs. The cabin drives.",
+        "Devices pair URL is a LAN IPv4. Hub complete is owner-only.",
     ]
     .join("\n")
 }
@@ -471,6 +472,7 @@ mod tests {
         assert!(slash_help().contains("Pulse every 15s"));
         assert!(slash_help().contains("Cabin eyes stay dormant"));
         assert!(slash_help().contains("Restart on Settings"));
+        assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());
