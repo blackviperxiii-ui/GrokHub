@@ -10,6 +10,7 @@ pub enum HeartbeatAct {
     Wall,
     MidThought,
     Reflect,
+    Anticipate,
 }
 
 /// User-owned work (inbox, night) always moves. Higher autonomy wakes more organs.
@@ -25,6 +26,9 @@ pub fn heartbeat_acts(autonomy: u8) -> Vec<HeartbeatAct> {
     }
     if autonomy >= 3 {
         out.push(HeartbeatAct::Reflect);
+    }
+    if autonomy >= 4 {
+        out.push(HeartbeatAct::Anticipate);
     }
     out
 }
@@ -80,7 +84,10 @@ mod tests {
         assert!(!two.contains(&HeartbeatAct::Reflect));
         let three = heartbeat_acts(3);
         assert!(three.contains(&HeartbeatAct::Reflect));
-        assert_eq!(heartbeat_acts(4), heartbeat_acts(3));
+        assert!(!three.contains(&HeartbeatAct::Anticipate));
+        let four = heartbeat_acts(4);
+        assert!(four.contains(&HeartbeatAct::Reflect));
+        assert!(four.contains(&HeartbeatAct::Anticipate));
     }
 
     #[test]

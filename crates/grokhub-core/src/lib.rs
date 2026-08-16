@@ -2,6 +2,7 @@
 
 pub mod appearance;
 pub mod attach;
+pub mod autonomy;
 pub mod feel;
 pub mod automation;
 pub mod chat;
@@ -59,6 +60,10 @@ pub use appearance::{
 pub use feel::{
     feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb, mix_channel, HOVER_EXPANSION,
     HOVER_SECS, PRESS_EXPANSION, PRESS_SECS,
+};
+pub use autonomy::{
+    anticipated_need, autonomy_policy, cabin_system_prompt, host_plan_autorun, host_step_autorun,
+    should_anticipate, HostAuto, LearnMode, Policy, SkillFollow, SkillWrite,
 };
 pub use attach::{
     append_composer, attach_kind, attach_name, attach_prompt_line, chat_attach_status,
@@ -163,7 +168,10 @@ pub use greeting::{
 };
 pub use history::search_corpus;
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
-pub use learning::{insight_pin, record_turn, upsert_insight, LearningState};
+pub use learning::{
+    extract_insights, insight_key_for_fact, insight_pin, looks_like_user_pref, record_turn,
+    upsert_insight, user_pref_facts, LearningInsight, LearningState,
+};
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
 pub use openclaw::{default_openclaw_paths, import_memory_file, is_openclaw_workspace};
 pub use shortcuts::{
@@ -201,8 +209,9 @@ pub use project::{
 };
 pub use redact::{forget_topic, is_plain_text, redact_secrets};
 pub use skill::{
-    bump_skill_run, is_hard_run, match_skill, parse_skill_md, prefer_patch, propose_skill_from_turn,
-    render_skill_md, skill_dir_name, skill_safe, SkillMd,
+    bump_skill_run, is_hard_run, match_skill, parse_skill_md, patch_skill, prefer_patch,
+    propose_skill_from_turn, render_skill_md, skill_dir_name, skill_follow_block, skill_safe,
+    SkillMd,
 };
 pub use slash::{
     filter_slash_commands, parse_slash, resolve_mode_arg, slash_help, slash_kind, Slash, SlashDef,

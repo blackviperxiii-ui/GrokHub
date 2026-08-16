@@ -1,3 +1,10 @@
+use crate::helpers::{
+    cabin_menu_should_dismiss, click_project_opens_board, collect_other_chip_threads, expand_home,
+    next_maximized, next_starter_skill_name, wants_live_repaint,
+};
+use crate::titlebar::{
+    apply_tray_window, titlebar_chrome_btn, titlebar_chrome_hit,
+};
 use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin, load_image_data_url,
@@ -12,11 +19,12 @@ use crate::update::{remember_source, resolve_source};
 use crate::xai::{grok_chat, grok_chat_stream, grok_imagine, grok_stt, grok_tts, http_status_of};
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use grokhub_core::{
-    append_composer, apply_work_update, attach_kind, attach_name, attach_prompt_line,
+    append_composer, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
+    autonomy_policy, cabin_system_prompt,
     appearance_choices, appearance_hint, approved_cmds, auth_bearer, automation_blocked_by_policy, blend_thread_goal,
     build_hub_snapshot,
     build_quick_chips, build_windshield, bump_skill_run, bump_usage, cabin_eyes_for_turn, can_inhabit, can_mark_done,
-    catalog_line, chip_suggest_prompt, chip_thread_from_messages, compact_keep_pin, compose_imagine_prompt,
+    catalog_line, chip_suggest_prompt, compact_keep_pin, compose_imagine_prompt,
     context_fingerprint,
     context_percent, daily_units_blocked,
     dedicated_imagine_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
@@ -29,11 +37,11 @@ use grokhub_core::{
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     imagine_aspect_label, imagine_aspect_name, imagine_style_label, imagine_video_dur_label,
     imagine_video_res_label, last_imagine_receipt,
-    extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
+    extract_insights, extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
     forget_topic, greet_from_last_job, has_auth, has_goal_complete, has_verify_ok, hey_grok_on_press,
     hey_grok_route, hey_grok_starts_ptt, import_memory_file, insight_pin, is_openclaw_workspace,
     add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
-    host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
+    host_cmd_leaves_project, host_hour_blocked, host_plan_autorun, host_step_autorun, host_risk, host_status_line, is_hard_run,
     project_menu_acts, project_menu_label, rename_node, restore_bound_path, seed_from_bound,
     settle_project_path, should_seed_sidebar, stage_project, toggle_folder, upsert_bound,
     visible_tree, ProjectKind, ProjectMenuAct,
@@ -50,7 +58,7 @@ use grokhub_core::{
     parse_computer_cmd_loose, should_attach_hands_frame, user_asks_cabin_eyes,
     user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
-    now_ms, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
+    now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
     parse_nl_automation, parse_recipe, parse_slash, parse_theme, passenger_label, pick_theme, plan_from_text, plan_room,
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
@@ -59,14 +67,14 @@ use grokhub_core::{
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     rewind_dest, save_hub_state, screen_from_extents, search_corpus,
-    should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
+    should_anticipate, should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title, apply_manual_rename, delete_thread, display_tab_title, history_order,
     should_name_thread,
-    slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
+    skill_follow_block, slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
     unified_diff_cite, usage_line,
@@ -76,9 +84,10 @@ use grokhub_core::{
     update_wipes_config, voice_session_url, Automation, BoardCard,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ChipThread, ComputerOp, DeviceCodeStart, HeyGrokAction,
     HeyGrokRoute, HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
-    HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, MintRealtimeFn, Recipe, ReplayOp, RewindRecord,
+    HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, MintRealtimeFn, Policy, Recipe, ReplayOp, RewindRecord,
     AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
     VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
+    user_pref_facts,
     DEFAULT_MODEL, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS, IMAGINE_ASPECTS,
     IMAGINE_STYLES,
     PRESENCE_RING_MS, TRANSCRIBERS,
@@ -235,42 +244,6 @@ fn take_focused_composer(
         Some(ComposerEnter::Newline) => None,
         None => None,
     }
-}
-
-fn next_maximized(currently: bool) -> bool {
-    !currently
-}
-
-fn cabin_menu_should_dismiss(ignore: bool, outside_click: bool) -> bool {
-    !ignore && outside_click
-}
-
-fn next_starter_skill_name(existing: &[String]) -> String {
-    if !existing.iter().any(|n| n == "new-skill") {
-        return "new-skill".into();
-    }
-    let mut i = 2_u32;
-    loop {
-        let name = format!("new-skill-{i}");
-        if !existing.iter().any(|n| n == &name) {
-            return name;
-        }
-        i = i.saturating_add(1);
-        if i > 99 {
-            return format!("new-skill-{i}");
-        }
-    }
-}
-
-fn wants_live_repaint(
-    running: bool,
-    chip_busy: bool,
-    hub_on: bool,
-    window_visible: bool,
-    imagine: bool,
-) -> bool {
-    let _ = window_visible;
-    running || chip_busy || hub_on || imagine
 }
 
 const HIDDEN_HEARTBEAT_MS: u64 = 400;
@@ -628,6 +601,8 @@ pub struct Cabin {
     palette_focus: bool,
     shortcuts_open: bool,
     pending_skill: Option<SkillMd>,
+    active_skill_follow: Option<String>,
+    last_anticipate_ms: u64,
     goal_step: u32,
     stream_buf: String,
     thought_buf: String,
@@ -902,6 +877,8 @@ impl Cabin {
             palette_focus: false,
             shortcuts_open: false,
             pending_skill: None,
+            active_skill_follow: None,
+            last_anticipate_ms: 0,
             goal_step: 0,
             stream_buf: String::new(),
             thought_buf: String::new(),
@@ -2392,9 +2369,13 @@ impl Cabin {
             self.run_slash(slash);
             return;
         }
+        self.active_skill_follow = None;
         if let Some(sk) = match_skill(&text, &self.skill_list) {
             self.skill_name = sk.name.clone();
             self.status = format!("Skill {}", sk.name);
+            if self.policy().injects_skill() {
+                self.active_skill_follow = Some(skill_follow_block(sk));
+            }
         }
         self.messages.push(Msg {
             role: "user".into(),
@@ -2760,6 +2741,32 @@ impl Cabin {
         self.kick_model();
     }
 
+    fn policy(&self) -> Policy {
+        autonomy_policy(self.cfg.autonomy, self.cfg.yolo, self.approve_risky_only)
+    }
+
+    fn commit_proposed_skill(&mut self, proposed: SkillMd) {
+        let to_save = if let Some(name) = prefer_patch(&self.skill_list, &proposed) {
+            if let Some(existing) = self.skill_list.iter().find(|s| s.name == name) {
+                patch_skill(existing, &proposed)
+            } else {
+                proposed
+            }
+        } else {
+            proposed
+        };
+        match skills::save_skill(&to_save) {
+            Ok(_) => {
+                self.skill_list = skills::list_skills();
+                self.skill_name = to_save.name.clone();
+                self.skill_body = grokhub_core::render_skill_md(&to_save);
+                self.pending_skill = None;
+                self.status = format!("Wrote skill {}", to_save.name);
+            }
+            Err(e) => self.status = e,
+        }
+    }
+
     fn queue_sh(&mut self, cmd: String) {
         if !self.cfg.host_on {
             self.status = "Host off — /host on".into();
@@ -2779,12 +2786,7 @@ impl Cabin {
         }
         let step = step_from_cmd(cmd);
         let outside = host_cmd_leaves_project(&step.cmd, &self.cfg.project_dir);
-        if self.cfg.yolo && !(self.approve_risky_only && step.risk == HostRisk::Destructive) && !outside
-        {
-            self.run_cmds(vec![step.cmd]);
-            return;
-        }
-        if self.approve_risky_only && step.risk != HostRisk::Destructive && !outside {
+        if host_step_autorun(self.policy(), step.risk, outside) {
             self.run_cmds(vec![step.cmd]);
             return;
         }
@@ -3047,8 +3049,34 @@ impl Cabin {
                         self.run_reflect();
                     }
                 }
+                HeartbeatAct::Anticipate => self.tick_anticipate(),
             }
         }
+    }
+
+    fn tick_anticipate(&mut self) {
+        let clock = Self::local_clock();
+        let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
+        if !should_anticipate(
+            self.policy(),
+            self.running,
+            quiet,
+            daily_units_blocked(self.daily_auto_used, self.cfg.daily_auto_cap),
+        ) {
+            return;
+        }
+        let Some(prompt) = anticipated_need(
+            &self.learning.insights,
+            &self.skill_list,
+            self.last_anticipate_ms,
+            now_ms(),
+            IDLE_REFLECT_MS,
+        ) else {
+            return;
+        };
+        self.last_anticipate_ms = now_ms();
+        self.daily_auto_used = self.daily_auto_used.saturating_add(1);
+        self.send_chat(prompt);
     }
 
     fn tick_night(&mut self) {
@@ -3594,54 +3622,31 @@ impl Cabin {
             })
             .collect();
         let soul = config::read_memory("SOUL.md");
+        let user_md = config::read_memory("USER.md");
+        let memory_md = config::read_memory("MEMORY.md");
         let pins = skills::pin_text(&self.skill_list);
-        let mut sys = String::new();
-        if !soul.trim().is_empty() {
-            sys.push_str("SOUL.md\n");
-            sys.push_str(&soul);
+        let mut board = String::new();
+        for c in self.board.iter().take(8) {
+            board.push_str(&format!("- [{}] {}\n", c.status.as_str(), c.title));
         }
-        if !pins.is_empty() {
-            if !sys.is_empty() {
-                sys.push_str("\n\n");
-            }
-            sys.push_str("Skills (names only):\n");
-            sys.push_str(&pins);
-        }
-        if !self.cfg.goal_pin.trim().is_empty() {
-            if !sys.is_empty() {
-                sys.push_str("\n\n");
-            }
-            sys.push_str("GOAL PIN: ");
-            sys.push_str(&self.cfg.goal_pin);
-        }
-        if !self.board.is_empty() {
-            if !sys.is_empty() {
-                sys.push_str("\n\n");
-            }
-            sys.push_str("Workboard:\n");
-            for c in self.board.iter().take(8) {
-                sys.push_str(&format!("- [{}] {}\n", c.status.as_str(), c.title));
-            }
-        }
-        if let Some(h) = self.last_host.last() {
-            if !sys.is_empty() {
-                sys.push_str("\n\n");
-            }
-            sys.push_str("Last HOST_RESULT (tail):\n");
-            sys.push_str(&h.chars().take(400).collect::<String>());
-        }
-        if !sys.is_empty() {
-            sys.push_str("\n\n");
-        }
-        sys.push_str(hands_protocol());
+        let last_host = self
+            .last_host
+            .last()
+            .map(|h| h.chars().take(400).collect::<String>())
+            .unwrap_or_default();
         let pin = insight_pin(&self.learning);
-        if !pin.is_empty() {
-            if !sys.is_empty() {
-                sys.push_str("\n\n");
-            }
-            sys.push_str("Learned:\n");
-            sys.push_str(&pin);
-        }
+        let sys = cabin_system_prompt(
+            &soul,
+            &user_md,
+            &memory_md,
+            &pins,
+            self.active_skill_follow.as_deref(),
+            &self.cfg.goal_pin,
+            &board,
+            &last_host,
+            hands_protocol(),
+            &pin,
+        );
         if !sys.is_empty() {
             msgs.insert(0, ("system".into(), sys));
         }
@@ -3756,6 +3761,16 @@ impl Cabin {
                 }
                 remember_chip_outcome(&mut self.chip_memory, true, now_ms());
                 record_turn(&mut self.learning);
+                if self.policy().learns() && !self.scratch() {
+                    let facts = fact_candidates(
+                        &self
+                            .messages
+                            .iter()
+                            .map(|m| (m.role.clone(), m.content.clone()))
+                            .collect::<Vec<_>>(),
+                    );
+                    extract_insights(&mut self.learning, &facts);
+                }
                 bump_usage(&mut self.usage, "message");
                 let text = if self.thought_buf.is_empty() {
                     text
@@ -3802,7 +3817,7 @@ impl Cabin {
                 if here {
                     if let Some(plan) = plan_from_text(&text) {
                         self.pending_update = false;
-                        if self.cfg.yolo {
+                        if host_plan_autorun(self.policy(), &plan, &self.cfg.project_dir) {
                             self.run_cmds(approved_cmds(&plan));
                         } else {
                             self.plan_pending = Some(plan);
@@ -3964,12 +3979,17 @@ impl Cabin {
                     )
                     .unwrap_or_default();
                     let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
-                    if prefer_patch(&self.skill_list, &proposed).is_some() {
-                        self.status = format!("Patch skill {}?", proposed.name);
+                    let policy = self.policy();
+                    if policy.auto_writes_skill() {
+                        self.commit_proposed_skill(proposed);
+                    } else if policy.stages_skill() {
+                        if prefer_patch(&self.skill_list, &proposed).is_some() {
+                            self.status = format!("Patch skill {}?", proposed.name);
+                        }
+                        self.pending_skill = Some(proposed.clone());
+                        self.skill_name = proposed.name.clone();
+                        self.skill_body = grokhub_core::render_skill_md(&proposed);
                     }
-                    self.pending_skill = Some(proposed.clone());
-                    self.skill_name = proposed.name.clone();
-                    self.skill_body = grokhub_core::render_skill_md(&proposed);
                 }
                 self.kick_model();
             }
@@ -4071,7 +4091,7 @@ impl Cabin {
             }
             if !c.trim().starts_with("COMPUTER_CMD")
                 && host_cmd_leaves_project(c, &self.cfg.project_dir)
-                && !self.cfg.yolo
+                && !host_step_autorun(self.policy(), host_risk(c), true)
             {
                 self.messages.push(Msg {
                     role: "user".into(),
@@ -4389,27 +4409,62 @@ impl Cabin {
             self.status = "Scratch — no reflect".into();
             return;
         }
-        let current = config::read_memory("MEMORY.md");
         let msgs: Vec<(String, String)> = self
             .messages
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        let edit = surgical_memory_edit(&current, &fact_candidates(&msgs));
-        if edit.diff.is_empty() {
-            self.status = "Reflect: nothing new".into();
-            return;
+        let facts = fact_candidates(&msgs);
+        if self.policy().learns() {
+            extract_insights(&mut self.learning, &facts);
         }
-        match config::write_memory("MEMORY.md", &edit.next) {
-            Ok(()) => {
-                self.reflect_diff = edit.diff;
-                if self.mem_name == "MEMORY.md" {
-                    self.mem_body = edit.next;
+        let current = config::read_memory("MEMORY.md");
+        let edit = surgical_memory_edit(&current, &facts);
+        let mut wrote = false;
+        if !edit.diff.is_empty() {
+            match config::write_memory("MEMORY.md", &edit.next) {
+                Ok(()) => {
+                    self.reflect_diff = edit.diff;
+                    if self.mem_name == "MEMORY.md" {
+                        self.mem_body = edit.next;
+                    }
+                    wrote = true;
                 }
-                self.status = "Reflected MEMORY.md".into();
+                Err(e) => {
+                    self.status = e;
+                    return;
+                }
             }
-            Err(e) => self.status = e,
         }
+        if self.policy().writes_user_md() {
+            let prefs = user_pref_facts(&facts);
+            if !prefs.is_empty() {
+                let user = config::read_memory("USER.md");
+                let user_edit = surgical_memory_edit(&user, &prefs);
+                if !user_edit.diff.is_empty() {
+                    match config::write_memory("USER.md", &user_edit.next) {
+                        Ok(()) => {
+                            if self.mem_name == "USER.md" {
+                                self.mem_body = user_edit.next;
+                            }
+                            if self.reflect_diff.is_empty() {
+                                self.reflect_diff = user_edit.diff;
+                            }
+                            wrote = true;
+                        }
+                        Err(e) => {
+                            self.status = e;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        self.status = if wrote {
+            "Reflected MEMORY.md".into()
+        } else {
+            "Reflect: nothing new".into()
+        };
     }
 
     fn run_skill_verify(&mut self) {
@@ -4819,51 +4874,6 @@ impl Cabin {
     }
 }
 
-fn apply_tray_window(ctx: &egui::Context, w: crate::tray::TrayWindow) {
-    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(w.visible));
-    if w.visible {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(w.minimized));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-    }
-}
-
-fn titlebar_chrome_size() -> egui::Vec2 {
-    egui::vec2(crate::theme::HIT.max(36.0), crate::theme::TITLEBAR_H)
-}
-
-/// egui ignores a click held longer than 0.8s (`max_click_duration`). The
-/// titlebar × is a close control — release over it must still hide to tray.
-fn chrome_activated(clicked: bool, released_over: bool) -> bool {
-    clicked || released_over
-}
-
-fn titlebar_chrome_hit(resp: &egui::Response) -> bool {
-    chrome_activated(
-        resp.clicked(),
-        resp.contains_pointer() && resp.ctx.input(|i| i.pointer.primary_released()),
-    )
-}
-
-fn titlebar_chrome_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let (_rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click_and_drag());
-    let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
-    if wash.a() > 0 {
-        ui.painter().rect_filled(rect, 6.0, wash);
-    }
-    let color = if resp.hovered() {
-        crate::theme::fg()
-    } else {
-        crate::theme::muted()
-    };
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        label,
-        egui::FontId::proportional(16.0),
-        color,
-    );
-    resp
-}
 
 impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -5860,7 +5870,7 @@ impl Cabin {
     }
 
     fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {
-            if needs_auth_banner(self.has_key()) && !self.messages.is_empty() {
+            if needs_auth_banner(self.has_key()) {
                 ui.horizontal(|ui| {
                     ui.colored_label(crate::theme::setup(), "Connect Grok in Settings");
                     if ui.button("Settings").clicked() {
@@ -6500,7 +6510,8 @@ impl Cabin {
                                                                 save = true;
                                                             }
                                                             crate::cards::settings_note(ui, &format!("Passenger: {passenger}"));
-                                                            crate::cards::settings_note(ui, "Pulse every 15s. Inbox and night always move. Wall, mid-thought, and reflect wake with autonomy.");
+                                                            crate::cards::settings_note(ui, "0 you drive. 1 confirms each host plan. 2–4 is how the cabin drives — 3 acts, 4 anticipates. Halt always works.");
+                                                            crate::cards::settings_note(ui, "Pulse every 15s. Inbox and night always move. Wall, mid-thought, reflect, and anticipate wake with autonomy.");
                                                             ui.horizontal(|ui| {
                                                                 ui.label(RichText::new("Autonomy").size(15.0).color(crate::theme::fg()));
                                                                 ui.add(egui::Slider::new(&mut self.cfg.autonomy, 0..=4).show_value(true));
@@ -7687,19 +7698,6 @@ impl Cabin {
     }
 }
 
-fn click_project_opens_board(already_selected: bool) -> bool {
-    already_selected
-}
-
-fn collect_other_chip_threads(threads: &[threads::ChatThread], current_id: &str) -> Vec<ChipThread> {
-    threads
-        .iter()
-        .rev()
-        .filter(|t| t.id != current_id && !t.scratch)
-        .filter_map(|t| chip_thread_from_messages(&t.title, &t.messages))
-        .take(6)
-        .collect()
-}
 
 fn project_row_active(selected: bool, is_project: bool, nav: Nav) -> bool {
     if !selected || !is_project {
@@ -7734,18 +7732,6 @@ fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {
         egui::text::CCursor::new(end),
     )));
     state.store(ui.ctx(), id);
-}
-
-fn expand_home(p: &str) -> String {
-    if let Some(rest) = p.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{home}/{rest}");
-        }
-    }
-    if p == "~" {
-        return std::env::var("HOME").unwrap_or_else(|_| p.to_string());
-    }
-    p.to_string()
 }
 
 #[cfg(test)]
@@ -7869,52 +7855,6 @@ mod tests {
     #[test]
     fn health_opens_the_about_page() {
         assert_eq!(super::health_settings_sec(), super::SettingsSec::About);
-    }
-
-    #[test]
-    fn titlebar_close_is_a_real_hit() {
-        let s = super::titlebar_chrome_size();
-        assert!(s.x >= 32.0, "close hit {s:?}");
-        assert_eq!(s.y, crate::theme::TITLEBAR_H);
-    }
-
-    #[test]
-    fn titlebar_close_fires_after_a_held_press() {
-        assert!(
-            super::chrome_activated(true, false),
-            "a normal click still closes"
-        );
-        assert!(
-            super::chrome_activated(false, true),
-            "egui drops clicks held longer than 0.8s — titlebar × must still hide to tray"
-        );
-        assert!(!super::chrome_activated(false, false));
-    }
-
-    #[test]
-    fn maximize_toggles_restore() {
-        assert!(super::next_maximized(false));
-        assert!(!super::next_maximized(true));
-    }
-
-    #[test]
-    fn cabin_menu_closes_on_outside_click() {
-        assert!(super::cabin_menu_should_dismiss(false, true));
-        assert!(!super::cabin_menu_should_dismiss(true, true));
-        assert!(!super::cabin_menu_should_dismiss(false, false));
-    }
-
-    #[test]
-    fn new_skill_gets_a_free_name() {
-        assert_eq!(super::next_starter_skill_name(&[]), "new-skill");
-        assert_eq!(
-            super::next_starter_skill_name(&["new-skill".into()]),
-            "new-skill-2"
-        );
-        assert_eq!(
-            super::next_starter_skill_name(&["new-skill".into(), "new-skill-2".into()]),
-            "new-skill-3"
-        );
     }
 
     fn about_section_opens_update() {
