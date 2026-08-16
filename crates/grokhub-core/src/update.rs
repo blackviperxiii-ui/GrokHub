@@ -140,15 +140,17 @@ pub struct OverlayUpdateView {
     pub running: bool,
     pub posts_chat: bool,
     pub stay_on_update: bool,
+    pub can_restart: bool,
 }
 
-fn overlay_view(pct: u8, status: String, running: bool) -> OverlayUpdateView {
+fn overlay_view(pct: u8, status: String, running: bool, can_restart: bool) -> OverlayUpdateView {
     OverlayUpdateView {
         pct,
         status,
         running,
         posts_chat: false,
         stay_on_update: true,
+        can_restart,
     }
 }
 
@@ -157,6 +159,7 @@ pub fn overlay_update_begin(total_cmds: usize) -> OverlayUpdateView {
         update_progress_pct(0, total_cmds),
         "Updating…".into(),
         true,
+        false,
     )
 }
 
@@ -169,15 +172,76 @@ pub fn overlay_update_progress(
         update_progress_pct(done_cmds, total_cmds),
         label.to_string(),
         true,
+        false,
     )
 }
 
 pub fn overlay_update_finish(ok: bool, last_pct: u8) -> OverlayUpdateView {
     if ok {
-        overlay_view(100, "Update finished — restart the cabin".into(), false)
+        overlay_view(100, "Update finished — restart GrokHub".into(), false, true)
     } else {
-        overlay_view(last_pct, "Update failed".into(), false)
+        overlay_view(last_pct, "Update failed".into(), false, false)
     }
+}
+
+pub fn overlay_update_can_restart(finished_ok: bool, running: bool) -> bool {
+    finished_ok && !running
+}
+
+/// Prefer the user overlay binary so a running (deleted) inode is not relaunched.
+pub fn restart_bin(home: Option<&str>, current_exe: Option<&str>) -> String {
+    if let Some(home) = home.map(str::trim).filter(|s| !s.is_empty()) {
+        let overlay = std::path::Path::new(home).join(".local/bin/grokhub");
+        if overlay.is_file() {
+            return overlay.to_string_lossy().into_owned();
+        }
+    }
+    current_exe
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("grokhub")
+        .to_string()
+}
+
+pub fn restart_argv(exe: &str, hidden: bool) -> Vec<String> {
+    if hidden {
+        vec![exe.to_string(), "--agent".into()]
+    } else {
+        vec![exe.to_string()]
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestartAct {
+    Systemd { units: Vec<String> },
+    Spawn { argv: Vec<String> },
+}
+
+/// Restart the hub unit (if live), then the cabin unit or a fresh process.
+pub fn restart_acts(cabin_unit: bool, hub_unit: bool, exe: &str, hidden: bool) -> Vec<RestartAct> {
+    let mut acts = Vec::new();
+    let mut units = Vec::new();
+    if hub_unit {
+        units.push("grokhub-hub.service".into());
+    }
+    if cabin_unit {
+        units.push("grokhub.service".into());
+    }
+    if !units.is_empty() {
+        acts.push(RestartAct::Systemd { units });
+    }
+    if !cabin_unit {
+        acts.push(RestartAct::Spawn {
+            argv: restart_argv(exe, hidden),
+        });
+    }
+    acts
+}
+
+pub fn systemd_user_restart_args(units: &[String]) -> Vec<String> {
+    let mut args = vec!["--user".into(), "restart".into()];
+    args.extend(units.iter().cloned());
+    args
 }
 
 #[cfg(test)]
@@ -274,6 +338,7 @@ mod tests {
         assert!(start.running);
         assert!(!start.posts_chat);
         assert!(start.stay_on_update);
+        assert!(!start.can_restart);
         assert!(start.status.contains("Updating"));
 
         let pull = overlay_update_progress(
@@ -285,6 +350,7 @@ mod tests {
         assert!(pull.running);
         assert!(!pull.posts_chat);
         assert!(pull.stay_on_update);
+        assert!(!pull.can_restart);
         assert!(pull.status.contains("Pulling"));
 
         let ok = overlay_update_finish(true, 50);
@@ -292,16 +358,65 @@ mod tests {
         assert!(!ok.running);
         assert!(!ok.posts_chat);
         assert!(ok.stay_on_update);
+        assert!(ok.can_restart);
         assert!(ok.status.contains("restart"));
         assert!(!ok.status.contains("HOST_RESULT"));
+        assert!(overlay_update_can_restart(true, false));
+        assert!(!overlay_update_can_restart(true, true));
+        assert!(!overlay_update_can_restart(false, false));
 
         let fail = overlay_update_finish(false, 50);
         assert_eq!(fail.pct, 50);
         assert!(!fail.running);
         assert!(!fail.posts_chat);
         assert!(fail.stay_on_update);
+        assert!(!fail.can_restart);
         assert!(fail.status.contains("failed"));
         assert!(!fail.status.contains("HOST_RESULT"));
+    }
+
+    #[test]
+    fn restart_prefers_overlay_bin_and_restarts_hub_then_cabin() {
+        let root = std::env::temp_dir().join(format!("grokhub-restart-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let bin = root.join(".local/bin/grokhub");
+        fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        fs::write(&bin, "#!/bin/sh\n").unwrap();
+        assert_eq!(restart_bin(Some(root.to_str().unwrap()), Some("/old/grokhub")), bin.to_string_lossy().to_string());
+        assert_eq!(restart_bin(None, Some("/opt/grokhub")), "/opt/grokhub");
+        assert_eq!(restart_argv("/opt/grokhub", false), vec!["/opt/grokhub".to_string()]);
+        assert_eq!(
+            restart_argv("/opt/grokhub", true),
+            vec!["/opt/grokhub".to_string(), "--agent".into()]
+        );
+        assert_eq!(
+            restart_acts(true, true, "/opt/grokhub", false),
+            vec![RestartAct::Systemd {
+                units: vec!["grokhub-hub.service".into(), "grokhub.service".into()]
+            }]
+        );
+        assert_eq!(
+            restart_acts(false, true, "/opt/grokhub", true),
+            vec![
+                RestartAct::Systemd {
+                    units: vec!["grokhub-hub.service".into()]
+                },
+                RestartAct::Spawn {
+                    argv: vec!["/opt/grokhub".into(), "--agent".into()]
+                }
+            ]
+        );
+        assert_eq!(
+            restart_acts(false, false, "/opt/grokhub", false),
+            vec![RestartAct::Spawn {
+                argv: vec!["/opt/grokhub".into()]
+            }]
+        );
+        assert_eq!(
+            systemd_user_restart_args(&["grokhub-hub.service".into(), "grokhub.service".into()]),
+            vec!["--user", "restart", "grokhub-hub.service", "grokhub.service"]
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
