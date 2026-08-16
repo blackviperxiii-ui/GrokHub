@@ -763,4 +763,48 @@ mod tests {
         }
         assert_eq!(msgs, vec![("assistant".into(), "Hello".into())]);
     }
+
+    #[test]
+    fn nested_secret_hands_and_bad_wav() {
+        assert_eq!(
+            parse_client_secret(&serde_json::json!({
+                "client_secret": { "value": "ek_nested" }
+            }))
+            .as_deref(),
+            Some("ek_nested")
+        );
+        assert!(parse_client_secret(&serde_json::json!({
+            "client_secret": { "value": "   " }
+        }))
+        .is_none());
+        assert_eq!(
+            reduce_voice_state(VoiceState::Hands, &VoiceEvent::Start),
+            VoiceState::Hands
+        );
+        assert_eq!(
+            reduce_voice_state(
+                VoiceState::Hands,
+                &VoiceEvent::AudioOut {
+                    pcm_b64: "AA".into()
+                }
+            ),
+            VoiceState::Hands
+        );
+        assert_eq!(
+            reduce_voice_state(VoiceState::Hands, &VoiceEvent::Halt),
+            VoiceState::Idle
+        );
+        let ev = parse_realtime_event(&serde_json::json!({
+            "type": "error",
+            "error": { "message": "quota" }
+        }))
+        .unwrap();
+        assert_eq!(ev, VoiceEvent::Error("quota".into()));
+        let mut wav = b"RIFF".to_vec();
+        wav.extend_from_slice(&[12, 0, 0, 0]);
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(&[0u8; 40]);
+        assert_eq!(pcm_from_capture(&wav), &wav[44..]);
+        assert_eq!(pcm_from_capture(b"RIFF????"), b"RIFF????");
+    }
 }

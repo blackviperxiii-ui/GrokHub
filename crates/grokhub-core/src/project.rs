@@ -419,8 +419,13 @@ mod tests {
         assert_eq!(project_name_from_path("/home/j/GrokHub-Work"), "GrokHub-Work");
         assert!(host_cmd_leaves_project("cat /etc/passwd", "/home/j/proj"));
         assert!(!host_cmd_leaves_project("cat src/main.rs", "/home/j/proj"));
+        assert!(!host_cmd_leaves_project("cat /home/j/proj/src/a.rs", "/home/j/proj"));
+        assert!(host_cmd_leaves_project("cat ~/secrets", "/home/j/proj"));
+        assert!(!host_cmd_leaves_project("ls", "/home/j/proj"));
+        assert!(!host_cmd_leaves_project("cat /etc/passwd", ""));
         assert!(host_hour_blocked(40, 40));
         assert!(!host_hour_blocked(3, 40));
+        assert!(!host_hour_blocked(40, 0), "cap 0 means unlimited");
     }
 
     #[test]

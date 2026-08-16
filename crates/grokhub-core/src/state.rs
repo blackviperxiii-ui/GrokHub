@@ -356,4 +356,62 @@ mod tests {
         assert!(loaded.console_api_key.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn expired_and_wrong_pair_codes() {
+        let mut st = HubState::empty();
+        st.pair = Some(PairCode {
+            code: "ABC-234".into(),
+            expires_at: 1,
+        });
+        assert_eq!(
+            st.pair_with("ABC-234", "phone", "Pixel").unwrap_err(),
+            PairError::NoCode
+        );
+        st.pair = Some(PairCode {
+            code: "ABC-234".into(),
+            expires_at: now_ms() + 60_000,
+        });
+        assert_eq!(
+            st.pair_with("ZZZ-999", "phone", "Pixel").unwrap_err(),
+            PairError::Mismatch
+        );
+        assert!(st.pair.is_some(), "a mismatch must leave the code live");
+    }
+
+    #[test]
+    fn task_is_hidden_from_other_peers() {
+        let mut st = HubState::empty();
+        let phone_code = st.rotate_pair().code;
+        let phone = st.pair_with(&phone_code, "phone", "Pixel").unwrap();
+        let other_code = st.rotate_pair().code;
+        let other = st.pair_with(&other_code, "other", "Laptop").unwrap();
+        let hub_id = st.device_id.clone();
+        assert!(st.enqueue_task(&phone, &hub_id, "Flash", "   ").is_err());
+        let task = st
+            .enqueue_task(&phone, &hub_id, "Flash", "flash the pi")
+            .unwrap();
+        assert!(st.get_task(&task.id, &phone.id).is_some());
+        assert!(
+            st.get_task(&task.id, &other.id).is_none(),
+            "another paired box must not read this task"
+        );
+        assert_eq!(st.queued_for(&other.id).len(), 0);
+    }
+
+    #[test]
+    fn task_title_and_prompt_are_capped() {
+        let t = HubTask::enqueue("a", "b", "c", "", &"y".repeat(20_000), 1);
+        assert_eq!(t.title, "Remote task");
+        assert_eq!(t.prompt.chars().count(), 16_000);
+        let titled = HubTask::enqueue("a", "b", "c", &"x".repeat(200), "ok", 1);
+        assert_eq!(titled.title.chars().count(), 120);
+        let mut done = titled.clone();
+        done.complete("ok", vec![], None);
+        assert_eq!(done.status, "done");
+        let mut failed = titled;
+        failed.complete("nope", vec![], Some("failed"));
+        assert_eq!(failed.status, "failed");
+        assert_eq!(failed.result.as_deref(), Some("nope"));
+    }
 }
