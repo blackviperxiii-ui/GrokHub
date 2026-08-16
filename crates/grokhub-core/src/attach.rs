@@ -114,6 +114,22 @@ pub fn next_chat_image<'a>(user: Option<&'a str>, cabin: Option<&'a str>) -> Opt
         .or_else(|| cabin.filter(|s| !s.is_empty()))
 }
 
+/// True when the pixel is a cabin/hands frame, not a user drop.
+pub fn cabin_frame_only(user: Option<&str>, cabin: Option<&str>) -> bool {
+    user.filter(|s| !s.is_empty()).is_none() && cabin.filter(|s| !s.is_empty()).is_some()
+}
+
+/// Request-only note so the model does not narrate “an image is attached”.
+pub fn cabin_eyes_request_text(user_text: &str) -> String {
+    const NOTE: &str = "Cabin eyes sent a desktop frame. Do not say an image is attached.";
+    let t = user_text.trim_end();
+    if t.is_empty() {
+        NOTE.to_string()
+    } else {
+        format!("{t}\n\n{NOTE}")
+    }
+}
+
 pub fn plus_menu_rows() -> &'static [(&'static str, PlusAct)] {
     &[
         ("Upload file", PlusAct::Upload),
@@ -207,6 +223,18 @@ mod tests {
         assert_eq!(next_chat_image(None, Some("data:cabin")), Some("data:cabin"));
         assert_eq!(next_chat_image(Some(""), Some("data:cabin")), Some("data:cabin"));
         assert_eq!(next_chat_image(None, None), None);
+        assert!(!cabin_frame_only(Some("data:user"), Some("data:cabin")));
+        assert!(cabin_frame_only(None, Some("data:cabin")));
+        assert!(cabin_frame_only(Some(""), Some("data:cabin")));
+        assert!(!cabin_frame_only(None, None));
+        assert_eq!(
+            cabin_eyes_request_text("what's in the bowl"),
+            "what's in the bowl\n\nCabin eyes sent a desktop frame. Do not say an image is attached."
+        );
+        assert_eq!(
+            cabin_eyes_request_text("  "),
+            "Cabin eyes sent a desktop frame. Do not say an image is attached."
+        );
     }
 
     #[test]
