@@ -1,11 +1,93 @@
 use grokhub_core::{
-    chat_request_body_vision, chat_stream_flag, chat_timeout_secs, client_secrets_body,
-    client_secrets_url, dedicated_imagine_model, frame_bytes, imagine_request_body, imagine_slug,
-    merge_thinking, parse_chat_content, parse_chat_reasoning, parse_client_secret, parse_imagine_url,
-    parse_sse_delta, parse_sse_thought, parse_stt_text, realtime_can_connect, sse_done, stt_multipart,
-    stt_url, tts_request_body, tts_url, voice_client_secret_denied, PresenceFrame, XAI_BASE,
+    chat_include_usage, chat_request_body_vision, chat_stream_flag, chat_timeout_secs,
+    client_secrets_body, client_secrets_url, dedicated_imagine_model, frame_bytes, imagine_request_body,
+    imagine_slug, merge_thinking, parse_client_secret, parse_imagine_url, parse_model_reasoning,
+    parse_model_text, parse_sse_delta, parse_sse_thought, parse_stt_text, realtime_can_connect,
+    responses_request_body, responses_url, sse_done, stt_multipart, stt_url, tts_request_body, tts_url,
+    voice_client_secret_denied, PresenceFrame, XAI_BASE,
 };
 use std::io::Read;
+
+fn json_error(v: &serde_json::Value) -> Option<String> {
+    v.get("error")
+        .and_then(|e| e.get("message").and_then(|m| m.as_str()).or(e.as_str()))
+        .map(|s| s.to_string())
+}
+
+fn grok_json(
+    url: &str,
+    key: &str,
+    body: serde_json::Value,
+    timeout_secs: u64,
+) -> Result<serde_json::Value, String> {
+    let resp = ureq::post(url)
+        .set("authorization", &format!("Bearer {key}"))
+        .set("content-type", "application/json")
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .send_json(body)
+        .map_err(http_err)?;
+    let v: serde_json::Value = resp.into_json().map_err(|e| e.to_string())?;
+    if let Some(err) = json_error(&v) {
+        return Err(err);
+    }
+    Ok(v)
+}
+
+fn consume_sse(
+    mut reader: impl Read,
+    on_delta: &mut impl FnMut(&str),
+    on_thought: &mut impl FnMut(&str),
+) -> Result<String, String> {
+    let mut raw = String::new();
+    let mut acc = String::new();
+    let mut buf = [0u8; 2048];
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        raw.push_str(&String::from_utf8_lossy(&buf[..n]));
+        while let Some(idx) = raw.find('\n') {
+            let line = raw[..idx].trim_end_matches('\r').to_string();
+            raw = raw[idx + 1..].to_string();
+            if sse_done(&line) {
+                return Ok(acc);
+            }
+            if let Some(t) = parse_sse_thought(&line) {
+                on_thought(&t);
+            }
+            if let Some(d) = parse_sse_delta(&line) {
+                on_delta(&d);
+                acc.push_str(&d);
+            }
+        }
+    }
+    Ok(acc)
+}
+
+fn grok_sse(
+    url: &str,
+    key: &str,
+    body: serde_json::Value,
+    timeout_secs: u64,
+    on_delta: &mut impl FnMut(&str),
+    on_thought: &mut impl FnMut(&str),
+) -> Result<String, String> {
+    let resp = ureq::post(url)
+        .set("authorization", &format!("Bearer {key}"))
+        .set("content-type", "application/json")
+        .set("accept", "text/event-stream")
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .send_json(body)
+        .map_err(http_err)?;
+    consume_sse(resp.into_reader(), on_delta, on_thought)
+}
+
+fn merge_reply(v: &serde_json::Value) -> Option<String> {
+    parse_model_text(v).map(|content| {
+        merge_thinking(&parse_model_reasoning(v).unwrap_or_default(), &content)
+    })
+}
 
 pub fn grok_chat(
     api_key: &str,
@@ -18,23 +100,21 @@ pub fn grok_chat(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
-    let body = chat_request_body_vision(model, messages, image_data_url, effort);
-    let resp = ureq::post(&format!("{XAI_BASE}/chat/completions"))
-        .set("authorization", &format!("Bearer {key}"))
-        .set("content-type", "application/json")
-        .timeout(std::time::Duration::from_secs(chat_timeout_secs(effort)))
-        .send_json(body)
-        .map_err(http_err)?;
-    let v: serde_json::Value = resp.into_json().map_err(|e| e.to_string())?;
-    if let Some(err) = v
-        .get("error")
-        .and_then(|e| e.get("message").and_then(|m| m.as_str()).or(e.as_str()))
-    {
-        return Err(err.to_string());
+    let timeout = chat_timeout_secs(effort);
+    let responses = responses_request_body(model, messages, image_data_url, effort);
+    if let Ok(v) = grok_json(&responses_url(), key, responses, timeout) {
+        if let Some(text) = merge_reply(&v) {
+            return Ok(text);
+        }
     }
-    parse_chat_content(&v)
-        .map(|content| merge_thinking(&parse_chat_reasoning(&v).unwrap_or_default(), &content))
-        .ok_or_else(|| "empty Grok reply".into())
+    let body = chat_request_body_vision(model, messages, image_data_url, effort);
+    let v = grok_json(
+        &format!("{XAI_BASE}/chat/completions"),
+        key,
+        body,
+        timeout,
+    )?;
+    merge_reply(&v).ok_or_else(|| "empty Grok reply".into())
 }
 
 pub fn grok_chat_stream(
@@ -50,54 +130,35 @@ pub fn grok_chat_stream(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
-    let mut body = chat_request_body_vision(model, messages, image_data_url, effort);
-    chat_stream_flag(&mut body, true);
-    let resp = match ureq::post(&format!("{XAI_BASE}/chat/completions"))
-        .set("authorization", &format!("Bearer {key}"))
-        .set("content-type", "application/json")
-        .set("accept", "text/event-stream")
-        .timeout(std::time::Duration::from_secs(chat_timeout_secs(effort)))
-        .send_json(body)
-    {
-        Ok(r) => r,
-        Err(e) => {
-            return grok_chat(api_key, model, messages, image_data_url, effort)
-                .map_err(|_| http_err(e))
-        }
-    };
-    let mut reader = resp.into_reader();
-    let mut raw = String::new();
-    let mut acc = String::new();
-    let mut buf = [0u8; 2048];
-    loop {
-        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
-        if n == 0 {
-            break;
-        }
-        raw.push_str(&String::from_utf8_lossy(&buf[..n]));
-        while let Some(idx) = raw.find('\n') {
-            let line = raw[..idx].trim_end_matches('\r').to_string();
-            raw = raw[idx + 1..].to_string();
-            if sse_done(&line) {
-                return if acc.is_empty() {
-                    grok_chat(api_key, model, messages, image_data_url, effort)
-                } else {
-                    Ok(acc)
-                };
-            }
-            if let Some(t) = parse_sse_thought(&line) {
-                on_thought(&t);
-            }
-            if let Some(d) = parse_sse_delta(&line) {
-                on_delta(&d);
-                acc.push_str(&d);
-            }
+    let timeout = chat_timeout_secs(effort);
+    let mut responses = responses_request_body(model, messages, image_data_url, effort);
+    chat_stream_flag(&mut responses, true);
+    if let Ok(acc) = grok_sse(
+        &responses_url(),
+        key,
+        responses,
+        timeout,
+        &mut on_delta,
+        &mut on_thought,
+    ) {
+        if !acc.is_empty() {
+            return Ok(acc);
         }
     }
-    if acc.is_empty() {
-        grok_chat(api_key, model, messages, image_data_url, effort)
-    } else {
-        Ok(acc)
+    let mut body = chat_request_body_vision(model, messages, image_data_url, effort);
+    chat_stream_flag(&mut body, true);
+    chat_include_usage(&mut body);
+    match grok_sse(
+        &format!("{XAI_BASE}/chat/completions"),
+        key,
+        body,
+        timeout,
+        &mut on_delta,
+        &mut on_thought,
+    ) {
+        Ok(acc) if !acc.is_empty() => Ok(acc),
+        Ok(_) => grok_chat(api_key, model, messages, image_data_url, effort),
+        Err(e) => grok_chat(api_key, model, messages, image_data_url, effort).map_err(|_| e),
     }
 }
 
