@@ -383,7 +383,7 @@ pub fn slash_help() -> String {
         "Appearance: Dark, Light, System. Chat streams tokens on the thread that started them.",
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Hands: unsandboxed; /stop kills the worker.",
         "Cabin eyes stay dormant until you ask, or hands need a frame. Thought does not announce an attach.",
-        "Pulse every 15s: every organ runs. The cabin drives.",
+        "Pulse every 15s: every organ runs. Hidden idle waits for the pulse.",
         "After 21:00 a quiet Balanced review fills Suggested tiles from what it learned.",
         "Devices pair URL is a LAN IPv4. Hub complete is owner-only.",
         "Five chips sit centered over the composer.",
@@ -477,6 +477,9 @@ mod tests {
         assert!(slash_help().contains("Restart on Settings"));
         assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
         assert!(slash_help().contains("Mode pill"));
+        assert!(slash_help().contains("quiet Balanced review"));
+        assert!(slash_help().contains("centered over the composer"));
+        assert!(slash_help().contains("Hidden idle waits for the pulse"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());
