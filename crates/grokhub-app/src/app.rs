@@ -58,6 +58,8 @@ use grokhub_core::{
     rewind_dest, save_hub_state, screen_from_extents, search_corpus,
     should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
+    heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
+    HEARTBEAT_MS,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title, apply_manual_rename, delete_thread, history_order, should_name_thread,
     slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
@@ -577,6 +579,7 @@ pub struct Cabin {
     last_window_title: String,
     voice_orb: String,
     last_night_tick: Instant,
+    last_heartbeat: Instant,
     night_check_rx: Option<(String, mpsc::Receiver<(String, i32)>)>,
     learning: LearningState,
     usage: UsageDay,
@@ -848,6 +851,7 @@ impl Cabin {
             last_window_title: String::new(),
             voice_orb: "idle".into(),
             last_night_tick: Instant::now(),
+            last_heartbeat: Instant::now(),
             night_check_rx: None,
             learning: crate::store::load_learning(),
             usage: crate::store::load_usage(),
@@ -2966,6 +2970,43 @@ impl Cabin {
         })
     }
 
+    fn tick_heartbeat(&mut self) {
+        let elapsed = self.last_heartbeat.elapsed().as_millis() as u64;
+        if !heartbeat_due(elapsed, HEARTBEAT_MS) {
+            return;
+        }
+        self.last_heartbeat = Instant::now();
+        for act in heartbeat_acts(self.cfg.autonomy) {
+            match act {
+                HeartbeatAct::Housekeep => {
+                    self.roll_today();
+                    if self.last_persist.elapsed() > Duration::from_secs(2) {
+                        self.persist();
+                    }
+                }
+                HeartbeatAct::Inbox => self.drain_inbox(),
+                HeartbeatAct::Night => self.tick_night(),
+                HeartbeatAct::Wall => self.tick_wall(),
+                HeartbeatAct::MidThought => {
+                    if self.messages.is_empty() {
+                        self.mid_thought_greet();
+                    }
+                }
+                HeartbeatAct::Reflect => {
+                    if should_idle_reflect(
+                        self.last_activity.elapsed().as_millis() as u64,
+                        self.running,
+                        IDLE_REFLECT_MS,
+                    ) && !self.reflected_idle
+                    {
+                        self.reflected_idle = true;
+                        self.run_reflect();
+                    }
+                }
+            }
+        }
+    }
+
     fn tick_night(&mut self) {
         if self.running || self.last_night_tick.elapsed() < Duration::from_secs(5) {
             return;
@@ -4761,14 +4802,10 @@ impl eframe::App for Cabin {
         self.poll_tray(ctx);
         self.poll_voice();
         self.poll_global_hotkeys();
-        self.tick_night();
+        self.poll_night_check(now_ms());
         self.poll_wall();
-        self.tick_wall();
         self.live_room();
-        self.roll_today();
-        if self.messages.is_empty() {
-            self.mid_thought_greet();
-        }
+        self.tick_heartbeat();
         if ctx.input(|i| i.viewport().close_requested()) {
             let hide = crate::tray::should_hide_on_close(
                 self.cfg.close_to_tray,
@@ -4808,31 +4845,28 @@ impl eframe::App for Cabin {
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Slash)) {
             self.shortcuts_open = !self.shortcuts_open;
         }
-        if should_idle_reflect(
-            self.last_activity.elapsed().as_millis() as u64,
-            self.running,
-            IDLE_REFLECT_MS,
-        ) && !self.reflected_idle
-        {
-            self.reflected_idle = true;
-            self.run_reflect();
-        }
         self.capture_window(ctx);
         self.flush_window(ctx);
         if self.last_persist.elapsed() > Duration::from_secs(2) {
             self.persist();
         }
-        if wants_live_repaint(
+        let wait = next_heartbeat_wait_ms(
+            self.last_heartbeat.elapsed().as_millis() as u64,
+            HEARTBEAT_MS,
+        );
+        let live = wants_live_repaint(
             self.running,
             self.chip_busy || self.goal_busy || self.oauth_photo_busy,
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
-        ) {
-            ctx.request_repaint_after(Duration::from_millis(80));
-        } else if !self.window_visible {
-            ctx.request_repaint_after(Duration::from_millis(HIDDEN_HEARTBEAT_MS));
-        }
+        );
+        ctx.request_repaint_after(Duration::from_millis(heartbeat_repaint_ms(
+            live,
+            !self.window_visible,
+            wait,
+            HIDDEN_HEARTBEAT_MS,
+        )));
 
         crate::theme::apply(
             ctx,
@@ -6378,6 +6412,7 @@ impl Cabin {
                                                                 save = true;
                                                             }
                                                             crate::cards::settings_note(ui, &format!("Passenger: {passenger}"));
+                                                            crate::cards::settings_note(ui, "Pulse every 15s. Inbox and night always move. Wall, mid-thought, and reflect wake with autonomy.");
                                                             ui.horizontal(|ui| {
                                                                 ui.label(RichText::new("Autonomy").size(15.0).color(crate::theme::fg()));
                                                                 ui.add(egui::Slider::new(&mut self.cfg.autonomy, 0..=4).show_value(true));
@@ -7819,6 +7854,10 @@ mod tests {
         assert!(super::wants_live_repaint(true, false, false, true, false));
         assert!(super::HIDDEN_HEARTBEAT_MS > 80);
         assert!(!super::night_host_check_blocks_ui());
+        assert_eq!(
+            grokhub_core::heartbeat_repaint_ms(false, false, grokhub_core::HEARTBEAT_MS, super::HIDDEN_HEARTBEAT_MS),
+            grokhub_core::HEARTBEAT_MS
+        );
     }
 
     #[test]
