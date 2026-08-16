@@ -114,6 +114,21 @@ pub fn next_chat_image<'a>(user: Option<&'a str>, cabin: Option<&'a str>) -> Opt
         .or_else(|| cabin.filter(|s| !s.is_empty()))
 }
 
+/// Only a frame captured on this turn may go to the model.
+/// A leftover desktop or webcam JPEG is not a this-turn capture.
+pub fn this_turn_cabin_frame<'a>(
+    eyes_turn: bool,
+    hands_turn: bool,
+    captured_this_turn: Option<&'a str>,
+) -> Option<&'a str> {
+    let url = captured_this_turn.filter(|s| !s.is_empty())?;
+    if crate::recipe::should_attach_hands_frame(eyes_turn, hands_turn, true) {
+        Some(url)
+    } else {
+        None
+    }
+}
+
 /// True when the pixel is a cabin/hands frame, not a user drop.
 pub fn cabin_frame_only(user: Option<&str>, cabin: Option<&str>) -> bool {
     user.filter(|s| !s.is_empty()).is_none() && cabin.filter(|s| !s.is_empty()).is_some()
@@ -234,6 +249,19 @@ mod tests {
         assert_eq!(
             cabin_eyes_request_text("  "),
             "Cabin eyes sent a desktop frame. Do not say an image is attached."
+        );
+        assert_eq!(
+            this_turn_cabin_frame(true, false, None),
+            None,
+            "a failed capture must not attach a stale or webcam frame"
+        );
+        assert_eq!(
+            this_turn_cabin_frame(true, false, Some("data:cabin-now")),
+            Some("data:cabin-now")
+        );
+        assert_eq!(
+            this_turn_cabin_frame(false, false, Some("data:stale")),
+            None
         );
     }
 
