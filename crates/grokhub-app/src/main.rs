@@ -19,6 +19,7 @@ mod secrets;
 mod skills;
 mod threads;
 mod tray;
+mod window;
 mod update;
 mod xai;
 
@@ -173,15 +174,22 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
     ) {
         env::set_var("WINIT_UNIX_BACKEND", backend);
     }
+    let geom = window::clamp_geom(config::load().window);
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size(window::launch_size(&geom))
+        .with_min_inner_size([window::WIN_MIN_W, window::WIN_MIN_H])
+        .with_title("GrokHub")
+        .with_app_id("grokhub")
+        .with_decorations(false)
+        .with_maximized(geom.maximized)
+        .with_visible(!hidden);
+    if let Some(pos) = window::launch_pos(&geom) {
+        viewport = viewport.with_position(pos);
+    }
     let opts = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 720.0])
-            .with_min_inner_size([720.0, 480.0])
-            .with_title("GrokHub")
-            .with_app_id("grokhub")
-            .with_decorations(false)
-            .with_visible(!hidden),
-        persist_window: true,
+        viewport,
+        // eframe window persistence also restores visibility; close-to-tray would come back withdrawn.
+        persist_window: false,
         ..Default::default()
     };
     eframe::run_native(
