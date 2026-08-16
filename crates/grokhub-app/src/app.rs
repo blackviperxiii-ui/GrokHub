@@ -453,6 +453,7 @@ pub struct Cabin {
     host_hour_at: Instant,
     approve_risky_only: bool,
     tray: Option<crate::tray::TrayHost>,
+    tray_rx: Option<mpsc::Receiver<Option<crate::tray::TrayHost>>>,
     window_visible: bool,
     want_quit: bool,
     told_tray: bool,
@@ -705,8 +706,9 @@ impl Cabin {
             host_hour_count: 0,
             host_hour_at: Instant::now(),
             approve_risky_only,
-            tray: if crate::tray::tray_needed_at_launch(hidden) {
-                crate::tray::spawn()
+            tray: None,
+            tray_rx: if crate::tray::tray_needed_at_launch(hidden) {
+                Some(crate::tray::begin_tray_spawn())
             } else {
                 None
             },
@@ -3989,17 +3991,24 @@ impl Cabin {
     }
 
     fn unmap_to_tray(&mut self, ctx: &egui::Context) {
-        if self.tray.is_none() {
-            self.tray = crate::tray::spawn();
-        }
         self.window_visible = false;
         apply_tray_window(ctx, crate::tray::hide_to_tray_window());
+        self.ensure_tray_spawn();
+    }
+
+    fn ensure_tray_spawn(&mut self) {
+        if self.tray.is_some() || self.tray_rx.is_some() || !crate::tray::tray_wanted() {
+            return;
+        }
+        self.tray_rx = Some(crate::tray::begin_tray_spawn());
     }
 
     fn show_from_tray(&mut self, ctx: &egui::Context) {
         self.window_visible = true;
         apply_tray_window(ctx, crate::tray::show_from_tray_window());
-        self.tray = None;
+        if let Some(tray) = self.tray.take() {
+            crate::tray::drop_off_thread(tray);
+        }
         ctx.request_repaint();
     }
 
@@ -4040,6 +4049,16 @@ impl Cabin {
     }
 
     fn poll_tray(&mut self, ctx: &egui::Context) {
+        let ready = self
+            .tray_rx
+            .as_ref()
+            .and_then(crate::tray::take_spawn_result);
+        if let Some(maybe) = ready {
+            self.tray_rx = None;
+            if let Some(host) = maybe {
+                self.tray = crate::tray::keep_if_hidden(!self.window_visible, host);
+            }
+        }
         let Some(tray) = &self.tray else {
             return;
         };
@@ -4052,6 +4071,9 @@ impl Cabin {
             }
             Some(crate::tray::TrayCmd::Quit) => {
                 self.want_quit = true;
+                if let Some(tray) = self.tray.take() {
+                    crate::tray::drop_off_thread(tray);
+                }
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             None => {}
@@ -4205,6 +4227,12 @@ fn titlebar_chrome_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
 }
 
 impl eframe::App for Cabin {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Some(tray) = self.tray.take() {
+            crate::tray::drop_off_thread(tray);
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
         self.poll_chips();
