@@ -384,7 +384,9 @@ pub fn slash_help() -> String {
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Hands: unsandboxed; /stop kills the worker.",
         "Cabin eyes stay dormant until you ask, or hands need a frame. Thought does not announce an attach.",
         "Pulse every 15s: every organ runs. The cabin drives.",
+        "After 21:00 a quiet Balanced review fills Suggested tiles from what it learned.",
         "Devices pair URL is a LAN IPv4. Hub complete is owner-only.",
+        "Five chips sit centered over the composer.",
     ]
     .join("\n")
 }
