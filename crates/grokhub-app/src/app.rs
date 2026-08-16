@@ -57,7 +57,7 @@ use grokhub_core::{
     top_habit_labels,
     unified_diff_cite, usage_line,
     transcribe_route, uid, update_cmds, overlay_update_begin, overlay_update_finish,
-    realtime_bearer, realtime_can_connect, voice_transcript_sends_chat,
+    realtime_bearer, realtime_can_connect, voice_log_role, voice_transcript_sends_chat,
     update_wipes_config, voice_session_url, Automation, BoardCard,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ComputerOp, DeviceCodeStart, HeyGrokAction,
     HeyGrokRoute, HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
@@ -4021,15 +4021,19 @@ impl Cabin {
             }
             .into();
             match ev {
-                VoiceEvent::Transcript { text, final_ } if final_ && !text.trim().is_empty() => {
-                    if voice_transcript_sends_chat(self.voice_sock.is_some()) {
-                        self.send_chat(text);
-                    } else {
-                        self.messages.push(Msg {
-                            role: "user".into(),
-                            content: text,
-                        });
-                        self.persist();
+                VoiceEvent::Transcript { .. } => {
+                    if let Some((role, text)) = voice_log_role(&ev) {
+                        if voice_transcript_sends_chat(self.voice_sock.is_some()) {
+                            if role == "user" {
+                                self.send_chat(text.to_string());
+                            }
+                        } else {
+                            self.messages.push(Msg {
+                                role: role.into(),
+                                content: text.to_string(),
+                            });
+                            self.persist();
+                        }
                     }
                 }
                 VoiceEvent::Fallback | VoiceEvent::Error(_) => {

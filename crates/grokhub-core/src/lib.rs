@@ -176,9 +176,10 @@ pub use voice::{
     parse_stt_text, parse_voice_event_text, pcm_from_capture, redact_cabin_from_memory,
     realtime_can_connect, reduce_voice_state, should_attach_cabin_frame, should_capture_before_chat,
     should_mute_speaker, speech_can_connect, stt_multipart, stt_url, transcribe_route,
-    tts_request_body, tts_url, voice_can_connect, voice_client_secret_denied, voice_session_url,
-    voice_transcript_sends_chat, CabinEyesState, HeyGrokAction, HeyGrokRoute, TranscribeRoute,
-    VoiceEvent, VoiceState, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS,
+    tts_request_body, tts_url, voice_can_connect, voice_client_secret_denied, voice_log_role,
+    voice_session_url, voice_transcript_sends_chat, live_pcm_argv, live_pcm_frame_bytes,
+    CabinEyesState, HeyGrokAction, HeyGrokRoute, TranscribeRoute, VoiceEvent, VoiceRole, VoiceState,
+    DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS,
 };
 pub use windshield::{
     build_windshield, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, refused_lock,
