@@ -56,8 +56,12 @@ pub fn doctor_extras(last_receipt_ok: Option<bool>, skill_count: usize) -> Vec<D
 }
 
 pub fn doctor_hands_line(driver: &str) -> DoctorLine {
+    let ok = driver != "missing"
+        && driver != "not installed"
+        && driver != "uinput"
+        && driver != "daemon";
     DoctorLine {
-        ok: driver != "missing",
+        ok,
         text: format!("hands {driver}"),
     }
 }
@@ -85,5 +89,8 @@ mod tests {
         assert!(hands.ok);
         assert!(hands.text.contains("ydotool"));
         assert!(!doctor_hands_line("missing").ok);
+        assert!(!doctor_hands_line("not installed").ok);
+        assert!(!doctor_hands_line("uinput").ok);
+        assert!(!doctor_hands_line("daemon").ok);
     }
 }
