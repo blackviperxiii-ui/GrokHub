@@ -1,7 +1,7 @@
 # GrokHub native Rust — product, not sidecar
 
 **Date:** 2026-08-14  
-**Version:** 2.0.0 (do not bump)  
+**Version:** 2.5.0  
 **Decision:** The shipping Linux / Windows / Android product is Rust. No Electron. No Tauri.
 
 ## Why
@@ -42,7 +42,7 @@ Projects sit in the left rail. `+` creates a project under `~/GrokHub-Work/<slug
 
 History tabs: pin, rename (locks the title), delete. Fast names the tab from topics after each turn unless locked. `/pin` `/rename` `/delete`.
 
-Plus is Upload / Paste. Imagine toolbox docks mid-pane, then the floor. Appearance is Dark or System. OAuth paints the Grok profile photo in the footer. Settings → Update shows a percent bar on the Settings page. Chat shows thought / tool steps; host receipts stay off the bubble.
+Plus is Upload / Paste. Five chips sit above the composer. Enter sends; Ctrl+Enter is a newline. Empty chats can show a faint Fast blurb. Imagine toolbox docks mid-pane, then the floor; stills sit above the composer. Appearance is Dark, Light, or System. OAuth paints the Grok profile photo in the footer and covers STT/TTS; duplex Voice needs a console key. Settings → Update shows a percent bar on the Settings page. Chat shows thought / tool steps; host receipts stay off the bubble. `COMPUTER_CMD` drives mouse/keyboard/vision unsandboxed. Window size and position persist. Tray pings once on hide.
 
 Devices pane starts the in-process hub on `GROKHUB_HUB_PORT` or `18766` and shows the pair code.
 
