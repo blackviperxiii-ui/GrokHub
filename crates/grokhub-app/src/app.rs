@@ -72,7 +72,7 @@ use grokhub_core::{
     parse_computer_cmd_loose, user_asks_cabin_eyes,
     user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
-    goal_pin_for_job, goal_step_after_outcome,
+    goal_continue_pin, goal_pin_for_job, goal_step_after_outcome, should_auto_continue_goal,
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
     reply_needs_followup,
     recipe_from_cmds, replay_automation_target,
@@ -2594,10 +2594,7 @@ impl Cabin {
             return;
         }
         self.followup_step += 1;
-        self.messages.push(Msg {
-            role: "user".into(),
-            content: FOLLOWUP_PROMPT.into(),
-        });
+        self.push_bound_msg("user", FOLLOWUP_PROMPT.into());
         self.persist();
         self.kick_model();
     }
@@ -4284,11 +4281,14 @@ impl Cabin {
                     .iter()
                     .map(|t| (t.id.clone(), t.goal.label.clone()))
                     .collect();
-                let pin = goal_pin_for_job(
-                    job.as_deref(),
-                    &vis,
-                    &self.cfg.goal_pin,
-                    &stored_pins,
+                let pin = goal_continue_pin(
+                    &goal_pin_for_job(
+                        job.as_deref(),
+                        &vis,
+                        &self.cfg.goal_pin,
+                        &stored_pins,
+                    ),
+                    &last_user_text(&job_pairs).unwrap_or_default(),
                 );
                 let job_step = if job.as_deref() == Some(vis.as_str()) || job.is_none() {
                     self.goal_step
@@ -4299,7 +4299,13 @@ impl Cabin {
                         .map(|t| t.goal.step)
                         .unwrap_or(0)
                 };
-                if here && outcome == "continue" && !pin.is_empty() {
+                if should_auto_continue_goal(
+                    outcome,
+                    &pin,
+                    self.running,
+                    job_step,
+                    GOAL_MAX_STEPS,
+                ) {
                     if let Some(next) = next_goal_prompt(&pin, &text, job_step, GOAL_MAX_STEPS) {
                         self.goal_step = job_step.saturating_add(1);
                         if let Some(id) = job.as_deref() {
@@ -4312,7 +4318,10 @@ impl Cabin {
                             status: "queued".into(),
                             prompt: next.clone(),
                         });
-                        self.send_chat(next);
+                        self.chat_job_thread = origin.clone();
+                        self.push_bound_msg("user", next);
+                        self.persist();
+                        self.kick_model();
                     }
                 } else {
                     let next_step = goal_step_after_outcome(job_step, &outcome, true);
@@ -4335,22 +4344,17 @@ impl Cabin {
                         );
                     }
                 }
-                if here
-                    && !self.running
+                if !self.running
                     && self.followup_step < FOLLOWUP_MAX_STEPS
                     && reply_needs_followup(
-                        &last_user_text(
-                            &self
-                                .messages
-                                .iter()
-                                .map(|m| (m.role.clone(), m.content.clone()))
-                                .collect::<Vec<_>>(),
-                        )
-                        .unwrap_or_default(),
+                        &last_user_text(&job_pairs).unwrap_or_default(),
                         &text,
                         truncated,
                     )
                 {
+                    if self.chat_job_thread.is_none() {
+                        self.chat_job_thread = origin.clone();
+                    }
                     self.send_followup_turn();
                 }
                 if host_needs_kick && !self.running {
@@ -9177,6 +9181,14 @@ mod tests {
         assert!(
             chat.contains("!self.running"),
             "skip follow-up when host/goal already continues: {chat}"
+        );
+        assert!(
+            chat.contains("should_auto_continue_goal"),
+            "goal continue must not send_chat while host is running: {chat}"
+        );
+        assert!(
+            chat.contains("goal_continue_pin"),
+            "empty goal_pin must fall back to the last user task: {chat}"
         );
         let mid = src
             .split("fn tick_mid_thought(")
