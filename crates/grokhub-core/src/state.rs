@@ -330,7 +330,13 @@ pub fn save_hub_state(path: &std::path::Path, st: &HubState) -> Result<(), Strin
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         e.to_string()
-    })
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
 }
 
 pub fn load_hub_state(path: &std::path::Path) -> Option<HubState> {
@@ -415,6 +421,12 @@ mod tests {
         assert_eq!(loaded.device_id, st.device_id);
         assert!(loaded.last_frame.is_none());
         assert!(loaded.console_api_key.is_empty());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "hub-state.json holds pair tokens");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

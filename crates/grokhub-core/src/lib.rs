@@ -90,8 +90,9 @@ pub use chat_bubble::{
 };
 pub use chat_job::{
     apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
-    drop_trailing_assistant, job_error_goes_to_chat, persist_user_turn, push_bound_message,
-    upsert_assistant_turn, worker_gone_status, ChatSendKind,
+    drop_trailing_assistant, drop_trailing_assistant_on, job_error_goes_to_chat, kick_messages_for_job,
+    last_user_for_job,
+    persist_user_turn, push_bound_message, upsert_assistant_turn, worker_gone_status, ChatSendKind,
 };
 pub use chips::{
     build_quick_chips, chip_memory_key, chip_suggest_prompt, chip_thread_from_messages,
@@ -110,7 +111,7 @@ pub use capture::{
 pub use frame::{encode_b64, frame_bytes, jpeg_data_url, FrameGet, PresenceFrame};
 pub use host_plan::{
     approved_cmds, explain_host_risk, host_risk, move_step, parse_host_plan, plan_from_text,
-    step_from_cmd, yolo_plan_split, HostPlanStep, HostRisk,
+    retain_held_plan, step_from_cmd, strip_host_cmd_line, yolo_plan_split, HostPlanStep, HostRisk,
 };
 pub use host_safety::{forbidden_reason, recall_hits};
 pub use imagine::{
@@ -124,7 +125,9 @@ pub use imagine::{
     IMAGINE_WALL_GAP,
     WALL_GIF_EVERY_MS, WALL_GIF_MAX, WALL_SEEDS,
 };
-pub use inhabit::{can_inhabit, inhabit_bundle_usable, inhabit_ready, InhabitBundle};
+pub use inhabit::{
+    can_inhabit, inhabit_bundle_usable, inhabit_claim_allowed, inhabit_ready, InhabitBundle,
+};
 pub use recipe::{
     computer_cmd_line, computer_drive, computer_drive_for, extract_computer_ops, hands_backend_name,
     hands_blocked_by_lock, hands_protocol, lock_blocks_hands, pointer_op_blocked_on_lock,
@@ -163,9 +166,9 @@ pub use context::{
 };
 pub use diagnostics::diagnostics_bundle;
 pub use goal::{
-    blend_thread_goal, compact_keep_pin, looks_incomplete, next_goal_prompt, parse_fast_topics,
-    parse_goal_outcome, should_name_thread, thread_goal_prompt, ThreadGoal, GOAL_DROP_AFTER,
-    GOAL_MAX_STEPS,
+    blend_thread_goal, compact_keep_pin, goal_pin_for_job, goal_step_after_outcome, looks_incomplete,
+    next_goal_prompt, parse_fast_topics, parse_goal_outcome, should_name_thread, thread_goal_prompt,
+    ThreadGoal, GOAL_DROP_AFTER, GOAL_MAX_STEPS,
 };
 pub use greeting::{
     greeting_fingerprint, greeting_name, greeting_prompt, local_greeting, parse_llm_greeting,
@@ -198,7 +201,9 @@ pub use organs::{
     presence_should_stream, quiet_hours_active, redirect_prompt, replay_frame_delay,
     should_keep_frame, LocalClock, MidThoughtGreet, RoomPlan, PRESENCE_RING_MS, PRESENCE_WIPE_MS,
 };
-pub use rewind::{keep_last_rewinds, rewind_allowed, rewind_dest, RewindRecord};
+pub use rewind::{
+    keep_last_rewinds, rewind_allowed, rewind_dest, rewind_restore_matches, RewindRecord,
+};
 pub use oauth::{
     apply_profile, auth_bearer, chat_bearer, has_auth, merge_refreshed, parse_device_start, parse_poll_result,
     parse_token_json, parse_userinfo_profile, realtime_bearer, token_needs_refresh, trusted_profile_photo_url,
@@ -208,8 +213,8 @@ pub use oauth::{
 };
 pub use project::{
     add_to_folder, clean_project_name, create_folder, create_project, drop_node, drop_selected,
-    folder_choices, expand_host_path_token, host_cmd_leaves_project, host_hour_blocked,
-    refund_host_reserved, is_under_project,
+    folder_choices, expand_host_path_token, expand_project_root, host_cmd_leaves_project, host_hour_blocked,
+    normalize_host_path, refund_host_reserved, is_under_project,
     project_menu_acts, project_menu_label, project_name_from_path, project_slug, project_work_path,
     rename_node, restore_bound_path, seed_from_bound, settle_project_path, should_seed_sidebar,
     stage_project, toggle_folder, upsert_bound, visible_tree, DropOutcome, ProjectKind,

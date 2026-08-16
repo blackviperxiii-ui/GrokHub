@@ -15,6 +15,8 @@ pub struct ThreadGoal {
     pub topics: Vec<String>,
     #[serde(default)]
     pub unseen: Vec<u32>,
+    #[serde(default)]
+    pub step: u32,
 }
 
 pub fn should_name_thread(scratch: bool, user_turns: usize) -> bool {
@@ -25,20 +27,13 @@ pub fn parse_fast_topics(reply: &str) -> Vec<String> {
     let line = reply
         .lines()
         .map(str::trim)
-        .find(|l| l.to_ascii_uppercase().starts_with("GOAL:"))
-        .or_else(|| {
-            reply
-                .lines()
-                .map(str::trim)
-                .find(|l| !l.is_empty() && l.len() <= 80 && !looks_like_refusal(l))
-        });
+        .find(|l| l.to_ascii_uppercase().starts_with("GOAL:"));
     let Some(line) = line else {
         return Vec::new();
     };
     let rest = line
-        .strip_prefix("GOAL:")
-        .or_else(|| line.strip_prefix("goal:"))
-        .or_else(|| line.strip_prefix("Goal:"))
+        .split_once(':')
+        .map(|(_, r)| r)
         .unwrap_or(line)
         .trim();
     if rest.is_empty() || looks_like_refusal(rest) {
@@ -123,6 +118,39 @@ pub fn blend_thread_goal(prev: &ThreadGoal, observed: &[String], drop_after: u32
             .unwrap_or_default(),
         topics: kept_topics,
         unseen: kept_unseen,
+        step: prev.step,
+    }
+}
+
+/// Follow-up prompts use the origin thread pin, not the visible tab.
+pub fn goal_pin_for_job(
+    job_thread_id: Option<&str>,
+    visible_thread_id: &str,
+    visible_pin: &str,
+    stored_pins: &[(String, String)],
+) -> String {
+    let Some(job) = job_thread_id else {
+        return visible_pin.to_string();
+    };
+    if job == visible_thread_id {
+        return visible_pin.to_string();
+    }
+    stored_pins
+        .iter()
+        .find(|(id, _)| id == job)
+        .map(|(_, pin)| pin.clone())
+        .unwrap_or_else(|| visible_pin.to_string())
+}
+
+/// Completing a background goal must not zero another thread's step.
+pub fn goal_step_after_outcome(current: u32, outcome: &str, belongs_to_job: bool) -> u32 {
+    if !belongs_to_job {
+        return current;
+    }
+    if outcome == "continue" {
+        current
+    } else {
+        0
     }
 }
 
@@ -235,7 +263,7 @@ pub fn compact_keep_pin(
         return out;
     };
     let marked = format!("GOAL PIN: {pin}");
-    if !out.iter().any(|(_, c)| c.contains(pin)) {
+    if !out.iter().any(|(_, c)| c == &marked || c.starts_with(&format!("{marked}\n"))) {
         out.insert(0, ("system".into(), marked));
     }
     out
@@ -279,11 +307,22 @@ mod tests {
         assert_eq!(parse_goal_outcome("All set."), "complete");
         assert!(!looks_incomplete("All set."));
         assert!(!looks_incomplete("All done. GOAL_COMPLETE"));
+        let api = (0..12)
+            .map(|i| ("user".into(), format!("fix the api {i}")))
+            .collect::<Vec<_>>();
+        let pinned = compact_keep_pin(&api, 8, Some("pi"));
+        assert_eq!(pinned[0], ("system".into(), "GOAL PIN: pi".into()));
         assert!(looks_incomplete(""));
         assert!(looks_incomplete("I'll continue with the flash"));
         let p = next_goal_prompt("flash the pi", "wrote image", 0, 6).unwrap();
         assert!(p.contains("Goal step 1/6"));
         assert!(next_goal_prompt("flash the pi", "x", 6, 6).is_none());
+        assert_eq!(
+            goal_pin_for_job(Some("thr-a"), "thr-b", "", &[("thr-a".into(), "flash pi".into())]),
+            "flash pi"
+        );
+        assert_eq!(goal_step_after_outcome(3, "complete", false), 3);
+        assert_eq!(goal_step_after_outcome(3, "complete", true), 0);
     }
 
     #[test]
@@ -298,6 +337,15 @@ mod tests {
             vec!["comics".to_string(), "ink".to_string()]
         );
         assert!(parse_fast_topics("I cannot help with that.").is_empty());
+        assert!(
+            parse_fast_topics("Sure, I can help with that.").is_empty(),
+            "filler without GOAL: is not a tab topic"
+        );
+        assert_eq!(
+            parse_fast_topics("gOaL: comics"),
+            vec!["comics".to_string()],
+            "GOAL: prefix is case-insensitive"
+        );
         assert!(should_name_thread(false, 1));
         assert!(!should_name_thread(true, 4));
         assert!(!should_name_thread(false, 0));
