@@ -1,6 +1,7 @@
 //! Goal pin survives compact. Incomplete turns stay open.
 //! Fast mode names the chat tab from the current topics.
 
+use crate::chat_view::assistant_prose;
 use serde::{Deserialize, Serialize};
 
 /// Turns a topic can stay unseen before the tab drops it.
@@ -178,9 +179,9 @@ No lists, no 'and', no quotes, no extra words.\n\n{recent}"
 }
 
 pub fn looks_incomplete(assistant_text: &str) -> bool {
-    let t = assistant_text.to_ascii_lowercase();
+    let t = assistant_prose(assistant_text).to_ascii_lowercase();
     if t.trim().is_empty() {
-        return true;
+        return false;
     }
     if regexish_open(&t) {
         return true;
@@ -317,7 +318,7 @@ fn user_asked_for_work(user: &str) -> bool {
 }
 
 fn handed_work_to_user(assistant: &str) -> bool {
-    let t = assistant.to_ascii_lowercase();
+    let t = assistant_prose(assistant).to_ascii_lowercase();
     [
         "sudo apt",
         "apt install",
@@ -368,14 +369,15 @@ pub fn should_auto_continue_goal(
 }
 
 fn promised_action(assistant: &str) -> bool {
-    let t = assistant.to_ascii_lowercase();
+    let t = assistant_prose(assistant).to_ascii_lowercase();
     ["i'll", "i will", "let me ", "next i", "going to", "about to"]
         .iter()
         .any(|p| t.contains(p))
 }
 
 fn asked_user_a_question(assistant: &str) -> bool {
-    let last = assistant
+    let prose = assistant_prose(assistant);
+    let last = prose
         .lines()
         .rev()
         .map(str::trim)
@@ -385,7 +387,7 @@ fn asked_user_a_question(assistant: &str) -> bool {
 }
 
 fn polite_closer(assistant: &str) -> bool {
-    let t = assistant.to_ascii_lowercase();
+    let t = assistant_prose(assistant).to_ascii_lowercase();
     [
         "let me know if you need",
         "let me know if you want",
@@ -401,6 +403,9 @@ fn polite_closer(assistant: &str) -> bool {
 pub fn reply_needs_followup(user: &str, assistant: &str, truncated: bool) -> bool {
     if truncated {
         return true;
+    }
+    if assistant_prose(assistant).is_empty() {
+        return false;
     }
     if reply_has_work_lines(assistant) {
         return false;
@@ -471,8 +476,20 @@ mod tests {
             .collect::<Vec<_>>();
         let pinned = compact_keep_pin(&api, 8, Some("pi"));
         assert_eq!(pinned[0], ("system".into(), "GOAL PIN: pi".into()));
-        assert!(looks_incomplete(""));
+        assert!(
+            !looks_incomplete(""),
+            "empty prose is not a reason to start another turn"
+        );
         assert!(looks_incomplete("I'll continue with the flash"));
+        assert!(
+            !looks_incomplete("THINKING:\nnot found, I'll install ydotool\n\nTools are ready."),
+            "thinking must not hide a finished answer"
+        );
+        assert_eq!(
+            parse_goal_outcome("THINKING:\nlet me check PATH\n\n"),
+            "complete",
+            "thinking-only is not an incomplete job"
+        );
         let p = next_goal_prompt("flash the pi", "wrote image", 0, 6).unwrap();
         assert!(p.contains("Goal step 1/6"));
         assert!(next_goal_prompt("flash the pi", "x", 6, 6).is_none());
@@ -548,6 +565,16 @@ If this fails, tell me your distro.";
             "do not send_chat a goal step while host is already running"
         );
         assert!(!should_auto_continue_goal("complete", "check tools", false, 0, 6));
+        assert!(!reply_needs_followup(
+            "check to make sure all tools are installed",
+            "THINKING:\nydotool is not found, I'll apt install it\n\n",
+            false
+        ));
+        assert!(!reply_needs_followup(
+            "check the tools",
+            "THINKING:\nnot found\n\nHands are ready. GOAL_COMPLETE",
+            false
+        ));
         assert!(is_auto_continue_prompt(FOLLOWUP_PROMPT));
         assert_eq!(FOLLOWUP_MAX_STEPS, 4);
         assert!(FOLLOWUP_PROMPT.starts_with("FOLLOWUP:"));
