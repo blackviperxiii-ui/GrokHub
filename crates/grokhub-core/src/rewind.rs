@@ -12,10 +12,33 @@ pub struct RewindRecord {
     pub method: String,
 }
 
+const SENSITIVE_HOME_LEAVES: &[&str] = &[
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".kube",
+    ".config/GrokHub",
+];
+
+fn rewind_sensitive(root: &str, home: &str) -> bool {
+    let r = normalize(root);
+    let h = normalize(home);
+    if h.is_empty() {
+        return false;
+    }
+    SENSITIVE_HOME_LEAVES.iter().any(|leaf| {
+        let p = format!("{h}/{leaf}");
+        r == p || r.starts_with(&format!("{p}/"))
+    })
+}
+
 pub fn rewind_allowed(root: &str, home: &str) -> bool {
     let r = normalize(root);
     let h = normalize(home);
     if r.is_empty() || r == "/" || r == h {
+        return false;
+    }
+    if rewind_sensitive(&r, &h) {
         return false;
     }
     r.starts_with(&format!("{h}/")) || r.starts_with("/tmp/") || r == "/tmp"
@@ -56,6 +79,12 @@ mod tests {
         assert!(!rewind_allowed("/", "/home/user"));
         assert!(rewind_allowed("/home/user/GrokHub-Work", "/home/user"));
         assert!(rewind_allowed("/tmp/lab", "/home/user"));
+        assert!(!rewind_allowed("/home/user/.ssh", "/home/user"));
+        assert!(!rewind_allowed("/home/user/.ssh/id_ed25519", "/home/user"));
+        assert!(!rewind_allowed("/home/user/.gnupg", "/home/user"));
+        assert!(!rewind_allowed("/home/user/.aws", "/home/user"));
+        assert!(!rewind_allowed("/home/user/.kube/config", "/home/user"));
+        assert!(!rewind_allowed("/home/user/.config/GrokHub", "/home/user"));
         assert_eq!(
             rewind_dest("/home/user/.config/GrokHub/", "job-1"),
             "/home/user/.config/GrokHub/rewind/job-1"

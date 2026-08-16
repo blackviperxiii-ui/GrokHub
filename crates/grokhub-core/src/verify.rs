@@ -32,6 +32,15 @@ pub fn can_mark_done(verify_passed: bool, saw_verify_ok: bool) -> bool {
     verify_passed || saw_verify_ok
 }
 
+/// A new user turn must re-verify. One VERIFY_OK must not unlock Done for the session.
+pub fn verify_ok_after_user_turn(prev: bool, new_user_turn: bool) -> bool {
+    if new_user_turn {
+        false
+    } else {
+        prev
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,5 +63,8 @@ mod tests {
         assert!(can_mark_done(true, false));
         assert!(can_mark_done(false, true));
         assert!(!can_mark_done(false, false));
+        assert!(!verify_ok_after_user_turn(true, true));
+        assert!(verify_ok_after_user_turn(true, false));
+        assert!(!verify_ok_after_user_turn(false, false));
     }
 }

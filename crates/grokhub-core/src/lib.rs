@@ -85,8 +85,8 @@ pub use chat_bubble::{
 };
 pub use chat_job::{
     apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
-    drop_trailing_assistant, job_error_goes_to_chat, persist_user_turn, upsert_assistant_turn,
-    worker_gone_status, ChatSendKind,
+    drop_trailing_assistant, job_error_goes_to_chat, persist_user_turn, push_bound_message,
+    upsert_assistant_turn, worker_gone_status, ChatSendKind,
 };
 pub use chips::{
     build_quick_chips, chip_memory_key, chip_suggest_prompt, chip_thread_from_messages,
@@ -151,8 +151,8 @@ pub use connector::{
 };
 pub use consult::{format_consult_reply, parse_consult};
 pub use context::{
-    context_percent, estimate_messages, estimate_tokens, should_auto_compact, CONTEXT_BUDGET_TOKENS,
-    RECENT_MIN_MESSAGES,
+    context_percent, estimate_messages, estimate_tokens, should_auto_compact, should_auto_compact_now,
+    CONTEXT_BUDGET_TOKENS, RECENT_MIN_MESSAGES,
 };
 pub use diagnostics::diagnostics_bundle;
 pub use goal::{
@@ -175,8 +175,9 @@ pub use shortcuts::{
     shortcut_help, ComposerEnter, ComposerGo, SHORTCUTS,
 };
 pub use stream::{
-    chat_include_usage, chat_stream_flag, fold_stream_token, parse_sse_delta, parse_sse_thought,
-    parse_sse_usage, sse_done, StreamTokenKind, StreamUsage,
+    chat_include_usage, chat_stream_flag, fold_sse_acc, fold_stream_token, parse_sse_delta,
+    parse_sse_text, parse_sse_thought, parse_sse_usage, sse_done, sse_live_delta, StreamTokenKind,
+    StreamUsage,
 };
 pub use usage::{bump_usage, roll_usage_day, usage_blocked, usage_line, UsageDay};
 pub use hub_sync::{build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, HubMemoryFile, HubSnapshot};
@@ -197,7 +198,8 @@ pub use oauth::{
 };
 pub use project::{
     add_to_folder, clean_project_name, create_folder, create_project, drop_node, drop_selected,
-    folder_choices, expand_host_path_token, host_cmd_leaves_project, host_hour_blocked, is_under_project,
+    folder_choices, expand_host_path_token, host_cmd_leaves_project, host_hour_blocked,
+    refund_host_reserved, is_under_project,
     project_menu_acts, project_menu_label, project_name_from_path, project_slug, project_work_path,
     rename_node, restore_bound_path, seed_from_bound, settle_project_path, should_seed_sidebar,
     stage_project, toggle_folder, upsert_bound, visible_tree, DropOutcome, ProjectKind,
@@ -213,7 +215,8 @@ pub use slash::{
     SLASH_COMMANDS,
 };
 pub use verify::{
-    can_mark_done, has_goal_complete, has_verify_ok, interpret_verify, verify_script_path,
+    can_mark_done, has_goal_complete, has_verify_ok, interpret_verify, verify_ok_after_user_turn,
+    verify_script_path,
     VerifyResult,
 };
 pub use voice::{
@@ -243,8 +246,9 @@ pub use state::{
 };
 pub use task::{HubTask, Receipt};
 pub use thread_tab::{
-    apply_auto_title, apply_manual_rename, clean_tab_title, delete_thread, display_tab_title,
-    history_order, short_auto_title, toggle_pin, DeleteOutcome, ThreadTab, AUTO_TITLE_MAX,
+    apply_auto_title, apply_auto_title_in, apply_manual_rename, auto_title_blocked, clean_tab_title,
+    delete_thread, display_tab_title, history_order, short_auto_title, toggle_pin, DeleteOutcome,
+    ThreadTab, AUTO_TITLE_MAX,
 };
 pub use update::{
     discover_source, is_grokhub_source, overlay_update_begin, overlay_update_can_restart,

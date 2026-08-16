@@ -430,6 +430,11 @@ pub fn host_hour_blocked(count: u32, cap: u32) -> bool {
     cap > 0 && count >= cap
 }
 
+/// Halt refunds the reserved slots so a cancelled job does not eat the hour cap.
+pub fn refund_host_reserved(count: u32, reserved: u32) -> u32 {
+    count.saturating_sub(reserved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,6 +472,9 @@ mod tests {
         assert!(host_hour_blocked(40, 40));
         assert!(!host_hour_blocked(3, 40));
         assert!(!host_hour_blocked(40, 0), "cap 0 means unlimited");
+        assert_eq!(refund_host_reserved(3, 3), 0);
+        assert_eq!(refund_host_reserved(3, 1), 2);
+        assert_eq!(refund_host_reserved(0, 2), 0);
     }
 
     #[test]

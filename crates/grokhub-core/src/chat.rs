@@ -109,7 +109,9 @@ pub fn resolve_chat_model(mode: &str, model: &str) -> String {
     match mode.trim() {
         "max" | "deep" | "heavy" | "think" | "build" | "expert" | "balanced" | "balance"
         | "fast" => model_for_mode(mode.trim()).to_string(),
-        _ if settings_pin_blocks_auto(model) => model.trim().to_string(),
+        _ if settings_pin_blocks_auto(model) => {
+            crate::models::sanitize_chat_model(model).to_string()
+        }
         mode if !mode.is_empty() => model_for_mode(mode).to_string(),
         _ => DEFAULT_MODEL.to_string(),
     }
@@ -440,6 +442,11 @@ mod tests {
         assert_eq!(resolve_chat_model("max", ""), "grok-4.6");
         assert_eq!(resolve_chat_model("auto", "grok-3"), "grok-3");
         assert_eq!(resolve_chat_model("auto", ""), "grok-3-mini-fast");
+        assert_eq!(
+            resolve_chat_model("auto", "gpt-4"),
+            DEFAULT_MODEL,
+            "invalid Settings pin must not be sent to the API"
+        );
         assert_eq!(
             reasoning_effort_for_mode("max"),
             Some("xhigh")
