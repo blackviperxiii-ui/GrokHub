@@ -295,6 +295,16 @@ pub fn composer_go_cluster_w() -> f32 {
     84.0 + 22.0 + 28.0 + 8.0 * 3.0 + 64.0
 }
 
+/// Filled Send/Stop disc. Always reserve this, even when Idle is a 22px arrow.
+pub fn composer_go_hit_w() -> f32 {
+    28.0
+}
+
+/// Text + Fast + mic after Plus. Leaves the Stop disc and the two 8px gaps.
+pub fn composer_mid_w(inner: f32) -> f32 {
+    (inner - 22.0 - 8.0 - composer_go_hit_w() - 8.0).max(80.0)
+}
+
 /// Visible pill width from the window, not egui available (chips/wordmark
 /// inflate that past the pane so Stop paints off-screen).
 pub fn composer_pill_w(screen_w: f32) -> f32 {
@@ -1492,6 +1502,12 @@ mod tests {
         assert!(
             composer_pill_w(900.0) > composer_go_cluster_w() + 80.0,
             "Stop cluster must fit inside a 900-wide cabin pill"
+        );
+        let inner = composer_pill_w(900.0) - 16.0;
+        assert_eq!(
+            22.0 + 8.0 + composer_mid_w(inner) + 8.0 + composer_go_hit_w(),
+            inner,
+            "Plus + mid + Stop must fill the frame inner, not overflow it"
         );
         let bar_inner = crate::theme::IMAGINE_BAR_H - 20.0;
         assert_eq!(imagine_prompt_h(), 32.0);
