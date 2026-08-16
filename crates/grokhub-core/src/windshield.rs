@@ -228,5 +228,13 @@ mod tests {
         let cursor = parse_xdotool_mouse("x:123 y:456 screen:0 window:9").unwrap();
         assert_eq!((cursor.x, cursor.y, cursor.role.as_str()), (123, 456, "cursor"));
         assert!(parse_xdotool_mouse("").is_none());
+        let win = parse_wmctrl_line("0x01 0 10 20 800 600 GrokHub").unwrap();
+        assert_eq!(win.name, "GrokHub");
+        assert_eq!((win.x, win.y, win.w, win.h), (10, 20, 800, 600));
+        assert!(
+            parse_wmctrl_line("0x02 0 0 0 1920 1080 Lock screen").is_none(),
+            "lock windows must not become click targets"
+        );
+        assert!(parse_wmctrl_line("0x03 0 0 0 1920 1080 GDM Greeter").is_none());
     }
 }
