@@ -2,6 +2,7 @@
 
 use crate::chat::extract_host_cmds;
 use crate::connector::extract_connector_cmds;
+use crate::recipe::{computer_cmd_line, parse_computer_op};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatKind {
@@ -20,7 +21,10 @@ pub struct ChatView {
 
 pub fn is_workload_user(content: &str) -> bool {
     let t = content.trim_start();
-    t.starts_with("HOST_RESULT") || t.starts_with("HOST_DIFF") || t.starts_with("CONNECTOR_RESULT")
+    t.starts_with("HOST_RESULT")
+        || t.starts_with("HOST_DIFF")
+        || t.starts_with("CONNECTOR_RESULT")
+        || t.starts_with("COMPUTER_RESULT")
 }
 
 pub fn merge_thinking(thought: &str, content: &str) -> String {
@@ -84,6 +88,18 @@ pub fn visible_chat(messages: &[(String, String)]) -> Vec<ChatView> {
                             body: cmd,
                         });
                     }
+                    for line in rest.lines() {
+                        if let Some(op) = parse_computer_op(line) {
+                            out.push(ChatView {
+                                kind: ChatKind::Tool,
+                                title: "Hands".into(),
+                                body: computer_cmd_line(&op)
+                                    .trim_start_matches("COMPUTER_CMD:")
+                                    .trim()
+                                    .to_string(),
+                            });
+                        }
+                    }
                     for c in extract_connector_cmds(&rest) {
                         out.push(ChatView {
                             kind: ChatKind::Tool,
@@ -111,6 +127,7 @@ fn connector_title(id: &str) -> String {
 fn is_protocol_line(line: &str) -> bool {
     let t = line.trim();
     t.starts_with("HOST_CMD")
+        || t.starts_with("COMPUTER_CMD")
         || t.starts_with("CONNECTOR_CMD")
         || t.starts_with("WORK_PIN:")
         || t.starts_with("WORK_UPDATE:")
@@ -170,6 +187,21 @@ fn tool_from_workload(content: &str) -> Option<ChatView> {
     if t.starts_with("CONNECTOR_RESULT") {
         return Some(tool_from_connector_result(t));
     }
+    if t.starts_with("COMPUTER_RESULT") {
+        return Some(ChatView {
+            kind: ChatKind::Tool,
+            title: "Hands".into(),
+            body: content
+                .trim_start()
+                .strip_prefix("COMPUTER_RESULT (facts only):")
+                .or_else(|| content.trim_start().strip_prefix("COMPUTER_RESULT:"))
+                .unwrap_or(content)
+                .trim()
+                .chars()
+                .take(240)
+                .collect(),
+        });
+    }
     None
 }
 
@@ -228,7 +260,7 @@ mod tests {
             ("user".into(), "check the box".into()),
             (
                 "assistant".into(),
-                "THINKING:\nNeed a snapshot.\n\nI'll look.\nHOST_CMD: uname -a\nVERIFY_OK\n".into(),
+                "THINKING:\nNeed a snapshot.\n\nI'll look.\nHOST_CMD: uname -a\nCOMPUTER_CMD: click 10 20\nVERIFY_OK\n".into(),
             ),
             (
                 "user".into(),
@@ -253,6 +285,7 @@ mod tests {
         assert_eq!(v[1].title, "Thought");
         assert_eq!(v[2].body, "I'll look.");
         assert!(!v[2].body.contains("HOST_CMD"));
+        assert!(!v[2].body.contains("COMPUTER_CMD"));
         assert!(!v[2].body.contains("VERIFY_OK"));
         assert_eq!(v[3].title, "Host");
         assert!(v[3].body.contains("uname -a"));
@@ -314,8 +347,49 @@ mod tests {
     fn workload_user_is_not_a_spoken_turn() {
         assert!(is_workload_user("HOST_RESULT (facts only):\n$ ls\n"));
         assert!(is_workload_user("CONNECTOR_RESULT (facts only):\nok"));
+        assert!(is_workload_user("COMPUTER_RESULT (facts only):\nclicked 10,20"));
         assert!(is_workload_user("HOST_DIFF:\n- a"));
         assert!(!is_workload_user("check the box"));
+    }
+
+    #[test]
+    fn pending_computer_cmd_is_hands_tool() {
+        let msgs = vec![
+            ("user".into(), "click the Save button".into()),
+            (
+                "assistant".into(),
+                "On it.\nCOMPUTER_CMD: click 10 20\n".into(),
+            ),
+        ];
+        let v = visible_chat(&msgs);
+        assert_eq!(
+            kinds(&v),
+            vec![ChatKind::User, ChatKind::Assistant, ChatKind::Tool]
+        );
+        assert_eq!(v[1].body, "On it.");
+        assert_eq!(v[2].title, "Hands");
+        assert_eq!(v[2].body, "click 10 20");
+    }
+
+    #[test]
+    fn computer_result_is_hands_tool() {
+        let msgs = vec![
+            ("user".into(), "click save".into()),
+            (
+                "assistant".into(),
+                "Clicking.\nCOMPUTER_CMD: act Save\n".into(),
+            ),
+            (
+                "user".into(),
+                "COMPUTER_RESULT (facts only):\n$ COMPUTER_CMD: act Save\nclicked 40,80\n".into(),
+            ),
+        ];
+        let v = visible_chat(&msgs);
+        assert_eq!(v.iter().find(|x| x.kind == ChatKind::Assistant).map(|x| x.body.as_str()), Some("Clicking."));
+        assert!(v
+            .iter()
+            .any(|x| x.kind == ChatKind::Tool && x.title == "Hands"));
+        assert!(!v.iter().any(|x| x.body.contains("COMPUTER_RESULT")));
     }
 
     #[test]

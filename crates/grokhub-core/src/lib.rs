@@ -99,8 +99,10 @@ pub use imagine::{
 };
 pub use inhabit::{can_inhabit, InhabitBundle};
 pub use recipe::{
-    needs_reshoot, parse_computer_op, parse_recipe, parse_screen, replay_ops, screen_from_extents,
-    ComputerOp, Recipe, ReplayOp, ScreenSize,
+    computer_cmd_line, computer_drive, extract_computer_ops, hands_protocol, lock_blocks_hands,
+    needs_reshoot, parse_computer_cmd_loose, parse_computer_op, parse_recipe, parse_screen,
+    replay_ops, screen_from_extents, should_attach_hands_frame, user_asks_desktop_hands,
+    ComputerDrive, ComputerOp, Recipe, ReplayOp, ScreenSize,
 };
 pub use reflect::{
     fact_candidates, restore_memory_prev, should_idle_reflect, surgical_memory_edit, MemoryEdit,
