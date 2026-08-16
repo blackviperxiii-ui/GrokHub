@@ -693,9 +693,9 @@ pub(crate) fn chip_paint_label(label: &str) -> String {
     format!("{}…", out.trim_end())
 }
 
-pub fn chip_row_width_lock(avail: f32) -> (f32, f32) {
-    let w = crate::theme::QUERY_MAX_W.min(avail.max(120.0));
-    (w, w)
+/// Max width of the chip cluster — the composer pill, not a forced full-width strip.
+pub fn chip_row_width_lock(avail: f32) -> f32 {
+    crate::theme::QUERY_MAX_W.min(avail.max(120.0))
 }
 
 pub fn quick_chip_fill(_primary: bool) -> Color32 {
@@ -719,12 +719,14 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
         return None;
     }
     let mut act = None;
-    let (min_w, max_w) = chip_row_width_lock(ui.available_width());
+    let max_w = chip_row_width_lock(ui.available_width());
     ui.scope(|ui| {
-        ui.set_min_width(min_w);
         ui.set_max_width(max_w);
-        ui.set_width(max_w);
-        ui.horizontal_wrapped(|ui| {
+        ui.with_layout(
+            egui::Layout::left_to_right(egui::Align::Center)
+                .with_main_wrap(true)
+                .with_main_align(egui::Align::Center),
+            |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
             for (i, c) in chips.iter().take(grokhub_core::CHIP_VISIBLE_MAX).enumerate() {
                 let chip_id = ui.id().with(("qchip", i));
@@ -801,7 +803,8 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                 ui.ctx()
                     .data_mut(|d| d.insert_temp(chip_id, hit.hovered()));
             }
-        });
+            },
+        );
     });
     ui.add_space(8.0);
     act
@@ -1567,10 +1570,22 @@ mod tests {
         assert_eq!(quick_chip_fill(true), quick_chip_fill(false));
         assert_eq!(quick_chip_stroke(true), quick_chip_stroke(false));
         assert_eq!(quick_chip_fg(true), quick_chip_fg(false));
-        let (min_w, max_w) = chip_row_width_lock(640.0);
-        assert_eq!(min_w, max_w);
-        assert_eq!(min_w, crate::theme::QUERY_MAX_W.min(640.0_f32.max(120.0)));
+        let max_w = chip_row_width_lock(640.0);
+        assert_eq!(max_w, crate::theme::QUERY_MAX_W.min(640.0_f32.max(120.0)));
+        assert!(max_w <= crate::theme::QUERY_MAX_W);
+        assert_ne!(max_w, 0.0);
         assert!(!quick_chip_inner_button_framed());
+        let src = include_str!("cards.rs");
+        let start = src.find("pub fn quick_chip_row").expect("chip row");
+        let slice = &src[start..start + 900];
+        assert!(
+            slice.contains("with_main_align(egui::Align::Center)"),
+            "chips sit on the midline of the bar: {slice}"
+        );
+        assert!(
+            !slice.contains("set_width(max_w)") && !slice.contains("set_min_width"),
+            "chip cluster must shrink-wrap, not fill the pill: {slice}"
+        );
     }
 
     #[test]
