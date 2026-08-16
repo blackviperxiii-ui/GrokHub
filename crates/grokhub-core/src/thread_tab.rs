@@ -13,6 +13,8 @@ pub enum DeleteOutcome {
     ResetLast,
 }
 
+pub const AUTO_TITLE_MAX: usize = 16;
+
 pub fn clean_tab_title(name: &str) -> Option<String> {
     let t: String = name.trim().chars().take(80).collect();
     if t.is_empty() {
@@ -20,6 +22,49 @@ pub fn clean_tab_title(name: &str) -> Option<String> {
     } else {
         Some(t)
     }
+}
+
+/// One short name for the rail. "chowder and food interest and cho" → "chowder".
+pub fn short_auto_title(name: &str) -> Option<String> {
+    let t = name.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let first = t
+        .split(" and ")
+        .next()
+        .unwrap_or(t)
+        .split(',')
+        .next()
+        .unwrap_or(t)
+        .trim();
+    if first.is_empty() {
+        return None;
+    }
+    Some(clip_title(first, AUTO_TITLE_MAX))
+}
+
+/// What the sidebar paints. Topic lists collapse; a manual name stays until it is too long.
+pub fn display_tab_title(name: &str) -> String {
+    if name.contains(" and ") || name.contains(',') {
+        short_auto_title(name).unwrap_or_else(|| name.trim().to_string())
+    } else {
+        clip_title(name.trim(), AUTO_TITLE_MAX)
+    }
+}
+
+fn clip_title(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i + 1 >= n {
+            break;
+        }
+        out.push(ch);
+    }
+    format!("{}…", out.trim_end())
 }
 
 pub fn apply_manual_rename(tab: &mut ThreadTab, name: &str) -> bool {
@@ -35,7 +80,7 @@ pub fn apply_auto_title(tab: &mut ThreadTab, name: &str) -> bool {
     if tab.title_locked {
         return false;
     }
-    let Some(title) = clean_tab_title(name) else {
+    let Some(title) = short_auto_title(name) else {
         return false;
     };
     tab.title = title;
@@ -106,7 +151,23 @@ mod tests {
         assert_eq!(tab.title, "porn");
         assert!(!tab.title_locked);
         assert!(apply_auto_title(&mut tab, "porn and comics"));
-        assert_eq!(tab.title, "porn and comics");
+        assert_eq!(tab.title, "porn");
+    }
+
+    #[test]
+    fn auto_title_is_one_short_name() {
+        assert_eq!(
+            short_auto_title("chowder and food interest and cho").as_deref(),
+            Some("chowder")
+        );
+        assert_eq!(
+            display_tab_title("chowder and food interest and cho"),
+            "chowder"
+        );
+        assert_eq!(display_tab_title("food interest"), "food interest");
+        let long = display_tab_title("supercalifragilistic");
+        assert!(long.chars().count() <= AUTO_TITLE_MAX, "{long}");
+        assert!(long.ends_with('…'), "{long}");
     }
 
     #[test]
