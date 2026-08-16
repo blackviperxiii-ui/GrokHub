@@ -208,6 +208,7 @@ pub enum BarIcon {
     Plus,
     Mic,
     Send,
+    Stop,
     ArrowUp,
     Search,
     Gear,
@@ -451,6 +452,15 @@ pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::
                 arrow,
             );
         }
+        BarIcon::Stop => {
+            painter.circle_filled(c, w * 0.46, crate::theme::fg());
+            let pad = w * 0.18;
+            painter.rect_filled(
+                egui::Rect::from_center_size(c, Vec2::splat(w - pad * 2.0)),
+                2.0,
+                crate::theme::bg(),
+            );
+        }
         BarIcon::ArrowUp => {
             // grok.com Submit: M6 11L12 5M12 5L18 11M12 5V19 square-cap
             painter.line_segment(
@@ -676,6 +686,7 @@ mod tests {
         assert_ne!(BarIcon::Plus, BarIcon::Search);
         assert_ne!(BarIcon::Gear, BarIcon::Search);
         assert_ne!(BarIcon::ArrowUp, BarIcon::Send);
+        assert_ne!(BarIcon::Stop, BarIcon::Send);
         assert_eq!(rail_icon_for("imagine"), RailIcon::Imagine);
         assert_eq!(rail_icon_for("automations"), RailIcon::Clock);
         assert_eq!(rail_icon_for("skills"), RailIcon::Grid);

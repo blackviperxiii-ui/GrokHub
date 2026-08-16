@@ -289,6 +289,30 @@ pub fn imagine_send_cluster_w() -> f32 {
     crate::theme::IMAGINE_HIT * 2.0 + 12.0
 }
 
+/// Fast combo + mic + Send/Stop. Extra chrome is ComboBox padding/caret
+/// past `.width(84)` — 180px left Fast as the right edge of a 900-wide cabin.
+pub fn composer_go_cluster_w() -> f32 {
+    84.0 + 22.0 + 28.0 + 8.0 * 3.0 + 64.0
+}
+
+/// Filled Send/Stop disc. Always reserve this, even when Idle is a 22px arrow.
+pub fn composer_go_hit_w() -> f32 {
+    28.0
+}
+
+/// Text + Fast + mic after Plus. Leaves the Stop disc and the two 8px gaps.
+pub fn composer_mid_w(inner: f32) -> f32 {
+    (inner - 22.0 - 8.0 - composer_go_hit_w() - 8.0).max(80.0)
+}
+
+/// Visible pill width from the window, not egui available (chips/wordmark
+/// inflate that past the pane so Stop paints off-screen).
+pub fn composer_pill_w(screen_w: f32) -> f32 {
+    (screen_w - crate::theme::SIDEBAR_W - 40.0)
+        .min(crate::theme::QUERY_MAX_W)
+        .max(360.0)
+}
+
 /// Prompt field is a fixed strip. A stretching `TextEdit` covers the chips
 /// and steals their clicks (I-beam over 720p / Video audio).
 pub fn imagine_prompt_h() -> f32 {
@@ -1485,6 +1509,30 @@ mod tests {
         assert_eq!(
             imagine_send_cluster_w(),
             crate::theme::IMAGINE_HIT * 2.0 + 12.0
+        );
+        assert!(
+            composer_go_cluster_w()
+                >= 84.0 + 22.0 + 28.0 + 8.0 * 3.0 + 64.0,
+            "Fast combo + mic + Stop disc; 180px clipped Stop off a 900-wide cabin"
+        );
+        assert_eq!(
+            composer_pill_w(900.0),
+            600.0,
+            "900-wide cabin minus rail and central margins"
+        );
+        assert_eq!(
+            composer_pill_w(1400.0),
+            crate::theme::QUERY_MAX_W
+        );
+        assert!(
+            composer_pill_w(900.0) > composer_go_cluster_w() + 80.0,
+            "Stop cluster must fit inside a 900-wide cabin pill"
+        );
+        let inner = composer_pill_w(900.0) - 16.0;
+        assert_eq!(
+            22.0 + 8.0 + composer_mid_w(inner) + 8.0 + composer_go_hit_w(),
+            inner,
+            "Plus + mid + Stop must fill the frame inner, not overflow it"
         );
         let bar_inner = crate::theme::IMAGINE_BAR_H - 20.0;
         assert_eq!(imagine_prompt_h(), 32.0);
