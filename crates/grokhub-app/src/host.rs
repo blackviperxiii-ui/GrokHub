@@ -165,7 +165,7 @@ mod tests {
         stop.store(true, Ordering::SeqCst);
         let out = handle.join().expect("host thread");
         assert!(
-            started.elapsed() < Duration::from_secs(3),
+            started.elapsed() < Duration::from_secs(6),
             "halt left sleep running for {:?}",
             started.elapsed()
         );

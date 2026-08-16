@@ -15,12 +15,16 @@ pub struct HostPlanStep {
     pub checked: bool,
 }
 
+fn host_words(cmd: &str) -> impl Iterator<Item = &str> {
+    cmd.split(|ch: char| ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '`' | '(' | ')'))
+        .filter(|t| !t.is_empty())
+}
+
 pub fn host_risk(cmd: &str) -> HostRisk {
     let c = cmd.to_ascii_lowercase();
     if c.contains("--force")
-        || c.contains("rm -")
+        || host_words(&c).any(|t| t == "rm" || t == "dd")
         || c.contains("mkfs")
-        || c.split_whitespace().next() == Some("dd")
         || c.contains(" sudo ")
         || c.starts_with("sudo ")
     {
@@ -75,18 +79,20 @@ pub fn parse_host_plan(text: &str) -> Option<Vec<HostPlanStep>> {
             continue;
         }
         if t.is_empty() {
-            break;
+            continue;
+        }
+        if !t.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            continue;
         }
         let rest = t
             .trim_start_matches(|c: char| c.is_ascii_digit())
             .trim_start_matches(['.', ')', ':'])
             .trim();
         if rest.is_empty() {
-            break;
+            continue;
         }
         let (cmd, _why) = rest
             .split_once(" — ")
-            .or_else(|| rest.split_once(" - "))
             .or_else(|| rest.split_once(" —"))
             .unwrap_or((rest, ""));
         let cmd = cmd.trim();
@@ -109,14 +115,8 @@ pub fn plan_from_text(text: &str) -> Option<Vec<HostPlanStep>> {
     let mut steps = Vec::new();
     for line in text.lines() {
         let t = line.trim();
-        if let Some(rest) = t
-            .strip_prefix("HOST_CMD:")
-            .or_else(|| t.strip_prefix("HOST_CMD"))
-        {
-            let cmd = rest.trim().trim_start_matches(':').trim();
-            if !cmd.is_empty() {
-                steps.push(step_from_cmd(cmd));
-            }
+        if let Some(cmd) = strip_host_cmd_line(t) {
+            steps.push(step_from_cmd(cmd));
             continue;
         }
         if let Some(op) = parse_computer_op(t) {
@@ -132,6 +132,45 @@ pub fn plan_from_text(text: &str) -> Option<Vec<HostPlanStep>> {
         None
     } else {
         Some(steps)
+    }
+}
+
+/// `HOST_CMD:` / `HOST_CMD ` only — not `HOST_CMDLINE`.
+pub fn strip_host_cmd_line(line: &str) -> Option<&str> {
+    let t = line.trim();
+    let rest = if let Some(r) = t.strip_prefix("HOST_CMD:") {
+        r
+    } else if let Some(r) = t.strip_prefix("HOST_CMD") {
+        if r.is_empty() || r.starts_with(':') || r.starts_with(char::is_whitespace) {
+            r
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+    let cmd = rest.trim().trim_start_matches(':').trim();
+    if cmd.is_empty() {
+        None
+    } else {
+        Some(cmd)
+    }
+}
+
+/// Keep a YOLO-held plan when HostDone is for a different auto-run batch.
+pub fn retain_held_plan(
+    pending: Option<Vec<HostPlanStep>>,
+    ran: &[String],
+) -> Option<Vec<HostPlanStep>> {
+    let pending = pending?;
+    if pending.is_empty() {
+        return None;
+    }
+    let ran_pending = pending.iter().any(|s| ran.iter().any(|c| c == &s.cmd));
+    if ran_pending {
+        None
+    } else {
+        Some(pending)
     }
 }
 
@@ -192,6 +231,8 @@ mod tests {
         let text = "HOST_PLAN:\n1. ls ~/proj — list files\n2. git status — see dirty tree\n";
         let steps = parse_host_plan(text).unwrap();
         assert_eq!(steps.len(), 2);
+        let spaced = parse_host_plan("HOST_PLAN:\n1. ls\n\n2. git status\n").unwrap();
+        assert_eq!(spaced.len(), 2, "blank lines must not end the plan");
         assert_eq!(steps[0].cmd, "ls ~/proj");
         assert_eq!(steps[0].risk, HostRisk::Safe);
         assert!(explain_host_risk("git push --force", HostRisk::Destructive).contains("force"));
@@ -216,5 +257,45 @@ mod tests {
         assert_eq!(run, vec!["ls".to_string()]);
         assert_eq!(hold.len(), 1);
         assert_eq!(hold[0].cmd, "rm -rf /tmp/x");
+    }
+
+    #[test]
+    fn rm_without_flags_is_destructive() {
+        assert_eq!(host_risk("rm foo.txt"), HostRisk::Destructive);
+        assert_eq!(host_risk("rm\tfoo.txt"), HostRisk::Destructive);
+        assert_eq!(host_risk("ls foo.txt"), HostRisk::Safe);
+    }
+
+    #[test]
+    fn host_cmd_prefix_is_not_a_substring() {
+        assert!(plan_from_text("HOST_CMDLINE: backup the repo\n").is_none());
+        assert_eq!(
+            plan_from_text("HOST_CMD echo ok\n").unwrap()[0].cmd,
+            "echo ok"
+        );
+    }
+
+    #[test]
+    fn host_plan_keeps_later_steps_and_real_hyphens() {
+        let empty_num = parse_host_plan("HOST_PLAN:\n1. ls\n2.\n3. git status\n").unwrap();
+        assert_eq!(
+            empty_num.iter().map(|s| s.cmd.as_str()).collect::<Vec<_>>(),
+            vec!["ls", "git status"]
+        );
+        let prose = parse_host_plan("HOST_PLAN:\n1. ls\nThis explains step 1\n2. git status\n").unwrap();
+        assert_eq!(
+            prose.iter().map(|s| s.cmd.as_str()).collect::<Vec<_>>(),
+            vec!["ls", "git status"]
+        );
+        let hyphen = parse_host_plan("HOST_PLAN:\n1. cp a - b\n").unwrap();
+        assert_eq!(hyphen[0].cmd, "cp a - b");
+    }
+
+    #[test]
+    fn yolo_hold_survives_unrelated_host_done() {
+        let hold = vec![step_from_cmd("rm foo.txt")];
+        let kept = retain_held_plan(Some(hold.clone()), &["ls".into()]);
+        assert_eq!(kept.as_ref().map(|p| p[0].cmd.as_str()), Some("rm foo.txt"));
+        assert!(retain_held_plan(Some(hold), &["rm foo.txt".into()]).is_none());
     }
 }

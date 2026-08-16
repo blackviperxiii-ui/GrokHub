@@ -21,7 +21,8 @@ use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOp
 use grokhub_core::{
     append_composer, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
     cabin_system_prompt,
-    appearance_choices, appearance_hint, approved_cmds, auth_bearer, blend_thread_goal,
+    appearance_choices, appearance_hint, approved_cmds, auth_bearer, automation_blocked_by_policy,
+    blend_thread_goal,
     build_hub_snapshot,
     build_quick_chips, build_windshield, bump_skill_run, bump_usage,
     inhabit_ready, hub_pair_url, parse_hostname_i, pick_lan_ipv4,
@@ -33,10 +34,10 @@ use grokhub_core::{
     WallGif, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
     imagine_shows_result_above, imagine_toolbox_dock, imagine_toolbox_shows_title,
     imagine_toolbox_top, imagine_wall_bounds,
-    automation_blocked_by_policy, doctor_hands_line, due_automations, ensure_automation_schedule,
-    estimate_messages, extract_connector_cmds,
-    mark_automation_skipped, yolo_plan_split, chat_bearer, drop_trailing_assistant,
-    job_error_goes_to_chat, persist_user_turn, push_bound_message, refund_host_reserved,
+    doctor_hands_line, due_automations, ensure_automation_schedule, estimate_messages,
+    extract_connector_cmds, mark_automation_skipped, retain_held_plan, yolo_plan_split, chat_bearer,
+    drop_trailing_assistant_on, job_error_goes_to_chat, kick_messages_for_job, last_user_for_job,
+    persist_user_turn, push_bound_message, refund_host_reserved, daily_units_blocked,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     imagine_aspect_label, imagine_aspect_name, imagine_style_label, imagine_video_dur_label,
@@ -66,6 +67,7 @@ use grokhub_core::{
     parse_computer_cmd_loose, user_asks_cabin_eyes,
     user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
+    goal_pin_for_job, goal_step_after_outcome,
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
     recipe_from_cmds, replay_automation_target,
     parse_nl_automation, parse_recipe, parse_slash, parse_theme, pick_theme, plan_from_text, plan_room,
@@ -75,9 +77,9 @@ use grokhub_core::{
     greeting_fingerprint, greeting_prompt, local_greeting, pick_greeting,
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
-    rewind_dest, save_hub_state, screen_from_extents, search_corpus,
-    should_anticipate, should_auto_compact_now, should_keep_frame,
-    should_refresh_llm, shortcut_help, user_asks_takeover, windshield_prompt,
+    rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
+    should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
+    user_asks_takeover, windshield_prompt,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
@@ -1111,25 +1113,43 @@ impl Cabin {
         self.host_halt.store(true, Ordering::SeqCst);
         self.rx = None;
         self.running = false;
-        self.chat_job_thread = None;
         if self.host_reserved > 0 {
             self.host_hour_count = refund_host_reserved(self.host_hour_count, self.host_reserved);
             self.host_reserved = 0;
         }
         self.pending_connectors.clear();
+        self.plan_pending = None;
+        self.agents.clear();
         self.active_skill_follow = None;
         self.stream_buf.clear();
         self.thought_buf.clear();
-        let mut msgs: Vec<(String, String)> = self
+        let vis = self.visible_thread_id();
+        let job = self.chat_job_thread.clone();
+        let mut visible: Vec<(String, String)> = self
             .messages
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        drop_trailing_assistant(&mut msgs);
-        self.messages = msgs
+        let mut stored: Vec<(String, Vec<(String, String)>)> = self
+            .threads
+            .iter()
+            .map(|t| (t.id.clone(), t.messages.clone()))
+            .collect();
+        drop_trailing_assistant_on(job.as_deref(), &vis, &mut visible, &mut stored);
+        self.messages = visible
             .into_iter()
             .map(|(role, content)| Msg { role, content })
             .collect();
+        if let Some(job_id) = job.as_deref() {
+            if job_id != vis {
+                if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job_id) {
+                    if let Some(t) = self.threads.iter_mut().find(|t| t.id == job_id) {
+                        t.messages = msgs.clone();
+                    }
+                }
+            }
+        }
+        self.chat_job_thread = None;
         self.persist();
         if let Some(mut s) = self.voice_sock.take() {
             s.halt();
@@ -2025,15 +2045,43 @@ impl Cabin {
     }
 
     fn spawn_thread_goal(&mut self) {
+        self.spawn_thread_goal_on(None);
+    }
+
+    fn spawn_thread_goal_on(&mut self, thread_id: Option<&str>) {
         if self.goal_busy {
             self.goal_stale = true;
             return;
         }
-        let scratch = self.scratch();
-        let user_turns = self.messages.iter().filter(|m| m.role == "user").count();
+        let vis = self.visible_thread_id();
+        let tid = thread_id
+            .map(|s| s.to_string())
+            .or_else(|| self.threads.get(self.thread_idx).map(|t| t.id.clone()))
+            .unwrap_or_default();
+        let on_visible = tid == vis || tid.is_empty();
+        let scratch = if on_visible {
+            self.scratch()
+        } else {
+            self.threads
+                .iter()
+                .find(|t| t.id == tid)
+                .map(|t| t.scratch)
+                .unwrap_or(false)
+        };
+        let pairs = if on_visible {
+            self.chat_pairs()
+        } else {
+            self.threads
+                .iter()
+                .find(|t| t.id == tid)
+                .map(|t| t.messages.clone())
+                .unwrap_or_default()
+        };
+        let user_turns = pairs.iter().filter(|(r, _)| r == "user").count();
         let locked = self
             .threads
-            .get(self.thread_idx)
+            .iter()
+            .find(|t| t.id == tid)
             .map(|t| t.title_locked)
             .unwrap_or(false);
         if locked || !should_name_thread(scratch, user_turns) {
@@ -2044,16 +2092,11 @@ impl Cabin {
             self.goal_stale = false;
             return;
         }
-        let tid = self
-            .threads
-            .get(self.thread_idx)
-            .map(|t| t.id.clone())
-            .unwrap_or_default();
         if tid.is_empty() {
             self.goal_stale = false;
             return;
         }
-        let prompt = thread_goal_prompt(&self.chat_pairs());
+        let prompt = thread_goal_prompt(&pairs);
         let key = self.bearer();
         if key.trim().is_empty() {
             self.goal_stale = false;
@@ -2261,6 +2304,10 @@ impl Cabin {
                 .iter()
                 .map(|m| (m.role.clone(), m.content.clone()))
                 .collect();
+            t.goal.step = self.goal_step;
+            if !self.cfg.goal_pin.is_empty() {
+                t.goal.label = self.cfg.goal_pin.clone();
+            }
         }
         self.thread_idx = idx.min(self.threads.len().saturating_sub(1));
         self.rename_idx = None;
@@ -2284,6 +2331,11 @@ impl Cabin {
             .get(self.thread_idx)
             .map(|t| t.goal.label.clone())
             .unwrap_or_default();
+        self.goal_step = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.goal.step)
+            .unwrap_or(0);
         self.persist();
     }
 
@@ -2438,16 +2490,16 @@ impl Cabin {
             }
         }
         self.touch();
+        if let Some(slash) = parse_slash(&text) {
+            self.run_slash(slash);
+            return;
+        }
         remember_typed_prompt(
             &mut self.chip_memory,
             &text,
             now_ms(),
             Self::local_clock().hour as u8,
         );
-        if let Some(slash) = parse_slash(&text) {
-            self.run_slash(slash);
-            return;
-        }
         if !persist_user_turn(self.has_key()) {
             self.status = "Connect Grok OAuth in Settings".into();
             return;
@@ -2796,6 +2848,27 @@ impl Cabin {
         Policy::max()
     }
 
+    fn last_user_on_job(&self) -> String {
+        let vis = self.visible_thread_id();
+        let visible_pairs: Vec<(String, String)> = self
+            .messages
+            .iter()
+            .map(|m| (m.role.clone(), m.content.clone()))
+            .collect();
+        let stored: Vec<(String, Vec<(String, String)>)> = self
+            .threads
+            .iter()
+            .map(|t| (t.id.clone(), t.messages.clone()))
+            .collect();
+        last_user_for_job(
+            self.chat_job_thread.as_deref(),
+            &vis,
+            &visible_pairs,
+            &stored,
+        )
+        .unwrap_or_default()
+    }
+
     fn commit_proposed_skill(&mut self, proposed: SkillMd) {
         let to_save = if let Some(name) = prefer_patch(&self.skill_list, &proposed) {
             if let Some(existing) = self.skill_list.iter().find(|s| s.name == name) {
@@ -2865,7 +2938,7 @@ impl Cabin {
             return;
         }
         if let Some(last) = self.rewind_rows.first().cloned() {
-            if std::path::Path::new(&last.path).exists() {
+            if rewind_restore_matches(&last.root, src) && std::path::Path::new(&last.path).exists() {
                 self.queue_sh(format!(
                     "cp -a '{}' '{}'",
                     last.path.replace('\'', r#"'"'"'"#),
@@ -3085,8 +3158,14 @@ impl Cabin {
         ) else {
             return;
         };
+        self.roll_today();
+        if daily_units_blocked(self.usage.automation, self.cfg.daily_auto_cap) {
+            return;
+        }
         self.last_anticipate_ms = now_ms();
-        self.daily_auto_used = self.daily_auto_used.saturating_add(1);
+        bump_usage(&mut self.usage, "automation");
+        self.daily_auto_used = self.usage.automation;
+        self.daily_auto_day = self.usage.day.clone();
         self.send_chat(prompt);
     }
 
@@ -3096,10 +3175,11 @@ impl Cabin {
         }
         self.last_night_tick = Instant::now();
         let clock = Self::local_clock();
-        let day = format!("{}-{}", clock.weekday, clock.hour);
-        if self.daily_auto_day != day && clock.hour == 0 && clock.minute < 6 {
-            self.daily_auto_used = 0;
-            self.daily_auto_day = day;
+        self.roll_today();
+        self.daily_auto_day = self.usage.day.clone();
+        self.daily_auto_used = self.usage.automation;
+        if daily_units_blocked(self.usage.automation, self.cfg.daily_auto_cap) {
+            return;
         }
         let clock_copy = clock;
         self.automations = std::mem::take(&mut self.automations)
@@ -3133,7 +3213,7 @@ impl Cabin {
                         .find(|a| a.id == id)
                         .map(|a| a.name.clone())
                         .unwrap_or_else(|| id.clone());
-                    self.mark_auto_ran(&id, now_ms);
+                    self.mark_auto_skipped(&id, now_ms);
                     self.status = format!("Night skipped {name} (check)");
                 } else if let Some(a) = self.automations.iter().find(|x| x.id == id).cloned() {
                     self.fire_night(a, now_ms);
@@ -3149,6 +3229,10 @@ impl Cabin {
     }
 
     fn spawn_night_check(&mut self, id: String, name: String, cmd: String) {
+        if let Some(why) = forbidden_reason(&cmd) {
+            self.status = format!("Night check blocked: {why}");
+            return;
+        }
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let out = run_host(&cmd, Duration::from_secs(20));
@@ -3164,7 +3248,7 @@ impl Cabin {
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
         let destructive = a.instructions.to_ascii_lowercase().contains("rm ")
             || host_risk(&a.instructions) == HostRisk::Destructive;
-        if automation_blocked_by_policy(quiet, destructive, self.cfg.autonomy) {
+        if automation_blocked_by_policy(quiet, destructive, 3) {
             self.mark_auto_skipped(&a.id, now_ms);
             self.status = format!("Night skipped {} (quiet/policy)", a.name);
             return;
@@ -3174,7 +3258,9 @@ impl Cabin {
             return;
         }
         self.mark_auto_ran(&a.id, now_ms);
-        self.daily_auto_used = self.daily_auto_used.saturating_add(1);
+        bump_usage(&mut self.usage, "automation");
+        self.daily_auto_used = self.usage.automation;
+        self.daily_auto_day = self.usage.day.clone();
         self.status = format!("Night: {}", a.name);
         if let Some(id) = replay_automation_target(&a.instructions) {
             self.replay_saved_recipe(id);
@@ -3619,32 +3705,49 @@ impl Cabin {
         }
         self.running = true;
         self.status = "Thinking…".into();
-        self.chat_job_thread = Some(self.visible_thread_id());
-        let key = self.bearer();
-        let last_user = self
+        if self.chat_job_thread.is_none() {
+            self.chat_job_thread = Some(self.visible_thread_id());
+        }
+        let vis = self.visible_thread_id();
+        let visible_pairs: Vec<(String, String)> = self
             .messages
             .iter()
+            .map(|m| (m.role.clone(), m.content.clone()))
+            .collect();
+        let stored: Vec<(String, Vec<(String, String)>)> = self
+            .threads
+            .iter()
+            .map(|t| (t.id.clone(), t.messages.clone()))
+            .collect();
+        let raw = kick_messages_for_job(
+            self.chat_job_thread.as_deref(),
+            &vis,
+            &visible_pairs,
+            &stored,
+        );
+        let key = self.bearer();
+        let last_user = raw
+            .iter()
             .rev()
-            .find(|m| m.role == "user" && !is_workload_user(&m.content))
-            .map(|m| m.content.as_str())
-            .unwrap_or("");
-        let mode = effective_chat_mode(&self.cfg.mode, last_user, &self.cfg.model);
+            .find(|(role, content)| role == "user" && !is_workload_user(content))
+            .map(|(_, content)| content.clone())
+            .unwrap_or_default();
+        let mode = effective_chat_mode(&self.cfg.mode, &last_user, &self.cfg.model);
         let model = resolve_chat_model(&mode, &self.cfg.model);
         let effort = if model == "grok-4.6" {
             grokhub_core::reasoning_effort_for_mode(&mode)
         } else {
             None
         };
-        let mut msgs: Vec<(String, String)> = self
-            .messages
-            .iter()
-            .map(|m| {
-                let content = if m.role == "assistant" {
-                    strip_thinking(&m.content)
+        let mut msgs: Vec<(String, String)> = raw
+            .into_iter()
+            .map(|(role, content)| {
+                let content = if role == "assistant" {
+                    strip_thinking(&content)
                 } else {
-                    m.content.clone()
+                    content
                 };
-                (m.role.clone(), content)
+                (role, content)
             })
             .collect();
         let soul = config::read_memory("SOUL.md");
@@ -3661,11 +3764,11 @@ impl Cabin {
             .map(|h| h.chars().take(400).collect::<String>())
             .unwrap_or_default();
         let pin = insight_pin(&self.learning);
-        if user_asks_desktop_hands(last_user) || user_asks_takeover(last_user) {
+        if user_asks_desktop_hands(&last_user) || user_asks_takeover(&last_user) {
             self.hands_attach = true;
             self.eyes_attach = true;
         }
-        if self.cfg.cabin_eyes && user_asks_cabin_eyes(last_user) {
+        if self.cfg.cabin_eyes && user_asks_cabin_eyes(&last_user) {
             self.eyes_attach = true;
         }
         let mut hands = hands_protocol().to_string();
@@ -3686,13 +3789,24 @@ impl Cabin {
                 hands.push_str(&glass);
             }
         }
+        let stored_pins: Vec<(String, String)> = self
+            .threads
+            .iter()
+            .map(|t| (t.id.clone(), t.goal.label.clone()))
+            .collect();
+        let job_pin = goal_pin_for_job(
+            self.chat_job_thread.as_deref(),
+            &vis,
+            &self.cfg.goal_pin,
+            &stored_pins,
+        );
         let sys = cabin_system_prompt(
             &soul,
             &user_md,
             &memory_md,
             &pins,
             self.active_skill_follow.as_deref(),
-            &self.cfg.goal_pin,
+            &job_pin,
             &board,
             &last_host,
             &hands,
@@ -3802,16 +3916,6 @@ impl Cabin {
                 }
                 remember_chip_outcome(&mut self.chip_memory, true, now_ms());
                 record_turn(&mut self.learning);
-                if self.policy().learns() && !self.scratch() {
-                    let facts = fact_candidates(
-                        &self
-                            .messages
-                            .iter()
-                            .map(|m| (m.role.clone(), m.content.clone()))
-                            .collect::<Vec<_>>(),
-                    );
-                    extract_insights(&mut self.learning, &facts);
-                }
                 bump_usage(&mut self.usage, "message");
                 let text = if self.thought_buf.is_empty() {
                     text
@@ -3821,6 +3925,32 @@ impl Cabin {
                 self.apply_assistant_snapshot(text.clone());
                 self.thought_buf.clear();
                 self.stream_buf.clear();
+                let job = self.chat_job_thread.clone();
+                let vis = self.visible_thread_id();
+                let visible_pairs: Vec<(String, String)> = self
+                    .messages
+                    .iter()
+                    .map(|m| (m.role.clone(), m.content.clone()))
+                    .collect();
+                let stored: Vec<(String, Vec<(String, String)>)> = self
+                    .threads
+                    .iter()
+                    .map(|t| (t.id.clone(), t.messages.clone()))
+                    .collect();
+                let job_pairs = kick_messages_for_job(
+                    job.as_deref(),
+                    &vis,
+                    &visible_pairs,
+                    &stored,
+                );
+                let job_scratch = job
+                    .as_deref()
+                    .and_then(|id| self.threads.iter().find(|t| t.id == id).map(|t| t.scratch))
+                    .unwrap_or_else(|| self.scratch());
+                if self.policy().learns() && !job_scratch {
+                    let facts = fact_candidates(&job_pairs);
+                    extract_insights(&mut self.learning, &facts);
+                }
                 self.chat_job_thread = None;
                 if here && self.speak_next {
                     self.speak_next = false;
@@ -3840,35 +3970,37 @@ impl Cabin {
                 for (key, st) in extract_work_updates(&text) {
                     let _ = apply_work_update(&mut self.board, &key, st);
                 }
-                if here {
-                    if let Some(plan) = plan_from_text(&text) {
-                        self.pending_update = false;
-                        if self.cfg.yolo {
-                            let (run, hold) = yolo_plan_split(
-                                &plan,
-                                self.approve_risky_only,
-                                &self.cfg.project_dir,
-                            );
-                            if !run.is_empty() {
-                                self.run_cmds(run);
-                            }
-                            if !hold.is_empty() {
-                                self.plan_pending = Some(hold);
+                if let Some(plan) = plan_from_text(&text) {
+                    self.pending_update = false;
+                    if self.cfg.yolo {
+                        let (run, hold) = yolo_plan_split(
+                            &plan,
+                            self.approve_risky_only,
+                            &self.cfg.project_dir,
+                        );
+                        if !run.is_empty() {
+                            self.run_cmds(run);
+                        }
+                        if !hold.is_empty() {
+                            self.plan_pending = Some(hold);
+                            if here {
                                 self.status = "Host plan needs approval".into();
                             }
-                        } else {
-                            self.run_cmds(approved_cmds(&plan));
                         }
+                    } else {
+                        self.run_cmds(approved_cmds(&plan));
                     }
-                    for c in extract_connector_cmds(&text) {
-                        self.run_connector(&c.connector_id, &c.tool, &c.args);
-                    }
-                    if let Some(p) = extract_imagine_prompt(&text) {
-                        self.imagine_prompt = p;
+                }
+                for c in extract_connector_cmds(&text) {
+                    self.run_connector(&c.connector_id, &c.tool, &c.args);
+                }
+                if let Some(p) = extract_imagine_prompt(&text) {
+                    self.imagine_prompt = p;
+                    if here {
                         self.nav = Nav::Imagine;
                         self.imagine_want_focus = true;
-                        self.kick_imagine();
                     }
+                    self.kick_imagine();
                 }
                 if let Some(mut a) = parse_nl_automation(&text) {
                     if a.id.is_empty() {
@@ -3880,38 +4012,58 @@ impl Cabin {
                         self.status = format!("Night saved: {} {}", a.schedule, a.time);
                     }
                 }
-                if here {
-                    if let Some(q) = parse_consult(&text) {
-                        self.run_consult(q);
-                    }
+                if let Some(q) = parse_consult(&text) {
+                    self.run_consult(q);
                 }
                 let outcome = parse_goal_outcome(&text);
-                if here && outcome == "continue" && !self.cfg.goal_pin.is_empty() {
-                    if let Some(next) = next_goal_prompt(
-                        &self.cfg.goal_pin,
-                        &text,
-                        self.goal_step,
-                        GOAL_MAX_STEPS,
-                    ) {
-                        self.goal_step = self.goal_step.saturating_add(1);
+                let stored_pins: Vec<(String, String)> = self
+                    .threads
+                    .iter()
+                    .map(|t| (t.id.clone(), t.goal.label.clone()))
+                    .collect();
+                let pin = goal_pin_for_job(
+                    job.as_deref(),
+                    &vis,
+                    &self.cfg.goal_pin,
+                    &stored_pins,
+                );
+                let job_step = if job.as_deref() == Some(vis.as_str()) || job.is_none() {
+                    self.goal_step
+                } else {
+                    self.threads
+                        .iter()
+                        .find(|t| Some(t.id.as_str()) == job.as_deref())
+                        .map(|t| t.goal.step)
+                        .unwrap_or(0)
+                };
+                if here && outcome == "continue" && !pin.is_empty() {
+                    if let Some(next) = next_goal_prompt(&pin, &text, job_step, GOAL_MAX_STEPS) {
+                        self.goal_step = job_step.saturating_add(1);
+                        if let Some(id) = job.as_deref() {
+                            if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
+                                t.goal.step = self.goal_step;
+                            }
+                        }
                         self.agents.push(AgentJob {
-                            title: format!("{} · step {}", self.cfg.goal_pin, self.goal_step + 1),
+                            title: format!("{} · step {}", pin, self.goal_step + 1),
                             status: "queued".into(),
                             prompt: next.clone(),
                         });
                         self.send_chat(next);
                     }
-                } else if outcome != "continue" {
-                    self.goal_step = 0;
+                } else {
+                    let next_step = goal_step_after_outcome(job_step, &outcome, true);
+                    if let Some(id) = job.as_deref() {
+                        if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
+                            t.goal.step = next_step;
+                        }
+                    }
+                    if here {
+                        self.goal_step = next_step;
+                    }
                 }
                 if here {
-                    let tokens = estimate_messages(
-                        &self
-                            .messages
-                            .iter()
-                            .map(|m| (m.role.clone(), m.content.clone()))
-                            .collect::<Vec<_>>(),
-                    );
+                    let tokens = estimate_messages(&visible_pairs);
                     if should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, self.goal_step) {
                         self.run_slash(Slash::Compact);
                         self.status = format!(
@@ -3919,8 +4071,8 @@ impl Cabin {
                             context_percent(tokens, CONTEXT_BUDGET_TOKENS)
                         );
                     }
-                    self.spawn_thread_goal();
                 }
+                self.spawn_thread_goal_on(job.as_deref());
             }
             Ok(JobOut::Consult(detail)) => {
                 self.running = false;
@@ -3987,18 +4139,12 @@ impl Cabin {
                         }
                     }
                     if !self.scratch() {
-                        let user = last_user_text(
-                            &self
-                                .messages
-                                .iter()
-                                .map(|m| (m.role.clone(), m.content.clone()))
-                                .collect::<Vec<_>>(),
-                        )
-                        .unwrap_or_default();
+                        let user = self.last_user_on_job();
                         let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
                         self.commit_proposed_skill(proposed);
                     }
                 }
+                self.plan_pending = retain_held_plan(self.plan_pending.take(), &self.last_host);
                 self.persist();
                 self.run_skill_verify();
                 bump_usage(&mut self.usage, "host");
@@ -4016,14 +4162,7 @@ impl Cabin {
                 if !any_hands
                     && is_hard_run(self.last_host.len() as u32, !ok, false, self.scratch())
                 {
-                    let user = last_user_text(
-                        &self
-                            .messages
-                            .iter()
-                            .map(|m| (m.role.clone(), m.content.clone()))
-                            .collect::<Vec<_>>(),
-                    )
-                    .unwrap_or_default();
+                    let user = self.last_user_on_job();
                     let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
                     self.commit_proposed_skill(proposed);
                 }
@@ -4044,7 +4183,6 @@ impl Cabin {
                         self.chat_job_thread = origin;
                     }
                 } else {
-                    self.chat_job_thread = None;
                     self.kick_model();
                 }
             }
@@ -4052,10 +4190,8 @@ impl Cabin {
                 self.running = false;
                 self.imagine_last = url.clone();
                 self.status = "Imagine ready".into();
-                self.messages.push(Msg {
-                    role: "assistant".into(),
-                    content: format!("IMAGINE: {url}"),
-                });
+                self.push_bound_msg("assistant", format!("IMAGINE: {url}"));
+                self.chat_job_thread = None;
                 self.persist();
             }
             Ok(JobOut::Voice(t)) => {
@@ -4214,12 +4350,13 @@ impl Cabin {
 
     fn run_connector(&mut self, id: &str, tool: &str, args: &str) {
         if id != "github" {
-            self.messages.push(Msg {
-                role: "user".into(),
-                content: format!(
+            self.push_bound_msg(
+                "user",
+                format!(
                     "CONNECTOR_RESULT (facts only):\n{id} {tool} — not wired. GitHub is the only live connector."
                 ),
-            });
+            );
+            self.persist();
             return;
         }
         if self.running {
@@ -4263,7 +4400,7 @@ impl Cabin {
             video_audio: self.imagine_video_audio,
         });
         self.running = true;
-        self.chat_job_thread = None;
+        self.chat_job_thread = Some(self.visible_thread_id());
         self.status = match self.imagine_kind {
             ImagineKind::Image => "Imagining…".into(),
             ImagineKind::Video => "Imagining storyboard still…".into(),
@@ -4289,11 +4426,11 @@ impl Cabin {
             return;
         }
         let oauth = secrets::access_token(&self.secrets);
-        let speech = auth_bearer(&self.cfg.api_key, &oauth);
+        let speech = self.bearer();
         let has_local = first_bin(TRANSCRIBERS).is_some();
         let route = hey_grok_route(
             realtime_can_connect(&self.cfg.api_key),
-            speech.as_ref().is_some_and(|s| !s.is_empty()),
+            !speech.is_empty(),
             has_local,
         );
         if self.voice_sock.is_none() {
@@ -4556,10 +4693,7 @@ impl Cabin {
         } else {
             "verify fail".into()
         };
-        self.messages.push(Msg {
-            role: "user".into(),
-            content: format!("VERIFY_RESULT:\n{}", v.detail),
-        });
+        self.push_bound_msg("user", format!("VERIFY_RESULT:\n{}", v.detail));
         if v.ok {
             if let Some(s) = self.skill_list.iter_mut().find(|s| s.name == self.skill_name) {
                 s.runs = bump_skill_run(s.runs);
@@ -4577,10 +4711,14 @@ impl Cabin {
     }
 
     fn replay_saved_recipe(&mut self, id: &str) {
+        if self.running {
+            self.status = "Busy — wait, then replay".into();
+            return;
+        }
         let recipe = if id.eq_ignore_ascii_case("last") {
             crate::recipes::load_last().or_else(|| self.last_recipe.clone())
         } else {
-            crate::recipes::load_recipe(id).or_else(|| self.last_recipe.clone())
+            crate::recipes::load_recipe(id)
         };
         match recipe {
             Some(r) => {
@@ -4592,6 +4730,10 @@ impl Cabin {
     }
 
     fn replay_recipe(&mut self) {
+        if self.running {
+            self.status = "Busy — wait, then replay".into();
+            return;
+        }
         if self.last_recipe.is_none() {
             self.last_recipe = crate::recipes::load_last();
         }
@@ -4630,9 +4772,8 @@ impl Cabin {
         self.status = "Recipe replay".into();
     }
 
-    fn speak_reply(&self, text: &str) {
-        let key = auth_bearer(&self.cfg.api_key, &secrets::access_token(&self.secrets))
-            .unwrap_or_default();
+    fn speak_reply(&mut self, text: &str) {
+        let key = self.bearer();
         let text = text.to_string();
         std::thread::spawn(move || {
             let Ok(bytes) = grok_tts(&key, &text) else {

@@ -1,6 +1,8 @@
 //! Bind an in-flight chat stream to the thread that started it.
 //! New chat must stay empty and idle while the origin thread keeps the reply.
 
+use crate::organs::last_user_text;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatSendKind {
     Fresh,
@@ -132,6 +134,58 @@ pub fn push_bound_message(
 /// Composer send without auth must not write a user turn.
 pub fn persist_user_turn(has_key: bool) -> bool {
     has_key
+}
+
+/// Halt must drop the partial assistant on the job thread, not only the visible tab.
+pub fn drop_trailing_assistant_on(
+    job_thread_id: Option<&str>,
+    visible_thread_id: &str,
+    visible_messages: &mut Vec<(String, String)>,
+    stored: &mut [(String, Vec<(String, String)>)],
+) {
+    let target = job_thread_id.unwrap_or(visible_thread_id);
+    if target == visible_thread_id {
+        drop_trailing_assistant(visible_messages);
+        return;
+    }
+    if let Some((_, msgs)) = stored.iter_mut().find(|(id, _)| id == target) {
+        drop_trailing_assistant(msgs);
+    }
+}
+
+/// Follow-up after host/connector must read the origin thread, not the visible tab.
+pub fn kick_messages_for_job(
+    job_thread_id: Option<&str>,
+    visible_thread_id: &str,
+    visible_messages: &[(String, String)],
+    stored: &[(String, Vec<(String, String)>)],
+) -> Vec<(String, String)> {
+    let Some(job) = job_thread_id else {
+        return visible_messages.to_vec();
+    };
+    if job == visible_thread_id {
+        return visible_messages.to_vec();
+    }
+    stored
+        .iter()
+        .find(|(id, _)| id == job)
+        .map(|(_, msgs)| msgs.clone())
+        .unwrap_or_else(|| visible_messages.to_vec())
+}
+
+/// Skill draft after host must use the origin thread's last real user turn.
+pub fn last_user_for_job(
+    job_thread_id: Option<&str>,
+    visible_thread_id: &str,
+    visible_messages: &[(String, String)],
+    stored: &[(String, Vec<(String, String)>)],
+) -> Option<String> {
+    last_user_text(&kick_messages_for_job(
+        job_thread_id,
+        visible_thread_id,
+        visible_messages,
+        stored,
+    ))
 }
 
 #[cfg(test)]
@@ -281,5 +335,33 @@ mod tests {
             visible.last().map(|m| m.1.as_str()),
             Some("CONNECTOR_RESULT (facts only):\nok")
         );
+    }
+
+    #[test]
+    fn halt_drops_partial_on_the_origin_thread() {
+        let mut visible = vec![("user".into(), "other".into())];
+        let mut stored = vec![
+            (
+                "thr-a".into(),
+                vec![
+                    ("user".into(), "what is rust".into()),
+                    ("assistant".into(), "Rust is".into()),
+                ],
+            ),
+            ("thr-b".into(), visible.clone()),
+        ];
+        drop_trailing_assistant_on(Some("thr-a"), "thr-b", &mut visible, &mut stored);
+        assert_eq!(visible, vec![("user".into(), "other".into())]);
+        assert_eq!(stored[0].1.len(), 1);
+        assert_eq!(stored[0].1[0].0, "user");
+        let origin = vec![
+            ("user".into(), "run ls".into()),
+            ("user".into(), "HOST_RESULT (facts only):\nok".into()),
+        ];
+        let stored = vec![("thr-a".into(), origin.clone()), ("thr-b".into(), visible.clone())];
+        let msgs = kick_messages_for_job(Some("thr-a"), "thr-b", &visible, &stored);
+        assert_eq!(msgs, origin);
+        let user = last_user_for_job(Some("thr-a"), "thr-b", &visible, &stored);
+        assert_eq!(user.as_deref(), Some("run ls"));
     }
 }

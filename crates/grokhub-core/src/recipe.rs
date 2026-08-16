@@ -271,10 +271,13 @@ fn ydotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
             vec![vec!["mousemove".into(), "--absolute".into(), x.to_string(), y.to_string()]]
         }
         ComputerOp::Type { text } => vec![vec!["type".into(), "--".into(), text.clone()]],
-        ComputerOp::Key { name } => {
-            let mut step = vec!["key".into()];
-            step.extend(ydotool_key_tokens(name));
-            vec![step]
+        ComputerOp::Key { name } => match ydotool_key_tokens(name) {
+            Some(tokens) if !tokens.is_empty() => {
+                let mut step = vec!["key".into()];
+                step.extend(tokens);
+                vec![step]
+            }
+            _ => vec![],
         }
         ComputerOp::Scroll { dy } => {
             if *dy == 0 {
@@ -292,13 +295,17 @@ fn ydotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
     }
 }
 
-fn ydotool_key_tokens(name: &str) -> Vec<String> {
+fn ydotool_key_tokens(name: &str) -> Option<Vec<String>> {
     let parts: Vec<&str> = name
         .split('+')
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
-    let codes: Vec<u16> = parts.iter().map(|p| linux_keycode(p)).collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let codes: Option<Vec<u16>> = parts.iter().map(|p| linux_keycode(p)).collect();
+    let codes = codes?;
     let mut tokens = Vec::new();
     for c in &codes {
         tokens.push(format!("{c}:1"));
@@ -306,69 +313,69 @@ fn ydotool_key_tokens(name: &str) -> Vec<String> {
     for c in codes.iter().rev() {
         tokens.push(format!("{c}:0"));
     }
-    tokens
+    Some(tokens)
 }
 
-fn linux_keycode(name: &str) -> u16 {
+fn linux_keycode(name: &str) -> Option<u16> {
     match name.to_ascii_lowercase().as_str() {
-        "return" | "enter" | "kp_enter" => 28,
-        "esc" | "escape" => 1,
-        "tab" => 15,
-        "space" | "spacebar" => 57,
-        "backspace" => 14,
-        "ctrl" | "control" | "control_l" | "ctrl_l" => 29,
-        "shift" | "shift_l" => 42,
-        "alt" | "alt_l" => 56,
-        "super" | "super_l" | "meta" | "win" => 125,
-        "up" => 103,
-        "down" => 108,
-        "left" => 105,
-        "right" => 106,
-        "delete" | "del" => 111,
-        "home" => 102,
-        "end" => 107,
-        "pageup" | "prior" => 104,
-        "pagedown" | "next" => 109,
-        "f1" => 59,
-        "f2" => 60,
-        "f3" => 61,
-        "f4" => 62,
-        "f5" => 63,
-        "a" => 30,
-        "s" => 31,
-        "d" => 32,
-        "c" => 46,
-        "v" => 47,
-        "x" => 45,
-        "z" => 44,
-        "q" => 16,
-        "w" => 17,
+        "return" | "enter" | "kp_enter" => Some(28),
+        "esc" | "escape" => Some(1),
+        "tab" => Some(15),
+        "space" | "spacebar" => Some(57),
+        "backspace" => Some(14),
+        "ctrl" | "control" | "control_l" | "ctrl_l" => Some(29),
+        "shift" | "shift_l" => Some(42),
+        "alt" | "alt_l" => Some(56),
+        "super" | "super_l" | "meta" | "win" => Some(125),
+        "up" => Some(103),
+        "down" => Some(108),
+        "left" => Some(105),
+        "right" => Some(106),
+        "delete" | "del" => Some(111),
+        "home" => Some(102),
+        "end" => Some(107),
+        "pageup" | "prior" => Some(104),
+        "pagedown" | "next" => Some(109),
+        "f1" => Some(59),
+        "f2" => Some(60),
+        "f3" => Some(61),
+        "f4" => Some(62),
+        "f5" => Some(63),
+        "a" => Some(30),
+        "s" => Some(31),
+        "d" => Some(32),
+        "c" => Some(46),
+        "v" => Some(47),
+        "x" => Some(45),
+        "z" => Some(44),
+        "q" => Some(16),
+        "w" => Some(17),
         other if other.len() == 1 => {
-            let ch = other.chars().next().unwrap_or('a');
+            let ch = other.chars().next()?;
             match ch {
-                '0' => 11,
-                '1'..='9' => 2 + (ch as u16 - b'1' as u16),
-                'b' => 48,
-                'e' => 18,
-                'f' => 33,
-                'g' => 34,
-                'h' => 35,
-                'i' => 23,
-                'j' => 36,
-                'k' => 37,
-                'l' => 38,
-                'm' => 50,
-                'n' => 49,
-                'o' => 24,
-                'p' => 25,
-                'r' => 19,
-                't' => 20,
-                'u' => 22,
-                'y' => 21,
-                _ => 28,
+                '0' => Some(11),
+                '1'..='9' => Some(2 + (ch as u16 - b'1' as u16)),
+                'b' => Some(48),
+                'e' => Some(18),
+                'f' => Some(33),
+                'g' => Some(34),
+                'h' => Some(35),
+                'i' => Some(23),
+                'j' => Some(36),
+                'k' => Some(37),
+                'l' => Some(38),
+                'm' => Some(50),
+                'n' => Some(49),
+                'o' => Some(24),
+                'p' => Some(25),
+                'r' => Some(19),
+                't' => Some(20),
+                'u' => Some(22),
+                'y' => Some(21),
+                _ => None,
             }
         }
-        _ => 28,
+        _ => None,
     }
 }
 
@@ -674,6 +681,18 @@ mod tests {
         ) {
             ComputerDrive::Ydotool(steps) => {
                 assert_eq!(steps[0], vec!["key", "29:1", "31:1", "31:0", "29:0"]);
+            }
+            other => panic!("{other:?}"),
+        }
+        match computer_drive_for(
+            HandsBackend::Ydotool,
+            &ComputerOp::Key { name: "F12".into() },
+        ) {
+            ComputerDrive::Ydotool(steps) => {
+                assert!(
+                    steps.is_empty(),
+                    "unknown keys must not press Enter: {steps:?}"
+                );
             }
             other => panic!("{other:?}"),
         }
