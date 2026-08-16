@@ -60,7 +60,8 @@ pub use feel::{
 };
 pub use attach::{
     append_composer, attach_kind, attach_name, attach_prompt_line, chat_attach_status,
-    clip_image_args, imagine_ref_status, list_pick_names, next_chat_image, parse_picker_stdout,
+    cabin_eyes_request_text, cabin_frame_only, clip_image_args, imagine_ref_status, list_pick_names,
+    next_chat_image, parse_picker_stdout,
     picker_args, plus_empty_status, plus_menu_rows, take_text_body, AttachKind, PlusAct, PlusTarget,
     TEXT_FILE_CAP,
 };
@@ -73,7 +74,8 @@ pub use chat::{
     should_failover_status, DEFAULT_MODEL, XAI_BASE,
 };
 pub use chat_view::{
-    is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
+    is_workload_user, merge_thinking, scrub_thought, strip_thinking, visible_chat, ChatKind,
+    ChatView,
 };
 pub use chat_bubble::{
     bubble_max_width, bubble_outer_height, bubble_outer_width, bubble_wrap_width, clamp_row_width,

@@ -40,7 +40,8 @@ use grokhub_core::{
     ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
-    chat_attach_status, imagine_ref_status, needs_auth_banner, next_chat_image, next_goal_prompt,
+    cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
+    needs_auth_banner, next_chat_image, next_goal_prompt,
     is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
     apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible, ChatSendKind,
     bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X, BUBBLE_PAD_Y,
@@ -3607,6 +3608,15 @@ impl Cabin {
             None
         };
         let image = next_chat_image(user_img.as_deref(), cabin.as_deref()).map(|s| s.to_string());
+        if cabin_frame_only(user_img.as_deref(), cabin.as_deref()) {
+            if let Some((_, content)) = msgs
+                .iter_mut()
+                .rev()
+                .find(|(role, c)| role == "user" && !is_workload_user(c))
+            {
+                *content = cabin_eyes_request_text(content);
+            }
+        }
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         self.stream_buf.clear();
