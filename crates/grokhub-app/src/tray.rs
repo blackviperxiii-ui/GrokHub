@@ -218,6 +218,21 @@ pub fn try_claim_cabin() -> bool {
     )
 }
 
+/// Restart must drop our pid file before spawning or the child only raises us.
+pub fn release_cabin_claim_at(dir: &Path, this_pid: u32) {
+    let path = cabin_pid_path(dir);
+    if let Ok(text) = fs::read_to_string(&path) {
+        if parse_cabin_pid(&text) == Some(this_pid) {
+            let _ = fs::remove_file(&path);
+        }
+    }
+    let _ = fs::remove_file(cabin_raise_path(dir));
+}
+
+pub fn release_cabin_claim() {
+    release_cabin_claim_at(&crate::config::config_dir(), std::process::id());
+}
+
 pub fn request_cabin_raise_at(dir: &Path) {
     let _ = fs::create_dir_all(dir);
     let _ = fs::write(cabin_raise_path(dir), b"1");
@@ -234,6 +249,12 @@ pub fn take_cabin_raise_at(dir: &Path) -> bool {
 
 pub fn take_cabin_raise() -> bool {
     take_cabin_raise_at(&crate::config::config_dir())
+}
+
+/// A sibling spawn writes `cabin.raise` before it exits. Restart must not
+/// honor that and CancelClose — that keeps the old process alive.
+pub fn honor_cabin_raise(want_quit: bool) -> bool {
+    !want_quit
 }
 
 pub fn should_hide_on_close(close_to_tray: bool, tray_alive: bool) -> bool {
@@ -561,9 +582,29 @@ mod tests {
             CabinClaim::ThisProcess,
             "a dead pid file must not block a new cabin"
         );
+        assert_eq!(
+            claim_cabin_at(&dir, 44, |_| false),
+            CabinClaim::ThisProcess
+        );
+        release_cabin_claim_at(&dir, 99);
+        assert_eq!(
+            fs::read_to_string(cabin_pid_path(&dir)).unwrap().trim(),
+            "44",
+            "another pid must not drop our claim"
+        );
+        release_cabin_claim_at(&dir, 44);
+        assert!(
+            !cabin_pid_path(&dir).exists(),
+            "restart must free the lock so the new cabin can claim"
+        );
         assert_eq!(parse_cabin_pid(" 42\n"), Some(42));
         assert_eq!(parse_cabin_pid("0"), None);
         assert!(!cabin_pid_alive(0));
+        assert!(honor_cabin_raise(false));
+        assert!(
+            !honor_cabin_raise(true),
+            "restart/quit must not raise the old cabin after a sibling spawn"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

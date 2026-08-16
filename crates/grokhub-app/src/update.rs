@@ -115,7 +115,18 @@ fn spawn_detached(argv: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Relaunch cabin + hub from the overlay. Caller must persist, then quit.
+/// Drop the pid lock, start a new cabin, then exit this process.
+/// `exec` would keep the old display connection and look like a partial restart.
+fn replace_process(argv: &[String]) -> Result<(), String> {
+    crate::tray::release_cabin_claim();
+    if let Err(e) = spawn_detached(argv) {
+        let _ = crate::tray::try_claim_cabin();
+        return Err(e);
+    }
+    std::process::exit(0);
+}
+
+/// Relaunch hub/hands, then a new cabin process. Caller must persist first.
 pub fn restart_system(hidden: bool) -> Result<(), String> {
     let home = env::var("HOME").ok();
     let current = env::current_exe()
@@ -123,7 +134,6 @@ pub fn restart_system(hidden: bool) -> Result<(), String> {
         .map(|p| p.to_string_lossy().into_owned());
     let exe = restart_bin(home.as_deref(), current.as_deref());
     let acts = restart_acts(
-        unit_is_active("grokhub.service"),
         unit_is_active("grokhub-hub.service"),
         unit_is_active("ydotoold.service"),
         &exe,
@@ -141,7 +151,7 @@ pub fn restart_system(hidden: bool) -> Result<(), String> {
                     return Err("systemctl --user restart failed".into());
                 }
             }
-            RestartAct::Spawn { argv } => spawn_detached(&argv)?,
+            RestartAct::Spawn { argv } => replace_process(&argv)?,
         }
     }
     Ok(())
@@ -277,7 +287,7 @@ mod tests {
             grokhub_core::restart_bin(Some(home.to_str().unwrap()), Some("/old/grokhub")),
             bin.to_string_lossy()
         );
-        let acts = grokhub_core::restart_acts(false, false, false, "/opt/grokhub", true);
+        let acts = grokhub_core::restart_acts(false, false, "/opt/grokhub", true);
         assert_eq!(
             acts,
             vec![grokhub_core::RestartAct::Spawn {
@@ -285,5 +295,20 @@ mod tests {
             }]
         );
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn restart_system_spawns_then_exits() {
+        let src = include_str!("update.rs");
+        let start = src.find("pub fn restart_system").expect("restart_system");
+        let slice = &src[start..start + 1600];
+        assert!(slice.contains("replace_process"), "{slice}");
+        assert!(src.contains("release_cabin_claim"), "{src}");
+        assert!(src.contains("spawn_detached"), "{src}");
+        assert!(src.contains("process::exit"), "{src}");
+        assert!(
+            !slice.contains("unit_is_active(\"grokhub.service\")"),
+            "must not systemctl-restart the running cabin: {slice}"
+        );
     }
 }
