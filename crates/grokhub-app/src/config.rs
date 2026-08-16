@@ -30,7 +30,7 @@ pub struct AppConfig {
     pub api_key: String,
     #[serde(default)]
     pub device_name: String,
-    #[serde(default)]
+    #[serde(default = "default_yolo")]
     pub yolo: bool,
     #[serde(default)]
     pub model: String,
@@ -78,8 +78,12 @@ pub struct AppConfig {
     pub window: crate::window::WindowGeom,
 }
 
+fn default_yolo() -> bool {
+    true
+}
+
 fn default_autonomy() -> u8 {
-    1
+    4
 }
 
 fn default_host_on() -> bool {
@@ -119,7 +123,7 @@ impl Default for AppConfig {
         Self {
             api_key: String::new(),
             device_name: String::new(),
-            yolo: false,
+            yolo: default_yolo(),
             model: String::new(),
             imagine_model: String::new(),
             voice_model: String::new(),
@@ -312,7 +316,8 @@ mod tests {
         let loaded = load();
         assert!(loaded.close_to_tray);
         assert!(loaded.host_on);
-        assert_eq!(loaded.autonomy, 1);
+        assert_eq!(loaded.autonomy, 4);
+        assert!(loaded.yolo);
         assert!(loaded.imagine_wall);
         assert_eq!(loaded.theme, "dark");
         let mut placed = AppConfig::default();
