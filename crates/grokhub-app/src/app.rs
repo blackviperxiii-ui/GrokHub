@@ -5245,8 +5245,11 @@ impl Cabin {
                         ProjectKind::Folder => crate::icons::RailIcon::Folder,
                         ProjectKind::Project => crate::icons::RailIcon::Chat,
                     };
-                    let active = self.project_sel.as_deref() == Some(self.projects[idx].id.as_str())
-                        && kind == ProjectKind::Project;
+                    let active = project_row_active(
+                        self.project_sel.as_deref() == Some(self.projects[idx].id.as_str()),
+                        kind == ProjectKind::Project,
+                        self.nav,
+                    );
                     let row = ui
                         .horizontal(|ui| {
                             ui.add_space(indent);
@@ -7238,6 +7241,27 @@ fn collect_other_chip_threads(threads: &[threads::ChatThread], current_id: &str)
         .collect()
 }
 
+fn project_row_active(selected: bool, is_project: bool, nav: Nav) -> bool {
+    if !selected || !is_project {
+        return false;
+    }
+    match nav {
+        Nav::Workboard => true,
+        Nav::Chat
+        | Nav::Devices
+        | Nav::Memory
+        | Nav::Imagine
+        | Nav::Skills
+        | Nav::Eyes
+        | Nav::Night
+        | Nav::History
+        | Nav::Command
+        | Nav::Connectors
+        | Nav::Agents
+        | Nav::Settings => false,
+    }
+}
+
 fn health_settings_sec() -> SettingsSec {
     SettingsSec::About
 }
@@ -7291,6 +7315,24 @@ mod tests {
     #[test]
     fn click_bound_project_opens_the_board() {
         assert!(super::click_project_opens_board(true));
+    }
+
+    #[test]
+    fn selected_project_highlights_only_on_the_board() {
+        assert!(super::project_row_active(true, true, super::Nav::Workboard));
+        assert!(
+            !super::project_row_active(true, true, super::Nav::Chat),
+            "a History chat must not leave the project lit"
+        );
+        assert!(
+            !super::project_row_active(true, true, super::Nav::Imagine),
+            "Imagine must not leave the project lit"
+        );
+        assert!(!super::project_row_active(true, true, super::Nav::Night));
+        assert!(!super::project_row_active(true, true, super::Nav::Skills));
+        assert!(!super::project_row_active(true, true, super::Nav::History));
+        assert!(!super::project_row_active(true, false, super::Nav::Workboard));
+        assert!(!super::project_row_active(false, true, super::Nav::Workboard));
     }
 
     #[test]
