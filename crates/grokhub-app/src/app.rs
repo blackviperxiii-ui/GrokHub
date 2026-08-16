@@ -63,7 +63,8 @@ use grokhub_core::{
     cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
     next_chat_image, next_goal_prompt, paint_connect_banner,
     this_turn_cabin_frame,
-    is_workload_user, merge_thinking, prefer_complete_reply, strip_thinking, visible_chat, ChatKind, ChatView,
+    is_workload_user, merge_thinking, prefer_complete_reply, quote_for_reply, strip_thinking,
+    visible_chat, ChatKind, ChatView,
     apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     worker_gone_status, ChatSendKind,
     bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X, BUBBLE_PAD_Y,
@@ -425,6 +426,13 @@ fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
     "…".into()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChatBlockAct {
+    None,
+    Copy(String),
+    Reply(String),
+}
+
 fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool) -> egui::Response {
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
     let wrap = bubble_wrap_width(avail, BUBBLE_PAD_X);
@@ -441,7 +449,7 @@ fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool
         .rounding(BUBBLE_RADIUS)
         .inner_margin(egui::Margin::symmetric(BUBBLE_PAD_X, BUBBLE_PAD_Y));
     let mut resp = None;
-    let paint = |ui: &mut egui::Ui| {
+    let mut paint_frame = |ui: &mut egui::Ui| {
         ui.set_max_width(outer_w);
         ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
             ui.set_max_width(outer_w);
@@ -450,6 +458,7 @@ fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool
                     .show(ui, |ui| {
                         ui.set_width(inner_w);
                         ui.set_max_width(inner_w);
+                        ui.set_clip_rect(ui.max_rect());
                         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                         if markdown {
                             crate::markdown::show(ui, body);
@@ -464,22 +473,72 @@ fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool
             );
         });
     };
-    if user {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), paint);
-    } else {
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), paint);
-    }
+    let row_w = ui.available_width().min(ui.max_rect().width()).max(1.0);
+    ui.allocate_ui_with_layout(
+        egui::vec2(row_w, 0.0),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_max_width(row_w);
+            ui.set_clip_rect(ui.max_rect());
+            ui.horizontal(|ui| {
+                ui.set_max_width(row_w);
+                if user {
+                    ui.add_space((ui.available_width() - outer_w).max(0.0));
+                }
+                paint_frame(ui);
+            });
+        },
+    );
     resp.expect("speech bubble")
 }
 
-fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, thought_open: bool) {
+fn paint_msg_acts(ui: &mut egui::Ui, user: bool, body: &str) -> ChatBlockAct {
+    let mut act = ChatBlockAct::None;
+    let mut paint = |ui: &mut egui::Ui| {
+        let copy = ui.add(
+            egui::Button::new(
+                RichText::new("Copy")
+                    .size(crate::theme::FONT_META)
+                    .color(crate::theme::muted()),
+            )
+            .frame(false),
+        );
+        if copy.clicked() {
+            act = ChatBlockAct::Copy(body.to_string());
+        }
+        let reply = ui.add(
+            egui::Button::new(
+                RichText::new("Reply")
+                    .size(crate::theme::FONT_META)
+                    .color(crate::theme::muted()),
+            )
+            .frame(false),
+        );
+        if reply.clicked() {
+            act = ChatBlockAct::Reply(body.to_string());
+        }
+    };
+    if user {
+        ui.horizontal(|ui| {
+            ui.add_space((ui.available_width() - 96.0).max(0.0));
+            paint(ui);
+        });
+    } else {
+        ui.horizontal(paint);
+    }
+    act
+}
+
+fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, thought_open: bool) -> ChatBlockAct {
     let bubble_w = crate::markdown::bubble_width(ui.available_width());
     match block.kind {
         ChatKind::User => {
             let _ = paint_speech_bubble(ui, &block.body, true, false);
+            paint_msg_acts(ui, true, &block.body)
         }
         ChatKind::Assistant => {
             let _ = paint_speech_bubble(ui, &block.body, false, true);
+            paint_msg_acts(ui, false, &block.body)
         }
         ChatKind::Thought => {
             let open = thought_open;
@@ -508,32 +567,9 @@ fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, thought_op
                         );
                     }
                 });
+            ChatBlockAct::None
         }
-        ChatKind::Tool => {
-            egui::Frame::none()
-                .fill(crate::theme::panel())
-                .rounding(10.0)
-                .inner_margin(egui::Margin::symmetric(10.0, 8.0))
-                .show(ui, |ui| {
-                    ui.set_max_width(bubble_w);
-                    ui.label(
-                        RichText::new(&block.title)
-                            .size(crate::theme::FONT_META)
-                            .color(crate::theme::muted()),
-                    );
-                    ui.add_space(4.0);
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(&block.body)
-                                .size(crate::theme::FONT_META)
-                                .monospace()
-                                .color(crate::theme::fg()),
-                        )
-                        .wrap(),
-                    );
-                });
-        }
+        ChatKind::Tool => ChatBlockAct::None,
     }
 }
 
@@ -680,6 +716,7 @@ pub struct Cabin {
     win_max: bool,
     geom_dirty: bool,
     imagine_want_focus: bool,
+    composer_want_focus: bool,
     settings_sec: SettingsSec,
     settings_back: Nav,
     imagine_aspect: u8,
@@ -961,6 +998,7 @@ impl Cabin {
             win_max,
             geom_dirty: false,
             imagine_want_focus: false,
+            composer_want_focus: false,
             settings_sec: SettingsSec::Account,
             settings_back: Nav::Chat,
             imagine_aspect: 0,
@@ -6483,12 +6521,26 @@ impl Cabin {
                         let views = visible_chat(&pairs);
                         let last_thought = views.iter().rposition(|v| v.kind == ChatKind::Thought);
                         for (i, block) in views.iter().enumerate() {
-                            paint_chat_block(
+                            match paint_chat_block(
                                 ui,
                                 block,
                                 i,
                                 self.thinking_here() && last_thought == Some(i),
-                            );
+                            ) {
+                                ChatBlockAct::Copy(body) => {
+                                    ui.ctx().copy_text(body);
+                                    self.status = "Copied".into();
+                                }
+                                ChatBlockAct::Reply(body) => {
+                                    self.composer =
+                                        append_composer(&self.composer, &quote_for_reply(&body));
+                                    if !self.composer.ends_with('\n') {
+                                        self.composer.push('\n');
+                                    }
+                                    self.composer_want_focus = true;
+                                }
+                                ChatBlockAct::None => {}
+                            }
                             ui.add_space(10.0);
                         }
                         if self.thinking_here() {
@@ -6697,6 +6749,10 @@ impl Cabin {
                             self.open_plus(PlusTarget::Chat, plus.rect.left_bottom());
                         }
                         let composer_id = egui::Id::new("chat-composer");
+                        if self.composer_want_focus {
+                            ui.memory_mut(|m| m.request_focus(composer_id));
+                            self.composer_want_focus = false;
+                        }
                         let focused = ui.memory(|m| m.has_focus(composer_id));
                         if let Some(t) =
                             take_focused_composer(ui, &mut self.composer, focused)
@@ -8624,6 +8680,51 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[test]
+    fn long_user_bubble_stays_inside_the_row() {
+        with_fonts_ui(|ui| {
+            ui.allocate_ui(egui::vec2(480.0, 400.0), |ui| {
+                ui.set_max_width(480.0);
+                let row = ui.max_rect();
+                let body = "/very/long/path/to/grokhub/lib/systemd/status\" 2>/dev/null && echo ok "
+                    .repeat(6);
+                let resp = super::paint_speech_bubble(ui, &body, true, false);
+                assert!(
+                    resp.rect.min.x + 0.5 >= row.min.x,
+                    "user bubble clipped off the left: {} < {}",
+                    resp.rect.min.x,
+                    row.min.x
+                );
+                assert!(
+                    resp.rect.max.x <= row.max.x + 1.0,
+                    "user bubble overflowed the right: {} > {}",
+                    resp.rect.max.x,
+                    row.max.x
+                );
+                assert!(
+                    resp.rect.width() <= grokhub_core::BUBBLE_MAX_PX + 8.0,
+                    "bubble {}",
+                    resp.rect.width()
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn chat_blocks_offer_copy_and_reply() {
+        let src = include_str!("app.rs");
+        let start = src.find("fn paint_msg_acts").expect("paint_msg_acts");
+        let slice = &src[start..start + 2800];
+        assert!(slice.contains("Copy"), "{slice}");
+        assert!(slice.contains("Reply"), "{slice}");
+        assert!(slice.contains("fn paint_chat_block"), "{slice}");
+        assert!(src.contains("ChatBlockAct::Copy"));
+        assert!(src.contains("ChatBlockAct::Reply"));
+        assert!(src.contains("quote_for_reply"));
+        assert!(src.contains("composer_want_focus"));
+        assert!(src.contains("copy_text"));
     }
 
     fn with_fonts_ui(mut add: impl FnMut(&mut egui::Ui)) {
