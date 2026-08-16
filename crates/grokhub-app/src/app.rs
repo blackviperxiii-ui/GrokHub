@@ -62,7 +62,7 @@ use grokhub_core::{
     cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
     next_chat_image, next_goal_prompt, paint_connect_banner,
     this_turn_cabin_frame,
-    is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
+    is_workload_user, merge_thinking, prefer_complete_reply, strip_thinking, visible_chat, ChatKind, ChatView,
     apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     worker_gone_status, ChatSendKind,
     bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X, BUBBLE_PAD_Y,
@@ -3922,11 +3922,17 @@ impl Cabin {
                 remember_chip_outcome(&mut self.chip_memory, true, now_ms());
                 record_turn(&mut self.learning);
                 bump_usage(&mut self.usage, "message");
-                let text = if self.thought_buf.is_empty() {
+                let finished = if self.thought_buf.is_empty() {
                     text
                 } else {
                     merge_thinking(&self.thought_buf, &strip_thinking(&text))
                 };
+                let streamed = if self.thought_buf.is_empty() {
+                    self.stream_buf.clone()
+                } else {
+                    merge_thinking(&self.thought_buf, &strip_thinking(&self.stream_buf))
+                };
+                let text = prefer_complete_reply(&streamed, &finished);
                 self.apply_assistant_snapshot(text.clone());
                 self.thought_buf.clear();
                 self.stream_buf.clear();
@@ -4733,6 +4739,11 @@ impl Cabin {
         self.nav = Nav::Chat;
         self.hands_attach = true;
         self.eyes_attach = true;
+        if crate::desktop::live_hands_backend().is_none() {
+            self.status =
+                "Hands need ydotool (Wayland) or xdotool (X11) on PATH, including ~/.local/bin"
+                    .into();
+        }
         self.send_chat("Take over this desktop. Look at the screen and fix what is broken.".into());
     }
 

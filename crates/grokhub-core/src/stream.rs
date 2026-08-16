@@ -138,8 +138,38 @@ pub fn fold_sse_acc(acc: &mut String, text: &str, kind: StreamTokenKind) {
     }
     match kind {
         StreamTokenKind::Delta => acc.push_str(text),
-        StreamTokenKind::Replace => *acc = text.to_string(),
+        StreamTokenKind::Replace => {
+            if should_replace_stream_acc(acc, text) {
+                *acc = text.to_string();
+            }
+        }
     }
+}
+
+/// A later `output_text.done` for one item must not wipe a longer delta acc.
+pub fn should_replace_stream_acc(acc: &str, done: &str) -> bool {
+    acc.is_empty() || done.len() >= acc.len() || done.starts_with(acc)
+}
+
+/// Live deltas can be ahead of the worker acc when a short done-event replaces it.
+pub fn prefer_complete_reply(streamed: &str, finished: &str) -> String {
+    let s = streamed.trim_end();
+    let f = finished.trim_end();
+    if s.is_empty() {
+        return finished.to_string();
+    }
+    if f.is_empty() {
+        return streamed.to_string();
+    }
+    if f.len() >= s.len() {
+        return finished.to_string();
+    }
+    let s_tool = s.contains("COMPUTER_CMD") || s.contains("HOST_CMD:");
+    let f_tool = f.contains("COMPUTER_CMD") || f.contains("HOST_CMD:");
+    if s.starts_with(f) || (s_tool && !f_tool) {
+        return streamed.to_string();
+    }
+    finished.to_string()
 }
 
 /// Grok 4.6 may stream `reasoning_content` or Responses reasoning deltas before the answer.
@@ -283,5 +313,24 @@ mod tests {
         let mut acc = String::from("Hel");
         fold_sse_acc(&mut acc, "Hello", StreamTokenKind::Replace);
         assert_eq!(acc, "Hello");
+        let mut acc = String::from("Hello\nCOMPUTER_CMD: key Alt+F4");
+        fold_sse_acc(&mut acc, "Hello", StreamTokenKind::Replace);
+        assert!(
+            acc.contains("COMPUTER_CMD: key Alt+F4"),
+            "short done must not wipe a longer stream: {acc}"
+        );
+        assert!(!should_replace_stream_acc(
+            "Hello\nCOMPUTER_CMD: key Alt+F4",
+            "Hello"
+        ));
+        assert_eq!(
+            prefer_complete_reply(
+                "I'll click.\nCOMPUTER_CMD: click 10 20\n",
+                "I'll click."
+            ),
+            "I'll click.\nCOMPUTER_CMD: click 10 20\n"
+        );
+        assert_eq!(prefer_complete_reply("", "final"), "final");
+        assert_eq!(prefer_complete_reply("Hel", "Hello"), "Hello");
     }
 }
