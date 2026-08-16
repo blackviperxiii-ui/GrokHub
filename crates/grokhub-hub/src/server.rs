@@ -272,9 +272,8 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             None => Err("Cabin mint not wired".into()),
         };
         return match minted {
-            Ok(v) => {
-                let secret = grokhub_core::parse_client_secret(&v).unwrap_or_default();
-                send_json(
+            Ok(v) => match grokhub_core::parse_client_secret(&v).filter(|s| !s.is_empty()) {
+                Some(secret) => send_json(
                     req,
                     200,
                     json!({
@@ -284,8 +283,13 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
                         "url": grokhub_core::voice_session_url(""),
                         "clientSecret": v
                     }),
-                )
-            }
+                ),
+                None => send_json(
+                    req,
+                    502,
+                    json!({ "ok": false, "error": "empty client secret" }),
+                ),
+            },
             Err(e) => send_json(req, 502, json!({ "ok": false, "error": e })),
         };
     }
@@ -565,6 +569,39 @@ mod tests {
         assert_eq!(st_v, 502, "{}", String::from_utf8_lossy(&body));
         assert!(
             String::from_utf8_lossy(&body).contains("xAI refused"),
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+
+    #[test]
+    fn voice_mint_rejects_empty_secret() {
+        let mut st = HubState::empty();
+        let code = st.rotate_pair().code;
+        st.console_api_key = "xai-test-key".into();
+        st.mint_realtime = Some(grokhub_core::MintRealtimeFn(std::sync::Arc::new(|_key: &str| {
+            Ok(serde_json::json!({ "unexpected": true }))
+        })));
+        let state = Arc::new(Mutex::new(st));
+        let port = serve_background(state, 0).expect("bind");
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        let pair_body = format!(
+            r#"{{"code":"{code}","deviceId":"d-empty","deviceName":"Pixel"}}"#
+        );
+        let req = format!(
+            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
+            pair_body.len()
+        );
+        let (_, _, body) = http(port, &req);
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let token = v["token"].as_str().unwrap();
+        let req = format!(
+            "POST /v1/voice/client-secret HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Length: 0\r\n\r\n"
+        );
+        let (st_v, _, body) = http(port, &req);
+        assert_eq!(st_v, 502, "{}", String::from_utf8_lossy(&body));
+        assert!(
+            String::from_utf8_lossy(&body).contains("empty client secret"),
             "{}",
             String::from_utf8_lossy(&body)
         );
