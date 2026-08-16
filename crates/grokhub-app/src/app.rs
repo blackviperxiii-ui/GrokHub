@@ -520,6 +520,7 @@ pub struct Cabin {
     settings_menu_open: bool,
     settings_menu_ignore: bool,
     win_max: bool,
+    geom_dirty: bool,
     imagine_want_focus: bool,
     settings_sec: SettingsSec,
     settings_back: Nav,
@@ -773,6 +774,7 @@ impl Cabin {
             settings_menu_open: false,
             settings_menu_ignore: false,
             win_max,
+            geom_dirty: false,
             imagine_want_focus: false,
             settings_sec: SettingsSec::Account,
             settings_back: Nav::Chat,
@@ -857,8 +859,28 @@ impl Cabin {
             size.y,
             self.cfg.window,
         ) {
-            self.cfg.window = g;
+            if crate::window::geom_moved(g, self.cfg.window) {
+                self.cfg.window = g;
+                self.geom_dirty = true;
+            }
             self.win_max = g.maximized;
+        }
+    }
+
+    fn flush_window(&mut self, ctx: &egui::Context) {
+        match crate::window::geom_flush(
+            self.geom_dirty,
+            self.last_persist.elapsed().as_millis() as u64,
+        ) {
+            crate::window::GeomFlush::Skip => {}
+            crate::window::GeomFlush::Now => {
+                if config::save(&self.cfg).is_ok() {
+                    self.geom_dirty = false;
+                }
+            }
+            crate::window::GeomFlush::AfterMs(ms) => {
+                ctx.request_repaint_after(Duration::from_millis(ms));
+            }
         }
     }
 
@@ -887,6 +909,7 @@ impl Cabin {
             let _ = save_hub_state(&config::hub_state_path(), &st);
         }
         self.last_persist = Instant::now();
+        self.geom_dirty = false;
     }
 
     fn scratch(&self) -> bool {
@@ -3988,6 +4011,7 @@ impl Cabin {
     fn hide_to_tray(&mut self, ctx: &egui::Context) {
         self.capture_window(ctx);
         self.persist();
+        self.geom_dirty = false;
         self.window_visible = false;
         apply_tray_window(ctx, crate::tray::hide_to_tray_window());
         if !self.told_tray {
@@ -4233,6 +4257,7 @@ impl eframe::App for Cabin {
             } else {
                 self.capture_window(ctx);
                 self.persist();
+                self.geom_dirty = false;
             }
         }
         if self.oauth_pending.is_some() {
@@ -4276,6 +4301,7 @@ impl eframe::App for Cabin {
             self.run_reflect();
         }
         self.capture_window(ctx);
+        self.flush_window(ctx);
         if self.last_persist.elapsed() > Duration::from_secs(2) {
             self.persist();
         }
@@ -4738,6 +4764,7 @@ impl Cabin {
                             self.win_max = next_maximized(currently);
                             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(self.win_max));
                             self.cfg.window.maximized = self.win_max;
+                            self.geom_dirty = true;
                         }
                         if titlebar_chrome_btn(ui, "–").clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
