@@ -334,7 +334,7 @@ pub fn parse_poll_result(ok: bool, json: &Value, now_ms: u64) -> PollResult {
                 error: None,
             },
             Err(e) => PollResult {
-                status: PollStatus::Pending,
+                status: PollStatus::Denied,
                 tokens: None,
                 error: Some(e),
             },
@@ -467,6 +467,12 @@ mod tests {
             1_000,
         );
         assert_eq!(ready.status, PollStatus::Ready);
+        let bad = parse_poll_result(true, &json!({"access_token": ""}), 1);
+        assert_eq!(
+            bad.status,
+            PollStatus::Denied,
+            "malformed success must not spin forever"
+        );
         let t = ready.tokens.unwrap();
         assert_eq!(t.access_token, "tok");
         assert!(token_needs_refresh(

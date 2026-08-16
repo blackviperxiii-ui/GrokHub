@@ -190,7 +190,9 @@ pub use organs::{
     presence_should_stream, quiet_hours_active, redirect_prompt, replay_frame_delay,
     should_keep_frame, LocalClock, MidThoughtGreet, RoomPlan, PRESENCE_RING_MS, PRESENCE_WIPE_MS,
 };
-pub use rewind::{keep_last_rewinds, rewind_allowed, rewind_dest, RewindRecord};
+pub use rewind::{
+    keep_last_rewinds, rewind_allowed, rewind_dest, rewind_restore_matches, RewindRecord,
+};
 pub use oauth::{
     apply_profile, auth_bearer, chat_bearer, has_auth, merge_refreshed, parse_device_start, parse_poll_result,
     parse_token_json, parse_userinfo_profile, realtime_bearer, token_needs_refresh, trusted_profile_photo_url,

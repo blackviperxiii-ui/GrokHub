@@ -25,9 +25,7 @@ pub fn connector_url_allowed(url: &str, extra: &[String]) -> bool {
 }
 
 fn host_of(url: &str) -> Option<String> {
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))?;
+    let rest = url.strip_prefix("https://")?;
     let host = rest.split('/').next()?.split('@').next_back()?;
     let host = host.split(':').next()?.to_ascii_lowercase();
     if host.is_empty() {
@@ -209,6 +207,10 @@ mod tests {
         assert!(connector_url_allowed("https://grok.com/rest/connectors", &[]));
         assert!(connector_url_allowed("https://api.x.ai/v1/chat", &[]));
         assert!(!connector_url_allowed("https://evil.example/x", &[]));
+        assert!(
+            !connector_url_allowed("http://grok.com/rest/connectors", &[]),
+            "cleartext connector URLs are not allowed"
+        );
         assert!(connector_url_allowed(
             "https://notes.example/x",
             &["example".into()]

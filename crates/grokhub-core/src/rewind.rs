@@ -49,6 +49,12 @@ pub fn rewind_dest(config_root: &str, job_id: &str) -> String {
     format!("{root}/rewind/{job_id}")
 }
 
+pub fn rewind_restore_matches(record_root: &str, current_root: &str) -> bool {
+    let rec = normalize(record_root);
+    let cur = normalize(current_root);
+    !rec.is_empty() && rec == cur
+}
+
 pub fn keep_last_rewinds(rows: &[RewindRecord], max: usize) -> Vec<RewindRecord> {
     let mut v = rows.to_vec();
     v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -101,5 +107,7 @@ mod tests {
         let kept = keep_last_rewinds(&rows, 5);
         assert_eq!(kept.len(), 5);
         assert_eq!(kept[0].job_id, "j6");
+        assert!(rewind_restore_matches("/home/j/proj", "/home/j/proj/"));
+        assert!(!rewind_restore_matches("/home/j/proj-a", "/home/j/proj-b"));
     }
 }

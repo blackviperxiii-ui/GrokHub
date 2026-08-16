@@ -64,12 +64,31 @@ impl HubTask {
     }
 
     pub fn complete(&mut self, result: &str, receipts: Vec<Receipt>, status: Option<&str>) {
-        self.status = if status == Some("failed") {
+        self.status = if status
+            .map(str::trim)
+            .is_some_and(|s| s.eq_ignore_ascii_case("failed"))
+        {
             "failed".into()
         } else {
             "done".into()
         };
         self.result = Some(result.chars().take(16_000).collect());
         self.receipts = receipts.into_iter().take(40).collect();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn complete_failed_is_case_insensitive() {
+        let mut t = HubTask::enqueue("a", "b", "c", "Flash", "x", 0);
+        t.complete("nope", vec![], Some("FAILED"));
+        assert_eq!(t.status, "failed");
+        t.complete("nope", vec![], Some(" failed\n"));
+        assert_eq!(t.status, "failed");
+        t.complete("ok", vec![], Some("done"));
+        assert_eq!(t.status, "done");
     }
 }
