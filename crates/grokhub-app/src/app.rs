@@ -12,7 +12,7 @@ use crate::xai::{grok_chat, grok_chat_stream, grok_imagine, grok_stt, grok_tts, 
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use grokhub_core::{
     append_composer, apply_work_update, attach_kind, attach_name, attach_prompt_line,
-    appearance_choices, approved_cmds, auth_bearer, automation_blocked_by_policy, blend_thread_goal,
+    appearance_choices, appearance_hint, approved_cmds, auth_bearer, automation_blocked_by_policy, blend_thread_goal,
     build_hub_snapshot,
     build_quick_chips, build_windshield, bump_skill_run, cabin_eyes_for_turn, can_inhabit, can_mark_done,
     bump_usage, catalog_line, chip_suggest_prompt, compact_keep_pin, compose_imagine_prompt,
@@ -61,7 +61,7 @@ use grokhub_core::{
     BoardStatus, ChipInput, ChipKind, ChipMemory, ComputerOp, DeviceCodeStart, HeyGrokAction,
     HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, Recipe, ReplayOp, RewindRecord,
-    AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
+    AttachKind, PlusAct, PlusTarget, SkillMd, Slash, TranscribeRoute, UsageDay, VoiceEvent,
     VoiceState, CONTEXT_BUDGET_TOKENS,
     DEFAULT_MODEL, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS, IMAGINE_ASPECTS,
     IMAGINE_STYLES,
@@ -5639,22 +5639,18 @@ impl Cabin {
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(
                                                                 ui,
-                                                                "Dark stays on. System follows the desktop.",
+                                                                appearance_hint(),
                                                             );
                                                             ui.horizontal(|ui| {
                                                                 let current = parse_theme(&self.cfg.theme);
                                                                 let os_dark = crate::theme::desktop_prefers_dark();
                                                                 for choice in appearance_choices() {
                                                                     let on = current == *choice;
-                                                                    let preview = match choice {
-                                                                        ThemeChoice::Dark => crate::theme::BG,
-                                                                        ThemeChoice::System => {
-                                                                            if os_dark {
-                                                                                crate::theme::BG
-                                                                            } else {
-                                                                                crate::theme::LIGHT_BG
-                                                                            }
-                                                                        }
+                                                                    let preview = if resolve_dark(*choice, os_dark)
+                                                                    {
+                                                                        crate::theme::BG
+                                                                    } else {
+                                                                        crate::theme::LIGHT_BG
                                                                     };
                                                                     if crate::cards::appearance_card(
                                                                         ui,
@@ -7005,15 +7001,21 @@ mod tests {
     }
 
     #[test]
-    fn appearance_tab_is_dark_and_system() {
+    fn appearance_tab_offers_light() {
         let ids: Vec<&str> = grokhub_core::appearance_choices()
             .iter()
             .copied()
             .map(grokhub_core::theme_id)
             .collect();
-        assert_eq!(ids, vec!["dark", "system"]);
-        assert!(!ids.iter().any(|id| *id == "light"));
-        assert_eq!(grokhub_core::parse_theme("light"), grokhub_core::ThemeChoice::Dark);
+        assert_eq!(ids, vec!["dark", "light", "system"]);
+        assert_eq!(
+            grokhub_core::parse_theme("light"),
+            grokhub_core::ThemeChoice::Light
+        );
+        assert!(!grokhub_core::resolve_dark(
+            grokhub_core::ThemeChoice::Light,
+            true
+        ));
         assert!(grokhub_core::resolve_dark(
             grokhub_core::ThemeChoice::Dark,
             false
