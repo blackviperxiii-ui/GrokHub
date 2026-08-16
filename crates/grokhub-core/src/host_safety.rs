@@ -50,6 +50,14 @@ mod tests {
     fn yolo_does_not_lift_forbidden() {
         // caller must still check forbidden_reason when yolo is true
         assert!(forbidden_reason("rm ~/.ssh/id_rsa").is_some());
+        assert!(forbidden_reason("cat /etc/sudoers").is_some());
+        assert!(forbidden_reason("ls ~/.gnupg").is_some());
+        assert!(forbidden_reason("cat ~/.config/GrokHub/app.json").is_some());
+        assert!(
+            forbidden_reason("CAT /ETC/SHADOW").is_some(),
+            "path rails are case-insensitive"
+        );
+        assert!(forbidden_reason("cat /etc/passwd").is_none());
     }
 
     #[test]
