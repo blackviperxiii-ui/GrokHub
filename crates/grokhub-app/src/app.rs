@@ -60,7 +60,8 @@ use grokhub_core::{
     should_auto_compact, should_keep_frame, should_refresh_llm, shortcut_help,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
-    apply_auto_title, apply_manual_rename, delete_thread, history_order, should_name_thread,
+    apply_auto_title, apply_manual_rename, delete_thread, display_tab_title, history_order,
+    should_name_thread,
     slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
@@ -408,6 +409,27 @@ fn listen_turn(api_key: &str) -> String {
             "VOICE_RECEIPT: Connect Grok OAuth for STT, or install whisper".into()
         }
     }
+}
+
+fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
+    let font = egui::FontId::proportional(crate::theme::FONT_CHROME);
+    let fits = |s: &str| {
+        ui.fonts(|f| f.layout_no_wrap(s.to_owned(), font.clone(), egui::Color32::WHITE))
+            .size()
+            .x
+            <= max_w
+    };
+    if fits(label) {
+        return label.to_string();
+    }
+    let mut t = label.to_string();
+    while t.pop().is_some() {
+        let candidate = format!("{}…", t.trim_end());
+        if fits(&candidate) {
+            return candidate;
+        }
+    }
+    "…".into()
 }
 
 fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool) -> egui::Response {
@@ -5325,10 +5347,13 @@ impl Cabin {
         let icon_c = egui::pos2(rect.left() + 20.0, rect.center().y);
         let icon_rect = egui::Rect::from_center_size(icon_c, egui::vec2(20.0, 20.0));
         crate::icons::paint_rail_icon_at(ui.painter(), icon_rect, icon, color);
+        let text_left = rect.left() + 38.0;
+        let text_right = rect.right() - 12.0;
+        let painted = fit_rail_label(ui, label, (text_right - text_left).max(8.0));
         ui.painter().text(
-            egui::pos2(rect.left() + 38.0, rect.center().y),
+            egui::pos2(text_left, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            label,
+            painted,
             egui::FontId::proportional(crate::theme::FONT_CHROME),
             color,
         );
@@ -5601,7 +5626,7 @@ impl Cabin {
                                 ui,
                                 i == self.thread_idx && self.nav == Nav::Chat,
                                 icon,
-                                &title,
+                                &display_tab_title(&title),
                                 false,
                             );
                             if resp.double_clicked() {
@@ -7910,6 +7935,22 @@ mod tests {
     fn rail_footer_is_reserved() {
         assert_eq!(super::RAIL_FOOTER_H, 52.0);
         assert!(super::PALETTE_LIST_H < 400.0);
+    }
+
+    #[test]
+    fn rail_chat_title_stays_short() {
+        assert_eq!(
+            grokhub_core::display_tab_title("chowder and food interest and cho"),
+            "chowder"
+        );
+        with_fonts_ui(|ui| {
+            let painted = super::fit_rail_label(ui, "chowder and food interest and cho", 72.0);
+            assert!(
+                painted.chars().count() < 20,
+                "rail label must not run off the pill: {painted}"
+            );
+            assert!(painted.ends_with('…') || painted == "chowder", "{painted}");
+        });
     }
 
     #[test]

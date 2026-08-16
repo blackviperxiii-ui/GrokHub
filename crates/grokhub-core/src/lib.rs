@@ -224,8 +224,8 @@ pub use state::{
 };
 pub use task::{HubTask, Receipt};
 pub use thread_tab::{
-    apply_auto_title, apply_manual_rename, clean_tab_title, delete_thread, history_order, toggle_pin,
-    DeleteOutcome, ThreadTab,
+    apply_auto_title, apply_manual_rename, clean_tab_title, delete_thread, display_tab_title,
+    history_order, short_auto_title, toggle_pin, DeleteOutcome, ThreadTab, AUTO_TITLE_MAX,
 };
 pub use update::{
     discover_source, is_grokhub_source, overlay_update_begin, overlay_update_finish,
