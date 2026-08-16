@@ -548,6 +548,7 @@ pub struct Cabin {
     last_recipe: Option<Recipe>,
     pending_update: bool,
     update_pct: Option<u8>,
+    update_can_restart: bool,
     secrets: Secrets,
     threads: Vec<ChatThread>,
     thread_idx: usize,
@@ -815,6 +816,7 @@ impl Cabin {
             last_recipe: None,
             pending_update: false,
             update_pct: None,
+            update_can_restart: false,
             secrets,
             threads,
             thread_idx,
@@ -3909,6 +3911,7 @@ impl Cabin {
             Ok(JobOut::UpdateProgress { pct, msg }) => {
                 self.rx = Some(rx);
                 self.update_pct = Some(pct);
+                self.update_can_restart = false;
                 self.status = msg;
             }
             Ok(JobOut::UpdateDone { ok }) => {
@@ -3916,6 +3919,7 @@ impl Cabin {
                 self.last_receipt_ok = Some(ok);
                 let view = overlay_update_finish(ok, self.update_pct.unwrap_or(0));
                 self.update_pct = Some(view.pct);
+                self.update_can_restart = view.can_restart;
                 self.status = view.status;
             }
             Ok(JobOut::Err(e)) => {
@@ -4220,6 +4224,25 @@ impl Cabin {
         }
     }
 
+    fn restart_after_update(&mut self, ctx: &egui::Context) {
+        if self.running {
+            self.status = "Busy — wait, then restart".into();
+            return;
+        }
+        self.persist();
+        self.status = "Restarting GrokHub…".into();
+        if let Some(tray) = self.tray.take() {
+            crate::tray::drop_off_thread(tray);
+        }
+        match crate::update::restart_system(!self.window_visible) {
+            Ok(()) => {
+                self.want_quit = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Err(e) => self.status = e,
+        }
+    }
+
     fn start_overlay_update(&mut self, cmds: Vec<String>) {
         if self.running {
             self.status = "Busy — wait, then update".into();
@@ -4235,6 +4258,7 @@ impl Cabin {
         self.running = begin.running;
         self.chat_job_thread = None;
         self.update_pct = Some(begin.pct);
+        self.update_can_restart = begin.can_restart;
         self.status = begin.status;
         self.last_host = cmds.clone();
         let (tx, rx) = mpsc::channel();
@@ -6154,6 +6178,7 @@ impl Cabin {
         let mut connect = false;
         let mut disconnect = false;
         let mut update = false;
+        let mut restart = false;
         let mut copy_diag = false;
         let oauth_line = self.secrets.oauth.as_ref().map(|t| {
             t.email
@@ -6436,6 +6461,16 @@ impl Cabin {
                                                                 };
                                                                 crate::cards::settings_progress(ui, pct, fill);
                                                             }
+                                                            if self.update_can_restart
+                                                                && crate::cards::settings_action(
+                                                                    ui,
+                                                                    "Restart GrokHub",
+                                                                    "Relaunch the cabin, tray, and hub from the new overlay.",
+                                                                    "Restart",
+                                                                )
+                                                            {
+                                                                restart = true;
+                                                            }
                                                             if !self.status.is_empty() {
                                                                 crate::cards::settings_note(ui, &self.status);
                                                             }
@@ -6472,6 +6507,9 @@ impl Cabin {
         }
         if update {
             self.queue_update();
+        }
+        if restart {
+            self.restart_after_update(ctx);
         }
         if copy_diag {
             let bundle = diagnostics_bundle(
@@ -7770,6 +7808,9 @@ mod tests {
         let done = grokhub_core::overlay_update_finish(true, 50);
         assert!(!done.posts_chat);
         assert!(done.stay_on_update);
+        assert!(done.can_restart);
+        assert!(grokhub_core::overlay_update_can_restart(true, false));
+        assert!(!grokhub_core::overlay_update_can_restart(true, true));
     }
 
     #[test]
