@@ -67,6 +67,7 @@ use grokhub_core::{
     parse_computer_cmd_loose, user_asks_cabin_eyes,
     user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
+    goal_pin_for_job, goal_step_after_outcome,
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
     recipe_from_cmds, replay_automation_target,
     parse_nl_automation, parse_recipe, parse_slash, parse_theme, pick_theme, plan_from_text, plan_room,
@@ -2044,15 +2045,43 @@ impl Cabin {
     }
 
     fn spawn_thread_goal(&mut self) {
+        self.spawn_thread_goal_on(None);
+    }
+
+    fn spawn_thread_goal_on(&mut self, thread_id: Option<&str>) {
         if self.goal_busy {
             self.goal_stale = true;
             return;
         }
-        let scratch = self.scratch();
-        let user_turns = self.messages.iter().filter(|m| m.role == "user").count();
+        let vis = self.visible_thread_id();
+        let tid = thread_id
+            .map(|s| s.to_string())
+            .or_else(|| self.threads.get(self.thread_idx).map(|t| t.id.clone()))
+            .unwrap_or_default();
+        let on_visible = tid == vis || tid.is_empty();
+        let scratch = if on_visible {
+            self.scratch()
+        } else {
+            self.threads
+                .iter()
+                .find(|t| t.id == tid)
+                .map(|t| t.scratch)
+                .unwrap_or(false)
+        };
+        let pairs = if on_visible {
+            self.chat_pairs()
+        } else {
+            self.threads
+                .iter()
+                .find(|t| t.id == tid)
+                .map(|t| t.messages.clone())
+                .unwrap_or_default()
+        };
+        let user_turns = pairs.iter().filter(|(r, _)| r == "user").count();
         let locked = self
             .threads
-            .get(self.thread_idx)
+            .iter()
+            .find(|t| t.id == tid)
             .map(|t| t.title_locked)
             .unwrap_or(false);
         if locked || !should_name_thread(scratch, user_turns) {
@@ -2063,16 +2092,11 @@ impl Cabin {
             self.goal_stale = false;
             return;
         }
-        let tid = self
-            .threads
-            .get(self.thread_idx)
-            .map(|t| t.id.clone())
-            .unwrap_or_default();
         if tid.is_empty() {
             self.goal_stale = false;
             return;
         }
-        let prompt = thread_goal_prompt(&self.chat_pairs());
+        let prompt = thread_goal_prompt(&pairs);
         let key = self.bearer();
         if key.trim().is_empty() {
             self.goal_stale = false;
@@ -2280,6 +2304,10 @@ impl Cabin {
                 .iter()
                 .map(|m| (m.role.clone(), m.content.clone()))
                 .collect();
+            t.goal.step = self.goal_step;
+            if !self.cfg.goal_pin.is_empty() {
+                t.goal.label = self.cfg.goal_pin.clone();
+            }
         }
         self.thread_idx = idx.min(self.threads.len().saturating_sub(1));
         self.rename_idx = None;
@@ -2303,6 +2331,11 @@ impl Cabin {
             .get(self.thread_idx)
             .map(|t| t.goal.label.clone())
             .unwrap_or_default();
+        self.goal_step = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.goal.step)
+            .unwrap_or(0);
         self.persist();
     }
 
@@ -3125,8 +3158,14 @@ impl Cabin {
         ) else {
             return;
         };
+        self.roll_today();
+        if daily_units_blocked(self.usage.automation, self.cfg.daily_auto_cap) {
+            return;
+        }
         self.last_anticipate_ms = now_ms();
-        self.daily_auto_used = self.daily_auto_used.saturating_add(1);
+        bump_usage(&mut self.usage, "automation");
+        self.daily_auto_used = self.usage.automation;
+        self.daily_auto_day = self.usage.day.clone();
         self.send_chat(prompt);
     }
 
@@ -3209,7 +3248,7 @@ impl Cabin {
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
         let destructive = a.instructions.to_ascii_lowercase().contains("rm ")
             || host_risk(&a.instructions) == HostRisk::Destructive;
-        if automation_blocked_by_policy(quiet, destructive, self.cfg.autonomy) {
+        if automation_blocked_by_policy(quiet, destructive, 3) {
             self.mark_auto_skipped(&a.id, now_ms);
             self.status = format!("Night skipped {} (quiet/policy)", a.name);
             return;
@@ -3750,13 +3789,24 @@ impl Cabin {
                 hands.push_str(&glass);
             }
         }
+        let stored_pins: Vec<(String, String)> = self
+            .threads
+            .iter()
+            .map(|t| (t.id.clone(), t.goal.label.clone()))
+            .collect();
+        let job_pin = goal_pin_for_job(
+            self.chat_job_thread.as_deref(),
+            &vis,
+            &self.cfg.goal_pin,
+            &stored_pins,
+        );
         let sys = cabin_system_prompt(
             &soul,
             &user_md,
             &memory_md,
             &pins,
             self.active_skill_follow.as_deref(),
-            &self.cfg.goal_pin,
+            &job_pin,
             &board,
             &last_host,
             &hands,
@@ -3866,16 +3916,6 @@ impl Cabin {
                 }
                 remember_chip_outcome(&mut self.chip_memory, true, now_ms());
                 record_turn(&mut self.learning);
-                if self.policy().learns() && !self.scratch() {
-                    let facts = fact_candidates(
-                        &self
-                            .messages
-                            .iter()
-                            .map(|m| (m.role.clone(), m.content.clone()))
-                            .collect::<Vec<_>>(),
-                    );
-                    extract_insights(&mut self.learning, &facts);
-                }
                 bump_usage(&mut self.usage, "message");
                 let text = if self.thought_buf.is_empty() {
                     text
@@ -3885,6 +3925,32 @@ impl Cabin {
                 self.apply_assistant_snapshot(text.clone());
                 self.thought_buf.clear();
                 self.stream_buf.clear();
+                let job = self.chat_job_thread.clone();
+                let vis = self.visible_thread_id();
+                let visible_pairs: Vec<(String, String)> = self
+                    .messages
+                    .iter()
+                    .map(|m| (m.role.clone(), m.content.clone()))
+                    .collect();
+                let stored: Vec<(String, Vec<(String, String)>)> = self
+                    .threads
+                    .iter()
+                    .map(|t| (t.id.clone(), t.messages.clone()))
+                    .collect();
+                let job_pairs = kick_messages_for_job(
+                    job.as_deref(),
+                    &vis,
+                    &visible_pairs,
+                    &stored,
+                );
+                let job_scratch = job
+                    .as_deref()
+                    .and_then(|id| self.threads.iter().find(|t| t.id == id).map(|t| t.scratch))
+                    .unwrap_or_else(|| self.scratch());
+                if self.policy().learns() && !job_scratch {
+                    let facts = fact_candidates(&job_pairs);
+                    extract_insights(&mut self.learning, &facts);
+                }
                 self.chat_job_thread = None;
                 if here && self.speak_next {
                     self.speak_next = false;
@@ -3904,35 +3970,37 @@ impl Cabin {
                 for (key, st) in extract_work_updates(&text) {
                     let _ = apply_work_update(&mut self.board, &key, st);
                 }
-                if here {
-                    if let Some(plan) = plan_from_text(&text) {
-                        self.pending_update = false;
-                        if self.cfg.yolo {
-                            let (run, hold) = yolo_plan_split(
-                                &plan,
-                                self.approve_risky_only,
-                                &self.cfg.project_dir,
-                            );
-                            if !run.is_empty() {
-                                self.run_cmds(run);
-                            }
-                            if !hold.is_empty() {
-                                self.plan_pending = Some(hold);
+                if let Some(plan) = plan_from_text(&text) {
+                    self.pending_update = false;
+                    if self.cfg.yolo {
+                        let (run, hold) = yolo_plan_split(
+                            &plan,
+                            self.approve_risky_only,
+                            &self.cfg.project_dir,
+                        );
+                        if !run.is_empty() {
+                            self.run_cmds(run);
+                        }
+                        if !hold.is_empty() {
+                            self.plan_pending = Some(hold);
+                            if here {
                                 self.status = "Host plan needs approval".into();
                             }
-                        } else {
-                            self.run_cmds(approved_cmds(&plan));
                         }
+                    } else {
+                        self.run_cmds(approved_cmds(&plan));
                     }
-                    for c in extract_connector_cmds(&text) {
-                        self.run_connector(&c.connector_id, &c.tool, &c.args);
-                    }
-                    if let Some(p) = extract_imagine_prompt(&text) {
-                        self.imagine_prompt = p;
+                }
+                for c in extract_connector_cmds(&text) {
+                    self.run_connector(&c.connector_id, &c.tool, &c.args);
+                }
+                if let Some(p) = extract_imagine_prompt(&text) {
+                    self.imagine_prompt = p;
+                    if here {
                         self.nav = Nav::Imagine;
                         self.imagine_want_focus = true;
-                        self.kick_imagine();
                     }
+                    self.kick_imagine();
                 }
                 if let Some(mut a) = parse_nl_automation(&text) {
                     if a.id.is_empty() {
@@ -3944,38 +4012,58 @@ impl Cabin {
                         self.status = format!("Night saved: {} {}", a.schedule, a.time);
                     }
                 }
-                if here {
-                    if let Some(q) = parse_consult(&text) {
-                        self.run_consult(q);
-                    }
+                if let Some(q) = parse_consult(&text) {
+                    self.run_consult(q);
                 }
                 let outcome = parse_goal_outcome(&text);
-                if here && outcome == "continue" && !self.cfg.goal_pin.is_empty() {
-                    if let Some(next) = next_goal_prompt(
-                        &self.cfg.goal_pin,
-                        &text,
-                        self.goal_step,
-                        GOAL_MAX_STEPS,
-                    ) {
-                        self.goal_step = self.goal_step.saturating_add(1);
+                let stored_pins: Vec<(String, String)> = self
+                    .threads
+                    .iter()
+                    .map(|t| (t.id.clone(), t.goal.label.clone()))
+                    .collect();
+                let pin = goal_pin_for_job(
+                    job.as_deref(),
+                    &vis,
+                    &self.cfg.goal_pin,
+                    &stored_pins,
+                );
+                let job_step = if job.as_deref() == Some(vis.as_str()) || job.is_none() {
+                    self.goal_step
+                } else {
+                    self.threads
+                        .iter()
+                        .find(|t| Some(t.id.as_str()) == job.as_deref())
+                        .map(|t| t.goal.step)
+                        .unwrap_or(0)
+                };
+                if here && outcome == "continue" && !pin.is_empty() {
+                    if let Some(next) = next_goal_prompt(&pin, &text, job_step, GOAL_MAX_STEPS) {
+                        self.goal_step = job_step.saturating_add(1);
+                        if let Some(id) = job.as_deref() {
+                            if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
+                                t.goal.step = self.goal_step;
+                            }
+                        }
                         self.agents.push(AgentJob {
-                            title: format!("{} · step {}", self.cfg.goal_pin, self.goal_step + 1),
+                            title: format!("{} · step {}", pin, self.goal_step + 1),
                             status: "queued".into(),
                             prompt: next.clone(),
                         });
                         self.send_chat(next);
                     }
-                } else if outcome != "continue" {
-                    self.goal_step = 0;
+                } else {
+                    let next_step = goal_step_after_outcome(job_step, &outcome, true);
+                    if let Some(id) = job.as_deref() {
+                        if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
+                            t.goal.step = next_step;
+                        }
+                    }
+                    if here {
+                        self.goal_step = next_step;
+                    }
                 }
                 if here {
-                    let tokens = estimate_messages(
-                        &self
-                            .messages
-                            .iter()
-                            .map(|m| (m.role.clone(), m.content.clone()))
-                            .collect::<Vec<_>>(),
-                    );
+                    let tokens = estimate_messages(&visible_pairs);
                     if should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, self.goal_step) {
                         self.run_slash(Slash::Compact);
                         self.status = format!(
@@ -3983,8 +4071,8 @@ impl Cabin {
                             context_percent(tokens, CONTEXT_BUDGET_TOKENS)
                         );
                     }
-                    self.spawn_thread_goal();
                 }
+                self.spawn_thread_goal_on(job.as_deref());
             }
             Ok(JobOut::Consult(detail)) => {
                 self.running = false;
@@ -4623,10 +4711,14 @@ impl Cabin {
     }
 
     fn replay_saved_recipe(&mut self, id: &str) {
+        if self.running {
+            self.status = "Busy — wait, then replay".into();
+            return;
+        }
         let recipe = if id.eq_ignore_ascii_case("last") {
             crate::recipes::load_last().or_else(|| self.last_recipe.clone())
         } else {
-            crate::recipes::load_recipe(id).or_else(|| self.last_recipe.clone())
+            crate::recipes::load_recipe(id)
         };
         match recipe {
             Some(r) => {
@@ -4638,6 +4730,10 @@ impl Cabin {
     }
 
     fn replay_recipe(&mut self) {
+        if self.running {
+            self.status = "Busy — wait, then replay".into();
+            return;
+        }
         if self.last_recipe.is_none() {
             self.last_recipe = crate::recipes::load_last();
         }

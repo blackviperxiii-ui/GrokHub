@@ -53,15 +53,7 @@ pub fn wants_live_repaint(
 }
 
 pub fn expand_home(p: &str) -> String {
-    if let Some(rest) = p.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{home}/{rest}");
-        }
-    }
-    if p == "~" {
-        return std::env::var("HOME").unwrap_or_else(|_| p.to_string());
-    }
-    p.to_string()
+    grokhub_core::expand_project_root(p, std::env::var("HOME").ok().as_deref())
 }
 
 #[cfg(test)]
@@ -98,5 +90,12 @@ mod tests {
     fn selected_project_opens_the_board() {
         assert!(click_project_opens_board(true));
         assert!(!click_project_opens_board(false));
+    }
+
+    #[test]
+    fn expand_home_understands_dollar_home() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/j".into());
+        assert_eq!(expand_home("$HOME/proj"), format!("{home}/proj"));
+        assert_eq!(expand_home("~/proj"), format!("{home}/proj"));
     }
 }
