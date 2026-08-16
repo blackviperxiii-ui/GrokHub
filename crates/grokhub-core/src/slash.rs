@@ -402,8 +402,9 @@ pub fn slash_help() -> String {
         "/usage — today's buckets",
         "/models — Grok catalog",
         "/palette — command palette",
-        "Enter sends; Ctrl+Enter newline. Appearance: Dark, Light, System.",
-        "Voice: OAuth for STT/TTS; duplex needs a console key. Hands: unsandboxed mouse/keyboard/vision.",
+        "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs.",
+        "Appearance: Dark, Light, System. Chat streams tokens on the thread that started them.",
+        "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Hands: unsandboxed; /stop kills the worker.",
     ]
     .join("\n")
 }

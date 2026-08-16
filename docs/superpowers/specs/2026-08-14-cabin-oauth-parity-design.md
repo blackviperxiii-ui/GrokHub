@@ -38,9 +38,10 @@ Doctor / banner: auth = key **or** OAuth.
 
 ## Honest limits
 
-- Duplex Voice still needs a console API key (OAuth covers STT/TTS)
-- Tray pings are one-shot on hide (`notify-send`); the cabin is still the window
+- Duplex Voice still needs a console API key (OAuth covers STT/TTS). With a key, the cabin streams 24 kHz PCM and live captions on the realtime socket.
+- Chat streams via `POST /v1/responses` (`store: false`). Tokens stay on the thread that started the job.
+- Tray pings are one-shot on hide (`notify-send`); titlebar × pins a real `unix:path=` session bus so the icon appears
 - Inhabit still refuses the phone
 - Website connectors stay status-only unless a local token exists
 - No Telegram, no provider zoo, no WASM, no hook YAML
-- Hands are unsandboxed (`COMPUTER_CMD` / xdotool / grim) — same as the Electron cabin
+- Hands are unsandboxed (`COMPUTER_CMD` / xdotool / grim). Halt sets `host_halt` so the worker actually stops.
