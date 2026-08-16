@@ -3218,7 +3218,7 @@ impl Cabin {
         self.daily_auto_day = self.usage.day.clone();
         self.daily_auto_used = self.usage.automation;
         if daily_units_blocked(self.usage.automation, self.cfg.daily_auto_cap) {
-            return;
+            return false;
         }
         let clock_copy = clock;
         self.automations = std::mem::take(&mut self.automations)
