@@ -523,6 +523,7 @@ pub struct Cabin {
     host_hour_at: Instant,
     approve_risky_only: bool,
     tray: Option<crate::tray::TrayHost>,
+    tray_rx: Option<mpsc::Receiver<Option<crate::tray::TrayHost>>>,
     window_visible: bool,
     want_quit: bool,
     told_tray: bool,
@@ -781,7 +782,12 @@ impl Cabin {
             host_hour_count: 0,
             host_hour_at: Instant::now(),
             approve_risky_only,
-            tray: crate::tray::spawn(),
+            tray: None,
+            tray_rx: if crate::tray::tray_needed_at_launch(hidden) {
+                Some(crate::tray::begin_tray_spawn())
+            } else {
+                None
+            },
             window_visible: !hidden,
             want_quit: false,
             told_tray: false,
@@ -3746,6 +3752,8 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let cap = self.cfg.host_hour_cap;
+        let clock = Self::local_clock();
+        let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
         std::thread::spawn(move || {
             let started = Instant::now();
             let mut inhibit = crate::notify::inhibit_sleep();
@@ -3770,7 +3778,12 @@ impl Cabin {
                 block.push_str("\n\n");
             }
             crate::notify::release_inhibit(&mut inhibit);
-            crate::notify::ping_if_long(started.elapsed(), "GrokHub", "Host job finished");
+            crate::notify::ping_if_long_quiet(
+                started.elapsed(),
+                quiet,
+                "GrokHub",
+                "Host job finished",
+            );
             let _ = tx.send(JobOut::HostDone(block));
         });
     }
@@ -4173,18 +4186,44 @@ impl Cabin {
     }
 
     fn hide_to_tray(&mut self, ctx: &egui::Context) {
+        match crate::tray::hide_action(self.window_visible, self.told_tray) {
+            crate::tray::HideAction::Skip => return,
+            crate::tray::HideAction::Hide => {
+                self.unmap_to_tray(ctx);
+            }
+            crate::tray::HideAction::HideAndPing => {
+                self.unmap_to_tray(ctx);
+                let clock = Self::local_clock();
+                let quiet =
+                    quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
+                if crate::notify::allow_ping(quiet) {
+                    crate::notify::ping("GrokHub", "Still running in the tray");
+                }
+                self.status = "In the tray — Show cabin to sit down".into();
+            }
+        }
+        self.told_tray = true;
+    }
+
+    fn unmap_to_tray(&mut self, ctx: &egui::Context) {
         self.window_visible = false;
         apply_tray_window(ctx, crate::tray::hide_to_tray_window());
-        if !self.told_tray {
-            self.told_tray = true;
-            crate::notify::ping("GrokHub", "Still running in the tray");
-            self.status = "In the tray — Show cabin to sit down".into();
+        self.ensure_tray_spawn();
+    }
+
+    fn ensure_tray_spawn(&mut self) {
+        if self.tray.is_some() || self.tray_rx.is_some() || !crate::tray::tray_wanted() {
+            return;
         }
+        self.tray_rx = Some(crate::tray::begin_tray_spawn());
     }
 
     fn show_from_tray(&mut self, ctx: &egui::Context) {
         self.window_visible = true;
         apply_tray_window(ctx, crate::tray::show_from_tray_window());
+        if let Some(tray) = self.tray.take() {
+            crate::tray::drop_off_thread(tray);
+        }
         ctx.request_repaint();
     }
 
@@ -4225,6 +4264,16 @@ impl Cabin {
     }
 
     fn poll_tray(&mut self, ctx: &egui::Context) {
+        let ready = self
+            .tray_rx
+            .as_ref()
+            .and_then(crate::tray::take_spawn_result);
+        if let Some(maybe) = ready {
+            self.tray_rx = None;
+            if let Some(host) = maybe {
+                self.tray = crate::tray::keep_if_hidden(!self.window_visible, host);
+            }
+        }
         let Some(tray) = &self.tray else {
             return;
         };
@@ -4237,6 +4286,9 @@ impl Cabin {
             }
             Some(crate::tray::TrayCmd::Quit) => {
                 self.want_quit = true;
+                if let Some(tray) = self.tray.take() {
+                    crate::tray::drop_off_thread(tray);
+                }
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             None => {}
@@ -4365,11 +4417,24 @@ fn apply_tray_window(ctx: &egui::Context, w: crate::tray::TrayWindow) {
 }
 
 fn titlebar_chrome_size() -> egui::Vec2 {
-    egui::vec2(36.0, crate::theme::TITLEBAR_H)
+    egui::vec2(crate::theme::HIT.max(36.0), crate::theme::TITLEBAR_H)
+}
+
+/// egui ignores a click held longer than 0.8s (`max_click_duration`). The
+/// titlebar × is a close control — release over it must still hide to tray.
+fn chrome_activated(clicked: bool, released_over: bool) -> bool {
+    clicked || released_over
+}
+
+fn titlebar_chrome_hit(resp: &egui::Response) -> bool {
+    chrome_activated(
+        resp.clicked(),
+        resp.contains_pointer() && resp.ctx.input(|i| i.pointer.primary_released()),
+    )
 }
 
 fn titlebar_chrome_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let (_rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click());
+    let (_rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click_and_drag());
     let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
     if wash.a() > 0 {
         ui.painter().rect_filled(rect, 6.0, wash);
@@ -4390,6 +4455,12 @@ fn titlebar_chrome_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
 }
 
 impl eframe::App for Cabin {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Some(tray) = self.tray.take() {
+            crate::tray::drop_off_thread(tray);
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
         self.poll_chips();
@@ -4903,7 +4974,7 @@ impl Cabin {
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if titlebar_chrome_btn(ui, "×").clicked() {
+                        if titlebar_chrome_hit(&titlebar_chrome_btn(ui, "×")) {
                             let hide = crate::tray::should_hide_on_close(
                                 self.cfg.close_to_tray,
                                 self.tray.is_some(),
@@ -4914,14 +4985,14 @@ impl Cabin {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
                         }
-                        if titlebar_chrome_btn(ui, "□").clicked() {
+                        if titlebar_chrome_hit(&titlebar_chrome_btn(ui, "□")) {
                             let currently = ctx
                                 .input(|i| i.viewport().maximized)
                                 .unwrap_or(self.win_max);
                             self.win_max = next_maximized(currently);
                             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(self.win_max));
                         }
-                        if titlebar_chrome_btn(ui, "–").clicked() {
+                        if titlebar_chrome_hit(&titlebar_chrome_btn(ui, "–")) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
                     });
@@ -7174,6 +7245,19 @@ mod tests {
         let s = super::titlebar_chrome_size();
         assert!(s.x >= 32.0, "close hit {s:?}");
         assert_eq!(s.y, crate::theme::TITLEBAR_H);
+    }
+
+    #[test]
+    fn titlebar_close_fires_after_a_held_press() {
+        assert!(
+            super::chrome_activated(true, false),
+            "a normal click still closes"
+        );
+        assert!(
+            super::chrome_activated(false, true),
+            "egui drops clicks held longer than 0.8s — titlebar × must still hide to tray"
+        );
+        assert!(!super::chrome_activated(false, false));
     }
 
     #[test]
