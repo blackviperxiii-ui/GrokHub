@@ -65,7 +65,7 @@ use grokhub_core::{
     greeting_fingerprint, greeting_prompt, local_greeting, pick_greeting,
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
-    rewind_dest, save_hub_state, screen_from_extents, search_corpus,
+    rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
     should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
@@ -2472,16 +2472,16 @@ impl Cabin {
             }
         }
         self.touch();
+        if let Some(slash) = parse_slash(&text) {
+            self.run_slash(slash);
+            return;
+        }
         remember_typed_prompt(
             &mut self.chip_memory,
             &text,
             now_ms(),
             Self::local_clock().hour as u8,
         );
-        if let Some(slash) = parse_slash(&text) {
-            self.run_slash(slash);
-            return;
-        }
         if !persist_user_turn(self.has_key()) {
             self.status = "Connect Grok OAuth in Settings".into();
             return;
@@ -2939,7 +2939,7 @@ impl Cabin {
             return;
         }
         if let Some(last) = self.rewind_rows.first().cloned() {
-            if std::path::Path::new(&last.path).exists() {
+            if rewind_restore_matches(&last.root, src) && std::path::Path::new(&last.path).exists() {
                 self.queue_sh(format!(
                     "cp -a '{}' '{}'",
                     last.path.replace('\'', r#"'"'"'"#),
@@ -3150,12 +3150,10 @@ impl Cabin {
         }
         self.last_night_tick = Instant::now();
         let clock = Self::local_clock();
-        let day = format!("{}-{}", clock.weekday, clock.hour);
-        if self.daily_auto_day != day && clock.hour == 0 && clock.minute < 6 {
-            self.daily_auto_used = 0;
-            self.daily_auto_day = day;
-        }
-        if daily_units_blocked(self.daily_auto_used, self.cfg.daily_auto_cap) {
+        self.roll_today();
+        self.daily_auto_day = self.usage.day.clone();
+        self.daily_auto_used = self.usage.automation;
+        if daily_units_blocked(self.usage.automation, self.cfg.daily_auto_cap) {
             return;
         }
         let clock_copy = clock;
@@ -3235,7 +3233,9 @@ impl Cabin {
             return;
         }
         self.mark_auto_ran(&a.id, now_ms);
-        self.daily_auto_used = self.daily_auto_used.saturating_add(1);
+        bump_usage(&mut self.usage, "automation");
+        self.daily_auto_used = self.usage.automation;
+        self.daily_auto_day = self.usage.day.clone();
         self.status = format!("Night: {}", a.name);
         self.nav = Nav::Chat;
         self.send_chat(a.instructions);
