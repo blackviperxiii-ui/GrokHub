@@ -1016,7 +1016,7 @@ mod tests {
         assert!(TRANSCRIBERS.contains(&"whisper"));
         assert!(PLAYERS.contains(&"ffplay"));
         assert!(first_bin(&["definitely-not-a-bin-grokhub"]).is_none());
-        assert!(hands_down_receipt(HandsDown::Missing).contains("~/.local/bin"));
+        assert!(hands_down_receipt(HandsDown::Missing).contains("lib/grokhub/bin"));
         assert!(hands_down_receipt(HandsDown::Uinput).contains("uinput"));
         assert!(hands_down_receipt(HandsDown::Daemon).contains("ydotoold"));
         assert_ne!(
