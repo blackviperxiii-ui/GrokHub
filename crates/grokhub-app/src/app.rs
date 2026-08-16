@@ -13,7 +13,7 @@ use crate::xai::{grok_chat, grok_chat_stream, grok_imagine, grok_stt, grok_tts, 
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use grokhub_core::{
     append_composer, apply_work_update, attach_kind, attach_name, attach_prompt_line,
-    appearance_choices, appearance_hint, approved_cmds, auth_bearer, automation_blocked_by_policy, blend_thread_goal,
+    appearance_choices, appearance_hint, approved_cmds, automation_blocked_by_policy, blend_thread_goal,
     build_hub_snapshot,
     build_quick_chips, build_windshield, bump_skill_run, bump_usage, cabin_eyes_for_turn,
     inhabit_ready, can_mark_done, hub_pair_url, parse_hostname_i, pick_lan_ipv4,
@@ -26,8 +26,9 @@ use grokhub_core::{
     imagine_shows_result_above, imagine_toolbox_dock, imagine_toolbox_shows_title,
     imagine_toolbox_top, imagine_wall_bounds,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
-    mark_automation_skipped, yolo_plan_split, chat_bearer, drop_trailing_assistant,
-    job_error_goes_to_chat, persist_user_turn, push_bound_message, refund_host_reserved,
+    mark_automation_skipped, yolo_plan_split, chat_bearer,
+    drop_trailing_assistant_on, job_error_goes_to_chat, kick_messages_for_job, persist_user_turn,
+    push_bound_message, refund_host_reserved,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     imagine_aspect_label, imagine_aspect_name, imagine_style_label, imagine_video_dur_label,
@@ -1129,7 +1130,6 @@ impl Cabin {
         self.host_halt.store(true, Ordering::SeqCst);
         self.rx = None;
         self.running = false;
-        self.chat_job_thread = None;
         if self.host_reserved > 0 {
             self.host_hour_count = refund_host_reserved(self.host_hour_count, self.host_reserved);
             self.host_reserved = 0;
@@ -1138,16 +1138,33 @@ impl Cabin {
         self.pending_skill = None;
         self.stream_buf.clear();
         self.thought_buf.clear();
-        let mut msgs: Vec<(String, String)> = self
+        let vis = self.visible_thread_id();
+        let job = self.chat_job_thread.clone();
+        let mut visible: Vec<(String, String)> = self
             .messages
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        drop_trailing_assistant(&mut msgs);
-        self.messages = msgs
+        let mut stored: Vec<(String, Vec<(String, String)>)> = self
+            .threads
+            .iter()
+            .map(|t| (t.id.clone(), t.messages.clone()))
+            .collect();
+        drop_trailing_assistant_on(job.as_deref(), &vis, &mut visible, &mut stored);
+        self.messages = visible
             .into_iter()
             .map(|(role, content)| Msg { role, content })
             .collect();
+        if let Some(job_id) = job.as_deref() {
+            if job_id != vis {
+                if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job_id) {
+                    if let Some(t) = self.threads.iter_mut().find(|t| t.id == job_id) {
+                        t.messages = msgs.clone();
+                    }
+                }
+            }
+        }
+        self.chat_job_thread = None;
         self.persist();
         if let Some(mut s) = self.voice_sock.take() {
             s.halt();
@@ -3189,6 +3206,10 @@ impl Cabin {
     }
 
     fn spawn_night_check(&mut self, id: String, name: String, cmd: String) {
+        if let Some(why) = forbidden_reason(&cmd) {
+            self.status = format!("Night check blocked: {why}");
+            return;
+        }
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let out = run_host(&cmd, Duration::from_secs(20));
@@ -3655,32 +3676,49 @@ impl Cabin {
         }
         self.running = true;
         self.status = "Thinking…".into();
-        self.chat_job_thread = Some(self.visible_thread_id());
-        let key = self.bearer();
-        let last_user = self
+        if self.chat_job_thread.is_none() {
+            self.chat_job_thread = Some(self.visible_thread_id());
+        }
+        let vis = self.visible_thread_id();
+        let visible_pairs: Vec<(String, String)> = self
             .messages
             .iter()
+            .map(|m| (m.role.clone(), m.content.clone()))
+            .collect();
+        let stored: Vec<(String, Vec<(String, String)>)> = self
+            .threads
+            .iter()
+            .map(|t| (t.id.clone(), t.messages.clone()))
+            .collect();
+        let raw = kick_messages_for_job(
+            self.chat_job_thread.as_deref(),
+            &vis,
+            &visible_pairs,
+            &stored,
+        );
+        let key = self.bearer();
+        let last_user = raw
+            .iter()
             .rev()
-            .find(|m| m.role == "user" && !is_workload_user(&m.content))
-            .map(|m| m.content.as_str())
-            .unwrap_or("");
-        let mode = effective_chat_mode(&self.cfg.mode, last_user, &self.cfg.model);
+            .find(|(role, content)| role == "user" && !is_workload_user(content))
+            .map(|(_, content)| content.clone())
+            .unwrap_or_default();
+        let mode = effective_chat_mode(&self.cfg.mode, &last_user, &self.cfg.model);
         let model = resolve_chat_model(&mode, &self.cfg.model);
         let effort = if model == "grok-4.6" {
             grokhub_core::reasoning_effort_for_mode(&mode)
         } else {
             None
         };
-        let mut msgs: Vec<(String, String)> = self
-            .messages
-            .iter()
-            .map(|m| {
-                let content = if m.role == "assistant" {
-                    strip_thinking(&m.content)
+        let mut msgs: Vec<(String, String)> = raw
+            .into_iter()
+            .map(|(role, content)| {
+                let content = if role == "assistant" {
+                    strip_thinking(&content)
                 } else {
-                    m.content.clone()
+                    content
                 };
-                (m.role.clone(), content)
+                (role, content)
             })
             .collect();
         let soul = config::read_memory("SOUL.md");
@@ -3735,10 +3773,10 @@ impl Cabin {
         if !sys.is_empty() {
             msgs.insert(0, ("system".into(), sys));
         }
-        if self.cfg.cabin_eyes && user_asks_cabin_eyes(last_user) {
+        if self.cfg.cabin_eyes && user_asks_cabin_eyes(&last_user) {
             self.eyes_attach = true;
         }
-        if user_asks_desktop_hands(last_user) {
+        if user_asks_desktop_hands(&last_user) {
             self.hands_attach = true;
         }
         let captured = self.capture_cabin_frame_this_turn();
@@ -4078,7 +4116,6 @@ impl Cabin {
                         self.chat_job_thread = origin;
                     }
                 } else {
-                    self.chat_job_thread = None;
                     self.kick_model();
                 }
             }
@@ -4086,10 +4123,8 @@ impl Cabin {
                 self.running = false;
                 self.imagine_last = url.clone();
                 self.status = "Imagine ready".into();
-                self.messages.push(Msg {
-                    role: "assistant".into(),
-                    content: format!("IMAGINE: {url}"),
-                });
+                self.push_bound_msg("assistant", format!("IMAGINE: {url}"));
+                self.chat_job_thread = None;
                 self.persist();
             }
             Ok(JobOut::Voice(t)) => {
@@ -4248,12 +4283,13 @@ impl Cabin {
 
     fn run_connector(&mut self, id: &str, tool: &str, args: &str) {
         if id != "github" {
-            self.messages.push(Msg {
-                role: "user".into(),
-                content: format!(
+            self.push_bound_msg(
+                "user",
+                format!(
                     "CONNECTOR_RESULT (facts only):\n{id} {tool} — not wired. GitHub is the only live connector."
                 ),
-            });
+            );
+            self.persist();
             return;
         }
         if self.running {
@@ -4297,7 +4333,7 @@ impl Cabin {
             video_audio: self.imagine_video_audio,
         });
         self.running = true;
-        self.chat_job_thread = None;
+        self.chat_job_thread = Some(self.visible_thread_id());
         self.status = match self.imagine_kind {
             ImagineKind::Image => "Imagining…".into(),
             ImagineKind::Video => "Imagining storyboard still…".into(),
@@ -4323,11 +4359,11 @@ impl Cabin {
             return;
         }
         let oauth = secrets::access_token(&self.secrets);
-        let speech = auth_bearer(&self.cfg.api_key, &oauth);
+        let speech = self.bearer();
         let has_local = first_bin(TRANSCRIBERS).is_some();
         let route = hey_grok_route(
             realtime_can_connect(&self.cfg.api_key),
-            speech.as_ref().is_some_and(|s| !s.is_empty()),
+            !speech.is_empty(),
             has_local,
         );
         if self.voice_sock.is_none() {
@@ -4555,10 +4591,7 @@ impl Cabin {
         } else {
             "verify fail".into()
         };
-        self.messages.push(Msg {
-            role: "user".into(),
-            content: format!("VERIFY_RESULT:\n{}", v.detail),
-        });
+        self.push_bound_msg("user", format!("VERIFY_RESULT:\n{}", v.detail));
         if v.ok {
             if let Some(s) = self.skill_list.iter_mut().find(|s| s.name == self.skill_name) {
                 s.runs = bump_skill_run(s.runs);
@@ -4604,9 +4637,8 @@ impl Cabin {
         self.status = "Recipe replay".into();
     }
 
-    fn speak_reply(&self, text: &str) {
-        let key = auth_bearer(&self.cfg.api_key, &secrets::access_token(&self.secrets))
-            .unwrap_or_default();
+    fn speak_reply(&mut self, text: &str) {
+        let key = self.bearer();
         let text = text.to_string();
         std::thread::spawn(move || {
             let Ok(bytes) = grok_tts(&key, &text) else {
