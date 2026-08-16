@@ -1,5 +1,5 @@
 use grokhub_core::{
-    clip_image_args, computer_cmd_line, computer_drive, jpeg_data_url, lock_blocks_hands,
+    clip_image_args, computer_cmd_line, computer_drive, hands_blocked_by_lock, jpeg_data_url,
     parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse, pcm_from_capture,
     picker_args, take_text_body, AtspiRow, ComputerDrive, ComputerOp, RECORDERS, TRANSCRIBERS,
 };
@@ -136,19 +136,6 @@ fn lock_titles() -> Vec<String> {
     collect_rows().into_iter().map(|r| r.name).collect()
 }
 
-fn pointer_blocked(op: &ComputerOp) -> bool {
-    match op {
-        ComputerOp::WaitFor { .. } => false,
-        ComputerOp::Click { .. }
-        | ComputerOp::DoubleClick { .. }
-        | ComputerOp::Move { .. }
-        | ComputerOp::Type { .. }
-        | ComputerOp::Key { .. }
-        | ComputerOp::Scroll { .. }
-        | ComputerOp::Act { .. } => true,
-    }
-}
-
 fn act_click(name: &str) -> Result<(i32, i32), String> {
     let rows = collect_rows();
     if let Some(r) = named_row(&rows, name) {
@@ -219,7 +206,7 @@ pub fn run_computer_op(op: &ComputerOp) -> String {
     let line = computer_cmd_line(op);
     let titles = lock_titles();
     let title_refs: Vec<&str> = titles.iter().map(|s| s.as_str()).collect();
-    if pointer_blocked(op) && lock_blocks_hands(&title_refs) {
+    if hands_blocked_by_lock(op, &title_refs) {
         return hands_receipt(&line, started, false, "blocked: lock screen");
     }
     match computer_drive(op) {
