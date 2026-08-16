@@ -282,11 +282,15 @@ pub fn night_check_command(check_command: &str) -> Option<&str> {
 }
 
 pub fn night_check_exit_code(output: &str) -> i32 {
-    if output.contains("exit 0") {
-        0
-    } else {
-        1
-    }
+    let line = match output.find("\nexit ") {
+        Some(idx) => &output[idx + 1..],
+        None => output.trim_start(),
+    };
+    let Some(rest) = line.strip_prefix("exit ") else {
+        return 1;
+    };
+    let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    num.parse().unwrap_or(1)
 }
 
 /// Host receipts wrap `$ cmd` / `exit N`. Only the command stdout gates skip-on-empty.
@@ -330,6 +334,12 @@ mod tests {
         assert_eq!(night_check_command("test -f /tmp/ready"), Some("test -f /tmp/ready"));
         assert_eq!(night_check_exit_code("$ cmd\nexit 0\n"), 0);
         assert_eq!(night_check_exit_code("$ cmd\nexit 1\n"), 1);
+        assert_eq!(
+            night_check_exit_code("$ cmd\nwould exit 0 if clean\nexit 1 · 4ms\n"),
+            1,
+            "stdout mentioning exit 0 must not open the night gate"
+        );
+        assert_eq!(night_check_exit_code("$ cmd\nexit 0 · 3ms\n"), 0);
         assert!(skip_automation("ready", night_check_exit_code("exit 1")));
         assert!(!skip_automation("ready", night_check_exit_code("exit 0")));
         assert_eq!(night_check_stdout("$ cmd\nexit 0 · 3ms\n"), "");
