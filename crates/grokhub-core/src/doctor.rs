@@ -55,6 +55,13 @@ pub fn doctor_extras(last_receipt_ok: Option<bool>, skill_count: usize) -> Vec<D
     out
 }
 
+pub fn doctor_hands_line(driver: &str) -> DoctorLine {
+    DoctorLine {
+        ok: driver != "missing",
+        text: format!("hands {driver}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,5 +81,9 @@ mod tests {
         let extra = doctor_extras(Some(false), 3);
         assert!(!doctor_ok(&extra));
         assert!(extra[1].text.contains("3 skills"));
+        let hands = doctor_hands_line("ydotool");
+        assert!(hands.ok);
+        assert!(hands.text.contains("ydotool"));
+        assert!(!doctor_hands_line("missing").ok);
     }
 }
