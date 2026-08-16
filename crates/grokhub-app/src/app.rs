@@ -8055,10 +8055,10 @@ mod tests {
     #[test]
     fn thought_uses_live_theme_tokens() {
         let src = include_str!("app.rs");
-        let start = src.find("ChatKind::Thought").expect("thought");
-        let slice = &src[start..start + 900];
-        assert!(slice.contains("muted()"), "{slice}");
-        assert!(slice.contains("subtle()"), "{slice}");
+        let start = src.find("ChatKind::Thought =>").expect("thought");
+        let slice = &src[start..start + 1600];
+        assert!(slice.contains("theme::muted()"), "{slice}");
+        assert!(slice.contains("theme::subtle()"), "{slice}");
         assert!(!slice.contains("theme::MUTED"));
         assert!(!slice.contains("theme::SUBTLE"));
     }
@@ -8066,9 +8066,11 @@ mod tests {
     #[test]
     fn composer_stack_drops_approve_slots() {
         let src = include_str!("app.rs");
-        assert!(!src.contains("SkillApprove"));
-        assert!(!src.contains("SaveAsSkill"));
-        assert!(!src.contains("HostPlan"));
+        let impl_end = src.find("#[cfg(test)]").unwrap_or(src.len());
+        let impl_src = &src[..impl_end];
+        assert!(!impl_src.contains("SkillApprove"));
+        assert!(!impl_src.contains("SaveAsSkill"));
+        assert!(!impl_src.contains("HostPlan"));
         let order = super::composer_stack_order();
         assert_eq!(
             order,
