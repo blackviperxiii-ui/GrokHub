@@ -7,6 +7,7 @@ pub mod automation;
 pub mod chat;
 pub mod chat_bubble;
 pub mod chat_job;
+pub mod capture;
 pub mod chat_view;
 pub mod chips;
 pub mod connector;
@@ -92,6 +93,11 @@ pub use chips::{
     QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
 };
 pub use doctor::{doctor_extras, doctor_lines, doctor_ok, DoctorLine};
+pub use capture::{
+    capture_kinds, ffmpeg_webcam_args, ffmpeg_x11_args, frame_is_blank, gnome_shell_screenshot_args,
+    infer_wayland_display, luma_mean_var, parse_xdpy_size, parse_xrandr_size, session_is_wayland,
+    x11_grab_size, CaptureKind,
+};
 pub use frame::{encode_b64, frame_bytes, jpeg_data_url, FrameGet, PresenceFrame};
 pub use host_plan::{
     approved_cmds, explain_host_risk, host_risk, move_step, parse_host_plan, plan_from_text,

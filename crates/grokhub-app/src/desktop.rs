@@ -1,8 +1,10 @@
 use grokhub_core::{
-    clip_image_args, computer_cmd_line, computer_drive, hands_blocked_by_lock, jpeg_data_url,
-    live_pcm_argv, live_pcm_frame_bytes, parse_atspi_line, parse_picker_stdout, parse_wmctrl_line,
-    parse_xdotool_mouse, pcm_from_capture, picker_args, take_text_body, AtspiRow, ComputerDrive,
-    ComputerOp, RECORDERS, TRANSCRIBERS,
+    capture_kinds, clip_image_args, computer_cmd_line, computer_drive, ffmpeg_webcam_args,
+    ffmpeg_x11_args, frame_is_blank, gnome_shell_screenshot_args, hands_blocked_by_lock,
+    infer_wayland_display, jpeg_data_url, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var,
+    parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse, pcm_from_capture,
+    picker_args, session_is_wayland, take_text_body, x11_grab_size, AtspiRow, CaptureKind,
+    ComputerDrive, ComputerOp, RECORDERS, TRANSCRIBERS,
 };
 use image::GenericImageView;
 use std::io::{Read, Write};
@@ -264,33 +266,196 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
     }
 }
 
+const CAPTURE_BINS: &[&str] = &[
+    "grim",
+    "gnome-screenshot",
+    "spectacle",
+    "gdbus",
+    "maim",
+    "scrot",
+    "import",
+    "ffmpeg",
+];
+
+fn pin_wayland_for_capture() {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return;
+    }
+    let runtime = std::env::var("XDG_RUNTIME_DIR").ok();
+    if let Some(name) = infer_wayland_display(None, runtime.as_deref()) {
+        std::env::set_var("WAYLAND_DISPLAY", name);
+    }
+}
+
+fn x11_size() -> (u32, u32) {
+    let xdpy = Command::new("xdpyinfo")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok());
+    let xrandr = Command::new("xrandr")
+        .arg("-q")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok());
+    x11_grab_size(xdpy.as_deref(), xrandr.as_deref())
+}
+
+fn run_capture_kind(kind: CaptureKind, dest: &Path) -> Result<PathBuf, String> {
+    let jpg = dest.to_path_buf();
+    let png = dest.with_extension("png");
+    match kind {
+        CaptureKind::Grim => {
+            let p = png.to_string_lossy().to_string();
+            run_ok("grim", &[&p])?;
+            Ok(png)
+        }
+        CaptureKind::GnomeScreenshot => {
+            let p = png.to_string_lossy().to_string();
+            run_ok("gnome-screenshot", &["-f", &p])?;
+            Ok(png)
+        }
+        CaptureKind::Spectacle => {
+            let p = png.to_string_lossy().to_string();
+            run_ok("spectacle", &["-b", "-n", "-o", &p])?;
+            Ok(png)
+        }
+        CaptureKind::GnomeShell => {
+            let p = png.to_string_lossy().to_string();
+            let args = gnome_shell_screenshot_args(&p);
+            let st = Command::new("gdbus")
+                .args(&args)
+                .status()
+                .map_err(|e| e.to_string())?;
+            if !st.success() {
+                return Err("gnome-shell screenshot failed".into());
+            }
+            Ok(png)
+        }
+        CaptureKind::Maim => {
+            let p = png.to_string_lossy().to_string();
+            run_ok("maim", &[&p])?;
+            Ok(png)
+        }
+        CaptureKind::Scrot => {
+            let p = jpg.to_string_lossy().to_string();
+            run_ok("scrot", &["-o", &p])?;
+            Ok(jpg)
+        }
+        CaptureKind::Import => {
+            let p = png.to_string_lossy().to_string();
+            run_ok("import", &["-window", "root", &p])?;
+            Ok(png)
+        }
+        CaptureKind::FfmpegX11 => {
+            let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
+            let (w, h) = x11_size();
+            let p = jpg.to_string_lossy().to_string();
+            let args = ffmpeg_x11_args(&display, w, h, &p);
+            let st = Command::new("ffmpeg")
+                .args(&args)
+                .status()
+                .map_err(|e| e.to_string())?;
+            if !st.success() {
+                return Err("ffmpeg x11grab failed".into());
+            }
+            Ok(jpg)
+        }
+    }
+}
+
+fn image_file_to_jpeg(path: &Path) -> Result<Vec<u8>, String> {
+    let img = image::open(path).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    let mut cur = std::io::Cursor::new(&mut buf);
+    img.write_to(&mut cur, image::ImageFormat::Jpeg)
+        .map_err(|e| e.to_string())?;
+    if buf.len() < 32 {
+        return Err("empty frame".into());
+    }
+    Ok(buf)
+}
+
+pub fn frame_bytes_are_blank(bytes: &[u8]) -> bool {
+    let Ok(img) = image::load_from_memory(bytes) else {
+        return false;
+    };
+    let rgb = img.to_rgb8();
+    let w = rgb.width().max(1);
+    let h = rgb.height().max(1);
+    let step_x = (w / 32).max(1);
+    let step_y = (h / 32).max(1);
+    let mut samples = Vec::new();
+    for y in (0..h).step_by(step_y as usize) {
+        for x in (0..w).step_by(step_x as usize) {
+            let p = rgb.get_pixel(x, y);
+            samples.push([p[0], p[1], p[2]]);
+        }
+    }
+    let (mean, var) = luma_mean_var(&samples);
+    frame_is_blank(mean, var)
+}
+
 pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let dest = path.to_string_lossy().to_string();
-    let ok = if which("grim") {
-        Command::new("grim").arg(&dest).status().map(|s| s.success()).unwrap_or(false)
-    } else if which("ffmpeg") && std::env::var("DISPLAY").is_ok() {
-        let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
-        Command::new("ffmpeg")
-            .args([
-                "-y", "-hide_banner", "-loglevel", "error",
-                "-f", "x11grab", "-video_size", "1280x720", "-i", &display,
-                "-frames:v", "1", "-q:v", "5", &dest,
-            ])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    } else if which("scrot") {
-        Command::new("scrot").args(["-o", &dest]).status().map(|s| s.success()).unwrap_or(false)
-    } else {
-        false
-    };
-    if !ok {
-        return Err("no grim/ffmpeg/scrot for a desktop frame".into());
+    pin_wayland_for_capture();
+    let bins: Vec<&str> = CAPTURE_BINS.iter().copied().filter(|n| which(n)).collect();
+    let wayland = session_is_wayland(
+        std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+        std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+    );
+    let x11 = std::env::var_os("DISPLAY").is_some();
+    let plan = capture_kinds(&bins, wayland, x11);
+    if plan.is_empty() {
+        return Err("no grim/gnome-screenshot/ffmpeg/scrot for a desktop frame".into());
     }
-    std::fs::read(path).map_err(|e| e.to_string())
+    let mut last = "no desktop frame".to_string();
+    for kind in plan {
+        match run_capture_kind(kind, path) {
+            Ok(written) => {
+                let jpeg = if written
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|e| e == "jpg" || e == "jpeg")
+                {
+                    match std::fs::read(&written) {
+                        Ok(b) if b.len() >= 32 => b,
+                        Ok(_) => {
+                            last = format!("{kind:?} empty");
+                            let _ = std::fs::remove_file(&written);
+                            continue;
+                        }
+                        Err(e) => {
+                            last = e.to_string();
+                            let _ = std::fs::remove_file(&written);
+                            continue;
+                        }
+                    }
+                } else {
+                    match image_file_to_jpeg(&written) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            last = e;
+                            let _ = std::fs::remove_file(&written);
+                            continue;
+                        }
+                    }
+                };
+                if written != path {
+                    let _ = std::fs::remove_file(&written);
+                }
+                if frame_bytes_are_blank(&jpeg) {
+                    last = format!("{kind:?} was a black frame");
+                    continue;
+                }
+                let _ = std::fs::write(path, &jpeg);
+                return Ok(jpeg);
+            }
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
 }
 
 pub fn capture_data_url() -> Result<String, String> {
@@ -529,22 +694,9 @@ pub fn capture_webcam() -> Result<String, String> {
     }
     let path = std::env::temp_dir().join("grokhub-cam.jpg");
     let dest = path.to_string_lossy().to_string();
+    let args = ffmpeg_webcam_args("/dev/video0", &dest);
     let ok = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "v4l2",
-            "-i",
-            "/dev/video0",
-            "-frames:v",
-            "1",
-            "-q:v",
-            "6",
-            &dest,
-        ])
+        .args(&args)
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
@@ -555,6 +707,9 @@ pub fn capture_webcam() -> Result<String, String> {
     let _ = std::fs::remove_file(&path);
     if bytes.len() < 32 {
         return Err("empty webcam frame".into());
+    }
+    if frame_bytes_are_blank(&bytes) {
+        return Err("webcam frame was black".into());
     }
     Ok(jpeg_data_url(&bytes))
 }
@@ -689,6 +844,22 @@ mod tests {
         assert!(first_bin(&["definitely-not-a-bin-grokhub"]).is_none());
         let a = grokhub_core::live_pcm_argv("arecord").unwrap();
         assert!(a.iter().any(|x| *x == "raw"));
+    }
+
+    #[test]
+    fn black_jpeg_is_a_blank_frame() {
+        let black = image::RgbImage::from_pixel(24, 24, image::Rgb([0, 0, 0]));
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageRgb8(black)
+            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+            .unwrap();
+        assert!(frame_bytes_are_blank(&buf));
+        let color = image::RgbImage::from_pixel(24, 24, image::Rgb([80, 140, 200]));
+        buf.clear();
+        image::DynamicImage::ImageRgb8(color)
+            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+            .unwrap();
+        assert!(!frame_bytes_are_blank(&buf));
     }
 
     #[test]
