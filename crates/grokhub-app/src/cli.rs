@@ -45,5 +45,11 @@ mod tests {
         assert_eq!(parse_args(&args(&["grokhub", "--update"])), Launch::Update);
         assert_eq!(parse_args(&args(&["grokhub", "--oauth"])), Launch::Oauth);
         assert_eq!(parse_args(&args(&["grokhub", "-V"])), Launch::Version);
+        assert_eq!(parse_args(&args(&["grokhub", "--version"])), Launch::Version);
+    }
+
+    #[test]
+    fn cabin_reports_2_0_5() {
+        assert_eq!(env!("CARGO_PKG_VERSION"), "2.0.5");
     }
 }
