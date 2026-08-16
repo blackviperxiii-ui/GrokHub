@@ -41,6 +41,7 @@ use grokhub_core::{
     match_skill, mode_from_chip_value, model_for_mode, move_step, nav_from_chip_value,
     chat_attach_status, imagine_ref_status, needs_auth_banner, next_chat_image, next_goal_prompt,
     is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
+    bubble_max_width, bubble_wrap_width, BUBBLE_PAD_X, BUBBLE_PAD_Y, BUBBLE_RADIUS,
     plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
     parse_computer_cmd_loose, should_attach_hands_frame, user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
@@ -403,31 +404,53 @@ fn listen_turn(api_key: &str) -> String {
     }
 }
 
+fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool) -> egui::Response {
+    let avail = ui.available_width();
+    let wrap = bubble_wrap_width(avail, BUBBLE_PAD_X);
+    let content = crate::markdown::measure_text(ui, body, wrap);
+    let inner_w = content.x.max(1.0).min(wrap);
+    let fill = if user {
+        crate::theme::bubble_user()
+    } else {
+        crate::theme::bubble_assistant()
+    };
+    let frame = egui::Frame::none()
+        .fill(fill)
+        .rounding(BUBBLE_RADIUS)
+        .inner_margin(egui::Margin::symmetric(BUBBLE_PAD_X, BUBBLE_PAD_Y));
+    let mut resp = None;
+    let paint = |ui: &mut egui::Ui| {
+        ui.set_max_width(bubble_max_width(avail));
+        resp = Some(
+            frame
+                .show(ui, |ui| {
+                    ui.set_width(inner_w);
+                    ui.set_max_width(wrap);
+                    if markdown {
+                        crate::markdown::show(ui, body);
+                    } else {
+                        ui.label(RichText::new(body).color(crate::theme::fg()));
+                    }
+                })
+                .response,
+        );
+    };
+    if user {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), paint);
+    } else {
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), paint);
+    }
+    resp.expect("speech bubble")
+}
+
 fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, idx: usize, thought_open: bool) {
-    let bubble_w = crate::markdown::bubble_width(ui.available_width());
+    let bubble_w = bubble_max_width(ui.available_width());
     match block.kind {
         ChatKind::User => {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                egui::Frame::none()
-                    .fill(crate::theme::BUBBLE_USER)
-                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
-                    .rounding(12.0)
-                    .inner_margin(egui::Margin::symmetric(14.0, 10.0))
-                    .show(ui, |ui| {
-                        ui.set_width(bubble_w);
-                        ui.label(RichText::new(&block.body).color(crate::theme::FG));
-                    });
-            });
+            let _ = paint_speech_bubble(ui, &block.body, true, false);
         }
         ChatKind::Assistant => {
-            ui.allocate_ui_with_layout(
-                egui::vec2(bubble_w, 0.0),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.set_max_width(bubble_w);
-                    crate::markdown::show(ui, &block.body);
-                },
-            );
+            let _ = paint_speech_bubble(ui, &block.body, false, true);
         }
         ChatKind::Thought => {
             egui::CollapsingHeader::new(
@@ -449,7 +472,7 @@ fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, idx: usize, thought_ope
         }
         ChatKind::Tool => {
             egui::Frame::none()
-                .fill(crate::theme::PANEL)
+                .fill(crate::theme::panel())
                 .rounding(10.0)
                 .inner_margin(egui::Margin::symmetric(10.0, 6.0))
                 .show(ui, |ui| {
@@ -457,13 +480,13 @@ fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, idx: usize, thought_ope
                         ui.label(
                             RichText::new(&block.title)
                                 .size(crate::theme::FONT_META)
-                                .color(crate::theme::MUTED),
+                                .color(crate::theme::muted()),
                         );
                         ui.label(
                             RichText::new(&block.body)
                                 .size(crate::theme::FONT_META)
                                 .monospace()
-                                .color(crate::theme::FG),
+                                .color(crate::theme::fg()),
                         );
                     });
                 });
@@ -5560,7 +5583,7 @@ impl Cabin {
                                 i,
                                 self.running && last_thought == Some(i),
                             );
-                            ui.add_space(8.0);
+                            ui.add_space(10.0);
                         }
                         if self.running {
                             match views.last().map(|v| v.kind) {
@@ -7429,6 +7452,51 @@ mod tests {
             let [a, b] = range.sorted();
             assert_eq!(a.index, 0);
             assert_eq!(b.index, 7);
+        });
+    }
+
+    #[test]
+    fn short_user_bubble_hugs_the_text() {
+        with_fonts_ui(|ui| {
+            ui.allocate_ui(egui::vec2(800.0, 200.0), |ui| {
+                ui.set_max_width(800.0);
+                let resp = super::paint_speech_bubble(ui, "Hi", true, false);
+                assert!(
+                    resp.rect.width() < 200.0,
+                    "short bubble stretched to {}",
+                    resp.rect.width()
+                );
+                assert!(resp.rect.width() > 24.0);
+                assert!(resp.rect.height() > 20.0);
+            });
+        });
+    }
+
+    #[test]
+    fn long_assistant_bubble_wraps_instead_of_one_line() {
+        with_fonts_ui(|ui| {
+            ui.allocate_ui(egui::vec2(800.0, 400.0), |ui| {
+                ui.set_max_width(800.0);
+                let body = "word ".repeat(80);
+                let resp = super::paint_speech_bubble(ui, &body, false, true);
+                assert!(
+                    resp.rect.width() <= grokhub_core::bubble_max_width(800.0) + 8.0,
+                    "bubble {}",
+                    resp.rect.width()
+                );
+                assert!(
+                    resp.rect.height() > 48.0,
+                    "wrapped bubble height {}",
+                    resp.rect.height()
+                );
+            });
+        });
+    }
+
+    fn with_fonts_ui(mut add: impl FnMut(&mut egui::Ui)) {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| add(ui));
         });
     }
 
