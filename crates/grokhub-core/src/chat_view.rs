@@ -461,7 +461,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn thought_drops_attach_narration() {
         assert_eq!(
             scrub_thought("The user attached an image. They asked about chowder."),
