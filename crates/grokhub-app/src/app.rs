@@ -45,7 +45,8 @@ use grokhub_core::{
     apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible, ChatSendKind,
     bubble_max_width, bubble_wrap_width, BUBBLE_PAD_X, BUBBLE_PAD_Y, BUBBLE_RADIUS,
     plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
-    parse_computer_cmd_loose, should_attach_hands_frame, user_asks_desktop_hands,
+    parse_computer_cmd_loose, should_attach_hands_frame, user_asks_cabin_eyes,
+    user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
     parse_nl_automation, parse_recipe, parse_slash, parse_theme, passenger_label, pick_theme, plan_from_text, plan_room,
@@ -539,6 +540,7 @@ pub struct Cabin {
     save_skill: bool,
     last_frame_url: Option<String>,
     hands_attach: bool,
+    eyes_attach: bool,
     speak_next: bool,
     verify_ok_turn: bool,
     verify_chip: String,
@@ -806,6 +808,7 @@ impl Cabin {
             save_skill: false,
             last_frame_url: None,
             hands_attach: false,
+            eyes_attach: false,
             speak_next: false,
             verify_ok_turn: false,
             verify_chip: String::new(),
@@ -2358,6 +2361,9 @@ impl Cabin {
         if user_asks_desktop_hands(&text) {
             self.hands_attach = true;
         }
+        if self.cfg.cabin_eyes && user_asks_cabin_eyes(&text) {
+            self.eyes_attach = true;
+        }
         self.persist();
         self.kick_model();
     }
@@ -3560,13 +3566,21 @@ impl Cabin {
         if !sys.is_empty() {
             msgs.insert(0, ("system".into(), sys));
         }
+        if self.cfg.cabin_eyes && user_asks_cabin_eyes(last_user) {
+            self.eyes_attach = true;
+        }
+        if user_asks_desktop_hands(last_user) {
+            self.hands_attach = true;
+        }
         self.ensure_cabin_frame();
         let user_img = self.attach_url.take();
         self.attach_name = None;
         let fused = self.last_frame_url.clone().or_else(|| self.webcam_url.clone());
+        let eyes_turn = self.eyes_attach;
         let hands_turn = self.hands_attach;
+        self.eyes_attach = false;
         self.hands_attach = false;
-        let cabin = if should_attach_hands_frame(self.cfg.cabin_eyes, hands_turn, fused.is_some()) {
+        let cabin = if should_attach_hands_frame(eyes_turn, hands_turn, fused.is_some()) {
             fused
         } else {
             None
@@ -4172,7 +4186,7 @@ impl Cabin {
     }
 
     fn ensure_cabin_frame(&mut self) {
-        if !should_capture_before_chat(self.cfg.cabin_eyes) && !self.hands_attach {
+        if !should_capture_before_chat(self.eyes_attach || self.hands_attach) {
             return;
         }
         let rows = collect_rows();
@@ -6366,7 +6380,7 @@ impl Cabin {
                                                             if crate::cards::settings_toggle(ui, "Close to tray", "The cabin keeps working in the background.", &mut self.cfg.close_to_tray) {
                                                                 save = true;
                                                             }
-                                                            if crate::cards::settings_toggle(ui, "Cabin eyes", "Attach a room frame when seeing.", &mut self.cfg.cabin_eyes) {
+                                                            if crate::cards::settings_toggle(ui, "Cabin eyes", "Armed. They look only when you ask, or when hands need a frame.", &mut self.cfg.cabin_eyes) {
                                                                 save = true;
                                                             }
                                                         }
@@ -7499,7 +7513,7 @@ impl Cabin {
             .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
             let _ = crate::cards::page_header(ui, "Eyes", "");
-            ui.label(RichText::new("AT-SPI via pyatspi when present, else wmctrl + xdotool cursor. Lock screens are won’ts. Cabin eyes captures a frame on each chat send.").color(crate::theme::muted()));
+            ui.label(RichText::new("AT-SPI via pyatspi when present, else wmctrl + xdotool cursor. Lock screens are won’ts. Cabin eyes stay dormant until you ask them to look, or hands need a frame.").color(crate::theme::muted()));
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 if ui.button("Scan + frame").clicked() {

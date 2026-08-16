@@ -262,14 +262,14 @@ pub fn should_attach_cabin_frame(state: CabinEyesState, user_opt_in: bool) -> bo
     user_opt_in && matches!(state, CabinEyesState::Seeing)
 }
 
-pub fn should_capture_before_chat(user_opt_in: bool) -> bool {
-    user_opt_in
+pub fn should_capture_before_chat(triggered: bool) -> bool {
+    triggered
 }
 
-pub fn cabin_eyes_for_turn(user_opt_in: bool, has_frame: bool) -> CabinEyesState {
+pub fn cabin_eyes_for_turn(user_opt_in: bool, triggered: bool, has_frame: bool) -> CabinEyesState {
     if !user_opt_in {
         CabinEyesState::Off
-    } else if has_frame {
+    } else if triggered && has_frame {
         CabinEyesState::Seeing
     } else {
         CabinEyesState::Armed
@@ -528,11 +528,12 @@ mod tests {
         assert!(!should_attach_cabin_frame(CabinEyesState::Off, true));
         assert!(should_capture_before_chat(true));
         assert!(!should_capture_before_chat(false));
-        assert_eq!(cabin_eyes_for_turn(true, true), CabinEyesState::Seeing);
-        assert_eq!(cabin_eyes_for_turn(true, false), CabinEyesState::Armed);
-        assert_eq!(cabin_eyes_for_turn(false, true), CabinEyesState::Off);
-        assert!(should_attach_cabin_frame(cabin_eyes_for_turn(true, true), true));
-        assert!(!should_attach_cabin_frame(cabin_eyes_for_turn(true, false), true));
+        assert_eq!(cabin_eyes_for_turn(true, true, true), CabinEyesState::Seeing);
+        assert_eq!(cabin_eyes_for_turn(true, false, true), CabinEyesState::Armed);
+        assert_eq!(cabin_eyes_for_turn(true, true, false), CabinEyesState::Armed);
+        assert_eq!(cabin_eyes_for_turn(false, true, true), CabinEyesState::Off);
+        assert!(should_attach_cabin_frame(cabin_eyes_for_turn(true, true, true), true));
+        assert!(!should_attach_cabin_frame(cabin_eyes_for_turn(true, false, true), true));
         assert_eq!(stt_url(), "https://api.x.ai/v1/stt");
         assert_eq!(tts_url(), "https://api.x.ai/v1/tts");
         assert_eq!(
