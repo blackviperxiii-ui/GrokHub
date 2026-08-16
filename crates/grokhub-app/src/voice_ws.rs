@@ -1,6 +1,6 @@
 //! Duplex Grok Voice over `wss://api.x.ai/v1/realtime`. Console API key only.
 
-use crate::desktop::PcmSink;
+use crate::desktop::{LivePcm, PcmSink};
 use grokhub_core::{
     dedicated_voice_model, encode_input_audio_append, encode_session_update, parse_realtime_event,
     pcm_from_capture, realtime_can_connect, voice_session_url, VoiceEvent,
@@ -80,29 +80,56 @@ pub fn start(bearer: &str, model: &str) -> Result<VoiceSock, String> {
         let _ = tx.send(VoiceEvent::Open);
         let mic_sock = sock.clone();
         let mic_stop = stop_t.clone();
-        std::thread::spawn(move || loop {
-            if mic_stop.load(Ordering::SeqCst) {
-                break;
-            }
-            let chunks = crate::desktop::record_pcm_chunks();
-            if chunks.is_empty() {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                continue;
-            }
-            for chunk in chunks {
-                if mic_stop.load(Ordering::SeqCst) {
-                    return;
+        std::thread::spawn(move || {
+            if let Some(mut mic) = LivePcm::start() {
+                loop {
+                    if mic_stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let Some(pcm) = mic.read_frame() else {
+                        break;
+                    };
+                    let pcm = pcm_from_capture(&pcm);
+                    if pcm.is_empty() {
+                        continue;
+                    }
+                    let b64 =
+                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, pcm);
+                    if let Ok(mut g) = mic_sock.lock() {
+                        if g.send(Message::Text(encode_input_audio_append(&b64)))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
                 }
-                let pcm = pcm_from_capture(&chunk);
-                if pcm.is_empty() {
+                return;
+            }
+            loop {
+                if mic_stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                let chunks = crate::desktop::record_pcm_chunks();
+                if chunks.is_empty() {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
                     continue;
                 }
-                let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, pcm);
-                if let Ok(mut g) = mic_sock.lock() {
-                    if g.send(Message::Text(encode_input_audio_append(&b64)))
-                        .is_err()
-                    {
+                for chunk in chunks {
+                    if mic_stop.load(Ordering::SeqCst) {
                         return;
+                    }
+                    let pcm = pcm_from_capture(&chunk);
+                    if pcm.is_empty() {
+                        continue;
+                    }
+                    let b64 =
+                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, pcm);
+                    if let Ok(mut g) = mic_sock.lock() {
+                        if g.send(Message::Text(encode_input_audio_append(&b64)))
+                            .is_err()
+                        {
+                            return;
+                        }
                     }
                 }
             }

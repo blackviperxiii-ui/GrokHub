@@ -1,10 +1,10 @@
 use grokhub_core::{
-    clip_image_args, jpeg_data_url, parse_atspi_line, parse_picker_stdout, parse_wmctrl_line,
-    parse_xdotool_mouse, pcm_from_capture, picker_args, take_text_body, AtspiRow, RECORDERS,
-    TRANSCRIBERS,
+    clip_image_args, jpeg_data_url, live_pcm_argv, live_pcm_frame_bytes, parse_atspi_line,
+    parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse, pcm_from_capture, picker_args,
+    take_text_body, AtspiRow, RECORDERS, TRANSCRIBERS,
 };
 use image::GenericImageView;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
@@ -214,6 +214,39 @@ impl Drop for PcmSink {
             let _ = c.stdin.take();
             let _ = c.kill();
         }
+    }
+}
+
+/// Long-running raw PCM capture for duplex Voice. Kill on drop.
+pub struct LivePcm {
+    child: Child,
+}
+
+impl LivePcm {
+    pub fn start() -> Option<Self> {
+        let bin = first_bin(RECORDERS)?;
+        let args = live_pcm_argv(bin.as_str())?;
+        let child = Command::new(&bin)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        Some(Self { child })
+    }
+
+    pub fn read_frame(&mut self) -> Option<Vec<u8>> {
+        let stdout = self.child.stdout.as_mut()?;
+        let mut buf = vec![0u8; live_pcm_frame_bytes()];
+        stdout.read_exact(&mut buf).ok()?;
+        Some(buf)
+    }
+}
+
+impl Drop for LivePcm {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -462,6 +495,8 @@ mod tests {
         assert!(TRANSCRIBERS.contains(&"whisper"));
         assert!(PLAYERS.contains(&"ffplay"));
         assert!(first_bin(&["definitely-not-a-bin-grokhub"]).is_none());
+        let a = grokhub_core::live_pcm_argv("arecord").unwrap();
+        assert!(a.iter().any(|x| *x == "raw"));
     }
 
     #[test]
