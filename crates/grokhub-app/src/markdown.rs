@@ -107,7 +107,7 @@ fn inline(ui: &mut Ui, line: &str, wrap: f32) {
 mod tests {
     use super::{bubble_width, measure_text};
     use grokhub_core::{
-        bubble_max_width, bubble_outer_width, bubble_wrap_width, BUBBLE_MAX_PX, BUBBLE_PAD_X,
+        bubble_max_width, bubble_outer_width, bubble_wrap_width, BUBBLE_MAX_FRAC, BUBBLE_PAD_X,
     };
 
     #[test]
@@ -120,8 +120,10 @@ mod tests {
         let cap = bubble_width(800.0);
         assert!((cap - bubble_max_width(800.0)).abs() < 0.1);
         assert!(cap < 800.0);
-        assert!(cap > 500.0, "800px pane must wrap in the pane, not a 440 column");
-        assert!(cap <= BUBBLE_MAX_PX + 0.1);
+        assert!(
+            (cap - 800.0 * BUBBLE_MAX_FRAC).abs() < 0.1,
+            "800px pane must wrap at ~84%, got {cap}"
+        );
         assert!(bubble_width(100.0) <= 100.0);
         let hugged = bubble_outer_width(800.0, 40.0, BUBBLE_PAD_X);
         assert!(hugged < 120.0);
