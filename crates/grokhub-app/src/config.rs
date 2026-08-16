@@ -74,6 +74,8 @@ pub struct AppConfig {
     pub imagine_wall: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default)]
+    pub window: crate::window::WindowGeom,
 }
 
 fn default_autonomy() -> u8 {
@@ -138,6 +140,7 @@ impl Default for AppConfig {
             goal_pin: String::new(),
             imagine_wall: default_imagine_wall(),
             theme: default_theme(),
+            window: crate::window::WindowGeom::default(),
         }
     }
 }
@@ -312,6 +315,20 @@ mod tests {
         assert_eq!(loaded.autonomy, 1);
         assert!(loaded.imagine_wall);
         assert_eq!(loaded.theme, "dark");
+        let mut placed = AppConfig::default();
+        placed.window.x = Some(80.0);
+        placed.window.y = Some(40.0);
+        placed.window.w = 1280.0;
+        placed.window.h = 800.0;
+        save(&placed).expect("window save");
+        let loaded = load();
+        assert_eq!(loaded.window.x, Some(80.0));
+        assert_eq!(loaded.window.y, Some(40.0));
+        assert_eq!(loaded.window.w, 1280.0);
+        assert_eq!(loaded.window.h, 800.0);
+        placed.window.maximized = true;
+        save(&placed).expect("maximized save");
+        assert!(load().window.maximized);
         let mut themed = AppConfig::default();
         themed.theme = "system".into();
         save(&themed).expect("theme save");
