@@ -5592,10 +5592,9 @@ impl Cabin {
         let block = crate::theme::WORDMARK + greet_h + crate::theme::QUERY_MIN_H;
         let lift = ((ui.available_height() - block) * 0.5).clamp(24.0, 320.0);
         ui.add_space(lift);
-        let pane_w = crate::cards::composer_pill_w(ui.available_width(), ui.available_width());
-        ui.vertical_centered(|ui| {
+        let pane_w = crate::cards::composer_pill_w(ui.max_rect().width(), ui.max_rect().width());
+        ui.vertical_centered_justified(|ui| {
             ui.set_max_width(pane_w);
-            ui.set_min_width(pane_w);
             ui.label(
                 RichText::new("GrokHub")
                     .font(crate::theme::title_font(crate::theme::WORDMARK))
@@ -5737,13 +5736,12 @@ impl Cabin {
                 self.slash_filter_first = "";
             }
             ui.add_space(6.0);
-            ui.vertical_centered(|ui| {
+            ui.vertical_centered_justified(|ui| {
             let col_w = crate::cards::composer_pill_w(
                 ui.available_width(),
                 ui.available_width(),
             );
             ui.set_max_width(col_w);
-            ui.set_min_width(col_w);
             for slot in composer_stack_order() {
                 match slot {
                     ComposerStackSlot::AuthBanner
@@ -7779,6 +7777,10 @@ mod tests {
         assert!(
             cap < mark,
             "cap pane width before the wordmark shrink-wraps the column"
+        );
+        assert!(
+            home.contains("vertical_centered_justified"),
+            "justify the empty-home column so the pill fills the pane: {home}"
         );
         let stack = src.find("for slot in composer_stack_order()").expect("stack");
         let cap = &src[stack.saturating_sub(280)..stack];
