@@ -83,9 +83,8 @@ pub use chat::{
     should_failover_status, DEFAULT_MODEL, XAI_BASE,
 };
 pub use chat_view::{
-    assistant_prose, is_workload_user, merge_thinking, scrub_thought, strip_thinking, visible_chat,
-    ChatKind,
-    ChatView,
+    assistant_prose, is_workload_user, merge_thinking, quote_for_reply, scrub_thought, strip_thinking,
+    visible_chat, ChatKind, ChatView,
 };
 pub use chat_bubble::{
     bubble_max_width, bubble_outer_height, bubble_outer_width, bubble_wrap_width, clamp_row_width,
