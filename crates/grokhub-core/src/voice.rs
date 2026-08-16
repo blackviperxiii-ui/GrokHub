@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 
 use crate::chat::XAI_BASE;
+use crate::stream::StreamTokenKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceState {
@@ -83,6 +84,7 @@ pub enum VoiceEvent {
         text: String,
         final_: bool,
         role: VoiceRole,
+        replace: bool,
     },
     AudioOut { pcm_b64: String },
     AudioEnd,
@@ -159,7 +161,7 @@ pub fn encode_session_update() -> String {
             "audio": {
                 "input": {
                     "format": { "type": "audio/pcm", "rate": 24000 },
-                    "transcription": { "language_hint": "en" }
+                    "transcription": { "model": "grok-transcribe", "language_hint": "en" }
                 },
                 "output": { "format": { "type": "audio/pcm", "rate": 24000 } }
             }
@@ -181,8 +183,13 @@ pub fn parse_realtime_event(v: &Value) -> Option<VoiceEvent> {
                 .unwrap_or("")
                 .to_string(),
         }),
-        "response.audio.done" | "response.done" => Some(VoiceEvent::AudioEnd),
+        "response.audio.done" | "response.output_audio.done" | "response.done" => {
+            Some(VoiceEvent::AudioEnd)
+        }
         "response.audio_transcript.delta"
+        | "response.output_audio_transcript.delta"
+        | "response.text.delta"
+        | "response.output_text.delta"
         | "conversation.item.input_audio_transcription.delta" => Some(VoiceEvent::Transcript {
             text: parse_voice_event_text(v).unwrap_or_default(),
             final_: false,
@@ -191,8 +198,18 @@ pub fn parse_realtime_event(v: &Value) -> Option<VoiceEvent> {
             } else {
                 VoiceRole::User
             },
+            replace: false,
+        }),
+        "conversation.item.input_audio_transcription.updated" => Some(VoiceEvent::Transcript {
+            text: parse_voice_event_text(v).unwrap_or_default(),
+            final_: false,
+            role: VoiceRole::User,
+            replace: true,
         }),
         "response.audio_transcript.done"
+        | "response.output_audio_transcript.done"
+        | "response.text.done"
+        | "response.output_text.done"
         | "conversation.item.input_audio_transcription.completed" => Some(VoiceEvent::Transcript {
             text: parse_voice_event_text(v).unwrap_or_default(),
             final_: true,
@@ -201,6 +218,7 @@ pub fn parse_realtime_event(v: &Value) -> Option<VoiceEvent> {
             } else {
                 VoiceRole::User
             },
+            replace: true,
         }),
         "error" => Some(VoiceEvent::Error(
             v.get("error")
@@ -339,12 +357,36 @@ pub fn voice_log_role(ev: &VoiceEvent) -> Option<(&'static str, &str)> {
             text,
             final_: true,
             role,
+            ..
         } if !text.trim().is_empty() => {
             let role = match role {
                 VoiceRole::User => "user",
                 VoiceRole::Assistant => "assistant",
             };
             Some((role, text.as_str()))
+        }
+        _ => None,
+    }
+}
+
+pub fn voice_stream_token(ev: &VoiceEvent) -> Option<(&'static str, &str, StreamTokenKind)> {
+    match ev {
+        VoiceEvent::Transcript {
+            text,
+            final_,
+            role,
+            replace,
+        } if !text.trim().is_empty() => {
+            let role = match role {
+                VoiceRole::User => "user",
+                VoiceRole::Assistant => "assistant",
+            };
+            let kind = if *final_ || *replace {
+                StreamTokenKind::Replace
+            } else {
+                StreamTokenKind::Delta
+            };
+            Some((role, text.as_str(), kind))
         }
         _ => None,
     }
@@ -447,6 +489,7 @@ pub fn stt_multipart(wav: &[u8], filename: &str, boundary: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stream::{fold_stream_token, StreamTokenKind};
 
     #[test]
     fn hey_and_url() {
@@ -469,6 +512,7 @@ mod tests {
                 text: "hey grok".into(),
                 final_: true,
                 role: VoiceRole::User,
+                replace: true,
             }
         );
         assert_eq!(
@@ -622,6 +666,7 @@ mod tests {
                 role: VoiceRole::User,
                 text,
                 final_,
+                ..
             } => {
                 assert_eq!(text, "hey grok");
                 assert!(final_);
@@ -638,6 +683,7 @@ mod tests {
                 role: VoiceRole::Assistant,
                 text,
                 final_,
+                ..
             } => {
                 assert_eq!(text, "hello from grok");
                 assert!(final_);
@@ -648,6 +694,73 @@ mod tests {
         assert_eq!(voice_log_role(&asst), Some(("assistant", "hello from grok")));
         let sess = encode_session_update();
         assert!(sess.contains("language_hint") || sess.contains("\"en\""));
+        assert!(sess.contains("grok-transcribe"));
         assert!(!sess.to_ascii_lowercase().contains("host and computer tools"));
+    }
+
+    #[test]
+    fn streaming_tokens_use_xai_event_names() {
+        let live = parse_realtime_event(&serde_json::json!({
+            "type": "conversation.item.input_audio_transcription.updated",
+            "transcript": "hey gr"
+        }))
+        .unwrap();
+        match &live {
+            VoiceEvent::Transcript {
+                role: VoiceRole::User,
+                text,
+                final_,
+                replace,
+            } => {
+                assert_eq!(text, "hey gr");
+                assert!(!*final_);
+                assert!(*replace);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            voice_stream_token(&live),
+            Some(("user", "hey gr", StreamTokenKind::Replace))
+        );
+        assert!(voice_log_role(&live).is_none());
+        let token = parse_realtime_event(&serde_json::json!({
+            "type": "response.output_text.delta",
+            "delta": "Hel"
+        }))
+        .unwrap();
+        assert_eq!(
+            voice_stream_token(&token),
+            Some(("assistant", "Hel", StreamTokenKind::Delta))
+        );
+        let audio_tok = parse_realtime_event(&serde_json::json!({
+            "type": "response.output_audio_transcript.delta",
+            "delta": "lo"
+        }))
+        .unwrap();
+        assert_eq!(
+            voice_stream_token(&audio_tok),
+            Some(("assistant", "lo", StreamTokenKind::Delta))
+        );
+        let done = parse_realtime_event(&serde_json::json!({
+            "type": "response.output_audio_transcript.done",
+            "transcript": "Hello"
+        }))
+        .unwrap();
+        assert_eq!(
+            voice_stream_token(&done),
+            Some(("assistant", "Hello", StreamTokenKind::Replace))
+        );
+        assert_eq!(voice_log_role(&done), Some(("assistant", "Hello")));
+        let mut msgs = Vec::new();
+        if let Some((role, text, kind)) = voice_stream_token(&token) {
+            fold_stream_token(&mut msgs, role, text, kind);
+        }
+        if let Some((role, text, kind)) = voice_stream_token(&audio_tok) {
+            fold_stream_token(&mut msgs, role, text, kind);
+        }
+        if let Some((role, text, kind)) = voice_stream_token(&done) {
+            fold_stream_token(&mut msgs, role, text, kind);
+        }
+        assert_eq!(msgs, vec![("assistant".into(), "Hello".into())]);
     }
 }

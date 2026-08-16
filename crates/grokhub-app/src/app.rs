@@ -57,7 +57,8 @@ use grokhub_core::{
     top_habit_labels,
     unified_diff_cite, usage_line,
     transcribe_route, uid, update_cmds, overlay_update_begin, overlay_update_finish,
-    realtime_bearer, realtime_can_connect, voice_log_role, voice_transcript_sends_chat,
+    realtime_bearer, realtime_can_connect, voice_log_role, voice_stream_token, voice_transcript_sends_chat,
+    fold_stream_token, StreamTokenKind,
     update_wipes_config, voice_session_url, Automation, BoardCard,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ComputerOp, DeviceCodeStart, HeyGrokAction,
     HeyGrokRoute, HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
@@ -4022,17 +4023,26 @@ impl Cabin {
             .into();
             match ev {
                 VoiceEvent::Transcript { .. } => {
-                    if let Some((role, text)) = voice_log_role(&ev) {
+                    if let Some((role, text, kind)) = voice_stream_token(&ev) {
                         if voice_transcript_sends_chat(self.voice_sock.is_some()) {
-                            if role == "user" {
+                            if voice_log_role(&ev).is_some() && role == "user" {
                                 self.send_chat(text.to_string());
                             }
                         } else {
-                            self.messages.push(Msg {
-                                role: role.into(),
-                                content: text.to_string(),
-                            });
-                            self.persist();
+                            let mut pairs: Vec<(String, String)> = self
+                                .messages
+                                .iter()
+                                .map(|m| (m.role.clone(), m.content.clone()))
+                                .collect();
+                            fold_stream_token(&mut pairs, role, text, kind);
+                            self.messages = pairs
+                                .into_iter()
+                                .map(|(role, content)| Msg { role, content })
+                                .collect();
+                            if matches!(kind, StreamTokenKind::Replace) && voice_log_role(&ev).is_some()
+                            {
+                                self.persist();
+                            }
                         }
                     }
                 }
