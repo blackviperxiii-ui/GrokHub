@@ -30,9 +30,8 @@ pub fn parse_fast_topics(reply: &str) -> Vec<String> {
         return Vec::new();
     };
     let rest = line
-        .strip_prefix("GOAL:")
-        .or_else(|| line.strip_prefix("goal:"))
-        .or_else(|| line.strip_prefix("Goal:"))
+        .split_once(':')
+        .map(|(_, r)| r)
         .unwrap_or(line)
         .trim();
     if rest.is_empty() || looks_like_refusal(rest) {
@@ -300,6 +299,11 @@ mod tests {
         assert!(
             parse_fast_topics("Sure, I can help with that.").is_empty(),
             "filler without GOAL: is not a tab topic"
+        );
+        assert_eq!(
+            parse_fast_topics("gOaL: comics"),
+            vec!["comics".to_string()],
+            "GOAL: prefix is case-insensitive"
         );
         assert!(should_name_thread(false, 1));
         assert!(!should_name_thread(true, 4));

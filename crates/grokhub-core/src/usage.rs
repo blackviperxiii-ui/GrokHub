@@ -43,6 +43,10 @@ pub fn roll_usage_day(day: &mut UsageDay, today: &str) {
     if today.is_empty() || day.day == today {
         return;
     }
+    if day.day.is_empty() {
+        day.day = today.to_string();
+        return;
+    }
     *day = UsageDay {
         day: today.to_string(),
         ..Default::default()
@@ -78,5 +82,13 @@ mod tests {
         assert_eq!(d.messages, 0);
         assert_eq!(d.automation, 0);
         assert_eq!(d.day, "2026-08-15");
+        let mut unbound = UsageDay {
+            day: String::new(),
+            messages: 3,
+            ..Default::default()
+        };
+        roll_usage_day(&mut unbound, "2026-08-16");
+        assert_eq!(unbound.messages, 3, "first bind must not wipe early bumps");
+        assert_eq!(unbound.day, "2026-08-16");
     }
 }

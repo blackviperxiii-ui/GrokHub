@@ -370,6 +370,26 @@ mod tests {
         assert_eq!(skipped.run_count, 0);
         assert!(skipped.next_run.unwrap() > 1_000);
         assert!(due_automations(&[skipped], 1_000).is_empty());
+        let once = Automation {
+            id: "o1".into(),
+            name: "once".into(),
+            schedule: "once".into(),
+            time: "00:00".into(),
+            times: vec![],
+            instructions: "hello".into(),
+            heartbeat_every_min: 0,
+            check_command: "test -f /missing".into(),
+            enabled: true,
+            last_run: None,
+            next_run: Some(500),
+            run_count: 0,
+        };
+        let check_skip = mark_automation_skipped(once.clone(), 1_000, clock);
+        assert!(check_skip.enabled, "a gated skip must not disable once jobs");
+        assert_eq!(check_skip.run_count, 0);
+        let ran = mark_automation_ran(once, 1_000);
+        assert!(!ran.enabled);
+        assert_eq!(ran.run_count, 1);
         let monthly = Automation {
             id: "m1".into(),
             name: "month".into(),

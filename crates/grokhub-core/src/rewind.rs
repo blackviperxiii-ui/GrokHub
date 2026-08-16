@@ -33,7 +33,8 @@ fn rewind_sensitive(root: &str, home: &str) -> bool {
 }
 
 pub fn rewind_allowed(root: &str, home: &str) -> bool {
-    let r = normalize(root);
+    let expanded = crate::project::expand_project_root(root, Some(home));
+    let r = normalize(&expanded);
     let h = normalize(home);
     if r.is_empty() || r == "/" || r == h {
         return false;
@@ -109,5 +110,9 @@ mod tests {
         assert_eq!(kept[0].job_id, "j6");
         assert!(rewind_restore_matches("/home/j/proj", "/home/j/proj/"));
         assert!(!rewind_restore_matches("/home/j/proj-a", "/home/j/proj-b"));
+        assert!(
+            rewind_allowed("~/GrokHub-Work", "/home/jeremy"),
+            "settings may store a tilde-bound project"
+        );
     }
 }
