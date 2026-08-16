@@ -1,4 +1,6 @@
-use grokhub_core::{empty_chip_memory, ChipMemory, ImagineWall, LearningState, ProjectNode, UsageDay};
+use grokhub_core::{
+    empty_chip_memory, ChipMemory, ImagineWall, LearningState, ProjectNode, SuggestionStore, UsageDay,
+};
 use std::fs;
 
 use crate::config;
@@ -71,6 +73,20 @@ pub fn save_projects(nodes: &[ProjectNode]) -> Result<(), String> {
 pub fn save_chips(s: &ChipMemory) -> Result<(), String> {
     let body = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
     config::atomic_write(&chips_path(), body.as_bytes())
+}
+
+pub fn suggestions_path() -> std::path::PathBuf {
+    config::config_dir().join("suggestions.json")
+}
+
+pub fn load_suggestions() -> SuggestionStore {
+    let raw = fs::read_to_string(suggestions_path()).unwrap_or_default();
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+pub fn save_suggestions(s: &SuggestionStore) -> Result<(), String> {
+    let body = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
+    config::atomic_write(&suggestions_path(), body.as_bytes())
 }
 
 #[cfg(test)]
@@ -149,6 +165,34 @@ mod tests {
         save_projects(&[]).expect("empty");
         assert!(projects_path().exists());
         assert!(load_projects().is_empty());
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn suggestions_roundtrip() {
+        let _g = TEST_CONFIG_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("grokhub-suggest-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut s = SuggestionStore::default();
+        s.last_review_day = Some("2026-08-16".into());
+        s.last_review_ms = 9;
+        s.autos.push(grokhub_core::LearnedSuggestion {
+            kind: grokhub_core::SuggestionKind::Auto,
+            title: "Night wrap".into(),
+            body: "Close the day".into(),
+            seed: Some("every day at 21, say good night".into()),
+            name: None,
+            trigger: None,
+            instructions: None,
+            provider: None,
+            tool: None,
+        });
+        save_suggestions(&s).expect("save");
+        let loaded = load_suggestions();
+        assert_eq!(loaded.last_review_day.as_deref(), Some("2026-08-16"));
+        assert_eq!(loaded.autos[0].title, "Night wrap");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
