@@ -3,8 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-pub const HANDS_PACMAN: &str =
-    "pacman -S --needed ydotool xdotool grim wmctrl python-atspi";
+pub const HANDS_PACMAN: &str = "scripts/build-hands.sh";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandsDown {
@@ -17,6 +16,10 @@ pub enum HandsDown {
 pub fn extra_bin_dirs(home: Option<&str>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(h) = home.map(str::trim).filter(|s| !s.is_empty()) {
+        dirs.push(PathBuf::from(h).join(".local/lib/grokhub/bin"));
+    }
+    dirs.push(PathBuf::from("/usr/lib/grokhub/bin"));
+    if let Some(h) = home.map(str::trim).filter(|s| !s.is_empty()) {
         dirs.push(PathBuf::from(h).join(".local/bin"));
     }
     dirs.push(PathBuf::from("/usr/local/bin"));
@@ -24,7 +27,7 @@ pub fn extra_bin_dirs(home: Option<&str>) -> Vec<PathBuf> {
     dirs
 }
 
-/// Walk PATH plus `~/.local/bin` even when the GUI PATH is only `/usr/bin`.
+/// Walk PATH plus GrokHub sidecars and `~/.local/bin` even when the GUI PATH is only `/usr/bin`.
 pub fn resolve_bin_in(name: &str, path: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
     let name = name.trim();
     if name.is_empty() || name.contains('/') || name.contains('\\') {
@@ -79,7 +82,7 @@ pub fn hands_down_receipt(reason: HandsDown) -> &'static str {
     match reason {
         HandsDown::Ready => "hands ready",
         HandsDown::Missing => {
-            "ydotool/xdotool missing — install ydotool (Wayland) or xdotool (X11): pacman -S --needed ydotool xdotool grim wmctrl python-atspi. Include ~/.local/bin on PATH."
+            "ydotool/xdotool missing — run ./scripts/install.sh to build ydotool and grim into ~/.local/lib/grokhub/bin. X11 can use xdotool. Include ~/.local/lib/grokhub/bin and ~/.local/bin on PATH."
         }
         HandsDown::Uinput => {
             "uinput blocked — load the uinput module, add your user to the input group, then log out. Hands cannot drive the desk until /dev/uinput is writable."
@@ -143,6 +146,29 @@ mod tests {
     }
 
     #[test]
+    fn sidecar_prefix_wins_over_local_bin() {
+        let root = std::env::temp_dir().join(format!("grokhub-hands-prefix-{}", std::process::id()));
+        let sidecar = root.join(".local/lib/grokhub/bin");
+        let local = root.join(".local/bin");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&sidecar).unwrap();
+        fs::create_dir_all(&local).unwrap();
+        let side_bin = sidecar.join("ydotool");
+        let local_bin = local.join("ydotool");
+        fs::write(&side_bin, "#!/bin/sh\n").unwrap();
+        fs::write(&local_bin, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&side_bin, fs::Permissions::from_mode(0o755)).unwrap();
+            fs::set_permissions(&local_bin, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let found = resolve_bin_in("ydotool", Some("/usr/bin"), root.to_str());
+        assert_eq!(found.as_deref(), Some(side_bin.as_path()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn missing_uinput_daemon_receipts_are_distinct() {
         assert_eq!(
             diagnose_hands(false, false, None, None),
@@ -167,7 +193,7 @@ mod tests {
         let miss = hands_down_receipt(HandsDown::Missing);
         let uinput = hands_down_receipt(HandsDown::Uinput);
         let daemon = hands_down_receipt(HandsDown::Daemon);
-        assert!(miss.contains("pacman -S --needed ydotool"));
+        assert!(miss.contains("lib/grokhub/bin"));
         assert!(uinput.contains("uinput"));
         assert!(daemon.contains("ydotoold"));
         assert_ne!(miss, uinput);
@@ -178,26 +204,50 @@ mod tests {
         assert_eq!(hands_chip_label(HandsDown::Ready, "ydotool"), "ydotool");
         assert!(!hands_chip_live(HandsDown::Missing));
         assert!(hands_chip_live(HandsDown::Ready));
-        assert_eq!(HANDS_PACMAN, "pacman -S --needed ydotool xdotool grim wmctrl python-atspi");
+        assert_eq!(HANDS_PACMAN, "scripts/build-hands.sh");
+        let build = include_str!("../../../scripts/build-hands.sh");
+        assert!(
+            build.contains("v1.0.4") && build.contains("lib/grokhub/bin"),
+            "build-hands.sh must pin ydotool and install sidecars"
+        );
+        let dirs = extra_bin_dirs(Some("/home/cabin"));
+        assert!(
+            dirs[0].ends_with(".local/lib/grokhub/bin"),
+            "sidecar prefix must be first: {dirs:?}"
+        );
+        assert_eq!(dirs[1], PathBuf::from("/usr/lib/grokhub/bin"));
         let sh = include_str!("../../../scripts/install.sh");
         assert!(
-            sh.contains("sudo pacman -S --needed") && sh.contains("usermod -aG input"),
-            "clone install must sudo-pull hands with the cabin"
+            sh.contains("build-hands.sh") && sh.contains("usermod -aG input"),
+            "clone install must build sidecars and keep the input group"
+        );
+        assert!(
+            !sh.contains("sudo pacman -S --needed ydotool"),
+            "clone install must not hard-require pacman ydotool"
         );
         let srcinfo = include_str!("../../../packaging/aur/.SRCINFO");
         assert!(
-            srcinfo.contains("depends = ydotool") && srcinfo.contains("depends = grim"),
-            "AUR metadata must pull hands with grokhub: {srcinfo}"
+            srcinfo.contains("optdepends = ydotool")
+                && srcinfo.contains("optdepends = grim")
+                && srcinfo.contains("makedepends = cmake")
+                && !srcinfo.contains("depends = ydotool"),
+            "AUR metadata must treat hands as sidecars: {srcinfo}"
         );
         let local_pkg = include_str!("../../../packaging/PKGBUILD");
         assert!(
-            local_pkg.contains("ydotool") && local_pkg.contains("python-atspi"),
-            "clone makepkg must depend on hands"
+            local_pkg.contains("build-hands.sh")
+                && local_pkg.contains("cmake")
+                && local_pkg.contains("python-atspi"),
+            "clone makepkg must build sidecars"
         );
         let bundle = include_str!("../../../scripts/make-release-bundle.sh");
         assert!(
-            bundle.contains("sudo pacman -S --needed") && bundle.contains("ydotoold.service"),
-            "release tarball install must ship the unit and pacman hands line"
+            bundle.contains("build-hands.sh") && bundle.contains("ydotoold.service"),
+            "release tarball install must ship the unit and build sidecars on the machine"
+        );
+        assert!(
+            !bundle.contains("sudo pacman -S --needed ydotool"),
+            "release tarball must not hard-require pacman ydotool"
         );
         assert_eq!(
             ydotool_socket_path(None, Some("/run/user/1000")),

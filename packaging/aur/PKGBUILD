@@ -1,14 +1,21 @@
 # Maintainer: GrokHub contributors
 pkgname=grokhub
 pkgver=2.0.0
-pkgrel=2
+pkgrel=3
 pkgdesc="Grok-native Linux cabin — Rust binary, no Electron"
 arch=('x86_64')
 url="https://github.com/blackviperxiii-ui/Grok-Hub"
 license=('MIT')
-depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme' 'python' 'ydotool' 'xdotool' 'grim' 'wmctrl' 'python-atspi')
-optdepends=('slurp: region capture')
-makedepends=('cargo' 'rust' 'pkgconf' 'git')
+depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme' 'python')
+optdepends=(
+  'ydotool: system ydotool if the sidecar build is skipped'
+  'grim: system grim if the sidecar build is skipped'
+  'xdotool: X11 pointer'
+  'wmctrl: X11 window list'
+  'python-atspi: windshield fallback'
+  'slurp: region capture'
+)
+makedepends=('cargo' 'rust' 'pkgconf' 'git' 'cmake' 'meson' 'ninja' 'wayland' 'wayland-protocols' 'pixman' 'libpng')
 options=('!debug')
 install=grokhub.install
 source=("${pkgname}::git+https://github.com/blackviperxiii-ui/Grok-Hub.git#tag=v${pkgver}")
@@ -30,6 +37,8 @@ package() {
   if [[ -d packaging/icons/hicolor ]]; then
     cp -a packaging/icons/hicolor/. "${pkgdir}/usr/share/icons/hicolor/"
   fi
+  PREFIX="${pkgdir}/usr" HANDS_FORCE=1 HANDS_SRC="${srcdir}/hands-src" \
+    bash scripts/build-hands.sh
   install -Dm644 packaging/systemd/grokhub-hub.service \
     "${pkgdir}/usr/lib/systemd/user/grokhub-hub.service"
   install -Dm644 packaging/systemd/ydotoold.service \
