@@ -27,7 +27,7 @@ use grokhub_core::{
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     imagine_aspect_label, imagine_aspect_name, imagine_style_label, imagine_video_dur_label,
-    imagine_video_res_label,
+    imagine_video_res_label, last_imagine_receipt,
     extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
     forget_topic, greet_from_last_job, has_auth, has_goal_complete, has_verify_ok, hey_grok_on_press,
     import_memory_file, insight_pin, is_openclaw_workspace,
@@ -627,7 +627,7 @@ impl Cabin {
             .iter()
             .position(|t| t.id == cfg.current_thread)
             .unwrap_or(0);
-        let messages = threads
+        let messages: Vec<Msg> = threads
             .get(thread_idx)
             .map(|t| {
                 t.messages
@@ -638,6 +638,8 @@ impl Cabin {
                     })
                     .collect()
             })
+            .unwrap_or_default();
+        let imagine_last = last_imagine_receipt(messages.iter().map(|m| m.content.as_str()))
             .unwrap_or_default();
         let mut cfg = cfg;
         if cfg.source_dir.trim().is_empty() {
@@ -682,7 +684,7 @@ impl Cabin {
             board: config::load_board(),
             board_title: String::new(),
             imagine_prompt: String::new(),
-            imagine_last: String::new(),
+            imagine_last,
             skill_name: String::new(),
             skill_body: String::new(),
             skill_list: skills::list_skills(),
@@ -1783,6 +1785,8 @@ impl Cabin {
                     .collect()
             })
             .unwrap_or_default();
+        self.imagine_last =
+            last_imagine_receipt(self.messages.iter().map(|m| m.content.as_str())).unwrap_or_default();
         self.cfg.goal_pin = self
             .threads
             .get(self.thread_idx)
@@ -1803,6 +1807,7 @@ impl Cabin {
         self.threads.push(ChatThread::new(title, scratch));
         self.thread_idx = self.threads.len() - 1;
         self.messages.clear();
+        self.imagine_last.clear();
         self.cfg.goal_pin.clear();
         self.goal_step = 0;
         self.status = if scratch {
@@ -1869,6 +1874,7 @@ impl Cabin {
                 self.threads.push(ChatThread::new("Chat", false));
                 self.thread_idx = 0;
                 self.messages.clear();
+                self.imagine_last.clear();
                 self.cfg.goal_pin.clear();
                 self.goal_step = 0;
                 self.status = "Chat deleted".into();
@@ -1890,6 +1896,10 @@ impl Cabin {
                                 .collect()
                         })
                         .unwrap_or_default();
+                    self.imagine_last = last_imagine_receipt(
+                        self.messages.iter().map(|m| m.content.as_str()),
+                    )
+                    .unwrap_or_default();
                     self.cfg.goal_pin = self
                         .threads
                         .get(next)

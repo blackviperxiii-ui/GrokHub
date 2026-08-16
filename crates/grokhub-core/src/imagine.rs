@@ -172,6 +172,34 @@ pub fn extract_imagine_prompt(text: &str) -> Option<String> {
     None
 }
 
+/// Filesystem path (or URL) from an `IMAGINE: …` receipt. Not a prompt verb.
+pub fn imagine_receipt_path(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("IMAGINE:") else {
+            continue;
+        };
+        let p = rest.trim();
+        if !p.is_empty() {
+            return Some(p.to_string());
+        }
+    }
+    None
+}
+
+/// Last generated still in a thread. Newer receipts win.
+pub fn last_imagine_receipt<'a, I>(messages: I) -> Option<String>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut last = None;
+    for text in messages {
+        if let Some(path) = imagine_receipt_path(text) {
+            last = Some(path);
+        }
+    }
+    last
+}
+
 /// Gap above the pane floor when the Imagine toolbox docks to the bottom.
 pub const IMAGINE_TOOLBOX_PAD: f32 = 24.0;
 
@@ -799,6 +827,35 @@ mod tests {
             toolbox_top,
             180.0
         ));
+    }
+
+    #[test]
+    fn imagine_receipt_path_reads_the_saved_still() {
+        assert_eq!(
+            imagine_receipt_path("IMAGINE: /tmp/cabin.png").as_deref(),
+            Some("/tmp/cabin.png")
+        );
+        assert_eq!(
+            imagine_receipt_path("  IMAGINE: /work/night.jpg \n").as_deref(),
+            Some("/work/night.jpg")
+        );
+        assert!(imagine_receipt_path("IMAGINE:").is_none());
+        assert!(imagine_receipt_path("IMAGINE_PROMPT: a cabin at night").is_none());
+        assert!(imagine_receipt_path("ok").is_none());
+        assert_eq!(
+            last_imagine_receipt(
+                [
+                    "hello",
+                    "IMAGINE: /tmp/one.png",
+                    "IMAGINE_PROMPT: skip me",
+                    "IMAGINE: /tmp/two.png",
+                ]
+                .into_iter()
+            )
+            .as_deref(),
+            Some("/tmp/two.png")
+        );
+        assert!(last_imagine_receipt(["hello"].into_iter()).is_none());
     }
 
     #[test]
