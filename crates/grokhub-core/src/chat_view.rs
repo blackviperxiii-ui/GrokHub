@@ -214,6 +214,10 @@ fn thought_chunk_is_attach_noise(chunk: &str) -> bool {
         "you just dropped",
         "you dropped",
         "you uploaded",
+        "screenshot attached",
+        "picture attached",
+        "picture was attached",
+        "photo attached",
     ]
     .iter()
     .any(|n| t.contains(n))
@@ -467,6 +471,8 @@ mod tests {
             "They asked about chowder."
         );
         assert_eq!(scrub_thought("There is an image attached."), "");
+        assert_eq!(scrub_thought("There's a screenshot attached to this message."), "");
+        assert_eq!(scrub_thought("A picture was attached."), "");
         assert_eq!(
             scrub_thought("You just dropped a black void. Need a snapshot."),
             "Need a snapshot."

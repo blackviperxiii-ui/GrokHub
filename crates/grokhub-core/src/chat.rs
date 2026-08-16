@@ -7,6 +7,11 @@ pub fn needs_auth_banner(has_key: bool) -> bool {
     !has_key
 }
 
+/// First-run empty chat still needs the Connect Grok banner.
+pub fn paint_connect_banner(has_key: bool, _message_count: usize) -> bool {
+    needs_auth_banner(has_key)
+}
+
 pub fn extract_host_cmds(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in text.lines() {
@@ -339,6 +344,12 @@ mod tests {
     fn banner() {
         assert!(needs_auth_banner(false));
         assert!(!needs_auth_banner(true));
+        assert!(
+            paint_connect_banner(false, 0),
+            "first-run empty chat must still show Connect Grok"
+        );
+        assert!(paint_connect_banner(false, 3));
+        assert!(!paint_connect_banner(true, 0));
     }
 
     #[test]
