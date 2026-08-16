@@ -726,7 +726,7 @@ mod tests {
         assert_ne!(BarIcon::ArrowUp, BarIcon::Send);
         assert_ne!(BarIcon::Stop, BarIcon::Send);
         assert_eq!(rail_icon_for("chat"), RailIcon::Chat);
-        assert_eq!(rail_icon_for("imagine"), RailIcon::Imagine,
+        assert_eq!(rail_icon_for("imagine"), RailIcon::Imagine);
         assert_eq!(rail_icon_for("automations"), RailIcon::Clock);
         assert_eq!(rail_icon_for("skills"), RailIcon::Grid);
         assert_eq!(rail_icon_for("workboard"), RailIcon::Folder);
