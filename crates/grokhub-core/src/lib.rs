@@ -171,8 +171,8 @@ pub use context::{
 pub use diagnostics::diagnostics_bundle;
 pub use goal::{
     blend_thread_goal, compact_keep_pin, looks_incomplete, next_goal_prompt, parse_fast_topics,
-    parse_goal_outcome, should_name_thread, thread_goal_prompt, ThreadGoal, GOAL_DROP_AFTER,
-    GOAL_MAX_STEPS,
+    parse_goal_outcome, reply_needs_followup, should_name_thread, thread_goal_prompt, ThreadGoal,
+    FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT, GOAL_DROP_AFTER, GOAL_MAX_STEPS,
 };
 pub use greeting::{
     greeting_fingerprint, greeting_name, greeting_prompt, local_greeting, parse_llm_greeting,
@@ -192,8 +192,8 @@ pub use shortcuts::{
     shortcut_help, ComposerEnter, ComposerGo, SHORTCUTS,
 };
 pub use stream::{
-    chat_include_usage, chat_stream_flag, fold_stream_token, parse_sse_delta, parse_sse_thought,
-    parse_sse_usage, sse_done, StreamTokenKind, StreamUsage,
+    chat_include_usage, chat_stream_flag, fold_stream_token, parse_sse_delta, parse_sse_finish,
+    parse_sse_thought, parse_sse_usage, sse_done, stream_was_truncated, StreamTokenKind, StreamUsage,
 };
 pub use usage::{bump_usage, roll_usage_day, usage_blocked, usage_line, UsageDay};
 pub use hub_sync::{build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, HubMemoryFile, HubSnapshot};
