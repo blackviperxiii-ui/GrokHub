@@ -34,7 +34,7 @@ GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub
 
 The tray icon is there from launch. Close / titlebar × hides the cabin — the window unmaps; it does not minimize to the taskbar. Size and position come back on the next launch. Jobs, hub, and idle reflect keep running. Tray: **Show cabin**, **Halt hands**, **Quit**. One ping when it first hides; it does not spam the desktop. `grokhub --agent` starts already hidden. `GROKHUB_TRAY=0` quits on close.
 
-Slash: `/help` · `/new` · `/scratch` · `/clear` · `/undo` · `/retry` · `/stop` · `/sh` · `/host` · `/project` · `/approve` · `/memory` · `/recall` · `/forget` · `/board` · `/imagine` · `/skill` · `/compact` · `/learn reflect` · `/update` · `/send` · `/sync` · `/hub` · `/inhabit` · `/rewind` · `/room` · `/export` · `/rename` · `/pin` · `/delete` · `/mode auto|fast|balance|think|max` · `/dream` · `/palette`. Type `/help` in the cabin for the rest. `/project` also takes `bind`, `new`, `folder`, `rename`, `move`, `delete`, `clear`. Right-click a sidebar project to rename or remove it — Delete drops the row, not the files.
+Slash: `/help` · `/new` · `/scratch` · `/clear` · `/undo` · `/retry` · `/stop` · `/sh` · `/host` · `/project` · `/memory` · `/recall` · `/forget` · `/board` · `/imagine` · `/skill` · `/compact` · `/learn reflect` · `/update` · `/send` · `/sync` · `/hub` · `/inhabit` · `/rewind` · `/room` · `/export` · `/rename` · `/pin` · `/delete` · `/mode auto|fast|balance|think|max` · `/dream` · `/palette`. Type `/help` in the cabin for the rest. `/project` also takes `bind`, `new`, `folder`, `rename`, `move`, `delete`, `clear`. Right-click a sidebar project to rename or remove it — Delete drops the row, not the files.
 
 Composer modes (combo on the pill, or `/mode`):
 
@@ -58,7 +58,7 @@ Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is the sign-in. Devic
 
 Settings → **Update** (or `grokhub --update` / `/update`) does `git pull --ff-only origin main` in the source clone, then `./scripts/install.sh --user`. The clone must be on `main` with an `origin`. Overlay only — config stays. Progress stays on Settings (bar + percent). After a clean overlay, **Restart** reloads the new binary (systemd user units if they are live, otherwise a fresh `grokhub` spawn).
 
-`HOST_PLAN` is an editable checklist. `scripts/verify.sh` gates **done** / `GOAL_COMPLETE`. A recipe whose `screen=` does not match the current desktop reshoots and skips coordinate clicks. A 15s heartbeat runs housekeep, inbox, and night. Wall, mid-thought, and reflect wake as autonomy rises. Idle ≥ 10 minutes (or `/learn reflect`) does a surgical `MEMORY.md` edit with a diff and `.prev` restore.
+The cabin drives. Host plans run without a confirm. A recipe whose `screen=` does not match the current desktop reshoots and skips coordinate clicks. A 15s heartbeat always runs housekeep, inbox, night, wall, mid-thought, reflect, and anticipate. Idle ≥ 10 minutes (or `/learn reflect`) does a surgical `MEMORY.md` edit with a diff and `.prev` restore. Halt / Stop / Ctrl+Shift+Esc kill a running job.
 
 Android / Windows: link `libgrokhub_ffi` and include `crates/grokhub-ffi/include/grokhub.h`.
 
@@ -75,11 +75,11 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `secrets.js
 1. Land in **chat**. Banner: **Connect Grok in Settings**.
 2. Settings → **Connect Grok OAuth** (or paste a console key from [console.x.ai](https://console.x.ai)). Save.
 3. Optional: Devices → **Start share** for the Android key-fob.
-4. YOLO is `/approve off` — host commands run without a prompt.
+4. The cabin drives — host, skills, learning, and anticipation run at full autonomy. Halt stops a running job.
 
 Tokens stay in `secrets.json`. Never in markdown.
 
-Composer is a pill: **What do you want to know?** Five quick chips sit above it on one row — no selected first pill. An empty chat can show a faint Fast blurb. Plus opens Upload / Paste. Mode combo is Auto / Fast / Balance / Think / Max. `/mode` only sets the combo — it does not overwrite Settings → Chat model. Mic is Hey Grok. Enter or the arrow sends; Ctrl+Enter starts a new line. While a reply (or Imagine / host job) is running, Send is Stop. Chat streams tokens onto the thread that started the job; opening New chat does not steal the live reply. User and assistant turns sit in bubbles that hug the text and wrap in a tight column (hard cap 440px). Host receipts stay off the bubble. Thought does not announce that an image is attached. Imagine stills sit above the composer. Grok may emit `HOST_CMD:` lines (unsandboxed `bash -lc`) and `COMPUTER_CMD:` lines (mouse, keyboard, `act` / `wait_for` via xdotool). The cabin confirms unless YOLO. `/stop`, tray **Halt hands**, the Stop square, and Ctrl+Shift+Esc actually kill those workers. When you ask it to drive the UI, a JPEG frame is attached for that turn even if Cabin eyes is off. A leftover cabin frame is not attached on ordinary chat. Lock/password screens are skipped. Forbidden paths (`~/.ssh`, `/etc/shadow`) stay blocked.
+Composer is a pill: **What do you want to know?** Five quick chips sit above it on one row — no selected first pill. An empty chat can show a faint Fast blurb. Plus opens Upload / Paste. Mode combo is Auto / Fast / Balance / Think / Max. `/mode` only sets the combo — it does not overwrite Settings → Chat model. Mic is Hey Grok. Enter or the arrow sends; Ctrl+Enter starts a new line. While a reply (or Imagine / host job) is running, Send is Stop. Chat streams tokens onto the thread that started the job; opening New chat does not steal the live reply. User and assistant turns sit in bubbles that hug the text and wrap in a tight column (hard cap 440px). Host receipts stay off the bubble. Thought does not announce that an image is attached. Imagine stills sit above the composer. Grok may emit `HOST_CMD:` lines (unsandboxed `bash -lc`) and `COMPUTER_CMD:` lines (mouse, keyboard, `act` / `wait_for` via xdotool). Host runs immediately — the cabin drives. `/stop`, tray **Halt hands**, the Stop square, and Ctrl+Shift+Esc actually kill those workers. When you ask it to drive the UI, a JPEG frame is attached for that turn even if Cabin eyes is off. A leftover cabin frame is not attached on ordinary chat. Lock/password screens are skipped.
 
 ## Always-on hub
 

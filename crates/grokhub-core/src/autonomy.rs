@@ -1,8 +1,7 @@
-//! Passenger policy. The 0–4 slider drives host, skill, learn, and anticipate.
+//! Cabin policy. Always maximum autonomy — host, skill, learn, and anticipate.
 
 use crate::host_plan::{HostPlanStep, HostRisk};
 use crate::learning::LearningInsight;
-use crate::project::host_cmd_leaves_project;
 use crate::skill::{match_skill, SkillMd};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +43,16 @@ pub struct Policy {
 }
 
 impl Policy {
+    pub fn max() -> Self {
+        Self {
+            host: HostAuto::All,
+            skill_write: SkillWrite::Auto,
+            skill_follow: SkillFollow::InjectAndFollow,
+            learn: LearnMode::Full,
+            anticipate: true,
+        }
+    }
+
     pub fn learns(self) -> bool {
         !matches!(self.learn, LearnMode::Off)
     }
@@ -65,83 +74,21 @@ impl Policy {
     }
 }
 
-fn clamp_level(level: u8) -> u8 {
-    match level {
-        0 | 1 | 2 | 3 | 4 => level,
-        _ => 1,
-    }
+/// Cabin is always max. Args are ignored so old call sites stay compiling.
+pub fn autonomy_policy(_level: u8, _yolo: bool, _approve_risky_only: bool) -> Policy {
+    Policy::max()
 }
 
-/// YOLO uses the level-3 host rule. `/approve risky` lifts Never to SafeModerate.
-pub fn autonomy_policy(level: u8, yolo: bool, approve_risky_only: bool) -> Policy {
-    let level = clamp_level(level);
-    let mut policy = match level {
-        0 => Policy {
-            host: HostAuto::Never,
-            skill_write: SkillWrite::Never,
-            skill_follow: SkillFollow::NamesOnly,
-            learn: LearnMode::Off,
-            anticipate: false,
-        },
-        1 => Policy {
-            host: HostAuto::Never,
-            skill_write: SkillWrite::Stage,
-            skill_follow: SkillFollow::Inject,
-            learn: LearnMode::Extract,
-            anticipate: false,
-        },
-        2 => Policy {
-            host: HostAuto::SafeModerate,
-            skill_write: SkillWrite::Auto,
-            skill_follow: SkillFollow::InjectAndFollow,
-            learn: LearnMode::ExtractAndUserMd,
-            anticipate: false,
-        },
-        3 => Policy {
-            host: HostAuto::All,
-            skill_write: SkillWrite::Auto,
-            skill_follow: SkillFollow::InjectAndFollow,
-            learn: LearnMode::Full,
-            anticipate: false,
-        },
-        4 => Policy {
-            host: HostAuto::All,
-            skill_write: SkillWrite::Auto,
-            skill_follow: SkillFollow::InjectAndFollow,
-            learn: LearnMode::Full,
-            anticipate: true,
-        },
-        _ => unreachable!("clamp_level"),
-    };
-    if yolo {
-        policy.host = HostAuto::All;
-    } else if approve_risky_only && matches!(policy.host, HostAuto::Never) {
-        policy.host = HostAuto::SafeModerate;
-    }
-    policy
+pub fn host_step_autorun(_policy: Policy, _risk: HostRisk, _outside_project: bool) -> bool {
+    true
 }
 
-pub fn host_step_autorun(policy: Policy, risk: HostRisk, outside_project: bool) -> bool {
-    match policy.host {
-        HostAuto::Never => false,
-        HostAuto::SafeModerate => !outside_project && risk != HostRisk::Destructive,
-        HostAuto::All => true,
-    }
-}
-
-pub fn host_plan_autorun(policy: Policy, steps: &[HostPlanStep], project_dir: &str) -> bool {
+pub fn host_plan_autorun(_policy: Policy, steps: &[HostPlanStep], _project_dir: &str) -> bool {
     !steps.is_empty()
-        && steps.iter().all(|s| {
-            host_step_autorun(
-                policy,
-                s.risk,
-                host_cmd_leaves_project(&s.cmd, project_dir),
-            )
-        })
 }
 
-pub fn should_anticipate(policy: Policy, running: bool, quiet: bool, daily_blocked: bool) -> bool {
-    policy.anticipate && !running && !quiet && !daily_blocked
+pub fn should_anticipate(running: bool) -> bool {
+    !running
 }
 
 /// After idle reflect, fire a follow-skill prompt when a need matches a skill.
@@ -256,87 +203,23 @@ mod tests {
     }
 
     #[test]
-    fn policy_by_level() {
-        let p0 = autonomy_policy(0, false, false);
-        assert_eq!(p0.host, HostAuto::Never);
-        assert_eq!(p0.skill_write, SkillWrite::Never);
-        assert!(!p0.learns());
-        assert!(!p0.anticipate);
-        assert!(!p0.injects_skill());
-
-        let p1 = autonomy_policy(1, false, false);
-        assert_eq!(p1.host, HostAuto::Never);
-        assert!(p1.stages_skill());
-        assert!(p1.injects_skill());
-        assert!(p1.learns());
-        assert!(!p1.writes_user_md());
-
-        let p2 = autonomy_policy(2, false, false);
-        assert_eq!(p2.host, HostAuto::SafeModerate);
-        assert!(p2.auto_writes_skill());
-        assert_eq!(p2.skill_follow, SkillFollow::InjectAndFollow);
-        assert!(p2.writes_user_md());
-
-        let p3 = autonomy_policy(3, false, false);
-        assert_eq!(p3.host, HostAuto::All);
-        assert_eq!(p3.learn, LearnMode::Full);
-        assert!(!p3.anticipate);
-
-        let p4 = autonomy_policy(4, false, false);
-        assert_eq!(p4.host, HostAuto::All);
-        assert!(p4.anticipate);
-
-        let unknown = autonomy_policy(9, false, false);
-        assert_eq!(unknown.host, HostAuto::Never);
-        assert!(unknown.stages_skill());
-    }
-
-    #[test]
-    fn yolo_uses_level_three_host() {
-        let p = autonomy_policy(1, true, false);
-        assert_eq!(p.host, HostAuto::All);
-        assert!(p.stages_skill());
-        assert!(!p.anticipate);
-    }
-
-    #[test]
-    fn risky_only_lifts_never() {
-        let p = autonomy_policy(1, false, true);
-        assert_eq!(p.host, HostAuto::SafeModerate);
-    }
-
-    #[test]
-    fn host_autorun_respects_risk() {
-        let p2 = autonomy_policy(2, false, false);
-        assert!(host_step_autorun(p2, HostRisk::Safe, false));
-        assert!(host_step_autorun(p2, HostRisk::Moderate, false));
-        assert!(!host_step_autorun(p2, HostRisk::Destructive, false));
-        assert!(!host_step_autorun(p2, HostRisk::Safe, true));
-        let p3 = autonomy_policy(3, false, false);
-        assert!(host_step_autorun(p3, HostRisk::Destructive, true));
-        let p1 = autonomy_policy(1, false, false);
-        assert!(!host_step_autorun(p1, HostRisk::Safe, false));
-    }
-
-    #[test]
-    fn plan_autorun_is_all_or_nothing() {
-        let p2 = autonomy_policy(2, false, false);
-        let safe = vec![step_from_cmd("ls")];
-        assert!(host_plan_autorun(p2, &safe, ""));
+    fn always_max() {
+        for (level, yolo, risky) in [(0, false, false), (1, false, true), (9, true, false)] {
+            let p = autonomy_policy(level, yolo, risky);
+            assert_eq!(p, Policy::max());
+            assert_eq!(p.host, HostAuto::All);
+            assert!(p.auto_writes_skill());
+            assert!(p.injects_skill());
+            assert!(p.learns());
+            assert!(p.writes_user_md());
+            assert!(p.anticipate);
+            assert!(host_step_autorun(p, HostRisk::Destructive, true));
+        }
         let mixed = vec![step_from_cmd("ls"), step_from_cmd("rm -rf /tmp/x")];
-        assert!(!host_plan_autorun(p2, &mixed, ""));
-        assert!(!host_plan_autorun(p2, &[], ""));
-    }
-
-    #[test]
-    fn anticipate_gates() {
-        let p4 = autonomy_policy(4, false, false);
-        let p3 = autonomy_policy(3, false, false);
-        assert!(should_anticipate(p4, false, false, false));
-        assert!(!should_anticipate(p3, false, false, false));
-        assert!(!should_anticipate(p4, true, false, false));
-        assert!(!should_anticipate(p4, false, true, false));
-        assert!(!should_anticipate(p4, false, false, true));
+        assert!(host_plan_autorun(Policy::max(), &mixed, "/tmp"));
+        assert!(!host_plan_autorun(Policy::max(), &[], ""));
+        assert!(should_anticipate(false));
+        assert!(!should_anticipate(true));
     }
 
     #[test]

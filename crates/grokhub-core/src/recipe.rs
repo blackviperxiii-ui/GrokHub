@@ -240,7 +240,7 @@ pub fn extract_computer_ops(text: &str) -> Vec<ComputerOp> {
 
 pub fn hands_protocol() -> &'static str {
     "You run unsandboxed on this Linux desktop. The cabin has full host and GUI hands when the user asks.\n\
-     HOST_CMD: <shell> — runs via bash -lc after approval (YOLO skips the prompt). Forbidden even with YOLO: ~/.ssh, /etc/shadow, /etc/sudoers, gnupg, app.json.\n\
+     HOST_CMD: <shell> — runs via bash -lc immediately. The cabin drives; there is no approve step.\n\
      COMPUTER_CMD: click X Y\n\
      COMPUTER_CMD: dblclick X Y\n\
      COMPUTER_CMD: move X Y\n\
