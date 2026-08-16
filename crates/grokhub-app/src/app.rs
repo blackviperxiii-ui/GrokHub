@@ -27,7 +27,7 @@ use grokhub_core::{
     imagine_toolbox_top, imagine_wall_bounds,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
     mark_automation_skipped, retain_held_plan, yolo_plan_split, chat_bearer,
-    drop_trailing_assistant_on, job_error_goes_to_chat, kick_messages_for_job, persist_user_turn,
+    drop_trailing_assistant_on, job_error_goes_to_chat, kick_messages_for_job, last_user_for_job, persist_user_turn,
     push_bound_message, refund_host_reserved,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
@@ -1137,6 +1137,7 @@ impl Cabin {
         self.pending_connectors.clear();
         self.pending_skill = None;
         self.plan_pending = None;
+        self.agents.clear();
         self.stream_buf.clear();
         self.thought_buf.clear();
         let vis = self.visible_thread_id();
@@ -4084,12 +4085,22 @@ impl Cabin {
                     }
                 }
                 if is_hard_run(self.last_host.len() as u32, !ok, false, self.scratch()) {
-                    let user = last_user_text(
-                        &self
-                            .messages
-                            .iter()
-                            .map(|m| (m.role.clone(), m.content.clone()))
-                            .collect::<Vec<_>>(),
+                    let vis = self.visible_thread_id();
+                    let visible_pairs: Vec<(String, String)> = self
+                        .messages
+                        .iter()
+                        .map(|m| (m.role.clone(), m.content.clone()))
+                        .collect();
+                    let stored: Vec<(String, Vec<(String, String)>)> = self
+                        .threads
+                        .iter()
+                        .map(|t| (t.id.clone(), t.messages.clone()))
+                        .collect();
+                    let user = last_user_for_job(
+                        self.chat_job_thread.as_deref(),
+                        &vis,
+                        &visible_pairs,
+                        &stored,
                     )
                     .unwrap_or_default();
                     let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
