@@ -3,6 +3,9 @@ use serde_json::{json, Value};
 
 pub const DEFAULT_IMAGINE_MODEL: &str = "grok-imagine-image-2.0";
 pub const DEFAULT_VIDEO_MODEL: &str = "grok-imagine-video-1.5";
+/// OAuth / older console keys often allow these when the 2.0 / 1.5 ids 404.
+pub const FALLBACK_IMAGINE_MODEL: &str = "grok-imagine-image";
+pub const FALLBACK_VIDEO_MODEL: &str = "grok-imagine-video";
 
 /// xAI retired grok-2-image / grok-2-image-1212 (EOL 2026-02-28).
 pub fn retired_imagine_model(user: &str) -> bool {
@@ -40,11 +43,23 @@ pub fn imagine_image_body(
     aspect: Option<&str>,
     resolution: Option<&str>,
 ) -> Value {
+    imagine_image_shaped(prompt, model, aspect, resolution, None)
+}
+
+/// `quality` is only valid on grok-imagine-image-2.0 (`low` / `medium`).
+pub fn imagine_image_shaped(
+    prompt: &str,
+    model: &str,
+    aspect: Option<&str>,
+    resolution: Option<&str>,
+    quality: Option<&str>,
+) -> Value {
+    let model = dedicated_imagine_model(model);
     let mut body = json!({
-        "model": dedicated_imagine_model(model),
+        "model": model,
         "prompt": prompt,
         "n": 1,
-        "response_format": "b64_json",
+        "response_format": "url",
     });
     if let Some(a) = aspect.map(str::trim).filter(|s| !s.is_empty()) {
         body["aspect_ratio"] = json!(a);
@@ -52,7 +67,67 @@ pub fn imagine_image_body(
     if let Some(r) = resolution.map(str::trim).filter(|s| !s.is_empty()) {
         body["resolution"] = json!(r);
     }
+    let q = quality
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .or_else(|| match resolution.map(str::trim) {
+            Some("1k") => Some("low".into()),
+            Some("2k") => Some("medium".into()),
+            _ => None,
+        });
+    if model.contains("2.0") {
+        if let Some(q) = q {
+            if q == "low" || q == "medium" {
+                body["quality"] = json!(q);
+            }
+        }
+    }
     body
+}
+
+pub fn imagine_image_quality(quality: bool) -> &'static str {
+    if quality {
+        "medium"
+    } else {
+        "low"
+    }
+}
+
+pub fn imagine_image_fallback_model(model: &str) -> Option<&'static str> {
+    let m = dedicated_imagine_model(model);
+    if m == FALLBACK_IMAGINE_MODEL {
+        None
+    } else {
+        Some(FALLBACK_IMAGINE_MODEL)
+    }
+}
+
+pub fn imagine_video_fallback_model(model: &str) -> Option<&'static str> {
+    let m = dedicated_video_model(model);
+    if m == FALLBACK_VIDEO_MODEL {
+        None
+    } else {
+        Some(FALLBACK_VIDEO_MODEL)
+    }
+}
+
+/// Retry the cheaper Imagine alias when 2.0 / 1.5 is not on this credential.
+pub fn imagine_should_retry_model(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    if e.contains("bad credentials")
+        || e.contains("unauthenticated")
+        || e.contains("http 401")
+    {
+        return false;
+    }
+    let modelish = e.contains("model")
+        || e.contains("not found")
+        || e.contains("does not exist")
+        || e.contains("unknown")
+        || e.contains("invalid_argument");
+    let code = e.contains("http 404") || e.contains("http 400") || e.contains("http 403");
+    modelish && (code || e.contains("model"))
 }
 
 pub fn imagine_image_resolution(quality: bool) -> &'static str {
@@ -96,12 +171,15 @@ pub fn video_request_body(
     })
 }
 
-pub fn parse_video_request_id(body: &Value) -> Option<String> {
-    body.get("request_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.trim())
+fn nonempty_json_str(v: Option<&Value>) -> Option<String> {
+    v.and_then(|v| v.as_str())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
+}
+
+pub fn parse_video_request_id(body: &Value) -> Option<String> {
+    nonempty_json_str(body.get("request_id")).or_else(|| nonempty_json_str(body.get("id")))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,12 +201,19 @@ pub fn parse_video_job_status(status: &str) -> VideoJobStatus {
 }
 
 pub fn parse_video_url(body: &Value) -> Option<String> {
+    let video = body.get("video")?;
+    nonempty_json_str(video.get("url")).or_else(|| {
+        video
+            .get("file_output")
+            .and_then(|f| nonempty_json_str(f.get("public_url")))
+    })
+}
+
+pub fn video_moderation_blocked(body: &Value) -> bool {
     body.get("video")
-        .and_then(|v| v.get("url"))
-        .and_then(|u| u.as_str())
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+        .and_then(|v| v.get("respect_moderation"))
+        .and_then(|b| b.as_bool())
+        == Some(false)
 }
 
 pub fn imagine_is_video_path(path: &str) -> bool {
@@ -163,16 +248,49 @@ pub fn imagine_slug(prompt: &str) -> String {
     }
 }
 
-pub fn parse_imagine_url(body: &Value) -> Option<String> {
-    let data = body.get("data")?.as_array()?.first()?;
-    data.get("url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+fn imagine_item_url(data: &Value) -> Option<String> {
+    nonempty_json_str(data.get("url"))
         .or_else(|| {
-            data.get("b64_json")
-                .and_then(|v| v.as_str())
-                .map(|s| format!("data:image/png;base64,{s}"))
+            nonempty_json_str(data.get("b64_json")).map(|s| {
+                if s.starts_with("data:") {
+                    s
+                } else {
+                    format!("data:image/png;base64,{s}")
+                }
+            })
         })
+        .or_else(|| {
+            data.get("file_output")
+                .and_then(|f| nonempty_json_str(f.get("public_url")))
+        })
+}
+
+pub fn parse_imagine_url(body: &Value) -> Option<String> {
+    if let Some(data) = body
+        .get("data")
+        .and_then(|d| d.as_array())
+        .and_then(|a| a.first())
+    {
+        if let Some(u) = imagine_item_url(data) {
+            return Some(u);
+        }
+    }
+    nonempty_json_str(body.get("url"))
+}
+
+/// File extension from magic bytes so a jpeg/webp still is not saved as `.png`.
+pub fn media_ext_from_bytes<'a>(buf: &'a [u8], fallback: &'a str) -> &'a str {
+    if buf.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "png"
+    } else if buf.len() >= 3 && buf[0] == 0xFF && buf[1] == 0xD8 && buf[2] == 0xFF {
+        "jpg"
+    } else if buf.len() >= 12 && &buf[0..4] == b"RIFF" && &buf[8..12] == b"WEBP" {
+        "webp"
+    } else if buf.len() >= 8 && &buf[4..8] == b"ftyp" {
+        "mp4"
+    } else {
+        fallback
+    }
 }
 
 /// grok.com/imagine Aspect Ratio menu, measured 2026-08-15.
@@ -689,11 +807,21 @@ mod tests {
         assert!(!retired_imagine_model("grok-imagine-image-2.0"));
         let b = imagine_request_body("a cabin at night", "grok-3-mini-fast");
         assert_eq!(b["model"], DEFAULT_IMAGINE_MODEL);
-        assert_eq!(b["response_format"], "b64_json");
+        assert_eq!(b["response_format"], "url");
         let shaped = imagine_image_body("a cabin at night", "grok-2-image", Some("2:3"), Some("2k"));
         assert_eq!(shaped["model"], DEFAULT_IMAGINE_MODEL);
         assert_eq!(shaped["aspect_ratio"], "2:3");
         assert_eq!(shaped["resolution"], "2k");
+        assert_eq!(shaped["quality"], "medium");
+        let draft = imagine_image_shaped(
+            "a cabin at night",
+            DEFAULT_IMAGINE_MODEL,
+            Some("16:9"),
+            Some("1k"),
+            Some("low"),
+        );
+        assert_eq!(draft["quality"], "low");
+        assert_eq!(draft["response_format"], "url");
         assert_eq!(dedicated_imagine_model(""), DEFAULT_IMAGINE_MODEL);
         assert_eq!(dedicated_imagine_model("grok-imagine"), DEFAULT_IMAGINE_MODEL);
         assert_eq!(
@@ -702,6 +830,42 @@ mod tests {
         );
         let reply = json!({ "data": [{ "url": "https://img/x.png" }] });
         assert_eq!(parse_imagine_url(&reply).as_deref(), Some("https://img/x.png"));
+        let empty_url = json!({ "data": [{ "url": "", "b64_json": "aaaa" }] });
+        assert_eq!(
+            parse_imagine_url(&empty_url).as_deref(),
+            Some("data:image/png;base64,aaaa"),
+            "an empty url must not hide b64_json"
+        );
+        let top = json!({ "url": "https://img/top.png" });
+        assert_eq!(parse_imagine_url(&top).as_deref(), Some("https://img/top.png"));
+        assert_eq!(
+            parse_video_request_id(&json!({ "id": "vid-1" })).as_deref(),
+            Some("vid-1")
+        );
+        assert_eq!(
+            parse_video_url(&json!({
+                "video": { "url": "", "file_output": { "public_url": "https://vid/x.mp4" } }
+            }))
+            .as_deref(),
+            Some("https://vid/x.mp4")
+        );
+        assert!(video_moderation_blocked(&json!({
+            "video": { "url": "", "respect_moderation": false }
+        })));
+        assert!(!imagine_should_retry_model("HTTP 401: Bad credentials."));
+        assert!(imagine_should_retry_model(
+            "HTTP 404: model grok-imagine-image-2.0 not found"
+        ));
+        assert_eq!(
+            imagine_image_fallback_model(DEFAULT_IMAGINE_MODEL),
+            Some(FALLBACK_IMAGINE_MODEL)
+        );
+        assert_eq!(
+            imagine_video_fallback_model(DEFAULT_VIDEO_MODEL),
+            Some(FALLBACK_VIDEO_MODEL)
+        );
+        assert_eq!(media_ext_from_bytes(&[0xFF, 0xD8, 0xFF, 0xE0], "png"), "jpg");
+        assert_eq!(media_ext_from_bytes(b"nope", "png"), "png");
         assert_eq!(imagine_dest(None), "GrokHub-Work/imagine");
         assert_eq!(
             extract_imagine_prompt("ok\nIMAGINE_PROMPT: a cabin at night\n").as_deref(),
