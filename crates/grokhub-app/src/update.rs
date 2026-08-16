@@ -1,15 +1,14 @@
 use crate::config;
 use crate::host::run_host;
 use grokhub_core::{
-    discover_source, forbidden_reason, update_cmds, update_progress_pct, update_step_label,
-    update_wipes_config,
+    discover_source, forbidden_reason, restart_acts, restart_bin, systemd_user_restart_args,
+    update_cmds, update_progress_pct, update_step_label, update_wipes_config, RestartAct,
 };
 use std::env;
+use std::process::{Command, Stdio};
 #[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-#[cfg(test)]
-use std::process::Command;
 use std::time::Duration;
 
 pub fn resolve_source(cfg_source: &str) -> Option<PathBuf> {
@@ -89,6 +88,61 @@ pub fn run_update(source: &std::path::Path) -> Result<String, String> {
     let cmds = update_cmds(source)?;
     remember_source(source);
     run_update_cmds(&cmds)
+}
+
+fn unit_is_active(unit: &str) -> bool {
+    Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", unit])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn spawn_detached(argv: &[String]) -> Result<(), String> {
+    let (bin, args) = argv.split_first().ok_or("restart argv empty")?;
+    let mut cmd = Command::new(bin);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    cmd.spawn().map_err(|e| format!("restart spawn: {e}"))?;
+    Ok(())
+}
+
+/// Relaunch cabin + hub from the overlay. Caller must persist, then quit.
+pub fn restart_system(hidden: bool) -> Result<(), String> {
+    let home = env::var("HOME").ok();
+    let current = env::current_exe()
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned());
+    let exe = restart_bin(home.as_deref(), current.as_deref());
+    let acts = restart_acts(
+        unit_is_active("grokhub.service"),
+        unit_is_active("grokhub-hub.service"),
+        &exe,
+        hidden,
+    );
+    for act in acts {
+        match act {
+            RestartAct::Systemd { units } => {
+                let args = systemd_user_restart_args(&units);
+                let st = Command::new("systemctl")
+                    .args(&args)
+                    .status()
+                    .map_err(|e| format!("systemctl: {e}"))?;
+                if !st.success() {
+                    return Err("systemctl --user restart failed".into());
+                }
+            }
+            RestartAct::Spawn { argv } => spawn_detached(&argv)?,
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -204,5 +258,26 @@ mod tests {
         assert_eq!(*pcts.first().unwrap(), 0);
         assert_eq!(*pcts.last().unwrap(), 100);
         assert!(ticks.iter().all(|(_, m)| !m.contains("HOST_RESULT")), "{ticks:?}");
+    }
+
+    #[test]
+    fn restart_system_plan_uses_overlay_when_present() {
+        let home = std::env::temp_dir().join(format!("grokhub-restart-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let bin = home.join(".local/bin/grokhub");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(&bin, "#!/bin/sh\n").unwrap();
+        assert_eq!(
+            grokhub_core::restart_bin(Some(home.to_str().unwrap()), Some("/old/grokhub")),
+            bin.to_string_lossy()
+        );
+        let acts = grokhub_core::restart_acts(false, false, "/opt/grokhub", true);
+        assert_eq!(
+            acts,
+            vec![grokhub_core::RestartAct::Spawn {
+                argv: vec!["/opt/grokhub".into(), "--agent".into()]
+            }]
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
