@@ -24,7 +24,14 @@ pub enum HeyGrokAction {
     Halt,
 }
 
-pub const DEFAULT_VOICE_MODEL: &str = "grok-voice-latest";
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeyGrokRoute {
+    Realtime,
+    PushToTalk,
+    None,
+}
+
+pub const DEFAULT_VOICE_MODEL: &str = "grok-voice-think-fast-2.0";
 
 pub fn dedicated_voice_model(user: &str) -> String {
     let u = user.trim();
@@ -67,7 +74,7 @@ pub enum VoiceEvent {
     Close,
     Error(String),
     Transcript { text: String, final_: bool },
-    AudioOut,
+    AudioOut { pcm_b64: String },
     AudioEnd,
     BargeIn,
     Hands,
@@ -85,7 +92,7 @@ pub fn reduce_voice_state(state: VoiceState, event: &VoiceEvent) -> VoiceState {
             }
         }
         VoiceEvent::Transcript { .. } => VoiceState::Listening,
-        VoiceEvent::AudioOut => {
+        VoiceEvent::AudioOut { .. } => {
             if state == VoiceState::Hands {
                 VoiceState::Hands
             } else {
@@ -114,19 +121,35 @@ pub fn voice_can_connect(bearer: &str) -> bool {
     !bearer.trim().is_empty()
 }
 
+pub fn speech_can_connect(bearer: &str) -> bool {
+    voice_can_connect(bearer)
+}
+
+pub fn realtime_can_connect(api_key: &str) -> bool {
+    !api_key.trim().is_empty()
+}
+
+pub fn hey_grok_route(has_api_key: bool, has_speech_auth: bool, has_local: bool) -> HeyGrokRoute {
+    if has_api_key {
+        HeyGrokRoute::Realtime
+    } else if has_speech_auth || has_local {
+        HeyGrokRoute::PushToTalk
+    } else {
+        HeyGrokRoute::None
+    }
+}
+
 pub fn encode_session_update() -> String {
     serde_json::json!({
         "type": "session.update",
         "session": {
-            "modalities": ["text", "audio"],
-            "voice": "ara",
-            "input_audio_transcription": { "model": "whisper-1" },
+            "voice": "eve",
+            "instructions": "You are Grok in the GrokHub cabin. Be brief. Use host and computer tools when the user asks to change this Linux box.",
             "turn_detection": { "type": "server_vad" },
-            "tools": [
-                { "type": "function", "name": "host", "description": "Run a host command", "parameters": { "type": "object", "properties": {} } },
-                { "type": "function", "name": "computer", "description": "Desktop click/type", "parameters": { "type": "object", "properties": {} } },
-                { "type": "function", "name": "skill", "description": "Run a saved skill", "parameters": { "type": "object", "properties": {} } }
-            ]
+            "audio": {
+                "input": { "format": { "type": "audio/pcm", "rate": 24000 } },
+                "output": { "format": { "type": "audio/pcm", "rate": 24000 } }
+            }
         }
     })
     .to_string()
@@ -138,7 +161,13 @@ pub fn parse_realtime_event(v: &Value) -> Option<VoiceEvent> {
         "session.created" | "session.updated" => Some(VoiceEvent::Open),
         "input_audio_buffer.speech_started" => Some(VoiceEvent::BargeIn),
         "input_audio_buffer.speech_stopped" => Some(VoiceEvent::AudioEnd),
-        "response.audio.delta" | "response.output_audio.delta" => Some(VoiceEvent::AudioOut),
+        "response.audio.delta" | "response.output_audio.delta" => Some(VoiceEvent::AudioOut {
+            pcm_b64: v
+                .get("delta")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+        }),
         "response.audio.done" | "response.done" => Some(VoiceEvent::AudioEnd),
         "response.audio_transcript.delta"
         | "conversation.item.input_audio_transcription.delta" => Some(VoiceEvent::Transcript {
@@ -204,6 +233,76 @@ pub fn cabin_eyes_for_turn(user_opt_in: bool, has_frame: bool) -> CabinEyesState
     } else {
         CabinEyesState::Armed
     }
+}
+
+pub fn client_secrets_url() -> String {
+    format!("{XAI_BASE}/realtime/client_secrets")
+}
+
+pub fn client_secrets_body() -> Value {
+    json!({
+        "expires_after": { "seconds": 300 }
+    })
+}
+
+pub fn parse_client_secret(body: &Value) -> Option<String> {
+    let from_str = |v: &Value| {
+        v.as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    };
+    body.get("value")
+        .and_then(from_str)
+        .or_else(|| {
+            body.get("client_secret").and_then(|v| {
+                from_str(v).or_else(|| v.get("value").and_then(from_str))
+            })
+        })
+}
+
+pub fn client_secret_ws_protocol(secret: &str) -> String {
+    format!("xai-client-secret.{}", secret.trim())
+}
+
+pub fn voice_transcript_sends_chat(live_duplex: bool) -> bool {
+    !live_duplex
+}
+
+pub fn hey_grok_starts_ptt(sock_live: bool, running: bool) -> bool {
+    !sock_live && !running
+}
+
+pub fn voice_client_secret_denied(has_api_key: bool) -> Option<&'static str> {
+    if has_api_key {
+        None
+    } else {
+        Some("Duplex Voice needs a console API key. OAuth covers STT and TTS.")
+    }
+}
+
+/// Strip a WAV container so realtime appends get raw PCM.
+pub fn pcm_from_capture(bytes: &[u8]) -> &[u8] {
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WAVE" {
+        let mut i = 12usize;
+        while i + 8 <= bytes.len() {
+            let id = &bytes[i..i + 4];
+            let sz = u32::from_le_bytes([
+                bytes[i + 4],
+                bytes[i + 5],
+                bytes[i + 6],
+                bytes[i + 7],
+            ]) as usize;
+            i += 8;
+            if id == b"data" {
+                let end = (i + sz).min(bytes.len());
+                return bytes.get(i..end).unwrap_or(&[]);
+            }
+            i = i.saturating_add(sz);
+        }
+        return bytes.get(44..).unwrap_or(&[]);
+    }
+    bytes
 }
 
 pub fn stt_url() -> String {
@@ -283,7 +382,7 @@ mod tests {
     #[test]
     fn hey_and_url() {
         assert_eq!(dedicated_voice_model("grok-3-mini-fast"), DEFAULT_VOICE_MODEL);
-        assert!(voice_session_url("").contains("grok-voice-latest"));
+        assert!(voice_session_url("").contains("grok-voice-think-fast-2.0"));
         assert!(is_voice_error("VOICE_RECEIPT: arecord missing"));
         assert!(!is_voice_error("hey grok flash the pi"));
         assert_eq!(hey_grok_on_press(VoiceState::Idle, false), HeyGrokAction::Start);
@@ -341,5 +440,94 @@ mod tests {
         let s = String::from_utf8_lossy(&form);
         assert!(s.find("name=\"language\"").unwrap() < s.find("name=\"file\"").unwrap());
         assert!(s.contains("filename=\"grokhub-voice.wav\""));
+    }
+
+    #[test]
+    fn oauth_speech_and_api_key_realtime() {
+        assert_eq!(DEFAULT_VOICE_MODEL, "grok-voice-think-fast-2.0");
+        assert!(voice_session_url("").contains("grok-voice-think-fast-2.0"));
+        assert!(voice_session_url("grok-voice-latest").contains("grok-voice-latest"));
+        assert_eq!(
+            dedicated_voice_model(""),
+            "grok-voice-think-fast-2.0"
+        );
+        assert_eq!(hey_grok_route(true, true, false), HeyGrokRoute::Realtime);
+        assert_eq!(hey_grok_route(false, true, false), HeyGrokRoute::PushToTalk);
+        assert_eq!(hey_grok_route(false, false, true), HeyGrokRoute::PushToTalk);
+        assert_eq!(hey_grok_route(false, false, false), HeyGrokRoute::None);
+        assert!(realtime_can_connect("xai-k"));
+        assert!(!realtime_can_connect(""));
+        assert!(speech_can_connect("tok"));
+        assert!(speech_can_connect("xai-k"));
+        assert!(!speech_can_connect(""));
+        let sess = encode_session_update();
+        assert!(sess.contains("\"voice\":\"eve\"") || sess.contains("\"voice\": \"eve\""));
+        assert!(sess.contains("server_vad"));
+        assert!(sess.contains("audio/pcm"));
+        assert!(sess.contains("24000"));
+        assert!(!sess.contains("whisper-1"));
+        assert!(!sess.contains("modalities"));
+        assert_eq!(
+            client_secrets_url(),
+            "https://api.x.ai/v1/realtime/client_secrets"
+        );
+        let body = client_secrets_body();
+        assert_eq!(body["expires_after"]["seconds"], 300);
+        assert!(body.get("session").is_none(), "xAI client_secrets rejects session");
+        assert_eq!(
+            parse_client_secret(&serde_json::json!({
+                "value": "xai-realtime-client-secret-abc",
+                "expires_at": 1
+            }))
+            .as_deref(),
+            Some("xai-realtime-client-secret-abc")
+        );
+        assert_eq!(
+            parse_client_secret(&serde_json::json!({
+                "client_secret": "ek_from_field"
+            }))
+            .as_deref(),
+            Some("ek_from_field")
+        );
+        assert!(parse_client_secret(&serde_json::json!({ "error": "nope" })).is_none());
+        assert_eq!(
+            client_secret_ws_protocol("ek_abc"),
+            "xai-client-secret.ek_abc"
+        );
+        assert!(!voice_transcript_sends_chat(true));
+        assert!(voice_transcript_sends_chat(false));
+        assert!(!hey_grok_starts_ptt(true, false));
+        assert!(hey_grok_starts_ptt(false, false));
+        assert!(!hey_grok_starts_ptt(false, true));
+        assert_eq!(
+            voice_client_secret_denied(false),
+            Some("Duplex Voice needs a console API key. OAuth covers STT and TTS.")
+        );
+        assert!(voice_client_secret_denied(true).is_none());
+        let ev = parse_realtime_event(&serde_json::json!({
+            "type": "response.output_audio.delta",
+            "delta": "AAAA"
+        }))
+        .unwrap();
+        match ev {
+            VoiceEvent::AudioOut { pcm_b64 } => assert_eq!(pcm_b64, "AAAA"),
+            other => panic!("{other:?}"),
+        }
+        let mut wav = b"RIFF".to_vec();
+        wav.extend_from_slice(&[36, 0, 0, 0]);
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&[16, 0, 0, 0]);
+        wav.extend_from_slice(&[1, 0, 1, 0]);
+        wav.extend_from_slice(&24000u32.to_le_bytes());
+        wav.extend_from_slice(&48000u32.to_le_bytes());
+        wav.extend_from_slice(&[2, 0, 16, 0]);
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&4u32.to_le_bytes());
+        wav.extend_from_slice(b"PCM!");
+        assert_eq!(pcm_from_capture(&wav), b"PCM!");
+        assert_eq!(pcm_from_capture(b"raw-pcm"), b"raw-pcm");
+        assert_eq!(transcribe_route(true, false), TranscribeRoute::Xai);
+        assert_eq!(transcribe_route(false, true), TranscribeRoute::Local);
     }
 }
