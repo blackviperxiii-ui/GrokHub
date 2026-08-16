@@ -67,13 +67,23 @@ pub fn hey_grok_on_press(voice: VoiceState, hands_on: bool) -> HeyGrokAction {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoiceRole {
+    User,
+    Assistant,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoiceEvent {
     Start,
     Open,
     Close,
     Error(String),
-    Transcript { text: String, final_: bool },
+    Transcript {
+        text: String,
+        final_: bool,
+        role: VoiceRole,
+    },
     AudioOut { pcm_b64: String },
     AudioEnd,
     BargeIn,
@@ -144,10 +154,13 @@ pub fn encode_session_update() -> String {
         "type": "session.update",
         "session": {
             "voice": "eve",
-            "instructions": "You are Grok in the GrokHub cabin. Be brief. Use host and computer tools when the user asks to change this Linux box.",
+            "instructions": "You are Grok in the GrokHub cabin. Be brief.",
             "turn_detection": { "type": "server_vad" },
             "audio": {
-                "input": { "format": { "type": "audio/pcm", "rate": 24000 } },
+                "input": {
+                    "format": { "type": "audio/pcm", "rate": 24000 },
+                    "transcription": { "language_hint": "en" }
+                },
                 "output": { "format": { "type": "audio/pcm", "rate": 24000 } }
             }
         }
@@ -173,11 +186,21 @@ pub fn parse_realtime_event(v: &Value) -> Option<VoiceEvent> {
         | "conversation.item.input_audio_transcription.delta" => Some(VoiceEvent::Transcript {
             text: parse_voice_event_text(v).unwrap_or_default(),
             final_: false,
+            role: if t.starts_with("response.") {
+                VoiceRole::Assistant
+            } else {
+                VoiceRole::User
+            },
         }),
         "response.audio_transcript.done"
         | "conversation.item.input_audio_transcription.completed" => Some(VoiceEvent::Transcript {
             text: parse_voice_event_text(v).unwrap_or_default(),
             final_: true,
+            role: if t.starts_with("response.") {
+                VoiceRole::Assistant
+            } else {
+                VoiceRole::User
+            },
         }),
         "error" => Some(VoiceEvent::Error(
             v.get("error")
@@ -278,6 +301,52 @@ pub fn voice_client_secret_denied(has_api_key: bool) -> Option<&'static str> {
         None
     } else {
         Some("Duplex Voice needs a console API key. OAuth covers STT and TTS.")
+    }
+}
+
+/// Raw s16le 24 kHz mono capture for the realtime socket. No WAV container.
+pub fn live_pcm_argv(bin: &str) -> Option<&'static [&'static str]> {
+    match bin {
+        "arecord" => Some(&["-q", "-t", "raw", "-f", "S16_LE", "-r", "24000", "-c", "1"]),
+        "ffmpeg" => Some(&[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "pulse",
+            "-i",
+            "default",
+            "-ac",
+            "1",
+            "-ar",
+            "24000",
+            "-f",
+            "s16le",
+            "pipe:1",
+        ]),
+        _ => None,
+    }
+}
+
+/// 100 ms of s16le mono at 24 kHz.
+pub fn live_pcm_frame_bytes() -> usize {
+    24000 / 10 * 2
+}
+
+pub fn voice_log_role(ev: &VoiceEvent) -> Option<(&'static str, &str)> {
+    match ev {
+        VoiceEvent::Transcript {
+            text,
+            final_: true,
+            role,
+        } if !text.trim().is_empty() => {
+            let role = match role {
+                VoiceRole::User => "user",
+                VoiceRole::Assistant => "assistant",
+            };
+            Some((role, text.as_str()))
+        }
+        _ => None,
     }
 }
 
@@ -398,7 +467,8 @@ mod tests {
             ev,
             VoiceEvent::Transcript {
                 text: "hey grok".into(),
-                final_: true
+                final_: true,
+                role: VoiceRole::User,
             }
         );
         assert_eq!(
@@ -529,5 +599,55 @@ mod tests {
         assert_eq!(pcm_from_capture(b"raw-pcm"), b"raw-pcm");
         assert_eq!(transcribe_route(true, false), TranscribeRoute::Xai);
         assert_eq!(transcribe_route(false, true), TranscribeRoute::Local);
+    }
+
+    #[test]
+    fn duplex_pcm_and_transcript_roles() {
+        let arecord = live_pcm_argv("arecord").expect("arecord argv");
+        assert!(arecord.iter().any(|a| *a == "raw"));
+        assert!(!arecord.iter().any(|a| *a == "wav"));
+        assert!(arecord.iter().any(|a| *a == "24000"));
+        let ffmpeg = live_pcm_argv("ffmpeg").expect("ffmpeg argv");
+        assert!(ffmpeg.iter().any(|a| *a == "s16le"));
+        assert!(ffmpeg.iter().any(|a| *a == "pipe:1"));
+        assert!(live_pcm_argv("sox").is_none());
+        assert_eq!(live_pcm_frame_bytes(), 4800);
+        let user = parse_realtime_event(&serde_json::json!({
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "hey grok"
+        }))
+        .unwrap();
+        match &user {
+            VoiceEvent::Transcript {
+                role: VoiceRole::User,
+                text,
+                final_,
+            } => {
+                assert_eq!(text, "hey grok");
+                assert!(final_);
+            }
+            other => panic!("{other:?}"),
+        }
+        let asst = parse_realtime_event(&serde_json::json!({
+            "type": "response.audio_transcript.done",
+            "transcript": "hello from grok"
+        }))
+        .unwrap();
+        match &asst {
+            VoiceEvent::Transcript {
+                role: VoiceRole::Assistant,
+                text,
+                final_,
+            } => {
+                assert_eq!(text, "hello from grok");
+                assert!(final_);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(voice_log_role(&user), Some(("user", "hey grok")));
+        assert_eq!(voice_log_role(&asst), Some(("assistant", "hello from grok")));
+        let sess = encode_session_update();
+        assert!(sess.contains("language_hint") || sess.contains("\"en\""));
+        assert!(!sess.to_ascii_lowercase().contains("host and computer tools"));
     }
 }
