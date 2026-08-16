@@ -177,6 +177,46 @@ pub fn sse_done(line: &str) -> bool {
     line.trim() == "data: [DONE]" || line.trim() == "data:[DONE]"
 }
 
+/// Chat Completions `finish_reason` or Responses incomplete status.
+pub fn parse_sse_finish(line: &str) -> Option<String> {
+    let v = sse_json(line)?;
+    if let Some(reason) = v
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|c| c.get("finish_reason"))
+        .and_then(|r| r.as_str())
+        .map(str::trim)
+        .filter(|r| !r.is_empty() && *r != "null")
+    {
+        return Some(reason.to_string());
+    }
+    let resp = v.get("response").unwrap_or(&v);
+    if resp.get("status").and_then(|s| s.as_str()) == Some("incomplete") {
+        if let Some(reason) = resp
+            .get("incomplete_details")
+            .and_then(|d| d.get("reason"))
+            .and_then(|r| r.as_str())
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+        {
+            return Some(reason.to_string());
+        }
+        return Some("incomplete".into());
+    }
+    None
+}
+
+pub fn stream_was_truncated(reason: Option<&str>) -> bool {
+    let Some(r) = reason.map(|s| s.trim().to_ascii_lowercase()) else {
+        return false;
+    };
+    matches!(
+        r.as_str(),
+        "length" | "max_tokens" | "max_output_tokens" | "incomplete"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,6 +231,22 @@ mod tests {
         assert!(parse_sse_delta(think).is_none());
         assert!(sse_done("data: [DONE]"));
         assert!(parse_sse_delta("data: [DONE]").is_none());
+        assert_eq!(
+            parse_sse_finish(r#"data: {"choices":[{"delta":{},"finish_reason":"length"}]}"#)
+                .as_deref(),
+            Some("length")
+        );
+        assert_eq!(
+            parse_sse_finish(r#"data: {"choices":[{"finish_reason":"stop"}]}"#).as_deref(),
+            Some("stop")
+        );
+        assert!(stream_was_truncated(Some("length")));
+        assert!(stream_was_truncated(Some("max_tokens")));
+        assert!(!stream_was_truncated(Some("stop")));
+        assert!(!stream_was_truncated(None));
+        let incomplete = r#"data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}"#;
+        assert_eq!(parse_sse_finish(incomplete).as_deref(), Some("max_output_tokens"));
+        assert!(stream_was_truncated(parse_sse_finish(incomplete).as_deref()));
         let mut body = json!({"stream": false});
         chat_stream_flag(&mut body, true);
         assert_eq!(body["stream"], true);
