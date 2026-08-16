@@ -1,7 +1,7 @@
 # GrokHub on Arch Linux
 
 ```bash
-sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11
+sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 ydotool xdotool grim wmctrl python-atspi
 rustup default stable
 git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
 cd Grok-Hub
@@ -9,8 +9,8 @@ cd Grok-Hub
 grokhub
 ```
 
-Later updates: Settings → **Update**, `/update`, or `grokhub --update`. The clone must be on `main` with an `origin`. Overlay only — `~/.config/GrokHub` stays. Progress stays on Settings. After a clean overlay, **Restart** reloads the new binary.
+`./scripts/install.sh --user` is one sudo: it installs the cabin and the hands packages (`ydotool` `xdotool` `grim` `wmctrl` `python-atspi`), enables the user `ydotoold` unit, and offers the `input` group (log out once). `makepkg -si` / `yay -S grokhub` pulls the same packages as hard depends.
 
-Hands (mouse/keyboard takeover) need `ydotool` on Wayland or `xdotool` on X11, plus `grim`, `wmctrl`, and `python-atspi`. `./scripts/install.sh --user` tries `pacman -S --needed` for those and installs a user `ydotoold` unit. If `/dev/uinput` is not writable, add your user to the `input` group, load `uinput`, and log out. Eyes → **Install hands** starts the daemon without sudo.
+Later updates: Settings → **Update**, `/update`, or `grokhub --update`. The clone must be on `main` with an `origin`. Overlay only — `~/.config/GrokHub` stays. Progress stays on Settings. After a clean overlay, **Restart** reloads the new binary.
 
 See [aur/README.md](./aur/README.md) for makepkg.

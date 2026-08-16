@@ -1,12 +1,12 @@
 # Maintainer: GrokHub contributors
 pkgname=grokhub
 pkgver=2.0.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Grok-native Linux cabin — Rust binary, no Electron"
 arch=('x86_64')
 url="https://github.com/blackviperxiii-ui/Grok-Hub"
 license=('MIT')
-depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme' 'ydotool' 'xdotool' 'grim' 'wmctrl' 'python-atspi')
+depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme' 'python' 'ydotool' 'xdotool' 'grim' 'wmctrl' 'python-atspi')
 optdepends=('slurp: region capture')
 makedepends=('cargo' 'rust' 'pkgconf' 'git')
 options=('!debug')

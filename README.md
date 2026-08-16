@@ -13,7 +13,7 @@ Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 ## Run
 
 ```bash
-sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11
+sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 ydotool xdotool grim wmctrl python-atspi
 rustup default stable
 git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
 cd Grok-Hub

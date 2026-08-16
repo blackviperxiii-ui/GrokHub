@@ -5,7 +5,7 @@ Native Rust binaries. No Electron.
 ## From a clone
 
 ```bash
-sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11
+sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 ydotool xdotool grim wmctrl python-atspi
 rustup default stable
 git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
 cd Grok-Hub
@@ -13,14 +13,16 @@ cd Grok-Hub
 grokhub
 ```
 
+`install.sh --user` sudo-installs the hands packages with the cabin. One password.
+
 ## makepkg (system)
 
 ```bash
-cd packaging
+cd packaging/aur
 makepkg -si
 ```
 
-Or from `packaging/aur` after copying `PKGBUILD`.
+`makepkg -si` / `yay -S grokhub` installs `ydotool` `xdotool` `grim` `wmctrl` `python-atspi` as depends. First cabin launch or Eyes → Install hands starts `ydotoold`.
 
 ## Layout
 

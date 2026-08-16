@@ -60,15 +60,33 @@ HANDS_PKGS=(ydotool xdotool grim wmctrl python-atspi)
 if command -v pacman >/dev/null; then
   if pacman -Q "${HANDS_PKGS[@]}" >/dev/null 2>&1; then
     echo "hands packages present"
-  elif pacman -S --needed --noconfirm "${HANDS_PKGS[@]}"; then
-    echo "installed hands packages"
   else
-    echo "hands: sudo pacman -S --needed ${HANDS_PKGS[*]}"
+    if [[ "$(id -u)" -eq 0 ]]; then
+      if pacman -S --needed "${HANDS_PKGS[@]}"; then
+        echo "installed hands packages"
+      else
+        echo "hands: pacman -S --needed ${HANDS_PKGS[*]}"
+      fi
+    elif sudo pacman -S --needed "${HANDS_PKGS[@]}"; then
+      echo "installed hands packages"
+    else
+      echo "hands: sudo pacman -S --needed ${HANDS_PKGS[*]}"
+    fi
   fi
 fi
 if command -v systemctl >/dev/null && command -v ydotoold >/dev/null; then
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   systemctl --user enable --now ydotoold.service >/dev/null 2>&1 || true
+fi
+HANDS_USER="${SUDO_USER:-$USER}"
+if command -v id >/dev/null && [[ -n "${HANDS_USER}" ]]; then
+  if id -nG "$HANDS_USER" 2>/dev/null | grep -qw input; then
+    echo "hands: $HANDS_USER already in input"
+  elif sudo usermod -aG input "$HANDS_USER"; then
+    echo "hands: added $HANDS_USER to input — log out once"
+  else
+    echo "hands: sudo usermod -aG input $HANDS_USER  # then log out once"
+  fi
 fi
 
 CONFIG_DIR="${GROKHUB_CONFIG:-$HOME/.config/GrokHub}"
