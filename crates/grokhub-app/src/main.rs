@@ -142,6 +142,9 @@ fn run_hub() {
 }
 
 fn run_cabin(hidden: bool) -> eframe::Result<()> {
+    if !tray::try_claim_cabin() {
+        return Ok(());
+    }
     tray::pin_session_bus();
     tray::force_x11_for_close_to_tray(
         env::var_os("DISPLAY").is_some(),

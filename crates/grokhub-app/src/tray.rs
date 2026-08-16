@@ -136,6 +136,106 @@ pub fn hide_action(window_visible: bool, already_told: bool) -> HideAction {
     }
 }
 
+/// A pinned taskbar click maps the existing cabin. `close_requested` can still
+/// be true from the earlier × — cancel it so hide does not run again.
+pub fn ignore_close_while_hidden(window_visible: bool, close_requested: bool) -> bool {
+    !window_visible && close_requested
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HiddenTick {
+    Raise,
+    StayHidden,
+}
+
+/// Taskbar activate focuses an unmapped cabin. The hide frame is still focused,
+/// so do not raise on the same tick we unmapped or the window flashes back.
+pub fn hidden_window_tick(hidden: bool, focused: bool, just_hid: bool) -> HiddenTick {
+    if hidden && focused && !just_hid {
+        HiddenTick::Raise
+    } else {
+        HiddenTick::StayHidden
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CabinClaim {
+    ThisProcess,
+    AlreadyRunning,
+}
+
+pub fn cabin_pid_path(dir: &Path) -> PathBuf {
+    dir.join("cabin.pid")
+}
+
+pub fn cabin_raise_path(dir: &Path) -> PathBuf {
+    dir.join("cabin.raise")
+}
+
+pub fn parse_cabin_pid(text: &str) -> Option<u32> {
+    text.trim().parse().ok().filter(|&pid| pid != 0)
+}
+
+pub fn cabin_pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Path::new(&format!("/proc/{pid}")).exists()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
+/// Second launch writes `cabin.raise` and exits so the running cabin can show.
+pub fn claim_cabin_at(dir: &Path, this_pid: u32, alive: impl Fn(u32) -> bool) -> CabinClaim {
+    let _ = fs::create_dir_all(dir);
+    let path = cabin_pid_path(dir);
+    if let Ok(text) = fs::read_to_string(&path) {
+        if let Some(pid) = parse_cabin_pid(&text) {
+            if pid != this_pid && alive(pid) {
+                request_cabin_raise_at(dir);
+                return CabinClaim::AlreadyRunning;
+            }
+        }
+    }
+    let _ = fs::write(&path, this_pid.to_string());
+    let _ = fs::remove_file(cabin_raise_path(dir));
+    CabinClaim::ThisProcess
+}
+
+pub fn try_claim_cabin() -> bool {
+    matches!(
+        claim_cabin_at(
+            &crate::config::config_dir(),
+            std::process::id(),
+            cabin_pid_alive
+        ),
+        CabinClaim::ThisProcess
+    )
+}
+
+pub fn request_cabin_raise_at(dir: &Path) {
+    let _ = fs::create_dir_all(dir);
+    let _ = fs::write(cabin_raise_path(dir), b"1");
+}
+
+pub fn take_cabin_raise_at(dir: &Path) -> bool {
+    let path = cabin_raise_path(dir);
+    if !path.exists() {
+        return false;
+    }
+    let _ = fs::remove_file(&path);
+    true
+}
+
+pub fn take_cabin_raise() -> bool {
+    take_cabin_raise_at(&crate::config::config_dir())
+}
+
 pub fn should_hide_on_close(close_to_tray: bool, tray_alive: bool) -> bool {
     close_to_tray && (tray_alive || tray_wanted())
 }
@@ -407,6 +507,64 @@ mod tests {
         assert_eq!(hide_action(false, true), HideAction::Skip);
         assert_eq!(hide_action(true, false), HideAction::HideAndPing);
         assert_eq!(hide_action(true, true), HideAction::Hide);
+    }
+
+    #[test]
+    fn hidden_cabin_cancels_a_sticky_close() {
+        assert!(ignore_close_while_hidden(false, true));
+        assert!(!ignore_close_while_hidden(false, false));
+        assert!(!ignore_close_while_hidden(true, true));
+    }
+
+    #[test]
+    fn taskbar_focus_raises_a_hidden_cabin() {
+        assert_eq!(
+            hidden_window_tick(true, true, false),
+            HiddenTick::Raise,
+            "pinned taskbar maps + focuses the unmapped cabin"
+        );
+        assert_eq!(
+            hidden_window_tick(true, true, true),
+            HiddenTick::StayHidden,
+            "the hide frame is still focused — raising it flashes the window back"
+        );
+        assert_eq!(hidden_window_tick(true, false, false), HiddenTick::StayHidden);
+        assert_eq!(hidden_window_tick(false, true, false), HiddenTick::StayHidden);
+    }
+
+    #[test]
+    fn second_launch_asks_the_running_cabin_to_show() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-cabin-claim-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            claim_cabin_at(&dir, 11, |_| false),
+            CabinClaim::ThisProcess
+        );
+        assert_eq!(fs::read_to_string(cabin_pid_path(&dir)).unwrap().trim(), "11");
+        assert!(!cabin_raise_path(&dir).exists());
+        assert_eq!(
+            claim_cabin_at(&dir, 22, |pid| pid == 11),
+            CabinClaim::AlreadyRunning
+        );
+        assert!(take_cabin_raise_at(&dir));
+        assert!(!take_cabin_raise_at(&dir));
+        assert_eq!(
+            claim_cabin_at(&dir, 33, |_| false),
+            CabinClaim::ThisProcess,
+            "a dead pid file must not block a new cabin"
+        );
+        assert_eq!(parse_cabin_pid(" 42\n"), Some(42));
+        assert_eq!(parse_cabin_pid("0"), None);
+        assert!(!cabin_pid_alive(0));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
