@@ -95,6 +95,21 @@ pub fn build_windshield(
     }
 }
 
+/// Compact object list for the model. Prefer `act <label>` over guess-clicks.
+pub fn windshield_prompt(frame: &WindshieldFrame) -> String {
+    if frame.objects.is_empty() {
+        return String::new();
+    }
+    let mut s = String::new();
+    for o in frame.objects.iter().take(40) {
+        s.push_str(&format!(
+            "- [{}] {} @{},{} {}x{}\n",
+            o.kind, o.label, o.x, o.y, o.w, o.h
+        ));
+    }
+    s
+}
+
 /// `role=push button name=Install x=10 y=20 w=80 h=24`
 pub fn parse_atspi_line(line: &str) -> Option<AtspiRow> {
     let line = line.trim();
@@ -289,6 +304,9 @@ mod tests {
             "lock windows must not become click targets"
         );
         assert!(parse_wmctrl_line("0x03 0 0 0 1920 1080 GDM Greeter").is_none());
+        let prompt = windshield_prompt(&f);
+        assert!(prompt.contains("[window] Terminal"));
+        assert!(prompt.contains("[wont] lock screen"));
     }
 
     #[test]

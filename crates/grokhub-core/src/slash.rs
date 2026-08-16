@@ -2,9 +2,6 @@
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Slash {
-    Approve { yolo: bool },
-    ApproveRisky,
-    ApproveAll,
     Forget(Option<String>),
     MemoryNote(String),
     MemoryShow,
@@ -23,7 +20,6 @@ pub enum Slash {
     Retry,
     Stop,
     Sh(String),
-    Host { on: bool },
     ProjectBind(Option<String>),
     ProjectClear,
     ProjectShow,
@@ -46,7 +42,6 @@ pub enum Slash {
     Remember(String),
     Mode(String),
     Dream,
-    Tools { on: bool },
     HostStatus,
     Import,
     Consult(String),
@@ -77,13 +72,7 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
     let cmd = parts.next().unwrap_or("").to_ascii_lowercase();
     let rest = parts.next().unwrap_or("").trim();
     match cmd.as_str() {
-        "/approve" => match rest {
-            "off" | "yolo" => Some(Slash::Approve { yolo: true }),
-            "on" | "supervised" => Some(Slash::Approve { yolo: false }),
-            "risky" => Some(Slash::ApproveRisky),
-            "all" => Some(Slash::ApproveAll),
-            _ => None,
-        },
+        "/approve" => None,
         "/forget" => Some(Slash::Forget(if rest.is_empty() {
             None
         } else {
@@ -114,16 +103,7 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/retry" => Some(Slash::Retry),
         "/stop" => Some(Slash::Stop),
         "/sh" if !rest.is_empty() => Some(Slash::Sh(rest.to_string())),
-        "/host" => match rest {
-            "on" | "enable" => Some(Slash::Host { on: true }),
-            "off" | "disable" => Some(Slash::Host { on: false }),
-            _ => Some(Slash::HostStatus),
-        },
-        "/tools" => match rest {
-            "on" | "enable" => Some(Slash::Tools { on: true }),
-            "off" | "disable" => Some(Slash::Tools { on: false }),
-            _ => Some(Slash::HostStatus),
-        },
+        "/host" | "/tools" => Some(Slash::HostStatus),
         "/rename" if !rest.is_empty() => Some(Slash::Rename(rest.to_string())),
         "/pin" => Some(Slash::Pin),
         "/delete" | "/close" => Some(Slash::Delete),
@@ -199,10 +179,6 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
 
 pub fn slash_kind(s: &Slash) -> &'static str {
     match s {
-        Slash::Approve { yolo: true } => "approve_off",
-        Slash::Approve { yolo: false } => "approve_on",
-        Slash::ApproveRisky => "approve_risky",
-        Slash::ApproveAll => "approve_all",
         Slash::Forget(_) => "forget",
         Slash::MemoryNote(_) => "memory",
         Slash::MemoryShow => "memory_show",
@@ -221,8 +197,6 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Retry => "retry",
         Slash::Stop => "stop",
         Slash::Sh(_) => "sh",
-        Slash::Host { on: true } => "host_on",
-        Slash::Host { on: false } => "host_off",
         Slash::ProjectBind(_) => "project_bind",
         Slash::ProjectClear => "project_clear",
         Slash::ProjectShow => "project_show",
@@ -245,8 +219,6 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Remember(_) => "remember",
         Slash::Mode(_) => "mode",
         Slash::Dream => "dream",
-        Slash::Tools { on: true } => "tools_on",
-        Slash::Tools { on: false } => "tools_off",
         Slash::HostStatus => "host_status",
         Slash::Import => "import",
         Slash::Consult(_) => "consult",
@@ -294,7 +266,6 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/board", hint: "Open the Workboard", insert: "/board", run_on_pick: true },
     SlashDef { cmd: "/skill", hint: "Run a skill…", insert: "/skill ", run_on_pick: false },
     SlashDef { cmd: "/host", hint: "Desktop host status", insert: "/host", run_on_pick: true },
-    SlashDef { cmd: "/approve off", hint: "YOLO — run without confirm", insert: "/approve off", run_on_pick: true },
     SlashDef { cmd: "/recall", hint: "Search chats and memory", insert: "/recall ", run_on_pick: false },
     SlashDef { cmd: "/forget", hint: "Remove a memory topic", insert: "/forget ", run_on_pick: false },
     SlashDef { cmd: "/undo", hint: "Drop last assistant turn", insert: "/undo", run_on_pick: true },
@@ -371,11 +342,8 @@ pub fn slash_help() -> String {
         "/undo — drop last assistant turn",
         "/retry — re-send last user prompt",
         "/stop — halt the current job",
-        "/approve off — YOLO",
-        "/approve on — supervised",
-        "/approve risky — confirm destructive only",
         "/sh <cmd> — run on this box",
-        "/host on|off — host tools",
+        "/host — host tools (always on)",
         "/project bind <path> — bound tree is the world",
         "/project new <name> — create a project",
         "/project folder <name> — create a sidebar folder",
@@ -392,7 +360,7 @@ pub fn slash_help() -> String {
         "/send <task> — task this box",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another box (not the phone)",
-        "/rewind — restore last project snapshot",
+        "/rewind — restore last project snapshot (refuses ~/.ssh and other secret dirs)",
         "/room <name> — speak the room",
         "/export — write this chat as markdown",
         "/rename <title> — name this chat (permanent)",
@@ -404,17 +372,19 @@ pub fn slash_help() -> String {
         "/remember <fact> — write MEMORY.md",
         "/mode auto|fast|balance|think|max — Auto routes (Settings pin skips if not a ladder default); Fast mini; Balance 4.3; Think 4.6 high; Max 4.6 xhigh",
         "/dream — Imagine last night",
-        "/tools on|off — host tools",
+        "/tools — same as /host",
         "/import — OpenClaw workspace",
         "/consult <q> — one-shot consult",
         "/usage — today's buckets",
         "/models — Grok catalog",
         "/palette — command palette",
         "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs.",
+        "Mode pill: Auto / Fast / Balance / Think / Max. Pages use catalog chrome.",
         "Appearance: Dark, Light, System. Chat streams tokens on the thread that started them.",
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Hands: unsandboxed; /stop kills the worker.",
         "Cabin eyes stay dormant until you ask, or hands need a frame. Thought does not announce an attach.",
-        "Pulse every 15s: inbox and night always move. Wall, mid-thought, and reflect wake with autonomy.",
+        "Pulse every 15s: every organ runs. The cabin drives.",
+        "Devices pair URL is a LAN IPv4. Hub complete is owner-only.",
     ]
     .join("\n")
 }
@@ -424,10 +394,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn approve_yolo() {
-        assert_eq!(parse_slash("/approve off"), Some(Slash::Approve { yolo: true }));
-        assert_eq!(parse_slash("/approve on"), Some(Slash::Approve { yolo: false }));
-        assert_eq!(parse_slash("/approve risky"), Some(Slash::ApproveRisky));
+    fn approve_gone() {
+        assert_eq!(parse_slash("/approve off"), None);
+        assert_eq!(parse_slash("/approve on"), None);
+        assert_eq!(parse_slash("/approve risky"), None);
+        assert_eq!(parse_slash("/approve"), None);
         assert_eq!(parse_slash("hello"), None);
     }
 
@@ -479,7 +450,10 @@ mod tests {
         assert_eq!(parse_slash("/mode balance"), Some(Slash::Mode("balanced".into())));
         assert_eq!(parse_slash("/mode balanced"), Some(Slash::Mode("balanced".into())));
         assert_eq!(parse_slash("/dream"), Some(Slash::Dream));
-        assert_eq!(parse_slash("/tools off"), Some(Slash::Tools { on: false }));
+        assert_eq!(parse_slash("/host off"), Some(Slash::HostStatus));
+        assert_eq!(parse_slash("/tools off"), Some(Slash::HostStatus));
+        assert_eq!(parse_slash("/tools on"), Some(Slash::HostStatus));
+        assert!(!slash_help().contains("/approve"));
         assert_eq!(parse_slash("/import"), Some(Slash::Import));
         assert_eq!(
             parse_slash("/consult check the pi"),
@@ -499,6 +473,8 @@ mod tests {
         assert!(slash_help().contains("Pulse every 15s"));
         assert!(slash_help().contains("Cabin eyes stay dormant"));
         assert!(slash_help().contains("Restart on Settings"));
+        assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
+        assert!(slash_help().contains("Mode pill"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());
