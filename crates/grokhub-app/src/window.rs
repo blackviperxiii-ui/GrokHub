@@ -100,6 +100,44 @@ pub fn remember_geom(
     }))
 }
 
+/// Idle visible cabins do not spin, so a dirty move must schedule a flush.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeomFlush {
+    Skip,
+    Now,
+    AfterMs(u64),
+}
+
+pub const GEOM_FLUSH_MS: u64 = 400;
+
+pub fn geom_flush(dirty: bool, since_persist_ms: u64) -> GeomFlush {
+    if !dirty {
+        return GeomFlush::Skip;
+    }
+    if since_persist_ms >= GEOM_FLUSH_MS {
+        GeomFlush::Now
+    } else {
+        GeomFlush::AfterMs(GEOM_FLUSH_MS.saturating_sub(since_persist_ms))
+    }
+}
+
+fn opt_moved(a: Option<f32>, b: Option<f32>) -> bool {
+    match (a, b) {
+        (None, None) => false,
+        (Some(x), Some(y)) => (x - y).abs() >= 1.0,
+        _ => true,
+    }
+}
+
+/// Ignore sub-pixel jitter so an idle cabin does not keep rewriting app.json.
+pub fn geom_moved(a: WindowGeom, b: WindowGeom) -> bool {
+    a.maximized != b.maximized
+        || (a.w - b.w).abs() >= 1.0
+        || (a.h - b.h).abs() >= 1.0
+        || opt_moved(a.x, b.x)
+        || opt_moved(a.y, b.y)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +217,33 @@ mod tests {
         assert!(g.maximized);
         assert_eq!(launch_size(&g), [1000.0, 700.0]);
         assert_eq!(launch_pos(&g), Some([20.0, 30.0]));
+    }
+
+    #[test]
+    fn idle_cabin_does_not_flush_clean_geometry() {
+        assert_eq!(geom_flush(false, 5_000), GeomFlush::Skip);
+    }
+
+    #[test]
+    fn dirty_move_flushes_without_waiting_for_the_two_second_persist() {
+        assert_eq!(geom_flush(true, 400), GeomFlush::Now);
+        assert_eq!(geom_flush(true, 0), GeomFlush::AfterMs(400));
+    }
+
+    #[test]
+    fn subpixel_jitter_is_not_a_move() {
+        let a = WindowGeom {
+            x: Some(180.0),
+            y: Some(90.0),
+            w: 1280.0,
+            h: 800.0,
+            maximized: false,
+        };
+        let mut b = a;
+        b.x = Some(180.4);
+        b.w = 1280.2;
+        assert!(!geom_moved(a, b));
+        b.x = Some(182.0);
+        assert!(geom_moved(a, b));
     }
 }
