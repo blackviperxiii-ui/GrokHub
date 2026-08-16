@@ -39,7 +39,7 @@ pub fn show(ui: &mut Ui, text: &str) {
                 ui,
                 RichText::new(line)
                     .monospace()
-                    .color(Color32::from_rgb(0xa3, 0xa3, 0xa3)),
+                    .color(crate::theme::muted()),
                 wrap,
             );
         } else if line.is_empty() {
@@ -81,7 +81,7 @@ fn inline(ui: &mut Ui, line: &str, wrap: f32) {
                             Label::new(
                                 RichText::new(&after[..end])
                                     .monospace()
-                                    .color(Color32::from_rgb(0xd4, 0xd4, 0xd4)),
+                                    .color(crate::theme::subtle()),
                             )
                             .wrap(),
                         );

@@ -170,6 +170,46 @@ pub fn match_skill<'a>(user_text: &str, skills: &'a [SkillMd]) -> Option<&'a Ski
     best
 }
 
+pub fn skill_follow_block(skill: &SkillMd) -> String {
+    format!(
+        "Active skill {} — follow these steps:\n## Steps\n{}\n\n## Pitfalls\n{}\n\n## Verify\n{}",
+        skill.name,
+        skill.instructions.trim(),
+        skill.pitfalls.trim(),
+        skill.verify.trim()
+    )
+}
+
+/// Keep name/slash/runs; replace steps and verify from the new run.
+pub fn patch_skill(existing: &SkillMd, proposed: &SkillMd) -> SkillMd {
+    SkillMd {
+        name: existing.name.clone(),
+        description: if proposed.description.trim().is_empty() {
+            existing.description.clone()
+        } else {
+            proposed.description.clone()
+        },
+        slash: existing.slash.clone(),
+        trigger: if proposed.trigger.trim().is_empty() {
+            existing.trigger.clone()
+        } else {
+            proposed.trigger.clone()
+        },
+        instructions: proposed.instructions.clone(),
+        pitfalls: if proposed.pitfalls.trim().is_empty() {
+            existing.pitfalls.clone()
+        } else {
+            proposed.pitfalls.clone()
+        },
+        verify: if proposed.verify.trim().is_empty() {
+            existing.verify.clone()
+        } else {
+            proposed.verify.clone()
+        },
+        runs: existing.runs,
+    }
+}
+
 pub fn prefer_patch(existing: &[SkillMd], proposed: &SkillMd) -> Option<String> {
     let slash = proposed.slash.to_ascii_lowercase();
     if let Some(hit) = existing.iter().find(|s| s.slash.to_ascii_lowercase() == slash) {
@@ -274,6 +314,14 @@ mod tests {
         assert_eq!(hit.name, "flash-pi");
         let proposed = propose_skill_from_turn("flash the pi", "ok", &["dd if=a".into()]);
         assert_eq!(proposed.slash, "/flash");
-        assert_eq!(prefer_patch(&[flash], &proposed), Some("flash-pi".into()));
+        assert_eq!(prefer_patch(&[flash.clone()], &proposed), Some("flash-pi".into()));
+        let patched = patch_skill(&flash, &proposed);
+        assert_eq!(patched.name, "flash-pi");
+        assert_eq!(patched.slash, "/flash");
+        assert!(patched.instructions.contains("dd if=a"));
+        let follow = skill_follow_block(&flash);
+        assert!(follow.contains("Active skill flash-pi"));
+        assert!(follow.contains("## Steps"));
+        assert!(follow.contains("dd"));
     }
 }

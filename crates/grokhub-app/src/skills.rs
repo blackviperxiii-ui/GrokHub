@@ -127,6 +127,27 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "flash-pi");
         assert!(skill_folder("flash-pi").join("scripts/verify.sh").exists());
+        let pins = pin_text(&listed);
+        assert!(pins.contains("flash-pi"));
+        let patched = grokhub_core::patch_skill(
+            &listed[0],
+            &SkillMd {
+                name: "other".into(),
+                description: "write a new image".into(),
+                slash: "/other".into(),
+                trigger: "flash the pi again".into(),
+                instructions: "1. dd the newer image".into(),
+                pitfalls: "still the boot disk".into(),
+                verify: "lsblk -f".into(),
+                runs: 3,
+            },
+        );
+        assert_eq!(patched.name, "flash-pi");
+        assert!(patched.instructions.contains("newer"));
+        save_skill(&patched).expect("patch save");
+        let listed = list_skills();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].instructions.contains("newer"));
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
