@@ -48,8 +48,8 @@ pub mod windshield;
 pub mod workboard;
 
 pub use appearance::{
-    appearance_choices, os_prefers_dark, parse_theme, pick_theme, resolve_dark, theme_id, theme_label,
-    ThemeChoice,
+    appearance_choices, appearance_hint, os_prefers_dark, parse_theme, pick_theme, resolve_dark,
+    theme_id, theme_label, ThemeChoice,
 };
 pub use feel::{
     feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb, mix_channel, HOVER_EXPANSION,
