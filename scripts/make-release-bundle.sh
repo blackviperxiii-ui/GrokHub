@@ -52,7 +52,7 @@ Environment=YDOTOOL_SOCKET=%t/ydotool.sock
 [Install]
 WantedBy=graphical-session.target
 UNIT
-BUILD_PKGS=(cmake meson ninja wayland wayland-protocols pixman libpng)
+BUILD_PKGS=(cmake meson ninja wayland wayland-protocols pixman libpng libx11 libxtst libxinerama libxkbcommon glib2 libxmu)
 if command -v pacman >/dev/null; then
   missing=0
   for p in "${BUILD_PKGS[@]}"; do
@@ -71,10 +71,18 @@ if command -v pacman >/dev/null; then
 fi
 PREFIX="$PREFIX" HANDS_SRC="${HANDS_SRC:-$HERE/hands-src}" \
   bash "$HERE/build-hands.sh" || echo "hands: build-hands.sh continued"
+UDEV_SRC="$HERE/60-grokhub-uinput.rules"
+UDEV_DEST="/etc/udev/rules.d/60-grokhub-uinput.rules"
 if [[ "$(id -u)" -eq 0 ]]; then
-  install -Dm644 "$HERE/60-grokhub-uinput.rules" \
-    /usr/lib/udev/rules.d/60-grokhub-uinput.rules
+  install -Dm644 "$UDEV_SRC" "$UDEV_DEST" || echo "hands: install $UDEV_DEST"
+  modprobe uinput || echo "hands: modprobe uinput"
   udevadm control --reload-rules 2>/dev/null || true
+  udevadm trigger --subsystem-match=misc --attr-match=name=uinput 2>/dev/null || true
+else
+  sudo install -Dm644 "$UDEV_SRC" "$UDEV_DEST" || echo "hands: sudo install $UDEV_DEST"
+  sudo modprobe uinput || echo "hands: sudo modprobe uinput"
+  sudo udevadm control --reload-rules 2>/dev/null || true
+  sudo udevadm trigger --subsystem-match=misc --attr-match=name=uinput 2>/dev/null || true
 fi
 if command -v systemctl >/dev/null && [[ -x "$HANDS_BIN/ydotoold" ]]; then
   systemctl --user daemon-reload >/dev/null 2>&1 || true

@@ -1,7 +1,7 @@
 # Local makepkg from a clone (not the AUR source PKGBUILD).
 pkgname=grokhub
 pkgver=2.0.0
-pkgrel=3
+pkgrel=4
 pkgdesc="Grok-native Linux cabin — Rust binary, no Electron"
 arch=('x86_64')
 url="https://github.com/blackviperxiii-ui/Grok-Hub"
@@ -15,7 +15,7 @@ optdepends=(
   'python-atspi: windshield fallback'
   'slurp: region capture'
 )
-makedepends=('cargo' 'rust' 'pkgconf' 'cmake' 'meson' 'ninja' 'wayland' 'wayland-protocols' 'pixman' 'libpng')
+makedepends=('cargo' 'rust' 'pkgconf' 'cmake' 'meson' 'ninja' 'wayland' 'wayland-protocols' 'pixman' 'libpng' 'libx11' 'libxtst' 'libxinerama' 'libxkbcommon' 'glib2' 'libxmu')
 options=('!debug')
 install=aur/grokhub.install
 
