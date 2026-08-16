@@ -1,22 +1,34 @@
 //! Host rails. YOLO skips the prompt, not these.
 
+fn contains_path_leaf(cmd: &str, leaf: &str) -> bool {
+    cmd.split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | '=' | ',' | ';'))
+        .any(|tok| {
+            let t = tok.trim_matches(|ch: char| matches!(ch, '"' | '\''));
+            t == leaf
+                || t.ends_with(&format!("/{leaf}"))
+                || t.starts_with(&format!("{leaf}/"))
+                || t.contains(&format!("/{leaf}/"))
+                || t == format!("~/{leaf}")
+                || t.starts_with(&format!("~/{leaf}/"))
+        })
+}
+
 pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
     let c = cmd.to_ascii_lowercase();
-    let needles = [
-        ("/etc/shadow", "forbidden path: /etc/shadow"),
-        ("/etc/sudoers", "forbidden path: /etc/sudoers"),
-        ("/.ssh/", "forbidden path: ssh keys"),
-        ("/.ssh", "forbidden path: ssh keys"),
-        ("~/.ssh", "forbidden path: ssh keys"),
-        (".ssh/", "forbidden path: ssh keys"),
-        ("/.gnupg", "forbidden path: gnupg"),
-        (".gnupg", "forbidden path: gnupg"),
-        ("app.json", "forbidden path: app secrets"),
-    ];
-    for (n, why) in needles {
-        if c.contains(n) {
-            return Some(why);
-        }
+    if c.contains("/etc/shadow") {
+        return Some("forbidden path: /etc/shadow");
+    }
+    if c.contains("/etc/sudoers") {
+        return Some("forbidden path: /etc/sudoers");
+    }
+    if contains_path_leaf(&c, ".ssh") {
+        return Some("forbidden path: ssh keys");
+    }
+    if contains_path_leaf(&c, ".gnupg") {
+        return Some("forbidden path: gnupg");
+    }
+    if contains_path_leaf(&c, "app.json") {
+        return Some("forbidden path: app secrets");
     }
     None
 }
@@ -65,6 +77,10 @@ mod tests {
             "path rails are case-insensitive"
         );
         assert!(forbidden_reason("cat /etc/passwd").is_none());
+        assert!(
+            forbidden_reason("cat my.gnupg_backup/file").is_none(),
+            "unrelated names that contain .gnupg must not trip the rail"
+        );
     }
 
     #[test]
