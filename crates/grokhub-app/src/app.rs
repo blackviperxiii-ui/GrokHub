@@ -5768,15 +5768,24 @@ impl Cabin {
                     }
                     ComposerStackSlot::Pill => {
             let pill_w = crate::cards::composer_pill_w(ui.ctx().screen_rect().width());
-            ui.set_max_width(pill_w);
+            let cap = pill_w.min(ui.available_width()).max(360.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(cap, crate::theme::QUERY_MIN_H),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_width(cap);
+                    ui.set_max_width(cap);
             egui::Frame::none()
                 .fill(crate::theme::elevated())
                 .rounding(crate::theme::QUERY_RADIUS)
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                 .inner_margin(egui::Margin::same(8.0))
                 .show(ui, |ui| {
-                    ui.set_width(pill_w.min(ui.available_width()).max(200.0));
+                    let inner = (cap - 16.0).max(200.0);
+                    ui.set_width(inner);
+                    ui.set_max_width(inner);
                     ui.set_min_height(crate::theme::QUERY_MIN_H - 16.0);
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     ui.horizontal(|ui| {
                         let plus = crate::icons::paint_bar_icon(
                             ui,
@@ -5796,15 +5805,81 @@ impl Cabin {
                             self.send_chat(t);
                         }
                         let cluster = crate::cards::composer_go_cluster_w();
-                        let go_sz = 28.0;
+                        let go_sz = crate::cards::composer_go_hit_w();
+                        let mid = crate::cards::composer_mid_w(inner);
                         let rows = (self.composer.matches('\n').count() + 1).min(8);
                         let bar_h = crate::theme::QUERY_MIN_H - 16.0;
-                        let ready = !self.composer.trim().is_empty();
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(mid, bar_h),
+                            egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
                                 ui.spacing_mut().item_spacing.x = 8.0;
-                                let go = composer_go(self.running, ready);
+                                let text_w = (ui.available_width() - cluster + go_sz).max(80.0);
+                                let edit = ui.add(
+                                    egui::TextEdit::multiline(&mut self.composer)
+                                        .id(composer_id)
+                                        .desired_width(text_w)
+                                        .desired_rows(rows)
+                                        .frame(false)
+                                        .hint_text("What do you want to know?")
+                                        .return_key(Some(egui::KeyboardShortcut::new(
+                                            egui::Modifiers::COMMAND,
+                                            egui::Key::Enter,
+                                        ))),
+                                );
+                                if let Some(t) = take_focused_composer(
+                                    ui,
+                                    &mut self.composer,
+                                    edit.has_focus(),
+                                ) {
+                                    self.send_chat(t);
+                                }
+                                let mut mode = if self.cfg.mode.trim().is_empty() {
+                                    "auto".to_string()
+                                } else {
+                                    self.cfg.mode.clone()
+                                };
+                                let mode_now = mode.clone();
+                                egui::ComboBox::from_id_salt("composer-mode")
+                                    .selected_text(Self::mode_label(&mode_now))
+                                    .width(84.0)
+                                    .show_ui(ui, |ui| {
+                                        for (id, label) in [
+                                            ("auto", "Auto"),
+                                            ("fast", "Fast"),
+                                            ("balanced", "Balance"),
+                                            ("think", "Think"),
+                                            ("max", "Max"),
+                                        ] {
+                                            ui.selectable_value(
+                                                &mut mode,
+                                                id.to_string(),
+                                                label,
+                                            );
+                                        }
+                                    });
+                                if mode != mode_now {
+                                    self.run_slash(Slash::Mode(mode));
+                                }
+                                if crate::icons::paint_bar_icon(
+                                    ui,
+                                    crate::icons::BarIcon::Mic,
+                                    22.0,
+                                    crate::theme::muted(),
+                                )
+                                .on_hover_text("Hey Grok")
+                                .clicked()
+                                {
+                                    self.listen_voice();
+                                }
+                            },
+                        );
+                        let ready = !self.composer.trim().is_empty();
+                        let go = composer_go(self.running, ready);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(go_sz, bar_h),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
                                 let send = crate::icons::paint_bar_icon(
                                     ui,
                                     match go {
@@ -5833,78 +5908,12 @@ impl Cabin {
                                         }
                                     }
                                 }
-                                let rest = ui.available_width();
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(rest, bar_h),
-                                    egui::Layout::left_to_right(egui::Align::Center),
-                                    |ui| {
-                                        ui.spacing_mut().item_spacing.x = 8.0;
-                                        let text_w =
-                                            (ui.available_width() - cluster + go_sz).max(80.0);
-                                        let edit = ui.add(
-                                            egui::TextEdit::multiline(&mut self.composer)
-                                                .id(composer_id)
-                                                .desired_width(text_w)
-                                                .desired_rows(rows)
-                                                .frame(false)
-                                                .hint_text("What do you want to know?")
-                                                .return_key(Some(egui::KeyboardShortcut::new(
-                                                    egui::Modifiers::COMMAND,
-                                                    egui::Key::Enter,
-                                                ))),
-                                        );
-                                        if let Some(t) = take_focused_composer(
-                                            ui,
-                                            &mut self.composer,
-                                            edit.has_focus(),
-                                        ) {
-                                            self.send_chat(t);
-                                        }
-                                        let mut mode = if self.cfg.mode.trim().is_empty()
-                                        {
-                                            "auto".to_string()
-                                        } else {
-                                            self.cfg.mode.clone()
-                                        };
-                                        let mode_now = mode.clone();
-                                        egui::ComboBox::from_id_salt("composer-mode")
-                                            .selected_text(Self::mode_label(&mode_now))
-                                            .width(84.0)
-                                            .show_ui(ui, |ui| {
-                                                for (id, label) in [
-                                                    ("auto", "Auto"),
-                                                    ("fast", "Fast"),
-                                                    ("balanced", "Balance"),
-                                                    ("think", "Think"),
-                                                    ("max", "Max"),
-                                                ] {
-                                                    ui.selectable_value(
-                                                        &mut mode,
-                                                        id.to_string(),
-                                                        label,
-                                                    );
-                                                }
-                                            });
-                                        if mode != mode_now {
-                                            self.run_slash(Slash::Mode(mode));
-                                        }
-                                        if crate::icons::paint_bar_icon(
-                                            ui,
-                                            crate::icons::BarIcon::Mic,
-                                            22.0,
-                                            crate::theme::muted(),
-                                        )
-                                        .on_hover_text("Hey Grok")
-                                        .clicked()
-                                        {
-                                            self.listen_voice();
-                                        }
-                                    },
-                                );
                             },
                         );
                     });
                 });
+                },
+            );
                     }
                 }
             }
@@ -7750,14 +7759,14 @@ mod tests {
             "Fast + mic + Stop need a reserved strip: {pill}"
         );
         assert!(
-            pill.contains("right_to_left"),
-            "allocate Stop first so the text strip cannot push it off the pill: {pill}"
+            pill.contains("composer_mid_w(") && pill.contains("composer_go_hit_w("),
+            "Plus/mid/Stop widths come from the window pill, not inflated available: {pill}"
         );
         let stop = pill.find("ComposerGo::Stop").expect("stop glyph");
         let edit = pill.find("TextEdit::multiline").expect("composer field");
         assert!(
-            stop < edit,
-            "RTL paints Stop before the text strip so the disc owns the right edge"
+            edit < stop,
+            "Send/Stop is the last sibling after an exact-width mid strip"
         );
         assert!(
             !pill.contains("- 180.0"),
