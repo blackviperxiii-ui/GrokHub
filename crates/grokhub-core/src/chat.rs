@@ -224,6 +224,113 @@ pub fn parse_chat_reasoning(body: &Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+pub fn responses_url() -> String {
+    format!("{XAI_BASE}/responses")
+}
+
+pub fn responses_request_body(
+    model: &str,
+    messages: &[(String, String)],
+    image_data_url: Option<&str>,
+    effort: Option<&str>,
+) -> Value {
+    let resolved = if model.is_empty() { DEFAULT_MODEL } else { model };
+    let mut input: Vec<Value> = messages
+        .iter()
+        .map(|(role, content)| json!({ "role": role, "content": content }))
+        .collect();
+    if let Some(url) = image_data_url.filter(|s| s.starts_with("data:image")) {
+        if let Some(last) = input.last_mut() {
+            if last["role"] == "user" {
+                let text = last["content"].as_str().unwrap_or("").to_string();
+                last["content"] = json!([
+                    { "type": "input_text", "text": text },
+                    { "type": "input_image", "image_url": url }
+                ]);
+            }
+        }
+    }
+    let mut body = json!({
+        "model": resolved,
+        "stream": false,
+        "store": false,
+        "input": input,
+    });
+    if let Some(effort) = effort {
+        body["reasoning"] = json!({ "effort": effort });
+    }
+    body
+}
+
+fn output_text_parts(item: &Value) -> String {
+    let mut out = String::new();
+    let t = item.get("type").and_then(|x| x.as_str()).unwrap_or("");
+    if t == "output_text" || t == "text" {
+        if let Some(text) = item.get("text").and_then(|x| x.as_str()) {
+            out.push_str(text);
+        }
+        return out;
+    }
+    if let Some(content) = item.get("content").and_then(|c| c.as_array()) {
+        for part in content {
+            out.push_str(&output_text_parts(part));
+        }
+    } else if let Some(text) = item.get("text").and_then(|x| x.as_str()) {
+        out.push_str(text);
+    }
+    out
+}
+
+pub fn parse_responses_text(body: &Value) -> Option<String> {
+    let output = body.get("output").and_then(|o| o.as_array())?;
+    let mut out = String::new();
+    for item in output {
+        let t = item.get("type").and_then(|x| x.as_str()).unwrap_or("");
+        match t {
+            "message" | "output_text" | "text" => out.push_str(&output_text_parts(item)),
+            _ => {}
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+pub fn parse_responses_reasoning(body: &Value) -> Option<String> {
+    let output = body.get("output").and_then(|o| o.as_array())?;
+    let mut out = String::new();
+    for item in output {
+        if item.get("type").and_then(|x| x.as_str()) != Some("reasoning") {
+            continue;
+        }
+        if let Some(summary) = item.get("summary").and_then(|s| s.as_array()) {
+            for part in summary {
+                if let Some(text) = part.get("text").and_then(|x| x.as_str()) {
+                    out.push_str(text);
+                }
+            }
+        }
+        if out.is_empty() {
+            out.push_str(&output_text_parts(item));
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+pub fn parse_model_text(body: &Value) -> Option<String> {
+    parse_responses_text(body).or_else(|| parse_chat_content(body))
+}
+
+pub fn parse_model_reasoning(body: &Value) -> Option<String> {
+    parse_responses_reasoning(body).or_else(|| parse_chat_reasoning(body))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,6 +377,42 @@ mod tests {
         assert_eq!(max["reasoning_effort"], "xhigh");
         let fast = chat_request_body(DEFAULT_MODEL, &[("user".into(), "hi".into())]);
         assert!(fast.get("reasoning_effort").is_none());
+        let streamed = responses_request_body(
+            "grok-4.6",
+            &[("user".into(), "hi".into())],
+            None,
+            Some("xhigh"),
+        );
+        assert_eq!(streamed["model"], "grok-4.6");
+        assert_eq!(streamed["input"][0]["content"], "hi");
+        assert_eq!(streamed["store"], false);
+        assert_eq!(streamed["reasoning"]["effort"], "xhigh");
+        assert_eq!(responses_url(), "https://api.x.ai/v1/responses");
+        let vis = responses_request_body(
+            "grok-4.6",
+            &[("user".into(), "see".into())],
+            Some("data:image/jpeg;base64,AAAA"),
+            None,
+        );
+        assert_eq!(vis["input"][0]["content"][1]["type"], "input_image");
+        let reply = json!({
+            "output": [{
+                "type": "message",
+                "content": [{ "type": "output_text", "text": "hello" }]
+            }]
+        });
+        assert_eq!(parse_responses_text(&reply).as_deref(), Some("hello"));
+        let reasoned = json!({
+            "output": [
+                { "type": "reasoning", "summary": [{ "type": "summary_text", "text": "Need a snapshot." }] },
+                { "type": "message", "content": [{ "type": "output_text", "text": "hello" }] }
+            ]
+        });
+        assert_eq!(parse_responses_reasoning(&reasoned).as_deref(), Some("Need a snapshot."));
+        assert_eq!(parse_model_text(&reply).as_deref(), Some("hello"));
+        assert_eq!(parse_model_text(&json!({
+            "choices": [{ "message": { "content": "legacy" } }]
+        })).as_deref(), Some("legacy"));
         assert_eq!(chat_timeout_secs(Some("xhigh")), 600);
         assert_eq!(chat_timeout_secs(None), 120);
     }

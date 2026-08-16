@@ -1,10 +1,11 @@
 use grokhub_core::{
-    clip_image_args, computer_cmd_line, computer_drive, jpeg_data_url, lock_blocks_hands,
-    parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse, pcm_from_capture,
-    picker_args, take_text_body, AtspiRow, ComputerDrive, ComputerOp, RECORDERS, TRANSCRIBERS,
+    clip_image_args, computer_cmd_line, computer_drive, jpeg_data_url, live_pcm_argv,
+    live_pcm_frame_bytes, lock_blocks_hands, parse_atspi_line, parse_picker_stdout,
+    parse_wmctrl_line, parse_xdotool_mouse, pcm_from_capture, picker_args, take_text_body,
+    AtspiRow, ComputerDrive, ComputerOp, RECORDERS, TRANSCRIBERS,
 };
 use image::GenericImageView;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -394,6 +395,39 @@ impl Drop for PcmSink {
     }
 }
 
+/// Long-running raw PCM capture for duplex Voice. Kill on drop.
+pub struct LivePcm {
+    child: Child,
+}
+
+impl LivePcm {
+    pub fn start() -> Option<Self> {
+        let bin = first_bin(RECORDERS)?;
+        let args = live_pcm_argv(bin.as_str())?;
+        let child = Command::new(&bin)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        Some(Self { child })
+    }
+
+    pub fn read_frame(&mut self) -> Option<Vec<u8>> {
+        let stdout = self.child.stdout.as_mut()?;
+        let mut buf = vec![0u8; live_pcm_frame_bytes()];
+        stdout.read_exact(&mut buf).ok()?;
+        Some(buf)
+    }
+}
+
+impl Drop for LivePcm {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 fn record_wav(path: &Path) -> Result<(), String> {
     let dest = path.to_str().ok_or("wav path")?;
     match first_bin(RECORDERS).as_deref() {
@@ -639,6 +673,8 @@ mod tests {
         assert!(TRANSCRIBERS.contains(&"whisper"));
         assert!(PLAYERS.contains(&"ffplay"));
         assert!(first_bin(&["definitely-not-a-bin-grokhub"]).is_none());
+        let a = grokhub_core::live_pcm_argv("arecord").unwrap();
+        assert!(a.iter().any(|x| *x == "raw"));
     }
 
     #[test]

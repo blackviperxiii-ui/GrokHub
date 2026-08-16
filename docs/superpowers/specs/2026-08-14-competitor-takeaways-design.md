@@ -383,7 +383,7 @@ No new channel. No new provider. No new Settings section unless it is Memory or 
 
 **Magic (added):** Presence (Wave 5) is the organs — live picture, voice, rewind. The revelation is **Cabin** (Wave 6): this CachyOS box is Grok’s body the way a Tesla is Grok’s body. Full bloat, one thesis.
 
-Execution plan and workflow: `docs/superpowers/plans/2026-08-14-grokhub-2.0-workflow.md` and `docs/superpowers/plans/2026-08-14-grokhub-2.0-implementation.md`.
+Execution plan: native Rust cabin in `crates/grokhub-app`. See `docs/superpowers/plans/2026-08-14-rust-parity-implementation.md`.
 
 ---
 

@@ -65,8 +65,10 @@ pub use attach::{
 pub use chat::{
     chat_request_body, chat_request_body_for_mode, chat_request_body_vision, chat_timeout_secs,
     effective_chat_mode, extract_host_cmds, failover_model, is_composer_ladder_model, model_for_mode,
-    needs_auth_banner, parse_chat_content, parse_chat_reasoning, reasoning_effort_for_mode, resolve_chat_model,
-    route_auto_mode, settings_pin_blocks_auto, should_failover_status, DEFAULT_MODEL, XAI_BASE,
+    needs_auth_banner, parse_chat_content, parse_chat_reasoning, parse_model_reasoning, parse_model_text,
+    parse_responses_reasoning, parse_responses_text, reasoning_effort_for_mode, resolve_chat_model,
+    responses_request_body, responses_url, route_auto_mode, settings_pin_blocks_auto,
+    should_failover_status, DEFAULT_MODEL, XAI_BASE,
 };
 pub use chat_view::{
     is_workload_user, merge_thinking, strip_thinking, visible_chat, ChatKind, ChatView,
@@ -142,7 +144,10 @@ pub use openclaw::{default_openclaw_paths, import_memory_file, is_openclaw_works
 pub use shortcuts::{
     apply_composer_enter, composer_enter, filter_palette, shortcut_help, ComposerEnter, SHORTCUTS,
 };
-pub use stream::{chat_stream_flag, parse_sse_delta, parse_sse_thought, sse_done};
+pub use stream::{
+    chat_include_usage, chat_stream_flag, fold_stream_token, parse_sse_delta, parse_sse_thought,
+    parse_sse_usage, sse_done, StreamTokenKind, StreamUsage,
+};
 pub use usage::{bump_usage, roll_usage_day, usage_blocked, usage_line, UsageDay};
 pub use hub_sync::{build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, HubMemoryFile, HubSnapshot};
 pub use hygiene::{lockish, should_send_screenshot};
@@ -188,9 +193,10 @@ pub use voice::{
     parse_stt_text, parse_voice_event_text, pcm_from_capture, redact_cabin_from_memory,
     realtime_can_connect, reduce_voice_state, should_attach_cabin_frame, should_capture_before_chat,
     should_mute_speaker, speech_can_connect, stt_multipart, stt_url, transcribe_route,
-    tts_request_body, tts_url, voice_can_connect, voice_client_secret_denied, voice_session_url,
-    voice_transcript_sends_chat, CabinEyesState, HeyGrokAction, HeyGrokRoute, TranscribeRoute,
-    VoiceEvent, VoiceState, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS,
+    tts_request_body, tts_url, voice_can_connect, voice_client_secret_denied, voice_log_role,
+    voice_session_url, voice_stream_token, voice_transcript_sends_chat, live_pcm_argv, live_pcm_frame_bytes,
+    CabinEyesState, HeyGrokAction, HeyGrokRoute, TranscribeRoute, VoiceEvent, VoiceRole, VoiceState,
+    DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS,
 };
 pub use windshield::{
     build_windshield, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, refused_lock,

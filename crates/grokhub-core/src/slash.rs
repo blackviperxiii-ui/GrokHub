@@ -437,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn electron_parity_slash() {
+    fn cabin_slash() {
         assert_eq!(parse_slash("/help").as_ref().map(slash_kind), Some("help"));
         assert_eq!(parse_slash("/new"), Some(Slash::New));
         assert_eq!(parse_slash("/scratch"), Some(Slash::Scratch));

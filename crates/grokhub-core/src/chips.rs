@@ -287,7 +287,7 @@ pub fn detect_chip_context(chat: &[(String, String)]) -> ChipContext {
                 "grokhub",
                 "this app",
                 "the app",
-                "electron",
+                "native cabin",
                 "desktop app",
                 "sidebar",
                 "composer",
