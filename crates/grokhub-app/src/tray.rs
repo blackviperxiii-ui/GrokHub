@@ -3,6 +3,7 @@
 use ksni::blocking::TrayMethods;
 use ksni::menu::*;
 use std::sync::mpsc;
+use std::thread;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayCmd {
@@ -13,6 +14,31 @@ pub enum TrayCmd {
 
 pub fn tray_wanted() -> bool {
     std::env::var("GROKHUB_TRAY").ok().as_deref() != Some("0")
+}
+
+/// SNI while the cabin is visible shows up as a persistent desktop notification
+/// on GNOME. Only register the icon when the window starts hidden (`--agent`).
+pub fn tray_needed_at_launch(window_hidden: bool) -> bool {
+    window_hidden && tray_wanted()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HideAction {
+    Skip,
+    Hide,
+    HideAndPing,
+}
+
+/// Close-to-tray can fire every frame while `close_requested` sticks. Do not
+/// re-unmap or re-ping once the cabin is already hidden.
+pub fn hide_action(window_visible: bool, already_told: bool) -> HideAction {
+    if !window_visible {
+        HideAction::Skip
+    } else if already_told {
+        HideAction::Hide
+    } else {
+        HideAction::HideAndPing
+    }
 }
 
 pub fn should_hide_on_close(close_to_tray: bool, tray_alive: bool) -> bool {
@@ -167,6 +193,56 @@ pub fn spawn() -> Option<TrayHost> {
     }
 }
 
+/// ksni `spawn()` `block_on`s session-bus setup on the caller. Never do that
+/// on the UI thread — a missing bus hangs close/quit for tens of seconds.
+pub fn spawn_worker<F, T>(f: F) -> mpsc::Receiver<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    let _ = thread::Builder::new()
+        .name("grokhub-tray".into())
+        .spawn(move || {
+            let _ = tx.send(f());
+        });
+    rx
+}
+
+pub fn begin_tray_spawn() -> mpsc::Receiver<Option<TrayHost>> {
+    spawn_worker(spawn)
+}
+
+pub fn take_spawn_result<T>(rx: &mpsc::Receiver<T>) -> Option<T> {
+    match rx.try_recv() {
+        Ok(v) => Some(v),
+        Err(mpsc::TryRecvError::Empty) => None,
+        Err(mpsc::TryRecvError::Disconnected) => None,
+    }
+}
+
+/// SNI while the cabin is visible looks like a persistent notification.
+pub fn keep_if_hidden<T: Send + 'static>(hidden: bool, host: T) -> Option<T> {
+    if hidden {
+        Some(host)
+    } else {
+        drop_off_thread(host);
+        None
+    }
+}
+
+pub fn drop_off_thread<T: Send + 'static>(value: T) {
+    let _ = thread::Builder::new()
+        .name("grokhub-tray-drop".into())
+        .spawn(move || drop(value));
+}
+
+impl Drop for TrayHost {
+    fn drop(&mut self) {
+        let _ = self._keep.shutdown();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +283,95 @@ mod tests {
         assert_eq!(prefer_x11_backend(None, true), Some("x11"));
         assert_eq!(prefer_x11_backend(Some("wayland"), true), None);
         assert_eq!(prefer_x11_backend(None, false), None);
+    }
+
+    #[test]
+    fn already_hidden_cabin_does_not_hide_again() {
+        assert_eq!(hide_action(false, false), HideAction::Skip);
+        assert_eq!(hide_action(false, true), HideAction::Skip);
+        assert_eq!(hide_action(true, false), HideAction::HideAndPing);
+        assert_eq!(hide_action(true, true), HideAction::Hide);
+    }
+
+    #[test]
+    fn visible_launch_does_not_need_a_tray_icon() {
+        let prev = std::env::var("GROKHUB_TRAY").ok();
+        std::env::remove_var("GROKHUB_TRAY");
+        assert!(
+            !tray_needed_at_launch(false),
+            "A visible cabin must not register StatusNotifierItem"
+        );
+        assert!(tray_needed_at_launch(true), "--agent starts hidden with a tray");
+        std::env::set_var("GROKHUB_TRAY", "0");
+        assert!(!tray_needed_at_launch(true));
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_TRAY", v),
+            None => std::env::remove_var("GROKHUB_TRAY"),
+        }
+    }
+
+    #[test]
+    fn spawn_worker_returns_before_the_job_finishes() {
+        let (block_tx, block_rx) = mpsc::channel::<()>();
+        let started = std::time::Instant::now();
+        let rx = spawn_worker(move || {
+            block_rx.recv().unwrap();
+            9
+        });
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(80),
+            "Hide/quit must not wait for StatusNotifierItem D-Bus setup"
+        );
+        assert!(
+            take_spawn_result(&rx).is_none(),
+            "A blocked worker must not look ready"
+        );
+        block_tx.send(()).unwrap();
+        let t0 = std::time::Instant::now();
+        loop {
+            if let Some(v) = take_spawn_result(&rx) {
+                assert_eq!(v, 9);
+                break;
+            }
+            assert!(
+                t0.elapsed() < std::time::Duration::from_secs(2),
+                "worker should finish after unblock"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn take_spawn_result_does_not_block_when_empty() {
+        let (_tx, rx) = mpsc::sync_channel::<i32>(1);
+        let started = std::time::Instant::now();
+        assert!(take_spawn_result(&rx).is_none());
+        assert!(started.elapsed() < std::time::Duration::from_millis(50));
+    }
+
+    #[test]
+    fn visible_cabin_discards_a_late_tray() {
+        assert_eq!(keep_if_hidden(true, 1), Some(1));
+        assert!(keep_if_hidden(false, 1).is_none());
+    }
+
+    #[test]
+    fn drop_off_thread_returns_before_destructor_finishes() {
+        struct Slow(mpsc::Sender<()>);
+        impl Drop for Slow {
+            fn drop(&mut self) {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                let _ = self.0.send(());
+            }
+        }
+        let (tx, rx) = mpsc::channel();
+        let started = std::time::Instant::now();
+        drop_off_thread(Slow(tx));
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(80),
+            "Quit must not wait for tray D-Bus teardown on the UI thread"
+        );
+        rx.recv_timeout(std::time::Duration::from_secs(2))
+            .expect("destructor should still run off-thread");
     }
 }
