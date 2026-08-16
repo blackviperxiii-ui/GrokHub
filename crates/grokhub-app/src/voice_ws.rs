@@ -1,8 +1,9 @@
-//! Duplex Grok Voice over `wss://api.x.ai/v1/realtime`. Falls back to push-to-talk.
+//! Duplex Grok Voice over `wss://api.x.ai/v1/realtime`. Console API key only.
 
+use crate::desktop::PcmSink;
 use grokhub_core::{
     dedicated_voice_model, encode_input_audio_append, encode_session_update, parse_realtime_event,
-    voice_can_connect, voice_session_url, VoiceEvent,
+    pcm_from_capture, realtime_can_connect, voice_session_url, VoiceEvent,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -40,8 +41,11 @@ impl VoiceSock {
 }
 
 pub fn start(bearer: &str, model: &str) -> Result<VoiceSock, String> {
-    if !voice_can_connect(bearer) {
-        return Err("Connect Grok (OAuth or API key) for Voice.".into());
+    if !realtime_can_connect(bearer) {
+        return Err(
+            "Duplex Voice needs a console API key. OAuth covers STT and TTS."
+                .into(),
+        );
     }
     let url = voice_session_url(&dedicated_voice_model(model));
     let mut req = url.into_client_request().map_err(|e| e.to_string())?;
@@ -89,7 +93,11 @@ pub fn start(bearer: &str, model: &str) -> Result<VoiceSock, String> {
                 if mic_stop.load(Ordering::SeqCst) {
                     return;
                 }
-                let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &chunk);
+                let pcm = pcm_from_capture(&chunk);
+                if pcm.is_empty() {
+                    continue;
+                }
+                let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, pcm);
                 if let Ok(mut g) = mic_sock.lock() {
                     if g.send(Message::Text(encode_input_audio_append(&b64)))
                         .is_err()
@@ -99,6 +107,7 @@ pub fn start(bearer: &str, model: &str) -> Result<VoiceSock, String> {
                 }
             }
         });
+        let mut sink = PcmSink::new();
         loop {
             if stop_t.load(Ordering::SeqCst) {
                 break;
@@ -129,6 +138,14 @@ pub fn start(bearer: &str, model: &str) -> Result<VoiceSock, String> {
                 Ok(Message::Text(t)) => {
                     if let Ok(v) = serde_json::from_str(&t) {
                         if let Some(ev) = parse_realtime_event(&v) {
+                            if let VoiceEvent::AudioOut { pcm_b64 } = &ev {
+                                if let Ok(pcm) = base64::Engine::decode(
+                                    &base64::engine::general_purpose::STANDARD,
+                                    pcm_b64.as_bytes(),
+                                ) {
+                                    sink.push(&pcm);
+                                }
+                            }
                             if tx.send(ev).is_err() {
                                 break;
                             }
@@ -150,6 +167,15 @@ pub fn start(bearer: &str, model: &str) -> Result<VoiceSock, String> {
 mod tests {
     #[test]
     fn refuses_empty_bearer() {
-        assert!(super::start("", "grok-voice-latest").is_err());
+        assert!(super::start("", "grok-voice-think-fast-2.0").is_err());
+        let err = match super::start("", "grok-voice-think-fast-2.0") {
+            Err(e) => e,
+            Ok(_) => panic!("empty bearer must not open duplex Voice"),
+        };
+        assert!(
+            err.to_ascii_lowercase().contains("api key")
+                || err.to_ascii_lowercase().contains("console"),
+            "{err}"
+        );
     }
 }

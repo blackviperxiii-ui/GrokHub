@@ -30,7 +30,7 @@ use grokhub_core::{
     imagine_video_res_label, last_imagine_receipt,
     extract_work_updates, fact_candidates, failover_model, filter_slash_commands, forbidden_reason,
     forget_topic, greet_from_last_job, has_auth, has_goal_complete, has_verify_ok, hey_grok_on_press,
-    import_memory_file, insight_pin, is_openclaw_workspace,
+    hey_grok_route, hey_grok_starts_ptt, import_memory_file, insight_pin, is_openclaw_workspace,
     add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
     host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
     project_menu_acts, project_menu_label, rename_node, restore_bound_path, seed_from_bound,
@@ -46,7 +46,7 @@ use grokhub_core::{
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
     now_ms, on_wheel_grab, parse_consult, parse_goal_outcome, parse_local_clock, prefer_patch,
     parse_nl_automation, parse_recipe, parse_slash, parse_theme, passenger_label, pick_theme, plan_from_text, plan_room,
-    presence_orb_state, presence_should_stream, propose_skill_from_turn, quiet_hours_active,
+    presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
     remember_chip_outcome, remember_typed_prompt, roll_usage_day,
     greeting_fingerprint, greeting_prompt, local_greeting, pick_greeting,
@@ -57,15 +57,16 @@ use grokhub_core::{
     composer_enter, ComposerEnter,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title, apply_manual_rename, delete_thread, history_order, should_name_thread,
-    skip_automation, slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
+    slash_help, step_from_cmd, summarize_write, surgical_memory_edit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
     unified_diff_cite, usage_line,
     transcribe_route, uid, update_cmds, overlay_update_begin, overlay_update_finish,
+    realtime_bearer, realtime_can_connect, voice_transcript_sends_chat,
     update_wipes_config, voice_session_url, Automation, BoardCard,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ChipThread, ComputerOp, DeviceCodeStart, HeyGrokAction,
-    HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
-    HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, Recipe, ReplayOp, RewindRecord,
+    HeyGrokRoute, HostPlanStep, HostRisk, HubMemoryFile, QuickChip,
+    HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, MintRealtimeFn, Recipe, ReplayOp, RewindRecord,
     AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
     VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
     DEFAULT_MODEL, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND, IDLE_REFLECT_MS, IMAGINE_ASPECTS,
@@ -398,7 +399,7 @@ fn listen_turn(api_key: &str) -> String {
             Err(e) => format!("VOICE_RECEIPT: {e}"),
         },
         TranscribeRoute::None => {
-            "VOICE_RECEIPT: Connect Grok in Settings, or install whisper".into()
+            "VOICE_RECEIPT: Connect Grok OAuth for STT, or install whisper".into()
         }
     }
 }
@@ -999,11 +1000,23 @@ impl Cabin {
         let _ = crate::store::save_wall(&self.wall);
         self.flush_projects();
         let _ = config::save(&self.cfg);
+        self.sync_hub_voice();
         if let Ok(st) = self.hub.lock() {
             let _ = save_hub_state(&config::hub_state_path(), &st);
         }
         self.last_persist = Instant::now();
         self.geom_dirty = false;
+    }
+
+    fn sync_hub_voice(&self) {
+        if let Ok(mut st) = self.hub.lock() {
+            st.console_api_key = self.cfg.api_key.clone();
+            if st.mint_realtime.is_none() {
+                st.mint_realtime = Some(MintRealtimeFn(Arc::new(|key| {
+                    crate::xai::grok_realtime_secret(key)
+                })));
+            }
+        }
     }
 
     fn scratch(&self) -> bool {
@@ -3982,34 +3995,51 @@ impl Cabin {
             self.status = "Hands on — halted".into();
             return;
         }
+        let oauth = secrets::access_token(&self.secrets);
+        let speech = auth_bearer(&self.cfg.api_key, &oauth);
+        let has_local = first_bin(TRANSCRIBERS).is_some();
+        let route = hey_grok_route(
+            realtime_can_connect(&self.cfg.api_key),
+            speech.as_ref().is_some_and(|s| !s.is_empty()),
+            has_local,
+        );
         if self.voice_sock.is_none() {
-            let key = self.bearer();
-            match crate::voice_ws::start(&key, &self.cfg.voice_model) {
-                Ok(sock) => {
-                    self.voice_sock = Some(sock);
-                    self.voice_state = VoiceState::Listening;
-                    self.voice_orb = "listening".into();
-                    self.status = format!(
-                        "Voice live {}",
-                        voice_session_url(&dedicated_voice_model(&self.cfg.voice_model))
-                    );
-                    return;
+            match route {
+                HeyGrokRoute::Realtime => {
+                    if let Some(key) = realtime_bearer(&self.cfg.api_key, &oauth) {
+                        match crate::voice_ws::start(&key, &self.cfg.voice_model) {
+                            Ok(sock) => {
+                                self.voice_sock = Some(sock);
+                                self.voice_state = VoiceState::Listening;
+                                self.voice_orb = "listening".into();
+                                self.status = format!(
+                                    "Voice live {}",
+                                    voice_session_url(&dedicated_voice_model(&self.cfg.voice_model))
+                                );
+                                return;
+                            }
+                            Err(e) => {
+                                self.status = format!("{e} — push-to-talk");
+                            }
+                        }
+                    }
                 }
-                Err(e) => {
-                    self.status = format!("{e} — push-to-talk");
+                HeyGrokRoute::PushToTalk => {}
+                HeyGrokRoute::None => {
+                    self.status =
+                        "Connect Grok OAuth for STT/TTS, or paste a console key for duplex Voice."
+                            .into();
+                    return;
                 }
             }
         }
-        if self.running {
+        if !hey_grok_starts_ptt(self.voice_sock.is_some(), self.running) {
             return;
         }
         self.voice_orb = "listening".into();
         self.voice_state = VoiceState::Listening;
         self.running = true;
-        self.status = format!(
-            "Listening… {}",
-            voice_session_url(&dedicated_voice_model(&self.cfg.voice_model))
-        );
+        self.status = "Listening… STT".into();
         let key = self.bearer();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
@@ -4358,7 +4388,15 @@ impl Cabin {
             .into();
             match ev {
                 VoiceEvent::Transcript { text, final_ } if final_ && !text.trim().is_empty() => {
-                    self.send_chat(text);
+                    if voice_transcript_sends_chat(self.voice_sock.is_some()) {
+                        self.send_chat(text);
+                    } else {
+                        self.messages.push(Msg {
+                            role: "user".into(),
+                            content: text,
+                        });
+                        self.persist();
+                    }
                 }
                 VoiceEvent::Fallback | VoiceEvent::Error(_) => {
                     if let Some(mut s) = self.voice_sock.take() {
@@ -4418,6 +4456,7 @@ impl Cabin {
                 st.rotate_pair();
             }
         }
+        self.sync_hub_voice();
         match serve_lan(self.hub.clone(), self.hub_port) {
             Ok(p) => {
                 self.hub_port = p;
@@ -6106,7 +6145,7 @@ impl Cabin {
                                                             if let Some(p) = &pending {
                                                                 crate::cards::settings_note(ui, p);
                                                             }
-                                                            crate::cards::settings_field(ui, "Console key", "Optional. Never in markdown.", &mut self.cfg.api_key, true);
+                                                            crate::cards::settings_field(ui, "Console key", "Fallback for chat. Required for duplex Voice (grok-voice-think-fast-2.0). Never in markdown.", &mut self.cfg.api_key, true);
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
                                                             crate::cards::settings_field(ui, "Chat model", "Empty or a ladder default (mini / 4.3 / 4.6) lets Auto route. A catalog pin such as grok-3 skips Auto. Imagine never shares this.", &mut self.cfg.model, false);
                                                             crate::cards::settings_field(ui, "Composer mode", "Auto routes Fast / Balance / Think / Max. Fast is Grok 3 mini. Balance is Grok 4.3. Think is Grok 4.6 high. Max is Grok 4.6 xhigh. The combo does not overwrite Chat model.", &mut self.cfg.mode, false);
@@ -6186,7 +6225,11 @@ impl Cabin {
                                                         }
                                                         SettingsSec::Voice => {
                                                             crate::cards::settings_note(ui, &format!("Live voice model: {voice_live}."));
-                                                            crate::cards::settings_field(ui, "Voice override", "Must contain “voice” or “realtime”.", &mut self.cfg.voice_model, false);
+                                                            crate::cards::settings_note(
+                                                                ui,
+                                                                "OAuth runs Hey Grok STT and TTS. Duplex (wss://api.x.ai/v1/realtime) needs a console API key.",
+                                                            );
+                                                            crate::cards::settings_field(ui, "Voice override", "Must contain “voice” or “realtime”. Empty keeps grok-voice-think-fast-2.0.", &mut self.cfg.voice_model, false);
                                                         }
                                                         SettingsSec::Night => {
                                                             crate::cards::settings_field(ui, "Quiet start", "Local time. Automations hold here.", &mut self.cfg.quiet_start, false);
