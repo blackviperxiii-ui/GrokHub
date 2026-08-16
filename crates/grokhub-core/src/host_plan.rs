@@ -1,4 +1,4 @@
-use crate::chat::extract_host_cmds;
+use crate::recipe::{computer_cmd_line, parse_computer_op};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostRisk {
@@ -106,11 +106,32 @@ pub fn plan_from_text(text: &str) -> Option<Vec<HostPlanStep>> {
     if let Some(p) = parse_host_plan(text) {
         return Some(p);
     }
-    let cmds = extract_host_cmds(text);
-    if cmds.is_empty() {
+    let mut steps = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t
+            .strip_prefix("HOST_CMD:")
+            .or_else(|| t.strip_prefix("HOST_CMD"))
+        {
+            let cmd = rest.trim().trim_start_matches(':').trim();
+            if !cmd.is_empty() {
+                steps.push(step_from_cmd(cmd));
+            }
+            continue;
+        }
+        if let Some(op) = parse_computer_op(t) {
+            steps.push(HostPlanStep {
+                cmd: computer_cmd_line(&op),
+                risk: HostRisk::Moderate,
+                explain: "desktop hands — mouse/keyboard".into(),
+                checked: true,
+            });
+        }
+    }
+    if steps.is_empty() {
         None
     } else {
-        Some(cmds.into_iter().map(step_from_cmd).collect())
+        Some(steps)
     }
 }
 
@@ -152,5 +173,14 @@ mod tests {
         assert_eq!(approved_cmds(&steps), vec!["echo a"]);
         move_step(&mut steps, 1, true);
         assert_eq!(steps[0].cmd, "echo b");
+        let mixed = plan_from_text(
+            "HOST_CMD: echo hi\nCOMPUTER_CMD: click 10 20\nCOMPUTER_CMD: type hello\n",
+        )
+        .unwrap();
+        assert_eq!(mixed.len(), 3);
+        assert_eq!(mixed[0].cmd, "echo hi");
+        assert_eq!(mixed[1].cmd, "COMPUTER_CMD: click 10 20");
+        assert_eq!(mixed[2].cmd, "COMPUTER_CMD: type hello");
+        assert_eq!(mixed[1].risk, HostRisk::Moderate);
     }
 }
