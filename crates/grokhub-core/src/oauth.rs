@@ -370,13 +370,13 @@ pub fn parse_poll_result(ok: bool, json: &Value, now_ms: u64) -> PollResult {
             error: Some(err.into()),
         },
         _ => PollResult {
-            status: PollStatus::Pending,
+            status: PollStatus::Denied,
             tokens: None,
             error: json
                 .get("error_description")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .or_else(|| Some(format!("waiting ({err})"))),
+                .or_else(|| Some(format!("oauth error ({err})"))),
         },
     }
 }
@@ -472,6 +472,12 @@ mod tests {
             bad.status,
             PollStatus::Denied,
             "malformed success must not spin forever"
+        );
+        let grant = parse_poll_result(false, &json!({"error":"invalid_grant"}), 1);
+        assert_eq!(
+            grant.status,
+            PollStatus::Denied,
+            "unknown token errors must not poll forever"
         );
         let t = ready.tokens.unwrap();
         assert_eq!(t.access_token, "tok");

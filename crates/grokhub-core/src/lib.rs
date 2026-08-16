@@ -166,9 +166,9 @@ pub use context::{
 };
 pub use diagnostics::diagnostics_bundle;
 pub use goal::{
-    blend_thread_goal, compact_keep_pin, looks_incomplete, next_goal_prompt, parse_fast_topics,
-    parse_goal_outcome, should_name_thread, thread_goal_prompt, ThreadGoal, GOAL_DROP_AFTER,
-    GOAL_MAX_STEPS,
+    blend_thread_goal, compact_keep_pin, goal_pin_for_job, goal_step_after_outcome, looks_incomplete,
+    next_goal_prompt, parse_fast_topics, parse_goal_outcome, should_name_thread, thread_goal_prompt,
+    ThreadGoal, GOAL_DROP_AFTER, GOAL_MAX_STEPS,
 };
 pub use greeting::{
     greeting_fingerprint, greeting_name, greeting_prompt, local_greeting, parse_llm_greeting,
