@@ -26,6 +26,8 @@ use grokhub_core::{
     imagine_shows_result_above, imagine_toolbox_dock, imagine_toolbox_shows_title,
     imagine_toolbox_top, imagine_wall_bounds,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
+    mark_automation_skipped, yolo_plan_split, chat_bearer, drop_trailing_assistant,
+    job_error_goes_to_chat, persist_user_turn,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     imagine_aspect_label, imagine_aspect_name, imagine_style_label, imagine_video_dur_label,
@@ -1127,6 +1129,17 @@ impl Cabin {
         self.chat_job_thread = None;
         self.stream_buf.clear();
         self.thought_buf.clear();
+        let mut msgs: Vec<(String, String)> = self
+            .messages
+            .iter()
+            .map(|m| (m.role.clone(), m.content.clone()))
+            .collect();
+        drop_trailing_assistant(&mut msgs);
+        self.messages = msgs
+            .into_iter()
+            .map(|(role, content)| Msg { role, content })
+            .collect();
+        self.persist();
         if let Some(mut s) = self.voice_sock.take() {
             s.halt();
         }
@@ -2187,18 +2200,25 @@ impl Cabin {
     }
 
     fn bearer(&mut self) -> String {
+        let mut oauth_usable = false;
         if let Some(tok) = self.secrets.oauth.clone() {
             if let Ok((access, next, refreshed)) = crate::oauth::ensure_access(&tok) {
                 if refreshed {
                     self.secrets.oauth = Some(next);
                     let _ = secrets::save(&self.secrets);
                 }
+                oauth_usable = true;
                 if self.cfg.api_key.trim().is_empty() {
                     return access;
                 }
             }
         }
-        auth_bearer(&self.cfg.api_key, &secrets::access_token(&self.secrets)).unwrap_or_default()
+        chat_bearer(
+            &self.cfg.api_key,
+            &secrets::access_token(&self.secrets),
+            oauth_usable,
+        )
+        .unwrap_or_default()
     }
 
     fn switch_thread(&mut self, idx: usize) {
@@ -2393,6 +2413,10 @@ impl Cabin {
         );
         if let Some(slash) = parse_slash(&text) {
             self.run_slash(slash);
+            return;
+        }
+        if !persist_user_turn(self.has_key()) {
+            self.status = "Connect Grok OAuth in Settings".into();
             return;
         }
         if let Some(sk) = match_skill(&text, &self.skill_list) {
@@ -2929,16 +2953,10 @@ impl Cabin {
     fn dispatch_send(&mut self, task: String) {
         if self.hub_on {
             if let Ok(mut st) = self.hub.lock() {
-                let id = st.device_id.clone();
-                let name = st.device_name.clone();
-                st.inbox.push(grokhub_core::task::HubTask::enqueue(
-                    &id,
-                    &name,
-                    &id,
-                    &task,
-                    &task,
-                    now_ms(),
-                ));
+                if let Err(e) = st.enqueue_local(&task, &task) {
+                    self.status = e;
+                    return;
+                }
             }
             self.status = "Task queued on hub".into();
             self.nav = Nav::Devices;
@@ -3132,7 +3150,12 @@ impl Cabin {
         let destructive = a.instructions.to_ascii_lowercase().contains("rm ")
             || host_risk(&a.instructions) == HostRisk::Destructive;
         if automation_blocked_by_policy(quiet, destructive, self.cfg.autonomy) {
+            self.mark_auto_skipped(&a.id, now_ms);
             self.status = format!("Night skipped {} (quiet/policy)", a.name);
+            return;
+        }
+        if !persist_user_turn(self.has_key()) {
+            self.status = "Connect Grok OAuth in Settings".into();
             return;
         }
         self.mark_auto_ran(&a.id, now_ms);
@@ -3422,6 +3445,14 @@ impl Cabin {
     fn mark_auto_ran(&mut self, id: &str, now: u64) {
         if let Some(a) = self.automations.iter_mut().find(|x| x.id == id) {
             *a = mark_automation_ran(a.clone(), now);
+        }
+        let _ = crate::night::save(&self.automations);
+    }
+
+    fn mark_auto_skipped(&mut self, id: &str, now: u64) {
+        let clock = Self::local_clock();
+        if let Some(a) = self.automations.iter_mut().find(|x| x.id == id) {
+            *a = mark_automation_skipped(a.clone(), now, clock);
         }
         let _ = crate::night::save(&self.automations);
     }
@@ -3802,7 +3833,18 @@ impl Cabin {
                     if let Some(plan) = plan_from_text(&text) {
                         self.pending_update = false;
                         if self.cfg.yolo {
-                            self.run_cmds(approved_cmds(&plan));
+                            let (run, hold) = yolo_plan_split(
+                                &plan,
+                                self.approve_risky_only,
+                                &self.cfg.project_dir,
+                            );
+                            if !run.is_empty() {
+                                self.run_cmds(run);
+                            }
+                            if !hold.is_empty() {
+                                self.plan_pending = Some(hold);
+                                self.status = "Host plan needs approval".into();
+                            }
                         } else {
                             self.plan_pending = Some(plan);
                             self.status = "Host plan needs approval".into();
@@ -4310,6 +4352,9 @@ impl Cabin {
     }
 
     fn apply_job_fail(&mut self, err: &str) -> String {
+        if !job_error_goes_to_chat(self.chat_job_thread.as_deref()) {
+            return err.to_string();
+        }
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.clone();
         if job.as_deref().map(|id| id == vis).unwrap_or(true) {
