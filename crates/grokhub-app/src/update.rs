@@ -125,6 +125,7 @@ pub fn restart_system(hidden: bool) -> Result<(), String> {
     let acts = restart_acts(
         unit_is_active("grokhub.service"),
         unit_is_active("grokhub-hub.service"),
+        unit_is_active("ydotoold.service"),
         &exe,
         hidden,
     );
@@ -276,7 +277,7 @@ mod tests {
             grokhub_core::restart_bin(Some(home.to_str().unwrap()), Some("/old/grokhub")),
             bin.to_string_lossy()
         );
-        let acts = grokhub_core::restart_acts(false, false, "/opt/grokhub", true);
+        let acts = grokhub_core::restart_acts(false, false, false, "/opt/grokhub", true);
         assert_eq!(
             acts,
             vec![grokhub_core::RestartAct::Spawn {
