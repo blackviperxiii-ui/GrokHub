@@ -81,6 +81,23 @@ pub fn apply_stream_snapshot(
     }
 }
 
+/// Replace a partial live assistant with the error, or append one.
+pub fn apply_job_error(messages: &mut Vec<(String, String)>, err: &str) -> String {
+    let text = format!("Error: {err}");
+    if let Some((role, body)) = messages.last_mut() {
+        if role == "assistant" {
+            *body = text;
+            return err.to_string();
+        }
+    }
+    messages.push(("assistant".into(), text));
+    err.to_string()
+}
+
+pub fn worker_gone_status() -> &'static str {
+    "Job dropped — worker gone"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +174,30 @@ mod tests {
         assert_eq!(chat_send_kind(None, "thr-b", true), ChatSendKind::Redirect);
         assert!(!chat_shows_thinking(None, "thr-b", false));
         assert_eq!(chat_send_kind(None, "thr-b", false), ChatSendKind::Fresh);
+    }
+
+    #[test]
+    fn job_error_replaces_partial_assistant() {
+        let mut msgs = origin_partial();
+        let status = apply_job_error(&mut msgs, "429 rate limited");
+        assert_eq!(status, "429 rate limited");
+        assert_eq!(
+            msgs.last().map(|m| m.1.as_str()),
+            Some("Error: 429 rate limited")
+        );
+        assert_eq!(msgs.iter().filter(|(r, _)| r == "assistant").count(), 1);
+    }
+
+    #[test]
+    fn job_error_appends_when_no_assistant_yet() {
+        let mut msgs = vec![("user".into(), "hi".into())];
+        apply_job_error(&mut msgs, "401 unauthorized");
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[1], ("assistant".into(), "Error: 401 unauthorized".into()));
+    }
+
+    #[test]
+    fn worker_gone_has_a_status() {
+        assert!(!worker_gone_status().is_empty());
     }
 }

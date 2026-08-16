@@ -169,14 +169,22 @@ impl HubState {
 
     pub fn complete_task(
         &mut self,
+        peer_id: &str,
         id: &str,
         result: &str,
         receipts: Vec<Receipt>,
         status: Option<&str>,
-    ) -> Option<HubTask> {
-        let t = self.inbox.iter_mut().find(|t| t.id == id)?;
+    ) -> Result<HubTask, CompleteError> {
+        if !self.inbox.iter().any(|t| t.id == id) {
+            return Err(CompleteError::NotFound);
+        }
+        let t = self
+            .inbox
+            .iter_mut()
+            .find(|t| t.id == id && t.target_device_id == peer_id)
+            .ok_or(CompleteError::Forbidden)?;
         t.complete(result, receipts, status);
-        Some(t.clone())
+        Ok(t.clone())
     }
 
     pub fn take_next_queued(&mut self, peer_id: &str) -> Option<HubTask> {
@@ -274,6 +282,12 @@ pub enum PairError {
     Mismatch,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompleteError {
+    NotFound,
+    Forbidden,
+}
+
 pub fn state_for_disk(st: &HubState) -> HubState {
     let mut out = st.clone();
     out.last_frame = None;
@@ -329,10 +343,39 @@ mod tests {
             .enqueue_task(&peer, &st.device_id.clone(), "Flash", "flash the pi")
             .unwrap();
         assert_eq!(st.get_task(&task.id, &peer.id).unwrap().prompt, "flash the pi");
-        st.complete_task(&task.id, "blocked", vec![], Some("failed"));
+        st.complete_task(&st.device_id.clone(), &task.id, "blocked", vec![], Some("failed"))
+            .expect("hub target may complete");
         let results = st.claim_results(&peer.id);
         assert_eq!(results[0].status, "failed");
         assert!(st.claim_results(&peer.id).is_empty());
+    }
+
+    #[test]
+    fn foreign_peer_cannot_complete_hub_task() {
+        let mut st = HubState::empty();
+        let phone_code = st.rotate_pair().code;
+        let phone = st.pair_with(&phone_code, "phone", "Pixel").unwrap();
+        let other_code = st.rotate_pair().code;
+        let other = st.pair_with(&other_code, "other", "Laptop").unwrap();
+        let hub_id = st.device_id.clone();
+        let task = st
+            .enqueue_task(&phone, &hub_id, "Flash", "flash the pi")
+            .unwrap();
+        assert_eq!(
+            st.complete_task(&other.id, &task.id, "nope", vec![], Some("done"))
+                .unwrap_err(),
+            CompleteError::Forbidden
+        );
+        assert_eq!(st.get_task(&task.id, &phone.id).unwrap().status, "queued");
+        let done = st
+            .complete_task(&hub_id, &task.id, "flashed", vec![], Some("done"))
+            .expect("target completes");
+        assert_eq!(done.status, "done");
+        assert_eq!(
+            st.complete_task(&hub_id, "missing-id", "x", vec![], None)
+                .unwrap_err(),
+            CompleteError::NotFound
+        );
     }
 
     #[test]

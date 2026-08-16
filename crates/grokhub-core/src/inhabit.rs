@@ -16,3 +16,21 @@ pub struct InhabitBundle {
 pub fn can_inhabit(paired: bool, source_locked: bool, dest_idle: bool) -> bool {
     paired && source_locked && dest_idle
 }
+
+/// Pairing code or "sharing on" is not enough — a real peer must be present,
+/// and the destination must not already be running a job.
+pub fn inhabit_ready(peer_count: usize, dest_running: bool) -> bool {
+    can_inhabit(peer_count > 0, true, !dest_running)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inhabit_requires_peers_and_idle_dest() {
+        assert!(!inhabit_ready(0, false), "sharing with no peers is not paired");
+        assert!(!inhabit_ready(1, true), "a busy dest must not take inhabit");
+        assert!(inhabit_ready(1, false));
+    }
+}
