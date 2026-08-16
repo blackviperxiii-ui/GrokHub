@@ -26,7 +26,7 @@ use grokhub_core::{
     imagine_shows_result_above, imagine_toolbox_dock, imagine_toolbox_shows_title,
     imagine_toolbox_top, imagine_wall_bounds,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
-    mark_automation_skipped, yolo_plan_split, chat_bearer,
+    mark_automation_skipped, retain_held_plan, yolo_plan_split, chat_bearer,
     drop_trailing_assistant_on, job_error_goes_to_chat, kick_messages_for_job, persist_user_turn,
     push_bound_message, refund_host_reserved,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
@@ -1136,6 +1136,7 @@ impl Cabin {
         }
         self.pending_connectors.clear();
         self.pending_skill = None;
+        self.plan_pending = None;
         self.stream_buf.clear();
         self.thought_buf.clear();
         let vis = self.visible_thread_id();
@@ -3188,7 +3189,7 @@ impl Cabin {
                         .find(|a| a.id == id)
                         .map(|a| a.name.clone())
                         .unwrap_or_else(|| id.clone());
-                    self.mark_auto_ran(&id, now_ms);
+                    self.mark_auto_skipped(&id, now_ms);
                     self.status = format!("Night skipped {name} (check)");
                 } else if let Some(a) = self.automations.iter().find(|x| x.id == id).cloned() {
                     self.fire_night(a, now_ms);
@@ -4067,7 +4068,7 @@ impl Cabin {
                     }
                 }
                 self.save_skill = true;
-                self.plan_pending = None;
+                self.plan_pending = retain_held_plan(self.plan_pending.take(), &self.last_host);
                 self.persist();
                 self.run_skill_verify();
                 bump_usage(&mut self.usage, "host");
