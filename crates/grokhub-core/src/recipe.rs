@@ -249,7 +249,36 @@ pub fn hands_protocol() -> &'static str {
      COMPUTER_CMD: scroll <dy>\n\
      COMPUTER_CMD: act <accessible-name>\n\
      COMPUTER_CMD: wait_for title=<window>\n\
-     Prefer act and wait_for over raw clicks. Coordinates are the current screen; a JPEG frame is attached when the user asks for hands or Cabin eyes is on. Lock/password screens are won'ts — never click them or type into them. Do not read ~/.ssh or /etc/shadow."
+     Prefer act and wait_for over raw clicks. Coordinates are the current screen; a JPEG frame is attached only when the user asks for hands or cabin eyes. Lock/password screens are won'ts — never click them or type into them. Do not read ~/.ssh or /etc/shadow."
+}
+
+pub fn user_asks_cabin_eyes(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "cabin eyes",
+        "look at my screen",
+        "look at the screen",
+        "look at this screen",
+        "look at my desktop",
+        "look at the desktop",
+        "what's on my screen",
+        "whats on my screen",
+        "what's on the screen",
+        "whats on the screen",
+        "what's on my desktop",
+        "whats on my desktop",
+        "what do you see",
+        "what can you see",
+        "see my screen",
+        "see the screen",
+        "see my desktop",
+        "take a screenshot",
+        "grab a screenshot",
+        "use your eyes",
+        "open your eyes",
+        "wake your eyes",
+    ];
+    NEEDLES.iter().any(|n| t.contains(n))
 }
 
 pub fn user_asks_desktop_hands(text: &str) -> bool {
@@ -275,8 +304,10 @@ pub fn user_asks_desktop_hands(text: &str) -> bool {
     NEEDLES.iter().any(|n| t.contains(n))
 }
 
-pub fn should_attach_hands_frame(cabin_eyes: bool, hands_turn: bool, has_frame: bool) -> bool {
-    has_frame && (cabin_eyes || hands_turn)
+/// Attach a room frame only when this turn asked for eyes or hands.
+/// The Cabin eyes setting being on is not a trigger.
+pub fn should_attach_hands_frame(eyes_turn: bool, hands_turn: bool, has_frame: bool) -> bool {
+    has_frame && (eyes_turn || hands_turn)
 }
 
 pub fn lock_blocks_hands(titles: &[&str]) -> bool {
@@ -392,6 +423,11 @@ mod tests {
         assert!(user_asks_desktop_hands("click the Save button for me"));
         assert!(user_asks_desktop_hands("type into the settings window"));
         assert!(!user_asks_desktop_hands("what is rust ownership?"));
+        assert!(user_asks_cabin_eyes("look at my screen"));
+        assert!(user_asks_cabin_eyes("what do you see?"));
+        assert!(user_asks_cabin_eyes("Cabin eyes — what's on the desktop"));
+        assert!(!user_asks_cabin_eyes("what is rust ownership?"));
+        assert!(!user_asks_cabin_eyes("tell me about chowder"));
         assert!(should_attach_hands_frame(false, true, true));
         assert!(!should_attach_hands_frame(false, false, true));
         assert!(should_attach_hands_frame(true, false, true));
@@ -484,5 +520,17 @@ mod tests {
         );
         assert!(screen_from_extents(0, 1080).is_none());
         assert!(screen_from_extents(1920, 0).is_none());
+    }
+
+    #[test]
+    fn cabin_eyes_stay_dormant_until_called() {
+        assert!(!should_attach_hands_frame(false, false, true));
+        assert!(!should_attach_hands_frame(false, false, false));
+        assert!(should_attach_hands_frame(true, false, true));
+        assert!(should_attach_hands_frame(false, true, true));
+        assert!(!user_asks_cabin_eyes("what's in the bowl"));
+        assert!(!user_asks_cabin_eyes("tell me about rust"));
+        assert!(user_asks_cabin_eyes("look at my screen"));
+        assert!(hands_protocol().contains("only when the user asks"));
     }
 }
