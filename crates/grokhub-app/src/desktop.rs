@@ -6,7 +6,7 @@ use grokhub_core::{
     live_pcm_frame_bytes, luma_mean_var, parse_atspi_line, parse_picker_stdout, parse_wmctrl_line,
     parse_xdotool_mouse, pcm_from_capture, pick_hands_backend, picker_args, resolve_bin_in,
     session_is_wayland, take_text_body, x11_grab_size, ydotool_socket_path, AtspiRow, CaptureKind,
-    ComputerDrive, ComputerOp, HandsBackend, HandsDown, RECORDERS, TRANSCRIBERS,
+    ComputerDrive, ComputerOp, HandsBackend, HandsDown, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
 };
 use image::GenericImageView;
 use std::io::{Read, Write};
@@ -155,9 +155,24 @@ pub fn hands_ready() -> bool {
     hands_chip_live(hands_peek())
 }
 
+fn pyatspi_import_ok() -> bool {
+    Command::new("python3")
+        .args(["-c", "import pyatspi"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 pub fn install_hands_status() -> String {
     let reason = ensure_hands();
-    hands_down_receipt(reason).to_string()
+    let mut out = hands_down_receipt(reason).to_string();
+    if !pyatspi_import_ok() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(PYATSPI_MISSING);
+    }
+    out
 }
 
 pub fn collect_rows() -> Vec<AtspiRow> {
