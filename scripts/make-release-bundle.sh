@@ -22,6 +22,8 @@ cp -a "$ROOT/packaging/grokhub.desktop" "$STAGE/grokhub.desktop"
 cp -a "$ROOT/packaging/grokhub.svg" "$STAGE/grokhub.svg"
 cp -a "$ROOT/LICENSE" "$STAGE/LICENSE"
 cp -a "$ROOT/packaging/systemd/ydotoold.service" "$STAGE/ydotoold.service"
+cp -a "$ROOT/packaging/systemd/grokhub.service" "$STAGE/grokhub.service"
+cp -a "$ROOT/packaging/systemd/grokhub-hub.service" "$STAGE/grokhub-hub.service"
 cp -a "$ROOT/packaging/udev/60-grokhub-uinput.rules" "$STAGE/60-grokhub-uinput.rules"
 cp -a "$ROOT/scripts/build-hands.sh" "$STAGE/build-hands.sh"
 cat >"$STAGE/install.sh" <<'EOF'
@@ -52,34 +54,35 @@ Environment=YDOTOOL_SOCKET=%t/ydotool.sock
 [Install]
 WantedBy=graphical-session.target
 UNIT
-BUILD_PKGS=(cmake meson ninja wayland wayland-protocols pixman libpng libx11 libxtst libxinerama libxkbcommon glib2 libxmu)
-if command -v pacman >/dev/null; then
-  missing=0
-  for p in "${BUILD_PKGS[@]}"; do
-    if ! pacman -Q "$p" >/dev/null 2>&1; then
-      missing=1
-      break
-    fi
-  done
-  if [[ "$missing" -eq 1 ]]; then
-    if [[ "$(id -u)" -eq 0 ]]; then
-      pacman -S --needed "${BUILD_PKGS[@]}" || echo "hands: pacman -S --needed ${BUILD_PKGS[*]}"
-    else
-      sudo pacman -S --needed "${BUILD_PKGS[@]}" || echo "hands: sudo pacman -S --needed ${BUILD_PKGS[*]}"
-    fi
+try_pkgs() {
+  local kind="$1"
+  shift
+  if [[ "$#" -eq 0 ]]; then
+    return 0
   fi
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@" || echo "hands: $kind $*"
+  else
+    sudo "$@" || echo "hands: sudo $kind $*"
+  fi
+}
+if command -v pacman >/dev/null; then
+  try_pkgs pacman pacman -S --needed cmake meson ninja wayland wayland-protocols pixman libpng \
+    libx11 libxtst libxinerama libxkbcommon glib2 libxmu
+  try_pkgs pacman pacman -S --needed python-atspi ffmpeg alsa-utils
+elif command -v apt-get >/dev/null; then
+  try_pkgs apt-get apt-get install -y cmake meson ninja-build pkg-config libwayland-dev \
+    wayland-protocols libpixman-1-dev libpng-dev libx11-dev libxtst-dev libxinerama-dev \
+    libxkbcommon-dev libglib2.0-dev libxmu-dev
+  try_pkgs apt-get apt-get install -y python3-pyatspi ffmpeg alsa-utils
+elif command -v dnf >/dev/null; then
+  try_pkgs dnf dnf install -y cmake meson ninja-build wayland-devel wayland-protocols-devel \
+    pixman-devel libpng-devel libX11-devel libXtst-devel libXinerama-devel libxkbcommon-devel \
+    glib2-devel libXmu-devel
+  try_pkgs dnf dnf install -y python3-pyatspi ffmpeg alsa-utils
 fi
 PREFIX="$PREFIX" HANDS_SRC="${HANDS_SRC:-$HERE/hands-src}" \
   bash "$HERE/build-hands.sh" || echo "hands: build-hands.sh continued"
-if command -v pacman >/dev/null; then
-  if pacman -Q python-atspi >/dev/null 2>&1; then
-    echo "hands: python-atspi already installed"
-  elif [[ "$(id -u)" -eq 0 ]]; then
-    pacman -S --needed python-atspi || echo "hands: pacman -S --needed python-atspi"
-  else
-    sudo pacman -S --needed python-atspi || echo "hands: sudo pacman -S --needed python-atspi"
-  fi
-fi
 UDEV_SRC="$HERE/60-grokhub-uinput.rules"
 UDEV_DEST="/etc/udev/rules.d/60-grokhub-uinput.rules"
 if [[ "$(id -u)" -eq 0 ]]; then
@@ -93,9 +96,18 @@ else
   sudo udevadm control --reload-rules 2>/dev/null || true
   sudo udevadm trigger --subsystem-match=misc --attr-match=name=uinput 2>/dev/null || true
 fi
-if command -v systemctl >/dev/null && [[ -x "$HANDS_BIN/ydotoold" ]]; then
+install -Dm644 "$HERE/grokhub-hub.service" \
+  "$HOME/.config/systemd/user/grokhub-hub.service"
+install -Dm644 "$HERE/grokhub.service" \
+  "$HOME/.config/systemd/user/grokhub.service"
+if command -v systemctl >/dev/null; then
   systemctl --user daemon-reload >/dev/null 2>&1 || true
-  systemctl --user enable --now ydotoold.service >/dev/null 2>&1 || true
+  systemctl --user enable grokhub.service >/dev/null 2>&1 || true
+  systemctl --user enable --now grokhub-hub.service >/dev/null 2>&1 || true
+  if [[ -x "$HANDS_BIN/ydotoold" ]]; then
+    systemctl --user enable --now ydotoold.service >/dev/null 2>&1 || true
+    systemctl --user restart ydotoold.service >/dev/null 2>&1 || true
+  fi
 fi
 HANDS_USER="${SUDO_USER:-$USER}"
 if command -v id >/dev/null && [[ -n "${HANDS_USER}" ]]; then

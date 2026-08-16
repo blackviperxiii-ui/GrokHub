@@ -217,10 +217,19 @@ pub enum RestartAct {
     Spawn { argv: Vec<String> },
 }
 
-/// Restart the hub unit (if live), then the cabin unit or a fresh process.
-pub fn restart_acts(cabin_unit: bool, hub_unit: bool, exe: &str, hidden: bool) -> Vec<RestartAct> {
+/// Restart hands, then the hub unit (if live), then the cabin unit or a fresh process.
+pub fn restart_acts(
+    cabin_unit: bool,
+    hub_unit: bool,
+    hands_unit: bool,
+    exe: &str,
+    hidden: bool,
+) -> Vec<RestartAct> {
     let mut acts = Vec::new();
     let mut units = Vec::new();
+    if hands_unit {
+        units.push("ydotoold.service".into());
+    }
     if hub_unit {
         units.push("grokhub-hub.service".into());
     }
@@ -390,13 +399,17 @@ mod tests {
             vec!["/opt/grokhub".to_string(), "--agent".into()]
         );
         assert_eq!(
-            restart_acts(true, true, "/opt/grokhub", false),
+            restart_acts(true, true, true, "/opt/grokhub", false),
             vec![RestartAct::Systemd {
-                units: vec!["grokhub-hub.service".into(), "grokhub.service".into()]
+                units: vec![
+                    "ydotoold.service".into(),
+                    "grokhub-hub.service".into(),
+                    "grokhub.service".into()
+                ]
             }]
         );
         assert_eq!(
-            restart_acts(false, true, "/opt/grokhub", true),
+            restart_acts(false, true, false, "/opt/grokhub", true),
             vec![
                 RestartAct::Systemd {
                     units: vec!["grokhub-hub.service".into()]
@@ -407,14 +420,24 @@ mod tests {
             ]
         );
         assert_eq!(
-            restart_acts(false, false, "/opt/grokhub", false),
+            restart_acts(false, false, false, "/opt/grokhub", false),
             vec![RestartAct::Spawn {
                 argv: vec!["/opt/grokhub".into()]
             }]
         );
         assert_eq!(
-            systemd_user_restart_args(&["grokhub-hub.service".into(), "grokhub.service".into()]),
-            vec!["--user", "restart", "grokhub-hub.service", "grokhub.service"]
+            systemd_user_restart_args(&[
+                "ydotoold.service".into(),
+                "grokhub-hub.service".into(),
+                "grokhub.service".into()
+            ]),
+            vec![
+                "--user",
+                "restart",
+                "ydotoold.service",
+                "grokhub-hub.service",
+                "grokhub.service"
+            ]
         );
         let _ = fs::remove_dir_all(&root);
     }
