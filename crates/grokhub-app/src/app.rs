@@ -4202,11 +4202,24 @@ fn apply_tray_window(ctx: &egui::Context, w: crate::tray::TrayWindow) {
 }
 
 fn titlebar_chrome_size() -> egui::Vec2 {
-    egui::vec2(36.0, crate::theme::TITLEBAR_H)
+    egui::vec2(crate::theme::HIT.max(36.0), crate::theme::TITLEBAR_H)
+}
+
+/// egui ignores a click held longer than 0.8s (`max_click_duration`). The
+/// titlebar × is a close control — release over it must still hide to tray.
+fn chrome_activated(clicked: bool, released_over: bool) -> bool {
+    clicked || released_over
+}
+
+fn titlebar_chrome_hit(resp: &egui::Response) -> bool {
+    chrome_activated(
+        resp.clicked(),
+        resp.contains_pointer() && resp.ctx.input(|i| i.pointer.primary_released()),
+    )
 }
 
 fn titlebar_chrome_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let (_rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click());
+    let (_rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click_and_drag());
     let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
     if wash.a() > 0 {
         ui.painter().rect_filled(rect, 6.0, wash);
@@ -4744,7 +4757,7 @@ impl Cabin {
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if titlebar_chrome_btn(ui, "×").clicked() {
+                        if titlebar_chrome_hit(&titlebar_chrome_btn(ui, "×")) {
                             let hide = crate::tray::should_hide_on_close(
                                 self.cfg.close_to_tray,
                                 self.tray.is_some(),
@@ -4755,14 +4768,14 @@ impl Cabin {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
                         }
-                        if titlebar_chrome_btn(ui, "□").clicked() {
+                        if titlebar_chrome_hit(&titlebar_chrome_btn(ui, "□")) {
                             let currently = ctx
                                 .input(|i| i.viewport().maximized)
                                 .unwrap_or(self.win_max);
                             self.win_max = next_maximized(currently);
                             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(self.win_max));
                         }
-                        if titlebar_chrome_btn(ui, "–").clicked() {
+                        if titlebar_chrome_hit(&titlebar_chrome_btn(ui, "–")) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
                     });
@@ -6941,6 +6954,19 @@ mod tests {
         let s = super::titlebar_chrome_size();
         assert!(s.x >= 32.0, "close hit {s:?}");
         assert_eq!(s.y, crate::theme::TITLEBAR_H);
+    }
+
+    #[test]
+    fn titlebar_close_fires_after_a_held_press() {
+        assert!(
+            super::chrome_activated(true, false),
+            "a normal click still closes"
+        );
+        assert!(
+            super::chrome_activated(false, true),
+            "egui drops clicks held longer than 0.8s — titlebar × must still hide to tray"
+        );
+        assert!(!super::chrome_activated(false, false));
     }
 
     #[test]
