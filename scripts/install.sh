@@ -40,41 +40,69 @@ if [[ -d "$ROOT/packaging/icons/hicolor" ]]; then
   mkdir -p "$PREFIX/share/icons/hicolor"
   cp -a "$ROOT/packaging/icons/hicolor/." "$PREFIX/share/icons/hicolor/"
 fi
+
+HANDS_BIN="$PREFIX/lib/grokhub/bin"
+write_ydotoold_unit() {
+  local dest="$1"
+  local bin="$2"
+  mkdir -p "$(dirname "$dest")"
+  cat >"$dest" <<EOF
+[Unit]
+Description=ydotool daemon for GrokHub hands
+PartOf=graphical-session.target
+After=graphical-session.target
+ConditionPathExists=${bin}
+
+[Service]
+Type=simple
+ExecStart=${bin} --socket-path=%t/ydotool.sock
+Restart=on-failure
+RestartSec=2
+Environment=YDOTOOL_SOCKET=%t/ydotool.sock
+
+[Install]
+WantedBy=graphical-session.target
+EOF
+}
+
 if [[ "$SYSTEM" -eq 0 ]]; then
   install -Dm644 "$ROOT/packaging/systemd/grokhub-hub.service" \
     "$HOME/.config/systemd/user/grokhub-hub.service"
   install -Dm644 "$ROOT/packaging/systemd/grokhub.service" \
     "$HOME/.config/systemd/user/grokhub.service"
-  install -Dm644 "$ROOT/packaging/systemd/ydotoold.service" \
-    "$HOME/.config/systemd/user/ydotoold.service"
+  write_ydotoold_unit "$HOME/.config/systemd/user/ydotoold.service" \
+    "$HANDS_BIN/ydotoold"
 else
-  install -Dm644 "$ROOT/packaging/systemd/ydotoold.service" \
-    "$PREFIX/lib/systemd/user/ydotoold.service"
+  write_ydotoold_unit "$PREFIX/lib/systemd/user/ydotoold.service" \
+    "$HANDS_BIN/ydotoold"
   if [[ -f "$ROOT/packaging/udev/60-grokhub-uinput.rules" ]]; then
     install -Dm644 "$ROOT/packaging/udev/60-grokhub-uinput.rules" \
       /usr/lib/udev/rules.d/60-grokhub-uinput.rules
   fi
 fi
 
-HANDS_PKGS=(ydotool xdotool grim wmctrl python-atspi)
+# Build-time compilers stay pacman packages. Overlay must not die if a sidecar fails.
+BUILD_PKGS=(cmake meson ninja wayland wayland-protocols pixman libpng)
 if command -v pacman >/dev/null; then
-  if pacman -Q "${HANDS_PKGS[@]}" >/dev/null 2>&1; then
-    echo "hands packages present"
-  else
+  missing=0
+  for p in "${BUILD_PKGS[@]}"; do
+    if ! pacman -Q "$p" >/dev/null 2>&1; then
+      missing=1
+      break
+    fi
+  done
+  if [[ "$missing" -eq 1 ]]; then
     if [[ "$(id -u)" -eq 0 ]]; then
-      if pacman -S --needed "${HANDS_PKGS[@]}"; then
-        echo "installed hands packages"
-      else
-        echo "hands: pacman -S --needed ${HANDS_PKGS[*]}"
-      fi
-    elif sudo pacman -S --needed "${HANDS_PKGS[@]}"; then
-      echo "installed hands packages"
+      pacman -S --needed "${BUILD_PKGS[@]}" || echo "hands: pacman -S --needed ${BUILD_PKGS[*]}"
     else
-      echo "hands: sudo pacman -S --needed ${HANDS_PKGS[*]}"
+      sudo pacman -S --needed "${BUILD_PKGS[@]}" || echo "hands: sudo pacman -S --needed ${BUILD_PKGS[*]}"
     fi
   fi
 fi
-if command -v systemctl >/dev/null && command -v ydotoold >/dev/null; then
+PREFIX="$PREFIX" HANDS_SRC="${HANDS_SRC:-$ROOT/target/hands-src}" \
+  bash "$ROOT/scripts/build-hands.sh" || echo "hands: build-hands.sh continued"
+
+if command -v systemctl >/dev/null && [[ -x "$HANDS_BIN/ydotoold" || -x "$(command -v ydotoold 2>/dev/null || true)" ]]; then
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   systemctl --user enable --now ydotoold.service >/dev/null 2>&1 || true
 fi
@@ -95,6 +123,7 @@ printf '%s\n' "$ROOT" > "$CONFIG_DIR/source"
 
 echo "installed $PREFIX/bin/grokhub"
 echo "installed $PREFIX/bin/grokhub-hub"
+echo "hands sidecars $HANDS_BIN"
 if [[ "$SYSTEM" -eq 0 ]]; then
   echo "ensure $PREFIX/bin is on PATH"
 fi
