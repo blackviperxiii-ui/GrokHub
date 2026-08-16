@@ -83,7 +83,7 @@ use grokhub_core::{
     fold_stream_token, StreamTokenKind,
     update_wipes_config, voice_session_url, Automation, BoardCard,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ChipThread, ComputerOp, DeviceCodeStart, HeyGrokAction,
-    HeyGrokRoute, HostPlanStep, HubMemoryFile, QuickChip,
+    HeyGrokRoute, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, MintRealtimeFn, Policy, Recipe, ReplayOp, RewindRecord,
     AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
     VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
@@ -537,7 +537,6 @@ pub struct Cabin {
     task_prompt: String,
     mem_name: String,
     mem_body: String,
-    plan_pending: Option<Vec<HostPlanStep>>,
     last_persist: Instant,
     board: Vec<BoardCard>,
     board_title: String,
@@ -548,7 +547,6 @@ pub struct Cabin {
     skill_list: Vec<SkillMd>,
     eyes_text: String,
     last_host: Vec<String>,
-    save_skill: bool,
     last_frame_url: Option<String>,
     hands_attach: bool,
     eyes_attach: bool,
@@ -566,9 +564,6 @@ pub struct Cabin {
     threads: Vec<ChatThread>,
     thread_idx: usize,
     oauth_pending: Option<DeviceCodeStart>,
-    host_hour_count: u32,
-    host_hour_at: Instant,
-    approve_risky_only: bool,
     tray: Option<crate::tray::TrayHost>,
     tray_rx: Option<mpsc::Receiver<Option<crate::tray::TrayHost>>>,
     window_visible: bool,
@@ -600,7 +595,6 @@ pub struct Cabin {
     palette_pick: usize,
     palette_focus: bool,
     shortcuts_open: bool,
-    pending_skill: Option<SkillMd>,
     active_skill_follow: Option<String>,
     last_anticipate_ms: u64,
     goal_step: u32,
@@ -791,7 +785,6 @@ impl Cabin {
             .or_else(|| projects.iter().find(|n| n.kind == ProjectKind::Project))
             .map(|n| n.id.clone());
         let secrets = secrets::load();
-        let approve_risky_only = cfg.approve_risky_only;
         let win_max = cfg.window.maximized;
         let mut c = Self {
             nav: Nav::Chat,
@@ -809,7 +802,6 @@ impl Cabin {
             task_prompt: String::new(),
             mem_name,
             mem_body,
-            plan_pending: None,
             last_persist: Instant::now(),
             board: config::load_board(),
             board_title: String::new(),
@@ -820,7 +812,6 @@ impl Cabin {
             skill_list: skills::list_skills(),
             eyes_text: String::new(),
             last_host: vec![],
-            save_skill: false,
             last_frame_url: None,
             hands_attach: false,
             eyes_attach: false,
@@ -838,9 +829,6 @@ impl Cabin {
             threads,
             thread_idx,
             oauth_pending: None,
-            host_hour_count: 0,
-            host_hour_at: Instant::now(),
-            approve_risky_only,
             tray: None,
             tray_rx: if crate::tray::tray_needed_at_launch(hidden) {
                 Some(crate::tray::begin_tray_spawn())
@@ -876,7 +864,6 @@ impl Cabin {
             palette_pick: 0,
             palette_focus: false,
             shortcuts_open: false,
-            pending_skill: None,
             active_skill_follow: None,
             last_anticipate_ms: 0,
             goal_step: 0,
@@ -2722,7 +2709,6 @@ impl Cabin {
                 self.skill_list = skills::list_skills();
                 self.skill_name = to_save.name.clone();
                 self.skill_body = grokhub_core::render_skill_md(&to_save);
-                self.pending_skill = None;
                 self.status = format!("Wrote skill {}", to_save.name);
             }
             Err(e) => self.status = e,
@@ -3847,8 +3833,6 @@ impl Cabin {
                         }
                     }
                 }
-                self.save_skill = true;
-                self.plan_pending = None;
                 self.persist();
                 self.run_skill_verify();
                 bump_usage(&mut self.usage, "host");
@@ -3956,7 +3940,6 @@ impl Cabin {
             return;
         }
         if cmds.is_empty() {
-            self.plan_pending = None;
             return;
         }
         self.snapshot_project();
@@ -3967,7 +3950,6 @@ impl Cabin {
         self.voice_orb = "hands".into();
         self.host_live = cmds[0].clone();
         self.status = "Host…".into();
-        self.plan_pending = None;
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let clock = Self::local_clock();
@@ -4427,30 +4409,6 @@ impl Cabin {
         }
         self.eyes_text = t;
         self.status = format!("{} objects", frame.objects.len());
-    }
-
-    fn stage_last_skill(&mut self) {
-        if self.last_host.is_empty() {
-            return;
-        }
-        let s = SkillMd {
-            name: "last-host".into(),
-            description: "Last approved host run".into(),
-            slash: "/last-host".into(),
-            trigger: "repeat last host".into(),
-            instructions: self.last_host.join("\n"),
-            pitfalls: "review before YOLO".into(),
-            verify: "receipt exit 0".into(),
-            runs: 0,
-        };
-        match skills::save_skill(&s) {
-            Ok(p) => {
-                self.skill_list = skills::list_skills();
-                self.save_skill = false;
-                self.status = format!("Wrote {}", p.display());
-            }
-            Err(e) => self.status = e,
-        }
     }
 
     fn halt_work(&mut self, status: impl Into<String>) {
