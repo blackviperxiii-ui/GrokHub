@@ -381,7 +381,7 @@ pub fn slash_help() -> String {
         "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs.",
         "Mode pill: Auto / Fast / Balance / Think / Max. Pages use catalog chrome.",
         "Appearance: Dark, Light, System. Chat streams tokens on the thread that started them.",
-        "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Hands: unsandboxed; /stop kills the worker.",
+        "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Hands: ydotool/xdotool on PATH including ~/.local/bin; /stop kills the worker.",
         "Cabin eyes stay dormant until you ask, or hands need a frame. Thought does not announce an attach.",
         "Pulse every 15s: every organ runs. Hidden idle waits for the pulse.",
         "After 21:00 a quiet Balanced review fills Suggested tiles from what it learned.",
@@ -482,6 +482,7 @@ mod tests {
         assert!(slash_help().contains("centered over the composer"));
         assert!(slash_help().contains("Hidden idle waits for the pulse"));
         assert!(slash_help().contains("Chat rail opens the last-accessed thread"));
+        assert!(slash_help().contains("ydotool/xdotool on PATH including ~/.local/bin"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());
