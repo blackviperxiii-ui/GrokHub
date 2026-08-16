@@ -36,6 +36,11 @@ pub fn should_auto_compact(tokens: u32, budget: u32) -> bool {
     tokens as f32 >= budget as f32 * COMPACT_THRESHOLD
 }
 
+/// Goal continuations need the early turns. Compact only after the goal is idle.
+pub fn should_auto_compact_now(tokens: u32, budget: u32, goal_step: u32) -> bool {
+    goal_step == 0 && should_auto_compact(tokens, budget)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,5 +53,10 @@ mod tests {
         assert_eq!(context_percent(48_000, CONTEXT_BUDGET_TOKENS), 50);
         assert!(should_auto_compact(70_000, CONTEXT_BUDGET_TOKENS));
         assert!(!should_auto_compact(1_000, CONTEXT_BUDGET_TOKENS));
+        assert!(
+            !should_auto_compact_now(70_000, CONTEXT_BUDGET_TOKENS, 2),
+            "mid-goal compact would drop the early steps"
+        );
+        assert!(should_auto_compact_now(70_000, CONTEXT_BUDGET_TOKENS, 0));
     }
 }
