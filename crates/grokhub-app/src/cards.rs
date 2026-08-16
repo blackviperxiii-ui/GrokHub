@@ -2,7 +2,7 @@
 
 use crate::icons::{self, TileIcon};
 use eframe::egui::{self, Align2, Color32, ColorImage, FontId, RichText, Sense, Stroke, TextureHandle, TextureOptions};
-use grokhub_core::{curate_wall, wall_curate_seed, SkillMd, WallGif, WallSlot};
+use grokhub_core::{curate_wall, imagine_result_fit, wall_curate_seed, SkillMd, WallGif, WallSlot};
 
 pub use grokhub_core::ImagineKind;
 
@@ -911,6 +911,35 @@ fn tile_h(tall: bool, scale: f32) -> f32 {
         crate::theme::IMAGINE_TILE_SHORT
     };
     base * scale
+}
+
+/// Generated still, letterboxed in the wall slot above the docked chat box.
+pub fn imagine_result_hero(ui: &mut egui::Ui, path: &str) {
+    let wall = ui.max_rect();
+    if wall.width() < 8.0 || wall.height() < 8.0 || path.is_empty() {
+        return;
+    }
+    ui.allocate_rect(wall, Sense::hover());
+    ui.painter().rect_filled(wall, 0.0, crate::theme::bg());
+    let (tex, size) = imagine_disk_tex(ui.ctx(), path);
+    let (x, y, w, h) = imagine_result_fit(
+        wall.left(),
+        wall.top(),
+        wall.width(),
+        wall.height(),
+        size[0] as f32,
+        size[1] as f32,
+    );
+    if w <= 1.0 || h <= 1.0 {
+        return;
+    }
+    let dest = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+    ui.painter().image(
+        tex.id(),
+        dest,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
 }
 
 /// grok.com/imagine masonry: full-bleed stills, 1px gutters, caption over the photo.

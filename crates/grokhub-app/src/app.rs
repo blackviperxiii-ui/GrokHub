@@ -21,7 +21,8 @@ use grokhub_core::{
     dedicated_imagine_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
     pick_fresh_seed, wall_can_paint, wall_evict, ImagineKind, ImagineSpec, ImagineWall,
     WallGif, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
-    imagine_toolbox_dock, imagine_toolbox_shows_title, imagine_toolbox_top, imagine_wall_bounds,
+    imagine_shows_result_above, imagine_toolbox_dock, imagine_toolbox_shows_title,
+    imagine_toolbox_top, imagine_wall_bounds,
     due_automations, ensure_automation_schedule, estimate_messages, extract_connector_cmds,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
@@ -6129,11 +6130,13 @@ impl Cabin {
         let mut seed: Option<String> = None;
         let word = crate::cards::imagine_word(now_ms());
         let selected = self.imagine_prompt.clone();
+        let last = self.imagine_last.clone();
         let dock = imagine_toolbox_dock(
             !self.imagine_prompt.trim().is_empty(),
-            !self.imagine_last.is_empty(),
+            !last.is_empty(),
             self.running,
         );
+        let show_result = imagine_shows_result_above(!last.is_empty(), dock);
         let composer_id = egui::Id::new("imagine-composer");
         let cap = if imagine_toolbox_shows_title(dock) {
             260.0
@@ -6170,20 +6173,24 @@ impl Cabin {
                 );
                 ui.allocate_ui_at_rect(wall, |ui| {
                     ui.set_clip_rect(wall);
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                            crate::cards::imagine_masonry(
-                                ui,
-                                &selected,
-                                now_ms(),
-                                &self.wall.gifs,
-                                |p| {
-                                    seed = Some(p);
-                                },
-                            );
-                        });
+                    if show_result {
+                        crate::cards::imagine_result_hero(ui, &last);
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                                crate::cards::imagine_masonry(
+                                    ui,
+                                    &selected,
+                                    now_ms(),
+                                    &self.wall.gifs,
+                                    |p| {
+                                        seed = Some(p);
+                                    },
+                                );
+                            });
+                    }
                 });
             });
         let content = panel.response.rect;
