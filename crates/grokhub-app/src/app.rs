@@ -805,6 +805,7 @@ pub struct Cabin {
     plus_ignore_close: bool,
     file_pick: Option<PlusTarget>,
     pick_dir: String,
+    pick_cache: Option<(String, Vec<(String, bool)>)>,
     projects: Vec<ProjectNode>,
     project_sel: Option<String>,
     proj_menu_pos: egui::Pos2,
@@ -1103,6 +1104,7 @@ impl Cabin {
             plus_ignore_close: false,
             file_pick: None,
             pick_dir: std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()),
+            pick_cache: None,
             projects,
             project_sel,
             proj_menu_pos: egui::Pos2::ZERO,
@@ -1560,11 +1562,15 @@ impl Cabin {
         let mut files = Vec::new();
         if let Ok(rd) = std::fs::read_dir(dir) {
             for e in rd.flatten() {
+                if dirs.len() + files.len() >= 400 {
+                    break;
+                }
                 let name = e.file_name().to_string_lossy().to_string();
                 if name.starts_with('.') || name.is_empty() {
                     continue;
                 }
-                if e.path().is_dir() {
+                let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                if is_dir {
                     dirs.push(name);
                 } else {
                     files.push(name);
@@ -1581,6 +1587,22 @@ impl Cabin {
             out.push((f, false));
         }
         out
+    }
+
+    fn cached_pick_entries(&mut self) -> &[(String, bool)] {
+        let dir = self.pick_dir.clone();
+        let stale = self
+            .pick_cache
+            .as_ref()
+            .map(|(cached, _)| cached != &dir)
+            .unwrap_or(true);
+        if stale {
+            self.pick_cache = Some((dir.clone(), Self::pick_entries(Path::new(&dir))));
+        }
+        self.pick_cache
+            .as_ref()
+            .map(|(_, entries)| entries.as_slice())
+            .unwrap_or(&[])
     }
 
     fn ui_plus_overlays(&mut self, ctx: &egui::Context) {
@@ -1621,7 +1643,7 @@ impl Cabin {
             let mut cancel = false;
             let mut paste = false;
             let dir = PathBuf::from(&self.pick_dir);
-            let entries = Self::pick_entries(&dir);
+            let entries = self.cached_pick_entries().to_vec();
             egui::Window::new("Upload")
                 .collapsible(false)
                 .resizable(true)
@@ -10045,6 +10067,29 @@ mod tests {
         assert!(
             kick.contains("pending_kick") && kick.contains("kick_cap_rx"),
             "kick_model must wait for the off-thread frame instead of blocking: {kick}"
+        );
+    }
+
+    #[test]
+    fn plus_upload_does_not_rescan_the_folder_every_frame() {
+        let src = include_str!("app.rs");
+        let overlay = src
+            .split("fn ui_plus_overlays(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_imagine_overlays(").next())
+            .expect("ui_plus_overlays");
+        assert!(
+            overlay.contains("cached_pick_entries") && !overlay.contains("Self::pick_entries"),
+            "Upload window must not read_dir every paint: {overlay}"
+        );
+        let cache = src
+            .split("fn cached_pick_entries(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_plus_overlays(").next())
+            .expect("cached_pick_entries");
+        assert!(
+            cache.contains("pick_cache") && cache.contains("pick_entries("),
+            "folder listing must reuse the last scan until pick_dir changes: {cache}"
         );
     }
 
