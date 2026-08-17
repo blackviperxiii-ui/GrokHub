@@ -6,7 +6,7 @@ post_install() {
 
   cat <<'EOF'
 
-  GrokHub 2.6.19 (native Rust)
+  GrokHub 2.6.20 (native Rust)
 
   Run:    grokhub
   Hub:    grokhub-hub
