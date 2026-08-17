@@ -223,6 +223,14 @@ pub fn memory_updated_at(name: &str) -> u64 {
 }
 
 pub fn write_memory(name: &str, body: &str) -> Result<(), String> {
+    let mut bytes = body.as_bytes();
+    if bytes.len() > MEMORY_FILE_CAP {
+        bytes = &bytes[..MEMORY_FILE_CAP];
+        while !bytes.is_empty() && std::str::from_utf8(bytes).is_err() {
+            bytes = &bytes[..bytes.len() - 1];
+        }
+    }
+    let body = std::str::from_utf8(bytes).unwrap_or("");
     if !is_plain_text(body) {
         return Err("Secrets never in markdown".into());
     }
@@ -230,9 +238,11 @@ pub fn write_memory(name: &str, body: &str) -> Result<(), String> {
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(name);
     if path.exists() {
-        let _ = fs::copy(&path, dir.join(format!("{name}.prev")));
+        if fs::metadata(&path).map(|m| m.len()).unwrap_or(u64::MAX) <= MEMORY_FILE_CAP as u64 {
+            let _ = fs::copy(&path, dir.join(format!("{name}.prev")));
+        }
     }
-    atomic_write(&path, body.as_bytes())
+    atomic_write(&path, bytes)
 }
 
 pub fn restore_memory(name: &str) -> Result<String, String> {
@@ -374,6 +384,18 @@ mod tests {
         fs::create_dir_all(memory_dir()).unwrap();
         fs::write(memory_dir().join("MEMORY.md"), "x".repeat(MEMORY_FILE_CAP + 4096)).unwrap();
         assert_eq!(read_memory("MEMORY.md").len(), MEMORY_FILE_CAP);
+        write_memory("SOUL.md", &"y".repeat(MEMORY_FILE_CAP + 2048)).expect("clip write");
+        assert_eq!(read_memory("SOUL.md").len(), MEMORY_FILE_CAP);
+        let src = include_str!("config.rs");
+        let write = src
+            .split("pub fn write_memory(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn restore_memory(").next())
+            .expect("write_memory");
+        assert!(
+            write.contains("MEMORY_FILE_CAP"),
+            "saving Memory must not write a huge file on the UI thread: {write}"
+        );
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
