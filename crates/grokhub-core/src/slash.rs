@@ -389,7 +389,7 @@ pub fn slash_help() -> String {
         "After 21:00 a quiet Balanced review fills Suggested tiles from what it learned.",
         "Devices pair URL is a LAN IPv4. Hub complete is owner-only.",
         "Chat rail opens the last-accessed thread. MidThought can greet Continue {title}.",
-        "Host, hands, and connector work stay off the chat. Bubbles wrap inside the chat pane. Copy and Reply sit on visible messages.",
+        "Host, hands, and connector work stay off the chat. Chat shows thought and the final reply. Bubbles wrap with the chat pane. Copy and Reply sit on visible messages.",
         "Five chips sit centered over the composer.",
     ]
     .join("\n")
@@ -487,7 +487,8 @@ mod tests {
         assert!(slash_help().contains("Chat rail opens the last-accessed thread"));
         assert!(slash_help().contains("Host, hands, and connector work stay off the chat"));
         assert!(slash_help().contains("Copy and Reply"));
-        assert!(slash_help().contains("wrap inside the chat pane"));
+        assert!(slash_help().contains("wrap with the chat pane"));
+        assert!(slash_help().contains("thought and the final reply"));
         assert!(slash_help().contains("install.sh builds sidecars and installs python-atspi"));
         assert!(slash_help().contains("Eyes Install hands starts ydotoold"));
         assert!(slash_help().contains("handed-back apt/not-found"));
