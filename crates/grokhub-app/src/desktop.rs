@@ -13,7 +13,7 @@ use grokhub_core::{
 use image::GenericImageView;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -54,6 +54,68 @@ struct LastDeskFrame {
 
 static LAST_DESK_FRAME: Mutex<Option<LastDeskFrame>> = Mutex::new(None);
 
+/// Listing bins (AT-SPI, wmctrl, xrandr) on the UI thread.
+const DESK_LIST_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Screenshot / grim / ffmpeg on the UI thread.
+const DESK_CAPTURE_TIMEOUT: Duration = Duration::from_secs(8);
+/// Webcam ffmpeg on the UI thread.
+const DESK_WEBCAM_TIMEOUT: Duration = Duration::from_secs(4);
+
+fn kill_limited(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{pid}")])
+            .status();
+    }
+    let _ = child.kill();
+}
+
+/// Spawn `cmd` and kill the process group if it exceeds `timeout`.
+/// Used by presence / windshield paths that run on the UI thread.
+pub(crate) fn run_limited(mut cmd: Command, timeout: Duration) -> Option<Output> {
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn().ok()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                if let Some(mut s) = child.stdout.take() {
+                    let _ = s.read_to_end(&mut stdout);
+                }
+                if let Some(mut e) = child.stderr.take() {
+                    let _ = e.read_to_end(&mut stderr);
+                }
+                return Some(Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            Ok(None) if Instant::now() >= deadline => {
+                kill_limited(&mut child);
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(15)),
+            Err(_) => {
+                kill_limited(&mut child);
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
 fn remember_desk_frame(
     jpeg_w: u32,
     jpeg_h: u32,
@@ -84,10 +146,9 @@ fn last_desk_frame_geom() -> (u32, u32, i32, i32) {
 }
 
 pub fn read_display_outputs() -> Vec<DisplayOutput> {
-    Command::new("xrandr")
-        .arg("-q")
-        .output()
-        .ok()
+    let mut cmd = Command::new("xrandr");
+    cmd.arg("-q");
+    run_limited(cmd, DESK_LIST_TIMEOUT)
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|t| parse_xrandr_outputs(&t))
         .unwrap_or_default()
@@ -293,7 +354,9 @@ pub fn install_hands_status() -> String {
 
 pub fn collect_rows() -> Vec<AtspiRow> {
     let mut rows = Vec::new();
-    if let Ok(out) = Command::new("python3").args(["-c", ATSPI_PY]).output() {
+    let mut atspi = Command::new("python3");
+    atspi.args(["-c", ATSPI_PY]);
+    if let Some(out) = run_limited(atspi, DESK_LIST_TIMEOUT) {
         if out.status.success() {
             for line in String::from_utf8_lossy(&out.stdout).lines() {
                 if let Some(r) = parse_atspi_line(line) {
@@ -303,7 +366,9 @@ pub fn collect_rows() -> Vec<AtspiRow> {
         }
     }
     if rows.is_empty() {
-        if let Ok(out) = spawn_bin("wmctrl").args(["-lG"]).output() {
+        let mut wmctrl = spawn_bin("wmctrl");
+        wmctrl.args(["-lG"]);
+        if let Some(out) = run_limited(wmctrl, DESK_LIST_TIMEOUT) {
             for line in String::from_utf8_lossy(&out.stdout).lines() {
                 if let Some(r) = parse_wmctrl_line(line) {
                     rows.push(r);
@@ -311,7 +376,9 @@ pub fn collect_rows() -> Vec<AtspiRow> {
             }
         }
     }
-    if let Ok(out) = spawn_bin("xdotool").args(["getmouselocation"]).output() {
+    let mut mouse = spawn_bin("xdotool");
+    mouse.args(["getmouselocation"]);
+    if let Some(out) = run_limited(mouse, DESK_LIST_TIMEOUT) {
         if let Some(r) = parse_xdotool_mouse(&String::from_utf8_lossy(&out.stdout)) {
             rows.push(r);
         }
@@ -420,17 +487,15 @@ fn pointer_drive(op: &ComputerOp) -> ComputerDrive {
 }
 
 pub fn lock_titles() -> Vec<String> {
-    let atspi = Command::new("python3")
-        .args(["-c", ATSPI_PY])
-        .output()
-        .ok()
+    let mut atspi_cmd = Command::new("python3");
+    atspi_cmd.args(["-c", ATSPI_PY]);
+    let atspi = run_limited(atspi_cmd, DESK_LIST_TIMEOUT)
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default();
-    let wmctrl = Command::new("wmctrl")
-        .args(["-lG"])
-        .output()
-        .ok()
+    let mut wmctrl_cmd = Command::new("wmctrl");
+    wmctrl_cmd.args(["-lG"]);
+    let wmctrl = run_limited(wmctrl_cmd, DESK_LIST_TIMEOUT)
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default();
     lock_titles_from_stdout(&atspi, &wmctrl)
@@ -592,14 +657,11 @@ fn pin_wayland_for_capture() {
 }
 
 fn x11_size() -> (u32, u32) {
-    let xdpy = Command::new("xdpyinfo")
-        .output()
-        .ok()
+    let xdpy = run_limited(Command::new("xdpyinfo"), DESK_LIST_TIMEOUT)
         .and_then(|o| String::from_utf8(o.stdout).ok());
-    let xrandr = Command::new("xrandr")
-        .arg("-q")
-        .output()
-        .ok()
+    let mut xrandr_cmd = Command::new("xrandr");
+    xrandr_cmd.arg("-q");
+    let xrandr = run_limited(xrandr_cmd, DESK_LIST_TIMEOUT)
         .and_then(|o| String::from_utf8(o.stdout).ok());
     x11_grab_size(xdpy.as_deref(), xrandr.as_deref())
 }
@@ -639,13 +701,8 @@ fn run_capture_kind(
         CaptureKind::GnomeShell => {
             let p = png.to_string_lossy().to_string();
             let args = gnome_shell_screenshot_args(&p);
-            let st = spawn_bin("gdbus")
-                .args(&args)
-                .status()
-                .map_err(|e| e.to_string())?;
-            if !st.success() {
-                return Err("gnome-shell screenshot failed".into());
-            }
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            run_ok("gdbus", &refs)?;
             Ok(png)
         }
         CaptureKind::Maim => {
@@ -668,13 +725,8 @@ fn run_capture_kind(
             let (w, h) = x11_size();
             let p = jpg.to_string_lossy().to_string();
             let args = ffmpeg_x11_args(&display, w, h, &p);
-            let st = spawn_bin("ffmpeg")
-                .args(&args)
-                .status()
-                .map_err(|e| e.to_string())?;
-            if !st.success() {
-                return Err("ffmpeg x11grab failed".into());
-            }
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            run_ok("ffmpeg", &refs)?;
             Ok(jpg)
         }
     }
@@ -982,11 +1034,12 @@ fn transcribe(wav: &Path) -> Result<String, String> {
 }
 
 fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {
-    let st = spawn_bin(bin).args(args).status().map_err(|e| e.to_string())?;
-    if st.success() {
-        Ok(())
-    } else {
-        Err(format!("{bin} failed"))
+    let mut cmd = spawn_bin(bin);
+    cmd.args(args);
+    match run_limited(cmd, DESK_CAPTURE_TIMEOUT) {
+        Some(out) if out.status.success() => Ok(()),
+        Some(_) => Err(format!("{bin} failed")),
+        None => Err(format!("{bin} timed out")),
     }
 }
 
@@ -1027,11 +1080,9 @@ pub fn capture_webcam() -> Result<String, String> {
     let path = std::env::temp_dir().join("grokhub-cam.jpg");
     let dest = path.to_string_lossy().to_string();
     let args = ffmpeg_webcam_args("/dev/video0", &dest);
-    let ok = Command::new("ffmpeg")
-        .args(&args)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let mut cam = Command::new("ffmpeg");
+    cam.args(&args);
+    let ok = run_limited(cam, DESK_WEBCAM_TIMEOUT).is_some_and(|o| o.status.success());
     if !ok {
         return Err("webcam capture failed".into());
     }
@@ -1321,5 +1372,93 @@ mod tests {
         );
         assert_eq!(act_window_search_bin(false), None);
         assert_eq!(act_window_search_bin(true), Some("xdotool"));
+    }
+
+    #[test]
+    fn run_limited_kills_a_hung_desktop_command() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        let started = Instant::now();
+        let out = run_limited(cmd, Duration::from_millis(250));
+        assert!(
+            out.is_none(),
+            "hung desktop spawn must time out, got {out:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "UI-thread desktop spawn must not wait out the child: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn live_room_desktop_spawns_must_time_out() {
+        let src = include_str!("desktop.rs");
+        let collect = src
+            .split("pub fn collect_rows(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn named_row").next())
+            .expect("collect_rows");
+        assert!(
+            collect.contains("run_limited("),
+            "collect_rows must kill hung ATSPI/wmctrl: {collect}"
+        );
+        assert!(
+            !collect.contains(".output()"),
+            "collect_rows must not block the UI on Command::output: {collect}"
+        );
+        let lock = src
+            .split("pub fn lock_titles(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn lock_titles_from_stdout").next())
+            .expect("lock_titles");
+        assert!(
+            lock.contains("run_limited("),
+            "lock_titles must kill hung ATSPI/wmctrl: {lock}"
+        );
+        assert!(
+            !lock.contains(".output()"),
+            "lock_titles must not block the UI on Command::output: {lock}"
+        );
+        let cam = src
+            .split("pub fn capture_webcam(")
+            .nth(1)
+            .and_then(|s| s.split("\n/// Short PCM").next())
+            .expect("capture_webcam");
+        assert!(
+            cam.contains("run_limited("),
+            "webcam ffmpeg must time out: {cam}"
+        );
+        assert!(
+            !cam.contains(".status()"),
+            "webcam ffmpeg must not block the UI on Command::status: {cam}"
+        );
+        let run_ok = src
+            .split("fn run_ok(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn imagine_save_path(").next())
+            .expect("run_ok");
+        assert!(
+            run_ok.contains("run_limited("),
+            "screenshot bins must time out: {run_ok}"
+        );
+        let cap = src
+            .split("fn run_capture_kind(")
+            .nth(1)
+            .and_then(|s| s.split("\nfn image_file_to_jpeg").next())
+            .expect("run_capture_kind");
+        assert!(
+            !cap.contains(".status()"),
+            "capture bins must not block the UI on Command::status: {cap}"
+        );
+        let xrandr = src
+            .split("pub fn read_display_outputs(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn prepare_windshield").next())
+            .expect("read_display_outputs");
+        assert!(
+            xrandr.contains("run_limited("),
+            "xrandr must time out: {xrandr}"
+        );
     }
 }
