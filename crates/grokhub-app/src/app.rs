@@ -3336,6 +3336,7 @@ impl Cabin {
             };
             st.snapshot = serde_json::to_value(&snap).ok();
         }
+        self.persist();
         self.status = "Hub snapshot written — peers pull /v1/snapshot".into();
         self.apply_inbound_snapshot();
         self.nav = Nav::Devices;
@@ -10148,6 +10149,11 @@ mod tests {
         assert!(
             flushed < built,
             "/sync must flush the live pane before publishing threads: {sync}"
+        );
+        let merged = sync.find("st.snapshot =").expect("store merge");
+        assert!(
+            sync[merged..].contains("self.persist()"),
+            "/sync must persist the merged snapshot or a restart drops peer LWW: {sync}"
         );
         let mem_write = sync.find("write_memory").expect("sync memory flush");
         assert!(
