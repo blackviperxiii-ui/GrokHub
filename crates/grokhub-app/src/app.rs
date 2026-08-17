@@ -1317,6 +1317,9 @@ impl Cabin {
     }
 
     fn persist_bg(&mut self) {
+        if self.running {
+            return;
+        }
         if self.persist_rx.is_some() {
             return;
         }
@@ -10369,6 +10372,11 @@ mod tests {
         assert!(
             bg.contains("persist_idle_key") && bg.contains("return;"),
             "idle 2s persist must not clone every thread on the UI thread: {bg}"
+        );
+        let snap = bg.find("persist_snap").expect("persist_snap");
+        assert!(
+            bg[..snap].contains("self.running") && bg[..snap].contains("return"),
+            "a growing stream must not clone every thread to persist an 8MB bubble: {bg}"
         );
     }
 
