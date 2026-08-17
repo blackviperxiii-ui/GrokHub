@@ -50,7 +50,7 @@ pub struct DeviceCodeStart {
     pub interval: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PollStatus {
     Pending,
     SlowDown,
@@ -64,6 +64,16 @@ pub struct PollResult {
     pub status: PollStatus,
     pub tokens: Option<XaiOAuthTokens>,
     pub error: Option<String>,
+}
+
+/// Seconds to wait before the next device-code poll. `None` means stop.
+pub fn next_oauth_poll_secs(interval: u64, status: PollStatus) -> Option<u64> {
+    let interval = interval.max(1);
+    match status {
+        PollStatus::Pending => Some(interval),
+        PollStatus::SlowDown => Some(interval.saturating_add(5)),
+        PollStatus::Ready | PollStatus::Expired | PollStatus::Denied => None,
+    }
 }
 
 pub fn trusted_xai_url(url: &str) -> Result<String, String> {
@@ -535,6 +545,23 @@ mod tests {
                 .as_deref(),
             Some("xai-live-key")
         );
+    }
+
+    #[test]
+    fn device_poll_honors_interval_and_slow_down() {
+        assert_eq!(next_oauth_poll_secs(5, PollStatus::Pending), Some(5));
+        assert_eq!(next_oauth_poll_secs(0, PollStatus::Pending), Some(1));
+        assert_eq!(
+            next_oauth_poll_secs(5, PollStatus::SlowDown),
+            Some(10),
+            "RFC 8628 increases the interval by 5 seconds"
+        );
+        assert_eq!(next_oauth_poll_secs(5, PollStatus::Ready), None);
+        assert_eq!(next_oauth_poll_secs(5, PollStatus::Expired), None);
+        assert_eq!(next_oauth_poll_secs(5, PollStatus::Denied), None);
+        let slow = parse_poll_result(false, &json!({"error": "slow_down"}), 1);
+        assert_eq!(slow.status, PollStatus::SlowDown);
+        assert_eq!(next_oauth_poll_secs(2, slow.status), Some(7));
     }
 
     fn now_far() -> u64 {
