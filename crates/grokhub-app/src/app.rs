@@ -4400,7 +4400,6 @@ impl Cabin {
                     self.speak_next = false;
                     self.speak_reply(&text);
                 }
-                self.persist();
                 for card in extract_work_pins(&text) {
                     self.board.push(card);
                 }
@@ -4414,6 +4413,7 @@ impl Cabin {
                 for (key, st) in extract_work_updates(&text) {
                     let _ = apply_work_update(&mut self.board, &key, st);
                 }
+                self.persist();
                 let mut host_needs_kick = false;
                 if let Some(plan) = plan_from_text(&text) {
                     self.pending_update = false;
@@ -10186,6 +10186,12 @@ mod tests {
         assert!(
             chat.contains("should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, compact_step)"),
             "auto-compact must use the post-outcome goal step, not the pre-outcome job_step: {chat}"
+        );
+        let pins = chat.find("extract_work_pins").expect("work pins");
+        let host_plan = chat.find("plan_from_text").expect("host plan");
+        assert!(
+            pins < host_plan && chat[pins..host_plan].contains("self.persist()"),
+            "workboard pins must hit disk after Chat, not only before extract: {chat}"
         );
         assert!(
             chat.contains("goal_continue_pin"),
