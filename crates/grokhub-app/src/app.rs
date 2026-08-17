@@ -101,7 +101,7 @@ use grokhub_core::{
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title_in, apply_manual_rename, delete_thread, display_tab_title, history_order,
     should_name_thread,
-    skill_follow_block, slash_help, summarize_write, surgical_memory_edit,
+    skill_follow_block, skill_use_in_chat_prompt, slash_help, summarize_write, surgical_memory_edit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
     unified_diff_cite, usage_line,
@@ -8541,13 +8541,19 @@ impl Cabin {
                     }
                     if crate::cards::ghost_pill(ui, "Use in chat") && !self.skill_name.is_empty() {
                         let name = self.skill_name.clone();
-                        if let Some(s) = self.skill_list.iter().find(|s| s.name == name) {
-                            if let Some(r) = parse_recipe(&s.instructions) {
-                                self.last_recipe = Some(r);
-                            }
-                        }
+                        let slash = self
+                            .skill_list
+                            .iter()
+                            .find(|s| s.name == name)
+                            .map(|s| {
+                                if let Some(r) = parse_recipe(&s.instructions) {
+                                    self.last_recipe = Some(r);
+                                }
+                                s.slash.clone()
+                            })
+                            .unwrap_or_default();
                         self.nav = Nav::Chat;
-                        self.send_chat(format!("Follow skill {name}"));
+                        self.send_chat(skill_use_in_chat_prompt(&slash, &name));
                     }
                     if crate::cards::ghost_pill(ui, "Run verify") && !self.skill_name.is_empty() {
                         self.run_skill_verify();
@@ -9235,6 +9241,15 @@ mod tests {
         assert!(
             src.contains("let goal_step = threads.get(thread_idx)"),
             "boot must restore the current thread's goal step, not always 0"
+        );
+        let skills_ui = src
+            .split("fn ui_skills")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_eyes").next())
+            .expect("ui_skills");
+        assert!(
+            skills_ui.contains("skill_use_in_chat_prompt"),
+            "Use in chat must send a match_skill hit, not Follow skill: {skills_ui}"
         );
         let anticipate = src
             .split("fn tick_anticipate")
