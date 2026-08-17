@@ -11,20 +11,27 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
 
+fn expand_source_hint(raw: &str) -> PathBuf {
+    PathBuf::from(grokhub_core::expand_project_root(
+        raw,
+        env::var("HOME").ok().as_deref(),
+    ))
+}
+
 pub fn resolve_source(cfg_source: &str) -> Option<PathBuf> {
     let mut hints = Vec::new();
     if let Ok(e) = env::var("GROKHUB_SRC") {
-        hints.push(PathBuf::from(e));
+        hints.push(expand_source_hint(&e));
     }
     let trimmed = cfg_source.trim();
     if !trimmed.is_empty() {
-        hints.push(PathBuf::from(trimmed));
+        hints.push(expand_source_hint(trimmed));
     }
     let marker = config::config_dir().join("source");
     if let Ok(p) = std::fs::read_to_string(&marker) {
         let p = p.trim();
         if !p.is_empty() {
-            hints.push(PathBuf::from(p));
+            hints.push(expand_source_hint(p));
         }
     }
     if let Ok(cwd) = env::current_dir() {
@@ -162,6 +169,53 @@ mod tests {
     use super::*;
     use crate::config::TEST_CONFIG_LOCK;
     use std::fs;
+
+    #[test]
+    fn resolve_source_expands_tilde() {
+        let _g = TEST_CONFIG_LOCK.lock().unwrap();
+        let home = env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let root = PathBuf::from(&home).join(format!(
+            "grokhub-src-tilde-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::create_dir_all(root.join("crates/grokhub-app")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::write(root.join("scripts/install.sh"), "#!/bin/sh\n").unwrap();
+        let prev_src = env::var("GROKHUB_SRC").ok();
+        env::remove_var("GROKHUB_SRC");
+        let prev_cfg = env::var("GROKHUB_CONFIG").ok();
+        let cfg = std::env::temp_dir().join(format!(
+            "grokhub-src-tilde-cfg-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&cfg);
+        env::set_var("GROKHUB_CONFIG", &cfg);
+        let rest = root
+            .to_string_lossy()
+            .trim_start_matches(&format!("{home}/"))
+            .to_string();
+        let found = resolve_source(&format!("~/{rest}"));
+        match prev_src {
+            Some(v) => env::set_var("GROKHUB_SRC", v),
+            None => env::remove_var("GROKHUB_SRC"),
+        }
+        match prev_cfg {
+            Some(v) => env::set_var("GROKHUB_CONFIG", v),
+            None => env::remove_var("GROKHUB_CONFIG"),
+        }
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&cfg);
+        assert_eq!(
+            found,
+            Some(root),
+            "Settings source ~/… must expand before discover"
+        );
+    }
 
     #[test]
     fn resolve_prefers_grokhub_src() {
