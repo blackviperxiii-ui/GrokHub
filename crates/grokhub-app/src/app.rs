@@ -649,6 +649,7 @@ pub struct Cabin {
     mem_name: String,
     mem_body: String,
     last_persist: Instant,
+    persist_idle_key: String,
     persist_rx: Option<mpsc::Receiver<()>>,
     persist_io: Arc<Mutex<()>>,
     board: Vec<BoardCard>,
@@ -956,6 +957,7 @@ impl Cabin {
             mem_name,
             mem_body,
             last_persist: Instant::now(),
+            persist_idle_key: String::new(),
             persist_rx: None,
             persist_io: Arc::new(Mutex::new(())),
             board: config::load_board(),
@@ -1254,6 +1256,25 @@ impl Cabin {
         if self.persist_rx.is_some() {
             return;
         }
+        let key = format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            self.threads.len(),
+            self.thread_idx,
+            self.messages.len(),
+            self.messages.last().map(|m| m.content.len()).unwrap_or(0),
+            self.board.len(),
+            self.automations.len(),
+            self.geom_dirty,
+            self.projects_dirty,
+            self.usage.day,
+            self.usage.messages,
+            self.cfg.current_thread
+        );
+        if !self.geom_dirty && !self.projects_dirty && self.persist_idle_key == key {
+            self.last_persist = Instant::now();
+            return;
+        }
+        self.persist_idle_key = key;
         let snap = self.persist_snap();
         if snap.projects.is_some() {
             self.projects_dirty = false;
@@ -10160,6 +10181,10 @@ mod tests {
         assert!(
             spawn < save,
             "periodic persist must write after spawn: {bg}"
+        );
+        assert!(
+            bg.contains("persist_idle_key") && bg.contains("return;"),
+            "idle 2s persist must not clone every thread on the UI thread: {bg}"
         );
     }
 
