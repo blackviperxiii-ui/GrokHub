@@ -107,12 +107,17 @@ fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[&(String, String)]) {
         } else {
             last_was_work = false;
             if !prose.is_empty() {
+                if let Some(prev) = last_final.take() {
+                    push_thought(out, prev);
+                }
                 last_final = Some(prose);
             }
         }
     }
     if last_was_work {
-        last_final = None;
+        if let Some(prev) = last_final.take() {
+            push_thought(out, prev);
+        }
     }
     if let Some(prose) = last_final {
         out.push(ChatView {
@@ -178,7 +183,7 @@ fn host_cmd_heredoc_delim(line: &str) -> Option<String> {
         .trim_start_matches('\'');
     let delim: String = rest
         .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
         .collect();
     if delim.is_empty() {
         None
@@ -590,6 +595,28 @@ mod tests {
             host_cmd_heredoc_delim("HOST_CMD: uname -a"),
             None
         );
+        assert_eq!(
+            host_cmd_heredoc_delim("HOST_CMD: cat <<'EOF-2'"),
+            Some("EOF-2".into())
+        );
+        assert_eq!(
+            assistant_prose("I'll look.\nHOST_CMD: cat <<'EOF-2'\nsecret dump\nEOF-2\nDone."),
+            "I'll look.\nDone."
+        );
+    }
+
+    #[test]
+    fn status_then_work_keeps_the_status_as_thought() {
+        let msgs = vec![
+            ("user".into(), "check the box".into()),
+            ("assistant".into(), "Checking the system.".into()),
+            ("assistant".into(), "HOST_CMD: uname -a\n".into()),
+        ];
+        let v = visible_chat(&msgs);
+        assert_eq!(kinds(&v), vec![ChatKind::User, ChatKind::Thought]);
+        assert_eq!(v[1].body, "Checking the system.");
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Assistant));
+        assert!(!v.iter().any(|x| x.body.contains("uname")));
     }
 
     #[test]
