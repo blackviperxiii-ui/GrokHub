@@ -3,6 +3,7 @@
 pub mod appearance;
 pub mod attach;
 pub mod autonomy;
+pub mod browser;
 pub mod feel;
 pub mod automation;
 pub mod chat;
@@ -47,6 +48,7 @@ pub mod slash;
 pub mod state;
 pub mod stream;
 pub mod task;
+pub mod trajectory;
 pub mod thread_tab;
 pub mod update;
 pub mod usage;
@@ -146,6 +148,11 @@ pub use hands::{
     diagnose_hands, extra_bin_dirs, hands_chip_label, hands_chip_live, hands_down_receipt,
     resolve_bin_in, ydotool_socket_path, HandsDown, HANDS_PACMAN, PYATSPI_MISSING,
 };
+pub use browser::{
+    browser_windshield_line, cdp_activate_payload, cdp_page_close_payload, cdp_page_focus_payload,
+    format_tab_list, match_browser_tabs, parse_cdp_targets, pick_browser_tab, BrowserTab, CDP_DOWN,
+    CDP_PORTS,
+};
 pub use recipe::{
     act_window_search_bin, bin_on_path, computer_cmd_line, computer_drive, computer_drive_for, default_bin_extra_dirs,
     empty_hands_steps_error, extract_computer_ops, hands_backend_name,
@@ -154,7 +161,7 @@ pub use recipe::{
     pick_hands_backend, recipe_from_cmds, recipe_from_json, recipe_to_json, replay_ops,
     screen_from_extents, should_attach_hands_frame, user_asks_cabin_eyes, user_asks_desktop_hands,
     user_asks_takeover, ComputerDrive, ComputerOp, HandsBackend, Recipe, RecipeDoc, ReplayOp,
-    ScreenSize,
+    ScreenSize, TabAction,
 };
 pub use heartbeat::{
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
@@ -166,9 +173,9 @@ pub use reflect::{
 };
 pub use review::{
     build_review_digest, cabin_real_text, dedupe_suggestions, merge_suggestion_store,
-    parse_suggest_lines, partition_suggestions, prune_live_suggestions, review_due,
+    parse_suggest_lines, parse_suggest_skill_patches, partition_suggestions, prune_live_suggestions, review_due,
     review_status_line, review_system_prompt,
-    DigestLine, LearnedSuggestion,
+    DigestLine, LearnedSuggestion, SkillPatch,
     ReviewDigest, SuggestionKind, SuggestionStore, CABIN_GITHUB_TOOLS, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
 };
 pub use pair::{
@@ -188,8 +195,14 @@ pub use connector::{
 };
 pub use consult::{format_consult_reply, parse_consult};
 pub use context::{
-    context_percent, estimate_messages, estimate_tokens, should_auto_compact, should_auto_compact_now,
-    CONTEXT_BUDGET_TOKENS, RECENT_MIN_MESSAGES,
+    context_percent, estimate_messages, estimate_tokens, is_result_turn, should_auto_compact,
+    should_auto_compact_now, should_trim_result_bodies, trim_result_bodies, CONTEXT_BUDGET_TOKENS,
+    RECENT_MIN_MESSAGES, RESULT_TRIM_KEEP_HOPS, RESULT_TRIM_THRESHOLD,
+};
+pub use trajectory::{
+    clip_excerpt, parse_trajectory_jsonl, rotate_trajectory, summarize_trajectory,
+    trajectory_jsonl_line, yesterday_ms, TrajectoryEvent, TRAJECTORY_EXCERPT_CHARS,
+    TRAJECTORY_MAX_BYTES,
 };
 pub use diagnostics::diagnostics_bundle;
 pub use goal::{
@@ -286,7 +299,8 @@ pub use voice::{
 pub use windshield::{
     build_windshield, filter_atspi_rows, is_interactive_role, keep_atspi_row, lock_check_titles,
     parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row, rank_atspi_rows,
-    refused_lock, window_name_from_atspi, window_name_from_wmctrl, windshield_prompt, AtspiRow,
+    refused_lock, window_name_from_atspi, window_name_from_wmctrl, windshield_browser_line,
+    windshield_prompt, AtspiRow,
     PendingStep, WindshieldFrame,
 };
 pub use workboard::{

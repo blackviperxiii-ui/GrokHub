@@ -116,7 +116,12 @@ pub fn pin_text(skills: &[SkillMd]) -> String {
         if !s.is_empty() {
             s.push('\n');
         }
-        s.push_str(&format!("- {} — {}", sk.name, sk.trigger));
+        let desc = sk.description.trim();
+        if desc.is_empty() {
+            s.push_str(&format!("- {} — {}", sk.name, sk.trigger));
+        } else {
+            s.push_str(&format!("- {} — {} — {}", sk.name, sk.trigger, desc));
+        }
     }
     s.chars().take(1000).collect()
 }
@@ -152,6 +157,7 @@ mod tests {
         assert!(skill_folder("flash-pi").join("scripts/verify.sh").exists());
         let pins = pin_text(&listed);
         assert!(pins.contains("flash-pi"));
+        assert!(pins.contains("write an image"), "{pins}");
         let patched = grokhub_core::patch_skill(
             &listed[0],
             &SkillMd {
