@@ -590,6 +590,12 @@ struct LiveCap {
     cam: Option<String>,
 }
 
+enum CabinFrame {
+    Skip,
+    Pending,
+    Ready(String),
+}
+
 struct PersistSnap {
     threads: Vec<ChatThread>,
     msgs: Vec<(String, String)>,
@@ -728,6 +734,10 @@ pub struct Cabin {
     last_live: Instant,
     live_cap_rx: Option<mpsc::Receiver<LiveCap>>,
     eyes_cap_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    kick_cap_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    pending_kick: Option<bool>,
+    kick_frame: Option<String>,
+    kick_skip: bool,
     #[allow(dead_code)]
     hotkeys: Option<GlobalHotKeyManager>,
     hotkey_hey: u32,
@@ -1021,6 +1031,10 @@ impl Cabin {
             last_live: Instant::now(),
             live_cap_rx: None,
             eyes_cap_rx: None,
+            kick_cap_rx: None,
+            pending_kick: None,
+            kick_frame: None,
+            kick_skip: false,
             hotkeys: None,
             hotkey_hey: 0,
             hotkey_halt: 0,
@@ -1284,6 +1298,10 @@ impl Cabin {
             self.host_reserved = 0;
         }
         self.pending_connectors.clear();
+        self.pending_kick = None;
+        self.kick_cap_rx = None;
+        self.kick_frame = None;
+        self.kick_skip = false;
         self.plan_pending = None;
         self.agents.clear();
         self.active_skill_follow = None;
@@ -4354,6 +4372,27 @@ impl Cabin {
             self.status = "Connect Grok OAuth in Settings".into();
             return;
         }
+        if !self.kick_skip
+            && self.kick_frame.is_none()
+            && (self.kick_cap_rx.is_some()
+                || should_capture_before_chat(self.eyes_attach || self.hands_attach))
+        {
+            match self.poll_cabin_frame() {
+                CabinFrame::Pending => {
+                    self.pending_kick = Some(consume_attach);
+                    if self.chat_job_thread.is_none() {
+                        self.chat_job_thread = Some(self.visible_thread_id());
+                    }
+                    self.running = true;
+                    self.status = "Capturing…".into();
+                    return;
+                }
+                CabinFrame::Ready(url) => {
+                    self.kick_frame = Some(url);
+                }
+                CabinFrame::Skip => {}
+            }
+        }
         self.running = true;
         self.status = "Thinking…".into();
         if self.chat_job_thread.is_none() {
@@ -4435,7 +4474,14 @@ impl Cabin {
         if self.cfg.cabin_eyes && user_asks_cabin_eyes(&last_user) {
             self.eyes_attach = true;
         }
-        let captured = self.capture_cabin_frame_this_turn();
+        let captured = if self.kick_skip {
+            self.kick_skip = false;
+            self.kick_frame.take()
+        } else {
+            self.kick_frame
+                .take()
+                .or_else(|| self.capture_cabin_frame_this_turn())
+        };
         let mut hands = hands_protocol().to_string();
         if self.eyes_attach || self.hands_attach {
             let rows = collect_rows();
@@ -4891,14 +4937,8 @@ impl Cabin {
                     if !lock_blocks_hands(&titles)
                         && !lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
                     {
-                        match capture_data_url() {
-                            Ok(url) => {
-                                if let Ok(mut st) = self.hub.lock() {
-                                    st.store_frame(&url);
-                                }
-                                self.last_frame_url = Some(url);
-                            }
-                            Err(_) => {}
+                        if let Some(url) = self.capture_cabin_frame_this_turn() {
+                            self.kick_frame = Some(url);
                         }
                     }
                     if let Some(recipe) = recipe_from_cmds(&self.last_host, screen_from_rows(&rows)) {
@@ -5324,8 +5364,44 @@ impl Cabin {
     }
 
     fn capture_cabin_frame_this_turn(&mut self) -> Option<String> {
+        match self.poll_cabin_frame() {
+            CabinFrame::Ready(url) => Some(url),
+            CabinFrame::Skip | CabinFrame::Pending => None,
+        }
+    }
+
+    fn poll_cabin_frame(&mut self) -> CabinFrame {
+        if let Some(rx) = self.kick_cap_rx.take() {
+            return match rx.try_recv() {
+                Ok(Ok(url)) => {
+                    if let Ok(mut st) = self.hub.lock() {
+                        st.store_frame(&url);
+                    }
+                    self.last_frame_url = Some(url.clone());
+                    CabinFrame::Ready(url)
+                }
+                Ok(Err(e)) => {
+                    if self.status.is_empty()
+                        || self.status == "Thinking…"
+                        || self.status == "Capturing…"
+                    {
+                        self.status = format!("eyes: {e}");
+                    }
+                    self.kick_skip = true;
+                    CabinFrame::Skip
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.kick_cap_rx = Some(rx);
+                    CabinFrame::Pending
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.kick_skip = true;
+                    CabinFrame::Skip
+                }
+            };
+        }
         if !should_capture_before_chat(self.eyes_attach || self.hands_attach) {
-            return None;
+            return CabinFrame::Skip;
         }
         let rows = collect_rows();
         self.last_window_title = rows
@@ -5339,21 +5415,38 @@ impl Cabin {
             || !should_send_screenshot(&self.last_window_title, "")
         {
             self.status = "eyes: skipped lock/password frame".into();
-            return None;
+            return CabinFrame::Skip;
         }
-        match capture_data_url() {
-            Ok(url) => {
-                if let Ok(mut st) = self.hub.lock() {
-                    st.store_frame(&url);
-                }
-                self.last_frame_url = Some(url.clone());
-                Some(url)
+        let (tx, rx) = mpsc::channel();
+        self.kick_cap_rx = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send(capture_data_url());
+        });
+        CabinFrame::Pending
+    }
+
+    fn poll_pending_kick(&mut self) {
+        let Some(consume) = self.pending_kick else {
+            return;
+        };
+        if self.kick_frame.is_some()
+            || (self.kick_cap_rx.is_none()
+                && !should_capture_before_chat(self.eyes_attach || self.hands_attach))
+        {
+            self.pending_kick = None;
+            self.kick_model(consume);
+            return;
+        }
+        match self.poll_cabin_frame() {
+            CabinFrame::Pending => {}
+            CabinFrame::Ready(url) => {
+                self.kick_frame = Some(url);
+                self.pending_kick = None;
+                self.kick_model(consume);
             }
-            Err(e) => {
-                if self.status.is_empty() || self.status == "Thinking…" {
-                    self.status = format!("eyes: {e}");
-                }
-                None
+            CabinFrame::Skip => {
+                self.pending_kick = None;
+                self.kick_model(consume);
             }
         }
     }
@@ -6106,6 +6199,7 @@ impl eframe::App for Cabin {
         self.poll_wall();
         self.poll_persist();
         self.poll_eyes_cap();
+        self.poll_pending_kick();
         self.live_room();
         self.tick_heartbeat();
         let close_requested = ctx.input(|i| i.viewport().close_requested());
@@ -6185,7 +6279,12 @@ impl eframe::App for Cabin {
         );
         let live = wants_live_repaint(
             self.running,
-            self.chip_busy || self.goal_busy || self.oauth_photo_busy || self.review_busy,
+            self.chip_busy
+                || self.goal_busy
+                || self.oauth_photo_busy
+                || self.review_busy
+                || self.pending_kick.is_some()
+                || self.kick_cap_rx.is_some(),
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -9850,6 +9949,33 @@ mod tests {
         assert!(
             eyes.contains("lock_titles") && eyes.contains("should_send_screenshot"),
             "Eyes Scan lock gates stay on the UI thread: {eyes}"
+        );
+    }
+
+    #[test]
+    fn chat_capture_leaves_the_ui_thread() {
+        let src = include_str!("app.rs");
+        let cap = src
+            .split("fn capture_cabin_frame_this_turn")
+            .nth(1)
+            .and_then(|s| s.split("fn apply_job_fail").next())
+            .expect("capture_cabin_frame_this_turn");
+        let spawn = cap
+            .find("thread::spawn")
+            .expect("chat grim must leave the UI thread");
+        let shot = cap.find("capture_data_url").expect("screen capture");
+        assert!(
+            spawn < shot,
+            "send/HostDone capture must not block the cabin: {cap}"
+        );
+        let kick = src
+            .split("fn kick_model(")
+            .nth(1)
+            .and_then(|s| s.split("fn upsert_stream_assistant").next())
+            .expect("kick_model");
+        assert!(
+            kick.contains("pending_kick") && kick.contains("kick_cap_rx"),
+            "kick_model must wait for the off-thread frame instead of blocking: {kick}"
         );
     }
 
