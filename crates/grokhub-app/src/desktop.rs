@@ -7,7 +7,7 @@ use grokhub_core::{
     parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
     parse_xrandr_outputs, pcm_from_capture, pick_capture_output, pick_hands_backend, pick_named_row,
     picker_args, rank_atspi_rows, resolve_bin_in, session_is_wayland, take_text_body,
-    virtual_desktop_size, x11_grab_size, ydotool_socket_path, AtspiRow, CaptureKind, ComputerDrive,
+    virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path, AtspiRow, CaptureKind, ComputerDrive,
     ComputerOp, DisplayOutput, HandsBackend, HandsDown, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
 };
 use image::GenericImageView;
@@ -93,14 +93,18 @@ pub fn read_display_outputs() -> Vec<DisplayOutput> {
         .unwrap_or_default()
 }
 
-pub fn prepare_windshield(rows: &[AtspiRow], ask: Option<&str>) -> (Vec<AtspiRow>, String) {
+pub fn prepare_windshield(
+    rows: &[AtspiRow],
+    ask: Option<&str>,
+    captured_this_turn: bool,
+) -> (Vec<AtspiRow>, String) {
     let outputs = read_display_outputs();
     let (dw, dh) = virtual_desktop_size(&outputs)
         .map(|(w, h)| (w as i32, h as i32))
         .unwrap_or((0, 0));
     let kept = filter_atspi_rows(rows, dw, dh);
     let ranked = rank_atspi_rows(&kept, ask, 40);
-    let (fw, fh, ox, oy) = last_desk_frame_geom();
+    let (fw, fh, ox, oy) = windshield_frame_geom(captured_this_turn, last_desk_frame_geom());
     (ranked, layout_prompt(&outputs, fw, fh, ox, oy))
 }
 
