@@ -5465,7 +5465,11 @@ impl Cabin {
     }
 
     fn drain_inbox(&mut self) {
-        if !self.hub_on || self.running || !inbox_claim_ready(self.has_key()) {
+        if !self.hub_on
+            || self.running
+            || self.pending_hub_task.is_some()
+            || !inbox_claim_ready(self.has_key())
+        {
             return;
         }
         let id = self
@@ -9350,6 +9354,15 @@ mod tests {
         assert!(
             src.contains("inbox_claim_ready") && src.contains("requeue_claimed_for"),
             "do not claim a phone task without auth, and unstick claimed rows on boot"
+        );
+        let inbox = src
+            .split("fn drain_inbox")
+            .nth(1)
+            .and_then(|s| s.split("fn finish_hub_dispatch").next())
+            .expect("drain_inbox");
+        assert!(
+            inbox.contains("pending_hub_task.is_some()"),
+            "do not claim a second phone task while one is still pending: {inbox}"
         );
         assert!(
             src.contains("night_counts_run"),
