@@ -1980,6 +1980,9 @@ impl Cabin {
             }
             return;
         }
+        if config::read_memory(&self.mem_name) != self.mem_body {
+            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+        }
         let user_md = config::read_memory("USER.md");
         let memory_md = config::read_memory("MEMORY.md");
         let insights: Vec<String> = self
@@ -10031,6 +10034,18 @@ mod tests {
         assert!(
             inhabit[..soul].contains("write_memory") && inhabit[..soul].contains("mem_body"),
             "/inhabit must flush the Memory editor before packing SOUL.md: {inhabit}"
+        );
+        let greet = src
+            .split("fn refresh_greeting")
+            .nth(1)
+            .and_then(|s| s.split("fn spawn_greeting_llm").next())
+            .expect("refresh_greeting");
+        let user = greet.find("read_memory(\"USER.md\")").expect("greet user");
+        assert!(
+            greet[..user].contains("write_memory")
+                && greet[..user].contains("mem_body")
+                && greet[..user].contains("scratch()"),
+            "empty-chat greeting must flush the Memory editor before reading USER/MEMORY: {greet}"
         );
         let dream = src
             .split("fn run_dream")
