@@ -336,9 +336,9 @@ pub fn slash_help() -> String {
     [
         "/help — this list",
         "/new — new chat",
-        "/scratch — new scratch chat (no memory)",
+        "/scratch — new scratch chat (no memory; /forget and Memory Save stay off)",
         "/clear — clear this chat",
-        "/compact — keep last 8 turns",
+        "/compact — keep last 8 visible turns",
         "/undo — drop last assistant turn",
         "/retry — re-send last user prompt",
         "/stop — halt the current job",
@@ -358,15 +358,16 @@ pub fn slash_help() -> String {
         "/imagine <prompt>",
         "/update — overlay install (enables hub, rebuilds sidecars); Restart on Settings (ydotoold → hub, then a new cabin process)",
         "/send <task> — task this box",
+        "/sync — merge chats and memory with paired computers",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another box (not the phone)",
-        "/rewind — restore last project snapshot (refuses ~/.ssh and other secret dirs)",
+        "/rewind — restore last project snapshot (Restoring until host finishes; refuses empty dest and ~/.ssh)",
         "/room <name> — speak the room",
         "/export — write this chat as markdown",
         "/rename <title> — name this chat (permanent)",
         "/pin — pin or unpin this chat",
         "/delete — delete this chat tab",
-        "/context — context budget",
+        "/context — context budget (visible turns, not host rows)",
         "/health — doctor",
         "/fix — halt + doctor",
         "/remember <fact> — write MEMORY.md",
@@ -387,9 +388,9 @@ pub fn slash_help() -> String {
         "Cabin eyes stay dormant until you ask, or hands need a frame. Thought does not announce an attach.",
         "Pulse every 15s: every organ runs. Hidden idle waits for the pulse.",
         "After 21:00 a quiet Balanced review fills Suggested tiles from what it learned.",
-        "Devices pair URL is a LAN IPv4. Hub complete is owner-only.",
+        "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
         "Chat rail opens the last-accessed thread. MidThought can greet Continue {title}.",
-        "Host, hands, and connector work stay off the chat. Chat shows each thought as its own bubble and the final reply. User bubbles sit on the right. Bubbles wrap with the chat pane. Copy and Reply sit on visible messages. Hands map JPEG clicks through xrandr; act picks the smallest AT-SPI match.",
+        "Host, hands, and connector work stay off the chat. Chat shows each thought as its own bubble and the final reply. User bubbles sit on the right. Bubbles wrap with the chat pane. Copy and Reply sit on visible messages. Hands map JPEG clicks through xrandr; act picks the smallest AT-SPI match. A full-desktop frame stays at 0,0 — it does not inherit a single-monitor origin.",
         "Five chips sit centered over the composer.",
     ]
     .join("\n")
@@ -491,6 +492,13 @@ mod tests {
         assert!(slash_help().contains("each thought as its own bubble"));
         assert!(slash_help().contains("User bubbles sit on the right"));
         assert!(slash_help().contains("smallest AT-SPI match"));
+        assert!(slash_help().contains("full-desktop frame stays at 0,0"));
+        assert!(slash_help().contains("keep last 8 visible turns"));
+        assert!(slash_help().contains("/forget and Memory Save stay off"));
+        assert!(slash_help().contains("Restoring until host finishes"));
+        assert!(slash_help().contains("/skill <name> — run a skill"));
+        assert!(slash_help().contains("/sync — merge chats and memory"));
+        assert!(slash_help().contains("Expired pair codes hide and rotate"));
         assert!(slash_help().contains("install.sh builds sidecars and installs python-atspi"));
         assert!(slash_help().contains("Eyes Install hands starts ydotoold"));
         assert!(slash_help().contains("handed-back apt/not-found"));
