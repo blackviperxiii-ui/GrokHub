@@ -2923,6 +2923,7 @@ impl Cabin {
                 self.queue_sh(plan.host_script);
             }
             Slash::Export => {
+                self.persist();
                 if let Some(t) = self.threads.get(self.thread_idx) {
                     let md = threads::export_markdown(t);
                     let dest = if self.cfg.project_dir.trim().is_empty() {
@@ -9423,6 +9424,17 @@ mod tests {
         assert!(
             unbound.contains("project_sel = None") && unbound.contains("touch_projects"),
             "/project clear must drop the sidebar selection: {unbound}"
+        );
+        let export = src
+            .split("Slash::Export =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::Recall").next())
+            .expect("Export");
+        let flushed = export.find("self.persist()").expect("export persist");
+        let wrote = export.find("export_markdown").expect("export_markdown");
+        assert!(
+            flushed < wrote,
+            "/export must flush the live pane before writing the thread file: {export}"
         );
         let finish = src
             .split("fn finish_hub_dispatch")
