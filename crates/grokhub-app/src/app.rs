@@ -91,6 +91,7 @@ use grokhub_core::{
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
+    state_for_disk,
     clear_pending_after_complete, inbox_claim_ready,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
     user_asks_takeover, windshield_prompt,
@@ -1138,7 +1139,8 @@ impl Cabin {
         self.flush_projects();
         let _ = config::save(&self.cfg);
         self.sync_hub_voice();
-        if let Ok(st) = self.hub.lock() {
+        let hub_disk = self.hub.lock().ok().map(|st| state_for_disk(&st));
+        if let Some(st) = hub_disk {
             let _ = save_hub_state(&config::hub_state_path(), &st);
         }
         self.last_persist = Instant::now();
@@ -9529,6 +9531,24 @@ mod tests {
         assert!(
             drop_at.is_none_or(|d| d > spawn_at),
             "dropping the tray before spawn leaves a headless cabin when restart fails: {restart}"
+        );
+    }
+
+    #[test]
+    fn persist_does_not_hold_hub_lock_across_disk() {
+        let src = include_str!("app.rs");
+        let persist = src
+            .split("fn persist(&mut self)")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn sync_hub_voice").next())
+            .expect("persist");
+        assert!(
+            persist.contains("state_for_disk"),
+            "persist must clone hub state before the disk write: {persist}"
+        );
+        assert!(
+            !persist.contains("if let Ok(st) = self.hub.lock()"),
+            "persist must not hold hub.lock() across save_hub_state: {persist}"
         );
     }
 
