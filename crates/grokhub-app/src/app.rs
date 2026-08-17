@@ -11,7 +11,7 @@ use crate::desktop::{
     lock_titles, pick_file, play_audio, prepare_windshield, read_text_capped, record_once,
     run_computer_op_cancel, transcribe_local,
 };
-use crate::host::{host_working_dir, run_host, run_host_stream};
+use crate::host::{host_working_dir, resolve_host_cite_path, run_host, run_host_stream};
 use crate::secrets::{self, Secrets};
 use crate::skills;
 use crate::threads::{self, ChatThread};
@@ -4797,8 +4797,9 @@ impl Cabin {
                     &block,
                 ) {
                     if let Some(path) = cite.split_whitespace().last() {
-                        if let Ok(after) = std::fs::read_to_string(path) {
-                            let diff = unified_diff_cite(path, "", &after);
+                        let path = resolve_host_cite_path(&self.cfg.project_dir, path);
+                        if let Ok(after) = std::fs::read_to_string(&path) {
+                            let diff = unified_diff_cite(&path, "", &after);
                             self.push_bound_msg("user", format!("HOST_DIFF:\n{diff}"));
                             self.persist();
                         }
@@ -9891,6 +9892,10 @@ mod tests {
         assert!(
             host_done_facts[diff..].contains("self.persist()"),
             "HOST_DIFF must persist after the cite push: {host_done_facts}"
+        );
+        assert!(
+            host_done_facts.contains("resolve_host_cite_path"),
+            "HOST_DIFF must read the write from the bound tree, not the cabin cwd: {host_done_facts}"
         );
         let deleted = src
             .split("fn delete_thread_at")
