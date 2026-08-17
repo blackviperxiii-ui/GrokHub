@@ -231,7 +231,7 @@ pub fn prepare_windshield(
     let kept = filter_atspi_rows(rows, dw, dh);
     let ranked = rank_atspi_rows(&kept, ask, 40);
     let (fw, fh, ox, oy) = windshield_frame_geom(captured_this_turn, last_desk_frame_geom());
-    let mut header = layout_prompt(&outputs, fw, fh, ox, oy);
+    let mut header = layout_prompt(&outputs, fw, fh, ox, oy, None);
     let (up, n) = cached_cdp_status();
     header.push_str(&browser_windshield_line(up, n));
     header.push_str(&hands_windshield_line(hands_peek(), hands_driver_name()));
