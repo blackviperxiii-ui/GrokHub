@@ -5177,11 +5177,14 @@ impl Cabin {
                 .into_iter()
                 .map(|(role, content)| Msg { role, content })
                 .collect();
+            self.stamp_current_access();
             return status;
         }
         if let Some(id) = job {
             if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
-                return apply_job_error(&mut t.messages, err);
+                let status = apply_job_error(&mut t.messages, err);
+                t.accessed_ms = now_ms();
+                return status;
             }
         }
         err.to_string()
@@ -9534,6 +9537,15 @@ mod tests {
             send[pushed..saved].contains("stamp_current_access")
                 || send[pushed..saved].contains("accessed_ms"),
             "a sent turn must bump accessed_ms or /sync LWW can drop it: {send}"
+        );
+        let fail = src
+            .split("fn apply_job_fail")
+            .nth(1)
+            .and_then(|s| s.split("fn queue_update").next())
+            .expect("apply_job_fail");
+        assert!(
+            fail.contains("accessed_ms") || fail.contains("stamp_current_access"),
+            "a job error on the origin thread must bump accessed_ms or /sync LWW can drop it: {fail}"
         );
         let created = src
             .split("fn new_thread")
