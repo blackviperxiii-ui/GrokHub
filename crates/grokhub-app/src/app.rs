@@ -89,7 +89,7 @@ use grokhub_core::{
     greeting_fingerprint, greeting_prompt, local_greeting, pick_greeting,
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
-    is_rewind_copy_cmd, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
+    is_rewind_copy_cmd, is_rewind_copy_cmd_in, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
     clear_pending_after_complete, inbox_claim_ready,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
@@ -4949,7 +4949,7 @@ impl Cabin {
                 continue;
             }
             if !c.trim().starts_with("COMPUTER_CMD")
-                && !is_rewind_copy_cmd(c)
+                && !is_rewind_copy_cmd_in(c, &self.cfg.project_dir, std::env::var("HOME").ok().as_deref())
                 && host_cmd_leaves_project(c, &self.cfg.project_dir)
                 && !self.cfg.yolo
             {
