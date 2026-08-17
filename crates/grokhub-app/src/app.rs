@@ -2737,6 +2737,10 @@ impl Cabin {
             Slash::New => self.new_thread(false),
             Slash::Scratch => self.new_thread(true),
             Slash::Clear => {
+                if self.running {
+                    self.halt_in_flight();
+                    self.finish_hub_dispatch("Cleared in-flight reply", false);
+                }
                 self.messages.clear();
                 self.persist();
                 self.status = "Cleared".into();
@@ -9129,6 +9133,15 @@ mod tests {
         assert!(
             src.contains("night_counts_run"),
             "a night replay that did not start must not consume the slot"
+        );
+        let clear = src
+            .split("Slash::Clear =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::Undo =>").next())
+            .expect("Clear");
+        assert!(
+            clear.contains("halt_in_flight"),
+            "/clear during a job must halt or the stream refills the pane: {clear}"
         );
         let finish = src
             .split("fn finish_hub_dispatch")
