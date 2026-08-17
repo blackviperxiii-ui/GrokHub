@@ -4531,8 +4531,19 @@ impl Cabin {
                         self.goal_step = next_step;
                     }
                 }
+                let compact_step = if let Some(id) = job.as_deref() {
+                    self.threads
+                        .iter()
+                        .find(|t| t.id == id)
+                        .map(|t| t.goal.step)
+                        .unwrap_or(0)
+                } else if here {
+                    self.goal_step
+                } else {
+                    job_step
+                };
                 let tokens = estimate_messages(&job_pairs);
-                if should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, job_step) {
+                if should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, compact_step) {
                     if here {
                         self.run_slash(Slash::Compact);
                         self.status = format!(
@@ -10171,6 +10182,10 @@ mod tests {
         assert!(
             chat.contains("estimate_messages(&job_pairs)"),
             "auto-compact must use the origin thread, not only the visible tab: {chat}"
+        );
+        assert!(
+            chat.contains("should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, compact_step)"),
+            "auto-compact must use the post-outcome goal step, not the pre-outcome job_step: {chat}"
         );
         assert!(
             chat.contains("goal_continue_pin"),
