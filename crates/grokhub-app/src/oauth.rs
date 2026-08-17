@@ -356,9 +356,9 @@ mod tests {
     }
 
     #[test]
-    fn oauth_user_agent_is_2_6_24() {
+    fn oauth_user_agent_is_2_6_25() {
         assert!(
-            UA.contains("GrokHub/2.6.24"),
+            UA.contains("GrokHub/2.6.25"),
             "oauth UA must track the cabin version, got {UA}"
         );
     }
