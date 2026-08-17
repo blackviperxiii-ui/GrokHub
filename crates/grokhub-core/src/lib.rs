@@ -166,7 +166,7 @@ pub use recipe::{
     screen_from_extents, see_drive_attach, should_attach_hands_frame, user_asks_cabin_eyes,
     user_asks_desktop_hands, user_asks_gui_help, user_asks_guide_only, user_asks_takeover,
     hands_step_label, ComputerDrive, ComputerOp, HandsBackend, Recipe, RecipeDoc, ReplayOp,
-    ScreenSize, TabAction,
+    ScreenSize, TabAction, WindowChrome,
 };
 pub use heartbeat::{
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
@@ -303,7 +303,8 @@ pub use voice::{
 };
 pub use windshield::{
     build_windshield, filter_atspi_rows, is_interactive_role, keep_atspi_row, lock_check_titles,
-    parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row, rank_atspi_rows,
+    parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row, pick_window_row,
+    rank_atspi_rows, window_chrome_point,
     refused_lock, tab_list_from_rows, window_name_from_atspi, window_name_from_wmctrl,
     windshield_browser_line, windshield_prompt, AtspiRow,
     PendingStep, WindshieldFrame,

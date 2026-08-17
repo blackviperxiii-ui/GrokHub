@@ -247,6 +247,37 @@ fn is_new_tab_row(row: &AtspiRow) -> bool {
     n == "+" || n == "newtab" || n.contains("new tab")
 }
 
+const WINDOW_CLOSE_INSET_X: i32 = 18;
+const WINDOW_CLOSE_INSET_Y: i32 = 16;
+
+/// Largest matching frame/window, not the tiny Close button.
+pub fn pick_window_row<'a>(rows: &'a [AtspiRow], title: &str) -> Option<&'a AtspiRow> {
+    let q = title.trim().to_ascii_lowercase();
+    if q.is_empty() {
+        return None;
+    }
+    rows.iter()
+        .filter(|r| r.role != "cursor" && r.name.to_ascii_lowercase().contains(&q))
+        .max_by_key(|r| {
+            let frame = if r.role.eq_ignore_ascii_case("frame") || r.role.eq_ignore_ascii_case("window")
+            {
+                1i64
+            } else {
+                0
+            };
+            let area = (r.w as i64).saturating_mul(r.h as i64);
+            (frame, area)
+        })
+}
+
+pub fn window_chrome_point(row: &AtspiRow, chrome: crate::recipe::WindowChrome) -> (i32, i32) {
+    match chrome {
+        crate::recipe::WindowChrome::Close => {
+            (row.x + row.w - WINDOW_CLOSE_INSET_X, row.y + WINDOW_CLOSE_INSET_Y)
+        }
+    }
+}
+
 /// Exact / prefix name, then the smallest matching control (tab × beats the window).
 pub fn pick_named_row<'a>(rows: &'a [AtspiRow], name: &str) -> Option<&'a AtspiRow> {
     let q = norm_act_name(name);
@@ -587,6 +618,27 @@ mod tests {
         assert_eq!(
             window_name_from_wmctrl("0x02 0 0 0 1920 1080 Lock screen").as_deref(),
             Some("Lock screen")
+        );
+    }
+
+    #[test]
+    fn click_window_close_uses_the_frame_top_right() {
+        let rows = [
+            row("Close", "push button", 7260, 8, 16, 16),
+            row("Firefox", "frame", 5360, 0, 1920, 1440),
+            row("Mozilla Firefox", "window", 5360, 0, 800, 600),
+        ];
+        let win = pick_window_row(&rows, "Firefox").unwrap();
+        assert_eq!(win.name, "Firefox");
+        assert_eq!((win.w, win.h), (1920, 1440));
+        assert_eq!(
+            window_chrome_point(win, crate::recipe::WindowChrome::Close),
+            (7262, 16),
+            "close is an inset from the frame top-right, not the tiny Close button"
+        );
+        assert_ne!(
+            window_chrome_point(win, crate::recipe::WindowChrome::Close),
+            (50, 40)
         );
     }
 }

@@ -23,6 +23,13 @@ pub enum ComputerOp {
         x: Option<i32>,
         y: Option<i32>,
     },
+    ClickWindow { title: String, chrome: WindowChrome },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowChrome {
+    Close,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,7 +117,8 @@ pub fn empty_hands_steps_error(op: &ComputerOp, steps: &[Vec<String>]) -> Option
         | ComputerOp::Act { .. }
         | ComputerOp::WaitFor { .. }
         | ComputerOp::Cursor
-        | ComputerOp::MoveMonitor { .. } => None,
+        | ComputerOp::MoveMonitor { .. }
+        | ComputerOp::ClickWindow { .. } => None,
         _ => Some("empty hands step".into()),
     }
 }
@@ -151,9 +159,22 @@ pub fn parse_computer_op(line: &str) -> Option<ComputerOp> {
     let op = bits.next()?.to_ascii_lowercase();
     match op.as_str() {
         "click" => {
-            let x = bits.next()?.parse().ok()?;
-            let y = bits.next()?.parse().ok()?;
-            Some(ComputerOp::Click { x, y })
+            let a = bits.next()?;
+            if a.eq_ignore_ascii_case("window") {
+                let mut rest: Vec<&str> = bits.collect();
+                let chrome = rest.pop()?;
+                if !chrome.eq_ignore_ascii_case("close") || rest.is_empty() {
+                    return None;
+                }
+                Some(ComputerOp::ClickWindow {
+                    title: rest.join(" "),
+                    chrome: WindowChrome::Close,
+                })
+            } else {
+                let x = a.parse().ok()?;
+                let y = bits.next()?.parse().ok()?;
+                Some(ComputerOp::Click { x, y })
+            }
         }
         "dblclick" | "doubleclick" | "double-click" => {
             let x = bits.next()?.parse().ok()?;
@@ -325,6 +346,7 @@ pub enum ComputerDrive {
         x: Option<i32>,
         y: Option<i32>,
     },
+    ClickWindow { title: String, chrome: WindowChrome },
 }
 
 pub fn computer_drive(op: &ComputerOp) -> ComputerDrive {
@@ -341,6 +363,10 @@ pub fn computer_drive_for(backend: HandsBackend, op: &ComputerOp) -> ComputerDri
             name: name.clone(),
             x: *x,
             y: *y,
+        },
+        ComputerOp::ClickWindow { title, chrome } => ComputerDrive::ClickWindow {
+            title: title.clone(),
+            chrome: *chrome,
         },
         other => match backend {
             HandsBackend::Xdotool => ComputerDrive::Xdotool(xdotool_steps(other)),
@@ -397,7 +423,8 @@ fn xdotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
         | ComputerOp::WaitFor { .. }
         | ComputerOp::Tab { .. }
         | ComputerOp::Cursor
-        | ComputerOp::MoveMonitor { .. } => vec![],
+        | ComputerOp::MoveMonitor { .. }
+        | ComputerOp::ClickWindow { .. } => vec![],
     }
 }
 
@@ -439,7 +466,8 @@ fn ydotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
         | ComputerOp::WaitFor { .. }
         | ComputerOp::Tab { .. }
         | ComputerOp::Cursor
-        | ComputerOp::MoveMonitor { .. } => vec![],
+        | ComputerOp::MoveMonitor { .. }
+        | ComputerOp::ClickWindow { .. } => vec![],
     }
 }
 
@@ -598,6 +626,9 @@ pub fn computer_cmd_line(op: &ComputerOp) -> String {
         ComputerOp::MoveMonitor { name, x, y } => match (x, y) {
             (Some(x), Some(y)) => format!("COMPUTER_CMD: move monitor {name} {x} {y}"),
             _ => format!("COMPUTER_CMD: move monitor {name}"),
+        },
+        ComputerOp::ClickWindow { title, chrome } => match chrome {
+            WindowChrome::Close => format!("COMPUTER_CMD: click window {title} close"),
         },
     }
 }
@@ -932,6 +963,9 @@ fn label_for_op(op: &ComputerOp) -> String {
         },
         ComputerOp::Cursor => "Read cursor".into(),
         ComputerOp::MoveMonitor { name, .. } => format!("Moved to monitor {name}"),
+        ComputerOp::ClickWindow { title, chrome } => match chrome {
+            WindowChrome::Close => format!("Clicked window {title} close"),
+        },
     }
 }
 
@@ -1521,5 +1555,33 @@ mod tests {
             ]]
         );
         assert!(relative_move_steps(HandsBackend::Xdotool, 0, 0).is_empty());
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: click window Firefox close"),
+            Some(ComputerOp::ClickWindow {
+                title: "Firefox".into(),
+                chrome: WindowChrome::Close
+            })
+        );
+        assert_eq!(
+            computer_cmd_line(&ComputerOp::ClickWindow {
+                title: "Firefox".into(),
+                chrome: WindowChrome::Close
+            }),
+            "COMPUTER_CMD: click window Firefox close"
+        );
+        assert!(matches!(
+            computer_drive(&ComputerOp::ClickWindow {
+                title: "Firefox".into(),
+                chrome: WindowChrome::Close
+            }),
+            ComputerDrive::ClickWindow { title, chrome: WindowChrome::Close } if title == "Firefox"
+        ));
+        assert_eq!(
+            label_for_op(&ComputerOp::ClickWindow {
+                title: "Firefox".into(),
+                chrome: WindowChrome::Close
+            }),
+            "Clicked window Firefox close"
+        );
     }
 }
