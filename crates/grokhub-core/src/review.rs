@@ -487,6 +487,19 @@ fn merge_suggest_bucket(
     out
 }
 
+/// Drop Suggested tiles that collide with already-wired connectors.
+pub fn prune_live_suggestions(store: &mut SuggestionStore, live_tools: &[String]) {
+    if live_tools.is_empty() {
+        return;
+    }
+    let tools_l: Vec<String> = live_tools.iter().map(|t| t.to_ascii_lowercase()).collect();
+    store.connectors.retain(|item| {
+        let tool = item.tool.as_deref().unwrap_or("").to_ascii_lowercase();
+        let key = format!("github:{tool}");
+        !tools_l.iter().any(|t| t == &tool || t == &key)
+    });
+}
+
 /// Keep prior tiles when tonight's review only names some kinds.
 pub fn merge_suggestion_store(
     existing: &SuggestionStore,
@@ -665,6 +678,20 @@ SUGGEST_AUTO: Night wrap | Close the day | every day at 21, say good night
         assert_eq!(merged.skills[0].name.as_deref(), Some("desk-tidy"));
         assert_eq!(merged.connectors.len(), 1);
         assert_eq!(merged.connectors[0].tool.as_deref(), Some("user"));
+    }
+
+    #[test]
+    fn prune_drops_already_wired_github_tiles() {
+        let mut store = partition_suggestions(parse_suggest_lines(
+            "SUGGEST_CONNECTOR: Who | me | github user\n\
+             SUGGEST_AUTO: Night wrap | Close | every day at 21, say hi\n",
+        ));
+        prune_live_suggestions(&mut store, &["user".into()]);
+        assert!(
+            store.connectors.is_empty(),
+            "wired GitHub tools must leave the Suggested grid"
+        );
+        assert_eq!(store.autos.len(), 1, "other kinds stay");
     }
 
     #[test]
