@@ -1,5 +1,6 @@
 //! Cabin organs: greet, room, passenger, presence, redirect.
 
+use crate::attach::bound_scan;
 use crate::chat_view::is_workload_user;
 use crate::goal::is_auto_continue_prompt;
 
@@ -183,14 +184,20 @@ pub fn redirect_prompt(prev_user: &str, next: &str) -> String {
     format!("New direction: {next}\n\n(Previous ask: {prev_user})")
 }
 
-pub fn last_user_text(messages: &[(String, String)]) -> Option<String> {
+pub fn last_user_scan<'a, I>(messages: I) -> Option<String>
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+    I::IntoIter: DoubleEndedIterator,
+{
     messages
-        .iter()
+        .into_iter()
         .rev()
-        .find(|(r, c)| {
-            r == "user" && !is_workload_user(c) && !is_auto_continue_prompt(c)
-        })
-        .map(|(_, c)| c.clone())
+        .find(|(r, c)| *r == "user" && !is_workload_user(c) && !is_auto_continue_prompt(c))
+        .map(|(_, c)| bound_scan(c).into_owned())
+}
+
+pub fn last_user_text(messages: &[(String, String)]) -> Option<String> {
+    last_user_scan(messages.iter().map(|(r, c)| (r.as_str(), c.as_str())))
 }
 
 pub fn clipboard_context_block(text: &str) -> String {
@@ -297,6 +304,22 @@ mod tests {
             ])
             .as_deref(),
             Some("check the box")
+        );
+        let src = include_str!("organs.rs");
+        let last = src
+            .split("pub fn last_user_scan")
+            .nth(1)
+            .and_then(|s| s.split("pub fn last_user_text(").next())
+            .expect("last_user_scan");
+        let take = last
+            .find("into_owned")
+            .or_else(|| last.find("to_string"))
+            .expect("user take");
+        assert!(
+            last[..take].contains("bound_scan")
+                || last[..take].contains("TEXT_FILE_CAP")
+                || last[..take].contains("chip_scan"),
+            "last user must not clone an 8MB paste: {last}"
         );
         let receipts = thread_host_receipts(&[
             ("user".into(), "flash the pi".into()),
