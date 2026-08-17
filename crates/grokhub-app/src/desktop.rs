@@ -1,18 +1,21 @@
 use grokhub_core::{
     capture_kinds, clip_image_args, computer_cmd_line, computer_drive_for, diagnose_hands,
-    empty_hands_steps_error, ffmpeg_webcam_args, ffmpeg_x11_args, frame_is_blank,
-    gnome_shell_screenshot_args, hands_backend_name, hands_blocked_by_lock, hands_chip_label,
-    hands_chip_live, hands_down_receipt, infer_wayland_display, jpeg_data_url, live_pcm_argv,
-    live_pcm_frame_bytes, luma_mean_var, parse_atspi_line, parse_picker_stdout, parse_wmctrl_line,
-    parse_xdotool_mouse, pcm_from_capture, pick_hands_backend, picker_args, resolve_bin_in,
-    session_is_wayland, take_text_body, x11_grab_size, ydotool_socket_path, AtspiRow, CaptureKind,
-    ComputerDrive, ComputerOp, HandsBackend, HandsDown, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
+    empty_hands_steps_error, ffmpeg_webcam_args, ffmpeg_x11_args, filter_atspi_rows, frame_is_blank,
+    gnome_shell_screenshot_args, grim_capture_args, hands_backend_name, hands_blocked_by_lock,
+    hands_chip_label, hands_chip_live, hands_down_receipt, image_to_global, infer_wayland_display,
+    jpeg_data_url, layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var,
+    parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
+    parse_xrandr_outputs, pcm_from_capture, pick_capture_output, pick_hands_backend, pick_named_row,
+    picker_args, rank_atspi_rows, resolve_bin_in, session_is_wayland, take_text_body,
+    virtual_desktop_size, x11_grab_size, ydotool_socket_path, AtspiRow, CaptureKind, ComputerDrive,
+    ComputerOp, DisplayOutput, HandsBackend, HandsDown, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
 };
 use image::GenericImageView;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const ATSPI_PY: &str = r#"
@@ -22,13 +25,15 @@ try:
 except Exception:
     sys.exit(2)
 def walk(acc, n=0):
-    if n > 5:
+    if n > 8:
         return
     try:
         name = (acc.name or "").replace(" ", "_")
         role = (acc.getRoleName() or "object").replace(" ", "-")
         ext = acc.queryComponent().getExtents(0)
-        print(f"role={role} name={name} x={int(ext.x)} y={int(ext.y)} w={int(ext.width)} h={int(ext.height)}")
+        w, h = int(ext.width), int(ext.height)
+        if w > 0 and h > 0:
+            print(f"role={role} name={name} x={int(ext.x)} y={int(ext.y)} w={w} h={h}")
     except Exception:
         pass
     try:
@@ -38,6 +43,113 @@ def walk(acc, n=0):
         pass
 walk(pyatspi.Registry.getDesktop(0))
 "#;
+
+struct LastDeskFrame {
+    jpeg_w: u32,
+    jpeg_h: u32,
+    origin_x: i32,
+    origin_y: i32,
+    outputs: Vec<DisplayOutput>,
+}
+
+static LAST_DESK_FRAME: Mutex<Option<LastDeskFrame>> = Mutex::new(None);
+
+fn remember_desk_frame(
+    jpeg_w: u32,
+    jpeg_h: u32,
+    origin_x: i32,
+    origin_y: i32,
+    outputs: Vec<DisplayOutput>,
+) {
+    if let Ok(mut g) = LAST_DESK_FRAME.lock() {
+        *g = Some(LastDeskFrame {
+            jpeg_w,
+            jpeg_h,
+            origin_x,
+            origin_y,
+            outputs,
+        });
+    }
+}
+
+fn last_desk_frame_geom() -> (u32, u32, i32, i32) {
+    LAST_DESK_FRAME
+        .lock()
+        .ok()
+        .and_then(|g| {
+            g.as_ref()
+                .map(|f| (f.jpeg_w, f.jpeg_h, f.origin_x, f.origin_y))
+        })
+        .unwrap_or((0, 0, 0, 0))
+}
+
+pub fn read_display_outputs() -> Vec<DisplayOutput> {
+    Command::new("xrandr")
+        .arg("-q")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|t| parse_xrandr_outputs(&t))
+        .unwrap_or_default()
+}
+
+pub fn prepare_windshield(rows: &[AtspiRow], ask: Option<&str>) -> (Vec<AtspiRow>, String) {
+    let outputs = read_display_outputs();
+    let (dw, dh) = virtual_desktop_size(&outputs)
+        .map(|(w, h)| (w as i32, h as i32))
+        .unwrap_or((0, 0));
+    let kept = filter_atspi_rows(rows, dw, dh);
+    let ranked = rank_atspi_rows(&kept, ask, 40);
+    let (fw, fh, ox, oy) = last_desk_frame_geom();
+    (ranked, layout_prompt(&outputs, fw, fh, ox, oy))
+}
+
+fn remember_from_jpeg(bytes: &[u8], outputs: &[DisplayOutput], grim_name: Option<&str>) {
+    let Ok(img) = image::load_from_memory(bytes) else {
+        return;
+    };
+    let (w, h) = img.dimensions();
+    let origin = grim_name
+        .and_then(|n| outputs.iter().find(|o| o.name == n))
+        .map(|o| (o.x, o.y))
+        .unwrap_or((0, 0));
+    remember_desk_frame(w, h, origin.0, origin.1, outputs.to_vec());
+}
+
+fn map_pointer_xy(x: i32, y: i32) -> (i32, i32) {
+    let Ok(g) = LAST_DESK_FRAME.lock() else {
+        return (x, y);
+    };
+    let Some(f) = g.as_ref() else {
+        return (x, y);
+    };
+    image_to_global(
+        x,
+        y,
+        f.jpeg_w,
+        f.jpeg_h,
+        &f.outputs,
+        Some((f.origin_x, f.origin_y)),
+    )
+}
+
+fn map_pointer_op(op: &ComputerOp) -> ComputerOp {
+    match op {
+        ComputerOp::Click { x, y } => {
+            let (x, y) = map_pointer_xy(*x, *y);
+            ComputerOp::Click { x, y }
+        }
+        ComputerOp::DoubleClick { x, y } => {
+            let (x, y) = map_pointer_xy(*x, *y);
+            ComputerOp::DoubleClick { x, y }
+        }
+        ComputerOp::Move { x, y } => {
+            let (x, y) = map_pointer_xy(*x, *y);
+            ComputerOp::Move { x, y }
+        }
+        other => other.clone(),
+    }
+}
 
 pub fn resolve_bin(name: &str) -> Option<PathBuf> {
     resolve_bin_in(
@@ -200,14 +312,15 @@ pub fn collect_rows() -> Vec<AtspiRow> {
             rows.push(r);
         }
     }
-    rows
+    let outputs = read_display_outputs();
+    let (dw, dh) = virtual_desktop_size(&outputs)
+        .map(|(w, h)| (w as i32, h as i32))
+        .unwrap_or((0, 0));
+    filter_atspi_rows(&rows, dw, dh)
 }
 
 pub fn named_row<'a>(rows: &'a [AtspiRow], name: &str) -> Option<&'a AtspiRow> {
-    let q = name.to_ascii_lowercase();
-    rows.iter().find(|r| {
-        r.role != "cursor" && r.name.to_ascii_lowercase().contains(&q)
-    })
+    pick_named_row(rows, name)
 }
 
 pub fn row_center(row: &AtspiRow) -> (i32, i32) {
@@ -417,14 +530,15 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
     if hands_blocked_by_lock(op, &title_refs) {
         return hands_receipt(&line, started, false, "blocked: lock screen");
     }
-    match pointer_drive(op) {
+    let op = map_pointer_op(op);
+    match pointer_drive(&op) {
         ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
-            if let Some(detail) = empty_hands_steps_error(op, &steps) {
+            if let Some(detail) = empty_hands_steps_error(&op, &steps) {
                 return hands_receipt(&line, started, false, &detail);
             }
             match run_pointer_steps(&steps, cancel) {
                 Ok(()) => {
-                    let detail = match op {
+                    let detail = match &op {
                         ComputerOp::Click { x, y } => format!("clicked {x},{y}"),
                         ComputerOp::DoubleClick { x, y } => format!("double-clicked {x},{y}"),
                         ComputerOp::Move { x, y } => format!("moved {x},{y}"),
@@ -438,7 +552,7 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
                 Err(e) => hands_receipt(&line, started, false, &e),
             }
         }
-        ComputerDrive::Act(name) => match act_click(&name, cancel) {
+        ComputerDrive::Act(name) => match act_click(name.as_str(), cancel) {
             Ok((x, y)) => hands_receipt(&line, started, true, &format!("act {name} @{x},{y}")),
             Err(e) => hands_receipt(&line, started, false, &e),
         },
@@ -483,13 +597,26 @@ fn x11_size() -> (u32, u32) {
     x11_grab_size(xdpy.as_deref(), xrandr.as_deref())
 }
 
-fn run_capture_kind(kind: CaptureKind, dest: &Path) -> Result<PathBuf, String> {
+fn run_capture_kind(
+    kind: CaptureKind,
+    dest: &Path,
+    grim_output: Option<&str>,
+) -> Result<PathBuf, String> {
     let jpg = dest.to_path_buf();
     let png = dest.with_extension("png");
     match kind {
         CaptureKind::Grim => {
             let p = png.to_string_lossy().to_string();
-            run_ok("grim", &[&p])?;
+            if let Some(name) = grim_output {
+                let args = grim_capture_args(&p, Some(name));
+                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                if run_ok("grim", &refs).is_ok() {
+                    return Ok(png);
+                }
+            }
+            let args = grim_capture_args(&p, None);
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            run_ok("grim", &refs)?;
             Ok(png)
         }
         CaptureKind::GnomeScreenshot => {
@@ -593,9 +720,17 @@ pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
     if plan.is_empty() {
         return Err("no grim/gnome-screenshot/ffmpeg/scrot for a desktop frame".into());
     }
+    let outputs = read_display_outputs();
+    let points: Vec<(i32, i32)> = collect_rows()
+        .iter()
+        .filter(|r| r.role != "cursor")
+        .map(|r| (r.x + r.w / 2, r.y + r.h / 2))
+        .collect();
+    let grim_out = pick_capture_output(&outputs, &points)
+        .map(|o| o.name.clone());
     let mut last = "no desktop frame".to_string();
     for kind in plan {
-        match run_capture_kind(kind, path) {
+        match run_capture_kind(kind, path, grim_out.as_deref()) {
             Ok(written) => {
                 let jpeg = if written
                     .extension()
@@ -632,6 +767,7 @@ pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
                     last = format!("{kind:?} was a black frame");
                     continue;
                 }
+                remember_from_jpeg(&jpeg, &outputs, grim_out.as_deref());
                 let _ = std::fs::write(path, &jpeg);
                 return Ok(jpeg);
             }
@@ -1074,16 +1210,37 @@ mod tests {
 
     #[test]
     fn named_row_center_and_geometry() {
-        let rows = vec![AtspiRow {
-            name: "Save".into(),
-            role: "push button".into(),
-            x: 10,
-            y: 20,
-            w: 80,
-            h: 40,
-        }];
+        let rows = vec![
+            AtspiRow {
+                name: "Firefox".into(),
+                role: "frame".into(),
+                x: 1920,
+                y: 0,
+                w: 1920,
+                h: 1080,
+            },
+            AtspiRow {
+                name: "Close".into(),
+                role: "push button".into(),
+                x: 3720,
+                y: 12,
+                w: 16,
+                h: 16,
+            },
+            AtspiRow {
+                name: "Save".into(),
+                role: "push button".into(),
+                x: 10,
+                y: 20,
+                w: 80,
+                h: 40,
+            },
+        ];
         let r = named_row(&rows, "save").unwrap();
         assert_eq!(row_center(r), (50, 40));
+        let close = named_row(&rows, "Close").unwrap();
+        assert_eq!(row_center(close), (3728, 20));
+        assert_ne!(row_center(named_row(&rows, "Firefox").unwrap()), (3728, 20));
         let g = parse_getwindowgeometry(
             "Window 1\n  Position: 10,20 (screen: 0)\n  Geometry: 100x40\n",
         )
