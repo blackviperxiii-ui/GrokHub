@@ -136,6 +136,24 @@ pub fn persist_user_turn(has_key: bool) -> bool {
     has_key
 }
 
+/// Scratch policy follows the job thread, not whichever tab is visible.
+pub fn job_is_scratch(
+    job_thread_id: Option<&str>,
+    visible_thread_id: &str,
+    visible_scratch: bool,
+    stored_scratch: &[(String, bool)],
+) -> bool {
+    let target = job_thread_id.unwrap_or(visible_thread_id);
+    if target == visible_thread_id {
+        return visible_scratch;
+    }
+    stored_scratch
+        .iter()
+        .find(|(id, _)| id == target)
+        .map(|(_, scratch)| *scratch)
+        .unwrap_or(visible_scratch)
+}
+
 /// Halt must drop the partial assistant on the job thread, not only the visible tab.
 pub fn drop_trailing_assistant_on(
     job_thread_id: Option<&str>,
@@ -301,6 +319,21 @@ mod tests {
         assert!(job_error_goes_to_chat(Some("thr-a")));
         assert!(!persist_user_turn(false));
         assert!(persist_user_turn(true));
+    }
+
+    #[test]
+    fn scratch_follows_the_job_thread() {
+        let stored = [("thr-a".into(), true), ("thr-b".into(), false)];
+        assert!(
+            job_is_scratch(Some("thr-a"), "thr-b", false, &stored),
+            "a scratch host job must not write a skill after switching tabs"
+        );
+        assert!(
+            !job_is_scratch(Some("thr-b"), "thr-a", true, &stored),
+            "a real-thread host job must still save a skill from Scratch"
+        );
+        assert!(job_is_scratch(None, "thr-a", true, &stored));
+        assert!(!job_is_scratch(Some("thr-b"), "thr-b", false, &stored));
     }
 
     #[test]
