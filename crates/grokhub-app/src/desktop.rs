@@ -1,17 +1,18 @@
 use grokhub_core::{
-    act_window_search_bin, browser_windshield_line, capture_kinds, cdp_page_close_payload,
-    cdp_page_focus_payload, clip_image_args, computer_cmd_line, computer_drive_for, diagnose_hands,
-    empty_hands_steps_error, ffmpeg_webcam_args, ffmpeg_x11_args, filter_atspi_rows, format_tab_list,
-    frame_is_blank, frame_origin_for, gnome_shell_screenshot_args, grim_capture_args,
-    hands_backend_name, hands_blocked_by_lock, hands_chip_label, hands_chip_live, hands_down_receipt,
-    image_pixels_ok, image_to_global, infer_wayland_display, jpeg_data_url, layout_prompt, live_pcm_argv,
-    live_pcm_frame_bytes, luma_mean_var, parse_atspi_line, parse_cdp_targets, parse_picker_stdout,
-    parse_wmctrl_line, parse_xdotool_mouse, parse_xrandr_outputs, pcm_from_capture, pick_browser_tab,
-    pick_capture_output, pick_hands_backend, pick_named_row, picker_args, png_ihdr_size, rank_atspi_rows,
-    resolve_bin_in, session_is_wayland, take_text_body, IMAGE_FILE_CAP, TEXT_FILE_CAP,
-    virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path, AtspiRow, BrowserTab,
-    CaptureKind, ComputerDrive, ComputerOp, DisplayOutput, HandsBackend, HandsDown, TabAction,
-    CDP_DOWN, CDP_PORTS, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
+    act_window_search_bin, browser_windshield_line, capture_kinds, cdp_new_tab_path,
+    cdp_page_close_payload, cdp_page_focus_payload, clip_image_args, computer_cmd_line,
+    computer_drive_for, diagnose_hands, empty_hands_steps_error, ffmpeg_webcam_args, ffmpeg_x11_args,
+    filter_atspi_rows, format_tab_list, frame_is_blank, frame_origin_for, gnome_shell_screenshot_args,
+    grim_capture_args, hands_backend_name, hands_blocked_by_lock, hands_chip_label, hands_chip_live,
+    hands_down_receipt, hands_windshield_line, image_pixels_ok, image_to_global, infer_wayland_display,
+    jpeg_data_url, layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var, parse_atspi_line,
+    parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse, parse_xrandr_outputs,
+    pcm_from_capture, pick_browser_tab, pick_capture_output, pick_hands_backend, pick_named_row,
+    picker_args, png_ihdr_size, rank_atspi_rows, resolve_bin_in, session_is_wayland, tab_list_from_rows,
+    take_text_body, IMAGE_FILE_CAP, TEXT_FILE_CAP, virtual_desktop_size, windshield_frame_geom,
+    x11_grab_size, ydotool_socket_path, AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp,
+    DisplayOutput, HandsBackend, HandsDown, TabAction, CDP_DOWN, CDP_PORTS, RECORDERS, TRANSCRIBERS,
+    PYATSPI_MISSING,
 };
 use image::GenericImageView;
 use std::io::{Read, Write};
@@ -29,17 +30,21 @@ try:
 except Exception:
     sys.exit(2)
 def walk(acc, n=0):
-    if n > 8:
-        return
+    role = "object"
     try:
         name = (acc.name or "").replace(" ", "_")
         role = (acc.getRoleName() or "object").replace(" ", "-")
         ext = acc.queryComponent().getExtents(0)
         w, h = int(ext.width), int(ext.height)
-        if w > 0 and h > 0:
+        keep = n <= 8 or "tab" in role or "button" in role
+        if w > 0 and h > 0 and keep:
             print(f"role={role} name={name} x={int(ext.x)} y={int(ext.y)} w={w} h={h}")
     except Exception:
         pass
+    if n > 12:
+        return
+    if n > 8 and "tab" not in role and "frame" not in role and "panel" not in role:
+        return
     try:
         for i in range(acc.childCount):
             walk(acc.getChildAtIndex(i), n + 1)
@@ -229,6 +234,7 @@ pub fn prepare_windshield(
     let mut header = layout_prompt(&outputs, fw, fh, ox, oy);
     let (up, n) = cached_cdp_status();
     header.push_str(&browser_windshield_line(up, n));
+    header.push_str(&hands_windshield_line(hands_peek(), hands_driver_name()));
     (ranked, header)
 }
 
@@ -302,21 +308,158 @@ fn run_tab_op(action: TabAction, query: &str, cancel: Option<&AtomicBool>) -> Re
     if cancelled(cancel) {
         return Err("halted".into());
     }
-    let Some((port, tabs)) = probe_cdp() else {
-        return Err(CDP_DOWN.into());
-    };
-    invalidate_cdp_cache();
+    if let Some((port, tabs)) = probe_cdp() {
+        invalidate_cdp_cache();
+        return run_tab_op_cdp(port, &tabs, action, query);
+    }
+    run_tab_op_fallback(action, query, cancel)
+}
+
+fn run_tab_op_cdp(
+    port: u16,
+    tabs: &[BrowserTab],
+    action: TabAction,
+    query: &str,
+) -> Result<String, String> {
     match action {
-        TabAction::List => Ok(format_tab_list(&tabs)),
+        TabAction::List => Ok(format_tab_list(tabs)),
         TabAction::Close => {
-            let tab = pick_browser_tab(&tabs, query)?;
+            let tab = pick_browser_tab(tabs, query)?;
             close_cdp_tab(port, tab)?;
             Ok(format!("closed {}", tab.title))
         }
         TabAction::Focus => {
-            let tab = pick_browser_tab(&tabs, query)?;
+            let tab = pick_browser_tab(tabs, query)?;
             focus_cdp_tab(port, tab)?;
             Ok(format!("focused {}", tab.title))
+        }
+        TabAction::New => {
+            let path = cdp_new_tab_path(query);
+            cdp_http(port, &path).map_err(|e| format!("tab new: {e}"))?;
+            if query.trim().is_empty() {
+                Ok("opened new tab".into())
+            } else {
+                Ok(format!("opened {query}"))
+            }
+        }
+    }
+}
+
+fn run_tab_op_fallback(
+    action: TabAction,
+    query: &str,
+    cancel: Option<&AtomicBool>,
+) -> Result<String, String> {
+    match action {
+        TabAction::List => {
+            let rows = collect_rows();
+            let listed = tab_list_from_rows(&rows);
+            if listed != "no page tabs" {
+                return Ok(listed);
+            }
+            let mut wins = String::new();
+            for r in &rows {
+                if r.role == "window" || r.role == "frame" {
+                    if !wins.is_empty() {
+                        wins.push('\n');
+                    }
+                    wins.push_str(&format!("- {}", r.name));
+                }
+            }
+            if wins.is_empty() {
+                Ok(format!(
+                    "no page tabs — {CDP_DOWN}; use act New Tab or wait_for then key ctrl+t"
+                ))
+            } else {
+                Ok(wins)
+            }
+        }
+        TabAction::New => {
+            focus_browser_window(query, cancel);
+            run_pointer_op(
+                &ComputerOp::Key {
+                    name: "ctrl+t".into(),
+                },
+                cancel,
+            )?;
+            let url = query.trim();
+            if !url.is_empty() && !is_browser_app_name(url) {
+                run_pointer_op(
+                    &ComputerOp::Type {
+                        text: url.to_string(),
+                    },
+                    cancel,
+                )?;
+                run_pointer_op(
+                    &ComputerOp::Key {
+                        name: "Return".into(),
+                    },
+                    cancel,
+                )?;
+                Ok(format!("opened {url} (key ctrl+t)"))
+            } else {
+                Ok("opened new tab (key ctrl+t)".into())
+            }
+        }
+        TabAction::Close => {
+            if act_click(query, cancel).is_ok() {
+                return Ok(format!("closed {query} via act"));
+            }
+            let _ = wait_for_title(Some(query), cancel);
+            run_pointer_op(
+                &ComputerOp::Key {
+                    name: "ctrl+w".into(),
+                },
+                cancel,
+            )?;
+            Ok(format!("closed {query} (key ctrl+w)"))
+        }
+        TabAction::Focus => {
+            if let Ok((x, y)) = act_click(query, cancel) {
+                return Ok(format!("focused {query} via act @{x},{y}"));
+            }
+            let rows = collect_rows();
+            let names: Vec<&str> = rows
+                .iter()
+                .map(|r| r.name.as_str())
+                .filter(|n| !n.is_empty() && *n != "cursor")
+                .collect();
+            Err(format!(
+                "no tab matched {query} — {CDP_DOWN}; saw: {}",
+                names.join(", ")
+            ))
+        }
+    }
+}
+
+fn is_browser_app_name(s: &str) -> bool {
+    matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "firefox" | "chrome" | "chromium" | "browser" | "brave"
+    )
+}
+
+fn focus_browser_window(hint: &str, cancel: Option<&AtomicBool>) {
+    if !hint.trim().is_empty() && act_click(hint, cancel).is_ok() {
+        return;
+    }
+    for name in ["Firefox", "Chrome", "Chromium", "Brave"] {
+        if act_click(name, cancel).is_ok() {
+            return;
+        }
+    }
+}
+
+fn run_pointer_op(op: &ComputerOp, cancel: Option<&AtomicBool>) -> Result<(), String> {
+    match pointer_drive(op) {
+        ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
+            if let Some(detail) = empty_hands_steps_error(op, &steps) {
+                return Err(detail);
+            }
+            run_pointer_steps(&steps, cancel)
+        }
+        ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) | ComputerDrive::Tab(_, _) => {
+            Err("not a pointer op".into())
         }
     }
 }
@@ -2075,11 +2218,23 @@ mod tests {
             action: TabAction::List,
             query: String::new(),
         });
-        assert!(out.contains("browser hand down") || out.contains("exit 0"), "{out}");
+        assert!(
+            out.contains("browser hand down")
+                || out.contains("exit 0")
+                || out.contains("ctrl+t")
+                || out.contains("page tab")
+                || out.contains("no page tabs")
+                || out.contains("act "),
+            "tab list must run or fall back, not stall: {out}"
+        );
         let (_, header) = prepare_windshield(&[], None, false);
         assert!(
             header.contains("browser: cdp"),
             "windshield must report cdp up or down: {header}"
+        );
+        assert!(
+            header.contains("hands:"),
+            "windshield must report hands health: {header}"
         );
         let cdp = include_str!("desktop.rs")
             .split("fn cdp_http(")
