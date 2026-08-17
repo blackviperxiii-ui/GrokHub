@@ -20,6 +20,8 @@ pub enum PlusAct {
 }
 
 pub const TEXT_FILE_CAP: usize = 64 * 1024;
+/// Plus-button and Imagine wall stills. Bigger files decode on the UI thread and can OOM.
+pub const IMAGE_FILE_CAP: u64 = 8 * 1024 * 1024;
 
 pub fn attach_kind(path: &str) -> AttachKind {
     let ext = std::path::Path::new(path)

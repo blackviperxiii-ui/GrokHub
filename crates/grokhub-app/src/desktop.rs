@@ -6,7 +6,8 @@ use grokhub_core::{
     jpeg_data_url, layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var,
     parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
     parse_xrandr_outputs, pcm_from_capture, pick_capture_output, pick_hands_backend, pick_named_row,
-    picker_args, rank_atspi_rows, resolve_bin_in, session_is_wayland, take_text_body, TEXT_FILE_CAP,
+    picker_args, rank_atspi_rows, resolve_bin_in, session_is_wayland, take_text_body, IMAGE_FILE_CAP,
+    TEXT_FILE_CAP,
     virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path, AtspiRow, CaptureKind, ComputerDrive,
     ComputerOp, DisplayOutput, HandsBackend, HandsDown, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
 };
@@ -69,8 +70,6 @@ const DESK_LIST_TIMEOUT: Duration = Duration::from_millis(1500);
 const DESK_CAPTURE_TIMEOUT: Duration = Duration::from_secs(8);
 /// Webcam ffmpeg on the UI thread.
 const DESK_WEBCAM_TIMEOUT: Duration = Duration::from_secs(4);
-/// Plus-button image attach. Bigger files decode on the UI thread and can OOM.
-const IMAGE_FILE_CAP: u64 = 8 * 1024 * 1024;
 static CAPTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn capture_temp(kind: &str, ext: &str) -> PathBuf {
