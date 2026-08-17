@@ -4965,7 +4965,7 @@ impl Cabin {
                 ) {
                     if let Some(path) = cite.split_whitespace().last() {
                         let path = resolve_host_cite_path(&self.cfg.project_dir, path);
-                        if let Ok(after) = std::fs::read_to_string(&path) {
+                        if let Ok(after) = read_text_capped(std::path::Path::new(&path)) {
                             let diff = unified_diff_cite(&path, "", &after);
                             self.push_bound_msg("user", format!("HOST_DIFF:\n{diff}"));
                             self.persist();
@@ -10454,6 +10454,11 @@ mod tests {
         assert!(
             host_done_facts.contains("resolve_host_cite_path"),
             "HOST_DIFF must read the write from the bound tree, not the cabin cwd: {host_done_facts}"
+        );
+        assert!(
+            host_done_facts.contains("read_text_capped")
+                && !host_done_facts.contains("read_to_string"),
+            "HOST_DIFF must not slurp a huge host write on the UI thread: {host_done_facts}"
         );
         let deleted = src
             .split("fn delete_thread_at")
