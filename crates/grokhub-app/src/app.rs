@@ -7321,11 +7321,13 @@ impl Cabin {
                     if crate::cards::white_pill(ui, "Save") {
                         if self.scratch() {
                             self.status = "Scratch — no memory writes".into();
-                        } else {
+                        } else if config::read_memory(&self.mem_name) != self.mem_body {
                             match config::write_memory(&self.mem_name, &self.mem_body) {
                                 Ok(()) => self.status = format!("Wrote {}", self.mem_name),
                                 Err(e) => self.status = e,
                             }
+                        } else {
+                            self.status = format!("Wrote {}", self.mem_name);
                         }
                     }
                 });
@@ -9925,6 +9927,15 @@ mod tests {
         assert!(
             tabs[..flush].contains("read_memory"),
             "Memory tab switch must not rotate .prev when the leaving file is unchanged: {tabs}"
+        );
+        let save = memory_ui
+            .split("white_pill(ui, \"Save\")")
+            .nth(1)
+            .expect("memory save");
+        let write = save.find("write_memory").expect("save write");
+        assert!(
+            save[..write].contains("read_memory") && save[..write].contains("mem_body"),
+            "Memory Save must not rotate .prev when the file is unchanged: {save}"
         );
         let settings_save = src
             .split("fn save_settings")
