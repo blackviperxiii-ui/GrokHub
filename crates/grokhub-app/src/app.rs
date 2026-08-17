@@ -1412,6 +1412,7 @@ impl Cabin {
         self.active_skill_follow = None;
         self.hands_attach = false;
         self.eyes_attach = false;
+        self.last_receipt_ok = None;
     }
 
     fn pick_entries(dir: &Path) -> Vec<(String, bool)> {
@@ -9321,6 +9322,10 @@ mod tests {
         assert!(
             chrome.contains("hands_attach = false") && chrome.contains("eyes_attach = false"),
             "leaving a tab must not leave windshield/hands armed for the next tab: {chrome}"
+        );
+        assert!(
+            chrome.contains("last_receipt_ok = None"),
+            "leaving a tab must not put the next composer into the other tab's error chips: {chrome}"
         );
         let deleted = src
             .split("fn delete_thread_at")
