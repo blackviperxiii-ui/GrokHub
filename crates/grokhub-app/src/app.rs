@@ -67,7 +67,7 @@ use grokhub_core::{
     kick_consumes_attach, next_chat_image, next_goal_prompt, paint_connect_banner,
     this_turn_cabin_frame,
     is_workload_user, merge_thinking_capped, prefer_complete_reply, quote_for_reply, strip_thinking,
-    visible_chat, visible_turn_count, ChatKind, ChatView,
+    refresh_last_stretch, visible_chat_refs, visible_turn_count, ChatKind, ChatView,
     apply_job_error, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     upsert_assistant_turn,
     worker_gone_status, ChatSendKind,
@@ -7539,17 +7539,22 @@ impl Cabin {
         let tid = self.visible_thread_id();
         let n = self.messages.len();
         let last = self.messages.last().map(|m| m.content.len()).unwrap_or(0);
-        if self.chat_view_tid != tid || self.chat_view_n != n || self.chat_view_last != last {
-            let pairs: Vec<(String, String)> = self
-                .messages
-                .iter()
-                .map(|m| (m.role.clone(), m.content.clone()))
-                .collect();
-            self.chat_views = visible_chat(&pairs);
-            self.chat_view_tid = tid;
-            self.chat_view_n = n;
-            self.chat_view_last = last;
+        if self.chat_view_tid == tid && self.chat_view_n == n && self.chat_view_last == last {
+            return &self.chat_views;
         }
+        let refs: Vec<(&str, &str)> = self
+            .messages
+            .iter()
+            .map(|m| (m.role.as_str(), m.content.as_str()))
+            .collect();
+        if self.chat_view_tid == tid && self.chat_view_n == n && !self.chat_views.is_empty() {
+            refresh_last_stretch(&mut self.chat_views, &refs);
+        } else {
+            self.chat_views = visible_chat_refs(refs.iter().copied());
+        }
+        self.chat_view_tid = tid;
+        self.chat_view_n = n;
+        self.chat_view_last = last;
         &self.chat_views
     }
 
@@ -10049,6 +10054,24 @@ mod tests {
         assert!(
             chat.contains("cached_chat_views") && !chat.contains("visible_chat(&pairs)"),
             "idle chat must not clone the whole transcript every paint: {chat}"
+        );
+    }
+
+    #[test]
+    fn cached_chat_views_do_not_clone_the_thread_on_stream_delta() {
+        let src = include_str!("app.rs");
+        let cache = src
+            .split("fn cached_chat_views(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_chat(").next())
+            .expect("cached_chat_views");
+        assert!(
+            !cache.contains("m.content.clone()") && !cache.contains("role.clone()"),
+            "a stream delta must not clone every message to rebuild chat views: {cache}"
+        );
+        assert!(
+            cache.contains("refresh_last_stretch") || cache.contains("visible_chat_refs"),
+            "last-message growth must refresh the trailing stretch without a full transcript clone: {cache}"
         );
     }
 
