@@ -67,7 +67,7 @@ use grokhub_core::{
     kick_consumes_attach, next_chat_image, next_goal_prompt, paint_connect_banner,
     this_turn_cabin_frame,
     is_workload_user, merge_thinking, prefer_complete_reply, quote_for_reply, strip_thinking,
-    visible_chat, ChatKind, ChatView,
+    visible_chat, visible_turn_count, ChatKind, ChatView,
     apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     worker_gone_status, ChatSendKind,
     bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X,
@@ -2810,7 +2810,13 @@ impl Cabin {
             Slash::Pin => self.pin_thread(self.thread_idx),
             Slash::Delete => self.delete_thread_at(self.thread_idx),
             Slash::Context => {
-                let n = self.messages.len();
+                let n = visible_turn_count(
+                    &self
+                        .messages
+                        .iter()
+                        .map(|m| (m.role.clone(), m.content.clone()))
+                        .collect::<Vec<_>>(),
+                );
                 let tokens = estimate_messages(
                     &self
                         .messages
@@ -9530,6 +9536,15 @@ mod tests {
         assert!(
             night.contains("visible_host_receipts") && !night.contains("last_receipts"),
             "greeting last-night must not mix another tab's receipts: {night}"
+        );
+        let context = src
+            .split("Slash::Context =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::Health =>").next())
+            .expect("Context");
+        assert!(
+            context.contains("visible_turn_count"),
+            "/context must not count HOST_RESULT rows as turns: {context}"
         );
         let finish = src
             .split("fn finish_hub_dispatch")
