@@ -1,5 +1,5 @@
 use grokhub_core::TEXT_FILE_CAP;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -91,7 +91,7 @@ pub fn run_host_stream(
     if let Some(so) = stdout {
         let tx = tx.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(so).lines().flatten() {
+            for line in BufReader::new(so.take(TEXT_FILE_CAP as u64 + 1)).lines().flatten() {
                 if tx.send((false, line)).is_err() {
                     break;
                 }
@@ -101,7 +101,7 @@ pub fn run_host_stream(
     if let Some(se) = stderr {
         let tx = tx.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(se).lines().flatten() {
+            for line in BufReader::new(se.take(TEXT_FILE_CAP as u64 + 1)).lines().flatten() {
                 if tx.send((true, line)).is_err() {
                     break;
                 }
@@ -318,6 +318,12 @@ mod tests {
         assert!(
             stream.contains("TEXT_FILE_CAP"),
             "a huge host dump must not grow the receipt without bound: {stream}"
+        );
+        let take = stream.find("take(TEXT_FILE_CAP").expect("pipe take");
+        let lines = stream.find(".lines()").expect("line split");
+        assert!(
+            take < lines && stream.matches("take(TEXT_FILE_CAP").count() >= 2,
+            "a newline-free host dump must not slurp the whole pipe into one line: {stream}"
         );
         let out = run_host(
             "python3 -c \"print('x'*200000)\"",
