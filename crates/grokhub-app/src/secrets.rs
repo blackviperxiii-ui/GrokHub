@@ -23,7 +23,7 @@ pub fn secrets_path() -> PathBuf {
 }
 
 pub fn load() -> Secrets {
-    let raw = fs::read_to_string(secrets_path()).unwrap_or_default();
+    let raw = config::read_file_capped(&secrets_path(), config::MEMORY_FILE_CAP);
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
@@ -80,5 +80,19 @@ mod tests {
         }
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn secrets_load_does_not_slurp_a_huge_file() {
+        let src = include_str!("secrets.rs");
+        let load = src
+            .split("pub fn load(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn save(").next())
+            .expect("secrets load");
+        assert!(
+            load.contains("read_file_capped") && !load.contains("read_to_string"),
+            "boot must not slurp a huge secrets.json: {load}"
+        );
     }
 }
