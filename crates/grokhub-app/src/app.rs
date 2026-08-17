@@ -5402,8 +5402,7 @@ impl Cabin {
         match recipe {
             Some(r) => {
                 self.last_recipe = Some(r);
-                self.replay_recipe();
-                true
+                self.replay_recipe()
             }
             None => {
                 self.status = format!("No recipe {id}");
@@ -5412,17 +5411,17 @@ impl Cabin {
         }
     }
 
-    fn replay_recipe(&mut self) {
+    fn replay_recipe(&mut self) -> bool {
         if self.running {
             self.status = "Busy — wait, then replay".into();
-            return;
+            return false;
         }
         if self.last_recipe.is_none() {
             self.last_recipe = crate::recipes::load_last();
         }
         let Some(recipe) = self.last_recipe.clone() else {
             self.status = "No recipe".into();
-            return;
+            return false;
         };
         let rows = collect_rows();
         let current = screen_from_rows(&rows);
@@ -5450,9 +5449,10 @@ impl Cabin {
         self.eyes_text = t;
         if cmds.is_empty() {
             self.status = "Recipe replay".into();
-            return;
+            return false;
         }
         self.run_cmds(cmds);
+        self.running
     }
 
     fn speak_reply(&mut self, text: &str) {
@@ -9647,6 +9647,19 @@ mod tests {
         assert!(
             replay.contains("run_cmds") && !replay.contains("run_computer_op("),
             "recipe replay must use host gates, not raw desktop ops: {replay}"
+        );
+        assert!(
+            replay.contains("self.running"),
+            "recipe replay must report whether host actually started: {replay}"
+        );
+        let saved_replay = src
+            .split("fn replay_saved_recipe")
+            .nth(1)
+            .and_then(|s| s.split("fn replay_recipe(").next())
+            .expect("replay_saved_recipe");
+        assert!(
+            saved_replay.contains("self.replay_recipe()") && !saved_replay.contains("true"),
+            "night must not count a blocked recipe replay as started: {saved_replay}"
         );
         let send_auth = src
             .split("fn send_chat")
