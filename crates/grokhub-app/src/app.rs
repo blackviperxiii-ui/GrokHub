@@ -3556,22 +3556,44 @@ impl Cabin {
     }
 
     fn local_clock() -> LocalClock {
+        if let Ok(g) = LAST_CLOCK.lock() {
+            if let Some((at, clock)) = g.as_ref() {
+                if at.elapsed() < CLOCK_TTL {
+                    return *clock;
+                }
+            }
+        }
         let out = Self::date_out("+%w %H %M");
-        parse_local_clock(&out, now_ms()).unwrap_or(LocalClock {
+        let clock = parse_local_clock(&out, now_ms()).unwrap_or(LocalClock {
             now_ms: now_ms(),
             weekday: 1,
             hour: 12,
             minute: 0,
-        })
+        });
+        if let Ok(mut g) = LAST_CLOCK.lock() {
+            *g = Some((Instant::now(), clock));
+        }
+        clock
     }
 
     fn local_day() -> String {
+        if let Ok(g) = LAST_DAY.lock() {
+            if let Some((at, day)) = g.as_ref() {
+                if at.elapsed() < CLOCK_TTL {
+                    return day.clone();
+                }
+            }
+        }
         let out = Self::date_out("+%F");
-        if out.is_empty() {
+        let day = if out.is_empty() {
             "1970-01-01".into()
         } else {
             out
+        };
+        if let Ok(mut g) = LAST_DAY.lock() {
+            *g = Some((Instant::now(), day.clone()));
         }
+        day
     }
 
     fn tick_heartbeat(&mut self) {
@@ -9495,6 +9517,9 @@ struct LanHostCache {
 }
 
 static LAN_HOST: Mutex<Option<LanHostCache>> = Mutex::new(None);
+const CLOCK_TTL: Duration = Duration::from_millis(1000);
+static LAST_CLOCK: Mutex<Option<(Instant, LocalClock)>> = Mutex::new(None);
+static LAST_DAY: Mutex<Option<(Instant, String)>> = Mutex::new(None);
 
 fn hostname_i() -> String {
     if let Ok(g) = LAN_HOST.lock() {
@@ -9983,6 +10008,10 @@ mod tests {
         assert!(
             clock.contains("date_out(") && !clock.contains(".output()"),
             "local_clock must use the timed date helper: {clock}"
+        );
+        assert!(
+            clock.contains("CLOCK_TTL"),
+            "chips and greeting must not spawn date on every paint: {clock}"
         );
         let day = src
             .split("fn local_day()")
