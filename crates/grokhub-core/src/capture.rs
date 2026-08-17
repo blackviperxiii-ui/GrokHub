@@ -244,6 +244,37 @@ pub fn output_containing(outputs: &[DisplayOutput], x: i32, y: i32) -> Option<&D
     outputs.iter().find(|o| x >= o.x && y >= o.y && x < o.x + o.w && y < o.y + o.h)
 }
 
+pub fn cursor_on_output(outputs: &[DisplayOutput], x: i32, y: i32) -> Option<&DisplayOutput> {
+    output_containing(outputs, x, y)
+}
+
+/// Inclusive last pixel of the virtual desktop. Overflow must not wrap to the left output.
+pub fn clamp_to_desktop(x: i32, y: i32, outputs: &[DisplayOutput]) -> (i32, i32) {
+    let Some((min_x, min_y, w, h)) = virtual_desktop_bounds(outputs) else {
+        return (x, y);
+    };
+    let max_x = min_x + w as i32 - 1;
+    let max_y = min_y + h as i32 - 1;
+    (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
+}
+
+pub fn monitor_local_to_global(
+    outputs: &[DisplayOutput],
+    name: &str,
+    local: Option<(i32, i32)>,
+) -> Option<(i32, i32)> {
+    let o = outputs.iter().find(|o| o.name.eq_ignore_ascii_case(name))?;
+    let (lx, ly) = local.unwrap_or((o.w / 2, o.h / 2));
+    Some(clamp_to_desktop(o.x + lx, o.y + ly, outputs))
+}
+
+pub fn format_cursor_line(x: i32, y: i32, monitor: Option<&str>) -> String {
+    match monitor {
+        Some(name) if !name.is_empty() => format!("cursor {x},{y} monitor={name}"),
+        _ => format!("cursor {x},{y}"),
+    }
+}
+
 pub fn grim_capture_args(dest: &str, output: Option<&str>) -> Vec<String> {
     let mut args = Vec::new();
     if let Some(name) = output {
@@ -260,8 +291,12 @@ pub fn layout_prompt(
     frame_h: u32,
     origin_x: i32,
     origin_y: i32,
+    cursor: Option<(i32, i32)>,
 ) -> String {
     let mut s = String::new();
+    if let Some((min_x, min_y, w, h)) = virtual_desktop_bounds(outputs) {
+        s.push_str(&format!("desk: {min_x},{min_y} {w}x{h}\n"));
+    }
     if !outputs.is_empty() {
         s.push_str("outputs: ");
         s.push_str(
@@ -271,6 +306,13 @@ pub fn layout_prompt(
                 .collect::<Vec<_>>()
                 .join("; "),
         );
+        s.push('\n');
+    }
+    if let Some((cx, cy)) = cursor {
+        let mon = cursor_on_output(outputs, cx, cy).map(|o| o.name.as_str());
+        let line = format_cursor_line(cx, cy, mon);
+        s.push_str("cursor: ");
+        s.push_str(line.strip_prefix("cursor ").unwrap_or(&line));
         s.push('\n');
     }
     if frame_w > 0 && frame_h > 0 {
@@ -521,10 +563,11 @@ DP-1 disconnected (normal left inverted right x axis y axis)
             grim_capture_args("/tmp/desk.png", Some("HDMI-1")),
             vec!["-o", "HDMI-1", "/tmp/desk.png"]
         );
-        let glass = layout_prompt(&outs, 1920, 1080, 1920, 0);
+        let glass = layout_prompt(&outs, 1920, 1080, 1920, 0, None);
         assert!(glass.contains("eDP-1 0,0 1920x1080"));
         assert!(glass.contains("HDMI-1 1920,0 1920x1080"));
         assert!(glass.contains("frame: 1920x1080 origin 1920,0"));
+        assert!(glass.contains("desk: 0,0 3840x1080"));
         assert_eq!(
             windshield_frame_geom(false, (1920, 1080, 1920, 0)),
             (0, 0, 0, 0),
@@ -590,6 +633,44 @@ eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis)
             (0, 0),
             "without a confirmed grim -o, do not guess the other monitor"
         );
+    }
+
+    const TRIPLE_XRANDR: &str = "\
+Screen 0: minimum 320 x 200, current 7280 x 1440, maximum 16384 x 16384
+HDMI-A-2 connected primary 2560x1440+0+0 (normal left inverted right x axis y axis) 597mm x 336mm
+DP-1 connected 2800x1440+2560+0 (normal left inverted right x axis y axis) 697mm x 392mm
+DP-2 connected 1920x1440+5360+0 (normal left inverted right x axis y axis) 527mm x 296mm
+";
+
+    #[test]
+    fn triple_desk_clamps_past_the_right_edge_onto_dp2() {
+        let outs = parse_xrandr_outputs(TRIPLE_XRANDR);
+        assert_eq!(outs.len(), 3);
+        assert_eq!(virtual_desktop_size(&outs), Some((7280, 1440)));
+        assert_eq!(outs[2].name, "DP-2");
+        assert_eq!((outs[2].x, outs[2].y, outs[2].w, outs[2].h), (5360, 0, 1920, 1440));
+        assert_eq!(
+            clamp_to_desktop(7285, 25, &outs),
+            (7279, 25),
+            "7285 wraps to the left monitor; clamp must stay on DP-2"
+        );
+        assert_eq!(
+            cursor_on_output(&outs, 7279, 25).map(|o| o.name.as_str()),
+            Some("DP-2")
+        );
+        assert_eq!(
+            monitor_local_to_global(&outs, "DP-2", None),
+            Some((6320, 720))
+        );
+        assert_eq!(
+            monitor_local_to_global(&outs, "DP-2", Some((100, 20))),
+            Some((5460, 20))
+        );
+        assert_eq!(format_cursor_line(7279, 25, Some("DP-2")), "cursor 7279,25 monitor=DP-2");
+        let glass = layout_prompt(&outs, 1920, 1440, 5360, 0, Some((7279, 25)));
+        assert!(glass.contains("desk: 0,0 7280x1440"), "{glass}");
+        assert!(glass.contains("cursor: 7279,25 monitor=DP-2"), "{glass}");
+        assert!(glass.contains("DP-2 5360,0 1920x1440"), "{glass}");
     }
 
     #[test]
