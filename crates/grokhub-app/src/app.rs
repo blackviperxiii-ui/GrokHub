@@ -3183,6 +3183,14 @@ impl Cabin {
     }
 
     fn run_dream(&mut self) {
+        if !self.has_key() {
+            self.status = "Connect Grok OAuth in Settings".into();
+            return;
+        }
+        if self.running {
+            self.status = "Halt the live job before Imagine, or wait.".into();
+            return;
+        }
         let receipts = self.visible_host_receipts();
         let g = greet_from_last_job(
             if self.cfg.goal_pin.is_empty() {
@@ -9561,6 +9569,12 @@ mod tests {
         assert!(
             dream.contains("visible_host_receipts") && dream.contains("dream_rewind_id"),
             "/dream must use this tab's host receipts, not cabin-global last_receipts: {dream}"
+        );
+        let key = dream.find("has_key").expect("dream auth");
+        let push = dream.find("messages.push").expect("dream push");
+        assert!(
+            key < push && dream.contains("self.running"),
+            "/dream must not persist a turn when Imagine cannot start: {dream}"
         );
         let night = src
             .split("fn last_night_hint")
