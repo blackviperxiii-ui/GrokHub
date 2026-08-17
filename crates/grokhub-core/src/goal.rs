@@ -465,6 +465,14 @@ pub fn next_goal_prompt(pin: &str, prior: &str, step: u32, max_steps: u32) -> Op
     ))
 }
 
+/// Write the visible goal onto the thread being left (`/new` and tab switch).
+pub fn flush_visible_goal(goal: &mut ThreadGoal, step: u32, pin: &str) {
+    goal.step = step;
+    if !pin.trim().is_empty() {
+        goal.label = pin.to_string();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,6 +533,17 @@ mod tests {
             "a blocked phone task must not complete as done"
         );
         assert!(hub_dispatch_ok("Flashed the card."));
+        let mut g = ThreadGoal {
+            label: "old".into(),
+            step: 0,
+            ..ThreadGoal::default()
+        };
+        flush_visible_goal(&mut g, 3, "flash the pi");
+        assert_eq!(g.step, 3, "/new must keep the left tab's goal step");
+        assert_eq!(g.label, "flash the pi");
+        flush_visible_goal(&mut g, 4, "  ");
+        assert_eq!(g.step, 4);
+        assert_eq!(g.label, "flash the pi", "empty pin must not wipe the label");
     }
 
     #[test]
