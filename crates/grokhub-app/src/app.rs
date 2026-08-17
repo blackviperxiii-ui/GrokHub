@@ -7164,6 +7164,7 @@ impl Cabin {
                 self.start_hub();
             }
             crate::cards::section_label(ui, "This computer");
+            let mut rotated = false;
             let (name, sharing, pair_code) = if let Ok(mut st) = self.hub.lock() {
                 if self.hub_on
                     && st
@@ -7172,6 +7173,7 @@ impl Cabin {
                         .is_some_and(|p| !pair_code_is_live(p.expires_at, now_ms()))
                 {
                     st.rotate_pair();
+                    rotated = true;
                 }
                 (
                     st.device_name.clone(),
@@ -7187,6 +7189,9 @@ impl Cabin {
             } else {
                 (String::new(), false, None)
             };
+            if rotated {
+                self.persist();
+            }
             let body = if sharing {
                 format!("Sharing on port {}", self.hub_port)
             } else {
@@ -9801,6 +9806,15 @@ mod tests {
         assert!(
             new_code[rotated..].contains("self.persist()"),
             "New code must persist the rotated pair before a restart: {new_code}"
+        );
+        let expired = devices
+            .split("rotate_pair")
+            .nth(1)
+            .and_then(|s| s.split("New code").next())
+            .expect("expired rotate");
+        assert!(
+            expired.contains("self.persist()"),
+            "an expired pair rotate must persist or restart shows the dead code: {expired}"
         );
         let clear = src
             .split("Slash::Clear =>")
