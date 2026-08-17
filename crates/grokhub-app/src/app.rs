@@ -3897,6 +3897,9 @@ impl Cabin {
         for f in remote.memory_files {
             if import_memory_file(&f.name, &f.content).is_some() {
                 let _ = config::write_memory(&f.name, &f.content);
+                if self.mem_name == f.name {
+                    self.mem_body = f.content;
+                }
             }
         }
         self.status = format!("Merged hub snapshot from {}", remote.from_device_name);
@@ -9739,6 +9742,15 @@ mod tests {
         assert!(
             mem_rows.contains("memory_updated_at") && !mem_rows.contains("now_ms()"),
             "/sync must not stamp MEMORY.md now or stale local wins LWW: {mem_rows}"
+        );
+        let inbound = src
+            .split("fn apply_inbound_snapshot")
+            .nth(1)
+            .and_then(|s| s.split("fn push_presence").next())
+            .expect("apply_inbound_snapshot");
+        assert!(
+            inbound.contains("mem_body") && inbound.contains("mem_name"),
+            "inbound MEMORY.md must refresh the open Memory editor: {inbound}"
         );
         let send = src
             .split("fn dispatch_send")
