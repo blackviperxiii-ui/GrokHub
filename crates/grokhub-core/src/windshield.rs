@@ -1,7 +1,7 @@
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindshieldObject {
     pub id: String,
-    pub kind: &'static str,
+    pub kind: String,
     pub label: String,
     pub x: i32,
     pub y: i32,
@@ -25,6 +25,7 @@ pub struct WindshieldFrame {
     pub autonomy: u8,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtspiRow {
     pub name: String,
     pub role: String,
@@ -54,11 +55,7 @@ pub fn build_windshield(
         .enumerate()
         .map(|(i, r)| WindshieldObject {
             id: format!("w{i}"),
-            kind: if r.role.eq_ignore_ascii_case("cursor") {
-                "cursor"
-            } else {
-                "window"
-            },
+            kind: windshield_kind(&r.role),
             label: if r.name.is_empty() {
                 r.role.clone()
             } else {
@@ -73,7 +70,7 @@ pub fn build_windshield(
     if let Some(why) = refused {
         objects.push(WindshieldObject {
             id: "wont".into(),
-            kind: "wont",
+            kind: "wont".into(),
             label: why.to_string(),
             x: 0,
             y: 0,
@@ -108,6 +105,141 @@ pub fn windshield_prompt(frame: &WindshieldFrame) -> String {
         ));
     }
     s
+}
+
+fn windshield_kind(role: &str) -> String {
+    let r = role.trim().to_ascii_lowercase().replace(' ', "-");
+    if r.is_empty() {
+        "object".into()
+    } else {
+        r
+    }
+}
+
+pub fn is_interactive_role(role: &str) -> bool {
+    let r = role.to_ascii_lowercase();
+    r.contains("push button")
+        || r.contains("push-button")
+        || r.contains("page tab")
+        || r.contains("page-tab")
+        || r.contains("menu item")
+        || r.contains("menu-item")
+        || r.contains("check box")
+        || r.contains("check-box")
+        || r.contains("radio")
+        || r.contains("combo")
+        || r.contains("toggle")
+        || r == "link"
+        || r == "slider"
+        || r == "entry"
+        || r == "text"
+        || r.contains("close")
+}
+
+fn closeish(s: &str) -> bool {
+    s.to_ascii_lowercase().contains("close")
+}
+
+pub fn keep_atspi_row(row: &AtspiRow, desk_w: i32, desk_h: i32) -> bool {
+    if row.role.eq_ignore_ascii_case("cursor") {
+        return true;
+    }
+    if row.w <= 0 || row.h <= 0 {
+        return false;
+    }
+    if desk_w > 0 && (row.x >= desk_w || row.x + row.w <= 0) {
+        return false;
+    }
+    if desk_h > 0 && (row.y >= desk_h || row.y + row.h <= 0) {
+        return false;
+    }
+    if is_interactive_role(&row.role) || closeish(&row.name) || closeish(&row.role) {
+        return true;
+    }
+    !row.name.is_empty()
+}
+
+pub fn filter_atspi_rows(rows: &[AtspiRow], desk_w: i32, desk_h: i32) -> Vec<AtspiRow> {
+    rows.iter()
+        .filter(|r| keep_atspi_row(r, desk_w, desk_h))
+        .cloned()
+        .take(80)
+        .collect()
+}
+
+fn row_rank(row: &AtspiRow, ask: Option<&str>, cursor: Option<(i32, i32)>) -> i64 {
+    let mut s = 0i64;
+    if is_interactive_role(&row.role) {
+        s += 100;
+    }
+    if !row.name.is_empty() {
+        s += 50;
+    }
+    if closeish(&row.name) || closeish(&row.role) {
+        s += 80;
+    }
+    if let Some(ask) = ask {
+        let a = ask.to_ascii_lowercase();
+        let n = row.name.to_ascii_lowercase();
+        if !n.is_empty() && a.contains(&n) {
+            s += 200;
+        }
+        for w in n.split_whitespace() {
+            if w.len() >= 3 && a.contains(w) {
+                s += 40;
+            }
+        }
+    }
+    if let Some((cx, cy)) = cursor {
+        let x = row.x + row.w / 2;
+        let y = row.y + row.h / 2;
+        let d = (x - cx).abs() as i64 + (y - cy).abs() as i64;
+        if d < 400 {
+            s += 40;
+        }
+    }
+    s
+}
+
+pub fn rank_atspi_rows(rows: &[AtspiRow], ask: Option<&str>, limit: usize) -> Vec<AtspiRow> {
+    let cursor = rows.iter().find(|r| r.role.eq_ignore_ascii_case("cursor"));
+    let cursor_xy = cursor.map(|r| (r.x, r.y));
+    let mut scored: Vec<(i64, &AtspiRow)> = rows
+        .iter()
+        .map(|r| (row_rank(r, ask, cursor_xy), r))
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, r)| r.clone())
+        .collect()
+}
+
+/// Exact / prefix name, then the smallest matching control (tab × beats the window).
+pub fn pick_named_row<'a>(rows: &'a [AtspiRow], name: &str) -> Option<&'a AtspiRow> {
+    let q = name.trim().to_ascii_lowercase();
+    if q.is_empty() {
+        return None;
+    }
+    rows.iter()
+        .filter(|r| {
+            r.role != "cursor"
+                && (r.name.to_ascii_lowercase().contains(&q)
+                    || r.role.to_ascii_lowercase().contains(&q))
+        })
+        .min_by_key(|r| {
+            let n = r.name.to_ascii_lowercase();
+            let exact = if n == q {
+                0u8
+            } else if n.starts_with(&q) {
+                1
+            } else {
+                2
+            };
+            let area = (r.w as i64).saturating_mul(r.h as i64).max(1);
+            (exact, area)
+        })
 }
 
 /// `role=push button name=Install x=10 y=20 w=80 h=24`
@@ -307,6 +439,42 @@ mod tests {
         let prompt = windshield_prompt(&f);
         assert!(prompt.contains("[window] Terminal"));
         assert!(prompt.contains("[wont] lock screen"));
+        let btn = parse_atspi_line("role=push-button name=Save x=10 y=20 w=80 h=24").unwrap();
+        let glass = windshield_prompt(&build_windshield(&[btn], None, None, None, None, 4));
+        assert!(glass.contains("[push-button] Save"));
+    }
+
+    fn row(name: &str, role: &str, x: i32, y: i32, w: i32, h: i32) -> AtspiRow {
+        AtspiRow {
+            name: name.into(),
+            role: role.into(),
+            x,
+            y,
+            w,
+            h,
+        }
+    }
+
+    #[test]
+    fn act_picks_the_small_close_on_the_other_monitor() {
+        let rows = [
+            row("Firefox", "frame", 1920, 0, 1920, 1080),
+            row("Close", "push button", 3720, 12, 16, 16),
+            row("", "filler", 1920, 0, 1920, 1080),
+            row("cursor", "cursor", 2000, 40, 1, 1),
+        ];
+        let kept = filter_atspi_rows(&rows, 3840, 1080);
+        assert!(kept.iter().any(|r| r.name == "Close"));
+        assert!(kept.iter().any(|r| r.name == "Firefox"));
+        assert!(!kept.iter().any(|r| r.role == "filler"));
+        let hit = pick_named_row(&kept, "Close").unwrap();
+        assert_eq!(hit.name, "Close");
+        assert_eq!((hit.x + hit.w / 2, hit.y + hit.h / 2), (3728, 20));
+        let ranked = rank_atspi_rows(&kept, Some("close the firefox tab"), 40);
+        assert!(ranked.iter().any(|r| r.name == "Close"));
+        let glass = windshield_prompt(&build_windshield(&ranked, None, None, None, None, 4));
+        assert!(glass.contains("Close"));
+        assert!(glass.contains("@3720,12"));
     }
 
     #[test]

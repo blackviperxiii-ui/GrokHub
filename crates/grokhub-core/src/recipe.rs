@@ -489,7 +489,7 @@ pub fn hands_protocol() -> &'static str {
      COMPUTER_CMD: scroll <dy>\n\
      COMPUTER_CMD: act <accessible-name>\n\
      COMPUTER_CMD: wait_for title=<window>\n\
-     Prefer act and wait_for over raw clicks. Coordinates are the current screen; a JPEG frame is attached only when the user asks for hands or cabin eyes. Lock/password screens are won'ts — never click them or type into them. Do not read ~/.ssh or /etc/shadow.\n\
+     Prefer act and wait_for over raw clicks. Coordinates are the global desktop. A JPEG may be one output — use Windshield outputs / frame. Close a tab with act on the page-tab or key ctrl+w after wait_for that window; do not guess the × from the still. A JPEG frame is attached only when the user asks for hands or cabin eyes. Lock/password screens are won'ts — never click them or type into them. Do not read ~/.ssh or /etc/shadow.\n\
      If COMPUTER_RESULT says hands are down (not installed, uinput, or ydotoold), tell the user how to enable them. Do not pkill, kill, or otherwise terminate apps as a stand-in for mouse or keyboard control."
 }
 
@@ -903,5 +903,7 @@ mod tests {
         assert!(!user_asks_cabin_eyes("tell me about rust"));
         assert!(user_asks_cabin_eyes("look at my screen"));
         assert!(hands_protocol().contains("only when the user asks"));
+        assert!(hands_protocol().contains("global desktop"));
+        assert!(hands_protocol().contains("ctrl+w"));
     }
 }
