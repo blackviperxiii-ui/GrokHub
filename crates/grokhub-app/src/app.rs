@@ -66,7 +66,7 @@ use grokhub_core::{
     cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
     kick_consumes_attach, next_chat_image, next_goal_prompt, paint_connect_banner,
     this_turn_cabin_frame,
-    is_workload_user, merge_thinking, prefer_complete_reply, quote_for_reply, strip_thinking,
+    is_workload_user, merge_thinking_capped, prefer_complete_reply, quote_for_reply, strip_thinking,
     visible_chat, visible_turn_count, ChatKind, ChatView,
     apply_job_error, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     upsert_assistant_turn,
@@ -465,20 +465,22 @@ fn take_ui_text(mut s: String, cap: u64) -> String {
     s
 }
 
-fn push_stream_capped(buf: &mut String, d: &str, cap: u64) {
+fn push_stream_capped(buf: &mut String, d: &str, cap: u64) -> bool {
+    let before = buf.len();
     if (buf.len() as u64) >= cap {
-        return;
+        return false;
     }
     let room = (cap as usize).saturating_sub(buf.len());
     if d.len() <= room {
         buf.push_str(d);
-        return;
+        return buf.len() != before;
     }
     let mut end = room;
     while end > 0 && !d.is_char_boundary(end) {
         end -= 1;
     }
     buf.push_str(&d[..end]);
+    buf.len() != before
 }
 
 fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool) -> egui::Response {
@@ -1520,7 +1522,11 @@ impl Cabin {
     }
 
     fn apply_live_assistant(&mut self) {
-        self.apply_assistant_snapshot(merge_thinking(&self.thought_buf, &self.stream_buf));
+        self.apply_assistant_snapshot(merge_thinking_capped(
+            &self.thought_buf,
+            &self.stream_buf,
+            IMAGE_FILE_CAP as usize,
+        ));
     }
 
     fn has_key(&self) -> bool {
@@ -4890,25 +4896,29 @@ impl Cabin {
         match rx.try_recv() {
             Ok(JobOut::ChatDelta(d)) => {
                 self.rx = Some(rx);
-                push_stream_capped(&mut self.stream_buf, &d, IMAGE_FILE_CAP);
+                let changed = push_stream_capped(&mut self.stream_buf, &d, IMAGE_FILE_CAP);
                 if chat_stream_is_visible(
                     self.chat_job_thread.as_deref(),
                     &self.visible_thread_id(),
                 ) {
                     self.status = "Thinking…".into();
                 }
-                self.upsert_stream_assistant();
+                if changed {
+                    self.upsert_stream_assistant();
+                }
             }
             Ok(JobOut::ThoughtDelta(d)) => {
                 self.rx = Some(rx);
-                push_stream_capped(&mut self.thought_buf, &d, IMAGE_FILE_CAP);
+                let changed = push_stream_capped(&mut self.thought_buf, &d, IMAGE_FILE_CAP);
                 if chat_stream_is_visible(
                     self.chat_job_thread.as_deref(),
                     &self.visible_thread_id(),
                 ) {
                     self.status = "Thinking…".into();
                 }
-                self.upsert_stream_assistant();
+                if changed {
+                    self.upsert_stream_assistant();
+                }
             }
             Ok(JobOut::Chat { text, truncated }) => {
                 let text = take_ui_text(text, IMAGE_FILE_CAP);
@@ -4927,12 +4937,20 @@ impl Cabin {
                 let finished = if self.thought_buf.is_empty() {
                     text
                 } else {
-                    merge_thinking(&self.thought_buf, &strip_thinking(&text))
+                    merge_thinking_capped(
+                        &self.thought_buf,
+                        &strip_thinking(&text),
+                        IMAGE_FILE_CAP as usize,
+                    )
                 };
                 let streamed = if self.thought_buf.is_empty() {
                     self.stream_buf.clone()
                 } else {
-                    merge_thinking(&self.thought_buf, &strip_thinking(&self.stream_buf))
+                    merge_thinking_capped(
+                        &self.thought_buf,
+                        &strip_thinking(&self.stream_buf),
+                        IMAGE_FILE_CAP as usize,
+                    )
                 };
                 let text = prefer_complete_reply(&streamed, &finished);
                 self.apply_assistant_snapshot(text.clone());
@@ -12173,6 +12191,21 @@ mod tests {
         assert!(
             snap.contains("IMAGE_FILE_CAP"),
             "a huge complete reply must not land in the transcript unbounded: {snap}"
+        );
+        let live = src
+            .split("fn apply_live_assistant(")
+            .nth(1)
+            .and_then(|s| s.split("fn has_key(").next())
+            .expect("apply_live_assistant");
+        assert!(
+            live.contains("merge_thinking_capped")
+                || live.contains("take_ui_text")
+                || live.contains("IMAGE_FILE_CAP"),
+            "live thought+stream merge must not allocate two 8MB buffers unbounded: {live}"
+        );
+        assert!(
+            delta.contains("if push_stream_capped") || delta.contains("changed"),
+            "leftover deltas after the stream cap must not re-merge on the UI thread: {delta}"
         );
     }
 
