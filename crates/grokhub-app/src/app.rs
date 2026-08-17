@@ -6093,7 +6093,12 @@ impl Cabin {
 
     fn speak_reply(&mut self, text: &str) {
         let key = self.bearer();
-        let text = text.to_string();
+        let cap = TEXT_FILE_CAP as usize;
+        let mut end = cap.min(text.len());
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let text = text[..end].to_string();
         std::thread::spawn(move || {
             let Ok(bytes) = grok_tts(&key, &text) else {
                 return;
@@ -10346,6 +10351,23 @@ mod tests {
         assert!(
             chips.contains("chip_chat_pairs") || chips.contains("chip_scan"),
             "chip rebuild must not clone an 8MB complete into chat_pairs: {chips}"
+        );
+    }
+
+    #[test]
+    fn speak_reply_does_not_clone_an_8mb_complete() {
+        let src = include_str!("app.rs");
+        let speak = src
+            .split("fn speak_reply(")
+            .nth(1)
+            .and_then(|s| s.split("fn refresh_eyes(").next())
+            .expect("speak_reply");
+        let clone = speak.find("to_string()").expect("tts clone");
+        assert!(
+            speak[..clone].contains("TEXT_FILE_CAP")
+                || speak[..clone].contains("chip_scan")
+                || speak[..clone].contains("take_ui"),
+            "voice speak must not clone an 8MB complete onto the UI thread: {speak}"
         );
     }
 

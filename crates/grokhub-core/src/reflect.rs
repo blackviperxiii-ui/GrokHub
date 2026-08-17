@@ -51,9 +51,11 @@ pub fn surgical_memory_edit(current: &str, additions: &[String]) -> MemoryEdit {
 pub fn fact_candidates(messages: &[(String, String)]) -> Vec<String> {
     messages
         .iter()
-        .filter(|(role, _)| role == "user")
-        .map(|(_, c)| c.trim().to_string())
-        .filter(|c| {
+        .filter(|(role, c)| {
+            if role != "user" {
+                return false;
+            }
+            let c = c.trim();
             !c.is_empty()
                 && !c.starts_with('/')
                 && !c.starts_with("HOST_")
@@ -61,6 +63,7 @@ pub fn fact_candidates(messages: &[(String, String)]) -> Vec<String> {
                 && c.len() < 200
                 && is_plain_text(c)
         })
+        .map(|(_, c)| c.trim().to_string())
         .collect()
 }
 
@@ -86,5 +89,20 @@ mod tests {
             ("assistant".into(), "ok".into()),
         ]);
         assert_eq!(facts, vec!["prefer nvim"]);
+    }
+
+    #[test]
+    fn fact_candidates_does_not_clone_a_huge_user_turn() {
+        let src = include_str!("reflect.rs");
+        let facts = src
+            .split("pub fn fact_candidates(")
+            .nth(1)
+            .and_then(|s| s.split("#[cfg(test)]").next())
+            .expect("fact_candidates");
+        let clone = facts.find("to_string()").expect("fact clone");
+        assert!(
+            facts[..clone].contains("len()") || facts[..clone].contains("TEXT_FILE_CAP"),
+            "learning must not clone an 8MB user paste before the 200-char gate: {facts}"
+        );
     }
 }
