@@ -118,7 +118,7 @@ use grokhub_core::{
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, MintRealtimeFn, Policy, Recipe, ReplayOp, RewindRecord,
     HostPlanStep, HostRisk, forbidden_reason, mint_host_halt,
     AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
-    VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
+    VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX, IMAGE_FILE_CAP,
     user_pref_facts,
     DEFAULT_MODEL, FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND,
     IDLE_REFLECT_MS, IMAGINE_ASPECTS,
@@ -9380,6 +9380,9 @@ fn eyes_frame_tex(ctx: &egui::Context, url: &str) -> Option<(TextureHandle, [usi
         at: 0,
     };
     let (_, buf) = frame_bytes(&frame)?;
+    if (buf.len() as u64) > IMAGE_FILE_CAP {
+        return None;
+    }
     let img = image::load_from_memory(&buf).ok()?.to_rgba8();
     let size = [img.width() as usize, img.height() as usize];
     let tex = ctx.load_texture(
@@ -11414,6 +11417,22 @@ mod tests {
         assert!(slice.contains("hands_chip_text"));
         assert!(slice.contains("framed_preview") || slice.contains("object_chip"));
         assert!(slice.contains("Look at the screen"));
+    }
+
+    #[test]
+    fn eyes_frame_tex_rejects_a_huge_frame() {
+        let src = include_str!("app.rs");
+        let tex = src
+            .split("fn eyes_frame_tex(")
+            .nth(1)
+            .and_then(|s| s.split("fn project_row_active(").next())
+            .expect("eyes_frame_tex");
+        let cap = tex.find("IMAGE_FILE_CAP").expect("size check before decode");
+        let decode = tex.find("load_from_memory").expect("decode");
+        assert!(
+            cap < decode,
+            "Eyes last-frame paint must not decode a huge JPEG on the UI thread: {tex}"
+        );
     }
 
     #[test]
