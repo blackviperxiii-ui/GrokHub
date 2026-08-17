@@ -654,7 +654,6 @@ fn screen_from_rows(rows: &[grokhub_core::AtspiRow]) -> Option<grokhub_core::Scr
 
 struct LiveCap {
     url: Option<String>,
-    cam: Option<String>,
 }
 
 enum CabinFrame {
@@ -797,7 +796,6 @@ pub struct Cabin {
     chat_view_n: usize,
     chat_view_last: usize,
     presence_ring: Vec<(u64, String)>,
-    webcam_url: Option<String>,
     voice_sock: Option<crate::voice_ws::VoiceSock>,
     voice_state: VoiceState,
     cmd_line: String,
@@ -1109,7 +1107,6 @@ impl Cabin {
             chat_view_n: usize::MAX,
             chat_view_last: usize::MAX,
             presence_ring: vec![],
-            webcam_url: None,
             voice_sock: None,
             voice_state: VoiceState::Idle,
             cmd_line: String::new(),
@@ -4445,9 +4442,6 @@ impl Cabin {
                             self.push_presence(url);
                         }
                     }
-                    if let Some(cam) = cap.cam {
-                        self.webcam_url = Some(cam);
-                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     self.live_cap_rx = Some(rx);
@@ -4462,8 +4456,8 @@ impl Cabin {
         self.live_cap_rx = Some(rx);
         std::thread::spawn(move || {
             let url = capture_data_url().ok();
-            let cam = capture_webcam().ok();
-            let _ = tx.send(LiveCap { url, cam });
+            let _ = capture_webcam();
+            let _ = tx.send(LiveCap { url });
         });
     }
 
@@ -10502,6 +10496,11 @@ mod tests {
                 && live.contains("lock_titles")
                 && live.contains("should_send_screenshot"),
             "lock and title gates stay on the UI thread: {live}"
+        );
+        assert!(
+            !live.contains("webcam_url")
+                && !live.contains("cam:"),
+            "live room must not land an unbounded webcam data URL on the UI thread: {live}"
         );
     }
 
