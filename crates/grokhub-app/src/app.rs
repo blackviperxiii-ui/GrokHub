@@ -3245,6 +3245,7 @@ impl Cabin {
     }
 
     fn sync_hub(&mut self) {
+        self.persist();
         let mem = ["SOUL.md", "USER.md", "MEMORY.md"]
             .into_iter()
             .map(|n| HubMemoryFile {
@@ -9690,6 +9691,12 @@ mod tests {
         assert!(
             sync.contains("merge_hub_snapshots"),
             "/sync must merge the hub snapshot, not replace peer threads: {sync}"
+        );
+        let flushed = sync.find("self.persist()").expect("sync persist");
+        let built = sync.find("build_hub_snapshot").expect("build snapshot");
+        assert!(
+            flushed < built,
+            "/sync must flush the live pane before publishing threads: {sync}"
         );
         let thread_rows = sync
             .split("let threads = self")
