@@ -107,8 +107,9 @@ pub use chips::{
 pub use doctor::{doctor_extras, doctor_hands_line, doctor_lines, doctor_ok, DoctorLine};
 pub use capture::{
     capture_kinds, ffmpeg_webcam_args, ffmpeg_x11_args, frame_is_blank, gnome_shell_screenshot_args,
-    infer_wayland_display, luma_mean_var, parse_xdpy_size, parse_xrandr_size, session_is_wayland,
-    x11_grab_size, CaptureKind,
+    grim_capture_args, image_to_global, infer_wayland_display, layout_prompt, luma_mean_var,
+    output_containing, parse_xdpy_size, parse_xrandr_outputs, parse_xrandr_size, pick_capture_output,
+    session_is_wayland, virtual_desktop_size, x11_grab_size, CaptureKind, DisplayOutput,
 };
 pub use frame::{encode_b64, frame_bytes, jpeg_data_url, FrameGet, PresenceFrame};
 pub use host_plan::{
@@ -271,7 +272,8 @@ pub use voice::{
     DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS,
 };
 pub use windshield::{
-    build_windshield, lock_check_titles, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse,
+    build_windshield, filter_atspi_rows, is_interactive_role, keep_atspi_row, lock_check_titles,
+    parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row, rank_atspi_rows,
     refused_lock, window_name_from_atspi, window_name_from_wmctrl, windshield_prompt, AtspiRow,
     PendingStep, WindshieldFrame,
 };
