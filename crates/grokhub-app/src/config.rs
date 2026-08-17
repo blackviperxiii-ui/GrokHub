@@ -183,7 +183,7 @@ pub fn memory_dir() -> PathBuf {
 
 pub fn load() -> AppConfig {
     let path = config_dir().join("app.json");
-    let raw = fs::read_to_string(path).unwrap_or_default();
+    let raw = read_file_capped(&path, MEMORY_FILE_CAP);
     let mut cfg: AppConfig = serde_json::from_str(&raw).unwrap_or_default();
     cfg.host_on = true;
     cfg
@@ -278,7 +278,7 @@ pub fn chat_path() -> PathBuf {
 }
 
 pub fn load_chat() -> Vec<(String, String)> {
-    let raw = fs::read_to_string(chat_path()).unwrap_or_default();
+    let raw = read_file_capped(&chat_path(), MEMORY_FILE_CAP);
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
@@ -287,7 +287,7 @@ pub fn workboard_path() -> PathBuf {
 }
 
 pub fn load_board() -> Vec<BoardCard> {
-    let raw = fs::read_to_string(workboard_path()).unwrap_or_default();
+    let raw = read_file_capped(&workboard_path(), MEMORY_FILE_CAP);
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
@@ -447,5 +447,25 @@ mod tests {
         assert_eq!(load().theme, "system");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn cabin_config_loads_do_not_slurp_huge_files() {
+        let src = include_str!("config.rs");
+        for (name, next) in [
+            ("pub fn load(", "pub fn save("),
+            ("pub fn load_chat(", "pub fn workboard_path("),
+            ("pub fn load_board(", "pub fn save_board("),
+        ] {
+            let slice = src
+                .split(name)
+                .nth(1)
+                .and_then(|s| s.split(next).next())
+                .unwrap_or(name);
+            assert!(
+                slice.contains("read_file_capped") && !slice.contains("read_to_string"),
+                "boot must not slurp a huge {name}: {slice}"
+            );
+        }
     }
 }
