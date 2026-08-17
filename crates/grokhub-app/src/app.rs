@@ -51,6 +51,7 @@ use grokhub_core::{
     extract_insights, extract_work_updates, fact_candidates, failover_model, filter_slash_commands,
     frame_bytes, PresenceFrame,
     forget_topic, greet_from_last_job, has_auth, has_verify_ok, hey_grok_on_press,
+    thread_host_receipts,
     hey_grok_route, hey_grok_starts_ptt, import_memory_file, merge_imported_memory, insight_pin, is_openclaw_workspace,
     add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
     host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
@@ -3138,15 +3139,42 @@ impl Cabin {
             .join(" · ")
     }
 
+    fn visible_host_receipts(&self) -> Vec<(String, bool)> {
+        thread_host_receipts(
+            &self
+                .messages
+                .iter()
+                .map(|m| (m.role.clone(), m.content.clone()))
+                .collect::<Vec<_>>(),
+        )
+        .into_iter()
+        .map(|body| {
+            let ok = !crate::update::host_receipt_failed(&body);
+            (body, ok)
+        })
+        .collect()
+    }
+
+    fn dream_rewind_id(&self) -> Option<&str> {
+        self.rewind_rows.first().and_then(|r| {
+            if rewind_restore_matches(&r.root, self.cfg.project_dir.trim()) {
+                Some(r.job_id.as_str())
+            } else {
+                None
+            }
+        })
+    }
+
     fn run_dream(&mut self) {
+        let receipts = self.visible_host_receipts();
         let g = greet_from_last_job(
             if self.cfg.goal_pin.is_empty() {
                 None
             } else {
                 Some(self.cfg.goal_pin.as_str())
             },
-            &self.last_receipts,
-            self.last_rewind_id.as_deref(),
+            &receipts,
+            self.dream_rewind_id(),
         );
         self.imagine_prompt = g.dream_prompt.clone();
         self.nav = Nav::Imagine;
@@ -3859,14 +3887,13 @@ impl Cabin {
     }
 
     fn tick_mid_thought(&mut self) {
-        if !self.last_receipts.is_empty() || !self.rewind_rows.is_empty() {
-            return;
-        }
         self.continue_hint = threads::continue_thread_hint(&self.threads);
     }
 
     fn last_night_hint(&self) -> String {
-        if self.last_receipts.is_empty() && self.rewind_rows.is_empty() {
+        let receipts = self.visible_host_receipts();
+        let rewind = self.dream_rewind_id();
+        if receipts.is_empty() && rewind.is_none() {
             return self.continue_hint.chars().take(80).collect();
         }
         let g = greet_from_last_job(
@@ -3875,8 +3902,8 @@ impl Cabin {
             } else {
                 Some(self.cfg.goal_pin.as_str())
             },
-            &self.last_receipts,
-            self.last_rewind_id.as_deref(),
+            &receipts,
+            rewind,
         );
         let mut bits = Vec::new();
         if let Some(goal) = g.goal {
@@ -9435,6 +9462,24 @@ mod tests {
         assert!(
             flushed < wrote,
             "/export must flush the live pane before writing the thread file: {export}"
+        );
+        let dream = src
+            .split("fn run_dream")
+            .nth(1)
+            .and_then(|s| s.split("fn dispatch_send").next())
+            .expect("run_dream");
+        assert!(
+            dream.contains("visible_host_receipts") && dream.contains("dream_rewind_id"),
+            "/dream must use this tab's host receipts, not cabin-global last_receipts: {dream}"
+        );
+        let night = src
+            .split("fn last_night_hint")
+            .nth(1)
+            .and_then(|s| s.split("fn mark_auto_ran").next())
+            .expect("last_night_hint");
+        assert!(
+            night.contains("visible_host_receipts") && !night.contains("last_receipts"),
+            "greeting last-night must not mix another tab's receipts: {night}"
         );
         let finish = src
             .split("fn finish_hub_dispatch")
