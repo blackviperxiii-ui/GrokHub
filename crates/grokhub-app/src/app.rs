@@ -727,6 +727,7 @@ pub struct Cabin {
     agents: Vec<AgentJob>,
     last_live: Instant,
     live_cap_rx: Option<mpsc::Receiver<LiveCap>>,
+    eyes_cap_rx: Option<mpsc::Receiver<Result<String, String>>>,
     #[allow(dead_code)]
     hotkeys: Option<GlobalHotKeyManager>,
     hotkey_hey: u32,
@@ -1019,6 +1020,7 @@ impl Cabin {
             agents: vec![],
             last_live: Instant::now(),
             live_cap_rx: None,
+            eyes_cap_rx: None,
             hotkeys: None,
             hotkey_hey: 0,
             hotkey_halt: 0,
@@ -5672,6 +5674,7 @@ impl Cabin {
     }
 
     fn refresh_eyes(&mut self) {
+        let pending = self.poll_eyes_cap();
         let rows = collect_rows();
         let labels: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
         let refused = refused_lock(&labels);
@@ -5695,13 +5698,9 @@ impl Cabin {
             {
                 frame_note = Some("frame: skipped lock/password\n".into());
                 false
-            } else {
-                match capture_data_url() {
-                    Ok(url) => {
-                        if let Ok(mut st) = self.hub.lock() {
-                            st.store_frame(&url);
-                        }
-                        self.last_frame_url = Some(url);
+            } else if let Some(cap) = pending {
+                match cap {
+                    Ok(_) => {
                         frame_note = Some("frame: captured (on hub, not disk)\n".into());
                         true
                     }
@@ -5710,6 +5709,16 @@ impl Cabin {
                         false
                     }
                 }
+            } else {
+                if self.eyes_cap_rx.is_none() {
+                    let (tx, rx) = mpsc::channel();
+                    self.eyes_cap_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let _ = tx.send(capture_data_url());
+                    });
+                }
+                frame_note = Some("frame: capturing…\n".into());
+                false
             }
         } else {
             false
@@ -5740,6 +5749,37 @@ impl Cabin {
         }
         self.eyes_text = t;
         self.status = format!("{} objects", frame.objects.len());
+    }
+
+    fn poll_eyes_cap(&mut self) -> Option<Result<String, String>> {
+        let Some(rx) = self.eyes_cap_rx.take() else {
+            return None;
+        };
+        match rx.try_recv() {
+            Ok(cap) => {
+                if let Ok(url) = &cap {
+                    if should_send_screenshot(&self.last_window_title, "") {
+                        if let Ok(mut st) = self.hub.lock() {
+                            st.store_frame(url);
+                        }
+                        self.last_frame_url = Some(url.clone());
+                    }
+                    self.eyes_text = self.eyes_text.replace(
+                        "frame: capturing…\n",
+                        "frame: captured (on hub, not disk)\n",
+                    );
+                } else if let Err(e) = &cap {
+                    self.eyes_text =
+                        self.eyes_text.replace("frame: capturing…\n", &format!("frame: {e}\n"));
+                }
+                Some(cap)
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.eyes_cap_rx = Some(rx);
+                None
+            }
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        }
     }
 
     fn halt_work(&mut self, status: impl Into<String>) {
@@ -6065,6 +6105,7 @@ impl eframe::App for Cabin {
         self.poll_night_check(now_ms());
         self.poll_wall();
         self.poll_persist();
+        self.poll_eyes_cap();
         self.live_room();
         self.tick_heartbeat();
         let close_requested = ctx.input(|i| i.viewport().close_requested());
@@ -9787,6 +9828,28 @@ mod tests {
         assert!(
             spawn < save,
             "periodic persist must write after spawn: {bg}"
+        );
+    }
+
+    #[test]
+    fn refresh_eyes_captures_off_the_ui_thread() {
+        let src = include_str!("app.rs");
+        let eyes = src
+            .split("fn refresh_eyes")
+            .nth(1)
+            .and_then(|s| s.split("fn halt_work").next())
+            .expect("refresh_eyes");
+        let spawn = eyes
+            .find("thread::spawn")
+            .expect("Eyes Scan grim must leave the UI thread");
+        let shot = eyes.find("capture_data_url").expect("screen capture");
+        assert!(
+            spawn < shot,
+            "Eyes Scan must not block the cabin: {eyes}"
+        );
+        assert!(
+            eyes.contains("lock_titles") && eyes.contains("should_send_screenshot"),
+            "Eyes Scan lock gates stay on the UI thread: {eyes}"
         );
     }
 
