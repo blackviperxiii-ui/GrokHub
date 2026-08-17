@@ -88,7 +88,7 @@ use grokhub_core::{
     greeting_fingerprint, greeting_prompt, local_greeting, pick_greeting,
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
-    is_rewind_copy_cmd, rewind_can_queue, rewind_copy_cmd, rewind_snapshot_ready,
+    is_rewind_copy_cmd, rewind_blocked_reason, rewind_can_queue, rewind_copy_cmd, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
     clear_pending_after_complete, inbox_claim_ready,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
@@ -3056,6 +3056,10 @@ impl Cabin {
         }
         if let Some(last) = self.rewind_rows.first().cloned() {
             if rewind_restore_matches(&last.root, src) && rewind_snapshot_ready(&last.path) {
+                if let Some(why) = rewind_blocked_reason(self.cfg.host_on, self.running) {
+                    self.status = why.into();
+                    return;
+                }
                 self.queue_sh(format!(
                     "cp -a '{}' '{}'",
                     last.path.replace('\'', r#"'"'"'"#),
@@ -3077,12 +3081,8 @@ impl Cabin {
         if !rewind_allowed(&src, &home) {
             return None;
         }
-        if !rewind_can_queue(self.cfg.host_on, self.running) {
-            self.status = if !self.cfg.host_on {
-                "Host off — /host on".into()
-            } else {
-                "Busy — wait, then rewind".into()
-            };
+        if let Some(why) = rewind_blocked_reason(self.cfg.host_on, self.running) {
+            self.status = why.into();
             return None;
         }
         let id = uid("rw");
@@ -9284,13 +9284,24 @@ mod tests {
             finish_at.is_some_and(|f| run_at.is_some_and(|r| f < r)),
             "finish the phone task before starting consult: {chat_consult}"
         );
+        let rewind = src
+            .split("fn rewind_project")
+            .nth(1)
+            .and_then(|s| s.split("fn snapshot_project").next())
+            .expect("rewind_project");
+        let restored = rewind.find("Restored").expect("Restored");
+        let blocked = rewind.find("rewind_blocked_reason").expect("rewind gate");
+        assert!(
+            blocked < restored,
+            "/rewind must not claim Restored when host cannot start: {rewind}"
+        );
         let snap = src
             .split("fn snapshot_project")
             .nth(1)
             .and_then(|s| s.split("fn doctor_text").next())
             .expect("snapshot_project");
         assert!(
-            snap.contains("rewind_can_queue")
+            snap.contains("rewind_blocked_reason")
                 && snap.contains("rewind_copy_cmd")
                 && !snap.contains("run_cmds"),
             "snapshot must record a dest and return the cp, not nest run_cmds: {snap}"
