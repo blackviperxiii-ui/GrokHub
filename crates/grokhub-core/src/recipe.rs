@@ -51,6 +51,11 @@ pub fn hands_backend_name(backend: Option<HandsBackend>) -> &'static str {
     }
 }
 
+/// Window-name search for `COMPUTER_CMD: act` is xdotool-only. ydotool cannot look up titles.
+pub fn act_window_search_bin(has_xdotool: bool) -> Option<&'static str> {
+    has_xdotool.then_some("xdotool")
+}
+
 /// PATH lookup that does not spawn `which` (missing on some GUI PATHs).
 pub fn bin_on_path(name: &str, path_env: &str, extra_dirs: &[&str]) -> bool {
     let name = name.trim();
@@ -443,7 +448,7 @@ pub fn extract_computer_ops(text: &str) -> Vec<ComputerOp> {
 }
 
 pub fn recipe_from_cmds(cmds: &[String], screen: Option<ScreenSize>) -> Option<Recipe> {
-    let ops: Vec<ComputerOp> = cmds.iter().filter_map(|c| parse_computer_cmd_loose(c)).collect();
+    let ops: Vec<ComputerOp> = cmds.iter().filter_map(|c| parse_computer_op(c)).collect();
     if ops.is_empty() {
         None
     } else {
@@ -596,6 +601,16 @@ pub fn hands_blocked_by_lock(op: &ComputerOp, titles: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn act_search_skips_missing_xdotool() {
+        assert_eq!(act_window_search_bin(true), Some("xdotool"));
+        assert_eq!(
+            act_window_search_bin(false),
+            None,
+            "ydotool-only installs cannot search window titles"
+        );
+    }
 
     #[test]
     fn reshoot_skips_coordinates() {
@@ -871,6 +886,30 @@ mod tests {
         );
         assert!(pointer_op_blocked_on_lock(&ComputerOp::Scroll { dy: 1 }));
         assert!(!pointer_op_blocked_on_lock(&ComputerOp::WaitFor { title: None }));
+    }
+
+    #[test]
+    fn recipe_from_cmds_ignores_shell_type() {
+        assert!(
+            recipe_from_cmds(&["type cargo".into()], None).is_none(),
+            "bash type must not become a desktop type-in recipe"
+        );
+        assert!(
+            recipe_from_cmds(&["key Return".into()], None).is_none(),
+            "unprefixed key must not become desktop hands"
+        );
+        assert!(
+            recipe_from_cmds(&["click 10 20".into()], None).is_none(),
+            "unprefixed click must not become desktop hands"
+        );
+        let typed = recipe_from_cmds(&["COMPUTER_CMD: type hello".into()], None);
+        assert!(typed.is_some(), "prefixed COMPUTER_CMD type stays hands");
+        assert_eq!(
+            typed.unwrap().ops,
+            vec![ComputerOp::Type {
+                text: "hello".into()
+            }]
+        );
     }
 
     #[test]

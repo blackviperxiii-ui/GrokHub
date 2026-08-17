@@ -16,6 +16,13 @@ pub struct ChatView {
     pub body: String,
 }
 
+pub fn visible_turn_count(messages: &[(String, String)]) -> usize {
+    messages
+        .iter()
+        .filter(|(role, content)| role == "user" && !is_workload_user(content))
+        .count()
+}
+
 pub fn is_workload_user(content: &str) -> bool {
     let t = content.trim_start();
     t.starts_with("HOST_RESULT")
@@ -23,6 +30,8 @@ pub fn is_workload_user(content: &str) -> bool {
         || t.starts_with("CONNECTOR_RESULT")
         || t.starts_with("COMPUTER_RESULT")
         || t.starts_with("FOLLOWUP:")
+        || t.starts_with("[Goal step ")
+        || t.starts_with("VERIFY_RESULT:")
 }
 
 pub fn merge_thinking(thought: &str, content: &str) -> String {
@@ -70,6 +79,7 @@ fn hop_is_work(rest: &str) -> bool {
             || t.starts_with("COMPUTER_CMD")
             || t.starts_with("CONNECTOR_CMD")
             || t.starts_with("IMAGINE:")
+            || t.starts_with("IMAGINE_PROMPT:")
     })
 }
 
@@ -107,12 +117,17 @@ fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[&(String, String)]) {
         } else {
             last_was_work = false;
             if !prose.is_empty() {
+                if let Some(prev) = last_final.take() {
+                    push_thought(out, prev);
+                }
                 last_final = Some(prose);
             }
         }
     }
     if last_was_work {
-        last_final = None;
+        if let Some(prev) = last_final.take() {
+            push_thought(out, prev);
+        }
     }
     if let Some(prose) = last_final {
         out.push(ChatView {
@@ -134,6 +149,7 @@ fn is_protocol_line(line: &str) -> bool {
         || t.starts_with("GOAL_COMPLETE")
         || t.starts_with("GOAL_BLOCKED")
         || t.starts_with("CONSULT:")
+        || t.starts_with("IMAGINE_PROMPT:")
 }
 
 /// User-visible assistant prose. Thinking and HOST_CMD lines do not count.
@@ -178,7 +194,7 @@ fn host_cmd_heredoc_delim(line: &str) -> Option<String> {
         .trim_start_matches('\'');
     let delim: String = rest
         .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
         .collect();
     if delim.is_empty() {
         None
@@ -414,7 +430,41 @@ mod tests {
         assert!(is_workload_user(
             "FOLLOWUP: Finish the incomplete work from your last reply. Act now (HOST_CMD if needed). End with status."
         ));
+        assert!(is_workload_user(
+            "[Goal step 2/6]\nTask: flash the pi\nLast progress:\nWriting the image."
+        ));
+        assert!(is_workload_user("VERIFY_RESULT:\nexit 0\nchecked"));
         assert!(!is_workload_user("check the box"));
+        assert_eq!(
+            visible_turn_count(&[
+                ("user".into(), "check the box".into()),
+                ("assistant".into(), "ok".into()),
+                ("user".into(), "HOST_RESULT (facts only):\n$ ls\n".into()),
+                ("user".into(), "HOST_DIFF:\n- a".into()),
+                ("user".into(), "VERIFY_RESULT:\nexit 0\n".into()),
+            ]),
+            1
+        );
+        let leaked = visible_chat(&[
+            ("user".into(), "flash the pi".into()),
+            ("assistant".into(), "Writing the image.".into()),
+            (
+                "user".into(),
+                "[Goal step 2/6]\nTask: flash the pi\nContinue autonomously.".into(),
+            ),
+            (
+                "user".into(),
+                "VERIFY_RESULT:\nexit 0\nchecked".into(),
+            ),
+            ("assistant".into(), "Flashed.".into()),
+        ]);
+        assert_eq!(
+            leaked.iter().filter(|x| x.kind == ChatKind::User).count(),
+            1,
+            "goal steps and verify receipts must stay off the pane"
+        );
+        assert!(!leaked.iter().any(|x| x.body.contains("[Goal step")));
+        assert!(!leaked.iter().any(|x| x.body.contains("VERIFY_RESULT")));
     }
 
     #[test]
@@ -487,6 +537,15 @@ mod tests {
 
     #[test]
     fn imagine_prompt_stays_off_the_pane_until_final() {
+        let verb = visible_chat(&[(
+            "assistant".into(),
+            "IMAGINE_PROMPT: a cabin at night\n".into(),
+        )]);
+        assert!(
+            !verb.iter().any(|x| x.body.contains("IMAGINE_PROMPT")),
+            "the Imagine kick verb must not be the answer bubble"
+        );
+        assert!(!verb.iter().any(|x| x.kind == ChatKind::Assistant));
         let v = visible_chat(&[(
             "assistant".into(),
             "IMAGINE: a cabin at night\nHOST_CMD: true\n".into(),
@@ -590,6 +649,28 @@ mod tests {
             host_cmd_heredoc_delim("HOST_CMD: uname -a"),
             None
         );
+        assert_eq!(
+            host_cmd_heredoc_delim("HOST_CMD: cat <<'EOF-2'"),
+            Some("EOF-2".into())
+        );
+        assert_eq!(
+            assistant_prose("I'll look.\nHOST_CMD: cat <<'EOF-2'\nsecret dump\nEOF-2\nDone."),
+            "I'll look.\nDone."
+        );
+    }
+
+    #[test]
+    fn status_then_work_keeps_the_status_as_thought() {
+        let msgs = vec![
+            ("user".into(), "check the box".into()),
+            ("assistant".into(), "Checking the system.".into()),
+            ("assistant".into(), "HOST_CMD: uname -a\n".into()),
+        ];
+        let v = visible_chat(&msgs);
+        assert_eq!(kinds(&v), vec![ChatKind::User, ChatKind::Thought]);
+        assert_eq!(v[1].body, "Checking the system.");
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Assistant));
+        assert!(!v.iter().any(|x| x.body.contains("uname")));
     }
 
     #[test]

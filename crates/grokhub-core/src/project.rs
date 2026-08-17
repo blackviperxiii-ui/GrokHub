@@ -97,7 +97,11 @@ pub fn create_project(
         return Err("id taken");
     }
     let mut path = project_work_path(work_root, &name);
-    if nodes.iter().any(|n| n.path == path) {
+    let home = std::env::var("HOME").ok();
+    if nodes
+        .iter()
+        .any(|n| bound_paths_match(&n.path, &path, home.as_deref()))
+    {
         path = format!("{path}-{}", nodes.len());
     }
     nodes.push(ProjectNode {
@@ -147,7 +151,11 @@ pub fn settle_project_path(
     }
     let name = node.name.clone();
     let mut path = project_work_path(work_root, &name);
-    if nodes.iter().any(|n| n.id != id && n.path == path) {
+    let home = std::env::var("HOME").ok();
+    if nodes
+        .iter()
+        .any(|n| n.id != id && bound_paths_match(&n.path, &path, home.as_deref()))
+    {
         path = format!("{path}-{}", nodes.len());
     }
     let node = nodes.iter_mut().find(|n| n.id == id).ok_or("not found")?;
@@ -212,12 +220,32 @@ pub struct DropOutcome {
     pub name: String,
 }
 
+pub fn bound_paths_match(a: &str, b: &str, home: Option<&str>) -> bool {
+    let a = expand_project_root(a, home);
+    let b = expand_project_root(b, home);
+    !a.is_empty() && a == b
+}
+
 pub fn drop_selected(nodes: &mut Vec<ProjectNode>, id: &str, bound_path: &str) -> DropOutcome {
+    drop_selected_in(
+        nodes,
+        id,
+        bound_path,
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+pub fn drop_selected_in(
+    nodes: &mut Vec<ProjectNode>,
+    id: &str,
+    bound_path: &str,
+    home: Option<&str>,
+) -> DropOutcome {
     let node = nodes.iter().find(|n| n.id == id);
     let name = node.map(|n| n.name.clone()).unwrap_or_default();
     let path = node.map(|n| n.path.clone()).unwrap_or_default();
     let dropped = drop_node(nodes, id);
-    let unbound = dropped && !bound_path.trim().is_empty() && path == bound_path;
+    let unbound = dropped && bound_paths_match(&path, bound_path, home);
     DropOutcome {
         dropped,
         unbound,
@@ -348,11 +376,26 @@ pub fn folder_choices(nodes: &[ProjectNode]) -> Vec<(String, String)> {
 }
 
 pub fn upsert_bound(nodes: &mut Vec<ProjectNode>, bound_path: &str) -> Option<String> {
+    upsert_bound_in(
+        nodes,
+        bound_path,
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+pub fn upsert_bound_in(
+    nodes: &mut Vec<ProjectNode>,
+    bound_path: &str,
+    home: Option<&str>,
+) -> Option<String> {
     let path = bound_path.trim();
     if path.is_empty() {
         return None;
     }
-    if let Some(n) = nodes.iter().find(|n| n.kind == ProjectKind::Project && n.path == path) {
+    if let Some(n) = nodes
+        .iter()
+        .find(|n| n.kind == ProjectKind::Project && bound_paths_match(&n.path, path, home))
+    {
         return Some(n.id.clone());
     }
     let id = format!("bound-{}", nodes.len());
@@ -410,6 +453,9 @@ pub fn expand_host_path_token_in(tok: &str, home: Option<&str>) -> Option<String
     if tok.starts_with('/') {
         return Some(tok);
     }
+    if tok == "$OLDPWD" || tok.starts_with("$OLDPWD/") {
+        return Some("/var/empty".into());
+    }
     let home = home.filter(|h| !h.is_empty())?;
     let home = home.trim_end_matches('/');
     if let Some(rest) = tok.strip_prefix("~/") {
@@ -420,6 +466,11 @@ pub fn expand_host_path_token_in(tok: &str, home: Option<&str>) -> Option<String
     }
     if tok == "~" || tok == "$HOME" {
         return Some(home.to_string());
+    }
+    if let Some(rest) = tok.strip_prefix('~') {
+        if !rest.is_empty() && !rest.starts_with('/') {
+            return Some(format!("/home/{rest}"));
+        }
     }
     None
 }
@@ -453,10 +504,62 @@ pub fn host_cmd_leaves_project(cmd: &str, project_root: &str) -> bool {
     host_cmd_leaves_project_in(cmd, project_root, std::env::var("HOME").ok().as_deref())
 }
 
+fn host_cmd_name(tok: &str) -> &str {
+    tok.trim_start_matches('\\')
+}
+
+fn host_cd_argv<'a>(bits: &'a [&'a str]) -> Option<&'a [&'a str]> {
+    let mut i = 0;
+    while matches!(
+        bits.get(i).copied().map(host_cmd_name),
+        Some("builtin") | Some("command") | Some("exec") | Some("eval")
+    ) {
+        i += 1;
+        while i < bits.len() && (bits[i] == "--" || bits[i].starts_with('-')) {
+            i += 1;
+        }
+    }
+    if bits.get(i).copied().map(host_cmd_name) != Some("cd") {
+        return None;
+    }
+    Some(&bits[i + 1..])
+}
+
+fn host_cd_dest_leaves(cmd: &str, root: &str, home: Option<&str>) -> bool {
+    for seg in cmd.split(|c: char| matches!(c, '&' | '|' | ';')) {
+        let bits: Vec<&str> = seg.split_whitespace().collect();
+        let Some(after_cd) = host_cd_argv(&bits) else {
+            continue;
+        };
+        let dest = after_cd
+            .iter()
+            .find(|w| **w != "--" && !w.starts_with('-'))
+            .copied();
+        let Some(dest) = dest else {
+            return true;
+        };
+        let peeled = peel_host_path_token(dest);
+        let path = if let Some(p) = expand_host_path_token_in(dest, home) {
+            normalize_host_path(&p)
+        } else if !peeled.is_empty() {
+            normalize_host_path(&format!("{}/{peeled}", root.trim_end_matches('/')))
+        } else {
+            return true;
+        };
+        if !is_under_project(&path, root) {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn host_cmd_leaves_project_in(cmd: &str, project_root: &str, home: Option<&str>) -> bool {
     let root = expand_project_root(project_root, home);
     if root.is_empty() {
         return false;
+    }
+    if host_cd_dest_leaves(cmd, &root, home) {
+        return true;
     }
     for tok in cmd.split_whitespace() {
         let peeled = peel_host_path_token(tok);
@@ -553,6 +656,94 @@ mod tests {
         assert_eq!(refund_host_reserved(3, 3), 0);
         assert_eq!(refund_host_reserved(3, 1), 2);
         assert_eq!(refund_host_reserved(0, 2), 0);
+        assert!(
+            host_cmd_leaves_project_in(
+                "cp -a '/home/j/proj/.' '/home/j/.config/GrokHub/rewind/rw1'",
+                "/home/j/proj",
+                Some("/home/j")
+            ),
+            "cabin rewind dest is outside the bound tree — run_cmds must exempt it"
+        );
+    }
+
+    #[test]
+    fn bare_cd_leaves_the_bound_tree() {
+        assert!(
+            host_cmd_leaves_project_in("cd", "/home/j/proj", Some("/home/j")),
+            "cd with no dest goes to HOME"
+        );
+        assert!(
+            host_cmd_leaves_project_in("cd && ls", "/home/j/proj", Some("/home/j")),
+            "cd && ls lists HOME, not the bound tree"
+        );
+        assert!(
+            !host_cmd_leaves_project_in("cd src && ls", "/home/j/proj", Some("/home/j")),
+            "cd into a project subdir stays in-world"
+        );
+        assert!(
+            !host_cmd_leaves_project_in("echo cd", "/home/j/proj", Some("/home/j")),
+            "the word cd in another command is not a directory change"
+        );
+    }
+
+    #[test]
+    fn wrapped_cd_without_dest_leaves_the_bound_tree() {
+        assert!(
+            host_cmd_leaves_project_in("builtin cd", "/home/j/proj", Some("/home/j")),
+            "builtin cd with no dest goes to HOME"
+        );
+        assert!(
+            host_cmd_leaves_project_in("command cd && ls", "/home/j/proj", Some("/home/j")),
+            "command cd && ls lists HOME, not the bound tree"
+        );
+        assert!(
+            host_cmd_leaves_project_in("builtin -- cd", "/home/j/proj", Some("/home/j")),
+            "builtin -- cd with no dest goes to HOME"
+        );
+        assert!(
+            !host_cmd_leaves_project_in("builtin cd src && ls", "/home/j/proj", Some("/home/j")),
+            "builtin cd into a project subdir stays in-world"
+        );
+        assert!(
+            !host_cmd_leaves_project_in("command echo cd", "/home/j/proj", Some("/home/j")),
+            "command echo cd is not a directory change"
+        );
+        assert!(
+            host_cmd_leaves_project_in("exec cd", "/home/j/proj", Some("/home/j")),
+            "exec cd with no dest goes to HOME"
+        );
+        assert!(
+            host_cmd_leaves_project_in("\\cd", "/home/j/proj", Some("/home/j")),
+            "backslash cd skips aliases and still goes to HOME"
+        );
+        assert!(
+            !host_cmd_leaves_project_in("exec cd src", "/home/j/proj", Some("/home/j")),
+            "exec cd into a project subdir stays in-world"
+        );
+        assert!(
+            host_cmd_leaves_project_in("eval cd", "/home/j/proj", Some("/home/j")),
+            "eval cd with no dest goes to HOME"
+        );
+        assert!(
+            host_cmd_leaves_project_in("eval builtin cd && ls", "/home/j/proj", Some("/home/j")),
+            "eval builtin cd && ls lists HOME, not the bound tree"
+        );
+        assert!(
+            host_cmd_leaves_project_in("cd ~other", "/home/j/proj", Some("/home/j")),
+            "cd ~other goes to that user's home, not a project subdir named ~other"
+        );
+        assert!(
+            host_cmd_leaves_project_in("cat ~other/secrets", "/home/j/proj", Some("/home/j")),
+            "cat ~other/secrets reads outside the bound tree"
+        );
+        assert!(
+            host_cmd_leaves_project_in("cd $OLDPWD", "/home/j/proj", Some("/home/j")),
+            "cd $OLDPWD goes to the previous directory, not a project subdir"
+        );
+        assert!(
+            host_cmd_leaves_project_in("cat $OLDPWD/secrets", "/home/j/proj", Some("/home/j")),
+            "cat $OLDPWD/secrets reads outside the bound tree"
+        );
     }
 
     #[test]
@@ -685,6 +876,71 @@ mod tests {
         assert!(out.dropped);
         assert!(!out.unbound);
         assert!(nodes.is_empty());
+    }
+
+    #[test]
+    fn create_project_does_not_reuse_tilde_tree() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/j".into());
+        let work = format!("{home}/GrokHub-Work");
+        let mut nodes = vec![ProjectNode {
+            id: "old".into(),
+            name: "Night watch".into(),
+            kind: ProjectKind::Project,
+            path: "~/GrokHub-Work/night-watch".into(),
+            parent: None,
+            open: false,
+        }];
+        create_project(&mut nodes, "p2", "Night watch", None, &work).unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert!(
+            !bound_paths_match(&nodes[0].path, &nodes[1].path, Some(&home)),
+            "a second Night watch must not reuse the tilde-bound tree: {} vs {}",
+            nodes[0].path,
+            nodes[1].path
+        );
+    }
+
+    #[test]
+    fn drop_selected_unbinds_tilde_bound_path() {
+        let mut nodes = vec![ProjectNode {
+            id: "p1".into(),
+            name: "proj".into(),
+            kind: ProjectKind::Project,
+            path: "~/work/proj".into(),
+            parent: None,
+            open: false,
+        }];
+        let out = drop_selected_in(&mut nodes, "p1", "/home/j/work/proj", Some("/home/j"));
+        assert!(out.dropped);
+        assert!(
+            out.unbound,
+            "tilde sidebar path must match the expanded bound dir"
+        );
+        let mut nodes = vec![ProjectNode {
+            id: "p1".into(),
+            name: "proj".into(),
+            kind: ProjectKind::Project,
+            path: "$HOME/work/proj".into(),
+            parent: None,
+            open: false,
+        }];
+        let out = drop_selected_in(&mut nodes, "p1", "/home/j/work/proj", Some("/home/j"));
+        assert!(out.unbound, "$HOME sidebar path must match the expanded bound dir");
+    }
+
+    #[test]
+    fn upsert_bound_finds_tilde_sidebar_row() {
+        let mut nodes = vec![ProjectNode {
+            id: "p1".into(),
+            name: "proj".into(),
+            kind: ProjectKind::Project,
+            path: "~/work/proj".into(),
+            parent: None,
+            open: false,
+        }];
+        let id = upsert_bound_in(&mut nodes, "/home/j/work/proj", Some("/home/j"));
+        assert_eq!(id.as_deref(), Some("p1"));
+        assert_eq!(nodes.len(), 1, "must not add a second row for the same tree");
     }
 
     #[test]

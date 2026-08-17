@@ -48,6 +48,28 @@ pub fn greet_from_last_job(
     }
 }
 
+/// Host/computer receipt bodies from this thread, oldest first.
+pub fn thread_host_receipts(messages: &[(String, String)]) -> Vec<String> {
+    messages
+        .iter()
+        .filter(|(role, content)| {
+            role == "user"
+                && (content.trim_start().starts_with("HOST_RESULT")
+                    || content.trim_start().starts_with("COMPUTER_RESULT"))
+        })
+        .map(|(_, content)| {
+            content
+                .lines()
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join("\n")
+                .chars()
+                .take(160)
+                .collect()
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomPlan {
     pub slug: String,
@@ -68,7 +90,7 @@ pub fn plan_room(utterance: &str, home: &str) -> RoomPlan {
         l.contains("doc") && !(l.contains("flash") || l.contains("lab") || l.contains("firmware") || l.contains("code"))
     };
     let workspace = if docs_only { "docs".into() } else { slug.clone() };
-    let root = format!("{}/GrokHub-Work/{slug}", home.trim_end_matches('/'));
+    let root = format!("{}/GrokHub-Work/{workspace}", home.trim_end_matches('/'));
     let quoted = sh_single(&root);
     let script = format!(
         "mkdir -p {quoted} && command -v hyprctl >/dev/null && hyprctl dispatch workspace name:{workspace} || true && command -v qdbus >/dev/null && qdbus org.kde.KWin /KWin org.kde.KWin.showDesktop false || true"
@@ -247,6 +269,12 @@ mod tests {
         assert_eq!(g.last_fail.as_deref(), Some("verify fail"));
         let r = plan_room("stage a docs desk", "/home/jeremy");
         assert_eq!(r.workspace, "docs");
+        assert_eq!(r.project_rel, "GrokHub-Work/docs");
+        assert!(
+            r.host_script.contains("'/home/jeremy/GrokHub-Work/docs'"),
+            "bind path and mkdir must be the same folder: {}",
+            r.host_script
+        );
         assert!(r.host_script.contains("mkdir -p"));
         assert_eq!(passenger_label(4), "Night / Dispatch");
         assert_eq!(on_wheel_grab(true), (true, true));
@@ -269,6 +297,25 @@ mod tests {
             ])
             .as_deref(),
             Some("check the box")
+        );
+        let receipts = thread_host_receipts(&[
+            ("user".into(), "flash the pi".into()),
+            (
+                "user".into(),
+                "HOST_RESULT (facts only):\n$ dd if=img of=/dev/sda\nexit 0 · 3ms\n".into(),
+            ),
+            (
+                "user".into(),
+                "COMPUTER_RESULT (facts only):\nclicked 10,20\n".into(),
+            ),
+            ("assistant".into(), "HOST_RESULT (facts only):\nignore".into()),
+        ]);
+        assert_eq!(
+            receipts,
+            vec![
+                "$ dd if=img of=/dev/sda\nexit 0 · 3ms".to_string(),
+                "clicked 10,20".to_string(),
+            ]
         );
     }
 }

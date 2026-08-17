@@ -196,6 +196,18 @@ impl HubState {
         Some(t.clone())
     }
 
+    /// After a crash, claimed rows have no live worker. Put them back in line.
+    pub fn requeue_claimed_for(&mut self, peer_id: &str) -> u32 {
+        let mut n = 0;
+        for t in &mut self.inbox {
+            if t.status == "claimed" && t.target_device_id == peer_id {
+                t.status = "queued".into();
+                n += 1;
+            }
+        }
+        n
+    }
+
     pub fn claim_inbox(&mut self, peer_id: &str) -> Vec<HubTask> {
         let mut out = vec![];
         for t in &mut self.inbox {
@@ -307,6 +319,20 @@ pub enum PairError {
 pub enum CompleteError {
     NotFound,
     Forbidden,
+}
+
+/// Do not claim a phone task when chat cannot run.
+pub fn inbox_claim_ready(has_key: bool) -> bool {
+    has_key
+}
+
+/// Drop `pending_hub_task` only when the inbox row is gone or completed.
+pub fn clear_pending_after_complete(err: Option<CompleteError>) -> bool {
+    match err {
+        None => true,
+        Some(CompleteError::NotFound) => true,
+        Some(CompleteError::Forbidden) => false,
+    }
 }
 
 pub fn state_for_disk(st: &HubState) -> HubState {
@@ -494,10 +520,29 @@ mod tests {
             "done",
             "ack must not hide a completed result from GET /v1/results"
         );
+        assert!(clear_pending_after_complete(None));
+        assert!(clear_pending_after_complete(Some(CompleteError::NotFound)));
+        assert!(
+            !clear_pending_after_complete(Some(CompleteError::Forbidden)),
+            "a forbidden complete must keep pending so the claimed row can still finish"
+        );
         for i in 0..90 {
             st.enqueue_local("local", &format!("do {i}")).unwrap();
         }
         assert!(st.inbox.len() <= 80);
+        assert!(inbox_claim_ready(true));
+        assert!(
+            !inbox_claim_ready(false),
+            "do not claim a phone task when chat cannot run"
+        );
+        let mut stuck = HubState::empty();
+        let hub = stuck.device_id.clone();
+        let mut row = HubTask::enqueue("phone", "Pixel", &hub, "Flash", "flash the pi", 1);
+        row.status = "claimed".into();
+        stuck.inbox.push(row);
+        assert_eq!(stuck.requeue_claimed_for(&hub), 1);
+        assert_eq!(stuck.inbox[0].status, "queued");
+        assert_eq!(stuck.take_next_queued(&hub).unwrap().status, "claimed");
     }
 
     #[test]

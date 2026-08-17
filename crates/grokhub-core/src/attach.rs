@@ -114,6 +114,11 @@ pub fn next_chat_image<'a>(user: Option<&'a str>, cabin: Option<&'a str>) -> Opt
         .or_else(|| cabin.filter(|s| !s.is_empty()))
 }
 
+/// Only a typed send / retry should consume the plus-button image.
+pub fn kick_consumes_attach(user_originated: bool) -> bool {
+    user_originated
+}
+
 /// Only a frame captured on this turn may go to the model.
 /// A leftover desktop or webcam JPEG is not a this-turn capture.
 pub fn this_turn_cabin_frame<'a>(
@@ -238,6 +243,11 @@ mod tests {
         assert_eq!(next_chat_image(None, Some("data:cabin")), Some("data:cabin"));
         assert_eq!(next_chat_image(Some(""), Some("data:cabin")), Some("data:cabin"));
         assert_eq!(next_chat_image(None, None), None);
+        assert!(kick_consumes_attach(true));
+        assert!(
+            !kick_consumes_attach(false),
+            "followup/host/goal kicks must leave the attached image for the next send"
+        );
         assert!(!cabin_frame_only(Some("data:user"), Some("data:cabin")));
         assert!(cabin_frame_only(None, Some("data:cabin")));
         assert!(cabin_frame_only(Some(""), Some("data:cabin")));
