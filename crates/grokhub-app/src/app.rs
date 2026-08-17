@@ -5188,11 +5188,23 @@ impl Cabin {
             self.status = "Scratch — no reflect".into();
             return;
         }
-        let msgs: Vec<(String, String)> = self
+        let vis = self.visible_thread_id();
+        let visible_pairs: Vec<(String, String)> = self
             .messages
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
+        let stored: Vec<(String, Vec<(String, String)>)> = self
+            .threads
+            .iter()
+            .map(|t| (t.id.clone(), t.messages.clone()))
+            .collect();
+        let msgs = kick_messages_for_job(
+            self.chat_job_thread.as_deref(),
+            &vis,
+            &visible_pairs,
+            &stored,
+        );
         let facts = fact_candidates(&msgs);
         if self.policy().learns() {
             extract_insights(&mut self.learning, &facts);
@@ -9399,6 +9411,15 @@ mod tests {
         assert!(
             pushed < saved,
             "VERIFY_RESULT must hit disk or a restart drops it: {verify}"
+        );
+        let reflect = src
+            .split("fn run_reflect")
+            .nth(1)
+            .and_then(|s| s.split("fn take_over_desktop").next())
+            .expect("run_reflect");
+        assert!(
+            reflect.contains("kick_messages_for_job"),
+            "/learn reflect must read the origin thread, not only the visible tab: {reflect}"
         );
         let takeover = src
             .split("fn take_over_desktop")
