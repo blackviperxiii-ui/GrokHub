@@ -16,6 +16,15 @@ pub enum ComputerOp {
     Scroll { dy: i32 },
     Act { name: String },
     WaitFor { title: Option<String> },
+    Tab { action: TabAction, query: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabAction {
+    List,
+    Close,
+    Focus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +99,7 @@ pub fn empty_hands_steps_error(op: &ComputerOp, steps: &[Vec<String>]) -> Option
     match op {
         ComputerOp::Key { name } => Some(format!("unknown key {name}")),
         ComputerOp::Scroll { dy } if *dy == 0 => None,
+        ComputerOp::Tab { .. } | ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } => None,
         _ => Some("empty hands step".into()),
     }
 }
@@ -181,6 +191,38 @@ pub fn parse_computer_op(line: &str) -> Option<ComputerOp> {
                 .filter(|s| !s.is_empty());
             Some(ComputerOp::WaitFor { title })
         }
+        "tab" => {
+            let action = bits.next()?.to_ascii_lowercase();
+            match action.as_str() {
+                "list" => Some(ComputerOp::Tab {
+                    action: TabAction::List,
+                    query: String::new(),
+                }),
+                "close" => {
+                    let query = bits.collect::<Vec<_>>().join(" ");
+                    if query.is_empty() {
+                        None
+                    } else {
+                        Some(ComputerOp::Tab {
+                            action: TabAction::Close,
+                            query,
+                        })
+                    }
+                }
+                "focus" => {
+                    let query = bits.collect::<Vec<_>>().join(" ");
+                    if query.is_empty() {
+                        None
+                    } else {
+                        Some(ComputerOp::Tab {
+                            action: TabAction::Focus,
+                            query,
+                        })
+                    }
+                }
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -235,6 +277,7 @@ pub enum ComputerDrive {
     Ydotool(Vec<Vec<String>>),
     Act(String),
     WaitFor(Option<String>),
+    Tab(TabAction, String),
 }
 
 pub fn computer_drive(op: &ComputerOp) -> ComputerDrive {
@@ -245,6 +288,7 @@ pub fn computer_drive_for(backend: HandsBackend, op: &ComputerOp) -> ComputerDri
     match op {
         ComputerOp::Act { name } => ComputerDrive::Act(name.clone()),
         ComputerOp::WaitFor { title } => ComputerDrive::WaitFor(title.clone()),
+        ComputerOp::Tab { action, query } => ComputerDrive::Tab(*action, query.clone()),
         other => match backend {
             HandsBackend::Xdotool => ComputerDrive::Xdotool(xdotool_steps(other)),
             HandsBackend::Ydotool => ComputerDrive::Ydotool(ydotool_steps(other)),
@@ -296,7 +340,7 @@ fn xdotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
                 ]]
             }
         }
-        ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } => vec![],
+        ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } | ComputerOp::Tab { .. } => vec![],
     }
 }
 
@@ -334,7 +378,7 @@ fn ydotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
                 ]]
             }
         }
-        ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } => vec![],
+        ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } | ComputerOp::Tab { .. } => vec![],
     }
 }
 
@@ -435,6 +479,11 @@ pub fn computer_cmd_line(op: &ComputerOp) -> String {
             Some(t) => format!("COMPUTER_CMD: wait_for title={t}"),
             None => "COMPUTER_CMD: wait_for".into(),
         },
+        ComputerOp::Tab { action, query } => match action {
+            TabAction::List => "COMPUTER_CMD: tab list".into(),
+            TabAction::Close => format!("COMPUTER_CMD: tab close {query}"),
+            TabAction::Focus => format!("COMPUTER_CMD: tab focus {query}"),
+        },
     }
 }
 
@@ -494,7 +543,10 @@ pub fn hands_protocol() -> &'static str {
      COMPUTER_CMD: scroll <dy>\n\
      COMPUTER_CMD: act <accessible-name>\n\
      COMPUTER_CMD: wait_for title=<window>\n\
-     Prefer act and wait_for over raw clicks. Coordinates are the global desktop. A JPEG may be one output — use Windshield outputs / frame. Close a tab with act on the page-tab or key ctrl+w after wait_for that window; do not guess the × from the still. A JPEG frame is attached only when the user asks for hands or cabin eyes. Lock/password screens are won'ts — never click them or type into them. Do not read ~/.ssh or /etc/shadow.\n\
+     COMPUTER_CMD: tab list\n\
+     COMPUTER_CMD: tab close <title-or-url>\n\
+     COMPUTER_CMD: tab focus <title-or-url>\n\
+     Prefer act and wait_for over raw clicks. Coordinates are the global desktop. A JPEG may be one output — use Windshield outputs / frame. When Windshield says browser: cdp, close or focus a tab with tab close / tab focus. Otherwise wait_for that window then key ctrl+w; do not guess the × from the still. A JPEG frame is attached only when the user asks for hands or cabin eyes. Lock/password screens are won'ts — never click them or type into them. Do not read ~/.ssh or /etc/shadow.\n\
      If COMPUTER_RESULT says hands are down (not installed, uinput, or ydotoold), tell the user how to enable them. Do not pkill, kill, or otherwise terminate apps as a stand-in for mouse or keyboard control."
 }
 
@@ -701,9 +753,39 @@ mod tests {
             computer_cmd_line(&ComputerOp::Click { x: 1, y: 2 }),
             "COMPUTER_CMD: click 1 2"
         );
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: tab list"),
+            Some(ComputerOp::Tab {
+                action: TabAction::List,
+                query: String::new()
+            })
+        );
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: tab close GitHub"),
+            Some(ComputerOp::Tab {
+                action: TabAction::Close,
+                query: "GitHub".into()
+            })
+        );
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: tab focus news.ycombinator"),
+            Some(ComputerOp::Tab {
+                action: TabAction::Focus,
+                query: "news.ycombinator".into()
+            })
+        );
+        assert!(parse_computer_op("COMPUTER_CMD: tab close").is_none());
+        assert!(matches!(
+            computer_drive(&ComputerOp::Tab {
+                action: TabAction::Close,
+                query: "GitHub".into()
+            }),
+            ComputerDrive::Tab(TabAction::Close, q) if q == "GitHub"
+        ));
         let proto = hands_protocol();
         assert!(proto.contains("HOST_CMD:"));
         assert!(proto.contains("COMPUTER_CMD:"));
+        assert!(proto.contains("tab close"));
         assert!(proto.to_ascii_lowercase().contains("unsandboxed"));
         assert!(
             proto.contains("Do not pkill") && proto.contains("hands are down"),

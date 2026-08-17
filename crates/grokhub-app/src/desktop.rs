@@ -1,17 +1,21 @@
 use grokhub_core::{
-    act_window_search_bin, capture_kinds, clip_image_args, computer_cmd_line, computer_drive_for, diagnose_hands,
-    empty_hands_steps_error, ffmpeg_webcam_args, ffmpeg_x11_args, filter_atspi_rows, frame_is_blank,
-    frame_origin_for, gnome_shell_screenshot_args, grim_capture_args, hands_backend_name, hands_blocked_by_lock,
-    hands_chip_label, hands_chip_live, hands_down_receipt, image_to_global, infer_wayland_display,
-    jpeg_data_url, layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var,
-    parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
-    parse_xrandr_outputs, pcm_from_capture, pick_capture_output, pick_hands_backend, pick_named_row,
-    picker_args, rank_atspi_rows, resolve_bin_in, session_is_wayland, take_text_body,
-    virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path, AtspiRow, CaptureKind, ComputerDrive,
-    ComputerOp, DisplayOutput, HandsBackend, HandsDown, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
+    act_window_search_bin, browser_windshield_line, capture_kinds, cdp_page_close_payload,
+    cdp_page_focus_payload, clip_image_args, computer_cmd_line, computer_drive_for, diagnose_hands,
+    empty_hands_steps_error, ffmpeg_webcam_args, ffmpeg_x11_args, filter_atspi_rows, format_tab_list,
+    frame_is_blank, frame_origin_for, gnome_shell_screenshot_args, grim_capture_args,
+    hands_backend_name, hands_blocked_by_lock, hands_chip_label, hands_chip_live, hands_down_receipt,
+    image_to_global, infer_wayland_display, jpeg_data_url, layout_prompt, live_pcm_argv,
+    live_pcm_frame_bytes, luma_mean_var, parse_atspi_line, parse_cdp_targets, parse_picker_stdout,
+    parse_wmctrl_line, parse_xdotool_mouse, parse_xrandr_outputs, pcm_from_capture, pick_browser_tab,
+    pick_capture_output, pick_hands_backend, pick_named_row, picker_args, rank_atspi_rows,
+    resolve_bin_in, session_is_wayland, take_text_body, virtual_desktop_size, windshield_frame_geom,
+    x11_grab_size, ydotool_socket_path, AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp,
+    DisplayOutput, HandsBackend, HandsDown, TabAction, CDP_DOWN, CDP_PORTS, RECORDERS, TRANSCRIBERS,
+    PYATSPI_MISSING,
 };
 use image::GenericImageView;
 use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -105,7 +109,139 @@ pub fn prepare_windshield(
     let kept = filter_atspi_rows(rows, dw, dh);
     let ranked = rank_atspi_rows(&kept, ask, 40);
     let (fw, fh, ox, oy) = windshield_frame_geom(captured_this_turn, last_desk_frame_geom());
-    (ranked, layout_prompt(&outputs, fw, fh, ox, oy))
+    let mut header = layout_prompt(&outputs, fw, fh, ox, oy);
+    let (up, n) = cached_cdp_status();
+    header.push_str(&browser_windshield_line(up, n));
+    (ranked, header)
+}
+
+struct CdpCache {
+    at: Instant,
+    up: bool,
+    n: usize,
+}
+
+static CDP_CACHE: Mutex<Option<CdpCache>> = Mutex::new(None);
+
+fn cached_cdp_status() -> (bool, usize) {
+    if let Ok(g) = CDP_CACHE.lock() {
+        if let Some(c) = g.as_ref() {
+            if c.at.elapsed() < Duration::from_secs(2) {
+                return (c.up, c.n);
+            }
+        }
+    }
+    let hit = probe_cdp();
+    let (up, n) = match &hit {
+        Some((_, tabs)) => (true, tabs.len()),
+        None => (false, 0),
+    };
+    if let Ok(mut g) = CDP_CACHE.lock() {
+        *g = Some(CdpCache {
+            at: Instant::now(),
+            up,
+            n,
+        });
+    }
+    (up, n)
+}
+
+fn invalidate_cdp_cache() {
+    if let Ok(mut g) = CDP_CACHE.lock() {
+        *g = None;
+    }
+}
+
+fn cdp_http(port: u16, path: &str) -> Result<String, String> {
+    let url = format!("http://127.0.0.1:{port}{path}");
+    let resp = ureq::get(&url)
+        .timeout(Duration::from_millis(400))
+        .call()
+        .map_err(|e| e.to_string())?;
+    resp.into_string().map_err(|e| e.to_string())
+}
+
+fn probe_cdp() -> Option<(u16, Vec<BrowserTab>)> {
+    for port in CDP_PORTS {
+        for path in ["/json/list", "/json"] {
+            let Ok(raw) = cdp_http(*port, path) else {
+                continue;
+            };
+            let Ok(tabs) = parse_cdp_targets(&raw) else {
+                continue;
+            };
+            return Some((*port, tabs));
+        }
+    }
+    None
+}
+
+fn run_tab_op(action: TabAction, query: &str, cancel: Option<&AtomicBool>) -> Result<String, String> {
+    if cancelled(cancel) {
+        return Err("halted".into());
+    }
+    let Some((port, tabs)) = probe_cdp() else {
+        return Err(CDP_DOWN.into());
+    };
+    invalidate_cdp_cache();
+    match action {
+        TabAction::List => Ok(format_tab_list(&tabs)),
+        TabAction::Close => {
+            let tab = pick_browser_tab(&tabs, query)?;
+            close_cdp_tab(port, tab)?;
+            Ok(format!("closed {}", tab.title))
+        }
+        TabAction::Focus => {
+            let tab = pick_browser_tab(&tabs, query)?;
+            focus_cdp_tab(port, tab)?;
+            Ok(format!("focused {}", tab.title))
+        }
+    }
+}
+
+fn close_cdp_tab(port: u16, tab: &BrowserTab) -> Result<(), String> {
+    if cdp_http(port, &format!("/json/close/{}", tab.id)).is_ok() {
+        return Ok(());
+    }
+    cdp_ws_method(&tab.ws_url, cdp_page_close_payload())
+}
+
+fn focus_cdp_tab(port: u16, tab: &BrowserTab) -> Result<(), String> {
+    if cdp_http(port, &format!("/json/activate/{}", tab.id)).is_ok() {
+        return Ok(());
+    }
+    cdp_ws_method(&tab.ws_url, cdp_page_focus_payload())
+}
+
+fn cdp_ws_method(ws_url: &str, payload: &str) -> Result<(), String> {
+    if ws_url.is_empty() {
+        return Err("cdp target has no websocket".into());
+    }
+    let rest = ws_url
+        .strip_prefix("ws://")
+        .ok_or_else(|| "cdp websocket must be ws://".to_string())?;
+    let (host, _) = rest
+        .split_once('/')
+        .ok_or_else(|| "cdp websocket path missing".to_string())?;
+    let addr = host
+        .to_socket_addrs()
+        .map_err(|e| e.to_string())?
+        .next()
+        .ok_or_else(|| "cdp websocket host".to_string())?;
+    let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(800))
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .map_err(|e| e.to_string())?;
+    let (mut socket, _) = tungstenite::client(ws_url, stream).map_err(|e| e.to_string())?;
+    socket
+        .send(tungstenite::Message::Text(payload.to_string()))
+        .map_err(|e| e.to_string())?;
+    let _ = socket.read();
+    Ok(())
 }
 
 fn remember_from_jpeg(bytes: &[u8], outputs: &[DisplayOutput], grim_name: Option<&str>) {
@@ -449,7 +585,7 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
             ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
                 run_pointer_steps(&steps, cancel)?;
             }
-            ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) => {}
+            ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) | ComputerDrive::Tab(_, _) => {}
         }
         return Ok((x, y));
     }
@@ -486,7 +622,7 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
         ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
             run_pointer_steps(&steps, cancel)?;
         }
-        ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) => {}
+        ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) | ComputerDrive::Tab(_, _) => {}
     }
     Ok((cx, cy))
 }
@@ -549,7 +685,9 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
                         ComputerOp::Type { text } => format!("typed {} chars", text.chars().count()),
                         ComputerOp::Key { name } => format!("key {name}"),
                         ComputerOp::Scroll { dy } => format!("scrolled {dy}"),
-                        ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } => "ok".into(),
+                        ComputerOp::Act { .. }
+                        | ComputerOp::WaitFor { .. }
+                        | ComputerOp::Tab { .. } => "ok".into(),
                     };
                     hands_receipt(&line, started, true, &detail)
                 }
@@ -561,6 +699,10 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
             Err(e) => hands_receipt(&line, started, false, &e),
         },
         ComputerDrive::WaitFor(title) => match wait_for_title(title.as_deref(), cancel) {
+            Ok(detail) => hands_receipt(&line, started, true, &detail),
+            Err(e) => hands_receipt(&line, started, false, &e),
+        },
+        ComputerDrive::Tab(action, query) => match run_tab_op(action, &query, cancel) {
             Ok(detail) => hands_receipt(&line, started, true, &detail),
             Err(e) => hands_receipt(&line, started, false, &e),
         },
@@ -1318,5 +1460,19 @@ mod tests {
         );
         assert_eq!(act_window_search_bin(false), None);
         assert_eq!(act_window_search_bin(true), Some("xdotool"));
+    }
+
+    #[test]
+    fn tab_list_without_cdp_says_down() {
+        let out = run_computer_op(&ComputerOp::Tab {
+            action: TabAction::List,
+            query: String::new(),
+        });
+        assert!(out.contains("browser hand down") || out.contains("exit 0"), "{out}");
+        let (_, header) = prepare_windshield(&[], None, false);
+        assert!(
+            header.contains("browser: cdp"),
+            "windshield must report cdp up or down: {header}"
+        );
     }
 }
