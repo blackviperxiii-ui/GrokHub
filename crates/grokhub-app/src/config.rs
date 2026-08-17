@@ -194,13 +194,12 @@ pub fn save(cfg: &AppConfig) -> Result<(), String> {
     atomic_write(&config_dir().join("app.json"), s.as_bytes())
 }
 
-pub fn read_memory(name: &str) -> String {
-    let path = memory_dir().join(name);
+pub fn read_file_capped(path: &Path, cap: usize) -> String {
     let mut f = match fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return String::new(),
     };
-    let mut buf = vec![0u8; MEMORY_FILE_CAP];
+    let mut buf = vec![0u8; cap];
     let n = match f.read(&mut buf) {
         Ok(n) => n,
         Err(_) => return String::new(),
@@ -210,6 +209,10 @@ pub fn read_memory(name: &str) -> String {
         buf.pop();
     }
     String::from_utf8(buf).unwrap_or_default()
+}
+
+pub fn read_memory(name: &str) -> String {
+    read_file_capped(&memory_dir().join(name), MEMORY_FILE_CAP)
 }
 
 pub fn memory_updated_at(name: &str) -> u64 {
