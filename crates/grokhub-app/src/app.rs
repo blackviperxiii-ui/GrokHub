@@ -97,7 +97,8 @@ use grokhub_core::{
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
-    build_review_digest, dedupe_suggestions, parse_suggest_lines, partition_suggestions, review_due,
+    build_review_digest, dedupe_suggestions, merge_suggestion_store, parse_suggest_lines,
+    partition_suggestions, review_due,
     review_status_line, review_system_prompt, DigestLine, ReviewDigest, SuggestionStore, REVIEW_NIGHT_HOUR,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title_in, apply_manual_rename, delete_thread, display_tab_title, history_order,
@@ -3731,10 +3732,10 @@ impl Cabin {
                     self.suggestions.last_review_day = day;
                     self.suggestions.last_review_ms = ms;
                 } else {
-                    let mut store = partition_suggestions(items);
-                    store.last_review_day = day;
-                    store.last_review_ms = ms;
-                    self.suggestions = store;
+                    let mut incoming = partition_suggestions(items);
+                    incoming.last_review_day = day;
+                    incoming.last_review_ms = ms;
+                    self.suggestions = merge_suggestion_store(&self.suggestions, incoming);
                 }
                 let _ = crate::store::save_suggestions(&self.suggestions);
             }
@@ -10976,6 +10977,10 @@ mod tests {
         assert!(
             held.contains("last_review_day") && held.contains("save_suggestions"),
             "a held nightly review must not retry every heartbeat: {apply}"
+        );
+        assert!(
+            apply.contains("merge_suggestion_store"),
+            "a partial nightly review must not wipe the other suggestion grids: {apply}"
         );
         assert!(src.contains("self.tick_review()"));
         assert!(
