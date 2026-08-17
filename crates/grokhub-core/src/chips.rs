@@ -10,6 +10,7 @@ pub const CHIP_VISIBLE_MAX: usize = 5;
 pub const CHIP_HARD_MAX: usize = 8;
 pub const CHIP_LLM_DEBOUNCE_MS: u64 = 1200;
 pub const CHIP_LLM_MODE: &str = "fast";
+const CHIP_SCAN_CAP: usize = 4096;
 const MAX_HITS: usize = 80;
 const MAX_TRANSITIONS: usize = 12;
 
@@ -239,11 +240,22 @@ fn value_key(value: &str, kind: ChipKind) -> String {
     format!("{kind}:{}", v.chars().take(160).collect::<String>())
 }
 
+fn chip_scan(s: &str) -> &str {
+    if s.len() <= CHIP_SCAN_CAP {
+        return s;
+    }
+    let mut end = CHIP_SCAN_CAP;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 fn last_of(chat: &[(String, String)], role: &str) -> String {
     chat.iter()
         .rev()
         .find(|(r, c)| r == role && !c.trim().is_empty())
-        .map(|(_, c)| c.clone())
+        .map(|(_, c)| chip_scan(c).to_string())
         .unwrap_or_default()
 }
 
@@ -252,7 +264,7 @@ fn recent_user(chat: &[(String, String)], n: usize) -> Vec<String> {
         .rev()
         .filter(|(r, c)| r == "user" && !c.trim().is_empty())
         .take(n)
-        .map(|(_, c)| c.trim().to_string())
+        .map(|(_, c)| chip_scan(c.trim()).to_string())
         .collect()
 }
 
@@ -1752,6 +1764,7 @@ pub fn chip_suggest_prompt(
         .rev()
         .filter_map(|(role, content)| {
             let who = if role == "user" { "User" } else { "Asst" };
+            let content = chip_scan(content);
             let body: String = content.replace("```", "[code]").split_whitespace().collect::<Vec<_>>().join(" ");
             let body: String = body.chars().take(220).collect();
             if body.is_empty() {
@@ -2248,6 +2261,32 @@ mod tests {
             CHIP_VISIBLE_MAX,
             "after dismissing the first row {:?}",
             labels(&after)
+        );
+    }
+
+    #[test]
+    fn chip_scan_caps_before_lowercase() {
+        let src = include_str!("chips.rs");
+        let last = src
+            .split("fn last_of(")
+            .nth(1)
+            .and_then(|s| s.split("fn recent_user(").next())
+            .expect("last_of");
+        assert!(
+            last.contains("chip_scan") || last.contains("TEXT_FILE_CAP") || last.contains("CHIP_SCAN"),
+            "last_of must not clone an 8MB assistant for chips: {last}"
+        );
+        let suggest = src
+            .split("pub fn chip_suggest_prompt(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn ").next())
+            .expect("chip_suggest_prompt");
+        let replace = suggest.find("replace(\"```\"").expect("fence replace");
+        assert!(
+            suggest[..replace].contains("chip_scan")
+                || suggest[..replace].contains("TEXT_FILE_CAP")
+                || suggest[..replace].contains("CHIP_SCAN"),
+            "chip prompt must not split_whitespace an 8MB body: {suggest}"
         );
     }
 
