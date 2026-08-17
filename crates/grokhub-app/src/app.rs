@@ -2958,6 +2958,9 @@ impl Cabin {
                 }
             }
             Slash::Recall(q) => {
+                if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
+                    let _ = config::write_memory(&self.mem_name, &self.mem_body);
+                }
                 let corpus = [
                     ("SOUL.md", config::read_memory("SOUL.md")),
                     ("USER.md", config::read_memory("USER.md")),
@@ -9852,6 +9855,18 @@ mod tests {
         assert!(
             flushed < wrote,
             "/export must flush the live pane before writing the thread file: {export}"
+        );
+        let recall = src
+            .split("Slash::Recall(q)")
+            .nth(1)
+            .and_then(|s| s.split("fn kick_model_retry").next())
+            .expect("Recall");
+        let mem = recall.find("read_memory(\"SOUL.md\")").expect("recall soul");
+        assert!(
+            recall[..mem].contains("write_memory")
+                && recall[..mem].contains("mem_body")
+                && recall[..mem].contains("scratch()"),
+            "/recall must flush the Memory editor before searching disk: {recall}"
         );
         let sync = src
             .split("fn sync_hub(&mut self)")
