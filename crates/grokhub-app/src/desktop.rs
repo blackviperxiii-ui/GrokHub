@@ -69,6 +69,8 @@ const DESK_LIST_TIMEOUT: Duration = Duration::from_millis(1500);
 const DESK_CAPTURE_TIMEOUT: Duration = Duration::from_secs(8);
 /// Webcam ffmpeg on the UI thread.
 const DESK_WEBCAM_TIMEOUT: Duration = Duration::from_secs(4);
+/// Local whisper on a worker thread — still must not hang halt forever.
+const DESK_TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn kill_limited(child: &mut Child) {
     #[cfg(unix)]
@@ -1024,22 +1026,34 @@ fn transcribe(wav: &Path) -> Result<String, String> {
     let dest = wav.to_str().ok_or("wav")?;
     let bin = first_bin(TRANSCRIBERS).ok_or("install whisper (openai-whisper or whisper.cpp)")?;
     let out_dir = std::env::temp_dir();
-    let status = match bin.as_str() {
-        "whisper-cli" | "whisper.cpp" => Command::new(&bin)
-            .args([dest, "-otxt", "-of", out_dir.join("grokhub-voice").to_str().unwrap_or("/tmp/grokhub-voice")])
-            .status(),
-        _ => Command::new(&bin)
-            .args([
+    let mut cmd = Command::new(&bin);
+    match bin.as_str() {
+        "whisper-cli" | "whisper.cpp" => {
+            cmd.args([
+                dest,
+                "-otxt",
+                "-of",
+                out_dir
+                    .join("grokhub-voice")
+                    .to_str()
+                    .unwrap_or("/tmp/grokhub-voice"),
+            ]);
+        }
+        _ => {
+            cmd.args([
                 dest,
                 "--output_format",
                 "txt",
                 "--output_dir",
                 out_dir.to_str().unwrap_or("/tmp"),
-            ])
-            .status(),
+            ]);
+        }
     }
-    .map_err(|e| e.to_string())?;
-    if !status.success() {
+    let out = match run_limited(cmd, DESK_TRANSCRIBE_TIMEOUT) {
+        Some(o) => o,
+        None => return Err(format!("{bin} timed out")),
+    };
+    if !out.status.success() {
         return Err(format!("{bin} failed"));
     }
     let txt = wav.with_extension("txt");
@@ -1118,20 +1132,22 @@ pub fn record_pcm_chunks() -> Vec<Vec<u8>> {
     let dest = std::env::temp_dir().join("grokhub-voice-live.wav");
     let path = dest.to_string_lossy().to_string();
     let ok = match first_bin(RECORDERS).as_deref() {
-        Some("arecord") => Command::new("arecord")
-            .args(["-q", "-d", "1", "-f", "S16_LE", "-r", "24000", "-c", "1", "-t", "wav", &path])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false),
-        Some("ffmpeg") => Command::new("ffmpeg")
-            .args([
+        Some("arecord") => {
+            let mut cmd = Command::new("arecord");
+            cmd.args([
+                "-q", "-d", "1", "-f", "S16_LE", "-r", "24000", "-c", "1", "-t", "wav", &path,
+            ]);
+            run_limited(cmd, DESK_CAPTURE_TIMEOUT).is_some_and(|o| o.status.success())
+        }
+        Some("ffmpeg") => {
+            let mut cmd = Command::new("ffmpeg");
+            cmd.args([
                 "-y", "-hide_banner", "-loglevel", "error",
                 "-f", "pulse", "-i", "default", "-t", "1", "-ac", "1", "-ar", "24000",
                 "-f", "s16le", &path,
-            ])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false),
+            ]);
+            run_limited(cmd, DESK_CAPTURE_TIMEOUT).is_some_and(|o| o.status.success())
+        }
         _ => false,
     };
     if !ok {
@@ -1525,6 +1541,24 @@ mod tests {
         assert!(
             ydo.contains("run_limited(") && !ydo.contains(".status()"),
             "systemctl start ydotoold must not freeze hands: {ydo}"
+        );
+        let tr = src
+            .split("fn transcribe(")
+            .nth(1)
+            .and_then(|s| s.split("\nfn run_ok(").next())
+            .expect("transcribe");
+        assert!(
+            tr.contains("run_limited(") && !tr.contains(".status()"),
+            "whisper must not hang forever: {tr}"
+        );
+        let pcm = src
+            .split("pub fn record_pcm_chunks(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn pick_file(").next())
+            .expect("record_pcm_chunks");
+        assert!(
+            pcm.contains("run_limited(") && !pcm.contains(".status()"),
+            "live mic arecord must time out so Voice halt can finish: {pcm}"
         );
     }
 }
