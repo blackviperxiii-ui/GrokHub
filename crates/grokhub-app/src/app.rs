@@ -3726,6 +3726,9 @@ impl Cabin {
             }
             Err(e) => {
                 self.status = format!("Nightly review held — {e}");
+                self.suggestions.last_review_day = Some(Self::local_day());
+                self.suggestions.last_review_ms = now_ms();
+                let _ = crate::store::save_suggestions(&self.suggestions);
             }
         }
     }
@@ -10890,6 +10893,11 @@ mod tests {
         assert!(
             !apply.contains("send_chat") && !apply.contains("Nav::Chat"),
             "applying suggestions stays off the chat: {apply}"
+        );
+        let held = apply.split("Err(e)").nth(1).expect("review held");
+        assert!(
+            held.contains("last_review_day") && held.contains("save_suggestions"),
+            "a held nightly review must not retry every heartbeat: {apply}"
         );
         assert!(src.contains("self.tick_review()"));
         assert!(
