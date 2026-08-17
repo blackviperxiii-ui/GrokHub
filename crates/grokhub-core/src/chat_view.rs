@@ -79,25 +79,48 @@ pub fn strip_thinking(content: &str) -> String {
 }
 
 pub fn visible_chat(messages: &[(String, String)]) -> Vec<ChatView> {
+    visible_chat_refs(messages.iter().map(|(role, content)| (role.as_str(), content.as_str())))
+}
+
+pub fn visible_chat_refs<'a>(messages: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<ChatView> {
     let mut out = Vec::new();
-    let mut stretch: Vec<&(String, String)> = Vec::new();
+    let mut stretch: Vec<(&str, &str)> = Vec::new();
     let mut ask = "";
-    for msg in messages {
-        if msg.0 == "user" && !is_workload_user(&msg.1) {
+    for (role, content) in messages {
+        if role == "user" && !is_workload_user(content) {
             emit_stretch(&mut out, &stretch, ask);
             stretch.clear();
-            ask = &msg.1;
+            ask = content;
             out.push(ChatView {
                 kind: ChatKind::User,
                 title: String::new(),
-                body: msg.1.clone(),
+                body: content.to_string(),
             });
         } else {
-            stretch.push(msg);
+            stretch.push((role, content));
         }
     }
     emit_stretch(&mut out, &stretch, ask);
     out
+}
+
+/// Rebuild only the trailing stretch after the last real user turn.
+/// Stream deltas must not clone earlier messages into a new view list.
+pub fn refresh_last_stretch(views: &mut Vec<ChatView>, messages: &[(&str, &str)]) {
+    let Some(user_i) = messages
+        .iter()
+        .rposition(|(role, content)| *role == "user" && !is_workload_user(content))
+    else {
+        *views = visible_chat_refs(messages.iter().copied());
+        return;
+    };
+    let Some(view_i) = views.iter().rposition(|v| v.kind == ChatKind::User) else {
+        *views = visible_chat_refs(messages.iter().copied());
+        return;
+    };
+    let ask = messages[user_i].1;
+    views.truncate(view_i + 1);
+    emit_stretch(views, &messages[user_i + 1..], ask);
 }
 
 fn hop_is_work(rest: &str) -> bool {
@@ -122,12 +145,12 @@ fn push_thought(out: &mut Vec<ChatView>, body: String) {
     });
 }
 
-fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[&(String, String)], ask: &str) {
+fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[(&str, &str)], ask: &str) {
     let teach = crate::recipe::user_asks_gui_help(ask) && !crate::recipe::user_asks_guide_only(ask);
     let mut last_final: Option<String> = None;
     let mut last_was_work = false;
-    for (role, content) in stretch {
-        if *role == "user" && teach {
+    for &(role, content) in stretch {
+        if role == "user" && teach {
             if let Some(label) = crate::recipe::hands_step_label(content) {
                 out.push(ChatView {
                     kind: ChatKind::Tool,
@@ -137,7 +160,7 @@ fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[&(String, String)], ask: &st
             }
             continue;
         }
-        if *role != "assistant" {
+        if role != "assistant" {
             continue;
         }
         let (thought, rest) = split_thought(content);
@@ -418,6 +441,36 @@ mod tests {
         assert!(!v.iter().any(|x| x.kind == ChatKind::Assistant));
         assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
         assert!(!v.iter().any(|x| x.body.contains("ls /tmp")));
+    }
+
+    #[test]
+    fn refresh_last_stretch_keeps_earlier_turns() {
+        let user = "first ask";
+        let mid = "first answer";
+        let ask = "second ask";
+        let short = "Hi";
+        let long = "Hi there, this grew while streaming.";
+        let mut views = visible_chat(&[
+            ("user".into(), user.into()),
+            ("assistant".into(), mid.into()),
+            ("user".into(), ask.into()),
+            ("assistant".into(), short.into()),
+        ]);
+        let prefix = views.clone();
+        let msgs = [
+            ("user", user),
+            ("assistant", mid),
+            ("user", ask),
+            ("assistant", long),
+        ];
+        refresh_last_stretch(&mut views, &msgs);
+        assert_eq!(views[0].body, user);
+        assert_eq!(views[1].body, mid);
+        assert_eq!(views[2].body, ask);
+        assert_eq!(views.last().map(|v| v.body.as_str()), Some(long));
+        assert_eq!(prefix[0], views[0]);
+        assert_eq!(prefix[1], views[1]);
+        assert_eq!(prefix[2], views[2]);
     }
 
     #[test]
