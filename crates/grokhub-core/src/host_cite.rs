@@ -32,21 +32,36 @@ pub fn summarize_write(cmd: &str, stdout: &str) -> Option<String> {
 fn is_write_cmd(c: &str) -> bool {
     let l = c.to_ascii_lowercase();
     l.contains("tee")
-        || l.contains(">>")
         || l.contains("sed -i")
         || l.contains("truncate")
         || l.split_whitespace().any(|w| matches!(w, "mv" | "cp" | "install" | "dd"))
-        || l.contains("cat >")
-        || l.contains("cat>")
-        || l.contains(">")
+        || redirect_file_dest(c).is_some()
+}
+
+fn redirect_file_dest(c: &str) -> Option<String> {
+    let bytes = c.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'>' {
+            let mut j = i + 1;
+            if j < bytes.len() && bytes[j] == b'>' {
+                j += 1;
+            }
+            let rest = c[j..].trim();
+            let rest = rest.strip_prefix('&').unwrap_or(rest);
+            let tok = rest.split_whitespace().next().unwrap_or("");
+            if !tok.is_empty() && !tok.chars().all(|ch| ch.is_ascii_digit()) {
+                return Some(tok.to_string());
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 fn write_dest(c: &str) -> Option<String> {
-    if let Some(rest) = c.split('>').nth(1) {
-        let p = rest.trim().split_whitespace().next().unwrap_or("");
-        if !p.is_empty() && p != "&1" && p != "&2" {
-            return Some(p.to_string());
-        }
+    if let Some(p) = redirect_file_dest(c) {
+        return Some(p);
     }
     let bits: Vec<&str> = c.split_whitespace().collect();
     for (i, w) in bits.iter().enumerate() {
@@ -132,6 +147,14 @@ mod tests {
             Some("wrote to /tmp/out")
         );
         assert!(summarize_write("ls /tmp", "").is_none());
+        assert!(
+            summarize_write("ls 2>&1", "").is_none(),
+            "stderr-to-stdout is not a file write"
+        );
+        assert!(
+            summarize_write("echo hi 2>&1", "").is_none(),
+            "fd redirects must not cite a write"
+        );
         assert_eq!(
             summarize_write("cp src.txt dest.txt", "").as_deref(),
             Some("wrote to dest.txt"),
