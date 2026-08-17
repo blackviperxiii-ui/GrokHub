@@ -397,15 +397,22 @@ fn listen_turn(api_key: &str) -> String {
     };
     let has_local = first_bin(TRANSCRIBERS).is_some();
     match transcribe_route(!api_key.trim().is_empty(), has_local) {
-        TranscribeRoute::Xai => match std::fs::read(&wav) {
-            Ok(bytes) => match grok_stt(api_key, &bytes) {
-                Ok(t) => t,
-                Err(e) => transcribe_local(&wav).unwrap_or_else(|local| {
-                    format!("VOICE_RECEIPT: {e}; {local}")
-                }),
-            },
-            Err(e) => format!("VOICE_RECEIPT: {e}"),
-        },
+        TranscribeRoute::Xai => {
+            let len = std::fs::metadata(&wav).map(|m| m.len()).unwrap_or(u64::MAX);
+            if len > IMAGE_FILE_CAP {
+                "VOICE_RECEIPT: recording too large".into()
+            } else {
+                match std::fs::read(&wav) {
+                    Ok(bytes) => match grok_stt(api_key, &bytes) {
+                        Ok(t) => t,
+                        Err(e) => transcribe_local(&wav).unwrap_or_else(|local| {
+                            format!("VOICE_RECEIPT: {e}; {local}")
+                        }),
+                    },
+                    Err(e) => format!("VOICE_RECEIPT: {e}"),
+                }
+            }
+        }
         TranscribeRoute::Local => match transcribe_local(&wav) {
             Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
             Ok(_) => "VOICE_RECEIPT: empty transcript".into(),
@@ -10303,6 +10310,17 @@ mod tests {
         assert!(
             agent_job.contains("thread_id"),
             "Queue jobs must remember the origin thread: {agent_job}"
+        );
+        let listen = src
+            .split("fn listen_turn(")
+            .nth(1)
+            .and_then(|s| s.split("fn fit_rail_label").next())
+            .expect("listen_turn");
+        let wav_read = listen.find("std::fs::read(&wav)").expect("wav read");
+        assert!(
+            listen.contains("IMAGE_FILE_CAP")
+                && listen.find("IMAGE_FILE_CAP").expect("wav cap") < wav_read,
+            "voice STT must not slurp a huge wav: {listen}"
         );
         let queue = src
             .split("fn ui_agents")
