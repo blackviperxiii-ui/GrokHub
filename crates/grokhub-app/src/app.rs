@@ -121,7 +121,7 @@ use grokhub_core::{
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, MintRealtimeFn, Policy, Recipe, ReplayOp, RewindRecord,
     HostPlanStep, HostRisk, forbidden_reason, mint_host_halt,
     AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
-    VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX, IMAGE_FILE_CAP,
+    VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX, FRAME_CAP, IMAGE_FILE_CAP,
     user_pref_facts,
     DEFAULT_MODEL, FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND,
     IDLE_REFLECT_MS, IMAGINE_ASPECTS,
@@ -4356,6 +4356,9 @@ impl Cabin {
     }
 
     fn push_presence(&mut self, url: String) {
+        if url.len() > FRAME_CAP {
+            return;
+        }
         let now = now_ms();
         self.presence_ring.push((now, url));
         self.presence_ring
@@ -9594,8 +9597,8 @@ impl Cabin {
                 }
             });
             ui.add_space(12.0);
-            if let Some(url) = self.last_frame_url.clone() {
-                if let Some((tex, size)) = eyes_frame_tex(ui.ctx(), &url) {
+            if let Some(url) = self.last_frame_url.as_deref() {
+                if let Some((tex, size)) = eyes_frame_tex(ui.ctx(), url) {
                     let max_w = ui.available_width().min(480.0);
                     crate::cards::framed_preview(ui, &tex, size, max_w);
                 }
@@ -11787,6 +11790,34 @@ mod tests {
         assert!(slice.contains("hands_chip_text"));
         assert!(slice.contains("framed_preview") || slice.contains("object_chip"));
         assert!(slice.contains("Look at the screen"));
+    }
+
+    #[test]
+    fn presence_ring_drops_a_huge_frame() {
+        let src = include_str!("app.rs");
+        let push = src
+            .split("fn push_presence(")
+            .nth(1)
+            .and_then(|s| s.split("fn live_room(").next())
+            .expect("push_presence");
+        assert!(
+            push.contains("FRAME_CAP"),
+            "live presence must not keep an 8MB JPEG data URL for ten minutes: {push}"
+        );
+    }
+
+    #[test]
+    fn eyes_paint_does_not_clone_last_frame_url() {
+        let src = include_str!("app.rs");
+        let eyes = src
+            .split("fn ui_eyes(")
+            .nth(1)
+            .and_then(|s| s.split("fn project_row_active(").next())
+            .expect("ui_eyes");
+        assert!(
+            !eyes.contains("last_frame_url.clone()"),
+            "Eyes paint must not clone a huge last-frame data URL every frame: {eyes}"
+        );
     }
 
     #[test]
