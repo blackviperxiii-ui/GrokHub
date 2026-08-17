@@ -3826,14 +3826,16 @@ impl Cabin {
                         if dest == "MEMORY.md" {
                             memory = merge_imported_memory(&memory, &content, &name);
                             imported += 1;
-                        } else if config::write_memory(&dest, &content).is_ok() {
+                        } else if config::read_memory(&dest) != content
+                            && config::write_memory(&dest, &content).is_ok()
+                        {
                             imported += 1;
                         }
                     }
                 }
             }
         }
-        if imported > 0 {
+        if imported > 0 && config::read_memory("MEMORY.md") != memory {
             let _ = config::write_memory("MEMORY.md", &memory);
         }
         let skills_dir = std::path::PathBuf::from(&root).join("skills");
@@ -9783,6 +9785,24 @@ mod tests {
         assert!(
             import[..merge_read].contains("write_memory") && import[..merge_read].contains("mem_body"),
             "/import must flush the Memory editor before merging MEMORY.md: {import}"
+        );
+        let dest_arm = import
+            .split("import_memory_file")
+            .nth(1)
+            .expect("import files");
+        let dest_write = dest_arm.find("write_memory(&dest").expect("import dest write");
+        assert!(
+            dest_arm[..dest_write].contains("read_memory(&dest)"),
+            "/import must not rotate .prev when SOUL/USER already match disk: {dest_arm}"
+        );
+        let after_loop = import
+            .split("if imported > 0")
+            .nth(1)
+            .expect("import persist memory");
+        assert!(
+            after_loop.contains("read_memory(\"MEMORY.md\")")
+                && after_loop.contains("write_memory(\"MEMORY.md\""),
+            "/import must not rotate MEMORY.md.prev when the merge is unchanged: {after_loop}"
         );
         let sign_out = src
             .split("fn sign_out_oauth")
