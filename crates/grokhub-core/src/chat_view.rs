@@ -72,6 +72,7 @@ fn hop_is_work(rest: &str) -> bool {
             || t.starts_with("COMPUTER_CMD")
             || t.starts_with("CONNECTOR_CMD")
             || t.starts_with("IMAGINE:")
+            || t.starts_with("IMAGINE_PROMPT:")
     })
 }
 
@@ -141,6 +142,7 @@ fn is_protocol_line(line: &str) -> bool {
         || t.starts_with("GOAL_COMPLETE")
         || t.starts_with("GOAL_BLOCKED")
         || t.starts_with("CONSULT:")
+        || t.starts_with("IMAGINE_PROMPT:")
 }
 
 /// User-visible assistant prose. Thinking and HOST_CMD lines do not count.
@@ -518,6 +520,15 @@ mod tests {
 
     #[test]
     fn imagine_prompt_stays_off_the_pane_until_final() {
+        let verb = visible_chat(&[(
+            "assistant".into(),
+            "IMAGINE_PROMPT: a cabin at night\n".into(),
+        )]);
+        assert!(
+            !verb.iter().any(|x| x.body.contains("IMAGINE_PROMPT")),
+            "the Imagine kick verb must not be the answer bubble"
+        );
+        assert!(!verb.iter().any(|x| x.kind == ChatKind::Assistant));
         let v = visible_chat(&[(
             "assistant".into(),
             "IMAGINE: a cabin at night\nHOST_CMD: true\n".into(),
