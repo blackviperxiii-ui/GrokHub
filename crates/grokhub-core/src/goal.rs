@@ -155,6 +155,15 @@ pub fn goal_step_after_outcome(current: u32, outcome: &str, belongs_to_job: bool
     }
 }
 
+/// Visible tab step after a continue hop. Background jobs must not bump it.
+pub fn visible_goal_step_on_continue(visible: u32, job_step: u32, here: bool) -> u32 {
+    if here {
+        job_step.saturating_add(1)
+    } else {
+        visible
+    }
+}
+
 pub fn thread_goal_prompt(messages: &[(String, String)]) -> String {
     let recent = messages
         .iter()
@@ -504,6 +513,12 @@ mod tests {
         );
         assert_eq!(goal_step_after_outcome(3, "complete", false), 3);
         assert_eq!(goal_step_after_outcome(3, "complete", true), 0);
+        assert_eq!(
+            visible_goal_step_on_continue(0, 1, false),
+            0,
+            "a background continue must not bump the visible tab step"
+        );
+        assert_eq!(visible_goal_step_on_continue(0, 1, true), 2);
         assert!(hub_dispatch_ok("All set. GOAL_COMPLETE"));
         assert!(
             !hub_dispatch_ok("GOAL_BLOCKED: need the serial cable"),

@@ -75,6 +75,7 @@ use grokhub_core::{
     user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
     goal_continue_pin, goal_pin_for_job, goal_step_after_outcome, hub_dispatch_ok, should_auto_continue_goal,
+    visible_goal_step_on_continue,
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
     reply_needs_followup,
     recipe_from_cmds, replay_automation_target,
@@ -4370,14 +4371,15 @@ impl Cabin {
                     GOAL_MAX_STEPS,
                 ) {
                     if let Some(next) = next_goal_prompt(&pin, &text, job_step, GOAL_MAX_STEPS) {
-                        self.goal_step = job_step.saturating_add(1);
+                        let next_step = job_step.saturating_add(1);
                         if let Some(id) = job.as_deref() {
                             if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
-                                t.goal.step = self.goal_step;
+                                t.goal.step = next_step;
                             }
                         }
+                        self.goal_step = visible_goal_step_on_continue(self.goal_step, job_step, here);
                         self.agents.push(AgentJob {
-                            title: format!("{} · step {}", pin, self.goal_step + 1),
+                            title: format!("{} · step {}", pin, next_step + 1),
                             status: "queued".into(),
                             prompt: next.clone(),
                         });
@@ -9065,6 +9067,10 @@ mod tests {
         assert!(
             src.contains("hub_dispatch_ok(&text)"),
             "GOAL_BLOCKED must not complete a phone task as done"
+        );
+        assert!(
+            src.contains("visible_goal_step_on_continue"),
+            "a background goal continue must not bump the visible tab step"
         );
         assert!(
             src.contains("oauth_access_live"),
