@@ -443,23 +443,46 @@ fn ydotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
     }
 }
 
-pub fn relative_move_steps(backend: HandsBackend, dx: i32, dy: i32) -> Vec<Vec<String>> {
+const RELATIVE_CHUNK: i32 = 800;
+
+fn relative_chunks(dx: i32, dy: i32) -> Vec<(i32, i32)> {
     if dx == 0 && dy == 0 {
         return vec![];
     }
-    match backend {
-        HandsBackend::Ydotool => vec![vec![
-            "mousemove".into(),
-            dx.to_string(),
-            dy.to_string(),
-        ]],
-        HandsBackend::Xdotool => vec![vec![
-            "mousemove_relative".into(),
-            "--".into(),
-            dx.to_string(),
-            dy.to_string(),
-        ]],
+    let dist = dx.abs().max(dy.abs());
+    let n = (dist + RELATIVE_CHUNK - 1) / RELATIVE_CHUNK;
+    let n = n.max(1);
+    let mut out = Vec::with_capacity(n as usize);
+    let mut px = 0;
+    let mut py = 0;
+    for i in 1..=n {
+        let x = dx.saturating_mul(i) / n;
+        let y = dy.saturating_mul(i) / n;
+        out.push((x - px, y - py));
+        px = x;
+        py = y;
     }
+    out
+}
+
+pub fn relative_move_steps(backend: HandsBackend, dx: i32, dy: i32) -> Vec<Vec<String>> {
+    relative_chunks(dx, dy)
+        .into_iter()
+        .map(|(sx, sy)| match backend {
+            HandsBackend::Ydotool => vec![
+                "mousemove".into(),
+                "--".into(),
+                sx.to_string(),
+                sy.to_string(),
+            ],
+            HandsBackend::Xdotool => vec![
+                "mousemove_relative".into(),
+                "--".into(),
+                sx.to_string(),
+                sy.to_string(),
+            ],
+        })
+        .collect()
 }
 
 fn ydotool_key_tokens(name: &str) -> Option<Vec<String>> {
@@ -1468,13 +1491,25 @@ mod tests {
             }),
             "Moved to monitor DP-2"
         );
+        let ydo_neg = relative_move_steps(HandsBackend::Ydotool, -12, 4);
         assert_eq!(
-            relative_move_steps(HandsBackend::Ydotool, 5600, -10),
+            ydo_neg,
             vec![vec![
                 "mousemove".to_string(),
-                "5600".to_string(),
-                "-10".to_string()
-            ]]
+                "--".to_string(),
+                "-12".to_string(),
+                "4".to_string()
+            ]],
+            "ydotool treats a leading - as a flag unless -- is first"
+        );
+        let ydo_big = relative_move_steps(HandsBackend::Ydotool, 5600, -10);
+        assert!(
+            ydo_big.len() > 1,
+            "a 5600px hop must be chunked: {ydo_big:?}"
+        );
+        assert!(
+            ydo_big.iter().all(|s| s.get(1).map(String::as_str) == Some("--")),
+            "every ydotool relative chunk needs --: {ydo_big:?}"
         );
         assert_eq!(
             relative_move_steps(HandsBackend::Xdotool, -12, 4),
