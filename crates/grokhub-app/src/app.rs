@@ -738,6 +738,7 @@ pub struct Cabin {
     pending_kick: Option<bool>,
     kick_frame: Option<String>,
     kick_skip: bool,
+    recipe_cap_rx: Option<mpsc::Receiver<Result<String, String>>>,
     #[allow(dead_code)]
     hotkeys: Option<GlobalHotKeyManager>,
     hotkey_hey: u32,
@@ -1035,6 +1036,7 @@ impl Cabin {
             pending_kick: None,
             kick_frame: None,
             kick_skip: false,
+            recipe_cap_rx: None,
             hotkeys: None,
             hotkey_hey: 0,
             hotkey_halt: 0,
@@ -1302,6 +1304,7 @@ impl Cabin {
         self.kick_cap_rx = None;
         self.kick_frame = None;
         self.kick_skip = false;
+        self.recipe_cap_rx = None;
         self.plan_pending = None;
         self.agents.clear();
         self.active_skill_follow = None;
@@ -5730,14 +5733,14 @@ impl Cabin {
                     let lock = lock_titles();
                     if !lock_blocks_hands(&titles)
                         && !lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+                        && self.recipe_cap_rx.is_none()
                     {
-                        if let Ok(url) = capture_data_url() {
-                            if let Ok(mut st) = self.hub.lock() {
-                                st.store_frame(&url);
-                            }
-                            self.last_frame_url = Some(url);
-                            t.push_str("frame: captured\n");
-                        }
+                        let (tx, rx) = mpsc::channel();
+                        self.recipe_cap_rx = Some(rx);
+                        std::thread::spawn(move || {
+                            let _ = tx.send(capture_data_url());
+                        });
+                        t.push_str("frame: capturing…\n");
                     }
                 }
                 ReplayOp::Op(op) => cmds.push(computer_cmd_line(&op)),
@@ -5872,6 +5875,33 @@ impl Cabin {
                 None
             }
             Err(mpsc::TryRecvError::Disconnected) => None,
+        }
+    }
+
+    fn poll_recipe_cap(&mut self) {
+        let Some(rx) = self.recipe_cap_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(url)) => {
+                if let Ok(mut st) = self.hub.lock() {
+                    st.store_frame(&url);
+                }
+                self.last_frame_url = Some(url);
+                self.eyes_text = self.eyes_text.replace(
+                    "frame: capturing…\n",
+                    "frame: captured\n",
+                );
+            }
+            Ok(Err(e)) => {
+                self.eyes_text = self
+                    .eyes_text
+                    .replace("frame: capturing…\n", &format!("frame: {e}\n"));
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.recipe_cap_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
         }
     }
 
@@ -6199,6 +6229,7 @@ impl eframe::App for Cabin {
         self.poll_wall();
         self.poll_persist();
         self.poll_eyes_cap();
+        self.poll_recipe_cap();
         self.poll_pending_kick();
         self.live_room();
         self.tick_heartbeat();
@@ -6284,7 +6315,8 @@ impl eframe::App for Cabin {
                 || self.oauth_photo_busy
                 || self.review_busy
                 || self.pending_kick.is_some()
-                || self.kick_cap_rx.is_some(),
+                || self.kick_cap_rx.is_some()
+                || self.recipe_cap_rx.is_some(),
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -9976,6 +10008,32 @@ mod tests {
         assert!(
             kick.contains("pending_kick") && kick.contains("kick_cap_rx"),
             "kick_model must wait for the off-thread frame instead of blocking: {kick}"
+        );
+    }
+
+    #[test]
+    fn recipe_reshoot_leaves_the_ui_thread() {
+        let src = include_str!("app.rs");
+        let replay = src
+            .split("fn replay_recipe(")
+            .nth(1)
+            .and_then(|s| s.split("fn speak_reply").next())
+            .expect("replay_recipe");
+        let reshoot = replay
+            .split("ReplayOp::Reshoot")
+            .nth(1)
+            .expect("reshoot");
+        let spawn = reshoot
+            .find("thread::spawn")
+            .expect("recipe reshoot grim must leave the UI thread");
+        let shot = reshoot.find("capture_data_url").expect("screen capture");
+        assert!(
+            spawn < shot,
+            "recipe reshoot must not block the cabin: {reshoot}"
+        );
+        assert!(
+            reshoot.contains("lock_titles") && reshoot.contains("lock_blocks_hands"),
+            "recipe reshoot lock gates stay on the UI thread: {reshoot}"
         );
     }
 
