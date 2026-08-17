@@ -95,7 +95,7 @@ pub fn trajectory_path() -> std::path::PathBuf {
 }
 
 pub fn read_trajectory() -> String {
-    fs::read_to_string(trajectory_path()).unwrap_or_default()
+    config::read_file_capped(&trajectory_path(), TRAJECTORY_MAX_BYTES)
 }
 
 pub fn append_trajectory(line: &str) -> Result<(), String> {
