@@ -385,12 +385,12 @@ pub fn slash_help() -> String {
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Hands: install.sh builds sidecars and installs python-atspi; Eyes Install hands starts ydotoold; /stop kills the worker.",
         "A truncated, promised-work, or handed-back apt/not-found reply can quiet-continue up to four times. Thinking does not count.",
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
-        "Cabin eyes stay dormant until you ask, or hands need a frame. Thought does not announce an attach.",
+        "Cabin eyes stay dormant until you ask, hands need a frame, or GUI help (close that tab / turn this on). just tell me looks and does not click. Thought does not announce an attach.",
         "Pulse every 15s: every organ runs. Hidden idle waits for the pulse.",
-        "After 21:00 a quiet Balanced review fills Suggested tiles from what it learned.",
+        "After 21:00 a quiet Balanced review fills Suggested tiles from what it learned. Night can patch an existing skill from yesterday's host/hands trajectory.",
         "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
         "Chat rail opens the last-accessed thread. MidThought can greet Continue {title}.",
-        "Host, hands, and connector work stay off the chat. Chat shows each thought as its own bubble and the final reply. User bubbles sit on the right. Bubbles wrap with the chat pane. Copy and Reply sit on visible messages. Hands map JPEG clicks through xrandr; act picks the smallest AT-SPI match. A full-desktop frame stays at 0,0 — it does not inherit a single-monitor origin.",
+        "Host, hands, and connector work stay off the chat. Chat shows each thought as its own bubble and the final reply. User bubbles sit on the right. Bubbles wrap with the chat pane. Copy and Reply sit on visible messages. Hands map JPEG clicks through xrandr; act picks the smallest AT-SPI match. A full-desktop frame stays at 0,0 — it does not inherit a single-monitor origin. tab list/close/focus talks to localhost CDP when it is up. GUI-help turns show a Hands chip and a how-to. Hung desktop tools time out so the cabin does not freeze.",
         "Five chips sit centered over the composer.",
     ]
     .join("\n")
@@ -504,6 +504,13 @@ mod tests {
         assert!(slash_help().contains("handed-back apt/not-found"));
         assert!(slash_help().contains("Thinking does not count"));
         assert!(slash_help().contains("pinned taskbar click"));
+        assert!(slash_help().contains("GUI help"));
+        assert!(slash_help().contains("just tell me looks and does not click"));
+        assert!(slash_help().contains("tab list/close/focus"));
+        assert!(slash_help().contains("localhost CDP"));
+        assert!(slash_help().contains("Hands chip and a how-to"));
+        assert!(slash_help().contains("Hung desktop tools time out"));
+        assert!(slash_help().contains("patch an existing skill"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());
