@@ -1,6 +1,7 @@
 //! Goal pin survives compact. Incomplete turns stay open.
 //! Fast mode names the chat tab from the current topics.
 
+use crate::attach::bound_scan;
 use crate::chat_view::{assistant_prose, is_workload_user};
 use serde::{Deserialize, Serialize};
 
@@ -261,6 +262,8 @@ pub fn hub_dispatch_ok(text: &str) -> bool {
 }
 
 pub fn parse_goal_outcome(text: &str) -> &'static str {
+    let text = bound_scan(text);
+    let text = text.as_ref();
     if text.to_ascii_uppercase().contains("GOAL_COMPLETE") {
         return "complete";
     }
@@ -431,6 +434,8 @@ pub fn reply_needs_followup(user: &str, assistant: &str, truncated: bool) -> boo
     if truncated {
         return true;
     }
+    let assistant = bound_scan(assistant);
+    let assistant = assistant.as_ref();
     if assistant_prose(assistant).is_empty() {
         return false;
     }
@@ -716,5 +721,44 @@ If this fails, tell me your distro.";
         assert!(prompt.contains("GOAL:"));
         assert!(prompt.contains("draw porn"));
         assert!(prompt.to_ascii_lowercase().contains("topic"));
+    }
+
+    #[test]
+    fn parse_goal_outcome_does_not_uppercase_an_8mb_complete() {
+        let src = include_str!("goal.rs");
+        let outcome = src
+            .split("pub fn parse_goal_outcome(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn compact_keep_pin(").next())
+            .expect("parse_goal_outcome");
+        let upper = outcome.find("to_ascii_uppercase").expect("uppercase scan");
+        assert!(
+            outcome[..upper].contains("TEXT_FILE_CAP")
+                || outcome[..upper].contains("bound_scan")
+                || outcome[..upper].contains("chip_scan"),
+            "goal outcome must not uppercase an 8MB complete: {outcome}"
+        );
+        let follow = src
+            .split("pub fn reply_needs_followup(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn next_goal_prompt(").next())
+            .expect("reply_needs_followup");
+        let follow_up = follow.find("to_ascii_uppercase").expect("followup uppercase");
+        assert!(
+            follow[..follow_up].contains("TEXT_FILE_CAP")
+                || follow[..follow_up].contains("bound_scan")
+                || follow[..follow_up].contains("chip_scan"),
+            "follow-up must not uppercase an 8MB complete: {follow}"
+        );
+    }
+
+    #[test]
+    fn parse_goal_outcome_reads_a_marker_after_a_huge_prefix() {
+        let mut huge = "a".repeat(crate::attach::TEXT_FILE_CAP + 8);
+        huge.push_str("\nGOAL_COMPLETE\n");
+        assert_eq!(parse_goal_outcome(&huge), "complete");
+        let mut blocked = "b".repeat(crate::attach::TEXT_FILE_CAP + 8);
+        blocked.push_str("\nGOAL_BLOCKED: need serial\n");
+        assert_eq!(parse_goal_outcome(&blocked), "blocked");
     }
 }

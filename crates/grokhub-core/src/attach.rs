@@ -1,5 +1,7 @@
 //! Plus-button upload: classify files, parse picker output, compose attach lines.
 
+use std::borrow::Cow;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachKind {
     Image,
@@ -29,6 +31,42 @@ pub const IMAGE_PIXEL_CAP: u64 = 36_000_000;
 
 pub fn image_pixels_ok(width: u32, height: u32) -> bool {
     (width as u64).saturating_mul(height as u64) <= IMAGE_PIXEL_CAP
+}
+
+fn scan_end(s: &str, cap: usize) -> usize {
+    let mut end = cap.min(s.len());
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+fn scan_start(s: &str, cap: usize) -> usize {
+    if s.len() <= cap {
+        return 0;
+    }
+    let mut start = s.len() - cap;
+    while start < s.len() && !s.is_char_boundary(start) {
+        start += 1;
+    }
+    start
+}
+
+/// Head plus tail so end markers like `GOAL_COMPLETE` survive a huge complete.
+pub fn bound_scan(s: &str) -> Cow<'_, str> {
+    if s.len() <= TEXT_FILE_CAP {
+        return Cow::Borrowed(s);
+    }
+    let half = TEXT_FILE_CAP / 2;
+    let head = scan_end(s, half);
+    let tail = scan_start(s, half);
+    if tail <= head {
+        return Cow::Borrowed(&s[..scan_end(s, TEXT_FILE_CAP)]);
+    }
+    let mut out = String::with_capacity(head + s.len() - tail);
+    out.push_str(&s[..head]);
+    out.push_str(&s[tail..]);
+    Cow::Owned(out)
 }
 
 /// PNG IHDR only — do not decode IDAT. A 50k×50k bomb is still a tiny file.
@@ -212,6 +250,16 @@ pub fn chat_attach_status(kind: AttachKind, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bound_scan_keeps_the_tail_of_a_huge_body() {
+        let mut huge = "a".repeat(TEXT_FILE_CAP + 8);
+        huge.push_str("GOAL_COMPLETE");
+        let scan = bound_scan(&huge);
+        assert!(scan.len() <= TEXT_FILE_CAP);
+        assert!(scan.contains("GOAL_COMPLETE"));
+        assert_eq!(bound_scan("short").as_ref(), "short");
+    }
 
     #[test]
     fn image_pixels_ok_rejects_a_decompression_bomb() {
