@@ -3146,13 +3146,17 @@ impl Cabin {
                     last.path.replace('\'', r#"'"'"'"#),
                     src.replace('\'', r#"'"'"'"#)
                 ));
-                self.status = format!("Restoring {}", last.job_id);
+                if self.running {
+                    self.status = format!("Restoring {}", last.job_id);
+                }
                 return;
             }
         }
         if let Some(cmd) = self.snapshot_project() {
             self.queue_sh(cmd);
-            self.status = "No snapshot yet — took one. /rewind again to restore.".into();
+            if self.running {
+                self.status = "No snapshot yet — took one. /rewind again to restore.".into();
+            }
         }
     }
 
@@ -10487,6 +10491,17 @@ mod tests {
         assert!(
             blocked < restoring && !rewind.contains("Restored"),
             "/rewind must not claim Restored before cp finishes or when host cannot start: {rewind}"
+        );
+        let queued = rewind.find("queue_sh").expect("queue restore");
+        assert!(
+            queued < restoring && rewind[queued..restoring].contains("self.running"),
+            "/rewind must not claim Restoring when host did not start: {rewind}"
+        );
+        let took = rewind.find("took one").expect("first snapshot");
+        let snap_q = rewind.rfind("queue_sh").expect("queue snapshot");
+        assert!(
+            snap_q < took && rewind[snap_q..took].contains("self.running"),
+            "/rewind must not claim a snapshot started when host did not start: {rewind}"
         );
         let snap = src
             .split("fn snapshot_project")
