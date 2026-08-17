@@ -4,7 +4,7 @@ use crate::icons::{self, TileIcon};
 use eframe::egui::{self, Align2, Color32, ColorImage, FontId, RichText, Sense, Stroke, TextureHandle, TextureOptions};
 use grokhub_core::{
     curate_wall, imagine_result_fit, wall_curate_seed, LearnedSuggestion, SkillMd, SuggestionKind,
-    WallGif, WallSlot,
+    WallGif, WallSlot, IMAGE_FILE_CAP,
 };
 
 pub use grokhub_core::ImagineKind;
@@ -1556,10 +1556,18 @@ fn imagine_disk_tex(ctx: &egui::Context, path: &str) -> (TextureHandle, [usize; 
     if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
         return hit;
     }
-    let img = std::fs::read(path)
-        .ok()
-        .and_then(|b| image::load_from_memory(&b).ok())
-        .unwrap_or_else(|| image::DynamicImage::new_rgb8(8, 8));
+    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
+    let img = if len > IMAGE_FILE_CAP {
+        None
+    } else {
+        std::fs::read(path).ok().and_then(|b| {
+            if !crate::desktop::image_pixels_ok_for_bytes(&b) {
+                return None;
+            }
+            image::load_from_memory(&b).ok()
+        })
+    }
+    .unwrap_or_else(|| image::DynamicImage::new_rgb8(8, 8));
     let rgba = img.to_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
     let tex = ctx.load_texture(
@@ -2023,5 +2031,25 @@ mod tests {
         assert!(github_api_path("list_issues", "repo:owner/name").is_ok());
         assert!(github_api_path("search_code", "query:foo").is_ok());
         assert!(github_api_path("search_issues", "query:foo").is_ok());
+    }
+
+    #[test]
+    fn imagine_disk_tex_rejects_a_huge_file() {
+        let src = include_str!("cards.rs");
+        let tex = src
+            .split("fn imagine_disk_tex(")
+            .nth(1)
+            .and_then(|s| s.split("fn imagine_disk_tile(").next())
+            .expect("imagine_disk_tex");
+        let meta = tex.find("metadata").expect("size check before decode");
+        let read = tex.find("std::fs::read").expect("read image");
+        assert!(
+            meta < read && tex.contains("IMAGE_FILE_CAP"),
+            "a huge wall still must not decode on the UI thread: {tex}"
+        );
+        assert!(
+            tex.contains("image_pixels_ok") || tex.contains("IMAGE_PIXEL_CAP"),
+            "a tiny wall still with huge pixels must not decode on the UI thread: {tex}"
+        );
     }
 }

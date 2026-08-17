@@ -10,7 +10,7 @@ pub fn learning_path() -> std::path::PathBuf {
 }
 
 pub fn load_learning() -> LearningState {
-    let raw = fs::read_to_string(learning_path()).unwrap_or_default();
+    let raw = config::read_file_capped(&learning_path(), config::MEMORY_FILE_CAP);
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
@@ -24,7 +24,7 @@ pub fn usage_path() -> std::path::PathBuf {
 }
 
 pub fn load_usage() -> UsageDay {
-    let raw = fs::read_to_string(usage_path()).unwrap_or_default();
+    let raw = config::read_file_capped(&usage_path(), config::MEMORY_FILE_CAP);
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
@@ -38,7 +38,7 @@ pub fn chips_path() -> std::path::PathBuf {
 }
 
 pub fn load_chips() -> ChipMemory {
-    let raw = fs::read_to_string(chips_path()).unwrap_or_default();
+    let raw = config::read_file_capped(&chips_path(), config::MEMORY_FILE_CAP);
     serde_json::from_str(&raw).unwrap_or_else(|_| empty_chip_memory())
 }
 
@@ -47,7 +47,7 @@ pub fn wall_path() -> std::path::PathBuf {
 }
 
 pub fn load_wall() -> ImagineWall {
-    let raw = fs::read_to_string(wall_path()).unwrap_or_default();
+    let raw = config::read_file_capped(&wall_path(), config::MEMORY_FILE_CAP);
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
@@ -61,7 +61,7 @@ pub fn projects_path() -> std::path::PathBuf {
 }
 
 pub fn load_projects() -> Vec<ProjectNode> {
-    let raw = fs::read_to_string(projects_path()).unwrap_or_default();
+    let raw = config::read_file_capped(&projects_path(), config::MEMORY_FILE_CAP);
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
@@ -80,7 +80,7 @@ pub fn suggestions_path() -> std::path::PathBuf {
 }
 
 pub fn load_suggestions() -> SuggestionStore {
-    let raw = fs::read_to_string(suggestions_path()).unwrap_or_default();
+    let raw = config::read_file_capped(&suggestions_path(), config::MEMORY_FILE_CAP);
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
@@ -195,5 +195,15 @@ mod tests {
         assert_eq!(loaded.autos[0].title, "Night wrap");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn cabin_state_loads_do_not_slurp_huge_files() {
+        let src = include_str!("store.rs");
+        let code = src.split("#[cfg(test)]").next().expect("store");
+        assert!(
+            code.contains("read_file_capped") && !code.contains("read_to_string"),
+            "boot must not slurp huge learning/chips/wall JSON: {code}"
+        );
     }
 }

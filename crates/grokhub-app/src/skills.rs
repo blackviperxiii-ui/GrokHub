@@ -5,6 +5,7 @@ use grokhub_core::{
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -22,7 +23,7 @@ pub fn list_skills() -> Vec<SkillMd> {
     };
     for e in rd.flatten() {
         let p = e.path().join("SKILL.md");
-        if let Ok(raw) = fs::read_to_string(p) {
+        if let Ok(raw) = crate::desktop::read_text_capped(&p) {
             if skill_safe(&raw) {
                 out.push(parse_skill_md(&raw));
             }
@@ -99,7 +100,10 @@ pub fn run_verify(name: &str, cwd: Option<&str>) -> Option<VerifyResult> {
     if let Some(dir) = cwd.filter(|d| !d.is_empty()) {
         cmd.current_dir(dir);
     }
-    let out = cmd.output().ok()?;
+    let out = match crate::desktop::run_limited(cmd, Duration::from_secs(12)) {
+        Some(o) => o,
+        None => return Some(interpret_verify(Some(124), "verify timed out")),
+    };
     Some(interpret_verify(
         out.status.code(),
         &String::from_utf8_lossy(&out.stdout),
@@ -206,5 +210,37 @@ mod tests {
         assert!(hit.ok, "verify must run in the bound project: {hit:?}");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn run_verify_must_time_out() {
+        let src = include_str!("skills.rs");
+        let verify = src
+            .split("pub fn run_verify(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn pin_text(").next())
+            .expect("run_verify");
+        assert!(
+            verify.contains("run_limited("),
+            "HostDone skill verify must not freeze the UI on a hung script: {verify}"
+        );
+        assert!(
+            !verify.contains(".output()"),
+            "run_verify must not block the UI on Command::output: {verify}"
+        );
+    }
+
+    #[test]
+    fn list_skills_does_not_slurp_huge_skill_md() {
+        let src = include_str!("skills.rs");
+        let list = src
+            .split("pub fn list_skills(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn save_skill(").next())
+            .expect("list_skills");
+        assert!(
+            list.contains("read_text_capped") && !list.contains("read_to_string"),
+            "listing skills must not slurp a huge SKILL.md on the UI thread: {list}"
+        );
     }
 }
