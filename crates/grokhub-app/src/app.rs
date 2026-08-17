@@ -26,7 +26,7 @@ use grokhub_core::{
     cabin_system_prompt,
     appearance_choices, appearance_hint, approved_cmds, auth_bearer, automation_blocked_by_policy,
     blend_thread_goal, flush_visible_goal,
-    build_hub_snapshot,
+    build_hub_snapshot, merge_hub_snapshots,
     build_quick_chips, build_windshield, bump_skill_run, bump_usage,
     inhabit_ready, hub_pair_url, devices_shows_pair_code, pair_code_is_live, parse_hostname_i, pick_lan_ipv4,
     start_hub_rotates_pair,
@@ -3291,6 +3291,14 @@ impl Cabin {
             mem,
         );
         if let Ok(mut st) = self.hub.lock() {
+            let snap = match st
+                .snapshot
+                .as_ref()
+                .and_then(|v| serde_json::from_value::<HubSnapshot>(v.clone()).ok())
+            {
+                Some(remote) => merge_hub_snapshots(&snap, &remote),
+                None => snap,
+            };
             st.snapshot = serde_json::to_value(&snap).ok();
         }
         self.status = "Hub snapshot written — peers pull /v1/snapshot".into();
@@ -9607,6 +9615,15 @@ mod tests {
         assert!(
             flushed < wrote,
             "/export must flush the live pane before writing the thread file: {export}"
+        );
+        let sync = src
+            .split("fn sync_hub(&mut self)")
+            .nth(1)
+            .and_then(|s| s.split("fn local_clock").next())
+            .expect("sync_hub");
+        assert!(
+            sync.contains("merge_hub_snapshots"),
+            "/sync must merge the hub snapshot, not replace peer threads: {sync}"
         );
         let dream = src
             .split("fn run_dream")
