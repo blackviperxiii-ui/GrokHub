@@ -8664,6 +8664,12 @@ impl Cabin {
                     crate::cards::grok_tile(ui, icon, &s.title, &s.body, Some("Add"), false),
                     crate::cards::TileHit::Add | crate::cards::TileHit::Body
                 ) {
+                    if !self.skill_body.is_empty() {
+                        let parsed = grokhub_core::parse_skill_md(&self.skill_body);
+                        if skills::save_skill(&parsed).is_ok() {
+                            self.skill_list = skills::list_skills();
+                        }
+                    }
                     let sk = crate::cards::skill_from_learned(s);
                     if skills::save_skill(&sk).is_ok() {
                         self.skill_list = skills::list_skills();
@@ -9629,6 +9635,16 @@ mod tests {
         assert!(
             flushed_v < ran,
             "Run verify must flush the editor so verify.sh matches the open SKILL.md: {verify_btn}"
+        );
+        let add = skills_ui
+            .split("merge_suggested_skills")
+            .nth(1)
+            .and_then(|s| s.split("section_label").next())
+            .expect("add suggested");
+        let learned = add.find("skill_from_learned").expect("learned");
+        assert!(
+            add[..learned].contains("skill_body") && add[..learned].contains("save_skill"),
+            "Add suggested must flush the leaving editor: {add}"
         );
         let new_skill = skills_ui
             .split("New Skill")
