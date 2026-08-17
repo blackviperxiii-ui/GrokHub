@@ -2995,8 +2995,14 @@ impl Cabin {
         }
     }
 
-    fn kick_model_retry(&mut self, _t: String) {
+    fn kick_model_retry(&mut self, t: String) {
         self.halt_in_flight();
+        self.active_skill_follow = None;
+        if let Some(sk) = match_skill(&t, &self.skill_list) {
+            if self.policy().injects_skill() {
+                self.active_skill_follow = Some(skill_follow_block(sk));
+            }
+        }
         self.kick_model(true);
     }
 
@@ -9458,6 +9464,15 @@ mod tests {
         assert!(
             send.contains("kick_model(true)"),
             "typed send must consume the plus-button image: {send}"
+        );
+        let retry = src
+            .split("fn kick_model_retry")
+            .nth(1)
+            .and_then(|s| s.split("fn policy(").next())
+            .expect("kick_model_retry");
+        assert!(
+            retry.contains("match_skill") && retry.contains("skill_follow_block"),
+            "/retry must re-inject the skill follow that halt_in_flight cleared: {retry}"
         );
         let host_done = src
             .split("Ok(JobOut::HostDone(block))")
