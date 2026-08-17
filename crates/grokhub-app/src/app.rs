@@ -1368,11 +1368,7 @@ impl Cabin {
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        let mut stored: Vec<(String, Vec<(String, String)>)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.messages.clone()))
-            .collect();
+        let mut stored = self.job_stored_pairs(job.as_deref(), &vis);
         drop_trailing_assistant_on(job.as_deref(), &vis, &mut visible, &mut stored);
         self.messages = visible
             .into_iter()
@@ -3264,6 +3260,24 @@ impl Cabin {
         Policy::max()
     }
 
+    fn job_stored_pairs(
+        &self,
+        job_thread_id: Option<&str>,
+        visible_thread_id: &str,
+    ) -> Vec<(String, Vec<(String, String)>)> {
+        let Some(id) = job_thread_id else {
+            return Vec::new();
+        };
+        if id == visible_thread_id {
+            return Vec::new();
+        }
+        self.threads
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| vec![(t.id.clone(), t.messages.clone())])
+            .unwrap_or_default()
+    }
+
     fn last_user_on_job(&self) -> String {
         let vis = self.visible_thread_id();
         let visible_pairs: Vec<(String, String)> = self
@@ -3271,11 +3285,7 @@ impl Cabin {
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        let stored: Vec<(String, Vec<(String, String)>)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.messages.clone()))
-            .collect();
+        let stored = self.job_stored_pairs(self.chat_job_thread.as_deref(), &vis);
         last_user_for_job(
             self.chat_job_thread.as_deref(),
             &vis,
@@ -4527,11 +4537,7 @@ impl Cabin {
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        let stored: Vec<(String, Vec<(String, String)>)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.messages.clone()))
-            .collect();
+        let stored = self.job_stored_pairs(self.chat_job_thread.as_deref(), &vis);
         let raw = kick_messages_for_job(
             self.chat_job_thread.as_deref(),
             &vis,
@@ -4778,11 +4784,7 @@ impl Cabin {
                     .iter()
                     .map(|m| (m.role.clone(), m.content.clone()))
                     .collect();
-                let stored: Vec<(String, Vec<(String, String)>)> = self
-                    .threads
-                    .iter()
-                    .map(|t| (t.id.clone(), t.messages.clone()))
-                    .collect();
+                let stored = self.job_stored_pairs(job.as_deref(), &vis);
                 let job_pairs = kick_messages_for_job(
                     job.as_deref(),
                     &vis,
@@ -5694,11 +5696,7 @@ impl Cabin {
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        let stored: Vec<(String, Vec<(String, String)>)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.messages.clone()))
-            .collect();
+        let stored = self.job_stored_pairs(self.chat_job_thread.as_deref(), &vis);
         let msgs = kick_messages_for_job(
             self.chat_job_thread.as_deref(),
             &vis,
@@ -10578,6 +10576,10 @@ mod tests {
             kick.contains("verify_rx"),
             "kick_model must wait for off-thread verify before the follow-up turn: {kick}"
         );
+        assert!(
+            !kick.contains("t.messages.clone()"),
+            "kick_model must not clone every thread to read the origin: {kick}"
+        );
         let reflect = src
             .split("fn run_reflect")
             .nth(1)
@@ -10586,6 +10588,10 @@ mod tests {
         assert!(
             reflect.contains("kick_messages_for_job"),
             "/learn reflect must read the origin thread, not only the visible tab: {reflect}"
+        );
+        assert!(
+            !reflect.contains("t.messages.clone()"),
+            "/learn reflect must not clone every thread to read the origin: {reflect}"
         );
         let mem = reflect.find("read_memory(\"MEMORY.md\")").expect("reflect memory");
         assert!(
@@ -10658,6 +10664,15 @@ mod tests {
             send_auth[gate..].contains("speak_next = false"),
             "auth-fail send must not leave TTS armed for the next reply: {send_auth}"
         );
+        let last_user = src
+            .split("fn last_user_on_job")
+            .nth(1)
+            .and_then(|s| s.split("fn commit_proposed_skill").next())
+            .expect("last_user_on_job");
+        assert!(
+            last_user.contains("last_user_for_job") && !last_user.contains("t.messages.clone()"),
+            "skill draft after host must not clone every thread: {last_user}"
+        );
         let halt_flight = src
             .split("fn halt_in_flight")
             .nth(1)
@@ -10676,6 +10691,10 @@ mod tests {
         assert!(
             halt_flight.contains("stamp_current_access") && halt_flight.contains("accessed_ms"),
             "halt must stamp the origin thread when it is not the visible tab: {halt_flight}"
+        );
+        assert!(
+            !halt_flight.contains("t.messages.clone()"),
+            "Stop must not clone every thread to drop one trailing assistant: {halt_flight}"
         );
         let host_done_facts = src
             .split("Ok(JobOut::HostDone(block))")
@@ -11927,6 +11946,10 @@ mod tests {
         assert!(
             chat.contains("estimate_messages(&job_pairs)"),
             "auto-compact must use the origin thread, not only the visible tab: {chat}"
+        );
+        assert!(
+            !chat.contains("t.messages.clone()"),
+            "Chat complete must not clone every thread to learn from one reply: {chat}"
         );
         assert!(
             chat.contains("should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, compact_step)"),
