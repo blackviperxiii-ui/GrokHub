@@ -453,10 +453,42 @@ pub fn host_cmd_leaves_project(cmd: &str, project_root: &str) -> bool {
     host_cmd_leaves_project_in(cmd, project_root, std::env::var("HOME").ok().as_deref())
 }
 
+fn host_cd_dest_leaves(cmd: &str, root: &str, home: Option<&str>) -> bool {
+    for seg in cmd.split(|c: char| matches!(c, '&' | '|' | ';')) {
+        let bits: Vec<&str> = seg.split_whitespace().collect();
+        if bits.first().copied() != Some("cd") {
+            continue;
+        }
+        let dest = bits
+            .iter()
+            .skip(1)
+            .find(|w| **w != "--" && !w.starts_with('-'))
+            .copied();
+        let Some(dest) = dest else {
+            return true;
+        };
+        let peeled = peel_host_path_token(dest);
+        let path = if let Some(p) = expand_host_path_token_in(dest, home) {
+            normalize_host_path(&p)
+        } else if !peeled.is_empty() {
+            normalize_host_path(&format!("{}/{peeled}", root.trim_end_matches('/')))
+        } else {
+            return true;
+        };
+        if !is_under_project(&path, root) {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn host_cmd_leaves_project_in(cmd: &str, project_root: &str, home: Option<&str>) -> bool {
     let root = expand_project_root(project_root, home);
     if root.is_empty() {
         return false;
+    }
+    if host_cd_dest_leaves(cmd, &root, home) {
+        return true;
     }
     for tok in cmd.split_whitespace() {
         let peeled = peel_host_path_token(tok);
@@ -560,6 +592,26 @@ mod tests {
                 Some("/home/j")
             ),
             "cabin rewind dest is outside the bound tree — run_cmds must exempt it"
+        );
+    }
+
+    #[test]
+    fn bare_cd_leaves_the_bound_tree() {
+        assert!(
+            host_cmd_leaves_project_in("cd", "/home/j/proj", Some("/home/j")),
+            "cd with no dest goes to HOME"
+        );
+        assert!(
+            host_cmd_leaves_project_in("cd && ls", "/home/j/proj", Some("/home/j")),
+            "cd && ls lists HOME, not the bound tree"
+        );
+        assert!(
+            !host_cmd_leaves_project_in("cd src && ls", "/home/j/proj", Some("/home/j")),
+            "cd into a project subdir stays in-world"
+        );
+        assert!(
+            !host_cmd_leaves_project_in("echo cd", "/home/j/proj", Some("/home/j")),
+            "the word cd in another command is not a directory change"
         );
     }
 
