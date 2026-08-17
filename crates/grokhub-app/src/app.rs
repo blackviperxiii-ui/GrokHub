@@ -3981,7 +3981,7 @@ impl Cabin {
         if let Ok(rd) = std::fs::read_dir(&root) {
             for e in rd.flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
-                if let Ok(body) = std::fs::read_to_string(e.path()) {
+                if let Ok(body) = read_text_capped(&e.path()) {
                     if let Some((dest, content)) = import_memory_file(&name, &body) {
                         if dest == "MEMORY.md" {
                             memory = merge_imported_memory(&memory, &content, &name);
@@ -4002,7 +4002,7 @@ impl Cabin {
         if let Ok(rd) = std::fs::read_dir(skills_dir) {
             for e in rd.flatten() {
                 let md = e.path().join("SKILL.md");
-                if let Ok(raw) = std::fs::read_to_string(md) {
+                if let Ok(raw) = read_text_capped(&md) {
                     let parsed = grokhub_core::parse_skill_md(&raw);
                     if !parsed.name.is_empty() && skills::save_skill(&parsed).is_ok() {
                         imported += 1;
@@ -10617,6 +10617,10 @@ mod tests {
             after_loop.contains("read_memory(\"MEMORY.md\")")
                 && after_loop.contains("write_memory(\"MEMORY.md\""),
             "/import must not rotate MEMORY.md.prev when the merge is unchanged: {after_loop}"
+        );
+        assert!(
+            import.contains("read_text_capped") && !import.contains("read_to_string"),
+            "/import must not slurp huge OpenClaw files on the UI thread: {import}"
         );
         let sign_out = src
             .split("fn sign_out_oauth")
