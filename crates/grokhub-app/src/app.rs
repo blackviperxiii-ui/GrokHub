@@ -3598,9 +3598,21 @@ impl Cabin {
             }
         }
         thread_lines.reverse();
-        let mut host_receipts = self.last_host.clone();
-        for (line, _) in self.last_receipts.iter().rev().take(6) {
-            host_receipts.push(line.clone());
+        let mut host_receipts = thread_host_receipts(
+            &self
+                .messages
+                .iter()
+                .map(|m| (m.role.clone(), m.content.clone()))
+                .collect::<Vec<_>>(),
+        );
+        for t in self.threads.iter().rev() {
+            if t.id == current {
+                continue;
+            }
+            host_receipts.extend(thread_host_receipts(&t.messages));
+        }
+        if host_receipts.len() > 6 {
+            host_receipts = host_receipts.split_off(host_receipts.len() - 6);
         }
         let input = ReviewDigest {
             insight_pin: insight_pin(&self.learning),
@@ -10478,6 +10490,17 @@ mod tests {
         assert!(
             spawn[..digest].contains("write_memory") && spawn[..digest].contains("mem_body"),
             "nightly review must flush the Memory editor before the digest: {spawn}"
+        );
+        let digest_fn = src
+            .split("fn review_digest(")
+            .nth(1)
+            .and_then(|s| s.split("fn spawn_review(").next())
+            .expect("review_digest");
+        assert!(
+            digest_fn.contains("thread_host_receipts")
+                && !digest_fn.contains("last_receipts")
+                && !digest_fn.contains("last_host"),
+            "nightly review must take host receipts from the digested threads, not cabin-global last_host: {digest_fn}"
         );
         let apply = src
             .split("fn apply_review_reply(")
