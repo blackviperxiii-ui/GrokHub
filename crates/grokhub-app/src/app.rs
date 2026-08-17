@@ -3247,6 +3247,9 @@ impl Cabin {
 
     fn sync_hub(&mut self) {
         self.persist();
+        if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
+            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+        }
         let mem = ["SOUL.md", "USER.md", "MEMORY.md"]
             .into_iter()
             .map(|n| HubMemoryFile {
@@ -9787,6 +9790,13 @@ mod tests {
         assert!(
             flushed < built,
             "/sync must flush the live pane before publishing threads: {sync}"
+        );
+        let mem_write = sync.find("write_memory").expect("sync memory flush");
+        assert!(
+            mem_write < built
+                && sync.contains("mem_body")
+                && sync.contains("scratch()"),
+            "/sync must flush the Memory editor before publishing files: {sync}"
         );
         let thread_rows = sync
             .split("let threads = self")
