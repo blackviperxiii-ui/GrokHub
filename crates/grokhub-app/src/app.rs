@@ -2795,6 +2795,7 @@ impl Cabin {
                 self.messages.clear();
                 self.followup_step = 0;
                 self.active_skill_follow = None;
+                self.stamp_current_access();
                 self.persist();
                 self.status = "Cleared".into();
             }
@@ -2807,6 +2808,7 @@ impl Cabin {
                     self.messages.remove(i);
                     self.followup_step = 0;
                     self.active_skill_follow = None;
+                    self.stamp_current_access();
                     self.persist();
                     self.status = "Undid last assistant turn".into();
                 } else {
@@ -10087,6 +10089,10 @@ mod tests {
             clear.contains("followup_step = 0") && clear.contains("active_skill_follow = None"),
             "/clear must reset followup budget and skill follow with the pane: {clear}"
         );
+        assert!(
+            clear.contains("stamp_current_access") || clear.contains("accessed_ms"),
+            "/clear must bump accessed_ms or /sync LWW can restore the cleared turns: {clear}"
+        );
         let undo = src
             .split("Slash::Undo =>")
             .nth(1)
@@ -10095,6 +10101,10 @@ mod tests {
         assert!(
             undo.contains("followup_step = 0") && undo.contains("active_skill_follow = None"),
             "/undo must reset followup budget like /clear: {undo}"
+        );
+        assert!(
+            undo.contains("stamp_current_access") || undo.contains("accessed_ms"),
+            "/undo must bump accessed_ms or /sync LWW can restore the undone turn: {undo}"
         );
         let forget = src
             .split("Slash::Forget")
