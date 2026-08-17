@@ -3096,7 +3096,7 @@ impl Cabin {
                     last.path.replace('\'', r#"'"'"'"#),
                     src.replace('\'', r#"'"'"'"#)
                 ));
-                self.status = format!("Restored {}", last.job_id);
+                self.status = format!("Restoring {}", last.job_id);
                 return;
             }
         }
@@ -9607,11 +9607,11 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn snapshot_project").next())
             .expect("rewind_project");
-        let restored = rewind.find("Restored").expect("Restored");
+        let restoring = rewind.find("Restoring").expect("Restoring");
         let blocked = rewind.find("rewind_blocked_reason").expect("rewind gate");
         assert!(
-            blocked < restored,
-            "/rewind must not claim Restored when host cannot start: {rewind}"
+            blocked < restoring && !rewind.contains("Restored"),
+            "/rewind must not claim Restored before cp finishes or when host cannot start: {rewind}"
         );
         let snap = src
             .split("fn snapshot_project")
