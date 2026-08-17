@@ -64,13 +64,14 @@ pub use feel::{
     HOVER_SECS, PRESS_EXPANSION, PRESS_SECS,
 };
 pub use autonomy::{
-    anticipated_need, autonomy_policy, cabin_system_prompt, host_plan_autorun, host_step_autorun,
-    should_anticipate, HostAuto, LearnMode, Policy, SkillFollow, SkillWrite,
+    anticipate_consumes_slot, anticipated_need, autonomy_policy, cabin_system_prompt,
+    host_plan_autorun, host_step_autorun, should_anticipate, HostAuto, LearnMode, Policy,
+    SkillFollow, SkillWrite,
 };
 pub use attach::{
     append_composer, attach_kind, attach_name, attach_prompt_line, chat_attach_status,
     cabin_eyes_request_text, cabin_frame_only, clip_image_args, imagine_ref_status, list_pick_names,
-    next_chat_image, parse_picker_stdout, this_turn_cabin_frame,
+    kick_consumes_attach, next_chat_image, parse_picker_stdout, this_turn_cabin_frame,
     picker_args, plus_empty_status, plus_menu_rows, take_text_body, AttachKind, PlusAct, PlusTarget,
     TEXT_FILE_CAP,
 };
@@ -84,7 +85,7 @@ pub use chat::{
 };
 pub use chat_view::{
     assistant_prose, is_workload_user, merge_thinking, quote_for_reply, scrub_thought, strip_thinking,
-    visible_chat, ChatKind, ChatView,
+    visible_chat, visible_turn_count, ChatKind, ChatView,
 };
 pub use chat_bubble::{
     bubble_max_width, bubble_outer_height, bubble_outer_width, bubble_wrap_width, clamp_row_width,
@@ -92,7 +93,8 @@ pub use chat_bubble::{
 };
 pub use chat_job::{
     apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
-    drop_trailing_assistant, drop_trailing_assistant_on, job_error_goes_to_chat, kick_messages_for_job,
+    drop_trailing_assistant, drop_trailing_assistant_on, job_error_goes_to_chat, job_is_scratch,
+    kick_messages_for_job,
     last_user_for_job,
     persist_user_turn, push_bound_message, upsert_assistant_turn, worker_gone_status, ChatSendKind,
 };
@@ -109,14 +111,15 @@ pub use capture::{
     capture_kinds, ffmpeg_webcam_args, ffmpeg_x11_args, frame_is_blank, gnome_shell_screenshot_args,
     grim_capture_args, image_to_global, infer_wayland_display, layout_prompt, luma_mean_var,
     output_containing, parse_xdpy_size, parse_xrandr_outputs, parse_xrandr_size, pick_capture_output,
-    session_is_wayland, virtual_desktop_size, x11_grab_size, CaptureKind, DisplayOutput,
+    session_is_wayland, virtual_desktop_size, windshield_frame_geom, x11_grab_size, CaptureKind,
+    DisplayOutput,
 };
 pub use frame::{encode_b64, frame_bytes, jpeg_data_url, FrameGet, PresenceFrame};
 pub use host_plan::{
     approved_cmds, explain_host_risk, host_risk, move_step, parse_host_plan, plan_from_text,
     retain_held_plan, step_from_cmd, strip_host_cmd_line, yolo_plan_split, HostPlanStep, HostRisk,
 };
-pub use host_safety::{forbidden_reason, recall_hits};
+pub use host_safety::{forbidden_reason, mint_host_halt, recall_hits};
 pub use imagine::{
     compose_imagine_prompt, curate_wall, dedicated_imagine_model, dedicated_video_model,
     extract_imagine_prompt, imagine_aspect_label, imagine_aspect_name, imagine_dest,
@@ -144,7 +147,7 @@ pub use hands::{
     resolve_bin_in, ydotool_socket_path, HandsDown, HANDS_PACMAN, PYATSPI_MISSING,
 };
 pub use recipe::{
-    bin_on_path, computer_cmd_line, computer_drive, computer_drive_for, default_bin_extra_dirs,
+    act_window_search_bin, bin_on_path, computer_cmd_line, computer_drive, computer_drive_for, default_bin_extra_dirs,
     empty_hands_steps_error, extract_computer_ops, hands_backend_name,
     hands_blocked_by_lock, hands_protocol, lock_blocks_hands, pointer_op_blocked_on_lock,
     needs_reshoot, parse_computer_cmd_loose, parse_computer_op, parse_recipe, parse_screen,
@@ -162,17 +165,20 @@ pub use reflect::{
     IDLE_REFLECT_MS,
 };
 pub use review::{
-    build_review_digest, cabin_real_text, dedupe_suggestions, parse_suggest_lines,
-    partition_suggestions, review_due, review_status_line, review_system_prompt, DigestLine, LearnedSuggestion,
-    ReviewDigest, SuggestionKind, SuggestionStore, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
+    build_review_digest, cabin_real_text, dedupe_suggestions, merge_suggestion_store,
+    parse_suggest_lines, partition_suggestions, prune_live_suggestions, review_due,
+    review_status_line, review_system_prompt,
+    DigestLine, LearnedSuggestion,
+    ReviewDigest, SuggestionKind, SuggestionStore, CABIN_GITHUB_TOOLS, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
 };
 pub use pair::{
-    hub_pair_url, make_pair_code, normalize_code, parse_hostname_i, pick_lan_ipv4, CODE_ALPH,
-    PAIR_TTL_MS,
+    devices_shows_pair_code, hub_pair_url, make_pair_code, normalize_code, pair_code_is_live,
+    parse_hostname_i, pick_lan_ipv4, start_hub_rotates_pair, CODE_ALPH, PAIR_TTL_MS,
 };
 pub use automation::{
     automation_blocked_by_policy, compute_next_run, due_automations, ensure_automation_schedule,
     mark_automation_ran, mark_automation_skipped, night_check_command, night_check_exit_code,
+    night_check_may_fire, night_counts_run, night_unauth_should_skip,
     night_check_stdout, parse_nl_automation, replay_automation_target, skip_automation,
     skip_night_check_receipt, Automation,
 };
@@ -187,8 +193,9 @@ pub use context::{
 };
 pub use diagnostics::diagnostics_bundle;
 pub use goal::{
-    blend_thread_goal, compact_keep_pin, goal_continue_pin, goal_pin_for_job,
+    blend_thread_goal, compact_keep_pin, flush_visible_goal, goal_continue_pin, goal_pin_for_job, hub_dispatch_ok,
     goal_step_after_outcome, is_auto_continue_prompt, looks_incomplete, next_goal_prompt,
+    visible_goal_step_on_continue,
     parse_fast_topics, parse_goal_outcome, reply_needs_followup, should_auto_continue_goal,
     should_name_thread, thread_goal_prompt, ThreadGoal, FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT,
     GOAL_DROP_AFTER, GOAL_MAX_STEPS,
@@ -205,7 +212,9 @@ pub use learning::{
     upsert_insight, user_pref_facts, LearningInsight, LearningState,
 };
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
-pub use openclaw::{default_openclaw_paths, import_memory_file, is_openclaw_workspace};
+pub use openclaw::{
+    default_openclaw_paths, import_memory_file, is_openclaw_workspace, merge_imported_memory,
+};
 pub use shortcuts::{
     apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette,
     shortcut_help, ComposerEnter, ComposerGo, SHORTCUTS,
@@ -221,15 +230,17 @@ pub use hub_sync::{build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, Hub
 pub use hygiene::{lockish, should_send_screenshot};
 pub use organs::{
     clipboard_context_block, daily_units_blocked, greet_from_last_job, last_user_text,
+    thread_host_receipts,
     on_wheel_grab, parse_local_clock, passenger_label, plan_room, presence_orb_state,
     presence_should_stream, quiet_hours_active, redirect_prompt, replay_frame_delay,
     should_keep_frame, LocalClock, MidThoughtGreet, RoomPlan, PRESENCE_RING_MS, PRESENCE_WIPE_MS,
 };
 pub use rewind::{
-    keep_last_rewinds, rewind_allowed, rewind_dest, rewind_restore_matches, RewindRecord,
+    is_rewind_copy_cmd, is_rewind_copy_cmd_in, keep_last_rewinds, rewind_allowed, rewind_blocked_reason, rewind_can_queue,
+    rewind_copy_cmd, rewind_dest, rewind_restore_matches, rewind_snapshot_ready, RewindRecord,
 };
 pub use oauth::{
-    apply_profile, auth_bearer, chat_bearer, has_auth, merge_refreshed, parse_device_start, parse_poll_result,
+    apply_profile, auth_bearer, chat_bearer, has_auth, merge_refreshed, next_oauth_poll_secs, parse_device_start, parse_poll_result,
     parse_token_json, parse_userinfo_profile, oauth_access_live, realtime_bearer, token_needs_refresh, trusted_profile_photo_url,
     trusted_xai_url, DeviceCodeStart, OAuthProfile, PollResult, PollStatus, XaiOAuthTokens,
     TOKEN_REFRESH_SKEW_MS, XAI_DEVICE_CODE_GRANT, XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY,
@@ -247,7 +258,8 @@ pub use project::{
 pub use redact::{forget_topic, is_plain_text, redact_secrets};
 pub use skill::{
     bump_skill_run, is_hard_run, match_skill, parse_skill_md, patch_skill, prefer_patch,
-    propose_skill_from_turn, render_skill_md, skill_dir_name, skill_follow_block, skill_safe,
+    propose_skill_from_turn, render_skill_md, skill_dir_name, skill_follow_block,
+    skill_use_in_chat_prompt, skill_safe,
     SkillMd,
 };
 pub use slash::{
@@ -282,7 +294,7 @@ pub use workboard::{
     BoardCard, BoardStatus,
 };
 pub use state::{
-    load_hub_state, save_hub_state, state_for_disk, CompleteError, HubState, MintRealtimeFn, PairError,
+    clear_pending_after_complete, inbox_claim_ready, load_hub_state, save_hub_state, state_for_disk, CompleteError, HubState, MintRealtimeFn, PairError,
     DEFAULT_PORT, HUB_KIND,
 };
 pub use task::{HubTask, Receipt};

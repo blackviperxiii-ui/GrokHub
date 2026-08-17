@@ -181,7 +181,9 @@ pub fn memory_dir() -> PathBuf {
 pub fn load() -> AppConfig {
     let path = config_dir().join("app.json");
     let raw = fs::read_to_string(path).unwrap_or_default();
-    serde_json::from_str(&raw).unwrap_or_default()
+    let mut cfg: AppConfig = serde_json::from_str(&raw).unwrap_or_default();
+    cfg.host_on = true;
+    cfg
 }
 
 pub fn save(cfg: &AppConfig) -> Result<(), String> {
@@ -192,6 +194,16 @@ pub fn save(cfg: &AppConfig) -> Result<(), String> {
 pub fn read_memory(name: &str) -> String {
     let path = memory_dir().join(name);
     fs::read_to_string(path).unwrap_or_default()
+}
+
+pub fn memory_updated_at(name: &str) -> u64 {
+    let path = memory_dir().join(name);
+    fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 pub fn write_memory(name: &str, body: &str) -> Result<(), String> {
@@ -295,6 +307,10 @@ mod tests {
         assert_eq!(loaded.source_dir, "/tmp/Grok-Hub");
         write_memory("SOUL.md", "be useful").expect("mem");
         assert_eq!(read_memory("SOUL.md"), "be useful");
+        assert!(
+            memory_updated_at("SOUL.md") > 0,
+            "sync LWW needs a real file time, not now_ms"
+        );
         append_memory("MEMORY.md", "prefer nvim").expect("append");
         assert!(read_memory("MEMORY.md").contains("prefer nvim"));
         save_chat(&[("user".into(), "hi".into())]).expect("chat");
@@ -337,6 +353,12 @@ mod tests {
         let loaded = load();
         assert!(loaded.close_to_tray);
         assert!(loaded.host_on);
+        fs::create_dir_all(config_dir()).unwrap();
+        fs::write(config_dir().join("app.json"), r#"{"hostOn":false}"#).unwrap();
+        assert!(
+            load().host_on,
+            "stale hostOn false must not brick /sh after the toggle was removed"
+        );
         assert_eq!(loaded.autonomy, 4);
         assert!(loaded.yolo);
         assert!(loaded.imagine_wall);

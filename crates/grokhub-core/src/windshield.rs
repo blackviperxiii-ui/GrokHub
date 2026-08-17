@@ -147,10 +147,10 @@ pub fn keep_atspi_row(row: &AtspiRow, desk_w: i32, desk_h: i32) -> bool {
     if row.w <= 0 || row.h <= 0 {
         return false;
     }
-    if desk_w > 0 && (row.x >= desk_w || row.x + row.w <= 0) {
+    if desk_w > 0 && (row.x >= desk_w || row.x + row.w <= -desk_w) {
         return false;
     }
-    if desk_h > 0 && (row.y >= desk_h || row.y + row.h <= 0) {
+    if desk_h > 0 && (row.y >= desk_h || row.y + row.h <= -desk_h) {
         return false;
     }
     if is_interactive_role(&row.role) || closeish(&row.name) || closeish(&row.role) {
@@ -475,6 +475,15 @@ mod tests {
         let glass = windshield_prompt(&build_windshield(&ranked, None, None, None, None, 4));
         assert!(glass.contains("Close"));
         assert!(glass.contains("@3720,12"));
+        let left = [
+            row("Firefox", "frame", -1920, 0, 1920, 1080),
+            row("Close", "push button", -200, 12, 16, 16),
+        ];
+        let kept_left = filter_atspi_rows(&left, 3840, 1080);
+        assert!(
+            kept_left.iter().any(|r| r.name == "Close"),
+            "a window on the left-of-primary monitor must stay in the windshield"
+        );
     }
 
     #[test]

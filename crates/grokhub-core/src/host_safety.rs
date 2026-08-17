@@ -1,5 +1,8 @@
 //! Host rails. YOLO skips the prompt, not these.
 
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
 fn contains_path_leaf(cmd: &str, leaf: &str) -> bool {
     cmd.split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | '=' | ',' | ';'))
         .any(|tok| {
@@ -31,6 +34,11 @@ pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
         return Some("forbidden path: app secrets");
     }
     None
+}
+
+/// Each host job gets its own cancel flag so a later `/sh` cannot un-halt the previous one.
+pub fn mint_host_halt() -> Arc<AtomicBool> {
+    Arc::new(AtomicBool::new(false))
 }
 
 pub fn recall_hits(query: &str, corpus: &[(&str, &str)]) -> Vec<String> {
@@ -81,6 +89,23 @@ mod tests {
             forbidden_reason("cat my.gnupg_backup/file").is_none(),
             "unrelated names that contain .gnupg must not trip the rail"
         );
+    }
+
+    #[test]
+    fn new_host_job_does_not_unhalt_the_previous() {
+        use std::sync::atomic::Ordering;
+        let prev = mint_host_halt();
+        prev.store(true, Ordering::SeqCst);
+        let next = mint_host_halt();
+        assert!(
+            prev.load(Ordering::SeqCst),
+            "minting a new flag must leave the halted job cancelled"
+        );
+        assert!(
+            !next.load(Ordering::SeqCst),
+            "the new host job must start unhalted"
+        );
+        assert!(!std::sync::Arc::ptr_eq(&prev, &next));
     }
 
     #[test]

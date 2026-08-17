@@ -1,5 +1,5 @@
 use grokhub_core::{
-    capture_kinds, clip_image_args, computer_cmd_line, computer_drive_for, diagnose_hands,
+    act_window_search_bin, capture_kinds, clip_image_args, computer_cmd_line, computer_drive_for, diagnose_hands,
     empty_hands_steps_error, ffmpeg_webcam_args, ffmpeg_x11_args, filter_atspi_rows, frame_is_blank,
     gnome_shell_screenshot_args, grim_capture_args, hands_backend_name, hands_blocked_by_lock,
     hands_chip_label, hands_chip_live, hands_down_receipt, image_to_global, infer_wayland_display,
@@ -7,7 +7,7 @@ use grokhub_core::{
     parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
     parse_xrandr_outputs, pcm_from_capture, pick_capture_output, pick_hands_backend, pick_named_row,
     picker_args, rank_atspi_rows, resolve_bin_in, session_is_wayland, take_text_body,
-    virtual_desktop_size, x11_grab_size, ydotool_socket_path, AtspiRow, CaptureKind, ComputerDrive,
+    virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path, AtspiRow, CaptureKind, ComputerDrive,
     ComputerOp, DisplayOutput, HandsBackend, HandsDown, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
 };
 use image::GenericImageView;
@@ -93,14 +93,18 @@ pub fn read_display_outputs() -> Vec<DisplayOutput> {
         .unwrap_or_default()
 }
 
-pub fn prepare_windshield(rows: &[AtspiRow], ask: Option<&str>) -> (Vec<AtspiRow>, String) {
+pub fn prepare_windshield(
+    rows: &[AtspiRow],
+    ask: Option<&str>,
+    captured_this_turn: bool,
+) -> (Vec<AtspiRow>, String) {
     let outputs = read_display_outputs();
     let (dw, dh) = virtual_desktop_size(&outputs)
         .map(|(w, h)| (w as i32, h as i32))
         .unwrap_or((0, 0));
     let kept = filter_atspi_rows(rows, dw, dh);
     let ranked = rank_atspi_rows(&kept, ask, 40);
-    let (fw, fh, ox, oy) = last_desk_frame_geom();
+    let (fw, fh, ox, oy) = windshield_frame_geom(captured_this_turn, last_desk_frame_geom());
     (ranked, layout_prompt(&outputs, fw, fh, ox, oy))
 }
 
@@ -415,7 +419,7 @@ fn pointer_drive(op: &ComputerOp) -> ComputerDrive {
     )
 }
 
-fn lock_titles() -> Vec<String> {
+pub fn lock_titles() -> Vec<String> {
     let atspi = Command::new("python3")
         .args(["-c", ATSPI_PY])
         .output()
@@ -455,7 +459,10 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     if live_hands_backend().is_none() {
         return Err(format!("act {name}: not found"));
     }
-    let out = spawn_bin("xdotool")
+    let Some(bin) = act_window_search_bin(which("xdotool")) else {
+        return Err(format!("act {name}: not found"));
+    };
+    let out = spawn_bin(bin)
         .args(["search", "--onlyvisible", "--name", name])
         .output()
         .map_err(|e| e.to_string())?;
@@ -468,7 +475,7 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     if id.is_empty() {
         return Err(format!("act {name}: not found"));
     }
-    let geo = spawn_bin("xdotool")
+    let geo = spawn_bin(bin)
         .args(["getwindowgeometry", &id])
         .output()
         .map_err(|e| e.to_string())?;
@@ -1304,5 +1311,15 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(["ydotool", "xdotool", "missing"].contains(&hands_driver_name()));
+    }
+
+    #[test]
+    fn act_fallback_does_not_spawn_missing_xdotool() {
+        assert!(
+            include_str!("desktop.rs").contains("act_window_search_bin"),
+            "act must not spawn xdotool when it is missing"
+        );
+        assert_eq!(act_window_search_bin(false), None);
+        assert_eq!(act_window_search_bin(true), Some("xdotool"));
     }
 }

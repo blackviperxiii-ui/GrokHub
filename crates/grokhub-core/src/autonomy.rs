@@ -93,6 +93,11 @@ pub fn should_anticipate(running: bool, review_busy: bool, draft_empty: bool, qu
     !running && !review_busy && draft_empty && !quiet
 }
 
+/// Do not bump automation usage or the anticipate cooldown when chat cannot send.
+pub fn anticipate_consumes_slot(has_key: bool) -> bool {
+    has_key
+}
+
 /// After idle reflect, fire a follow-skill prompt when a need matches a skill.
 pub fn anticipated_need(
     insights: &[LearningInsight],
@@ -225,6 +230,11 @@ mod tests {
         assert!(!should_anticipate(false, true, true, false));
         assert!(!should_anticipate(false, false, false, false));
         assert!(!should_anticipate(false, false, true, true));
+        assert!(
+            !anticipate_consumes_slot(false),
+            "no key must not burn the daily automation cap"
+        );
+        assert!(anticipate_consumes_slot(true));
     }
 
     #[test]

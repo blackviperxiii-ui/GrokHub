@@ -60,6 +60,25 @@ pub fn import_memory_file(name: &str, content: &str) -> Option<(String, String)>
     Some((dest.into(), clip_import(content.trim(), 8_000)))
 }
 
+/// Extra OpenClaw markdown must append under a heading, not replace MEMORY.md.
+pub fn merge_imported_memory(existing: &str, incoming: &str, heading: &str) -> String {
+    let incoming = incoming.trim();
+    if incoming.is_empty() {
+        return existing.to_string();
+    }
+    let block = if heading.eq_ignore_ascii_case("MEMORY.md") {
+        incoming.to_string()
+    } else {
+        format!("## {heading}\n\n{incoming}")
+    };
+    let existing = existing.trim();
+    if existing.is_empty() {
+        block
+    } else {
+        format!("{existing}\n\n{block}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +95,11 @@ mod tests {
         let clipped = clip_import(&long, 8000);
         assert!(clipped.contains("truncated"));
         assert!(!clipped.contains('\u{FFFD}'));
+        let merged = merge_imported_memory("keep me", "be useful", "AGENTS.md");
+        assert!(
+            merged.contains("keep me") && merged.contains("## AGENTS.md") && merged.contains("be useful"),
+            "import must not clobber MEMORY.md with the last readdir file"
+        );
+        assert_eq!(merge_imported_memory("", "notes", "MEMORY.md"), "notes");
     }
 }
