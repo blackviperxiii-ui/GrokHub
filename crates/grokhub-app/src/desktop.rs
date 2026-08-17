@@ -54,6 +54,15 @@ struct LastDeskFrame {
 
 static LAST_DESK_FRAME: Mutex<Option<LastDeskFrame>> = Mutex::new(None);
 
+#[derive(Clone)]
+struct DeskScan {
+    rows: Vec<AtspiRow>,
+    lock: Vec<String>,
+}
+
+static LAST_DESK_SCAN: Mutex<Option<(Instant, DeskScan)>> = Mutex::new(None);
+const DESK_SCAN_TTL: Duration = Duration::from_millis(400);
+
 /// Listing bins (AT-SPI, wmctrl, xrandr) on the UI thread.
 const DESK_LIST_TIMEOUT: Duration = Duration::from_millis(1500);
 /// Screenshot / grim / ffmpeg on the UI thread.
@@ -345,27 +354,43 @@ pub fn install_hands_status() -> String {
     out
 }
 
-pub fn collect_rows() -> Vec<AtspiRow> {
-    let mut rows = Vec::new();
-    let mut atspi = Command::new("python3");
-    atspi.args(["-c", ATSPI_PY]);
-    if let Some(out) = run_limited(atspi, DESK_LIST_TIMEOUT) {
-        if out.status.success() {
-            for line in String::from_utf8_lossy(&out.stdout).lines() {
-                if let Some(r) = parse_atspi_line(line) {
-                    rows.push(r);
-                }
+fn desk_scan() -> DeskScan {
+    if let Ok(g) = LAST_DESK_SCAN.lock() {
+        if let Some((at, scan)) = g.as_ref() {
+            if at.elapsed() < DESK_SCAN_TTL {
+                return scan.clone();
             }
         }
     }
+    let scan = desk_scan_now();
+    if let Ok(mut g) = LAST_DESK_SCAN.lock() {
+        *g = Some((Instant::now(), scan.clone()));
+    }
+    scan
+}
+
+fn desk_scan_now() -> DeskScan {
+    let mut atspi_cmd = Command::new("python3");
+    atspi_cmd.args(["-c", ATSPI_PY]);
+    let atspi = run_limited(atspi_cmd, DESK_LIST_TIMEOUT)
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let mut wmctrl_cmd = spawn_bin("wmctrl");
+    wmctrl_cmd.args(["-lG"]);
+    let wmctrl = run_limited(wmctrl_cmd, DESK_LIST_TIMEOUT)
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let mut rows = Vec::new();
+    for line in atspi.lines() {
+        if let Some(r) = parse_atspi_line(line) {
+            rows.push(r);
+        }
+    }
     if rows.is_empty() {
-        let mut wmctrl = spawn_bin("wmctrl");
-        wmctrl.args(["-lG"]);
-        if let Some(out) = run_limited(wmctrl, DESK_LIST_TIMEOUT) {
-            for line in String::from_utf8_lossy(&out.stdout).lines() {
-                if let Some(r) = parse_wmctrl_line(line) {
-                    rows.push(r);
-                }
+        for line in wmctrl.lines() {
+            if let Some(r) = parse_wmctrl_line(line) {
+                rows.push(r);
             }
         }
     }
@@ -380,7 +405,14 @@ pub fn collect_rows() -> Vec<AtspiRow> {
     let (dw, dh) = virtual_desktop_size(&outputs)
         .map(|(w, h)| (w as i32, h as i32))
         .unwrap_or((0, 0));
-    filter_atspi_rows(&rows, dw, dh)
+    DeskScan {
+        rows: filter_atspi_rows(&rows, dw, dh),
+        lock: lock_titles_from_stdout(&atspi, &wmctrl),
+    }
+}
+
+pub fn collect_rows() -> Vec<AtspiRow> {
+    desk_scan().rows
 }
 
 pub fn named_row<'a>(rows: &'a [AtspiRow], name: &str) -> Option<&'a AtspiRow> {
@@ -482,18 +514,7 @@ fn pointer_drive(op: &ComputerOp) -> ComputerDrive {
 }
 
 pub fn lock_titles() -> Vec<String> {
-    let mut atspi_cmd = Command::new("python3");
-    atspi_cmd.args(["-c", ATSPI_PY]);
-    let atspi = run_limited(atspi_cmd, DESK_LIST_TIMEOUT)
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default();
-    let mut wmctrl_cmd = Command::new("wmctrl");
-    wmctrl_cmd.args(["-lG"]);
-    let wmctrl = run_limited(wmctrl_cmd, DESK_LIST_TIMEOUT)
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default();
-    lock_titles_from_stdout(&atspi, &wmctrl)
+    desk_scan().lock
 }
 
 pub fn lock_titles_from_stdout(atspi: &str, wmctrl: &str) -> Vec<String> {
@@ -1393,18 +1414,23 @@ mod tests {
     #[test]
     fn live_room_desktop_spawns_must_time_out() {
         let src = include_str!("desktop.rs");
+        let scan = src
+            .split("fn desk_scan_now(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn collect_rows(").next())
+            .expect("desk_scan_now");
+        assert!(
+            scan.contains("run_limited(") && !scan.contains(".output()"),
+            "desk scan must kill hung ATSPI/wmctrl: {scan}"
+        );
         let collect = src
             .split("pub fn collect_rows(")
             .nth(1)
             .and_then(|s| s.split("\npub fn named_row").next())
             .expect("collect_rows");
         assert!(
-            collect.contains("run_limited("),
-            "collect_rows must kill hung ATSPI/wmctrl: {collect}"
-        );
-        assert!(
-            !collect.contains(".output()"),
-            "collect_rows must not block the UI on Command::output: {collect}"
+            collect.contains("desk_scan("),
+            "collect_rows must reuse the shared desk scan: {collect}"
         );
         let lock = src
             .split("pub fn lock_titles(")
@@ -1412,12 +1438,8 @@ mod tests {
             .and_then(|s| s.split("\npub fn lock_titles_from_stdout").next())
             .expect("lock_titles");
         assert!(
-            lock.contains("run_limited("),
-            "lock_titles must kill hung ATSPI/wmctrl: {lock}"
-        );
-        assert!(
-            !lock.contains(".output()"),
-            "lock_titles must not block the UI on Command::output: {lock}"
+            lock.contains("desk_scan("),
+            "lock_titles must reuse the shared desk scan: {lock}"
         );
         let cam = src
             .split("pub fn capture_webcam(")
