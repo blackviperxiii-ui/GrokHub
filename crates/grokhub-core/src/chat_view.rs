@@ -16,6 +16,13 @@ pub struct ChatView {
     pub body: String,
 }
 
+pub fn visible_turn_count(messages: &[(String, String)]) -> usize {
+    messages
+        .iter()
+        .filter(|(role, content)| role == "user" && !is_workload_user(content))
+        .count()
+}
+
 pub fn is_workload_user(content: &str) -> bool {
     let t = content.trim_start();
     t.starts_with("HOST_RESULT")
@@ -428,6 +435,16 @@ mod tests {
         ));
         assert!(is_workload_user("VERIFY_RESULT:\nexit 0\nchecked"));
         assert!(!is_workload_user("check the box"));
+        assert_eq!(
+            visible_turn_count(&[
+                ("user".into(), "check the box".into()),
+                ("assistant".into(), "ok".into()),
+                ("user".into(), "HOST_RESULT (facts only):\n$ ls\n".into()),
+                ("user".into(), "HOST_DIFF:\n- a".into()),
+                ("user".into(), "VERIFY_RESULT:\nexit 0\n".into()),
+            ]),
+            1
+        );
         let leaked = visible_chat(&[
             ("user".into(), "flash the pi".into()),
             ("assistant".into(), "Writing the image.".into()),
