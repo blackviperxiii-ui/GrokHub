@@ -7410,6 +7410,7 @@ impl Cabin {
         }
         self.sync_hub_voice();
         self.flush_projects();
+        self.persist();
     }
 
     fn ui_settings(&mut self, ctx: &egui::Context) {
@@ -10094,6 +10095,12 @@ mod tests {
         assert!(
             settings_save.contains("upsert_bound") && settings_save.contains("touch_projects"),
             "Settings Save must keep the sidebar selection on the bound path: {settings_save}"
+        );
+        let hub_name = settings_save.find("device_name").expect("hub device name");
+        let saved = settings_save.find("self.persist()").expect("settings persist");
+        assert!(
+            hub_name < saved,
+            "Settings Save must persist hub device_name or restart keeps the old name: {settings_save}"
         );
         let unbound = src
             .split("Slash::ProjectClear =>")
