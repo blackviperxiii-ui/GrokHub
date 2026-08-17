@@ -367,6 +367,9 @@ fn cdp_ws_method(ws_url: &str, payload: &str) -> Result<(), String> {
 }
 
 fn remember_from_jpeg(bytes: &[u8], outputs: &[DisplayOutput], grim_name: Option<&str>) {
+    if !image_pixels_ok_for_bytes(bytes) {
+        return;
+    }
     let Ok(img) = image::load_from_memory(bytes) else {
         return;
     };
@@ -989,6 +992,9 @@ fn image_file_to_jpeg(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 pub fn frame_bytes_are_blank(bytes: &[u8]) -> bool {
+    if !image_pixels_ok_for_bytes(bytes) {
+        return false;
+    }
     let Ok(img) = image::load_from_memory(bytes) else {
         return false;
     };
@@ -1562,6 +1568,35 @@ mod tests {
         );
         let a = grokhub_core::live_pcm_argv("arecord").unwrap();
         assert!(a.iter().any(|x| *x == "raw"));
+    }
+
+    #[test]
+    fn frame_decode_rejects_a_pixel_bomb() {
+        let src = include_str!("desktop.rs");
+        let remember = src
+            .split("fn remember_from_jpeg(")
+            .nth(1)
+            .and_then(|s| s.split("fn map_pointer_xy(").next())
+            .expect("remember_from_jpeg");
+        assert!(
+            remember.contains("image_pixels_ok"),
+            "desk-frame remember must not decode a pixel bomb: {remember}"
+        );
+        let blank = src
+            .split("pub fn frame_bytes_are_blank(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn capture_jpeg(").next())
+            .expect("frame_bytes_are_blank");
+        assert!(
+            blank.contains("image_pixels_ok"),
+            "blank-frame check must not decode a pixel bomb: {blank}"
+        );
+        let mut hdr = vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+        hdr.extend_from_slice(&13u32.to_be_bytes());
+        hdr.extend_from_slice(b"IHDR");
+        hdr.extend_from_slice(&50_000u32.to_be_bytes());
+        hdr.extend_from_slice(&50_000u32.to_be_bytes());
+        assert!(!frame_bytes_are_blank(&hdr));
     }
 
     #[test]
