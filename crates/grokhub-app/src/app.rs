@@ -75,8 +75,7 @@ use grokhub_core::{
     BUBBLE_PAD_Y,
     BUBBLE_RADIUS,
     plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
-    parse_computer_op, user_asks_cabin_eyes,
-    user_asks_desktop_hands,
+    parse_computer_op, see_drive_attach, user_asks_cabin_eyes,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
     goal_continue_pin, goal_pin_for_job, goal_step_after_outcome, hub_dispatch_ok, should_auto_continue_goal,
     visible_goal_step_on_continue,
@@ -96,7 +95,7 @@ use grokhub_core::{
     clear_pending_after_complete, inbox_claim_ready,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm,
     should_trim_result_bodies, shortcut_help,
-    user_asks_takeover, windshield_prompt,
+    windshield_prompt,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
@@ -582,7 +581,34 @@ fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, thought_op
                 });
             ChatBlockAct::None
         }
-        ChatKind::Tool => ChatBlockAct::None,
+        ChatKind::Tool => {
+            egui::Frame::none()
+                .fill(crate::theme::elevated())
+                .rounding(8.0)
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+                .show(ui, |ui| {
+                    ui.set_max_width(bubble_w);
+                    let title = if block.title.is_empty() {
+                        "Hands"
+                    } else {
+                        block.title.as_str()
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(title)
+                                .size(crate::theme::FONT_META)
+                                .color(crate::theme::muted()),
+                        );
+                        ui.label(
+                            RichText::new(&block.body)
+                                .size(crate::theme::FONT_META)
+                                .color(crate::theme::subtle()),
+                        );
+                    });
+                });
+            ChatBlockAct::None
+        }
     }
 }
 
@@ -2884,9 +2910,12 @@ impl Cabin {
             role: "user".into(),
             content: text.clone(),
         });
-        if user_asks_desktop_hands(&text) || user_asks_takeover(&text) {
-            self.hands_attach = true;
+        let (eyes, hands) = see_drive_attach(&text);
+        if eyes {
             self.eyes_attach = true;
+        }
+        if hands {
+            self.hands_attach = true;
         }
         if self.cfg.cabin_eyes && user_asks_cabin_eyes(&text) {
             self.eyes_attach = true;
@@ -4684,9 +4713,12 @@ impl Cabin {
             .map(|h| h.chars().take(400).collect::<String>())
             .unwrap_or_default();
         let pin = insight_pin(&self.learning);
-        if user_asks_desktop_hands(&last_user) || user_asks_takeover(&last_user) {
-            self.hands_attach = true;
+        let (eyes, hands) = see_drive_attach(&last_user);
+        if eyes {
             self.eyes_attach = true;
+        }
+        if hands {
+            self.hands_attach = true;
         }
         if self.cfg.cabin_eyes && user_asks_cabin_eyes(&last_user) {
             self.eyes_attach = true;
@@ -5147,6 +5179,7 @@ impl Cabin {
                 self.persist();
                 if any_hands {
                     self.hands_attach = true;
+                    self.eyes_attach = true;
                     let rows = collect_rows();
                     let titles: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
                     let lock = lock_titles();
@@ -10762,6 +10795,12 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn send_followup_turn").next())
             .expect("send_chat auth");
+        assert!(
+            send_auth.contains("see_drive_attach")
+                && send_auth.contains("eyes_attach = true")
+                && send_auth.contains("hands_attach = true"),
+            "GUI help must wake eyes and hands together: {send_auth}"
+        );
         let gate = send_auth.find("persist_user_turn").expect("send auth");
         assert!(
             send_auth[gate..].contains("hands_attach = false")
@@ -10946,6 +10985,10 @@ mod tests {
         assert!(
             host_done.contains("lock_titles"),
             "HostDone capture must see lock windows that collect_rows drops: {host_done}"
+        );
+        assert!(
+            host_done.contains("eyes_attach = true") && host_done.contains("hands_attach = true"),
+            "after COMPUTER_CMD, HostDone must re-arm eyes and hands for the next shot: {host_done}"
         );
         let import = src
             .split("fn import_openclaw")
