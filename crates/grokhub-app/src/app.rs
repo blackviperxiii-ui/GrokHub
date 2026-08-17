@@ -74,7 +74,7 @@ use grokhub_core::{
     parse_computer_cmd_loose, user_asks_cabin_eyes,
     user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
-    goal_continue_pin, goal_pin_for_job, goal_step_after_outcome, should_auto_continue_goal,
+    goal_continue_pin, goal_pin_for_job, goal_step_after_outcome, hub_dispatch_ok, should_auto_continue_goal,
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
     reply_needs_followup,
     recipe_from_cmds, replay_automation_target,
@@ -4411,7 +4411,7 @@ impl Cabin {
                     self.kick_model();
                 }
                 if !self.running {
-                    self.finish_hub_dispatch(&text, true);
+                    self.finish_hub_dispatch(&text, hub_dispatch_ok(&text));
                 }
                 self.spawn_thread_goal_on(job.as_deref());
             }
@@ -9041,6 +9041,10 @@ mod tests {
         assert!(
             src.contains("finish_hub_dispatch"),
             "phone dispatch must complete the hub task so GET /v1/results can see it"
+        );
+        assert!(
+            src.contains("hub_dispatch_ok(&text)"),
+            "GOAL_BLOCKED must not complete a phone task as done"
         );
         assert!(
             src.contains("oauth_access_live"),

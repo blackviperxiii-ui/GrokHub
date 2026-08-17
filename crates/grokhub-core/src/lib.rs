@@ -187,7 +187,7 @@ pub use context::{
 };
 pub use diagnostics::diagnostics_bundle;
 pub use goal::{
-    blend_thread_goal, compact_keep_pin, goal_continue_pin, goal_pin_for_job,
+    blend_thread_goal, compact_keep_pin, goal_continue_pin, goal_pin_for_job, hub_dispatch_ok,
     goal_step_after_outcome, is_auto_continue_prompt, looks_incomplete, next_goal_prompt,
     parse_fast_topics, parse_goal_outcome, reply_needs_followup, should_auto_continue_goal,
     should_name_thread, thread_goal_prompt, ThreadGoal, FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT,
