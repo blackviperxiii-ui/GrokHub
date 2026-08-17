@@ -2849,7 +2849,9 @@ impl Cabin {
             }
             Slash::ProjectClear => {
                 self.cfg.project_dir.clear();
-                let _ = config::save(&self.cfg);
+                self.project_sel = None;
+                self.touch_projects();
+                self.persist();
                 self.status = "Unbound — full desktop".into();
             }
             Slash::ProjectShow => {
@@ -9142,6 +9144,15 @@ mod tests {
         assert!(
             clear.contains("halt_in_flight"),
             "/clear during a job must halt or the stream refills the pane: {clear}"
+        );
+        let unbound = src
+            .split("Slash::ProjectClear =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::ProjectShow =>").next())
+            .expect("ProjectClear");
+        assert!(
+            unbound.contains("project_sel = None") && unbound.contains("touch_projects"),
+            "/project clear must drop the sidebar selection: {unbound}"
         );
         let finish = src
             .split("fn finish_hub_dispatch")
