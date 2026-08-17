@@ -22,6 +22,8 @@ pub enum PlusAct {
 pub const TEXT_FILE_CAP: usize = 64 * 1024;
 /// Plus-button and Imagine wall stills. Bigger files decode on the UI thread and can OOM.
 pub const IMAGE_FILE_CAP: u64 = 8 * 1024 * 1024;
+/// Imagine video / TTS download. A huge body must not fill RAM.
+pub const MEDIA_FILE_CAP: u64 = 64 * 1024 * 1024;
 /// 8K still fits. A tiny PNG that claims 50k×50k must not decode on the UI thread.
 pub const IMAGE_PIXEL_CAP: u64 = 36_000_000;
 
@@ -218,6 +220,7 @@ mod tests {
         assert!(!image_pixels_ok(50_000, 50_000));
         assert!(!image_pixels_ok(u32::MAX, 2));
         assert_eq!(IMAGE_PIXEL_CAP, 36_000_000);
+        assert_eq!(MEDIA_FILE_CAP, 64 * 1024 * 1024);
         let mut hdr = vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
         hdr.extend_from_slice(&13u32.to_be_bytes());
         hdr.extend_from_slice(b"IHDR");
