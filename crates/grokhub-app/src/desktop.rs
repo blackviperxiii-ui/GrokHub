@@ -825,6 +825,12 @@ pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
                     .and_then(|s| s.to_str())
                     .is_some_and(|e| e == "jpg" || e == "jpeg")
                 {
+                    let len = std::fs::metadata(&written).map(|m| m.len()).unwrap_or(u64::MAX);
+                    if len > IMAGE_FILE_CAP {
+                        last = format!("{kind:?} too large");
+                        let _ = std::fs::remove_file(&written);
+                        continue;
+                    }
                     match std::fs::read(&written) {
                         Ok(b) if b.len() >= 32 => b,
                         Ok(_) => {
@@ -1130,6 +1136,11 @@ pub fn capture_webcam() -> Result<String, String> {
     let ok = run_limited(cam, DESK_WEBCAM_TIMEOUT).is_some_and(|o| o.status.success());
     if !ok {
         return Err("webcam capture failed".into());
+    }
+    let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(u64::MAX);
+    if len > IMAGE_FILE_CAP {
+        let _ = std::fs::remove_file(&path);
+        return Err("image too large".into());
     }
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&path);
@@ -1683,6 +1694,31 @@ mod tests {
         assert!(
             jmeta < jopen && jpeg.contains("IMAGE_FILE_CAP"),
             "capture JPEG convert must not decode a huge file: {jpeg}"
+        );
+    }
+
+    #[test]
+    fn capture_jpeg_reads_reject_a_huge_file() {
+        let src = include_str!("desktop.rs");
+        let cap = src
+            .split("pub fn capture_jpeg(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn capture_data_url(").next())
+            .expect("capture_jpeg");
+        let jpg_read = cap.find("std::fs::read(&written)").expect("jpg read");
+        assert!(
+            cap.contains("IMAGE_FILE_CAP") && cap.find("IMAGE_FILE_CAP").expect("cap") < jpg_read,
+            "grim/ffmpeg JPEG must not slurp a huge file: {cap}"
+        );
+        let cam = src
+            .split("pub fn capture_webcam(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn record_pcm_chunks(").next())
+            .expect("capture_webcam");
+        let cam_read = cam.find("std::fs::read(&path)").expect("cam read");
+        assert!(
+            cam.contains("IMAGE_FILE_CAP") && cam.find("IMAGE_FILE_CAP").expect("cam cap") < cam_read,
+            "webcam JPEG must not slurp a huge file: {cam}"
         );
     }
 }
