@@ -1226,6 +1226,9 @@ pub fn clipboard_image() -> Option<PathBuf> {
             if !o.status.success() || o.stdout.len() < 24 {
                 continue;
             }
+            if o.stdout.len() as u64 > IMAGE_FILE_CAP {
+                continue;
+            }
             let b = &o.stdout;
             let png = b[0] == 0x89 && b[1] == b'P';
             let jpg = b[0] == 0xFF && b[1] == 0xD8;
@@ -1278,7 +1281,8 @@ pub fn clipboard_once() -> Option<String> {
         cmd.args(args);
         if let Some(o) = run_limited(cmd, DESK_LIST_TIMEOUT) {
             if o.status.success() {
-                let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                let n = o.stdout.len().min(TEXT_FILE_CAP);
+                let s = String::from_utf8_lossy(&o.stdout[..n]).trim().to_string();
                 if !s.is_empty() {
                     return Some(s);
                 }
@@ -1640,6 +1644,19 @@ mod tests {
         assert!(
             img.contains("run_limited(") && !img.contains(".output()"),
             "clipboard image paste must time out: {img}"
+        );
+        assert!(
+            img.contains("IMAGE_FILE_CAP"),
+            "clipboard image paste must not keep a huge bitmap: {img}"
+        );
+        let text = src
+            .split("pub fn clipboard_once(")
+            .nth(1)
+            .and_then(|s| s.split("\n#[cfg(test)]").next())
+            .expect("clipboard_once");
+        assert!(
+            text.contains("TEXT_FILE_CAP"),
+            "clipboard text paste must not keep a huge paste: {text}"
         );
         let ydo = src
             .split("fn start_ydotoold(")
