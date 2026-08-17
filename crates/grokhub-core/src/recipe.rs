@@ -448,7 +448,7 @@ pub fn extract_computer_ops(text: &str) -> Vec<ComputerOp> {
 }
 
 pub fn recipe_from_cmds(cmds: &[String], screen: Option<ScreenSize>) -> Option<Recipe> {
-    let ops: Vec<ComputerOp> = cmds.iter().filter_map(|c| parse_computer_cmd_loose(c)).collect();
+    let ops: Vec<ComputerOp> = cmds.iter().filter_map(|c| parse_computer_op(c)).collect();
     if ops.is_empty() {
         None
     } else {
@@ -886,6 +886,30 @@ mod tests {
         );
         assert!(pointer_op_blocked_on_lock(&ComputerOp::Scroll { dy: 1 }));
         assert!(!pointer_op_blocked_on_lock(&ComputerOp::WaitFor { title: None }));
+    }
+
+    #[test]
+    fn recipe_from_cmds_ignores_shell_type() {
+        assert!(
+            recipe_from_cmds(&["type cargo".into()], None).is_none(),
+            "bash type must not become a desktop type-in recipe"
+        );
+        assert!(
+            recipe_from_cmds(&["key Return".into()], None).is_none(),
+            "unprefixed key must not become desktop hands"
+        );
+        assert!(
+            recipe_from_cmds(&["click 10 20".into()], None).is_none(),
+            "unprefixed click must not become desktop hands"
+        );
+        let typed = recipe_from_cmds(&["COMPUTER_CMD: type hello".into()], None);
+        assert!(typed.is_some(), "prefixed COMPUTER_CMD type stays hands");
+        assert_eq!(
+            typed.unwrap().ops,
+            vec![ComputerOp::Type {
+                text: "hello".into()
+            }]
+        );
     }
 
     #[test]
