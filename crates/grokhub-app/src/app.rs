@@ -590,6 +590,42 @@ struct LiveCap {
     cam: Option<String>,
 }
 
+struct PersistSnap {
+    threads: Vec<ChatThread>,
+    msgs: Vec<(String, String)>,
+    board: Vec<BoardCard>,
+    automations: Vec<Automation>,
+    rewind_rows: Vec<RewindRecord>,
+    learning: LearningState,
+    suggestions: SuggestionStore,
+    usage: UsageDay,
+    chip_memory: ChipMemory,
+    wall: ImagineWall,
+    cfg: AppConfig,
+    hub: Option<HubState>,
+    projects: Option<Vec<ProjectNode>>,
+}
+
+fn write_persist_disk(snap: &PersistSnap) {
+    let _ = threads::save(&snap.threads);
+    let _ = config::save_chat(&snap.msgs);
+    let _ = config::save_board(&snap.board);
+    let _ = crate::night::save(&snap.automations);
+    let _ = crate::night::save_rewinds(&snap.rewind_rows);
+    let _ = crate::store::save_learning(&snap.learning);
+    let _ = crate::store::save_suggestions(&snap.suggestions);
+    let _ = crate::store::save_usage(&snap.usage);
+    let _ = crate::store::save_chips(&snap.chip_memory);
+    let _ = crate::store::save_wall(&snap.wall);
+    if let Some(p) = &snap.projects {
+        let _ = crate::store::save_projects(p);
+    }
+    let _ = config::save(&snap.cfg);
+    if let Some(st) = &snap.hub {
+        let _ = save_hub_state(&config::hub_state_path(), st);
+    }
+}
+
 pub struct Cabin {
     nav: Nav,
     cfg: AppConfig,
@@ -607,6 +643,8 @@ pub struct Cabin {
     mem_name: String,
     mem_body: String,
     last_persist: Instant,
+    persist_rx: Option<mpsc::Receiver<()>>,
+    persist_io: Arc<Mutex<()>>,
     board: Vec<BoardCard>,
     board_title: String,
     imagine_prompt: String,
@@ -893,6 +931,8 @@ impl Cabin {
             mem_name,
             mem_body,
             last_persist: Instant::now(),
+            persist_rx: None,
+            persist_io: Arc::new(Mutex::new(())),
             board: config::load_board(),
             board_title: String::new(),
             imagine_prompt: String::new(),
@@ -1124,6 +1164,17 @@ impl Cabin {
     }
 
     fn persist(&mut self) {
+        let snap = self.persist_snap();
+        self.flush_projects();
+        self.sync_hub_voice();
+        if let Ok(_g) = self.persist_io.lock() {
+            write_persist_disk(&snap);
+        }
+        self.last_persist = Instant::now();
+        self.geom_dirty = false;
+    }
+
+    fn persist_snap(&mut self) -> PersistSnap {
         let msgs: Vec<(String, String)> = self
             .messages
             .iter()
@@ -1133,25 +1184,60 @@ impl Cabin {
             t.messages = msgs.clone();
             self.cfg.current_thread = t.id.clone();
         }
-        let _ = threads::save(&self.threads);
-        let _ = config::save_chat(&msgs);
-        let _ = config::save_board(&self.board);
-        let _ = crate::night::save(&self.automations);
-        let _ = crate::night::save_rewinds(&self.rewind_rows);
-        let _ = crate::store::save_learning(&self.learning);
-        let _ = crate::store::save_suggestions(&self.suggestions);
-        let _ = crate::store::save_usage(&self.usage);
-        let _ = crate::store::save_chips(&self.chip_memory);
-        let _ = crate::store::save_wall(&self.wall);
-        self.flush_projects();
-        let _ = config::save(&self.cfg);
-        self.sync_hub_voice();
-        let hub_disk = self.hub.lock().ok().map(|st| state_for_disk(&st));
-        if let Some(st) = hub_disk {
-            let _ = save_hub_state(&config::hub_state_path(), &st);
+        let projects = if self.projects_dirty {
+            Some(self.projects.clone())
+        } else {
+            None
+        };
+        PersistSnap {
+            threads: self.threads.clone(),
+            msgs,
+            board: self.board.clone(),
+            automations: self.automations.clone(),
+            rewind_rows: self.rewind_rows.clone(),
+            learning: self.learning.clone(),
+            suggestions: self.suggestions.clone(),
+            usage: self.usage.clone(),
+            chip_memory: self.chip_memory.clone(),
+            wall: self.wall.clone(),
+            cfg: self.cfg.clone(),
+            hub: self.hub.lock().ok().map(|st| state_for_disk(&st)),
+            projects,
         }
+    }
+
+    fn persist_bg(&mut self) {
+        if self.persist_rx.is_some() {
+            return;
+        }
+        let snap = self.persist_snap();
+        if snap.projects.is_some() {
+            self.projects_dirty = false;
+        }
+        self.sync_hub_voice();
         self.last_persist = Instant::now();
         self.geom_dirty = false;
+        let io = self.persist_io.clone();
+        let (tx, rx) = mpsc::channel();
+        self.persist_rx = Some(rx);
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                write_persist_disk(&snap);
+            }
+            let _ = tx.send(());
+        });
+    }
+
+    fn poll_persist(&mut self) {
+        let Some(rx) = self.persist_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => {}
+            Err(mpsc::TryRecvError::Empty) => {
+                self.persist_rx = Some(rx);
+            }
+        }
     }
 
     fn sync_hub_voice(&self) {
@@ -3418,7 +3504,7 @@ impl Cabin {
                         self.stamp_current_access();
                     }
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
-                        self.persist();
+                        self.persist_bg();
                     }
                 }
                 HeartbeatAct::Inbox => self.drain_inbox(),
@@ -5978,6 +6064,7 @@ impl eframe::App for Cabin {
         self.poll_global_hotkeys();
         self.poll_night_check(now_ms());
         self.poll_wall();
+        self.poll_persist();
         self.live_room();
         self.tick_heartbeat();
         let close_requested = ctx.input(|i| i.viewport().close_requested());
@@ -6049,7 +6136,7 @@ impl eframe::App for Cabin {
         self.capture_window(ctx);
         self.flush_window(ctx);
         if self.last_persist.elapsed() > Duration::from_secs(2) {
-            self.persist();
+            self.persist_bg();
         }
         let wait = next_heartbeat_wait_ms(
             self.last_heartbeat.elapsed().as_millis() as u64,
@@ -9664,6 +9751,42 @@ mod tests {
         assert!(
             !persist.contains("if let Ok(st) = self.hub.lock()"),
             "persist must not hold hub.lock() across save_hub_state: {persist}"
+        );
+    }
+
+    #[test]
+    fn periodic_persist_leaves_the_ui_thread() {
+        let src = include_str!("app.rs");
+        let beat = src
+            .split("fn tick_heartbeat")
+            .nth(1)
+            .and_then(|s| s.split("fn tick_anticipate").next())
+            .expect("tick_heartbeat");
+        assert!(
+            beat.contains("persist_bg(") && !beat.contains("self.persist()"),
+            "2s housekeep persist must not block the cabin: {beat}"
+        );
+        let paint = src
+            .split("self.flush_window(ctx)")
+            .nth(1)
+            .and_then(|s| s.split("next_heartbeat_wait_ms").next())
+            .expect("update persist");
+        assert!(
+            paint.contains("persist_bg(") && !paint.contains("self.persist()"),
+            "2s paint persist must not block the cabin: {paint}"
+        );
+        let bg = src
+            .split("fn persist_bg(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ").next())
+            .expect("persist_bg");
+        let spawn = bg.find("thread::spawn").expect("persist_bg must leave the UI thread");
+        let save = bg
+            .find("write_persist_disk")
+            .expect("periodic persist must write on the worker");
+        assert!(
+            spawn < save,
+            "periodic persist must write after spawn: {bg}"
         );
     }
 
