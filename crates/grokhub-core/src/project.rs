@@ -464,6 +464,11 @@ pub fn expand_host_path_token_in(tok: &str, home: Option<&str>) -> Option<String
     if tok == "~" || tok == "$HOME" {
         return Some(home.to_string());
     }
+    if let Some(rest) = tok.strip_prefix('~') {
+        if !rest.is_empty() && !rest.starts_with('/') {
+            return Some(format!("/home/{rest}"));
+        }
+    }
     None
 }
 
@@ -719,6 +724,14 @@ mod tests {
         assert!(
             host_cmd_leaves_project_in("eval builtin cd && ls", "/home/j/proj", Some("/home/j")),
             "eval builtin cd && ls lists HOME, not the bound tree"
+        );
+        assert!(
+            host_cmd_leaves_project_in("cd ~other", "/home/j/proj", Some("/home/j")),
+            "cd ~other goes to that user's home, not a project subdir named ~other"
+        );
+        assert!(
+            host_cmd_leaves_project_in("cat ~other/secrets", "/home/j/proj", Some("/home/j")),
+            "cat ~other/secrets reads outside the bound tree"
         );
     }
 
