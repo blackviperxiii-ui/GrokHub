@@ -3413,6 +3413,7 @@ impl Cabin {
                         self.running,
                         IDLE_REFLECT_MS,
                     ) && !self.reflected_idle
+                        && !self.scratch()
                     {
                         self.reflected_idle = true;
                         self.run_reflect();
@@ -11105,6 +11106,15 @@ mod tests {
         assert!(
             house.contains("stamp_current_access") && house.contains("Nav::Chat"),
             "Housekeep stamps access while sitting on Chat: {house}"
+        );
+        let idle = src
+            .split("HeartbeatAct::Reflect =>")
+            .nth(1)
+            .and_then(|s| s.split("HeartbeatAct::Anticipate =>").next())
+            .expect("idle reflect");
+        assert!(
+            idle.contains("scratch()"),
+            "idle reflect must not consume the slot on Scratch: {idle}"
         );
         let mut older = crate::threads::ChatThread::new("Older", false);
         older.accessed_ms = 1_000;
