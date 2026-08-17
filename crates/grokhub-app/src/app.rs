@@ -3680,7 +3680,7 @@ impl Cabin {
         if key.trim().is_empty() {
             return;
         }
-        if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
+        if config::read_memory(&self.mem_name) != self.mem_body {
             let _ = config::write_memory(&self.mem_name, &self.mem_body);
         }
         let digest = self.review_digest();
@@ -10975,6 +10975,10 @@ mod tests {
         assert!(
             spawn[..digest].contains("write_memory") && spawn[..digest].contains("mem_body"),
             "nightly review must flush the Memory editor before the digest: {spawn}"
+        );
+        assert!(
+            !spawn[..digest].contains("scratch()"),
+            "Scratch is a chat tab — unsaved Memory editor edits must still reach the nightly digest: {spawn}"
         );
         let digest_fn = src
             .split("fn review_digest(")
