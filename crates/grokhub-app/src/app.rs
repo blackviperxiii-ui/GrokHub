@@ -98,7 +98,7 @@ use grokhub_core::{
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
     build_review_digest, dedupe_suggestions, merge_suggestion_store, parse_suggest_lines,
-    partition_suggestions, review_due,
+    partition_suggestions, prune_live_suggestions, review_due,
     review_status_line, review_system_prompt, DigestLine, ReviewDigest, SuggestionStore,
     CABIN_GITHUB_TOOLS, REVIEW_NIGHT_HOUR,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
@@ -3740,6 +3740,7 @@ impl Cabin {
                     incoming.last_review_ms = ms;
                     self.suggestions = merge_suggestion_store(&self.suggestions, incoming);
                 }
+                prune_live_suggestions(&mut self.suggestions, &live_tools);
                 let _ = crate::store::save_suggestions(&self.suggestions);
             }
             Err(e) => {
@@ -10988,6 +10989,10 @@ mod tests {
         assert!(
             apply.contains("CABIN_GITHUB_TOOLS") && !apply.contains("&[]"),
             "nightly review must drop already-wired GitHub tools: {apply}"
+        );
+        assert!(
+            apply.contains("prune_live_suggestions"),
+            "a successful review must drop wired GitHub tiles already sitting in the store: {apply}"
         );
         assert!(src.contains("self.tick_review()"));
         assert!(
