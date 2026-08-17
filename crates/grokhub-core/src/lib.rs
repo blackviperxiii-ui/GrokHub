@@ -284,7 +284,7 @@ pub use workboard::{
     BoardCard, BoardStatus,
 };
 pub use state::{
-    clear_pending_after_complete, load_hub_state, save_hub_state, state_for_disk, CompleteError, HubState, MintRealtimeFn, PairError,
+    clear_pending_after_complete, inbox_claim_ready, load_hub_state, save_hub_state, state_for_disk, CompleteError, HubState, MintRealtimeFn, PairError,
     DEFAULT_PORT, HUB_KIND,
 };
 pub use task::{HubTask, Receipt};
