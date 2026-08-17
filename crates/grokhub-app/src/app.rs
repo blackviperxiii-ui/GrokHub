@@ -2783,6 +2783,7 @@ impl Cabin {
                     role: "assistant".into(),
                     content: slash_help(),
                 });
+                self.stamp_current_access();
                 self.persist();
             }
             Slash::New => self.new_thread(false),
@@ -2897,6 +2898,7 @@ impl Cabin {
                     role: "assistant".into(),
                     content: catalog_line(),
                 });
+                self.stamp_current_access();
                 self.persist();
             }
             Slash::Palette => self.open_palette(),
@@ -3019,6 +3021,7 @@ impl Cabin {
                     role: "assistant".into(),
                     content: body,
                 });
+                self.stamp_current_access();
                 self.persist();
             }
         }
@@ -3257,6 +3260,7 @@ impl Cabin {
                 g.dream_prompt
             ),
         });
+        self.stamp_current_access();
         self.persist();
         self.kick_imagine();
     }
@@ -10104,6 +10108,24 @@ mod tests {
             clear.contains("stamp_current_access") || clear.contains("accessed_ms"),
             "/clear must bump accessed_ms or /sync LWW can restore the cleared turns: {clear}"
         );
+        let help = src
+            .split("Slash::Help =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::New =>").next())
+            .expect("Help");
+        assert!(
+            help.contains("stamp_current_access") || help.contains("accessed_ms"),
+            "/help must bump accessed_ms or /sync LWW can drop the help turn: {help}"
+        );
+        let models = src
+            .split("Slash::Models =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::Palette =>").next())
+            .expect("Models");
+        assert!(
+            models.contains("stamp_current_access") || models.contains("accessed_ms"),
+            "/models must bump accessed_ms or /sync LWW can drop the catalog turn: {models}"
+        );
         let undo = src
             .split("Slash::Undo =>")
             .nth(1)
@@ -10228,6 +10250,10 @@ mod tests {
                 && recall[..mem].contains("mem_body")
                 && recall[..mem].contains("scratch()"),
             "/recall must flush the Memory editor before searching disk: {recall}"
+        );
+        assert!(
+            recall.contains("stamp_current_access") || recall.contains("accessed_ms"),
+            "/recall must bump accessed_ms or /sync LWW can drop the recall turn: {recall}"
         );
         let sync = src
             .split("fn sync_hub(&mut self)")
@@ -10366,6 +10392,10 @@ mod tests {
         assert!(
             key < push && dream.contains("self.running"),
             "/dream must not persist a turn when Imagine cannot start: {dream}"
+        );
+        assert!(
+            dream.contains("stamp_current_access") || dream.contains("accessed_ms"),
+            "/dream must bump accessed_ms or /sync LWW can drop the dream turn: {dream}"
         );
         let night = src
             .split("fn last_night_hint")
