@@ -68,7 +68,8 @@ use grokhub_core::{
     this_turn_cabin_frame,
     is_workload_user, merge_thinking, prefer_complete_reply, quote_for_reply, strip_thinking,
     visible_chat, visible_turn_count, ChatKind, ChatView,
-    apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
+    apply_job_error, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
+    upsert_assistant_turn,
     worker_gone_status, ChatSendKind,
     bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X,
     BUBBLE_PAD_Y,
@@ -1405,40 +1406,32 @@ impl Cabin {
             return;
         }
         let vis = self.visible_thread_id();
-        let mut visible: Vec<(String, String)> = self
-            .messages
-            .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
-            .collect();
-        let mut stored: Vec<(String, Vec<(String, String)>)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.messages.clone()))
-            .collect();
-        apply_stream_snapshot(
-            self.chat_job_thread.as_deref(),
-            &vis,
-            &mut visible,
-            &mut stored,
-            &content,
-        );
-        self.messages = visible
-            .into_iter()
-            .map(|(role, content)| Msg { role, content })
-            .collect();
+        let job = self.chat_job_thread.as_deref();
+        if job.is_none() || job == Some(vis.as_str()) {
+            if let Some(m) = self.messages.last_mut() {
+                if m.role == "assistant" {
+                    m.content = content;
+                } else {
+                    self.messages.push(Msg {
+                        role: "assistant".into(),
+                        content,
+                    });
+                }
+            } else {
+                self.messages.push(Msg {
+                    role: "assistant".into(),
+                    content,
+                });
+            }
+        } else if let Some(job_id) = job {
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == job_id) {
+                upsert_assistant_turn(&mut t.messages, &content);
+            }
+        }
         let target = self
             .chat_job_thread
             .clone()
-            .unwrap_or_else(|| vis.clone());
-        if let Some(job) = self.chat_job_thread.as_deref() {
-            if job != vis {
-                if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job) {
-                    if let Some(t) = self.threads.iter_mut().find(|t| t.id == job) {
-                        t.messages = msgs.clone();
-                    }
-                }
-            }
-        }
+            .unwrap_or_else(|| vis);
         if let Some(t) = self.threads.iter_mut().find(|t| t.id == target) {
             t.accessed_ms = now_ms();
         }
@@ -11241,6 +11234,10 @@ mod tests {
         assert!(
             snap.contains("accessed_ms"),
             "background stream writes must bump accessed_ms or /sync LWW drops the new messages: {snap}"
+        );
+        assert!(
+            !snap.contains("t.messages.clone()"),
+            "stream deltas must not clone every thread: {snap}"
         );
         let mem_rows = sync
             .split("let mem = ")
