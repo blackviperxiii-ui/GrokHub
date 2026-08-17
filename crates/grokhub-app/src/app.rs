@@ -41,7 +41,7 @@ use grokhub_core::{
     doctor_hands_line, due_automations, ensure_automation_schedule, estimate_messages,
     extract_connector_cmds, mark_automation_skipped, retain_held_plan, yolo_plan_split, chat_bearer,
     oauth_access_live,
-    drop_trailing_assistant_on, job_error_goes_to_chat, job_is_scratch, kick_messages_for_job, last_user_for_job,
+    drop_trailing_assistant_on, job_error_goes_to_chat, job_is_scratch, kick_messages_for_job,
     persist_user_turn, refund_host_reserved, daily_units_blocked,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
@@ -3368,19 +3368,25 @@ impl Cabin {
 
     fn last_user_on_job(&self) -> String {
         let vis = self.visible_thread_id();
-        let visible_pairs: Vec<(String, String)> = self
-            .messages
+        let job = self.chat_job_thread.as_deref();
+        let visible = || {
+            last_user_scan(
+                self.messages
+                    .iter()
+                    .map(|m| (m.role.as_str(), m.content.as_str())),
+            )
+        };
+        if job.is_none() || job == Some(vis.as_str()) {
+            return visible().unwrap_or_default();
+        }
+        self.threads
             .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
-            .collect();
-        let stored = self.job_stored_pairs(self.chat_job_thread.as_deref(), &vis);
-        last_user_for_job(
-            self.chat_job_thread.as_deref(),
-            &vis,
-            &visible_pairs,
-            &stored,
-        )
-        .unwrap_or_default()
+            .find(|t| Some(t.id.as_str()) == job)
+            .and_then(|t| {
+                last_user_scan(t.messages.iter().map(|(r, c)| (r.as_str(), c.as_str())))
+            })
+            .or_else(visible)
+            .unwrap_or_default()
     }
 
     fn commit_proposed_skill(&mut self, proposed: SkillMd) {
@@ -10967,8 +10973,14 @@ mod tests {
             .and_then(|s| s.split("fn commit_proposed_skill").next())
             .expect("last_user_on_job");
         assert!(
-            last_user.contains("last_user_for_job") && !last_user.contains("t.messages.clone()"),
+            (last_user.contains("last_user_for_job") || last_user.contains("last_user_scan"))
+                && last_user.contains("self.threads")
+                && !last_user.contains("t.messages.clone()"),
             "skill draft after host must not clone every thread: {last_user}"
+        );
+        assert!(
+            !last_user.contains("content.clone()"),
+            "skill draft after host must not clone an 8MB complete to read the last user: {last_user}"
         );
         let halt_flight = src
             .split("fn halt_in_flight")
