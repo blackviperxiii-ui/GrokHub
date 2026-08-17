@@ -1,7 +1,7 @@
 # Rust cabin — Grok OAuth + Electron parity
 
 **Date:** 2026-08-14  
-**Version:** 2.6.2  
+**Version:** 2.6.3  
 **Override:** Grok OAuth is required. The old “no OAuth” line in the Rust-parity spec is void.
 
 ## Why
