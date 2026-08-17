@@ -5284,6 +5284,7 @@ impl Cabin {
                 }
                 Err(e) => {
                     self.status = e;
+                    self.persist();
                     return;
                 }
             }
@@ -5306,6 +5307,7 @@ impl Cabin {
                         }
                         Err(e) => {
                             self.status = e;
+                            self.persist();
                             return;
                         }
                     }
@@ -5317,6 +5319,7 @@ impl Cabin {
         } else {
             "Reflect: nothing new".into()
         };
+        self.persist();
     }
 
     fn run_skill_verify(&mut self) {
@@ -9556,7 +9559,7 @@ mod tests {
         let reflect = src
             .split("fn run_reflect")
             .nth(1)
-            .and_then(|s| s.split("fn take_over_desktop").next())
+            .and_then(|s| s.split("fn run_skill_verify").next())
             .expect("run_reflect");
         assert!(
             reflect.contains("kick_messages_for_job"),
@@ -9566,6 +9569,12 @@ mod tests {
         assert!(
             reflect[..mem].contains("write_memory") && reflect[..mem].contains("mem_body"),
             "/learn reflect must flush the Memory editor before surgical edit: {reflect}"
+        );
+        let insights = reflect.find("extract_insights").expect("reflect insights");
+        let saved = reflect[insights..].find("self.persist()").expect("reflect persist");
+        assert!(
+            saved > 0,
+            "/learn reflect must persist insights or a restart drops them: {reflect}"
         );
         let takeover = src
             .split("fn take_over_desktop")
