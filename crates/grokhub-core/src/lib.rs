@@ -64,8 +64,9 @@ pub use feel::{
     HOVER_SECS, PRESS_EXPANSION, PRESS_SECS,
 };
 pub use autonomy::{
-    anticipated_need, autonomy_policy, cabin_system_prompt, host_plan_autorun, host_step_autorun,
-    should_anticipate, HostAuto, LearnMode, Policy, SkillFollow, SkillWrite,
+    anticipate_consumes_slot, anticipated_need, autonomy_policy, cabin_system_prompt,
+    host_plan_autorun, host_step_autorun, should_anticipate, HostAuto, LearnMode, Policy,
+    SkillFollow, SkillWrite,
 };
 pub use attach::{
     append_composer, attach_kind, attach_name, attach_prompt_line, chat_attach_status,
