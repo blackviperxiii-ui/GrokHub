@@ -7236,6 +7236,9 @@ impl Cabin {
             ui.horizontal(|ui| {
                 for name in ["SOUL.md", "USER.md", "MEMORY.md"] {
                     if crate::cards::tab_pill(ui, name, self.mem_name == name) {
+                        if !self.scratch() && self.mem_name != name {
+                            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+                        }
                         self.mem_name = name.into();
                         self.mem_body = config::read_memory(name);
                     }
@@ -9691,6 +9694,17 @@ mod tests {
         assert!(
             memory_ui.contains("self.scratch()") && memory_ui.contains("no memory writes"),
             "Memory Save on Scratch must not write MEMORY.md: {memory_ui}"
+        );
+        let tabs = memory_ui
+            .split("tab_pill")
+            .nth(1)
+            .and_then(|s| s.split("Restore").next())
+            .expect("memory tabs");
+        let flush = tabs.find("write_memory").expect("flush leaving memory");
+        let switch = tabs.find("mem_name = name").expect("switch name");
+        assert!(
+            flush < switch && tabs.contains("scratch()"),
+            "Memory tab switch must flush the leaving file like thread switch: {tabs}"
         );
         let settings_save = src
             .split("fn save_settings")
