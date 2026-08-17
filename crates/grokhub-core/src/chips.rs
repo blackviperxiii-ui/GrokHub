@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::is_plain_text;
+use crate::recipe::user_asks_gui_help;
 
 pub const CHIP_VISIBLE_MAX: usize = 5;
 pub const CHIP_HARD_MAX: usize = 8;
@@ -586,6 +587,26 @@ fn topic_from_text(text: &str) -> String {
         .join(" ")
 }
 
+fn last_user_wants_gui(chat: &[(String, String)]) -> bool {
+    user_asks_gui_help(&last_of(chat, "user"))
+}
+
+fn finish_tools_prompt(chat: &[(String, String)]) -> &'static str {
+    if last_user_wants_gui(chat) {
+        "Don't just plan — drive the desktop now. Emit COMPUTER_CMD lines (act, tab new, key ctrl+t). Summarize after COMPUTER_RESULT."
+    } else {
+        "Don't just plan — actually investigate my machine now. Emit HOST_CMD lines for safe read-only checks. Summarize results after HOST_RESULT."
+    }
+}
+
+fn finish_job_prompt(chat: &[(String, String)]) -> &'static str {
+    if last_user_wants_gui(chat) {
+        "Finish the incomplete work from your last reply. Act now (COMPUTER_CMD: act, tab new, or key ctrl+t). End with status."
+    } else {
+        "Finish the incomplete work from your last reply. Act now (HOST_CMD if needed). End with status."
+    }
+}
+
 fn chips_from_last_assistant(chat: &[(String, String)]) -> Vec<QuickChip> {
     let asst = last_of(chat, "assistant");
     if asst.len() < 24 {
@@ -641,7 +662,7 @@ fn chips_from_last_assistant(chat: &[(String, String)]) -> Vec<QuickChip> {
         out.push(chip(
             "last-run-host",
             if is_plan { "Finish — run tools now" } else { "Run diagnostics now" },
-            "Don't just plan — actually investigate my machine now. Emit HOST_CMD lines for safe read-only checks. Summarize results after HOST_RESULT.",
+            finish_tools_prompt(chat),
             ChipKind::Chat,
             97.0,
             "Predicted: you need action, not another plan",
@@ -1551,7 +1572,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         chips.push(chip(
             "ctx-incomplete",
             "Finish the job",
-            "Finish the incomplete work from your last reply. Act now (HOST_CMD if needed). End with status.",
+            finish_job_prompt(input.chat),
             ChipKind::Chat,
             96.0,
             "Predicted incomplete turn",
@@ -2409,6 +2430,28 @@ mod tests {
     fn chip_llm_is_fast_mode() {
         assert_eq!(CHIP_LLM_MODE, "fast");
         assert_eq!(crate::model_for_mode(CHIP_LLM_MODE), "grok-3-mini-fast");
+    }
+
+    #[test]
+    fn gui_plan_finish_chip_asks_for_computer_cmd() {
+        let mem = ChipMemory::default();
+        let chat = [
+            msg("user", "use my mouse and select a new tab in firefox"),
+            msg(
+                "assistant",
+                "I'll locate Firefox on the desktop and run a click on the new tab.",
+            ),
+        ];
+        let chips = build_quick_chips(input(&chat, "", &mem, &[], &[]));
+        let finish = chips.iter().find(|c| {
+            c.id == "last-run-host" || c.id == "ctx-incomplete" || c.label.contains("Finish")
+        });
+        let finish = finish.expect(&format!("finish chip: {:?}", labels(&chips)));
+        assert!(
+            finish.value.contains("COMPUTER_CMD"),
+            "GUI finish chip must ask for COMPUTER_CMD: {}",
+            finish.value
+        );
     }
 
     #[test]

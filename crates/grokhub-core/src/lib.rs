@@ -146,12 +146,13 @@ pub use inhabit::{
 };
 pub use hands::{
     diagnose_hands, extra_bin_dirs, hands_chip_label, hands_chip_live, hands_down_receipt,
-    resolve_bin_in, ydotool_socket_path, HandsDown, HANDS_PACMAN, PYATSPI_MISSING,
+    hands_windshield_line, resolve_bin_in, ydotool_socket_path, HandsDown, HANDS_PACMAN,
+    PYATSPI_MISSING,
 };
 pub use browser::{
-    browser_windshield_line, cdp_activate_payload, cdp_page_close_payload, cdp_page_focus_payload,
-    format_tab_list, match_browser_tabs, parse_cdp_targets, pick_browser_tab, BrowserTab, CDP_DOWN,
-    CDP_PORTS,
+    browser_windshield_line, cdp_activate_payload, cdp_new_tab_path, cdp_page_close_payload,
+    cdp_page_focus_payload, format_tab_list, match_browser_tabs, parse_cdp_targets, pick_browser_tab,
+    BrowserTab, CDP_DOWN, CDP_PORTS,
 };
 pub use recipe::{
     act_window_search_bin, bin_on_path, computer_cmd_line, computer_drive, computer_drive_for, default_bin_extra_dirs,
@@ -300,8 +301,8 @@ pub use voice::{
 pub use windshield::{
     build_windshield, filter_atspi_rows, is_interactive_role, keep_atspi_row, lock_check_titles,
     parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row, rank_atspi_rows,
-    refused_lock, window_name_from_atspi, window_name_from_wmctrl, windshield_browser_line,
-    windshield_prompt, AtspiRow,
+    refused_lock, tab_list_from_rows, window_name_from_atspi, window_name_from_wmctrl,
+    windshield_browser_line, windshield_prompt, AtspiRow,
     PendingStep, WindshieldFrame,
 };
 pub use workboard::{
