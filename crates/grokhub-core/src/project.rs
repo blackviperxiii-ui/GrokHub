@@ -212,12 +212,32 @@ pub struct DropOutcome {
     pub name: String,
 }
 
+pub fn bound_paths_match(a: &str, b: &str, home: Option<&str>) -> bool {
+    let a = expand_project_root(a, home);
+    let b = expand_project_root(b, home);
+    !a.is_empty() && a == b
+}
+
 pub fn drop_selected(nodes: &mut Vec<ProjectNode>, id: &str, bound_path: &str) -> DropOutcome {
+    drop_selected_in(
+        nodes,
+        id,
+        bound_path,
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+pub fn drop_selected_in(
+    nodes: &mut Vec<ProjectNode>,
+    id: &str,
+    bound_path: &str,
+    home: Option<&str>,
+) -> DropOutcome {
     let node = nodes.iter().find(|n| n.id == id);
     let name = node.map(|n| n.name.clone()).unwrap_or_default();
     let path = node.map(|n| n.path.clone()).unwrap_or_default();
     let dropped = drop_node(nodes, id);
-    let unbound = dropped && !bound_path.trim().is_empty() && path == bound_path;
+    let unbound = dropped && bound_paths_match(&path, bound_path, home);
     DropOutcome {
         dropped,
         unbound,
@@ -348,11 +368,26 @@ pub fn folder_choices(nodes: &[ProjectNode]) -> Vec<(String, String)> {
 }
 
 pub fn upsert_bound(nodes: &mut Vec<ProjectNode>, bound_path: &str) -> Option<String> {
+    upsert_bound_in(
+        nodes,
+        bound_path,
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+pub fn upsert_bound_in(
+    nodes: &mut Vec<ProjectNode>,
+    bound_path: &str,
+    home: Option<&str>,
+) -> Option<String> {
     let path = bound_path.trim();
     if path.is_empty() {
         return None;
     }
-    if let Some(n) = nodes.iter().find(|n| n.kind == ProjectKind::Project && n.path == path) {
+    if let Some(n) = nodes
+        .iter()
+        .find(|n| n.kind == ProjectKind::Project && bound_paths_match(&n.path, path, home))
+    {
         return Some(n.id.clone());
     }
     let id = format!("bound-{}", nodes.len());
@@ -745,6 +780,49 @@ mod tests {
         assert!(out.dropped);
         assert!(!out.unbound);
         assert!(nodes.is_empty());
+    }
+
+    #[test]
+    fn drop_selected_unbinds_tilde_bound_path() {
+        let mut nodes = vec![ProjectNode {
+            id: "p1".into(),
+            name: "proj".into(),
+            kind: ProjectKind::Project,
+            path: "~/work/proj".into(),
+            parent: None,
+            open: false,
+        }];
+        let out = drop_selected_in(&mut nodes, "p1", "/home/j/work/proj", Some("/home/j"));
+        assert!(out.dropped);
+        assert!(
+            out.unbound,
+            "tilde sidebar path must match the expanded bound dir"
+        );
+        let mut nodes = vec![ProjectNode {
+            id: "p1".into(),
+            name: "proj".into(),
+            kind: ProjectKind::Project,
+            path: "$HOME/work/proj".into(),
+            parent: None,
+            open: false,
+        }];
+        let out = drop_selected_in(&mut nodes, "p1", "/home/j/work/proj", Some("/home/j"));
+        assert!(out.unbound, "$HOME sidebar path must match the expanded bound dir");
+    }
+
+    #[test]
+    fn upsert_bound_finds_tilde_sidebar_row() {
+        let mut nodes = vec![ProjectNode {
+            id: "p1".into(),
+            name: "proj".into(),
+            kind: ProjectKind::Project,
+            path: "~/work/proj".into(),
+            parent: None,
+            open: false,
+        }];
+        let id = upsert_bound_in(&mut nodes, "/home/j/work/proj", Some("/home/j"));
+        assert_eq!(id.as_deref(), Some("p1"));
+        assert_eq!(nodes.len(), 1, "must not add a second row for the same tree");
     }
 
     #[test]
