@@ -209,7 +209,9 @@ pub use learning::{
     upsert_insight, user_pref_facts, LearningInsight, LearningState,
 };
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
-pub use openclaw::{default_openclaw_paths, import_memory_file, is_openclaw_workspace};
+pub use openclaw::{
+    default_openclaw_paths, import_memory_file, is_openclaw_workspace, merge_imported_memory,
+};
 pub use shortcuts::{
     apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette,
     shortcut_help, ComposerEnter, ComposerGo, SHORTCUTS,
