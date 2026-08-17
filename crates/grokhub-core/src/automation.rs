@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::attach::bound_scan;
 use crate::organs::{hm_min, LocalClock};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -213,6 +214,7 @@ pub fn mark_automation_skipped(mut a: Automation, now_ms: u64, clock: LocalClock
 }
 
 pub fn parse_nl_automation(text: &str) -> Option<Automation> {
+    let text = bound_scan(text);
     let t = text.trim();
     if t.is_empty() {
         return None;
@@ -333,6 +335,32 @@ pub fn skip_night_check_receipt(receipt: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_nl_automation_does_not_lowercase_an_8mb_complete() {
+        let src = include_str!("automation.rs");
+        let parse = src
+            .split("pub fn parse_nl_automation(")
+            .nth(1)
+            .and_then(|s| s.split("#[cfg(test)]").next())
+            .expect("parse_nl_automation");
+        let lower = parse.find("to_ascii_lowercase").expect("lowercase scan");
+        assert!(
+            parse[..lower].contains("bound_scan")
+                || parse[..lower].contains("TEXT_FILE_CAP")
+                || parse[..lower].contains("chip_scan"),
+            "night parse must not lowercase an 8MB complete: {parse}"
+        );
+    }
+
+    #[test]
+    fn parse_nl_automation_reads_a_schedule_after_a_huge_prefix() {
+        let mut huge = "a".repeat(crate::attach::TEXT_FILE_CAP + 8);
+        huge.push_str("\nevery weekday at 9, summarize the workboard");
+        let a = parse_nl_automation(&huge).expect("tail schedule");
+        assert_eq!(a.schedule, "weekdays");
+        assert_eq!(a.time, "09:00");
+    }
 
     #[test]
     fn nl_and_gate() {
