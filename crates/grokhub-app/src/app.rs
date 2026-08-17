@@ -3260,7 +3260,7 @@ impl Cabin {
                 serde_json::json!({
                     "id": t.id,
                     "title": t.title,
-                    "updatedAt": now_ms(),
+                    "updatedAt": t.accessed_ms,
                     "messages": t.messages.iter().map(|(r,c)| serde_json::json!({"role": r, "content": c})).collect::<Vec<_>>(),
                 })
             })
@@ -9624,6 +9624,15 @@ mod tests {
         assert!(
             sync.contains("merge_hub_snapshots"),
             "/sync must merge the hub snapshot, not replace peer threads: {sync}"
+        );
+        let thread_rows = sync
+            .split("let threads = self")
+            .nth(1)
+            .and_then(|s| s.split("let skills = self").next())
+            .expect("sync threads");
+        assert!(
+            thread_rows.contains("accessed_ms") && !thread_rows.contains("now_ms()"),
+            "/sync must not stamp every thread now or local stale data wins LWW: {thread_rows}"
         );
         let dream = src
             .split("fn run_dream")
