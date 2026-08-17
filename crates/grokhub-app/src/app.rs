@@ -4498,14 +4498,24 @@ impl Cabin {
                         self.goal_step = next_step;
                     }
                 }
-                if here {
-                    let tokens = estimate_messages(&visible_pairs);
-                    if should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, self.goal_step) {
+                let tokens = estimate_messages(&job_pairs);
+                if should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, job_step) {
+                    if here {
                         self.run_slash(Slash::Compact);
                         self.status = format!(
                             "Auto-compact · {}% context",
                             context_percent(tokens, CONTEXT_BUDGET_TOKENS)
                         );
+                    } else if let Some(id) = job.as_deref() {
+                        if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
+                            let pin = if t.goal.label.trim().is_empty() {
+                                None
+                            } else {
+                                Some(t.goal.label.as_str())
+                            };
+                            t.messages = compact_keep_pin(&t.messages, 8, pin);
+                        }
+                        self.persist();
                     }
                 }
                 if !self.running
@@ -10000,6 +10010,10 @@ mod tests {
         assert!(
             chat.contains("should_auto_continue_goal"),
             "goal continue must not send_chat while host is running: {chat}"
+        );
+        assert!(
+            chat.contains("estimate_messages(&job_pairs)"),
+            "auto-compact must use the origin thread, not only the visible tab: {chat}"
         );
         assert!(
             chat.contains("goal_continue_pin"),
