@@ -194,6 +194,12 @@ fn row_rank(row: &AtspiRow, ask: Option<&str>, cursor: Option<(i32, i32)>) -> i6
                 s += 40;
             }
         }
+        if a.contains("tab") {
+            let role = row.role.to_ascii_lowercase();
+            if role.contains("page tab") || role.contains("page-tab") {
+                s += 120;
+            }
+        }
     }
     if let Some((cx, cy)) = cursor {
         let x = row.x + row.w / 2;
@@ -221,20 +227,42 @@ pub fn rank_atspi_rows(rows: &[AtspiRow], ask: Option<&str>, limit: usize) -> Ve
         .collect()
 }
 
+fn norm_act_name(s: &str) -> String {
+    s.to_ascii_lowercase()
+        .chars()
+        .map(|c| if c == '_' || c == '-' { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_new_tab_query(q: &str) -> bool {
+    let n = norm_act_name(q);
+    n == "+" || n == "new tab" || n == "newtab" || n.contains("new tab")
+}
+
+fn is_new_tab_row(row: &AtspiRow) -> bool {
+    let n = norm_act_name(&row.name);
+    n == "+" || n == "newtab" || n.contains("new tab")
+}
+
 /// Exact / prefix name, then the smallest matching control (tab × beats the window).
 pub fn pick_named_row<'a>(rows: &'a [AtspiRow], name: &str) -> Option<&'a AtspiRow> {
-    let q = name.trim().to_ascii_lowercase();
+    let q = norm_act_name(name);
     if q.is_empty() {
         return None;
     }
+    let new_tab = is_new_tab_query(name);
     rows.iter()
         .filter(|r| {
             r.role != "cursor"
-                && (r.name.to_ascii_lowercase().contains(&q)
-                    || r.role.to_ascii_lowercase().contains(&q))
+                && (norm_act_name(&r.name).contains(&q)
+                    || norm_act_name(&r.role).contains(&q)
+                    || (new_tab && is_new_tab_row(r)))
         })
         .min_by_key(|r| {
-            let n = r.name.to_ascii_lowercase();
+            let n = norm_act_name(&r.name);
             let exact = if n == q {
                 0u8
             } else if n.starts_with(&q) {
@@ -245,6 +273,33 @@ pub fn pick_named_row<'a>(rows: &'a [AtspiRow], name: &str) -> Option<&'a AtspiR
             let area = (r.w as i64).saturating_mul(r.h as i64).max(1);
             (exact, area)
         })
+}
+
+/// AT-SPI page-tab rows for `tab list` when CDP is down.
+pub fn tab_list_from_rows(rows: &[AtspiRow]) -> String {
+    let tabs: Vec<&AtspiRow> = rows
+        .iter()
+        .filter(|r| {
+            let role = r.role.to_ascii_lowercase();
+            (role.contains("page tab") || role.contains("page-tab")) && !role.contains("list")
+        })
+        .collect();
+    if tabs.is_empty() {
+        return "no page tabs".into();
+    }
+    let mut s = String::new();
+    for t in tabs {
+        if !s.is_empty() {
+            s.push('\n');
+        }
+        let title = if t.name.trim().is_empty() {
+            "(untitled)"
+        } else {
+            t.name.trim()
+        };
+        s.push_str(&format!("- {title}"));
+    }
+    s
 }
 
 /// `role=push button name=Install x=10 y=20 w=80 h=24`
@@ -476,6 +531,32 @@ mod tests {
         assert!(!kept.iter().any(|r| r.role == "filler"));
         let hit = pick_named_row(&kept, "Close").unwrap();
         assert_eq!(hit.name, "Close");
+        let underscored = [row("New_Tab", "page tab", 100, 8, 72, 20)];
+        assert_eq!(
+            pick_named_row(&underscored, "New Tab").map(|r| r.name.as_str()),
+            Some("New_Tab")
+        );
+        let tabs = [
+            row("New_Tab", "page tab", 100, 8, 72, 20),
+            row("Open a new tab", "push button", 180, 8, 20, 20),
+            row("+", "push button", 210, 8, 16, 16),
+            row("GitHub", "page tab", 20, 8, 80, 20),
+        ];
+        assert!(
+            pick_named_row(&tabs, "new tab").is_some(),
+            "new tab must match a new-tab control"
+        );
+        assert_eq!(
+            pick_named_row(&tabs, "+").map(|r| r.name.as_str()),
+            Some("+")
+        );
+        let ranked_tabs = rank_atspi_rows(&tabs, Some("select a new tab in firefox"), 4);
+        assert!(
+            ranked_tabs
+                .iter()
+                .any(|r| r.role.contains("page tab") || r.name.to_ascii_lowercase().contains("new")),
+            "tab asks must keep page-tab rows: {ranked_tabs:?}"
+        );
         assert_eq!((hit.x + hit.w / 2, hit.y + hit.h / 2), (3728, 20));
         let ranked = rank_atspi_rows(&kept, Some("close the firefox tab"), 40);
         assert!(ranked.iter().any(|r| r.name == "Close"));
