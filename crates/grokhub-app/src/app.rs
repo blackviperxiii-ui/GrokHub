@@ -2564,6 +2564,10 @@ impl Cabin {
         if text.is_empty() {
             return;
         }
+        if let Some(slash) = parse_slash(&text) {
+            self.run_slash(slash);
+            return;
+        }
         match chat_send_kind(
             self.chat_job_thread.as_deref(),
             &self.visible_thread_id(),
@@ -2589,10 +2593,6 @@ impl Cabin {
             }
         }
         self.touch();
-        if let Some(slash) = parse_slash(&text) {
-            self.run_slash(slash);
-            return;
-        }
         remember_typed_prompt(
             &mut self.chip_memory,
             &text,
@@ -9158,6 +9158,17 @@ mod tests {
             fire_night.contains("night_unauth_should_skip")
                 && fire_night.contains("mark_auto_skipped"),
             "missing OAuth must skip the night slot: {fire_night}"
+        );
+        let send = src
+            .split("fn send_chat")
+            .nth(1)
+            .and_then(|s| s.split("fn send_followup_turn").next())
+            .expect("send_chat");
+        let slash_at = send.find("parse_slash").expect("parse_slash");
+        let kind_at = send.find("chat_send_kind").expect("chat_send_kind");
+        assert!(
+            slash_at < kind_at,
+            "/compact during a live job must stay local, not become a redirect: {send}"
         );
         let created = src
             .split("fn new_thread")
