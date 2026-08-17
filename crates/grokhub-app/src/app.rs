@@ -2990,7 +2990,7 @@ impl Cabin {
                     let dest = if self.cfg.project_dir.trim().is_empty() {
                         config::config_dir().join("export.md")
                     } else {
-                        std::path::PathBuf::from(&self.cfg.project_dir).join("export.md")
+                        std::path::PathBuf::from(expand_home(&self.cfg.project_dir)).join("export.md")
                     };
                     match std::fs::write(&dest, md) {
                         Ok(()) => self.status = format!("Wrote {}", dest.display()),
@@ -10313,6 +10313,10 @@ mod tests {
         assert!(
             flushed < wrote,
             "/export must flush the live pane before writing the thread file: {export}"
+        );
+        assert!(
+            export.contains("expand_home"),
+            "/export must expand ~ in the bound project or it writes a literal tilde folder: {export}"
         );
         let recall = src
             .split("Slash::Recall(q)")
