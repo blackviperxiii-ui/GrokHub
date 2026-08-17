@@ -1560,9 +1560,12 @@ fn imagine_disk_tex(ctx: &egui::Context, path: &str) -> (TextureHandle, [usize; 
     let img = if len > IMAGE_FILE_CAP {
         None
     } else {
-        std::fs::read(path)
-            .ok()
-            .and_then(|b| image::load_from_memory(&b).ok())
+        std::fs::read(path).ok().and_then(|b| {
+            if !crate::desktop::image_pixels_ok_for_bytes(&b) {
+                return None;
+            }
+            image::load_from_memory(&b).ok()
+        })
     }
     .unwrap_or_else(|| image::DynamicImage::new_rgb8(8, 8));
     let rgba = img.to_rgba8();
@@ -2043,6 +2046,10 @@ mod tests {
         assert!(
             meta < read && tex.contains("IMAGE_FILE_CAP"),
             "a huge wall still must not decode on the UI thread: {tex}"
+        );
+        assert!(
+            tex.contains("image_pixels_ok") || tex.contains("IMAGE_PIXEL_CAP"),
+            "a tiny wall still with huge pixels must not decode on the UI thread: {tex}"
         );
     }
 }

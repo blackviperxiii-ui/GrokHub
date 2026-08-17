@@ -7,7 +7,7 @@ use grokhub_core::{
     parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
     parse_xrandr_outputs, pcm_from_capture, pick_capture_output, pick_hands_backend, pick_named_row,
     picker_args, rank_atspi_rows, resolve_bin_in, session_is_wayland, take_text_body, IMAGE_FILE_CAP,
-    TEXT_FILE_CAP,
+    TEXT_FILE_CAP, image_pixels_ok, png_ihdr_size,
     virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path, AtspiRow, CaptureKind, ComputerDrive,
     ComputerOp, DisplayOutput, HandsBackend, HandsDown, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
 };
@@ -757,11 +757,41 @@ fn run_capture_kind(
     }
 }
 
+fn image_pixels_ok_for_path(path: &Path) -> Result<(), String> {
+    let mut hdr = [0u8; 24];
+    if let Ok(n) = std::fs::File::open(path).and_then(|mut f| f.read(&mut hdr)) {
+        if let Some((w, h)) = png_ihdr_size(&hdr[..n]) {
+            if !image_pixels_ok(w, h) {
+                return Err("image too large".into());
+            }
+            return Ok(());
+        }
+    }
+    let (w, h) = image::image_dimensions(path).map_err(|e| e.to_string())?;
+    if !image_pixels_ok(w, h) {
+        return Err("image too large".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn image_pixels_ok_for_bytes(bytes: &[u8]) -> bool {
+    if let Some((w, h)) = png_ihdr_size(bytes) {
+        return image_pixels_ok(w, h);
+    }
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()
+        .and_then(|r| r.into_dimensions().ok())
+        .map(|(w, h)| image_pixels_ok(w, h))
+        .unwrap_or(true)
+}
+
 fn image_file_to_jpeg(path: &Path) -> Result<Vec<u8>, String> {
     let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
     if len > IMAGE_FILE_CAP {
         return Err("image too large".into());
     }
+    image_pixels_ok_for_path(path)?;
     let img = image::open(path).map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     let mut cur = std::io::Cursor::new(&mut buf);
@@ -1106,6 +1136,7 @@ pub fn sibling_still(src: &std::path::Path, dest: &std::path::Path) -> Result<()
     if len > IMAGE_FILE_CAP {
         return Err("image too large".into());
     }
+    image_pixels_ok_for_path(src)?;
     let img = image::open(src).map_err(|e| e.to_string())?;
     let (w, h) = img.dimensions();
     let x = ((w as f32) * 0.05) as u32;
@@ -1248,6 +1279,7 @@ pub fn load_image_data_url(path: &Path) -> Result<String, String> {
     if len > IMAGE_FILE_CAP {
         return Err("image too large".into());
     }
+    image_pixels_ok_for_path(path)?;
     let img = image::open(path).map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     let mut cur = std::io::Cursor::new(&mut buf);
@@ -1295,6 +1327,37 @@ pub fn clipboard_once() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn png_crc(data: &[u8]) -> u32 {
+        let mut crc = 0xffff_ffffu32;
+        for &b in data {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        crc ^ 0xffff_ffff
+    }
+
+    fn png_ihdr_only(width: u32, height: u32) -> Vec<u8> {
+        let mut ihdr = Vec::from(*b"IHDR");
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+        let crc = png_crc(&ihdr);
+        let mut out = vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+        out.extend_from_slice(&13u32.to_be_bytes());
+        out.extend_from_slice(&ihdr);
+        out.extend_from_slice(&crc.to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(b"IEND");
+        out.extend_from_slice(&png_crc(b"IEND").to_be_bytes());
+        out
+    }
 
     #[test]
     fn bins_are_named() {
@@ -1363,6 +1426,16 @@ mod tests {
         std::fs::write(&path, vec![0u8; (IMAGE_FILE_CAP as usize) + 1]).unwrap();
         assert_eq!(
             load_image_data_url(&path).unwrap_err(),
+            "image too large"
+        );
+        assert!(
+            load.contains("IMAGE_PIXEL_CAP") || load.contains("image_pixels_ok"),
+            "a tiny PNG with huge pixels must not decode on the UI thread: {load}"
+        );
+        let bomb = dir.join("bomb.png");
+        std::fs::write(&bomb, png_ihdr_only(50_000, 50_000)).unwrap();
+        assert_eq!(
+            load_image_data_url(&bomb).unwrap_err(),
             "image too large"
         );
     }
@@ -1711,6 +1784,10 @@ mod tests {
         assert!(
             jmeta < jopen && jpeg.contains("IMAGE_FILE_CAP"),
             "capture JPEG convert must not decode a huge file: {jpeg}"
+        );
+        assert!(
+            still.contains("image_pixels_ok") && jpeg.contains("image_pixels_ok"),
+            "a tiny still with huge pixels must not decode on the UI thread: {still} {jpeg}"
         );
     }
 
