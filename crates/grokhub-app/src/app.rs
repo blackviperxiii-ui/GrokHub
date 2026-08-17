@@ -4391,6 +4391,13 @@ impl Cabin {
         self.status = format!("Merged hub snapshot from {}", remote.from_device_name);
     }
 
+    fn remember_last_frame(&mut self, url: &str) {
+        if url.len() > FRAME_CAP {
+            return;
+        }
+        self.last_frame_url = Some(url.to_string());
+    }
+
     fn push_presence(&mut self, url: String) {
         if url.len() > FRAME_CAP {
             return;
@@ -4434,7 +4441,7 @@ impl Cabin {
                             if let Ok(mut st) = self.hub.lock() {
                                 st.store_frame(&url);
                             }
-                            self.last_frame_url = Some(url.clone());
+                            self.remember_last_frame(&url);
                             self.push_presence(url);
                         }
                     }
@@ -5686,7 +5693,7 @@ impl Cabin {
                     if let Ok(mut st) = self.hub.lock() {
                         st.store_frame(&url);
                     }
-                    self.last_frame_url = Some(url.clone());
+                    self.remember_last_frame(&url);
                     CabinFrame::Ready(url)
                 }
                 Ok(Err(e)) => {
@@ -6180,7 +6187,7 @@ impl Cabin {
                         if let Ok(mut st) = self.hub.lock() {
                             st.store_frame(url);
                         }
-                        self.last_frame_url = Some(url.clone());
+                        self.remember_last_frame(url);
                     }
                     self.eyes_text = self.eyes_text.replace(
                         "frame: capturing…\n",
@@ -6209,7 +6216,7 @@ impl Cabin {
                 if let Ok(mut st) = self.hub.lock() {
                     st.store_frame(&url);
                 }
-                self.last_frame_url = Some(url);
+                self.remember_last_frame(&url);
                 self.eyes_text = self.eyes_text.replace(
                     "frame: capturing…\n",
                     "frame: captured\n",
@@ -9689,6 +9696,9 @@ impl Cabin {
 
 
 fn eyes_frame_tex(ctx: &egui::Context, url: &str) -> Option<(TextureHandle, [usize; 2])> {
+    if url.len() > FRAME_CAP {
+        return None;
+    }
     let key: String = url.chars().take(48).collect();
     let id = egui::Id::new(("eyes-frame", url.len(), key));
     if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
@@ -11902,6 +11912,26 @@ mod tests {
         assert!(
             !eyes.contains("last_frame_url.clone()"),
             "Eyes paint must not clone a huge last-frame data URL every frame: {eyes}"
+        );
+    }
+
+    #[test]
+    fn last_frame_url_drops_a_huge_capture() {
+        let src = include_str!("app.rs");
+        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let remember = impl_src
+            .split("fn remember_last_frame(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ").next())
+            .expect("remember_last_frame");
+        assert!(
+            remember.contains("FRAME_CAP"),
+            "last_frame_url must not keep an 8MB grim data URL: {remember}"
+        );
+        let assigns = impl_src.matches("last_frame_url = Some").count();
+        assert!(
+            assigns <= 1,
+            "every last-frame write must go through remember_last_frame, found {assigns}"
         );
     }
 
