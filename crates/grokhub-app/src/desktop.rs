@@ -16,7 +16,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const ATSPI_PY: &str = r#"
@@ -90,6 +90,32 @@ fn kill_limited(child: &mut Child) {
     let _ = child.kill();
 }
 
+fn read_capped(r: &mut impl Read, buf: &mut Vec<u8>, cap: usize) -> std::io::Result<()> {
+    let mut tmp = [0u8; 8192];
+    loop {
+        if buf.len() >= cap {
+            return Ok(());
+        }
+        let n = match r.read(&mut tmp) {
+            Ok(0) => return Ok(()),
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        let room = cap - buf.len();
+        buf.extend_from_slice(&tmp[..n.min(room)]);
+    }
+}
+
+fn read_pipe_capped(mut r: impl Read, cap: usize, overflow: &AtomicBool) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let _ = read_capped(&mut r, &mut buf, cap);
+    if buf.len() >= cap {
+        overflow.store(true, Ordering::SeqCst);
+    }
+    buf
+}
+
 /// Spawn `cmd` and kill the process group if it exceeds `timeout`.
 /// Used by presence / windshield paths that run on the UI thread.
 pub(crate) fn run_limited(mut cmd: Command, timeout: Duration) -> Option<Output> {
@@ -101,37 +127,50 @@ pub(crate) fn run_limited(mut cmd: Command, timeout: Duration) -> Option<Output>
         cmd.process_group(0);
     }
     let mut child = cmd.spawn().ok()?;
+    let cap = (IMAGE_FILE_CAP as usize).saturating_add(1);
+    let overflow = Arc::new(AtomicBool::new(false));
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let out_flag = overflow.clone();
+    let err_flag = overflow.clone();
+    let h_out = std::thread::spawn(move || match stdout {
+        Some(s) => read_pipe_capped(s, cap, &out_flag),
+        None => Vec::new(),
+    });
+    let h_err = std::thread::spawn(move || match stderr {
+        Some(s) => read_pipe_capped(s, cap, &err_flag),
+        None => Vec::new(),
+    });
     let deadline = Instant::now() + timeout;
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut stdout = Vec::new();
-                let mut stderr = Vec::new();
-                if let Some(mut s) = child.stdout.take() {
-                    let _ = s.read_to_end(&mut stdout);
-                }
-                if let Some(mut e) = child.stderr.take() {
-                    let _ = e.read_to_end(&mut stderr);
-                }
-                return Some(Output {
-                    status,
-                    stdout,
-                    stderr,
-                });
-            }
-            Ok(None) if Instant::now() >= deadline => {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline || overflow.load(Ordering::SeqCst) => {
                 kill_limited(&mut child);
-                let _ = child.wait();
-                return None;
+                match child.wait() {
+                    Ok(status) if overflow.load(Ordering::SeqCst) => break status,
+                    _ => {
+                        let _ = h_out.join();
+                        let _ = h_err.join();
+                        return None;
+                    }
+                }
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(15)),
             Err(_) => {
                 kill_limited(&mut child);
                 let _ = child.wait();
+                let _ = h_out.join();
+                let _ = h_err.join();
                 return None;
             }
         }
-    }
+    };
+    Some(Output {
+        status,
+        stdout: h_out.join().unwrap_or_default(),
+        stderr: h_err.join().unwrap_or_default(),
+    })
 }
 
 fn remember_desk_frame(
@@ -1586,6 +1625,27 @@ mod tests {
             started.elapsed() < Duration::from_secs(3),
             "UI-thread desktop spawn must not wait out the child: {:?}",
             started.elapsed()
+        );
+        let limited = include_str!("desktop.rs")
+            .split("pub(crate) fn run_limited(")
+            .nth(1)
+            .and_then(|s| s.split("\nfn remember_desk_frame(").next())
+            .expect("run_limited");
+        assert!(
+            !limited.contains("read_to_end"),
+            "a huge clipboard dump must not slurp the whole pipe on the UI thread: {limited}"
+        );
+        assert!(
+            limited.contains("IMAGE_FILE_CAP"),
+            "run_limited must stop reading past IMAGE_FILE_CAP: {limited}"
+        );
+        let mut dump = Command::new("head");
+        dump.args(["-c", &(IMAGE_FILE_CAP + 2 * 1024 * 1024).to_string(), "/dev/zero"]);
+        let out = run_limited(dump, Duration::from_secs(3)).expect("head exited");
+        assert!(
+            out.stdout.len() as u64 <= IMAGE_FILE_CAP + 1,
+            "huge stdout must stay capped, got {}",
+            out.stdout.len()
         );
     }
 
