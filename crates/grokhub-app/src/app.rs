@@ -85,6 +85,7 @@ use grokhub_core::{
     greeting_fingerprint, greeting_prompt, local_greeting, pick_greeting,
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
+    rewind_can_queue, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
     user_asks_takeover, windshield_prompt,
@@ -3042,7 +3043,7 @@ impl Cabin {
             return;
         }
         if let Some(last) = self.rewind_rows.first().cloned() {
-            if rewind_restore_matches(&last.root, src) && std::path::Path::new(&last.path).exists() {
+            if rewind_restore_matches(&last.root, src) && rewind_snapshot_ready(&last.path) {
                 self.queue_sh(format!(
                     "cp -a '{}' '{}'",
                     last.path.replace('\'', r#"'"'"'"#),
@@ -3062,12 +3063,23 @@ impl Cabin {
         if !rewind_allowed(&src, &home) {
             return;
         }
+        if !rewind_can_queue(self.cfg.host_on, self.running) {
+            self.status = if !self.cfg.host_on {
+                "Host off — /host on".into()
+            } else {
+                "Busy — wait, then rewind".into()
+            };
+            return;
+        }
         let id = uid("rw");
         let dest = rewind_dest(&config::config_dir().display().to_string(), &id);
         let _ = std::fs::create_dir_all(&dest);
         let quoted_src = src.replace('\'', r#"'"'"'"#);
         let quoted_dest = dest.replace('\'', r#"'"'"'"#);
-        self.queue_sh(format!("cp -a '{quoted_src}/.' '{quoted_dest}'"));
+        if !self.run_cmds(vec![format!("cp -a '{quoted_src}/.' '{quoted_dest}'")]) {
+            let _ = std::fs::remove_dir_all(&dest);
+            return;
+        }
         self.rewind_rows.insert(
             0,
             RewindRecord {
@@ -9115,6 +9127,15 @@ mod tests {
         assert!(
             consult.contains("if self.chat_job_thread.is_none()"),
             "consult must stay on the origin thread: {consult}"
+        );
+        let snap = src
+            .split("fn snapshot_project")
+            .nth(1)
+            .and_then(|s| s.split("fn ").nth(1))
+            .expect("snapshot_project");
+        assert!(
+            src.contains("rewind_can_queue") && src.contains("rewind_snapshot_ready"),
+            "rewind must not restore an empty dest over the project: {snap}"
         );
     }
 

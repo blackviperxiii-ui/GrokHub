@@ -56,6 +56,20 @@ pub fn rewind_restore_matches(record_root: &str, current_root: &str) -> bool {
     !rec.is_empty() && rec == cur
 }
 
+/// Host must actually copy before a rewind row is recorded.
+pub fn rewind_can_queue(host_on: bool, running: bool) -> bool {
+    host_on && !running
+}
+
+/// An empty `create_dir_all` dest must not restore over the bound project.
+pub fn rewind_snapshot_ready(path: &str) -> bool {
+    let p = std::path::Path::new(path);
+    match std::fs::read_dir(p) {
+        Ok(mut ents) => ents.next().is_some(),
+        Err(_) => false,
+    }
+}
+
 pub fn keep_last_rewinds(rows: &[RewindRecord], max: usize) -> Vec<RewindRecord> {
     let mut v = rows.to_vec();
     v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -114,5 +128,24 @@ mod tests {
             rewind_allowed("~/GrokHub-Work", "/home/jeremy"),
             "settings may store a tilde-bound project"
         );
+        assert!(rewind_can_queue(true, false));
+        assert!(
+            !rewind_can_queue(false, false),
+            "host off must not record an empty snapshot"
+        );
+        assert!(!rewind_can_queue(true, true));
+        let empty = std::env::temp_dir().join(format!(
+            "grokhub-rewind-empty-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&empty);
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(
+            !rewind_snapshot_ready(&empty.to_string_lossy()),
+            "an empty dest must not restore over the project"
+        );
+        std::fs::write(empty.join("kept.txt"), "ok").unwrap();
+        assert!(rewind_snapshot_ready(&empty.to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&empty);
     }
 }
