@@ -168,7 +168,7 @@ pub use review::{
     build_review_digest, cabin_real_text, dedupe_suggestions, merge_suggestion_store,
     parse_suggest_lines, partition_suggestions, review_due, review_status_line, review_system_prompt,
     DigestLine, LearnedSuggestion,
-    ReviewDigest, SuggestionKind, SuggestionStore, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
+    ReviewDigest, SuggestionKind, SuggestionStore, CABIN_GITHUB_TOOLS, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
 };
 pub use pair::{
     devices_shows_pair_code, hub_pair_url, make_pair_code, normalize_code, pair_code_is_live,
