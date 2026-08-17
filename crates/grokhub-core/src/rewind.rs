@@ -61,6 +61,17 @@ pub fn rewind_can_queue(host_on: bool, running: bool) -> bool {
     host_on && !running
 }
 
+/// Restore must not claim success when the host job cannot start.
+pub fn rewind_blocked_reason(host_on: bool, running: bool) -> Option<&'static str> {
+    if !host_on {
+        Some("Host off — /host on")
+    } else if running {
+        Some("Busy — wait, then rewind")
+    } else {
+        None
+    }
+}
+
 /// An empty `create_dir_all` dest must not restore over the bound project.
 pub fn rewind_snapshot_ready(path: &str) -> bool {
     let p = std::path::Path::new(path);
@@ -146,6 +157,15 @@ mod tests {
             "host off must not record an empty snapshot"
         );
         assert!(!rewind_can_queue(true, true));
+        assert_eq!(
+            rewind_blocked_reason(false, false),
+            Some("Host off — /host on")
+        );
+        assert_eq!(
+            rewind_blocked_reason(true, true),
+            Some("Busy — wait, then rewind")
+        );
+        assert_eq!(rewind_blocked_reason(true, false), None);
         let empty = std::env::temp_dir().join(format!(
             "grokhub-rewind-empty-{}",
             std::process::id()

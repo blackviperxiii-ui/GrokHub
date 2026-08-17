@@ -229,8 +229,8 @@ pub use organs::{
     should_keep_frame, LocalClock, MidThoughtGreet, RoomPlan, PRESENCE_RING_MS, PRESENCE_WIPE_MS,
 };
 pub use rewind::{
-    is_rewind_copy_cmd, keep_last_rewinds, rewind_allowed, rewind_can_queue, rewind_copy_cmd,
-    rewind_dest, rewind_restore_matches, rewind_snapshot_ready, RewindRecord,
+    is_rewind_copy_cmd, keep_last_rewinds, rewind_allowed, rewind_blocked_reason, rewind_can_queue,
+    rewind_copy_cmd, rewind_dest, rewind_restore_matches, rewind_snapshot_ready, RewindRecord,
 };
 pub use oauth::{
     apply_profile, auth_bearer, chat_bearer, has_auth, merge_refreshed, next_oauth_poll_secs, parse_device_start, parse_poll_result,
