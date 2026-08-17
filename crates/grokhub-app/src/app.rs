@@ -8,7 +8,7 @@ use crate::titlebar::{
 use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin, load_image_data_url,
-    pick_file, play_audio, prepare_windshield, read_text_capped, record_once, run_computer_op,
+    pick_file, play_audio, prepare_windshield, read_text_capped, record_once,
     run_computer_op_cancel, transcribe_local,
 };
 use crate::host::{run_host, run_host_stream};
@@ -5393,6 +5393,7 @@ impl Cabin {
         let current = screen_from_rows(&rows);
         let ops = replay_ops(&recipe, current);
         let mut t = String::new();
+        let mut cmds = Vec::new();
         if let Some(c) = current {
             t.push_str(&format!("screen {}x{}\n", c.w, c.h));
         }
@@ -5408,16 +5409,15 @@ impl Cabin {
                         t.push_str("frame: captured\n");
                     }
                 }
-                ReplayOp::Op(op) => {
-                    t.push_str(&computer_cmd_line(&op));
-                    t.push('\n');
-                    t.push_str(&run_computer_op(&op));
-                    t.push('\n');
-                }
+                ReplayOp::Op(op) => cmds.push(computer_cmd_line(&op)),
             }
         }
         self.eyes_text = t;
-        self.status = "Recipe replay".into();
+        if cmds.is_empty() {
+            self.status = "Recipe replay".into();
+            return;
+        }
+        self.run_cmds(cmds);
     }
 
     fn speak_reply(&mut self, text: &str) {
@@ -9571,6 +9571,15 @@ mod tests {
         assert!(
             key < hands,
             "Take over without OAuth must not arm windshield: {takeover}"
+        );
+        let replay = src
+            .split("fn replay_recipe(")
+            .nth(1)
+            .and_then(|s| s.split("fn speak_reply").next())
+            .expect("replay_recipe");
+        assert!(
+            replay.contains("run_cmds") && !replay.contains("run_computer_op("),
+            "recipe replay must use host gates, not raw desktop ops: {replay}"
         );
         let send_auth = src
             .split("fn send_chat")
