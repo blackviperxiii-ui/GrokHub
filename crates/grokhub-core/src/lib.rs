@@ -236,7 +236,7 @@ pub use organs::{
     should_keep_frame, LocalClock, MidThoughtGreet, RoomPlan, PRESENCE_RING_MS, PRESENCE_WIPE_MS,
 };
 pub use rewind::{
-    is_rewind_copy_cmd, keep_last_rewinds, rewind_allowed, rewind_blocked_reason, rewind_can_queue,
+    is_rewind_copy_cmd, is_rewind_copy_cmd_in, keep_last_rewinds, rewind_allowed, rewind_blocked_reason, rewind_can_queue,
     rewind_copy_cmd, rewind_dest, rewind_restore_matches, rewind_snapshot_ready, RewindRecord,
 };
 pub use oauth::{
