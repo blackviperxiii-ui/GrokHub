@@ -2662,29 +2662,35 @@ impl Cabin {
 
     fn run_slash(&mut self, slash: Slash) {
         match slash {
-            Slash::Forget(topic) => match topic {
-                None => match config::write_memory("MEMORY.md", "") {
-                    Ok(()) => {
-                        if self.mem_name == "MEMORY.md" {
-                            self.mem_body.clear();
-                        }
-                        self.status = "Forgot MEMORY.md".into();
-                    }
-                    Err(e) => self.status = e,
-                },
-                Some(q) => {
-                    let next = forget_topic(&config::read_memory("MEMORY.md"), &q);
-                    match config::write_memory("MEMORY.md", &next) {
+            Slash::Forget(topic) => {
+                if self.scratch() {
+                    self.status = "Scratch — no memory writes".into();
+                    return;
+                }
+                match topic {
+                    None => match config::write_memory("MEMORY.md", "") {
                         Ok(()) => {
                             if self.mem_name == "MEMORY.md" {
-                                self.mem_body = next;
+                                self.mem_body.clear();
                             }
-                            self.status = format!("Forgot {q}");
+                            self.status = "Forgot MEMORY.md".into();
                         }
                         Err(e) => self.status = e,
+                    },
+                    Some(q) => {
+                        let next = forget_topic(&config::read_memory("MEMORY.md"), &q);
+                        match config::write_memory("MEMORY.md", &next) {
+                            Ok(()) => {
+                                if self.mem_name == "MEMORY.md" {
+                                    self.mem_body = next;
+                                }
+                                self.status = format!("Forgot {q}");
+                            }
+                            Err(e) => self.status = e,
+                        }
                     }
                 }
-            },
+            }
             Slash::MemoryShow => {
                 self.nav = Nav::Memory;
                 self.status = "Memory".into();
@@ -9517,6 +9523,15 @@ mod tests {
         assert!(
             clear.contains("followup_step = 0") && clear.contains("active_skill_follow = None"),
             "/clear must reset followup budget and skill follow with the pane: {clear}"
+        );
+        let forget = src
+            .split("Slash::Forget")
+            .nth(1)
+            .and_then(|s| s.split("Slash::MemoryShow").next())
+            .expect("Forget");
+        assert!(
+            forget.contains("self.scratch()") && forget.contains("no memory writes"),
+            "/forget on Scratch must not wipe MEMORY.md: {forget}"
         );
         let unbound = src
             .split("Slash::ProjectClear =>")
