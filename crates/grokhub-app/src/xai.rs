@@ -1,5 +1,6 @@
 use grokhub_core::{
     chat_include_usage, chat_request_body_vision, chat_stream_flag, chat_timeout_secs,
+    MEDIA_FILE_CAP, TEXT_FILE_CAP,
     client_secrets_body, client_secrets_url, dedicated_imagine_model, dedicated_video_model,
     fold_sse_acc, frame_bytes, imagine_image_fallback_model, imagine_image_shaped,
     imagine_should_retry_model, imagine_slug, imagine_video_fallback_model, media_ext_from_bytes,
@@ -320,8 +321,12 @@ fn save_media(url: &str, prompt: &str, ext: &str, key: &str) -> Result<String, S
             .map_err(http_err)?;
         let mut buf = Vec::new();
         resp.into_reader()
+            .take(MEDIA_FILE_CAP + 1)
             .read_to_end(&mut buf)
             .map_err(|e| e.to_string())?;
+        if buf.len() as u64 > MEDIA_FILE_CAP {
+            return Err("media too large".into());
+        }
         if buf.len() < 32 {
             return Err("empty media download".into());
         }
@@ -368,7 +373,12 @@ pub fn grok_stt(api_key: &str, wav: &[u8]) -> Result<String, String> {
 pub fn http_err(e: ureq::Error) -> String {
     match e {
         ureq::Error::Status(code, resp) => {
-            let body = resp.into_string().unwrap_or_default();
+            let mut buf = Vec::new();
+            let _ = resp
+                .into_reader()
+                .take(TEXT_FILE_CAP as u64)
+                .read_to_end(&mut buf);
+            let body = String::from_utf8_lossy(&buf);
             format!("HTTP {code}: {}", body.chars().take(200).collect::<String>())
         }
         other => other.to_string(),
@@ -399,8 +409,12 @@ pub fn grok_tts(api_key: &str, text: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     resp.into_reader()
+        .take(MEDIA_FILE_CAP + 1)
         .read_to_end(&mut buf)
         .map_err(|e| e.to_string())?;
+    if buf.len() as u64 > MEDIA_FILE_CAP {
+        return Err("speech too large".into());
+    }
     if buf.len() < 32 {
         return Err("empty speech".into());
     }
@@ -453,6 +467,32 @@ mod tests {
         assert!(
             save.contains("authorization"),
             "vidgen / image URLs need the same Bearer as the generate call: {save}"
+        );
+        let take = save.find(".take(").expect("capped download");
+        let read = save.find("read_to_end").expect("download read");
+        assert!(
+            take < read && save.contains("MEDIA_FILE_CAP"),
+            "Imagine download must not slurp a huge body: {save}"
+        );
+        let tts = src
+            .split("pub fn grok_tts(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn grok_realtime_secret").next())
+            .expect("grok_tts");
+        let tts_take = tts.find(".take(").expect("capped tts");
+        let tts_read = tts.find("read_to_end").expect("tts read");
+        assert!(
+            tts_take < tts_read && tts.contains("MEDIA_FILE_CAP"),
+            "TTS must not slurp a huge audio body: {tts}"
+        );
+        let err = src
+            .split("pub fn http_err(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn http_status_of").next())
+            .expect("http_err");
+        assert!(
+            err.contains(".take(") && !err.contains("into_string()"),
+            "HTTP error must not slurp a huge error page: {err}"
         );
         assert!(
             src.contains("imagine_should_retry_model"),
