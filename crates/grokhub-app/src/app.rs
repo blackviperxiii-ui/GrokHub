@@ -88,7 +88,7 @@ use grokhub_core::{
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     is_rewind_copy_cmd, rewind_can_queue, rewind_copy_cmd, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
-    clear_pending_after_complete,
+    clear_pending_after_complete, inbox_claim_ready,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
     user_asks_takeover, windshield_prompt,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
@@ -806,6 +806,10 @@ impl Cabin {
         let mut hub = load_hub_state(&config::hub_state_path()).unwrap_or_else(HubState::empty);
         if !cfg.device_name.trim().is_empty() {
             hub.device_name = cfg.device_name.clone();
+        }
+        let peer = hub.device_id.clone();
+        if hub.requeue_claimed_for(&peer) > 0 {
+            let _ = save_hub_state(&config::hub_state_path(), &hub);
         }
         let mem_name = "SOUL.md".to_string();
         let mem_body = config::read_memory(&mem_name);
@@ -5263,7 +5267,7 @@ impl Cabin {
     }
 
     fn drain_inbox(&mut self) {
-        if !self.hub_on || self.running {
+        if !self.hub_on || self.running || !inbox_claim_ready(self.has_key()) {
             return;
         }
         let id = self
@@ -9109,6 +9113,10 @@ mod tests {
         assert!(
             src.contains("self.finish_hub_dispatch(worker_gone_status(), false)"),
             "a dropped worker must fail the claimed phone task"
+        );
+        assert!(
+            src.contains("inbox_claim_ready") && src.contains("requeue_claimed_for"),
+            "do not claim a phone task without auth, and unstick claimed rows on boot"
         );
         let finish = src
             .split("fn finish_hub_dispatch")

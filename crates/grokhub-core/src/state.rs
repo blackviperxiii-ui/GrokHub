@@ -196,6 +196,18 @@ impl HubState {
         Some(t.clone())
     }
 
+    /// After a crash, claimed rows have no live worker. Put them back in line.
+    pub fn requeue_claimed_for(&mut self, peer_id: &str) -> u32 {
+        let mut n = 0;
+        for t in &mut self.inbox {
+            if t.status == "claimed" && t.target_device_id == peer_id {
+                t.status = "queued".into();
+                n += 1;
+            }
+        }
+        n
+    }
+
     pub fn claim_inbox(&mut self, peer_id: &str) -> Vec<HubTask> {
         let mut out = vec![];
         for t in &mut self.inbox {
@@ -307,6 +319,11 @@ pub enum PairError {
 pub enum CompleteError {
     NotFound,
     Forbidden,
+}
+
+/// Do not claim a phone task when chat cannot run.
+pub fn inbox_claim_ready(has_key: bool) -> bool {
+    has_key
 }
 
 /// Drop `pending_hub_task` only when the inbox row is gone or completed.
@@ -513,6 +530,19 @@ mod tests {
             st.enqueue_local("local", &format!("do {i}")).unwrap();
         }
         assert!(st.inbox.len() <= 80);
+        assert!(inbox_claim_ready(true));
+        assert!(
+            !inbox_claim_ready(false),
+            "do not claim a phone task when chat cannot run"
+        );
+        let mut stuck = HubState::empty();
+        let hub = stuck.device_id.clone();
+        let mut row = HubTask::enqueue("phone", "Pixel", &hub, "Flash", "flash the pi", 1);
+        row.status = "claimed".into();
+        stuck.inbox.push(row);
+        assert_eq!(stuck.requeue_claimed_for(&hub), 1);
+        assert_eq!(stuck.inbox[0].status, "queued");
+        assert_eq!(stuck.take_next_queued(&hub).unwrap().status, "claimed");
     }
 
     #[test]
