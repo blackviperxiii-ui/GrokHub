@@ -172,14 +172,11 @@ pub fn image_to_global(
     {
         return (jx, jy);
     }
-    if let Some((ox, oy)) = frame_origin {
-        if jpeg_w == desk_w && jpeg_h == desk_h && ox == 0 && oy == 0 {
-            return scale_to_desk(jx, jy, jpeg_w, jpeg_h, desk_w, desk_h);
-        }
-        return (jx + ox, jy + oy);
-    }
     if jpeg_w == desk_w && jpeg_h == desk_h {
-        return (jx, jy);
+        return scale_to_desk(jx, jy, jpeg_w, jpeg_h, desk_w, desk_h);
+    }
+    if let Some((ox, oy)) = frame_origin {
+        return (jx + ox, jy + oy);
     }
     let matched: Vec<&DisplayOutput> = outputs
         .iter()
@@ -205,6 +202,27 @@ fn scale_to_desk(jx: i32, jy: i32, jpeg_w: u32, jpeg_h: u32, desk_w: u32, desk_h
     let gx = (jx as f32 * desk_w as f32 / jpeg_w as f32).round() as i32;
     let gy = (jy as f32 * desk_h as f32 / jpeg_h as f32).round() as i32;
     (gx, gy)
+}
+
+/// Top-left of a captured JPEG. A full-desktop frame is always (0, 0), even
+/// when we *intended* to grim one output — gnome-screenshot and grim-without
+/// `-o` must not inherit that hint or clicks land on the wrong monitor.
+pub fn frame_origin_for(
+    jpeg_w: u32,
+    jpeg_h: u32,
+    outputs: &[DisplayOutput],
+    captured_output: Option<&str>,
+) -> (i32, i32) {
+    if let Some((dw, dh)) = virtual_desktop_size(outputs) {
+        if jpeg_w == dw && jpeg_h == dh {
+            return (0, 0);
+        }
+    }
+    captured_output
+        .and_then(|n| outputs.iter().find(|o| o.name == n))
+        .filter(|o| o.w as u32 == jpeg_w && o.h as u32 == jpeg_h)
+        .map(|o| (o.x, o.y))
+        .unwrap_or((0, 0))
 }
 
 /// Prefer a non-primary output that already has a window center on it.
@@ -542,6 +560,35 @@ eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis)
             image_to_global(-1880, 18, 1920, 1080, &outs, Some((-1920, 0))),
             (-1880, 18),
             "already-global left-monitor coords must not get a second origin"
+        );
+    }
+
+    #[test]
+    fn full_desktop_jpeg_must_not_inherit_a_single_monitor_origin() {
+        let outs = parse_xrandr_outputs(DUAL_XRANDR);
+        assert_eq!(
+            image_to_global(40, 18, 3840, 1080, &outs, Some((1920, 0))),
+            (40, 18),
+            "gnome-screenshot / grim-without -o is the whole desk; +1920 would click HDMI"
+        );
+        assert_eq!(
+            image_to_global(2000, 40, 3840, 1080, &outs, Some((1920, 0))),
+            (2000, 40),
+            "a pixel already on HDMI in the stitched JPEG must stay there"
+        );
+        assert_eq!(
+            frame_origin_for(3840, 1080, &outs, Some("HDMI-1")),
+            (0, 0),
+            "a 3840x1080 frame is the virtual desk, not HDMI-1"
+        );
+        assert_eq!(
+            frame_origin_for(1920, 1080, &outs, Some("HDMI-1")),
+            (1920, 0)
+        );
+        assert_eq!(
+            frame_origin_for(1920, 1080, &outs, None),
+            (0, 0),
+            "without a confirmed grim -o, do not guess the other monitor"
         );
     }
 
