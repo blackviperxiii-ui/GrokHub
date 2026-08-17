@@ -7750,7 +7750,9 @@ impl Cabin {
                         .inner_margin(egui::Margin::same(12.0))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                ui.checkbox(&mut self.automations[i].enabled, "");
+                                if ui.checkbox(&mut self.automations[i].enabled, "").changed() {
+                                    let _ = crate::night::save(&self.automations);
+                                }
                                 ui.vertical(|ui| {
                                     ui.label(
                                         RichText::new(&title).size(15.0).color(crate::theme::fg()),
@@ -10353,6 +10355,15 @@ mod tests {
         assert!(
             night.contains("review_status_line"),
             "Suggested header shows Reviewed today / due tonight: {night}"
+        );
+        let enable = night
+            .split("checkbox")
+            .nth(1)
+            .and_then(|s| s.split("ui.vertical").next())
+            .expect("night enable");
+        assert!(
+            enable.contains(".changed()") && enable.contains("night::save"),
+            "toggling an automation must persist enabled before restart: {enable}"
         );
         let skills = src
             .split("fn ui_skills(")
