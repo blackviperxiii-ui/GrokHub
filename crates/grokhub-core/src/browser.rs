@@ -11,7 +11,7 @@ pub struct BrowserTab {
 pub const CDP_PORTS: &[u16] = &[9222, 9223];
 
 pub const CDP_DOWN: &str =
-    "browser hand down — start Firefox or Chromium with --remote-debugging-port=9222, or use act / key ctrl+w after wait_for";
+    "browser hand down — start Firefox or Chromium with --remote-debugging-port=9222, or use act / key ctrl+t or ctrl+w after wait_for";
 
 /// Parse Chrome/Firefox `/json/list` (or `/json`) payload.
 pub fn parse_cdp_targets(raw: &str) -> Result<Vec<BrowserTab>, String> {
@@ -75,6 +75,41 @@ pub fn match_browser_tabs<'a>(tabs: &'a [BrowserTab], query: &str) -> Vec<&'a Br
         .collect()
 }
 
+fn is_browser_app_query(q: &str) -> bool {
+    matches!(
+        q,
+        "firefox" | "chrome" | "chromium" | "browser" | "brave"
+    )
+}
+
+fn is_new_tab_query(q: &str) -> bool {
+    q == "new tab" || q == "newtab" || q.contains("new tab") || q == "+"
+}
+
+fn is_blank_tab(tab: &BrowserTab) -> bool {
+    let title = tab.title.trim();
+    let url = tab.url.to_ascii_lowercase();
+    title.is_empty()
+        || title.eq_ignore_ascii_case("new tab")
+        || title.eq_ignore_ascii_case("(untitled)")
+        || url.contains("about:newtab")
+        || url.contains("about:blank")
+}
+
+fn soft_pick_browser_tab<'a>(tabs: &'a [BrowserTab], query: &str) -> Option<&'a BrowserTab> {
+    let q = query.trim().to_ascii_lowercase();
+    if is_browser_app_query(&q) && tabs.len() == 1 {
+        return Some(&tabs[0]);
+    }
+    if is_new_tab_query(&q) {
+        let blanks: Vec<_> = tabs.iter().filter(|t| is_blank_tab(t)).collect();
+        if blanks.len() == 1 {
+            return Some(blanks[0]);
+        }
+    }
+    None
+}
+
 /// One exact hit, or an error that lists the candidates.
 pub fn pick_browser_tab<'a>(
     tabs: &'a [BrowserTab],
@@ -82,7 +117,12 @@ pub fn pick_browser_tab<'a>(
 ) -> Result<&'a BrowserTab, String> {
     let hits = match_browser_tabs(tabs, query);
     match hits.len() {
-        0 => Err(format!("no tab matched {query}")),
+        0 => {
+            if let Some(hit) = soft_pick_browser_tab(tabs, query) {
+                return Ok(hit);
+            }
+            Err(format!("no tab matched {query}"))
+        }
         1 => Ok(hits[0]),
         _ => Err(format!(
             "ambiguous tab {query} — {} hits:\n{}",
@@ -90,6 +130,13 @@ pub fn pick_browser_tab<'a>(
             format_tab_list(&hits.iter().map(|t| (*t).clone()).collect::<Vec<_>>())
         )),
     }
+}
+
+/// Chrome/Firefox `GET /json/new?<url>`.
+pub fn cdp_new_tab_path(url: &str) -> String {
+    let url = url.trim();
+    let url = if url.is_empty() { "about:blank" } else { url };
+    format!("/json/new?{url}")
 }
 
 pub fn format_tab_list(tabs: &[BrowserTab]) -> String {
@@ -162,6 +209,26 @@ mod tests {
         assert!(miss.contains("ambiguous"), "{miss}");
         assert!(miss.contains("GitHub") && miss.contains("Hacker News"), "{miss}");
         assert!(pick_browser_tab(&tabs, "nope").unwrap_err().contains("no tab"));
+        let one = parse_cdp_targets(
+            r#"[{"id":"t1","type":"page","title":"GitHub","url":"https://github.com/foo","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/t1"}]"#,
+        )
+        .unwrap();
+        let firefox = pick_browser_tab(&one, "Firefox").unwrap();
+        assert_eq!(firefox.id, "t1");
+        let blank = parse_cdp_targets(
+            r#"[{"id":"n1","type":"page","title":"","url":"about:newtab","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/n1"}]"#,
+        )
+        .unwrap();
+        assert_eq!(pick_browser_tab(&blank, "new tab").unwrap().id, "n1");
+    }
+
+    #[test]
+    fn new_tab_path_defaults_to_blank() {
+        assert_eq!(cdp_new_tab_path(""), "/json/new?about:blank");
+        assert_eq!(
+            cdp_new_tab_path("https://example.com"),
+            "/json/new?https://example.com"
+        );
     }
 
     #[test]
