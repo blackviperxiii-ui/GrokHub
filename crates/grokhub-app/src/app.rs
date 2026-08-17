@@ -5428,7 +5428,8 @@ impl Cabin {
         if self.skill_name.is_empty() {
             return;
         }
-        let Some(v) = skills::run_verify(&self.skill_name) else {
+        let cwd = host_working_dir(&self.cfg.project_dir);
+        let Some(v) = skills::run_verify(&self.skill_name, cwd.as_deref()) else {
             return;
         };
         self.verify_ok_turn = v.ok;
@@ -9781,6 +9782,10 @@ mod tests {
         assert!(
             pushed < saved,
             "VERIFY_RESULT must hit disk or a restart drops it: {verify}"
+        );
+        assert!(
+            verify.contains("host_working_dir") && verify.contains("run_verify"),
+            "skill verify must run in the bound project, not the cabin cwd: {verify}"
         );
         let reflect = src
             .split("fn run_reflect")

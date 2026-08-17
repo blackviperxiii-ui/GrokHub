@@ -89,12 +89,17 @@ pub fn skill_updated_at(name: &str) -> u64 {
         .unwrap_or(0)
 }
 
-pub fn run_verify(name: &str) -> Option<VerifyResult> {
+pub fn run_verify(name: &str, cwd: Option<&str>) -> Option<VerifyResult> {
     let path = verify_script_path(skill_folder(name));
     if !path.exists() {
         return None;
     }
-    let out = Command::new("bash").arg(&path).output().ok()?;
+    let mut cmd = Command::new("bash");
+    cmd.arg(&path);
+    if let Some(dir) = cwd.filter(|d| !d.is_empty()) {
+        cmd.current_dir(dir);
+    }
+    let out = cmd.output().ok()?;
     Some(interpret_verify(
         out.status.code(),
         &String::from_utf8_lossy(&out.stdout),
@@ -162,6 +167,43 @@ mod tests {
         let listed = list_skills();
         assert_eq!(listed.len(), 1);
         assert!(listed[0].instructions.contains("newer"));
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn verify_runs_in_the_bound_tree() {
+        let _g = crate::config::TEST_CONFIG_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "grokhub-sk-cwd-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let s = SkillMd {
+            name: "cwd-check".into(),
+            description: "check the bound tree".into(),
+            slash: "/cwd".into(),
+            trigger: "verify cwd".into(),
+            instructions: "1. look in the bound project".into(),
+            pitfalls: "do not check the cabin cwd".into(),
+            verify: "test -f grokhub-verify-marker".into(),
+            runs: 0,
+        };
+        save_skill(&s).expect("save");
+        let project = root.join("bound");
+        fs::create_dir_all(&project).expect("project");
+        fs::write(project.join("grokhub-verify-marker"), "ok").expect("marker");
+        let miss = run_verify("cwd-check", None).expect("ran");
+        assert!(
+            !miss.ok,
+            "verify without a bound cwd must not see the project marker"
+        );
+        let hit = run_verify("cwd-check", project.to_str()).expect("ran bound");
+        assert!(hit.ok, "verify must run in the bound project: {hit:?}");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
