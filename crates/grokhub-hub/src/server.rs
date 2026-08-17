@@ -300,6 +300,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         if let Some(err) = grokhub_core::voice_client_secret_denied(grokhub_core::realtime_can_connect(
             &st.console_api_key,
         )) {
+            drop(st);
             return send_json(req, 400, json!({ "ok": false, "error": err }));
         }
         let key = st.console_api_key.clone();
@@ -332,6 +333,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         };
     }
 
+    drop(st);
     send_json(req, 404, json!({ "ok": false, "error": "unknown hub route" }))
 }
 
@@ -863,6 +865,32 @@ mod tests {
         assert!(
             drop_at < send_at,
             "inbox ack must not send while holding the hub lock: {ack}"
+        );
+        let voice_deny = src
+            .split("voice_client_secret_denied")
+            .nth(1)
+            .and_then(|s| s.split("let key = st.console_api_key").next())
+            .expect("voice deny");
+        let drop_at = voice_deny
+            .find("drop(st)")
+            .expect("voice 400 must drop before send_json");
+        let send_at = voice_deny.find("send_json").expect("voice 400 sends");
+        assert!(
+            drop_at < send_at,
+            "voice deny must not send while holding the hub lock: {voice_deny}"
+        );
+        let unknown = src
+            .split("Err(e) => send_json(req, 502")
+            .nth(1)
+            .and_then(|s| s.split("fn split_url").next())
+            .expect("unknown hub route");
+        let drop_at = unknown
+            .find("drop(st)")
+            .expect("unknown route must drop before send_json");
+        let send_at = unknown.find("send_json").expect("unknown route sends");
+        assert!(
+            drop_at < send_at,
+            "unknown route must not send while holding the hub lock: {unknown}"
         );
     }
 }
