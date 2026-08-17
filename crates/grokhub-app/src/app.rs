@@ -8726,6 +8726,12 @@ impl Cabin {
                         }
                     }
                     if crate::cards::ghost_pill(ui, "Use in chat") && !self.skill_name.is_empty() {
+                        if !self.skill_body.is_empty() {
+                            let parsed = grokhub_core::parse_skill_md(&self.skill_body);
+                            if skills::save_skill(&parsed).is_ok() {
+                                self.skill_list = skills::list_skills();
+                            }
+                        }
                         let name = self.skill_name.clone();
                         let slash = self
                             .skill_list
@@ -9569,6 +9575,17 @@ mod tests {
         assert!(
             flush < switch,
             "picking another skill must flush the leaving editor: {pick}"
+        );
+        let use_chat = skills_ui
+            .split("Use in chat")
+            .nth(1)
+            .and_then(|s| s.split("Run verify").next())
+            .expect("use in chat");
+        let flushed = use_chat.find("save_skill").expect("flush skill before use");
+        let sent = use_chat.find("send_chat").expect("use send");
+        assert!(
+            flushed < sent,
+            "Use in chat must flush the editor before the prompt: {use_chat}"
         );
         let skill_slash = src
             .split("Slash::Skill(name)")
