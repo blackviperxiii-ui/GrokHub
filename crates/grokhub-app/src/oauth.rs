@@ -261,6 +261,9 @@ pub fn fetch_profile_photo(url: &str, access: &str) -> Result<Vec<u8>, String> {
 }
 
 pub fn avatar_rgba(bytes: &[u8]) -> Option<image::RgbaImage> {
+    if !crate::desktop::image_pixels_ok_for_bytes(bytes) {
+        return None;
+    }
     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
     Some(center_square(img))
 }
@@ -301,6 +304,26 @@ mod tests {
     #[test]
     fn avatar_rgba_rejects_garbage() {
         assert!(avatar_rgba(b"not-an-image").is_none());
+    }
+
+    #[test]
+    fn avatar_rgba_rejects_a_pixel_bomb() {
+        let src = include_str!("oauth.rs");
+        let av = src
+            .split("pub fn avatar_rgba(")
+            .nth(1)
+            .and_then(|s| s.split("fn center_square(").next())
+            .expect("avatar_rgba");
+        assert!(
+            av.contains("image_pixels_ok") || av.contains("png_ihdr_size"),
+            "Settings avatar must not decode a pixel bomb: {av}"
+        );
+        let mut hdr = vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+        hdr.extend_from_slice(&13u32.to_be_bytes());
+        hdr.extend_from_slice(b"IHDR");
+        hdr.extend_from_slice(&50_000u32.to_be_bytes());
+        hdr.extend_from_slice(&50_000u32.to_be_bytes());
+        assert!(avatar_rgba(&hdr).is_none());
     }
 
     #[test]
