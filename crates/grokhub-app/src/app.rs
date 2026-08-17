@@ -91,6 +91,7 @@ use grokhub_core::{
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
+    search_thread_body,
     state_for_disk,
     clear_pending_after_complete, inbox_claim_ready,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm,
@@ -3295,12 +3296,7 @@ impl Cabin {
                     .map(|(n, b)| ((*n).to_string(), b.clone()))
                     .collect();
                 for t in &self.threads {
-                    let body = t
-                        .messages
-                        .iter()
-                        .map(|(_, c)| c.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    let body = search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()));
                     rows.push((t.title.clone(), body));
                 }
                 hits.extend(search_corpus(&q, &rows));
@@ -8658,12 +8654,7 @@ impl Cabin {
                         ("MEMORY.md".into(), config::read_memory("MEMORY.md")),
                     ];
                     for t in &self.threads {
-                        let body = t
-                            .messages
-                            .iter()
-                            .map(|(_, c)| c.as_str())
-                            .collect::<Vec<_>>()
-                            .join("\n");
+                        let body = search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()));
                         rows.push((t.title.clone(), body));
                     }
                     self.history_hits = search_corpus(&self.history_q, &rows);
@@ -12182,6 +12173,10 @@ mod tests {
                 && search.contains("mem_body")
                 && search.contains("scratch()"),
             "History Search must flush the Memory editor before reading disk: {search}"
+        );
+        assert!(
+            search.contains("TEXT_FILE_CAP") || search.contains("search_thread_body"),
+            "History Search must not join every 8MB thread on the UI thread: {search}"
         );
         let night = src
             .split("fn ui_night(")
