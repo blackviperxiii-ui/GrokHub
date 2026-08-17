@@ -167,6 +167,11 @@ pub fn automation_blocked_by_policy(quiet: bool, destructive: bool, autonomy: u8
     (quiet && destructive) || (autonomy == 0 && destructive)
 }
 
+/// Replay that did not start must not consume the night slot.
+pub fn night_counts_run(replay_started: Option<bool>) -> bool {
+    !matches!(replay_started, Some(false))
+}
+
 /// `replay last` or `every day at 21, replay last` — night runs the saved recipe, not a chat hop.
 pub fn replay_automation_target(instructions: &str) -> Option<&str> {
     let t = instructions.trim();
@@ -377,6 +382,12 @@ mod tests {
         assert_eq!(replay_automation_target("replay last"), Some("last"));
         assert_eq!(replay_automation_target("every day at 21, replay last"), Some("last"));
         assert_eq!(replay_automation_target("REPLAY desk-1"), Some("desk-1"));
+        assert!(night_counts_run(None), "a chat night job still counts");
+        assert!(night_counts_run(Some(true)));
+        assert!(
+            !night_counts_run(Some(false)),
+            "a missing recipe must not consume the night slot"
+        );
         assert_eq!(replay_automation_target("summarize the workboard"), None);
         let blocked = Automation {
             id: "n0".into(),

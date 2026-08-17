@@ -59,6 +59,7 @@ use grokhub_core::{
     visible_tree, ProjectKind, ProjectMenuAct,
     ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
+    night_counts_run,
     match_skill, mode_from_chip_value, model_for_mode, nav_from_chip_value,
     cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
     next_chat_image, next_goal_prompt, paint_connect_banner,
@@ -3401,13 +3402,16 @@ impl Cabin {
             self.status = "Connect Grok OAuth in Settings".into();
             return;
         }
+        let replay = replay_automation_target(&a.instructions).map(|id| self.replay_saved_recipe(id));
+        if !night_counts_run(replay) {
+            return;
+        }
         self.mark_auto_ran(&a.id, now_ms);
         bump_usage(&mut self.usage, "automation");
         self.daily_auto_used = self.usage.automation;
         self.daily_auto_day = self.usage.day.clone();
         self.status = format!("Night: {}", a.name);
-        if let Some(id) = replay_automation_target(&a.instructions) {
-            self.replay_saved_recipe(id);
+        if replay.is_some() {
             return;
         }
         self.nav = Nav::Chat;
@@ -5136,10 +5140,10 @@ impl Cabin {
         self.send_chat("Take over this desktop. Look at the screen and fix what is broken.".into());
     }
 
-    fn replay_saved_recipe(&mut self, id: &str) {
+    fn replay_saved_recipe(&mut self, id: &str) -> bool {
         if self.running {
             self.status = "Busy — wait, then replay".into();
-            return;
+            return false;
         }
         let recipe = if id.eq_ignore_ascii_case("last") {
             crate::recipes::load_last().or_else(|| self.last_recipe.clone())
@@ -5150,8 +5154,12 @@ impl Cabin {
             Some(r) => {
                 self.last_recipe = Some(r);
                 self.replay_recipe();
+                true
             }
-            None => self.status = format!("No recipe {id}"),
+            None => {
+                self.status = format!("No recipe {id}");
+                false
+            }
         }
     }
 
@@ -9117,6 +9125,10 @@ mod tests {
         assert!(
             src.contains("inbox_claim_ready") && src.contains("requeue_claimed_for"),
             "do not claim a phone task without auth, and unstick claimed rows on boot"
+        );
+        assert!(
+            src.contains("night_counts_run"),
+            "a night replay that did not start must not consume the slot"
         );
         let finish = src
             .split("fn finish_hub_dispatch")
