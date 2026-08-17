@@ -453,6 +453,9 @@ pub fn expand_host_path_token_in(tok: &str, home: Option<&str>) -> Option<String
     if tok.starts_with('/') {
         return Some(tok);
     }
+    if tok == "$OLDPWD" || tok.starts_with("$OLDPWD/") {
+        return Some("/var/empty".into());
+    }
     let home = home.filter(|h| !h.is_empty())?;
     let home = home.trim_end_matches('/');
     if let Some(rest) = tok.strip_prefix("~/") {
@@ -732,6 +735,14 @@ mod tests {
         assert!(
             host_cmd_leaves_project_in("cat ~other/secrets", "/home/j/proj", Some("/home/j")),
             "cat ~other/secrets reads outside the bound tree"
+        );
+        assert!(
+            host_cmd_leaves_project_in("cd $OLDPWD", "/home/j/proj", Some("/home/j")),
+            "cd $OLDPWD goes to the previous directory, not a project subdir"
+        );
+        assert!(
+            host_cmd_leaves_project_in("cat $OLDPWD/secrets", "/home/j/proj", Some("/home/j")),
+            "cat $OLDPWD/secrets reads outside the bound tree"
         );
     }
 
