@@ -46,6 +46,19 @@ pub fn hub_pair_url(port: u16, lan_ip: Option<&str>) -> String {
     }
 }
 
+/// Same inclusive TTL as `HubState::pair_with`.
+pub fn pair_code_is_live(expires_at: u64, now_ms: u64) -> bool {
+    expires_at >= now_ms
+}
+
+/// Start share must mint when there is no code or the stored one is dead.
+pub fn start_hub_rotates_pair(expires_at: Option<u64>, now_ms: u64) -> bool {
+    match expires_at {
+        None => true,
+        Some(exp) => !pair_code_is_live(exp, now_ms),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,5 +94,24 @@ mod tests {
         assert_eq!(hub_pair_url(18766, None), "http://127.0.0.1:18766");
         assert!(!hub_pair_url(18766, pick_lan_ipv4(&["192.168.1.40"]).as_deref()).contains("<lan>"));
         assert_eq!(parse_hostname_i("192.168.1.40 10.0.0.8\n"), vec!["192.168.1.40", "10.0.0.8"]);
+    }
+
+    #[test]
+    fn expired_pair_code_is_not_live() {
+        assert!(pair_code_is_live(2_000, 1_000));
+        assert!(
+            pair_code_is_live(2_000, 2_000),
+            "pair_with treats expiry as inclusive"
+        );
+        assert!(
+            !pair_code_is_live(1_000, 2_000),
+            "Devices must not keep showing a dead code"
+        );
+        assert!(start_hub_rotates_pair(None, 1_000));
+        assert!(
+            start_hub_rotates_pair(Some(500), 1_000),
+            "an expired leftover must rotate on Start share"
+        );
+        assert!(!start_hub_rotates_pair(Some(2_000), 1_000));
     }
 }

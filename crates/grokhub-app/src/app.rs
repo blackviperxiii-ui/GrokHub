@@ -28,7 +28,8 @@ use grokhub_core::{
     blend_thread_goal,
     build_hub_snapshot,
     build_quick_chips, build_windshield, bump_skill_run, bump_usage,
-    inhabit_ready, hub_pair_url, parse_hostname_i, pick_lan_ipv4,
+    inhabit_ready, hub_pair_url, pair_code_is_live, parse_hostname_i, pick_lan_ipv4,
+    start_hub_rotates_pair,
     catalog_line, chip_suggest_prompt, compact_keep_pin, compose_imagine_prompt,
     context_fingerprint,
     context_percent,
@@ -5454,7 +5455,7 @@ impl Cabin {
         if let Ok(mut st) = self.hub.lock() {
             st.sharing = true;
             st.port = self.hub_port;
-            if st.pair.is_none() {
+            if start_hub_rotates_pair(st.pair.as_ref().map(|p| p.expires_at), now_ms()) {
                 st.rotate_pair();
             }
         }
@@ -6942,11 +6943,21 @@ impl Cabin {
                 self.start_hub();
             }
             crate::cards::section_label(ui, "This computer");
-            let (name, sharing, pair_code) = if let Ok(st) = self.hub.lock() {
+            let (name, sharing, pair_code) = if let Ok(mut st) = self.hub.lock() {
+                if self.hub_on
+                    && st
+                        .pair
+                        .as_ref()
+                        .is_some_and(|p| !pair_code_is_live(p.expires_at, now_ms()))
+                {
+                    st.rotate_pair();
+                }
                 (
                     st.device_name.clone(),
                     self.hub_on,
-                    st.pair.as_ref().map(|p| p.code.clone()),
+                    st.pair.as_ref().and_then(|p| {
+                        pair_code_is_live(p.expires_at, now_ms()).then(|| p.code.clone())
+                    }),
                 )
             } else {
                 (String::new(), false, None)
@@ -9135,6 +9146,24 @@ mod tests {
         assert!(
             src.contains("night_counts_run"),
             "a night replay that did not start must not consume the slot"
+        );
+        let start_hub = src
+            .split("fn start_hub")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_project_overlays").next())
+            .expect("start_hub");
+        assert!(
+            start_hub.contains("start_hub_rotates_pair"),
+            "Start share must rotate an expired leftover code: {start_hub}"
+        );
+        let devices = src
+            .split("fn ui_devices")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_memory").next())
+            .expect("ui_devices");
+        assert!(
+            devices.contains("pair_code_is_live"),
+            "Devices must hide a dead pair code: {devices}"
         );
         let clear = src
             .split("Slash::Clear =>")
