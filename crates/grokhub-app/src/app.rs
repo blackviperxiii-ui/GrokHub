@@ -618,6 +618,7 @@ pub struct Cabin {
     threads: Vec<ChatThread>,
     thread_idx: usize,
     oauth_pending: Option<DeviceCodeStart>,
+    oauth_next_poll: Instant,
     host_hour_count: u32,
     host_hour_at: Instant,
     host_reserved: u32,
@@ -897,6 +898,7 @@ impl Cabin {
             threads,
             thread_idx,
             oauth_pending: None,
+            oauth_next_poll: Instant::now(),
             host_hour_count: 0,
             host_hour_at: Instant::now(),
             host_reserved: 0,
@@ -3848,7 +3850,9 @@ impl Cabin {
                     .unwrap_or_else(|| start.verification_uri.clone());
                 let _ = crate::oauth::open_browser(&uri);
                 self.status = format!("Grok OAuth code {} — approve in the browser", start.user_code);
+                let wait = start.interval.max(1);
                 self.oauth_pending = Some(start);
+                self.oauth_next_poll = Instant::now() + Duration::from_secs(wait);
             }
             Err(e) => self.status = e,
         }
@@ -3858,6 +3862,9 @@ impl Cabin {
         let Some(p) = self.oauth_pending.clone() else {
             return;
         };
+        if Instant::now() < self.oauth_next_poll {
+            return;
+        }
         match crate::oauth::poll_device(&p.device_code) {
             Ok(r) => match r.status {
                 grokhub_core::PollStatus::Ready => {
@@ -3875,7 +3882,14 @@ impl Cabin {
                     self.oauth_pending = None;
                     self.status = r.error.unwrap_or_else(|| "OAuth failed".into());
                 }
-                grokhub_core::PollStatus::SlowDown | grokhub_core::PollStatus::Pending => {}
+                status @ (grokhub_core::PollStatus::Pending | grokhub_core::PollStatus::SlowDown) => {
+                    if let Some(wait) = grokhub_core::next_oauth_poll_secs(p.interval, status) {
+                        if let Some(pending) = self.oauth_pending.as_mut() {
+                            pending.interval = wait;
+                        }
+                        self.oauth_next_poll = Instant::now() + Duration::from_secs(wait);
+                    }
+                }
             },
             Err(e) => self.status = e,
         }
@@ -5548,7 +5562,12 @@ impl eframe::App for Cabin {
         }
         if self.oauth_pending.is_some() {
             self.poll_oauth();
-            ctx.request_repaint_after(Duration::from_secs(2));
+            let wait = self
+                .oauth_pending
+                .as_ref()
+                .map(|p| p.interval.max(1))
+                .unwrap_or(1);
+            ctx.request_repaint_after(Duration::from_secs(wait));
         }
         self.poll_oauth_photo(ctx);
         if !self.composer.trim().is_empty()
@@ -9022,6 +9041,10 @@ mod tests {
         assert!(
             src.contains("oauth_access_live"),
             "expired OAuth without refresh must not hide a console key"
+        );
+        assert!(
+            src.contains("next_oauth_poll_secs"),
+            "Settings OAuth must honor interval and slow_down"
         );
         let cmds = src
             .split("fn run_cmds")
