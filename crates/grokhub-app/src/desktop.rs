@@ -1,15 +1,16 @@
 use grokhub_core::{
     act_window_search_bin, browser_windshield_line, capture_kinds, cdp_new_tab_path,
-    cdp_page_close_payload, cdp_page_focus_payload, clamp_to_desktop, clip_image_args,
+    cdp_page_close_payload, cdp_page_focus_payload, clamp_to_desktop, clamp_to_output, clip_image_args,
     computer_cmd_line, computer_drive_for, cursor_on_output, diagnose_hands, empty_hands_steps_error,
-    ffmpeg_webcam_args, ffmpeg_x11_args, filter_atspi_rows, format_cursor_line_miss,
+    ffmpeg_webcam_args, ffmpeg_x11_args, filter_atspi_rows, format_cursor_line_miss, format_pointer_hint,
     format_tab_list, frame_is_blank, frame_origin_for, gnome_shell_screenshot_args, grim_capture_args,
     hands_backend_name, hands_blocked_by_lock, hands_chip_label, hands_chip_live, hands_down_receipt,
     hands_windshield_line, image_pixels_ok, image_to_global, infer_wayland_display, jpeg_data_url,
     layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var, monitor_local_to_global,
-    parse_atspi_line, parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
-    parse_xrandr_outputs, pcm_from_capture, pick_browser_tab, pick_capture_output, pick_hands_backend,
-    pick_named_row, picker_args, png_ihdr_size, pointer_slop_miss, rank_atspi_rows, relative_move_steps,
+    output_for_point, parse_atspi_line, parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line,
+    parse_xdotool_mouse, parse_xrandr_outputs, pcm_from_capture, pick_browser_tab, pick_capture_output,
+    pick_hands_backend, pick_named_row, picker_args, png_ihdr_size, pointer_hop_plan, pointer_slop_miss,
+    rank_atspi_rows, relative_move_steps, relative_needed,
     resolve_bin_in, session_is_wayland, tab_list_from_rows, take_text_body, IMAGE_FILE_CAP,
     TEXT_FILE_CAP, virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path,
     AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp, DisplayOutput, HandsBackend,
@@ -63,6 +64,7 @@ struct LastDeskFrame {
 }
 
 static LAST_DESK_FRAME: Mutex<Option<LastDeskFrame>> = Mutex::new(None);
+static LAST_POINTER_HINT: Mutex<Option<(i32, i32)>> = Mutex::new(None);
 
 #[derive(Clone)]
 struct DeskScan {
@@ -232,7 +234,8 @@ pub fn prepare_windshield(
     let kept = filter_atspi_rows(rows, dw, dh);
     let ranked = rank_atspi_rows(&kept, ask, 40);
     let (fw, fh, ox, oy) = windshield_frame_geom(captured_this_turn, last_desk_frame_geom());
-    let mut header = layout_prompt(&outputs, fw, fh, ox, oy, read_cursor_xy());
+    let hint = LAST_POINTER_HINT.lock().ok().and_then(|g| *g);
+    let mut header = layout_prompt(&outputs, fw, fh, ox, oy, read_cursor_xy(), hint);
     let (up, n) = cached_cdp_status();
     header.push_str(&browser_windshield_line(up, n));
     header.push_str(&hands_windshield_line(hands_peek(), hands_driver_name()));
@@ -873,12 +876,40 @@ fn cursor_detail_line(x: i32, y: i32, miss: bool) -> String {
     format_cursor_line_miss(x, y, cursor_monitor_name(x, y).as_deref(), miss)
 }
 
+fn remember_pointer_hint(x: i32, y: i32) {
+    if let Ok(mut g) = LAST_POINTER_HINT.lock() {
+        *g = Some((x, y));
+    }
+}
+
 fn append_cursor_detail(detail: &str, intended: (i32, i32), actual: Option<(i32, i32)>) -> String {
     let Some((ax, ay)) = actual else {
         return format!("{detail}\ncursor unread");
     };
     let miss = pointer_slop_miss(intended, (ax, ay), POINTER_SLOP);
-    format!("{detail}\n{}", cursor_detail_line(ax, ay, miss))
+    let mut out = format!("{detail}\n{}", cursor_detail_line(ax, ay, miss));
+    if miss {
+        let outputs = read_display_outputs();
+        let mon = output_for_point(&outputs, intended.0, intended.1).map(|o| o.name.clone());
+        out.push('\n');
+        out.push_str(&format_pointer_hint(
+            intended.0,
+            intended.1,
+            mon.as_deref(),
+        ));
+    } else {
+        remember_pointer_hint(intended.0, intended.1);
+    }
+    out
+}
+
+fn pointer_tool_move_failed(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    (e.contains("ydotool") || e.contains("xdotool"))
+        && (e.contains("failed") || e.contains("timed out"))
+        && !e.contains("missing")
+        && !e.contains("uinput")
+        && !e.contains("ydotoold is down")
 }
 
 fn after_move_click_steps(op: &ComputerOp) -> Vec<Vec<String>> {
@@ -894,27 +925,45 @@ fn after_move_click_steps(op: &ComputerOp) -> Vec<Vec<String>> {
     }
 }
 
-fn drive_pointer_to(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(i32, i32), String> {
-    let outputs = read_display_outputs();
-    let (x, y) = clamp_to_desktop(x, y, &outputs);
-    match pointer_drive(&ComputerOp::Move { x, y }) {
+fn drive_waypoint(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(), String> {
+    let abs_ok = match pointer_drive(&ComputerOp::Move { x, y }) {
         ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
-            run_pointer_steps(&steps, cancel)?;
+            match run_pointer_steps(&steps, cancel) {
+                Ok(()) => true,
+                Err(e) if cancelled(cancel) || e == "halted" => return Err(e),
+                Err(e) if pointer_tool_move_failed(&e) => false,
+                Err(e) => return Err(e),
+            }
         }
         ComputerDrive::Act(_)
         | ComputerDrive::WaitFor(_)
         | ComputerDrive::Tab(_, _)
         | ComputerDrive::Cursor
         | ComputerDrive::MoveMonitor { .. } => return Err("not a pointer op".into()),
-    }
-    if let Some((ax, ay)) = read_cursor_xy() {
-        if pointer_slop_miss((x, y), (ax, ay), POINTER_SLOP) {
-            let backend = live_hands_backend().unwrap_or(HandsBackend::Xdotool);
-            let steps = relative_move_steps(backend, x - ax, y - ay);
-            if !steps.is_empty() {
-                run_pointer_steps(&steps, cancel)?;
+    };
+    if let Some((dx, dy)) = relative_needed(abs_ok, (x, y), read_cursor_xy(), POINTER_SLOP) {
+        let backend = live_hands_backend().unwrap_or(HandsBackend::Xdotool);
+        let steps = relative_move_steps(backend, dx, dy);
+        if !steps.is_empty() {
+            match run_pointer_steps(&steps, cancel) {
+                Ok(()) => {}
+                Err(e) if pointer_tool_move_failed(&e) => {}
+                Err(e) if cancelled(cancel) || e == "halted" => return Err(e),
+                Err(e) => return Err(e),
             }
         }
+    }
+    Ok(())
+}
+
+fn drive_pointer_to(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(i32, i32), String> {
+    let outputs = read_display_outputs();
+    let (x, y) = match output_for_point(&outputs, x, y) {
+        Some(o) => clamp_to_output(x, y, o),
+        None => clamp_to_desktop(x, y, &outputs),
+    };
+    for (hx, hy) in pointer_hop_plan(read_cursor_xy(), (x, y), &outputs) {
+        drive_waypoint(hx, hy, cancel)?;
     }
     Ok((x, y))
 }
