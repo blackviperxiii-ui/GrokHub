@@ -585,6 +585,11 @@ fn screen_from_rows(rows: &[grokhub_core::AtspiRow]) -> Option<grokhub_core::Scr
     screen_from_extents(mx, my)
 }
 
+struct LiveCap {
+    url: Option<String>,
+    cam: Option<String>,
+}
+
 pub struct Cabin {
     nav: Nav,
     cfg: AppConfig,
@@ -683,6 +688,7 @@ pub struct Cabin {
     cmd_hist: Vec<String>,
     agents: Vec<AgentJob>,
     last_live: Instant,
+    live_cap_rx: Option<mpsc::Receiver<LiveCap>>,
     #[allow(dead_code)]
     hotkeys: Option<GlobalHotKeyManager>,
     hotkey_hey: u32,
@@ -972,6 +978,7 @@ impl Cabin {
             cmd_hist: vec![],
             agents: vec![],
             last_live: Instant::now(),
+            live_cap_rx: None,
             hotkeys: None,
             hotkey_hey: 0,
             hotkey_halt: 0,
@@ -4028,18 +4035,38 @@ impl Cabin {
         if lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
             return;
         }
-        if let Ok(url) = capture_data_url() {
-            if should_send_screenshot(&self.last_window_title, "") {
-                if let Ok(mut st) = self.hub.lock() {
-                    st.store_frame(&url);
+        if let Some(rx) = self.live_cap_rx.take() {
+            match rx.try_recv() {
+                Ok(cap) => {
+                    if let Some(url) = cap.url {
+                        if should_send_screenshot(&self.last_window_title, "") {
+                            if let Ok(mut st) = self.hub.lock() {
+                                st.store_frame(&url);
+                            }
+                            self.last_frame_url = Some(url.clone());
+                            self.push_presence(url);
+                        }
+                    }
+                    if let Some(cam) = cap.cam {
+                        self.webcam_url = Some(cam);
+                    }
                 }
-                self.last_frame_url = Some(url.clone());
-                self.push_presence(url);
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.live_cap_rx = Some(rx);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {}
             }
         }
-        if let Ok(cam) = capture_webcam() {
-            self.webcam_url = Some(cam);
+        if self.live_cap_rx.is_some() {
+            return;
         }
+        let (tx, rx) = mpsc::channel();
+        self.live_cap_rx = Some(rx);
+        std::thread::spawn(move || {
+            let url = capture_data_url().ok();
+            let cam = capture_webcam().ok();
+            let _ = tx.send(LiveCap { url, cam });
+        });
     }
 
     fn tick_mid_thought(&mut self) {
@@ -9637,6 +9664,35 @@ mod tests {
         assert!(
             !persist.contains("if let Ok(st) = self.hub.lock()"),
             "persist must not hold hub.lock() across save_hub_state: {persist}"
+        );
+    }
+
+    #[test]
+    fn live_room_captures_off_the_ui_thread() {
+        let src = include_str!("app.rs");
+        let live = src
+            .split("fn live_room")
+            .nth(1)
+            .and_then(|s| s.split("fn tick_mid_thought").next())
+            .expect("live_room");
+        let spawn = live
+            .find("thread::spawn")
+            .expect("grim/ffmpeg must leave the UI thread");
+        let shot = live.find("capture_data_url").expect("screen capture");
+        let cam = live.find("capture_webcam").expect("webcam");
+        assert!(
+            spawn < shot && spawn < cam,
+            "presence capture must not block the cabin: {live}"
+        );
+        assert!(
+            live.contains("try_recv") && live.contains("live_cap_rx"),
+            "UI thread must apply one in-flight frame without stacking grim: {live}"
+        );
+        assert!(
+            live.contains("collect_rows")
+                && live.contains("lock_titles")
+                && live.contains("should_send_screenshot"),
+            "lock and title gates stay on the UI thread: {live}"
         );
     }
 
