@@ -510,7 +510,7 @@ mod tests {
         assert!(slash_help().contains("localhost CDP"));
         assert!(slash_help().contains("Hands chip and a how-to"));
         assert!(slash_help().contains("Hung desktop tools time out"));
-        assert!(slash_help().contains("GitHub, CDP, and chat SSE bodies are capped"));
+        assert!(slash_help().contains("GitHub, CDP, chat SSE, and OAuth JSON bodies are capped"));
         assert!(slash_help().contains("patch an existing skill"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
