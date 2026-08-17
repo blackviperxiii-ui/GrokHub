@@ -51,7 +51,7 @@ use grokhub_core::{
     extract_insights, extract_work_updates, fact_candidates, failover_model, filter_slash_commands,
     frame_bytes, PresenceFrame,
     forget_topic, greet_from_last_job, has_auth, has_verify_ok, hey_grok_on_press,
-    hey_grok_route, hey_grok_starts_ptt, import_memory_file, insight_pin, is_openclaw_workspace,
+    hey_grok_route, hey_grok_starts_ptt, import_memory_file, merge_imported_memory, insight_pin, is_openclaw_workspace,
     add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
     host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
     verify_ok_after_user_turn,
@@ -3685,17 +3685,24 @@ impl Cabin {
             return;
         };
         let mut imported = 0u32;
+        let mut memory = config::read_memory("MEMORY.md");
         if let Ok(rd) = std::fs::read_dir(&root) {
             for e in rd.flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
                 if let Ok(body) = std::fs::read_to_string(e.path()) {
                     if let Some((dest, content)) = import_memory_file(&name, &body) {
-                        if config::write_memory(&dest, &content).is_ok() {
+                        if dest == "MEMORY.md" {
+                            memory = merge_imported_memory(&memory, &content, &name);
+                            imported += 1;
+                        } else if config::write_memory(&dest, &content).is_ok() {
                             imported += 1;
                         }
                     }
                 }
             }
+        }
+        if imported > 0 {
+            let _ = config::write_memory("MEMORY.md", &memory);
         }
         let skills_dir = std::path::PathBuf::from(&root).join("skills");
         if let Ok(rd) = std::fs::read_dir(skills_dir) {
@@ -9272,6 +9279,15 @@ mod tests {
         assert!(
             host_done.contains("kick_model(false)"),
             "HostDone must not steal the attached image: {host_done}"
+        );
+        let import = src
+            .split("fn import_openclaw")
+            .nth(1)
+            .and_then(|s| s.split("fn run_consult").next())
+            .expect("import_openclaw");
+        assert!(
+            import.contains("merge_imported_memory"),
+            "/import must merge MEMORY.md instead of last-file-wins: {import}"
         );
         let anticipate = src
             .split("fn tick_anticipate")
