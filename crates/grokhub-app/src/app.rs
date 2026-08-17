@@ -864,6 +864,7 @@ impl Cabin {
         let secrets = secrets::load();
         let win_max = cfg.window.maximized;
         let approve_risky_only = cfg.approve_risky_only;
+        let goal_step = threads.get(thread_idx).map(|t| t.goal.step).unwrap_or(0);
         let mut c = Self {
             nav: Nav::Chat,
             cfg,
@@ -954,7 +955,7 @@ impl Cabin {
             shortcuts_open: false,
             active_skill_follow: None,
             last_anticipate_ms: 0,
-            goal_step: 0,
+            goal_step,
             followup_step: 0,
             stream_buf: String::new(),
             thought_buf: String::new(),
@@ -2551,6 +2552,11 @@ impl Cabin {
                         .get(next)
                         .map(|t| t.goal.label.clone())
                         .unwrap_or_default();
+                    self.goal_step = self
+                        .threads
+                        .get(next)
+                        .map(|t| t.goal.step)
+                        .unwrap_or(0);
                 }
                 self.status = format!("Deleted {}", gone.title);
             }
@@ -9212,6 +9218,19 @@ mod tests {
         assert!(
             created.contains("flush_visible_goal"),
             "/new must persist the left tab's goal before clearing it: {created}"
+        );
+        let deleted = src
+            .split("fn delete_thread_at")
+            .nth(1)
+            .and_then(|s| s.split("fn send_chat").next())
+            .expect("delete_thread_at");
+        assert!(
+            deleted.contains("goal.step") && deleted.contains("self.goal_step"),
+            "deleting the visible tab must adopt the next tab's goal step: {deleted}"
+        );
+        assert!(
+            src.contains("let goal_step = threads.get(thread_idx)"),
+            "boot must restore the current thread's goal step, not always 0"
         );
         let anticipate = src
             .split("fn tick_anticipate")
