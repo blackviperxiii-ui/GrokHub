@@ -4786,6 +4786,9 @@ impl Cabin {
             }
             return blocked;
         }
+        if blocked {
+            self.persist();
+        }
         if !gated.iter().any(|c| is_rewind_copy_cmd(c)) {
             if let Some(snap) = self.snapshot_project() {
                 gated.insert(0, snap);
@@ -9243,6 +9246,12 @@ mod tests {
         assert!(
             cmds.contains("push_bound_msg"),
             "blocked host receipts must stay on the job thread"
+        );
+        let ret = cmds.find("return blocked;").expect("return blocked");
+        let rewind = cmds.find("is_rewind_copy_cmd").expect("rewind copy");
+        assert!(
+            ret < rewind && cmds[ret..rewind].contains("self.persist()"),
+            "mixed blocked+allowed host must persist block receipts before spawn: {cmds}"
         );
         assert!(
             src.contains("host_needs_kick && !self.running"),
