@@ -1,5 +1,18 @@
 use eframe::egui::{Color32, Label, RichText, TextStyle, TextWrapMode, Ui, Vec2};
-use grokhub_core::bubble_max_width;
+use grokhub_core::{bubble_max_width, TEXT_FILE_CAP};
+
+/// Paint/layout prefix. Stream buffers may hold `IMAGE_FILE_CAP`; laying that out freezes Chat.
+pub(crate) fn display_text(text: &str) -> &str {
+    let cap = TEXT_FILE_CAP as usize;
+    if text.len() <= cap {
+        return text;
+    }
+    let mut end = cap;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
 
 /// Cap for wrapping. Short bubbles hug via `bubble_outer_width`, they do not stretch to this.
 pub fn bubble_width(available: f32) -> f32 {
@@ -7,6 +20,7 @@ pub fn bubble_width(available: f32) -> f32 {
 }
 
 pub fn measure_text(ui: &Ui, text: &str, wrap: f32) -> Vec2 {
+    let text = display_text(text);
     let font = TextStyle::Body.resolve(ui.style());
     let wrap = wrap.max(1.0);
     if text.is_empty() {
@@ -17,6 +31,7 @@ pub fn measure_text(ui: &Ui, text: &str, wrap: f32) -> Vec2 {
 }
 
 pub fn show(ui: &mut Ui, text: &str) {
+    let text = display_text(text);
     ui.style_mut().wrap_mode = Some(TextWrapMode::Wrap);
     let wrap = ui.available_width().max(1.0);
     ui.set_max_width(wrap);
@@ -113,7 +128,8 @@ fn inline(ui: &mut Ui, line: &str, wrap: f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bubble_width, measure_text};
+    use super::{bubble_width, display_text, measure_text};
+    use grokhub_core::TEXT_FILE_CAP;
     use grokhub_core::{
         bubble_max_width, bubble_outer_width, bubble_wrap_width, BUBBLE_MAX_FRAC, BUBBLE_PAD_X,
     };
@@ -121,6 +137,38 @@ mod tests {
     #[test]
     fn splits_markers() {
         assert!("**bold** and `code`".contains("**"));
+    }
+
+    #[test]
+    fn display_text_stays_inside_text_file_cap() {
+        let huge = "é".repeat((TEXT_FILE_CAP as usize) + 16);
+        let shown = display_text(&huge);
+        assert!(shown.len() <= TEXT_FILE_CAP as usize);
+        assert!(shown.is_char_boundary(shown.len()));
+        assert!(!shown.is_empty());
+    }
+
+    #[test]
+    fn measure_and_show_do_not_layout_an_8mb_bubble() {
+        let src = include_str!("markdown.rs");
+        let measure = src
+            .split("pub fn measure_text(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn show(").next())
+            .expect("measure_text");
+        let show = src
+            .split("pub fn show(")
+            .nth(1)
+            .and_then(|s| s.split("fn wrapping_label(").next())
+            .expect("show");
+        assert!(
+            measure.contains("TEXT_FILE_CAP") || measure.contains("display_text"),
+            "measure_text must not layout an 8MB stream body every paint: {measure}"
+        );
+        assert!(
+            show.contains("TEXT_FILE_CAP") || show.contains("display_text"),
+            "markdown show must not walk an 8MB stream body every paint: {show}"
+        );
     }
 
     #[test]
