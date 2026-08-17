@@ -4186,6 +4186,9 @@ impl Cabin {
                 (role, content)
             })
             .collect();
+        if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
+            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+        }
         let soul = config::read_memory("SOUL.md");
         let user_md = config::read_memory("USER.md");
         let memory_md = config::read_memory("MEMORY.md");
@@ -9664,6 +9667,13 @@ mod tests {
         assert!(
             cap < glass,
             "Windshield frame: must come from this-turn capture, not last JPEG: {kick}"
+        );
+        let soul = kick.find("read_memory(\"SOUL.md\")").expect("soul prompt");
+        assert!(
+            kick[..soul].contains("write_memory")
+                && kick[..soul].contains("mem_body")
+                && kick[..soul].contains("scratch()"),
+            "kick_model must flush the Memory editor before the system prompt: {kick}"
         );
         let anticipate = src
             .split("fn tick_anticipate")
