@@ -17,6 +17,12 @@ pub enum ComputerOp {
     Act { name: String },
     WaitFor { title: Option<String> },
     Tab { action: TabAction, query: String },
+    Cursor,
+    MoveMonitor {
+        name: String,
+        x: Option<i32>,
+        y: Option<i32>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,7 +106,11 @@ pub fn empty_hands_steps_error(op: &ComputerOp, steps: &[Vec<String>]) -> Option
     match op {
         ComputerOp::Key { name } => Some(format!("unknown key {name}")),
         ComputerOp::Scroll { dy } if *dy == 0 => None,
-        ComputerOp::Tab { .. } | ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } => None,
+        ComputerOp::Tab { .. }
+        | ComputerOp::Act { .. }
+        | ComputerOp::WaitFor { .. }
+        | ComputerOp::Cursor
+        | ComputerOp::MoveMonitor { .. } => None,
         _ => Some("empty hands step".into()),
     }
 }
@@ -151,10 +161,36 @@ pub fn parse_computer_op(line: &str) -> Option<ComputerOp> {
             Some(ComputerOp::DoubleClick { x, y })
         }
         "move" | "mousemove" => {
-            let x = bits.next()?.parse().ok()?;
-            let y = bits.next()?.parse().ok()?;
-            Some(ComputerOp::Move { x, y })
+            let a = bits.next()?;
+            if a.eq_ignore_ascii_case("monitor") {
+                let name = bits.next()?.to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                match (bits.next(), bits.next()) {
+                    (None, None) => Some(ComputerOp::MoveMonitor {
+                        name,
+                        x: None,
+                        y: None,
+                    }),
+                    (Some(xs), Some(ys)) => {
+                        let x = xs.parse().ok()?;
+                        let y = ys.parse().ok()?;
+                        Some(ComputerOp::MoveMonitor {
+                            name,
+                            x: Some(x),
+                            y: Some(y),
+                        })
+                    }
+                    _ => None,
+                }
+            } else {
+                let x = a.parse().ok()?;
+                let y = bits.next()?.parse().ok()?;
+                Some(ComputerOp::Move { x, y })
+            }
         }
+        "cursor" | "getmouselocation" | "mouse" => Some(ComputerOp::Cursor),
         "type" => {
             let text = bits.collect::<Vec<_>>().join(" ");
             if text.is_empty() {
@@ -283,6 +319,12 @@ pub enum ComputerDrive {
     Act(String),
     WaitFor(Option<String>),
     Tab(TabAction, String),
+    Cursor,
+    MoveMonitor {
+        name: String,
+        x: Option<i32>,
+        y: Option<i32>,
+    },
 }
 
 pub fn computer_drive(op: &ComputerOp) -> ComputerDrive {
@@ -294,6 +336,12 @@ pub fn computer_drive_for(backend: HandsBackend, op: &ComputerOp) -> ComputerDri
         ComputerOp::Act { name } => ComputerDrive::Act(name.clone()),
         ComputerOp::WaitFor { title } => ComputerDrive::WaitFor(title.clone()),
         ComputerOp::Tab { action, query } => ComputerDrive::Tab(*action, query.clone()),
+        ComputerOp::Cursor => ComputerDrive::Cursor,
+        ComputerOp::MoveMonitor { name, x, y } => ComputerDrive::MoveMonitor {
+            name: name.clone(),
+            x: *x,
+            y: *y,
+        },
         other => match backend {
             HandsBackend::Xdotool => ComputerDrive::Xdotool(xdotool_steps(other)),
             HandsBackend::Ydotool => ComputerDrive::Ydotool(ydotool_steps(other)),
@@ -345,7 +393,11 @@ fn xdotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
                 ]]
             }
         }
-        ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } | ComputerOp::Tab { .. } => vec![],
+        ComputerOp::Act { .. }
+        | ComputerOp::WaitFor { .. }
+        | ComputerOp::Tab { .. }
+        | ComputerOp::Cursor
+        | ComputerOp::MoveMonitor { .. } => vec![],
     }
 }
 
@@ -383,7 +435,30 @@ fn ydotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
                 ]]
             }
         }
-        ComputerOp::Act { .. } | ComputerOp::WaitFor { .. } | ComputerOp::Tab { .. } => vec![],
+        ComputerOp::Act { .. }
+        | ComputerOp::WaitFor { .. }
+        | ComputerOp::Tab { .. }
+        | ComputerOp::Cursor
+        | ComputerOp::MoveMonitor { .. } => vec![],
+    }
+}
+
+pub fn relative_move_steps(backend: HandsBackend, dx: i32, dy: i32) -> Vec<Vec<String>> {
+    if dx == 0 && dy == 0 {
+        return vec![];
+    }
+    match backend {
+        HandsBackend::Ydotool => vec![vec![
+            "mousemove".into(),
+            dx.to_string(),
+            dy.to_string(),
+        ]],
+        HandsBackend::Xdotool => vec![vec![
+            "mousemove_relative".into(),
+            "--".into(),
+            dx.to_string(),
+            dy.to_string(),
+        ]],
     }
 }
 
@@ -496,6 +571,11 @@ pub fn computer_cmd_line(op: &ComputerOp) -> String {
                 }
             }
         },
+        ComputerOp::Cursor => "COMPUTER_CMD: cursor".into(),
+        ComputerOp::MoveMonitor { name, x, y } => match (x, y) {
+            (Some(x), Some(y)) => format!("COMPUTER_CMD: move monitor {name} {x} {y}"),
+            _ => format!("COMPUTER_CMD: move monitor {name}"),
+        },
     }
 }
 
@@ -559,8 +639,10 @@ pub fn hands_protocol() -> &'static str {
      COMPUTER_CMD: tab new [url]\n\
      COMPUTER_CMD: tab close <title-or-url>\n\
      COMPUTER_CMD: tab focus <title-or-url>\n\
+     COMPUTER_CMD: cursor\n\
+     COMPUTER_CMD: move monitor <name> [x y]\n\
      Prefer act, wait_for, tab list/new/close/focus, and key over guessed JPEG coordinates. After each COMPUTER_CMD hop, look at the new JPEG and Windshield before the next click.\n\
-     Coordinates are the global desktop. A JPEG may be one output — use Windshield outputs / frame. When Windshield says browser: cdp, open/close/focus a tab with tab new / tab close / tab focus. New tab: act the New Tab or + control; if Windshield has no such row, wait_for title=Firefox then key ctrl+t. Otherwise wait_for that window then key ctrl+w to close; do not guess the × from the still.\n\
+     Coordinates are the global desktop (xrandr). A JPEG may be one output — use Windshield desk / outputs / frame. After move or click, COMPUTER_RESULT cursor X,Y monitor=NAME is the real pointer — treat it as ground truth and correct if it missed. Prefer move monitor <name> over hard-coded 7000-wide numbers. When Windshield says browser: cdp, open/close/focus a tab with tab new / tab close / tab focus. New tab: act the New Tab or + control; if Windshield has no such row, wait_for title=Firefox then key ctrl+t. Otherwise wait_for that window then key ctrl+w to close; do not guess the × from the still.\n\
      Never emit XML or JSON <tool_call> tags. The first reply must include a COMPUTER_CMD line — do not only plan.\n\
      A JPEG is attached when the user asks for hands, cabin eyes, or GUI help (close a tab, Settings, turn this on, how do I, for me). If the thing is on the glass and there is no honest shell, use COMPUTER_CMD — do not invent a CLI.\n\
      Guide-only (just tell me / don't click / walk me through without do it): describe the control from the Windshield; do not emit COMPUTER_CMD unless they then say do it.\n\
@@ -825,6 +907,8 @@ fn label_for_op(op: &ComputerOp) -> String {
             Some(t) if !t.is_empty() => format!("Waited for {t}"),
             _ => "Waited".into(),
         },
+        ComputerOp::Cursor => "Read cursor".into(),
+        ComputerOp::MoveMonitor { name, .. } => format!("Moved to monitor {name}"),
     }
 }
 
@@ -861,7 +945,7 @@ pub fn lock_blocks_hands(titles: &[&str]) -> bool {
 
 /// Wait-for may poll a lock title. Pointer, type, key, and act must not.
 pub fn pointer_op_blocked_on_lock(op: &ComputerOp) -> bool {
-    !matches!(op, ComputerOp::WaitFor { .. })
+    !matches!(op, ComputerOp::WaitFor { .. } | ComputerOp::Cursor)
 }
 
 pub fn hands_blocked_by_lock(op: &ComputerOp, titles: &[&str]) -> bool {
@@ -1305,5 +1389,102 @@ mod tests {
         assert!(hands_protocol().contains("GUI help"));
         assert!(hands_protocol().contains("global desktop"));
         assert!(hands_protocol().contains("ctrl+w"));
+    }
+
+    #[test]
+    fn hands_parse_cursor_and_move_monitor() {
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: cursor"),
+            Some(ComputerOp::Cursor)
+        );
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: move monitor DP-2"),
+            Some(ComputerOp::MoveMonitor {
+                name: "DP-2".into(),
+                x: None,
+                y: None
+            })
+        );
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: move monitor DP-2 100 20"),
+            Some(ComputerOp::MoveMonitor {
+                name: "DP-2".into(),
+                x: Some(100),
+                y: Some(20)
+            })
+        );
+        assert_eq!(
+            computer_cmd_line(&ComputerOp::Cursor),
+            "COMPUTER_CMD: cursor"
+        );
+        assert_eq!(
+            computer_cmd_line(&ComputerOp::MoveMonitor {
+                name: "DP-2".into(),
+                x: None,
+                y: None
+            }),
+            "COMPUTER_CMD: move monitor DP-2"
+        );
+        assert_eq!(
+            computer_cmd_line(&ComputerOp::MoveMonitor {
+                name: "DP-2".into(),
+                x: Some(100),
+                y: Some(20)
+            }),
+            "COMPUTER_CMD: move monitor DP-2 100 20"
+        );
+        assert!(matches!(
+            computer_drive(&ComputerOp::Cursor),
+            ComputerDrive::Cursor
+        ));
+        assert!(matches!(
+            computer_drive(&ComputerOp::MoveMonitor {
+                name: "DP-2".into(),
+                x: Some(100),
+                y: Some(20)
+            }),
+            ComputerDrive::MoveMonitor { name, x, y } if name == "DP-2" && x == Some(100) && y == Some(20)
+        ));
+        assert!(!pointer_op_blocked_on_lock(&ComputerOp::Cursor));
+        assert!(pointer_op_blocked_on_lock(&ComputerOp::MoveMonitor {
+            name: "DP-2".into(),
+            x: None,
+            y: None
+        }));
+        assert_eq!(
+            empty_hands_steps_error(&ComputerOp::Cursor, &[]),
+            None
+        );
+        let proto = hands_protocol();
+        assert!(proto.contains("COMPUTER_CMD: cursor"), "{proto}");
+        assert!(proto.contains("move monitor"), "{proto}");
+        assert!(proto.contains("monitor="), "{proto}");
+        assert_eq!(label_for_op(&ComputerOp::Cursor), "Read cursor");
+        assert_eq!(
+            label_for_op(&ComputerOp::MoveMonitor {
+                name: "DP-2".into(),
+                x: None,
+                y: None
+            }),
+            "Moved to monitor DP-2"
+        );
+        assert_eq!(
+            relative_move_steps(HandsBackend::Ydotool, 5600, -10),
+            vec![vec![
+                "mousemove".to_string(),
+                "5600".to_string(),
+                "-10".to_string()
+            ]]
+        );
+        assert_eq!(
+            relative_move_steps(HandsBackend::Xdotool, -12, 4),
+            vec![vec![
+                "mousemove_relative".to_string(),
+                "--".to_string(),
+                "-12".to_string(),
+                "4".to_string()
+            ]]
+        );
+        assert!(relative_move_steps(HandsBackend::Xdotool, 0, 0).is_empty());
     }
 }
