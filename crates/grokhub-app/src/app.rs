@@ -2743,11 +2743,9 @@ impl Cabin {
                 self.status = "Compacted".into();
             }
             Slash::Skill(name) => {
-                self.nav = Nav::Skills;
                 if let Some(s) = self.skill_list.iter().find(|s| s.name == name || s.slash == name) {
-                    self.skill_name = s.name.clone();
-                    self.skill_body = grokhub_core::render_skill_md(s);
-                    self.status = format!("Skill {}", s.name);
+                    self.nav = Nav::Chat;
+                    self.send_chat(skill_use_in_chat_prompt(&s.slash, &s.name));
                 } else {
                     self.status = format!("No skill {name}");
                 }
@@ -9484,6 +9482,15 @@ mod tests {
         assert!(
             skills_ui.contains("skill_use_in_chat_prompt"),
             "Use in chat must send a match_skill hit, not Follow skill: {skills_ui}"
+        );
+        let skill_slash = src
+            .split("Slash::Skill(name)")
+            .nth(1)
+            .and_then(|s| s.split("Slash::LearnReflect").next())
+            .expect("Skill slash");
+        assert!(
+            skill_slash.contains("skill_use_in_chat_prompt") && skill_slash.contains("send_chat"),
+            "/skill must run the skill, not only open the editor: {skill_slash}"
         );
         let send = src
             .split("fn send_chat")
