@@ -5726,7 +5726,12 @@ impl Cabin {
                 self.status = format!("Hub live on :{p} ({HUB_KIND})");
                 self.persist();
             }
-            Err(e) => self.status = e,
+            Err(e) => {
+                if let Ok(mut st) = self.hub.lock() {
+                    st.sharing = false;
+                }
+                self.status = e;
+            }
         }
     }
 
@@ -9888,6 +9893,11 @@ mod tests {
         assert!(
             start_hub.contains("start_hub_rotates_pair"),
             "Start share must rotate an expired leftover code: {start_hub}"
+        );
+        let start_err = start_hub.split("Err(e)").nth(1).expect("start hub err");
+        assert!(
+            start_err.contains("sharing = false"),
+            "Start share must not leave sharing on when serve_lan fails: {start_hub}"
         );
         let devices = src
             .split("fn ui_devices")
