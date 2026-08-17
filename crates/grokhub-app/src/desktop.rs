@@ -1144,9 +1144,7 @@ fn transcribe(wav: &Path) -> Result<String, String> {
     }
     let txt = wav.with_extension("txt");
     let alt = out_dir.join("grokhub-voice.txt");
-    std::fs::read_to_string(&txt)
-        .or_else(|_| std::fs::read_to_string(alt))
-        .map_err(|e| e.to_string())
+    read_text_capped(&txt).or_else(|_| read_text_capped(&alt))
 }
 
 fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {
@@ -1247,6 +1245,11 @@ pub fn record_pcm_chunks() -> Vec<Vec<u8>> {
         _ => false,
     };
     if !ok {
+        return vec![];
+    }
+    let len = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(u64::MAX);
+    if len > IMAGE_FILE_CAP {
+        let _ = std::fs::remove_file(&dest);
         return vec![];
     }
     let bytes = std::fs::read(&dest).unwrap_or_default();
@@ -1809,6 +1812,10 @@ mod tests {
             tr.contains("run_limited(") && !tr.contains(".status()"),
             "whisper must not hang forever: {tr}"
         );
+        assert!(
+            tr.contains("read_text_capped") && !tr.contains("read_to_string"),
+            "whisper must not slurp a huge transcript: {tr}"
+        );
         let pcm = src
             .split("pub fn record_pcm_chunks(")
             .nth(1)
@@ -1817,6 +1824,11 @@ mod tests {
         assert!(
             pcm.contains("run_limited(") && !pcm.contains(".status()"),
             "live mic arecord must time out so Voice halt can finish: {pcm}"
+        );
+        let pcm_read = pcm.find("std::fs::read(&dest)").expect("pcm read");
+        assert!(
+            pcm.contains("IMAGE_FILE_CAP") && pcm.find("IMAGE_FILE_CAP").expect("pcm cap") < pcm_read,
+            "live mic must not slurp a huge wav: {pcm}"
         );
     }
 
