@@ -4363,6 +4363,11 @@ impl Cabin {
         self.presence_ring.push((now, url));
         self.presence_ring
             .retain(|(ts, _)| should_keep_frame(*ts, now, PRESENCE_RING_MS));
+        const PRESENCE_RING_MAX: usize = 32;
+        if self.presence_ring.len() > PRESENCE_RING_MAX {
+            let drop_n = self.presence_ring.len() - PRESENCE_RING_MAX;
+            self.presence_ring.drain(..drop_n);
+        }
     }
 
     fn live_room(&mut self) {
@@ -11803,6 +11808,10 @@ mod tests {
         assert!(
             push.contains("FRAME_CAP"),
             "live presence must not keep an 8MB JPEG data URL for ten minutes: {push}"
+        );
+        assert!(
+            push.contains("PRESENCE_RING_MAX") || (push.contains("presence_ring.len()") && push.contains("32")),
+            "a 10-minute ring of FRAME_CAP JPEGs can still OOM live Eyes: {push}"
         );
     }
 
