@@ -1,6 +1,8 @@
 //! Clean chat surface. The model still sees HOST_RESULT; the user sees thought and the answer.
 //! Host, hands, and connector work stay off the pane until the final reply.
 
+use crate::attach::TEXT_FILE_CAP;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatKind {
     User,
@@ -94,7 +96,7 @@ pub fn visible_chat_refs<'a>(messages: impl IntoIterator<Item = (&'a str, &'a st
             out.push(ChatView {
                 kind: ChatKind::User,
                 title: String::new(),
-                body: content.to_string(),
+                body: view_text(content).to_string(),
             });
         } else {
             stretch.push((role, content));
@@ -102,6 +104,18 @@ pub fn visible_chat_refs<'a>(messages: impl IntoIterator<Item = (&'a str, &'a st
     }
     emit_stretch(&mut out, &stretch, ask);
     out
+}
+
+/// Display prefix. Transcript messages may hold `IMAGE_FILE_CAP`; views must not.
+fn view_text(s: &str) -> &str {
+    if s.len() <= TEXT_FILE_CAP {
+        return s;
+    }
+    let mut end = TEXT_FILE_CAP;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// Rebuild only the trailing stretch after the last real user turn.
@@ -146,10 +160,12 @@ fn push_thought(out: &mut Vec<ChatView>, body: String) {
 }
 
 fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[(&str, &str)], ask: &str) {
+    let ask = view_text(ask);
     let teach = crate::recipe::user_asks_gui_help(ask) && !crate::recipe::user_asks_guide_only(ask);
     let mut last_final: Option<String> = None;
     let mut last_was_work = false;
     for &(role, content) in stretch {
+        let content = view_text(content);
         if role == "user" && teach {
             if let Some(label) = crate::recipe::hands_step_label(content) {
                 out.push(ChatView {
@@ -471,6 +487,41 @@ mod tests {
         assert_eq!(prefix[0], views[0]);
         assert_eq!(prefix[1], views[1]);
         assert_eq!(prefix[2], views[2]);
+    }
+
+    #[test]
+    fn chat_views_do_not_keep_an_8mb_body() {
+        let huge = "word ".repeat(crate::attach::TEXT_FILE_CAP / 2);
+        assert!(huge.len() > crate::attach::TEXT_FILE_CAP);
+        let v = visible_chat(&[
+            ("user".into(), "hi".into()),
+            ("assistant".into(), huge.clone()),
+        ]);
+        let body = v
+            .iter()
+            .find(|x| x.kind == ChatKind::Assistant)
+            .expect("assistant view")
+            .body
+            .len();
+        assert!(
+            body <= crate::attach::TEXT_FILE_CAP,
+            "stream views must not clone an 8MB bubble: {body}"
+        );
+        let mut views = v;
+        refresh_last_stretch(
+            &mut views,
+            &[("user", "hi"), ("assistant", huge.as_str())],
+        );
+        let refreshed = views
+            .iter()
+            .find(|x| x.kind == ChatKind::Assistant)
+            .expect("refreshed assistant")
+            .body
+            .len();
+        assert!(
+            refreshed <= crate::attach::TEXT_FILE_CAP,
+            "stretch refresh must not clone an 8MB bubble: {refreshed}"
+        );
     }
 
     #[test]
