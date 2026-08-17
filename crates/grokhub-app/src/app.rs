@@ -3147,11 +3147,7 @@ impl Cabin {
                     self.status = why.into();
                     return;
                 }
-                self.queue_sh(format!(
-                    "cp -a '{}' '{}'",
-                    last.path.replace('\'', r#"'"'"'"#),
-                    src.replace('\'', r#"'"'"'"#)
-                ));
+                self.queue_sh(rewind_copy_cmd(&last.path, src));
                 if self.running {
                     self.status = format!("Restoring {}", last.job_id);
                 }
@@ -4929,6 +4925,7 @@ impl Cabin {
                 continue;
             }
             if !c.trim().starts_with("COMPUTER_CMD")
+                && !is_rewind_copy_cmd(c)
                 && host_cmd_leaves_project(c, &self.cfg.project_dir)
                 && !self.cfg.yolo
             {
@@ -9565,7 +9562,7 @@ mod tests {
             "blocked host receipts must stay on the job thread"
         );
         let ret = cmds.find("return blocked;").expect("return blocked");
-        let rewind = cmds.find("is_rewind_copy_cmd").expect("rewind copy");
+        let rewind = cmds.rfind("is_rewind_copy_cmd").expect("rewind copy");
         assert!(
             ret < rewind && cmds[ret..rewind].contains("self.persist()"),
             "mixed blocked+allowed host must persist block receipts before spawn: {cmds}"
@@ -10551,6 +10548,10 @@ mod tests {
             snap_q < took && rewind[snap_q..took].contains("self.running"),
             "/rewind must not claim a snapshot started when host did not start: {rewind}"
         );
+        assert!(
+            rewind.contains("rewind_copy_cmd"),
+            "/rewind restore must copy snapshot contents into the project, not nest the dest folder: {rewind}"
+        );
         let snap = src
             .split("fn snapshot_project")
             .nth(1)
@@ -10583,6 +10584,11 @@ mod tests {
         assert!(
             run_cmds.contains("mint_host_halt") && !run_cmds.contains("host_halt.store(false"),
             "a new host job must not clear the previous job's halt flag: {run_cmds}"
+        );
+        assert!(
+            run_cmds.contains("!is_rewind_copy_cmd")
+                && run_cmds.contains("host_cmd_leaves_project"),
+            "cabin rewind copies must run when YOLO is off: {run_cmds}"
         );
         let plan = src
             .split("if let Some(plan) = plan_from_text")
