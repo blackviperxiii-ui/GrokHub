@@ -3424,6 +3424,9 @@ impl Cabin {
     }
 
     fn tick_anticipate(&mut self) {
+        if self.scratch() {
+            return;
+        }
         let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
         if !should_anticipate(
@@ -10070,6 +10073,10 @@ mod tests {
         assert!(
             gate < bump,
             "anticipate must not burn quota before auth: {anticipate}"
+        );
+        assert!(
+            anticipate.contains("scratch()"),
+            "anticipate must not burn a slot on Scratch: {anticipate}"
         );
         let start_hub = src
             .split("fn start_hub")
