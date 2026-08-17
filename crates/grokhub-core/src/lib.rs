@@ -173,6 +173,7 @@ pub use pair::{
 pub use automation::{
     automation_blocked_by_policy, compute_next_run, due_automations, ensure_automation_schedule,
     mark_automation_ran, mark_automation_skipped, night_check_command, night_check_exit_code,
+    night_counts_run,
     night_check_stdout, parse_nl_automation, replay_automation_target, skip_automation,
     skip_night_check_receipt, Automation,
 };
