@@ -11,7 +11,7 @@ use crate::desktop::{
     lock_titles, pick_file, play_audio, prepare_windshield, read_text_capped, record_once,
     run_computer_op_cancel, transcribe_local,
 };
-use crate::host::{run_host, run_host_stream};
+use crate::host::{host_working_dir, run_host, run_host_stream};
 use crate::secrets::{self, Secrets};
 use crate::skills;
 use crate::threads::{self, ChatThread};
@@ -4989,6 +4989,7 @@ impl Cabin {
         let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
         let halt = self.host_halt.clone();
+        let cwd = host_working_dir(&self.cfg.project_dir);
         std::thread::spawn(move || {
             let started = Instant::now();
             let mut inhibit = crate::notify::inhibit_sleep();
@@ -5013,9 +5014,15 @@ impl Cabin {
                     )));
                     run_computer_op_cancel(&op, Some(&halt))
                 } else {
-                    run_host_stream(c, Duration::from_secs(90), Some(&halt), move |line| {
-                        let _ = tx_line.send(JobOut::HostLine(host_status_line(&cmd, line, 0)));
-                    })
+                    run_host_stream(
+                        c,
+                        Duration::from_secs(90),
+                        Some(&halt),
+                        cwd.as_deref(),
+                        move |line| {
+                            let _ = tx_line.send(JobOut::HostLine(host_status_line(&cmd, line, 0)));
+                        },
+                    )
                 };
                 if let Some(cite) = summarize_write(c, &receipt) {
                     block.push_str(&cite);
@@ -9578,6 +9585,11 @@ mod tests {
         assert!(
             cmds.contains("push_bound_msg"),
             "blocked host receipts must stay on the job thread"
+        );
+        assert!(
+            cmds.contains("host_working_dir(&self.cfg.project_dir)")
+                && cmds.contains("run_host_stream"),
+            "host shell must start in the bound project, not the cabin process cwd: {cmds}"
         );
         let ret = cmds.find("return blocked;").expect("return blocked");
         let rewind = cmds.rfind("is_rewind_copy_cmd").expect("rewind copy");
