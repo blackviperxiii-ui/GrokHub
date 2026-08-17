@@ -23,6 +23,8 @@ pub fn is_workload_user(content: &str) -> bool {
         || t.starts_with("CONNECTOR_RESULT")
         || t.starts_with("COMPUTER_RESULT")
         || t.starts_with("FOLLOWUP:")
+        || t.starts_with("[Goal step ")
+        || t.starts_with("VERIFY_RESULT:")
 }
 
 pub fn merge_thinking(thought: &str, content: &str) -> String {
@@ -419,7 +421,31 @@ mod tests {
         assert!(is_workload_user(
             "FOLLOWUP: Finish the incomplete work from your last reply. Act now (HOST_CMD if needed). End with status."
         ));
+        assert!(is_workload_user(
+            "[Goal step 2/6]\nTask: flash the pi\nLast progress:\nWriting the image."
+        ));
+        assert!(is_workload_user("VERIFY_RESULT:\nexit 0\nchecked"));
         assert!(!is_workload_user("check the box"));
+        let leaked = visible_chat(&[
+            ("user".into(), "flash the pi".into()),
+            ("assistant".into(), "Writing the image.".into()),
+            (
+                "user".into(),
+                "[Goal step 2/6]\nTask: flash the pi\nContinue autonomously.".into(),
+            ),
+            (
+                "user".into(),
+                "VERIFY_RESULT:\nexit 0\nchecked".into(),
+            ),
+            ("assistant".into(), "Flashed.".into()),
+        ]);
+        assert_eq!(
+            leaked.iter().filter(|x| x.kind == ChatKind::User).count(),
+            1,
+            "goal steps and verify receipts must stay off the pane"
+        );
+        assert!(!leaked.iter().any(|x| x.body.contains("[Goal step")));
+        assert!(!leaked.iter().any(|x| x.body.contains("VERIFY_RESULT")));
     }
 
     #[test]
