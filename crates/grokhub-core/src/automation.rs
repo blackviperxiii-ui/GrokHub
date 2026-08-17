@@ -172,6 +172,11 @@ pub fn night_counts_run(replay_started: Option<bool>) -> bool {
     !matches!(replay_started, Some(false))
 }
 
+/// Missing OAuth must leave the due set, same as quiet/policy — not hammer every tick.
+pub fn night_unauth_should_skip(has_key: bool) -> bool {
+    !has_key
+}
+
 /// `replay last` or `every day at 21, replay last` — night runs the saved recipe, not a chat hop.
 pub fn replay_automation_target(instructions: &str) -> Option<&str> {
     let t = instructions.trim();
@@ -388,6 +393,11 @@ mod tests {
             !night_counts_run(Some(false)),
             "a missing recipe must not consume the night slot"
         );
+        assert!(
+            night_unauth_should_skip(false),
+            "no key must skip the night slot so tick_night stops re-firing"
+        );
+        assert!(!night_unauth_should_skip(true));
         assert_eq!(replay_automation_target("summarize the workboard"), None);
         let blocked = Automation {
             id: "n0".into(),

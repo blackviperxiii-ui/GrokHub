@@ -60,7 +60,7 @@ use grokhub_core::{
     visible_tree, ProjectKind, ProjectMenuAct,
     ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
-    night_counts_run,
+    night_counts_run, night_unauth_should_skip,
     match_skill, mode_from_chip_value, model_for_mode, nav_from_chip_value,
     cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
     next_chat_image, next_goal_prompt, paint_connect_banner,
@@ -3405,7 +3405,8 @@ impl Cabin {
             self.status = format!("Night skipped {} (quiet/policy)", a.name);
             return;
         }
-        if !persist_user_turn(self.has_key()) {
+        if night_unauth_should_skip(self.has_key()) {
+            self.mark_auto_skipped(&a.id, now_ms);
             self.status = "Connect Grok OAuth in Settings".into();
             return;
         }
@@ -9146,6 +9147,16 @@ mod tests {
         assert!(
             src.contains("night_counts_run"),
             "a night replay that did not start must not consume the slot"
+        );
+        let fire_night = src
+            .split("fn fire_night")
+            .nth(1)
+            .and_then(|s| s.split("fn tick_review").next())
+            .expect("fire_night");
+        assert!(
+            fire_night.contains("night_unauth_should_skip")
+                && fire_night.contains("mark_auto_skipped"),
+            "missing OAuth must skip the night slot: {fire_night}"
         );
         let start_hub = src
             .split("fn start_hub")
