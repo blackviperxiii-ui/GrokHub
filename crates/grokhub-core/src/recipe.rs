@@ -51,6 +51,11 @@ pub fn hands_backend_name(backend: Option<HandsBackend>) -> &'static str {
     }
 }
 
+/// Window-name search for `COMPUTER_CMD: act` is xdotool-only. ydotool cannot look up titles.
+pub fn act_window_search_bin(has_xdotool: bool) -> Option<&'static str> {
+    has_xdotool.then_some("xdotool")
+}
+
 /// PATH lookup that does not spawn `which` (missing on some GUI PATHs).
 pub fn bin_on_path(name: &str, path_env: &str, extra_dirs: &[&str]) -> bool {
     let name = name.trim();
@@ -596,6 +601,16 @@ pub fn hands_blocked_by_lock(op: &ComputerOp, titles: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn act_search_skips_missing_xdotool() {
+        assert_eq!(act_window_search_bin(true), Some("xdotool"));
+        assert_eq!(
+            act_window_search_bin(false),
+            None,
+            "ydotool-only installs cannot search window titles"
+        );
+    }
 
     #[test]
     fn reshoot_skips_coordinates() {

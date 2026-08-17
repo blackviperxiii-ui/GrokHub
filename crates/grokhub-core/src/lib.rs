@@ -144,7 +144,7 @@ pub use hands::{
     resolve_bin_in, ydotool_socket_path, HandsDown, HANDS_PACMAN, PYATSPI_MISSING,
 };
 pub use recipe::{
-    bin_on_path, computer_cmd_line, computer_drive, computer_drive_for, default_bin_extra_dirs,
+    act_window_search_bin, bin_on_path, computer_cmd_line, computer_drive, computer_drive_for, default_bin_extra_dirs,
     empty_hands_steps_error, extract_computer_ops, hands_backend_name,
     hands_blocked_by_lock, hands_protocol, lock_blocks_hands, pointer_op_blocked_on_lock,
     needs_reshoot, parse_computer_cmd_loose, parse_computer_op, parse_recipe, parse_screen,

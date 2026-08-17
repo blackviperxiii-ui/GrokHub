@@ -1,5 +1,5 @@
 use grokhub_core::{
-    capture_kinds, clip_image_args, computer_cmd_line, computer_drive_for, diagnose_hands,
+    act_window_search_bin, capture_kinds, clip_image_args, computer_cmd_line, computer_drive_for, diagnose_hands,
     empty_hands_steps_error, ffmpeg_webcam_args, ffmpeg_x11_args, filter_atspi_rows, frame_is_blank,
     gnome_shell_screenshot_args, grim_capture_args, hands_backend_name, hands_blocked_by_lock,
     hands_chip_label, hands_chip_live, hands_down_receipt, image_to_global, infer_wayland_display,
@@ -455,7 +455,10 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     if live_hands_backend().is_none() {
         return Err(format!("act {name}: not found"));
     }
-    let out = spawn_bin("xdotool")
+    let Some(bin) = act_window_search_bin(which("xdotool")) else {
+        return Err(format!("act {name}: not found"));
+    };
+    let out = spawn_bin(bin)
         .args(["search", "--onlyvisible", "--name", name])
         .output()
         .map_err(|e| e.to_string())?;
@@ -468,7 +471,7 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     if id.is_empty() {
         return Err(format!("act {name}: not found"));
     }
-    let geo = spawn_bin("xdotool")
+    let geo = spawn_bin(bin)
         .args(["getwindowgeometry", &id])
         .output()
         .map_err(|e| e.to_string())?;
@@ -1304,5 +1307,15 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(["ydotool", "xdotool", "missing"].contains(&hands_driver_name()));
+    }
+
+    #[test]
+    fn act_fallback_does_not_spawn_missing_xdotool() {
+        assert!(
+            include_str!("desktop.rs").contains("act_window_search_bin"),
+            "act must not spawn xdotool when it is missing"
+        );
+        assert_eq!(act_window_search_bin(false), None);
+        assert_eq!(act_window_search_bin(true), Some("xdotool"));
     }
 }
