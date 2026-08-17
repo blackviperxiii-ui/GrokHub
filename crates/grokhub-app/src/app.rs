@@ -8686,6 +8686,12 @@ impl Cabin {
                     }
                 });
                 if let Some(name) = pick {
+                    if name != self.skill_name && !self.skill_body.is_empty() {
+                        let parsed = grokhub_core::parse_skill_md(&self.skill_body);
+                        if skills::save_skill(&parsed).is_ok() {
+                            self.skill_list = skills::list_skills();
+                        }
+                    }
                     if let Some(s) = self.skill_list.iter().find(|s| s.name == name).cloned() {
                         self.skill_name = s.name.clone();
                         self.skill_body = grokhub_core::render_skill_md(&s);
@@ -9552,6 +9558,17 @@ mod tests {
         assert!(
             skills_ui.contains("skill_use_in_chat_prompt"),
             "Use in chat must send a match_skill hit, not Follow skill: {skills_ui}"
+        );
+        let pick = skills_ui
+            .split("if let Some(name) = pick")
+            .nth(1)
+            .and_then(|s| s.split("if !self.skill_body.is_empty()").next())
+            .expect("skill pick");
+        let flush = pick.find("save_skill").expect("flush leaving skill");
+        let switch = pick.find("skill_name = s.name").expect("switch skill");
+        assert!(
+            flush < switch,
+            "picking another skill must flush the leaving editor: {pick}"
         );
         let skill_slash = src
             .split("Slash::Skill(name)")
