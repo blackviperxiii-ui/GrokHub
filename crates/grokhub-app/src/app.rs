@@ -63,7 +63,7 @@ use grokhub_core::{
     night_check_may_fire, night_counts_run, night_unauth_should_skip,
     match_skill, mode_from_chip_value, model_for_mode, nav_from_chip_value,
     cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
-    next_chat_image, next_goal_prompt, paint_connect_banner,
+    kick_consumes_attach, next_chat_image, next_goal_prompt, paint_connect_banner,
     this_turn_cabin_frame,
     is_workload_user, merge_thinking, prefer_complete_reply, quote_for_reply, strip_thinking,
     visible_chat, ChatKind, ChatView,
@@ -2631,7 +2631,7 @@ impl Cabin {
         }
         self.followup_step = 0;
         self.persist();
-        self.kick_model();
+        self.kick_model(true);
     }
 
     fn send_followup_turn(&mut self) {
@@ -2641,7 +2641,7 @@ impl Cabin {
         self.followup_step += 1;
         self.push_bound_msg("user", FOLLOWUP_PROMPT.into());
         self.persist();
-        self.kick_model();
+        self.kick_model(false);
     }
 
     fn run_slash(&mut self, slash: Slash) {
@@ -2964,7 +2964,7 @@ impl Cabin {
 
     fn kick_model_retry(&mut self, _t: String) {
         self.halt_in_flight();
-        self.kick_model();
+        self.kick_model(true);
     }
 
     fn policy(&self) -> Policy {
@@ -4030,7 +4030,7 @@ impl Cabin {
         });
     }
 
-    fn kick_model(&mut self) {
+    fn kick_model(&mut self, consume_attach: bool) {
         if !self.has_key() {
             self.status = "Connect Grok OAuth in Settings".into();
             return;
@@ -4150,8 +4150,12 @@ impl Cabin {
             msgs.insert(0, ("system".into(), sys));
         }
         let captured = self.capture_cabin_frame_this_turn();
-        let user_img = self.attach_url.take();
-        self.attach_name = None;
+        let user_img = if kick_consumes_attach(consume_attach) {
+            self.attach_name = None;
+            self.attach_url.take()
+        } else {
+            None
+        };
         let eyes_turn = self.eyes_attach;
         let hands_turn = self.hands_attach;
         self.eyes_attach = false;
@@ -4422,7 +4426,7 @@ impl Cabin {
                         self.chat_job_thread = origin.clone();
                         self.push_bound_msg("user", next);
                         self.persist();
-                        self.kick_model();
+                        self.kick_model(false);
                     }
                 } else {
                     let next_step = goal_step_after_outcome(job_step, &outcome, true);
@@ -4459,7 +4463,7 @@ impl Cabin {
                     self.send_followup_turn();
                 }
                 if host_needs_kick && !self.running {
-                    self.kick_model();
+                    self.kick_model(false);
                 }
                 if !self.running {
                     self.finish_hub_dispatch(&text, hub_dispatch_ok(&text));
@@ -4578,7 +4582,7 @@ impl Cabin {
                         self.chat_job_thread = origin;
                     }
                 } else {
-                    self.kick_model();
+                    self.kick_model(false);
                 }
                 if !self.running {
                     self.finish_hub_dispatch(&block, ok);
@@ -4599,7 +4603,7 @@ impl Cabin {
                         self.chat_job_thread = origin;
                     }
                 } else {
-                    self.kick_model();
+                    self.kick_model(false);
                     if !self.running {
                         self.finish_hub_dispatch(&detail, true);
                     }
@@ -4800,7 +4804,7 @@ impl Cabin {
                 ),
             );
             self.persist();
-            self.kick_model();
+            self.kick_model(false);
             return;
         }
         if self.running {
@@ -9250,6 +9254,24 @@ mod tests {
         assert!(
             skills_ui.contains("skill_use_in_chat_prompt"),
             "Use in chat must send a match_skill hit, not Follow skill: {skills_ui}"
+        );
+        let send = src
+            .split("fn send_chat")
+            .nth(1)
+            .and_then(|s| s.split("fn send_followup_turn").next())
+            .expect("send_chat attach");
+        assert!(
+            send.contains("kick_model(true)"),
+            "typed send must consume the plus-button image: {send}"
+        );
+        let host_done = src
+            .split("Ok(JobOut::HostDone(block))")
+            .nth(1)
+            .and_then(|s| s.split("Ok(JobOut::Connector").next())
+            .expect("HostDone attach");
+        assert!(
+            host_done.contains("kick_model(false)"),
+            "HostDone must not steal the attached image: {host_done}"
         );
         let anticipate = src
             .split("fn tick_anticipate")
