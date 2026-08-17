@@ -65,7 +65,16 @@ fn write_dest(c: &str) -> Option<String> {
     }
     let bits: Vec<&str> = c.split_whitespace().collect();
     for (i, w) in bits.iter().enumerate() {
-        if matches!(*w, "tee" | "mv" | "cp") {
+        if *w == "dd" {
+            if let Some(of) = bits[i + 1..]
+                .iter()
+                .find_map(|x| x.strip_prefix("of="))
+                .filter(|p| !p.is_empty())
+            {
+                return Some(of.to_string());
+            }
+        }
+        if matches!(*w, "tee" | "mv" | "cp" | "install") {
             let args: Vec<&str> = bits[i + 1..]
                 .iter()
                 .copied()
@@ -168,6 +177,20 @@ mod tests {
             summarize_write("mv old.txt new.txt", "").as_deref(),
             Some("wrote to new.txt"),
             "mv must cite the destination, not the source"
+        );
+        assert_eq!(
+            summarize_write("dd if=/home/j/a of=/tmp/b", "").as_deref(),
+            Some("wrote to /tmp/b"),
+            "dd must cite of= dest, not if= source"
+        );
+        assert_eq!(
+            summarize_write("install src.bin dest.bin", "").as_deref(),
+            Some("wrote to dest.bin"),
+            "install must cite the destination, not the source"
+        );
+        assert_eq!(
+            summarize_write("install /home/j/src/foo /tmp/foo", "").as_deref(),
+            Some("wrote to /tmp/foo")
         );
         assert_eq!(last_host_line("a\n  compiling cabin  \n"), "compiling cabin");
         assert_eq!(host_status_line("make", "compiling cabin", 3), "host: compiling cabin");
