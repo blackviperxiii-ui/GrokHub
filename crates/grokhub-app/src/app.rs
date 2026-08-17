@@ -4911,6 +4911,7 @@ impl Cabin {
                 self.upsert_stream_assistant();
             }
             Ok(JobOut::Chat { text, truncated }) => {
+                let text = take_ui_text(text, IMAGE_FILE_CAP);
                 let here = chat_stream_is_visible(
                     self.chat_job_thread.as_deref(),
                     &self.visible_thread_id(),
@@ -12183,6 +12184,11 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("Ok(JobOut::Consult").next())
             .expect("Chat arm");
+        let strip = chat.find("strip_thinking(&text)").expect("strip complete");
+        assert!(
+            chat[..strip].contains("take_ui_text") || chat[..strip].contains("IMAGE_FILE_CAP"),
+            "Chat complete must not strip/merge a 64MB worker body on the UI thread: {chat}"
+        );
         assert!(
             chat.contains("reply_needs_followup"),
             "stream-end follow-up belongs in the Chat arm: {chat}"
