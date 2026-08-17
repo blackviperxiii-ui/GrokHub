@@ -1252,16 +1252,21 @@ impl Cabin {
             .into_iter()
             .map(|(role, content)| Msg { role, content })
             .collect();
-        let Some(job) = self.chat_job_thread.as_deref() else {
-            return;
-        };
-        if job == vis {
-            return;
-        }
-        if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job) {
-            if let Some(t) = self.threads.iter_mut().find(|t| t.id == job) {
-                t.messages = msgs.clone();
+        let target = self
+            .chat_job_thread
+            .clone()
+            .unwrap_or_else(|| vis.clone());
+        if let Some(job) = self.chat_job_thread.as_deref() {
+            if job != vis {
+                if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job) {
+                    if let Some(t) = self.threads.iter_mut().find(|t| t.id == job) {
+                        t.messages = msgs.clone();
+                    }
+                }
             }
+        }
+        if let Some(t) = self.threads.iter_mut().find(|t| t.id == target) {
+            t.accessed_ms = now_ms();
         }
     }
 
@@ -1289,16 +1294,21 @@ impl Cabin {
             .into_iter()
             .map(|(role, content)| Msg { role, content })
             .collect();
-        let Some(job) = self.chat_job_thread.as_deref() else {
-            return;
-        };
-        if job == vis {
-            return;
-        }
-        if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job) {
-            if let Some(t) = self.threads.iter_mut().find(|t| t.id == job) {
-                t.messages = msgs.clone();
+        let target = self
+            .chat_job_thread
+            .clone()
+            .unwrap_or_else(|| vis.clone());
+        if let Some(job) = self.chat_job_thread.as_deref() {
+            if job != vis {
+                if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job) {
+                    if let Some(t) = self.threads.iter_mut().find(|t| t.id == job) {
+                        t.messages = msgs.clone();
+                    }
+                }
             }
+        }
+        if let Some(t) = self.threads.iter_mut().find(|t| t.id == target) {
+            t.accessed_ms = now_ms();
         }
     }
 
@@ -10016,6 +10026,24 @@ mod tests {
         assert!(
             thread_rows.contains("accessed_ms") && !thread_rows.contains("now_ms()"),
             "/sync must not stamp every thread now or local stale data wins LWW: {thread_rows}"
+        );
+        let push = src
+            .split("fn push_bound_msg")
+            .nth(1)
+            .and_then(|s| s.split("fn apply_live_assistant").next())
+            .expect("push_bound_msg");
+        assert!(
+            push.contains("accessed_ms"),
+            "background job writes must bump accessed_ms or /sync LWW drops the new messages: {push}"
+        );
+        let snap = src
+            .split("fn apply_assistant_snapshot")
+            .nth(1)
+            .and_then(|s| s.split("fn push_bound_msg").next())
+            .expect("apply_assistant_snapshot");
+        assert!(
+            snap.contains("accessed_ms"),
+            "background stream writes must bump accessed_ms or /sync LWW drops the new messages: {snap}"
         );
         let mem_rows = sync
             .split("let mem = ")
