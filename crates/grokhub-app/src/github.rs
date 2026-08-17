@@ -1,4 +1,5 @@
-use grokhub_core::github_api_path;
+use grokhub_core::{github_api_path, MEDIA_FILE_CAP, TEXT_FILE_CAP};
+use std::io::Read;
 
 pub fn run_github_tool(tool: &str, args: &str, token: &str) -> String {
     if token.trim().is_empty() {
@@ -20,12 +21,29 @@ pub fn run_github_tool(tool: &str, args: &str, token: &str) -> String {
     {
         Ok(r) => r,
         Err(ureq::Error::Status(code, r)) => {
-            let body = r.into_string().unwrap_or_default();
+            let mut buf = Vec::new();
+            let _ = r
+                .into_reader()
+                .take(TEXT_FILE_CAP as u64)
+                .read_to_end(&mut buf);
+            let body = String::from_utf8_lossy(&buf);
             return format!("GitHub {code}: {}", body.chars().take(240).collect::<String>());
         }
         Err(e) => return e.to_string(),
     };
-    let v: serde_json::Value = match resp.into_json() {
+    let mut buf = Vec::new();
+    if resp
+        .into_reader()
+        .take(MEDIA_FILE_CAP + 1)
+        .read_to_end(&mut buf)
+        .is_err()
+    {
+        return "GitHub response read failed".into();
+    }
+    if buf.len() as u64 > MEDIA_FILE_CAP {
+        return "GitHub response too large".into();
+    }
+    let v: serde_json::Value = match serde_json::from_slice(&buf) {
         Ok(v) => v,
         Err(e) => return e.to_string(),
     };
@@ -132,5 +150,27 @@ mod tests {
     fn issues_need_repo() {
         let s = run_github_tool("list_issues", "", "dummy");
         assert!(s.contains("Need repo:"), "{s}");
+    }
+
+    #[test]
+    fn github_http_does_not_slurp_a_huge_body() {
+        let src = include_str!("github.rs");
+        let run = src
+            .split("pub fn run_github_tool(")
+            .nth(1)
+            .and_then(|s| s.split("fn format_github(").next())
+            .expect("run_github_tool");
+        assert!(
+            run.contains(".take(") && !run.contains("into_string()"),
+            "GitHub errors must not slurp a huge error page: {run}"
+        );
+        assert!(
+            !run.contains("into_json()"),
+            "GitHub JSON must not slurp an unbounded search body: {run}"
+        );
+        assert!(
+            run.contains("MEDIA_FILE_CAP") || run.contains("TEXT_FILE_CAP"),
+            "GitHub reads must stop at a cabin cap: {run}"
+        );
     }
 }
