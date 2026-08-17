@@ -1404,6 +1404,13 @@ impl Cabin {
         self.status.clear();
     }
 
+    fn drop_leaving_thread_chrome(&mut self) {
+        self.attach_url = None;
+        self.attach_name = None;
+        self.followup_step = 0;
+        self.active_skill_follow = None;
+    }
+
     fn pick_entries(dir: &Path) -> Vec<(String, bool)> {
         let mut dirs = Vec::new();
         let mut files = Vec::new();
@@ -2412,6 +2419,7 @@ impl Cabin {
             .get(self.thread_idx)
             .map(|t| t.goal.step)
             .unwrap_or(0);
+        self.drop_leaving_thread_chrome();
         self.stamp_current_access();
         self.persist();
     }
@@ -2448,7 +2456,7 @@ impl Cabin {
         self.imagine_last.clear();
         self.cfg.goal_pin.clear();
         self.goal_step = 0;
-        self.followup_step = 0;
+        self.drop_leaving_thread_chrome();
         self.status = if scratch {
             "Scratch — no memory writes".into()
         } else {
@@ -2519,6 +2527,7 @@ impl Cabin {
                 self.imagine_last.clear();
                 self.cfg.goal_pin.clear();
                 self.goal_step = 0;
+                self.drop_leaving_thread_chrome();
                 self.status = "Chat deleted".into();
                 self.stamp_current_access();
             }
@@ -2557,6 +2566,7 @@ impl Cabin {
                         .get(next)
                         .map(|t| t.goal.step)
                         .unwrap_or(0);
+                    self.drop_leaving_thread_chrome();
                 }
                 self.status = format!("Deleted {}", gone.title);
             }
@@ -9249,6 +9259,28 @@ mod tests {
         assert!(
             created.contains("flush_visible_goal"),
             "/new must persist the left tab's goal before clearing it: {created}"
+        );
+        assert!(
+            created.contains("drop_leaving_thread_chrome"),
+            "/new must drop plus-attach, followup budget, and skill follow: {created}"
+        );
+        let switched = src
+            .split("fn switch_thread")
+            .nth(1)
+            .and_then(|s| s.split("fn stamp_current_access").next())
+            .expect("switch_thread");
+        assert!(
+            switched.contains("drop_leaving_thread_chrome"),
+            "switching tabs must not send the previous tab's image or skill follow: {switched}"
+        );
+        let deleted = src
+            .split("fn delete_thread_at")
+            .nth(1)
+            .and_then(|s| s.split("fn send_chat").next())
+            .expect("delete_thread_at chrome");
+        assert!(
+            deleted.contains("drop_leaving_thread_chrome"),
+            "deleting the visible tab must drop plus-attach and followup budget: {deleted}"
         );
         let deleted = src
             .split("fn delete_thread_at")
