@@ -75,8 +75,7 @@ use grokhub_core::{
     BUBBLE_PAD_Y,
     BUBBLE_RADIUS,
     plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
-    parse_computer_op, user_asks_cabin_eyes,
-    user_asks_desktop_hands,
+    parse_computer_op, see_drive_attach, user_asks_cabin_eyes,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
     goal_continue_pin, goal_pin_for_job, goal_step_after_outcome, hub_dispatch_ok, should_auto_continue_goal,
     visible_goal_step_on_continue,
@@ -94,12 +93,15 @@ use grokhub_core::{
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
     state_for_disk,
     clear_pending_after_complete, inbox_claim_ready,
-    should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
-    user_asks_takeover, windshield_prompt,
+    should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm,
+    should_trim_result_bodies, shortcut_help,
+    windshield_prompt,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
     build_review_digest, dedupe_suggestions, merge_suggestion_store, parse_suggest_lines,
+    parse_suggest_skill_patches, parse_trajectory_jsonl, summarize_trajectory, trajectory_jsonl_line,
+    trim_result_bodies, yesterday_ms, RESULT_TRIM_KEEP_HOPS,
     partition_suggestions, prune_live_suggestions, review_due,
     review_status_line, review_system_prompt, DigestLine, ReviewDigest, SuggestionStore,
     CABIN_GITHUB_TOOLS, REVIEW_NIGHT_HOUR,
@@ -579,7 +581,34 @@ fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, thought_op
                 });
             ChatBlockAct::None
         }
-        ChatKind::Tool => ChatBlockAct::None,
+        ChatKind::Tool => {
+            egui::Frame::none()
+                .fill(crate::theme::elevated())
+                .rounding(8.0)
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+                .show(ui, |ui| {
+                    ui.set_max_width(bubble_w);
+                    let title = if block.title.is_empty() {
+                        "Hands"
+                    } else {
+                        block.title.as_str()
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(title)
+                                .size(crate::theme::FONT_META)
+                                .color(crate::theme::muted()),
+                        );
+                        ui.label(
+                            RichText::new(&block.body)
+                                .size(crate::theme::FONT_META)
+                                .color(crate::theme::subtle()),
+                        );
+                    });
+                });
+            ChatBlockAct::None
+        }
     }
 }
 
@@ -2881,9 +2910,12 @@ impl Cabin {
             role: "user".into(),
             content: text.clone(),
         });
-        if user_asks_desktop_hands(&text) || user_asks_takeover(&text) {
-            self.hands_attach = true;
+        let (eyes, hands) = see_drive_attach(&text);
+        if eyes {
             self.eyes_attach = true;
+        }
+        if hands {
+            self.hands_attach = true;
         }
         if self.cfg.cabin_eyes && user_asks_cabin_eyes(&text) {
             self.eyes_attach = true;
@@ -3320,6 +3352,78 @@ impl Cabin {
                 self.status = format!("Wrote skill {}", to_save.name);
             }
             Err(e) => self.status = e,
+        }
+    }
+
+    fn apply_review_skill_patches(&mut self, raw: &str) {
+        let patches = parse_suggest_skill_patches(raw);
+        if patches.is_empty() {
+            return;
+        }
+        for p in patches {
+            let Some(existing) = self
+                .skill_list
+                .iter()
+                .find(|s| s.name.eq_ignore_ascii_case(&p.name))
+                .cloned()
+            else {
+                continue;
+            };
+            let proposed = SkillMd {
+                name: existing.name.clone(),
+                description: existing.description.clone(),
+                slash: existing.slash.clone(),
+                trigger: p.trigger,
+                instructions: p.instructions,
+                pitfalls: String::new(),
+                verify: String::new(),
+                runs: existing.runs,
+            };
+            let patched = patch_skill(&existing, &proposed);
+            let _ = skills::save_skill(&patched);
+        }
+        self.skill_list = skills::list_skills();
+    }
+
+    fn append_host_trajectory(&self, ok: bool, block: &str) {
+        let line = trajectory_jsonl_line(now_ms(), &self.last_host, ok, block);
+        let _ = crate::store::append_trajectory(&line);
+    }
+
+    fn trim_job_result_dumps(&mut self) {
+        let vis = self.visible_thread_id();
+        let origin = self
+            .chat_job_thread
+            .clone()
+            .unwrap_or_else(|| vis.clone());
+        let pairs: Vec<(String, String)> =
+            if self.chat_job_thread.as_deref().is_none_or(|id| id == vis) {
+                self.messages
+                    .iter()
+                    .map(|m| (m.role.clone(), m.content.clone()))
+                    .collect()
+            } else {
+                self.threads
+                    .iter()
+                    .find(|t| t.id == origin)
+                    .map(|t| t.messages.clone())
+                    .unwrap_or_default()
+            };
+        if !should_trim_result_bodies(estimate_messages(&pairs), CONTEXT_BUDGET_TOKENS) {
+            return;
+        }
+        let trimmed = trim_result_bodies(&pairs, RESULT_TRIM_KEEP_HOPS);
+        if self.chat_job_thread.as_deref().is_none_or(|id| id == vis) {
+            self.messages = trimmed
+                .iter()
+                .map(|(role, content)| Msg {
+                    role: role.clone(),
+                    content: content.clone(),
+                })
+                .collect();
+        }
+        if let Some(t) = self.threads.iter_mut().find(|t| t.id == origin) {
+            t.messages = trimmed;
         }
     }
 
@@ -3916,6 +4020,11 @@ impl Cabin {
             host_receipts,
             chip_habits: top_habit_labels(&self.chip_memory, 6),
             thread_lines,
+            trajectory: summarize_trajectory(
+                &parse_trajectory_jsonl(&crate::store::read_trajectory()),
+                yesterday_ms(now_ms()),
+                12,
+            ),
         };
         build_review_digest(&input)
     }
@@ -3965,6 +4074,7 @@ impl Cabin {
     fn apply_review_reply(&mut self, raw: Result<String, String>) {
         match raw {
             Ok(text) => {
+                self.apply_review_skill_patches(&text);
                 let skill_names: Vec<String> =
                     self.skill_list.iter().map(|s| s.name.clone()).collect();
                 let auto_names: Vec<String> =
@@ -4603,9 +4713,12 @@ impl Cabin {
             .map(|h| h.chars().take(400).collect::<String>())
             .unwrap_or_default();
         let pin = insight_pin(&self.learning);
-        if user_asks_desktop_hands(&last_user) || user_asks_takeover(&last_user) {
-            self.hands_attach = true;
+        let (eyes, hands) = see_drive_attach(&last_user);
+        if eyes {
             self.eyes_attach = true;
+        }
+        if hands {
+            self.hands_attach = true;
         }
         if self.cfg.cabin_eyes && user_asks_cabin_eyes(&last_user) {
             self.eyes_attach = true;
@@ -4663,6 +4776,9 @@ impl Cabin {
         );
         if !sys.is_empty() {
             msgs.insert(0, ("system".into(), sys));
+        }
+        if should_trim_result_bodies(estimate_messages(&msgs), CONTEXT_BUDGET_TOKENS) {
+            msgs = trim_result_bodies(&msgs, RESULT_TRIM_KEEP_HOPS);
         }
         let user_img = if kick_consumes_attach(consume_attach) {
             self.attach_name = None;
@@ -5063,6 +5179,7 @@ impl Cabin {
                 self.persist();
                 if any_hands {
                     self.hands_attach = true;
+                    self.eyes_attach = true;
                     let rows = collect_rows();
                     let titles: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
                     let lock = lock_titles();
@@ -5108,6 +5225,8 @@ impl Cabin {
                     let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
                     self.commit_proposed_skill(proposed);
                 }
+                self.append_host_trajectory(ok, &block);
+                self.trim_job_result_dumps();
                 if !self.pending_connectors.is_empty() {
                     let origin = self.chat_job_thread.clone();
                     let (id, tool, args) = self.pending_connectors.remove(0);
@@ -5129,6 +5248,7 @@ impl Cabin {
                     format!("CONNECTOR_RESULT (facts only):\n{detail}"),
                 );
                 self.persist();
+                self.trim_job_result_dumps();
                 if !self.pending_connectors.is_empty() {
                     let origin = self.chat_job_thread.clone();
                     let (id, tool, args) = self.pending_connectors.remove(0);
@@ -10675,6 +10795,12 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn send_followup_turn").next())
             .expect("send_chat auth");
+        assert!(
+            send_auth.contains("see_drive_attach")
+                && send_auth.contains("eyes_attach = true")
+                && send_auth.contains("hands_attach = true"),
+            "GUI help must wake eyes and hands together: {send_auth}"
+        );
         let gate = send_auth.find("persist_user_turn").expect("send auth");
         assert!(
             send_auth[gate..].contains("hands_attach = false")
@@ -10859,6 +10985,10 @@ mod tests {
         assert!(
             host_done.contains("lock_titles"),
             "HostDone capture must see lock windows that collect_rows drops: {host_done}"
+        );
+        assert!(
+            host_done.contains("eyes_attach = true") && host_done.contains("hands_attach = true"),
+            "after COMPUTER_CMD, HostDone must re-arm eyes and hands for the next shot: {host_done}"
         );
         let import = src
             .split("fn import_openclaw")
@@ -11514,6 +11644,10 @@ mod tests {
                 && !host_done.contains("parse_computer_cmd_loose"),
             "a leftover type cargo in last_host must not be labeled COMPUTER_RESULT: {host_done}"
         );
+        assert!(
+            host_done.contains("append_host_trajectory") && host_done.contains("trim_job_result_dumps"),
+            "HostDone must record a trajectory line and trim old tool dumps: {host_done}"
+        );
         let run_cmds = src
             .split("fn run_cmds")
             .nth(1)
@@ -11869,6 +12003,10 @@ mod tests {
         assert!(
             apply.contains("prune_live_suggestions"),
             "a successful review must drop wired GitHub tiles already sitting in the store: {apply}"
+        );
+        assert!(
+            apply.contains("apply_review_skill_patches"),
+            "nightly review must patch existing skills from SUGGEST_SKILL_PATCH: {apply}"
         );
         assert!(src.contains("self.tick_review()"));
         assert!(
