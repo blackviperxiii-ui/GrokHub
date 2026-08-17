@@ -79,6 +79,16 @@ pub fn skill_folder(name: &str) -> PathBuf {
     skills_dir().join(skill_dir_name(name))
 }
 
+pub fn skill_updated_at(name: &str) -> u64 {
+    let path = skill_folder(name).join("SKILL.md");
+    fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 pub fn run_verify(name: &str) -> Option<VerifyResult> {
     let path = verify_script_path(skill_folder(name));
     if !path.exists() {
@@ -126,6 +136,10 @@ mod tests {
         let listed = list_skills();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "flash-pi");
+        assert!(
+            skill_updated_at("flash-pi") > 0,
+            "sync LWW needs a real skill file time, not now_ms"
+        );
         assert!(skill_folder("flash-pi").join("scripts/verify.sh").exists());
         let pins = pin_text(&listed);
         assert!(pins.contains("flash-pi"));
