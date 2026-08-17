@@ -502,9 +502,9 @@ fn host_cmd_name(tok: &str) -> &str {
 
 fn host_cd_argv<'a>(bits: &'a [&'a str]) -> Option<&'a [&'a str]> {
     let mut i = 0;
-    if matches!(
-        bits.first().copied().map(host_cmd_name),
-        Some("builtin") | Some("command") | Some("exec")
+    while matches!(
+        bits.get(i).copied().map(host_cmd_name),
+        Some("builtin") | Some("command") | Some("exec") | Some("eval")
     ) {
         i += 1;
         while i < bits.len() && (bits[i] == "--" || bits[i].starts_with('-')) {
@@ -711,6 +711,14 @@ mod tests {
         assert!(
             !host_cmd_leaves_project_in("exec cd src", "/home/j/proj", Some("/home/j")),
             "exec cd into a project subdir stays in-world"
+        );
+        assert!(
+            host_cmd_leaves_project_in("eval cd", "/home/j/proj", Some("/home/j")),
+            "eval cd with no dest goes to HOME"
+        );
+        assert!(
+            host_cmd_leaves_project_in("eval builtin cd && ls", "/home/j/proj", Some("/home/j")),
+            "eval builtin cd && ls lists HOME, not the bound tree"
         );
     }
 
