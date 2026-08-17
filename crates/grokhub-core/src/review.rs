@@ -122,6 +122,7 @@ pub struct ReviewDigest {
     pub host_receipts: Vec<String>,
     pub chip_habits: Vec<String>,
     pub thread_lines: Vec<DigestLine>,
+    pub trajectory: String,
 }
 
 /// Compact, redacted digest for the Balanced review. Caps length.
@@ -159,6 +160,18 @@ pub fn build_review_digest(input: &ReviewDigest) -> String {
                 out.push_str(clean.trim());
                 out.push('\n');
             }
+        }
+    }
+    if !input.trajectory.trim().is_empty() {
+        out.push_str("Yesterday's host/hands:\n");
+        for line in input.trajectory.lines() {
+            let clean = redact_secrets(line);
+            if !is_plain_text(&clean) || clean.trim().is_empty() || !cabin_real_text(&clean) {
+                continue;
+            }
+            out.push_str("- ");
+            out.push_str(clean.trim());
+            out.push('\n');
         }
     }
     if !input.thread_lines.is_empty() {
@@ -208,9 +221,63 @@ pub fn review_system_prompt() -> &'static str {
      lines, one per line, using exactly these forms:\n\
      SUGGEST_AUTO: title | body | every day at 21, <what to do>\n\
      SUGGEST_SKILL: name | title | body | trigger | instructions\n\
+     SUGGEST_SKILL_PATCH: name | trigger | improved instructions\n\
      SUGGEST_CONNECTOR: title | body | github <tool>\n\
      Keep titles short. Propose at most 6 of each kind. Skip anything already \
-     listed as existing. If nothing useful, output nothing."
+     listed as existing. SUGGEST_SKILL_PATCH only for an existing skill name. \
+     If nothing useful, output nothing."
+}
+
+/// Patch an existing `SKILL.md` from the nightly review. Not a Suggested tile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillPatch {
+    pub name: String,
+    pub trigger: String,
+    pub instructions: String,
+}
+
+/// Parse `SUGGEST_SKILL_PATCH` lines. Name must be kebab-case; body is cabin-real.
+pub fn parse_suggest_skill_patches(raw: &str) -> Vec<SkillPatch> {
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        let Some(rest) = strip_prefix_ci(line, "SUGGEST_SKILL_PATCH:") else {
+            continue;
+        };
+        if let Some(item) = parse_suggest_skill_patch(rest) {
+            if out.len() < SUGGEST_CAP {
+                out.push(item);
+            }
+        }
+    }
+    out
+}
+
+fn parse_suggest_skill_patch(rest: &str) -> Option<SkillPatch> {
+    let parts: Vec<&str> = rest.splitn(3, '|').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let name = sanitize_skill_name(parts[0]);
+    let (trigger, instructions) = if parts.len() == 2 {
+        (String::new(), redact_secrets(parts[1].trim()))
+    } else {
+        (
+            redact_secrets(parts[1].trim()),
+            redact_secrets(parts[2].trim()),
+        )
+    };
+    if name.is_empty() || instructions.is_empty() {
+        return None;
+    }
+    if !cabin_real_text(&trigger) || !cabin_real_text(&instructions) {
+        return None;
+    }
+    Some(SkillPatch {
+        name,
+        trigger,
+        instructions,
+    })
 }
 
 /// Parse `SUGGEST_*` lines. Ignore prose, reject non-cabin verbs, cap per kind.
@@ -721,5 +788,26 @@ SUGGEST_AUTO: Night wrap | Close the day | every day at 21, say good night
             &["user".into()],
         );
         assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn parse_skill_patch_and_digest_trajectory() {
+        let raw = "\
+SUGGEST_SKILL_PATCH: desk-tidy | when messy | stack the windows then act Save
+SUGGEST_SKILL_PATCH: gmail-triage | inbox | archive Gmail
+SUGGEST_SKILL: desk-tidy | Desk | Body | trig | do it
+";
+        let patches = parse_suggest_skill_patches(raw);
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0].name, "desk-tidy");
+        assert!(patches[0].instructions.contains("stack the windows"));
+        let tiles = parse_suggest_lines(raw);
+        assert_eq!(tiles.len(), 1);
+        let digest = build_review_digest(&ReviewDigest {
+            trajectory: "ok: COMPUTER_CMD: tab close github — closed GitHub\nfail: HOST_CMD: open Outlook — mail".into(),
+            ..ReviewDigest::default()
+        });
+        assert!(digest.contains("tab close github"), "{digest}");
+        assert!(!digest.contains("Outlook"), "{digest}");
     }
 }
