@@ -55,10 +55,12 @@ pub fn strip_thinking(content: &str) -> String {
 pub fn visible_chat(messages: &[(String, String)]) -> Vec<ChatView> {
     let mut out = Vec::new();
     let mut stretch: Vec<&(String, String)> = Vec::new();
+    let mut ask = "";
     for msg in messages {
         if msg.0 == "user" && !is_workload_user(&msg.1) {
-            emit_stretch(&mut out, &stretch);
+            emit_stretch(&mut out, &stretch, ask);
             stretch.clear();
+            ask = &msg.1;
             out.push(ChatView {
                 kind: ChatKind::User,
                 title: String::new(),
@@ -68,7 +70,7 @@ pub fn visible_chat(messages: &[(String, String)]) -> Vec<ChatView> {
             stretch.push(msg);
         }
     }
-    emit_stretch(&mut out, &stretch);
+    emit_stretch(&mut out, &stretch, ask);
     out
 }
 
@@ -94,10 +96,21 @@ fn push_thought(out: &mut Vec<ChatView>, body: String) {
     });
 }
 
-fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[&(String, String)]) {
+fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[&(String, String)], ask: &str) {
+    let teach = crate::recipe::user_asks_gui_help(ask) && !crate::recipe::user_asks_guide_only(ask);
     let mut last_final: Option<String> = None;
     let mut last_was_work = false;
     for (role, content) in stretch {
+        if *role == "user" && teach {
+            if let Some(label) = crate::recipe::hands_step_label(content) {
+                out.push(ChatView {
+                    kind: ChatKind::Tool,
+                    title: "Hands".into(),
+                    body: label,
+                });
+            }
+            continue;
+        }
         if *role != "assistant" {
             continue;
         }
@@ -504,6 +517,66 @@ mod tests {
         assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
         assert!(!v.iter().any(|x| x.body.contains("COMPUTER_RESULT")));
         assert!(!v.iter().any(|x| x.body.contains("clicked 40,80")));
+    }
+
+    #[test]
+    fn gui_help_shows_hands_chip_and_howto() {
+        let msgs = vec![
+            ("user".into(), "close that firefox tab".into()),
+            (
+                "assistant".into(),
+                "Closing it.\nCOMPUTER_CMD: tab close Firefox\n".into(),
+            ),
+            (
+                "user".into(),
+                "COMPUTER_RESULT (facts only):\n$ COMPUTER_CMD: tab close Firefox\nclosed Firefox\n".into(),
+            ),
+            (
+                "assistant".into(),
+                "Closed. Next time: click the tab, then the ×, or press Ctrl+W.".into(),
+            ),
+        ];
+        let v = visible_chat(&msgs);
+        assert_eq!(
+            kinds(&v),
+            vec![
+                ChatKind::User,
+                ChatKind::Thought,
+                ChatKind::Tool,
+                ChatKind::Assistant
+            ]
+        );
+        assert_eq!(v[2].title, "Hands");
+        assert_eq!(v[2].body, "Closed tab Firefox");
+        assert!(v[3].body.contains("Ctrl+W"));
+        assert!(!v.iter().any(|x| x.body.contains("COMPUTER_RESULT")));
+        assert!(!v.iter().any(|x| x.body.contains("COMPUTER_CMD")));
+    }
+
+    #[test]
+    fn guide_only_has_no_hands_chip() {
+        let msgs = vec![
+            (
+                "user".into(),
+                "just tell me don't click how to enable bluetooth".into(),
+            ),
+            (
+                "assistant".into(),
+                "I would click it.\nCOMPUTER_CMD: act Bluetooth\n".into(),
+            ),
+            (
+                "user".into(),
+                "COMPUTER_RESULT (facts only):\n$ COMPUTER_CMD: act Bluetooth\nact Bluetooth @1,2\n".into(),
+            ),
+            (
+                "assistant".into(),
+                "Settings → Bluetooth → the switch.".into(),
+            ),
+        ];
+        let v = visible_chat(&msgs);
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
+        assert!(!v.iter().any(|x| x.body.contains("COMPUTER_RESULT")));
+        assert!(v.iter().any(|x| x.kind == ChatKind::Assistant && x.body.contains("Bluetooth")));
     }
 
     #[test]
