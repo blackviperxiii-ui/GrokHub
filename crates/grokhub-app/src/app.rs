@@ -112,7 +112,7 @@ use grokhub_core::{
     BoardStatus, ChipInput, ChipKind, ChipMemory, ChipThread, ComputerOp, DeviceCodeStart, HeyGrokAction,
     HeyGrokRoute, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, MintRealtimeFn, Policy, Recipe, ReplayOp, RewindRecord,
-    HostPlanStep, HostRisk, forbidden_reason,
+    HostPlanStep, HostRisk, forbidden_reason, mint_host_halt,
     AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
     VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
     user_pref_facts,
@@ -4716,7 +4716,7 @@ impl Cabin {
             }
         }
         self.last_host = gated.clone();
-        self.host_halt.store(false, Ordering::SeqCst);
+        self.host_halt = mint_host_halt();
         self.running = true;
         self.host_reserved = gated.len() as u32;
         if self.chat_job_thread.is_none() {
@@ -9337,6 +9337,15 @@ mod tests {
         assert!(
             host_done.contains("job_is_scratch"),
             "HostDone must use the origin thread scratch flag: {host_done}"
+        );
+        let run_cmds = src
+            .split("fn run_cmds")
+            .nth(1)
+            .and_then(|s| s.split("fn run_connector").next())
+            .expect("run_cmds");
+        assert!(
+            run_cmds.contains("mint_host_halt") && !run_cmds.contains("host_halt.store(false"),
+            "a new host job must not clear the previous job's halt flag: {run_cmds}"
         );
     }
 
