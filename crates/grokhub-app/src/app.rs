@@ -4581,6 +4581,7 @@ impl Cabin {
                         if let Ok(after) = std::fs::read_to_string(path) {
                             let diff = unified_diff_cite(path, "", &after);
                             self.push_bound_msg("user", format!("HOST_DIFF:\n{diff}"));
+                            self.persist();
                         }
                     }
                 }
@@ -5182,6 +5183,7 @@ impl Cabin {
             "verify fail".into()
         };
         self.push_bound_msg("user", format!("VERIFY_RESULT:\n{}", v.detail));
+        self.persist();
         if v.ok {
             if let Some(s) = self.skill_list.iter_mut().find(|s| s.name == self.skill_name) {
                 s.runs = bump_skill_run(s.runs);
@@ -9281,6 +9283,29 @@ mod tests {
         assert!(
             deleted.contains("drop_leaving_thread_chrome"),
             "deleting the visible tab must drop plus-attach and followup budget: {deleted}"
+        );
+        let verify = src
+            .split("fn run_skill_verify")
+            .nth(1)
+            .and_then(|s| s.split("fn take_over_desktop").next())
+            .expect("run_skill_verify");
+        let pushed = verify.find("push_bound_msg").expect("VERIFY_RESULT push");
+        let saved = verify.find("self.persist()").expect("verify persist");
+        assert!(
+            pushed < saved,
+            "VERIFY_RESULT must hit disk or a restart drops it: {verify}"
+        );
+        let host_done_facts = src
+            .split("Ok(JobOut::HostDone(block))")
+            .nth(1)
+            .and_then(|s| s.split("Ok(JobOut::Connector").next())
+            .expect("HostDone facts");
+        let diff = host_done_facts
+            .find("HOST_DIFF:")
+            .expect("HOST_DIFF push");
+        assert!(
+            host_done_facts[diff..].contains("self.persist()"),
+            "HOST_DIFF must persist after the cite push: {host_done_facts}"
         );
         let deleted = src
             .split("fn delete_thread_at")
