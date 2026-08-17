@@ -2680,6 +2680,9 @@ impl Cabin {
                         Err(e) => self.status = e,
                     },
                     Some(q) => {
+                        if config::read_memory(&self.mem_name) != self.mem_body {
+                            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+                        }
                         let next = forget_topic(&config::read_memory("MEMORY.md"), &q);
                         match config::write_memory("MEMORY.md", &next) {
                             Ok(()) => {
@@ -9801,6 +9804,15 @@ mod tests {
         assert!(
             forget.contains("self.scratch()") && forget.contains("no memory writes"),
             "/forget on Scratch must not wipe MEMORY.md: {forget}"
+        );
+        let topic = forget
+            .split("Some(q)")
+            .nth(1)
+            .expect("forget topic");
+        let read = topic.find("read_memory(\"MEMORY.md\")").expect("forget read");
+        assert!(
+            topic[..read].contains("write_memory") && topic[..read].contains("mem_body"),
+            "/forget topic must flush the Memory editor before editing disk: {topic}"
         );
         let memory_ui = src
             .split("fn ui_memory")
