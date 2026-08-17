@@ -760,6 +760,12 @@ pub struct Cabin {
     chip_llm_at: u64,
     greeting: String,
     greeting_fp: String,
+    greeting_user_at: u64,
+    greeting_memory_at: u64,
+    greeting_user_md: String,
+    greeting_memory_md: String,
+    greeting_flush_name: String,
+    greeting_flush_len: usize,
     greeting_llm_fp: String,
     greeting_rx: Option<mpsc::Receiver<String>>,
     greeting_busy: bool,
@@ -1059,6 +1065,12 @@ impl Cabin {
             chip_llm_at: 0,
             greeting: String::new(),
             greeting_fp: String::new(),
+            greeting_user_at: 0,
+            greeting_memory_at: 0,
+            greeting_user_md: String::new(),
+            greeting_memory_md: String::new(),
+            greeting_flush_name: String::new(),
+            greeting_flush_len: usize::MAX,
             greeting_llm_fp: String::new(),
             greeting_rx: None,
             greeting_busy: false,
@@ -2141,11 +2153,36 @@ impl Cabin {
             }
             return;
         }
-        if config::read_memory(&self.mem_name) != self.mem_body {
-            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+        if !self.scratch()
+            && (self.greeting_flush_name != self.mem_name
+                || self.greeting_flush_len != self.mem_body.len())
+        {
+            if config::read_memory(&self.mem_name) != self.mem_body {
+                let _ = config::write_memory(&self.mem_name, &self.mem_body);
+            }
+            self.greeting_flush_name = self.mem_name.clone();
+            self.greeting_flush_len = self.mem_body.len();
         }
-        let user_md = config::read_memory("USER.md");
-        let memory_md = config::read_memory("MEMORY.md");
+        let user_at = config::memory_updated_at("USER.md");
+        if self.greeting_user_at != user_at {
+            self.greeting_user_md = config::read_memory("USER.md");
+            self.greeting_user_at = user_at;
+        }
+        let memory_at = config::memory_updated_at("MEMORY.md");
+        if self.greeting_memory_at != memory_at {
+            self.greeting_memory_md = config::read_memory("MEMORY.md");
+            self.greeting_memory_at = memory_at;
+        }
+        let user_md = if self.mem_name == "USER.md" {
+            self.mem_body.clone()
+        } else {
+            self.greeting_user_md.clone()
+        };
+        let memory_md = if self.mem_name == "MEMORY.md" {
+            self.mem_body.clone()
+        } else {
+            self.greeting_memory_md.clone()
+        };
         let insights: Vec<String> = self
             .learning
             .insights
@@ -11143,6 +11180,10 @@ mod tests {
                 && greet[..user].contains("mem_body")
                 && greet[..user].contains("scratch()"),
             "empty-chat greeting must flush the Memory editor before reading USER/MEMORY: {greet}"
+        );
+        assert!(
+            greet[..user].contains("memory_updated_at"),
+            "empty-chat greeting must not slurp USER/MEMORY on every paint: {greet}"
         );
         let dream = src
             .split("fn run_dream")
