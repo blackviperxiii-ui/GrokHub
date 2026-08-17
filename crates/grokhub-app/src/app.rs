@@ -4698,6 +4698,7 @@ impl Cabin {
                     &stored_scratch,
                 );
                 self.push_bound_msg("user", format!("{prefix}\n{block}"));
+                self.persist();
                 if any_hands {
                     self.hands_attach = true;
                     let rows = collect_rows();
@@ -9767,6 +9768,13 @@ mod tests {
         assert!(
             host_done.contains("kick_model(false)"),
             "HostDone must not steal the attached image: {host_done}"
+        );
+        let pushed = host_done.find("push_bound_msg").expect("host result");
+        let recipe = host_done.find("save_recipe").expect("host recipe");
+        let saved = host_done.find("self.persist()").expect("host persist");
+        assert!(
+            pushed < saved && saved < recipe,
+            "HOST_RESULT must hit disk before recipe/skill side effects: {host_done}"
         );
         let import = src
             .split("fn import_openclaw")
