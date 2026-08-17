@@ -60,7 +60,7 @@ use grokhub_core::{
     settle_project_path, should_seed_sidebar, stage_project, toggle_folder, upsert_bound,
     visible_tree, ProjectKind, ProjectMenuAct,
     ProjectNode,
-    is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
+    is_plain_text, is_voice_error, keep_last_rewinds, last_user_scan, last_user_text, load_hub_state, mark_automation_ran,
     night_check_may_fire, night_counts_run, night_unauth_should_skip,
     match_skill, mode_from_chip_value, model_for_mode, nav_from_chip_value,
     cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
@@ -2921,12 +2921,10 @@ impl Cabin {
             self.running,
         ) {
             ChatSendKind::Redirect => {
-                let prev = last_user_text(
-                    &self
-                        .messages
+                let prev = last_user_scan(
+                    self.messages
                         .iter()
-                        .map(|m| (m.role.clone(), m.content.clone()))
-                        .collect::<Vec<_>>(),
+                        .map(|m| (m.role.as_str(), m.content.as_str())),
                 )
                 .unwrap_or_default();
                 self.halt_work("Redirected");
@@ -10712,6 +10710,15 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn send_followup_turn").next())
             .expect("send_chat");
+        let redirect = send
+            .split("ChatSendKind::Redirect")
+            .nth(1)
+            .and_then(|s| s.split("ChatSendKind::Fresh").next())
+            .expect("redirect");
+        assert!(
+            !redirect.contains("content.clone()"),
+            "redirect must not clone the transcript to read the last user turn: {redirect}"
+        );
         let slash_at = send.find("parse_slash").expect("parse_slash");
         let kind_at = send.find("chat_send_kind").expect("chat_send_kind");
         assert!(
