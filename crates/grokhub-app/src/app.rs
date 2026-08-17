@@ -124,7 +124,7 @@ use grokhub_core::{
     HostPlanStep, HostRisk, forbidden_reason, mint_host_halt,
     AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
     VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX, FRAME_CAP, IMAGE_FILE_CAP,
-    TEXT_FILE_CAP,
+    TEXT_FILE_CAP, bound_scan,
     user_pref_facts,
     DEFAULT_MODEL, FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND,
     IDLE_REFLECT_MS, IMAGINE_ASPECTS,
@@ -5010,22 +5010,23 @@ impl Cabin {
                     self.speak_next = false;
                     self.speak_reply(&text);
                 }
-                for card in extract_work_pins(&text) {
+                let scan = bound_scan(&text);
+                for card in extract_work_pins(&scan) {
                     self.board.push(card);
                 }
-                if let Some(r) = parse_recipe(&text) {
+                if let Some(r) = parse_recipe(&scan) {
                     self.last_recipe = Some(r);
                 }
-                if has_verify_ok(&text) {
+                if has_verify_ok(&scan) {
                     self.verify_ok_turn = true;
                     self.verify_chip = "VERIFY_OK".into();
                 }
-                for (key, st) in extract_work_updates(&text) {
+                for (key, st) in extract_work_updates(&scan) {
                     let _ = apply_work_update(&mut self.board, &key, st);
                 }
                 self.persist();
                 let mut host_needs_kick = false;
-                if let Some(plan) = plan_from_text(&text) {
+                if let Some(plan) = plan_from_text(&scan) {
                     self.pending_update = false;
                     if self.cfg.yolo {
                         let (run, hold) = yolo_plan_split(
@@ -5051,11 +5052,11 @@ impl Cabin {
                         }
                     }
                 }
-                for c in extract_connector_cmds(&text) {
+                for c in extract_connector_cmds(&scan) {
                     self.chat_job_thread = origin.clone();
                     self.run_connector(&c.connector_id, &c.tool, &c.args);
                 }
-                if let Some(p) = extract_imagine_prompt(&text) {
+                if let Some(p) = extract_imagine_prompt(&scan) {
                     self.chat_job_thread = origin.clone();
                     self.imagine_prompt = p;
                     if here {
@@ -5064,7 +5065,7 @@ impl Cabin {
                     }
                     self.kick_imagine();
                 }
-                if let Some(mut a) = parse_nl_automation(&text) {
+                if let Some(mut a) = parse_nl_automation(&scan) {
                     if a.id.is_empty() {
                         a.id = uid("auto");
                     }
@@ -5074,7 +5075,7 @@ impl Cabin {
                         self.status = format!("Night saved: {} {}", a.schedule, a.time);
                     }
                 }
-                if let Some(q) = parse_consult(&text) {
+                if let Some(q) = parse_consult(&scan) {
                     if !self.running {
                         self.finish_hub_dispatch(&text, hub_dispatch_ok(&text));
                         self.chat_job_thread = origin.clone();
@@ -12385,6 +12386,10 @@ mod tests {
             "background auto-compact must bump accessed_ms or /sync LWW can restore the dropped turns: {bg_compact}"
         );
         let pins = chat.find("extract_work_pins").expect("work pins");
+        assert!(
+            chat[..pins].contains("bound_scan"),
+            "Chat complete must not walk an 8MB body for pins/recipe/host/connectors: {chat}"
+        );
         let host_plan = chat.find("plan_from_text").expect("host plan");
         assert!(
             pins < host_plan && chat[pins..host_plan].contains("self.persist()"),
