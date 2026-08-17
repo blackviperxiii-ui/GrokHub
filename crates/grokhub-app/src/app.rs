@@ -2764,6 +2764,7 @@ impl Cabin {
                     .into_iter()
                     .map(|(role, content)| Msg { role, content })
                     .collect();
+                self.stamp_current_access();
                 self.persist();
                 self.status = "Compacted".into();
             }
@@ -9562,6 +9563,15 @@ mod tests {
         assert!(
             slash_at < kind_at,
             "/compact during a live job must stay local, not become a redirect: {send}"
+        );
+        let compact = src
+            .split("Slash::Compact =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::Skill").next())
+            .expect("Compact");
+        assert!(
+            compact.contains("stamp_current_access") || compact.contains("accessed_ms"),
+            "/compact must bump accessed_ms or /sync LWW can restore the dropped turns: {compact}"
         );
         let pushed = send.find("messages.push").expect("user turn");
         let saved = send.find("self.persist()").expect("send persist");
