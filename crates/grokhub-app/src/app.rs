@@ -7831,6 +7831,9 @@ impl Cabin {
             ui.horizontal(|ui| {
                 crate::cards::search_bar(ui, &mut self.history_q, "Search chats and memory", 320.0);
                 if crate::cards::white_pill(ui, "Search") {
+                    if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
+                        let _ = config::write_memory(&self.mem_name, &self.mem_body);
+                    }
                     let mut rows: Vec<(String, String)> = vec![
                         ("SOUL.md".into(), config::read_memory("SOUL.md")),
                         ("USER.md".into(), config::read_memory("USER.md")),
@@ -10373,6 +10376,22 @@ mod tests {
         assert!(
             src.contains("if !night_fired && !self.running"),
             "Review waits if Night just fired or chat is running"
+        );
+        let history = src
+            .split("fn ui_history(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_board(").next())
+            .expect("ui_history");
+        let search = history
+            .split("white_pill(ui, \"Search\")")
+            .nth(1)
+            .and_then(|s| s.split("history_hits").next())
+            .expect("history search");
+        assert!(
+            search.contains("write_memory")
+                && search.contains("mem_body")
+                && search.contains("scratch()"),
+            "History Search must flush the Memory editor before reading disk: {search}"
         );
         let night = src
             .split("fn ui_night(")
