@@ -2465,6 +2465,13 @@ impl Cabin {
         self.stamp_current_access();
     }
 
+    fn land_on_real_chat(&mut self) {
+        if self.scratch() {
+            self.open_recent_chat();
+        }
+        self.nav = Nav::Chat;
+    }
+
     fn new_thread(&mut self, scratch: bool) {
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
             t.messages = self
@@ -3567,7 +3574,7 @@ impl Cabin {
         if replay.is_some() {
             return;
         }
-        self.nav = Nav::Chat;
+        self.land_on_real_chat();
         self.send_chat(a.instructions);
     }
 
@@ -5627,7 +5634,7 @@ impl Cabin {
         let task = self.hub.lock().ok().and_then(|mut s| s.take_next_queued(&id));
         if let Some(t) = task {
             self.pending_hub_task = Some(t.id.clone());
-            self.nav = Nav::Chat;
+            self.land_on_real_chat();
             self.send_chat(format!("[from {}] {}", t.from_name, t.prompt));
         }
     }
@@ -7964,7 +7971,7 @@ impl Cabin {
                         if let Some(id) = replay_automation_target(&inst) {
                             self.replay_saved_recipe(id);
                         } else {
-                            self.nav = Nav::Chat;
+                            self.land_on_real_chat();
                             self.send_chat(inst);
                         }
                     }
@@ -9605,6 +9612,10 @@ mod tests {
             "do not claim a second phone task while one is still pending: {inbox}"
         );
         assert!(
+            inbox.contains("land_on_real_chat"),
+            "a claimed phone task must not land on Scratch: {inbox}"
+        );
+        assert!(
             src.contains("night_counts_run"),
             "a night replay that did not start must not consume the slot"
         );
@@ -9622,6 +9633,10 @@ mod tests {
         assert!(
             fire_night[counts..].contains("mark_auto_skipped"),
             "a missing night recipe must skip the slot, not hammer every 5s: {fire_night}"
+        );
+        assert!(
+            fire_night.contains("land_on_real_chat"),
+            "a night chat job must not land on Scratch: {fire_night}"
         );
         let night_check = src
             .split("fn poll_night_check")
@@ -10950,6 +10965,10 @@ mod tests {
             enable.contains(".changed()") && enable.contains("night::save"),
             "toggling an automation must persist enabled before restart: {enable}"
         );
+        assert!(
+            night.contains("land_on_real_chat"),
+            "Night Run must not send_chat on Scratch: {night}"
+        );
         let skills = src
             .split("fn ui_skills(")
             .nth(1)
@@ -11092,11 +11111,20 @@ mod tests {
         let open = src
             .split("fn open_recent_chat(")
             .nth(1)
-            .and_then(|s| s.split("fn new_thread(").next())
+            .and_then(|s| s.split("fn land_on_real_chat(").next())
             .expect("open_recent_chat");
         assert!(
             open.contains("most_recently_accessed_index") && open.contains("switch_thread"),
             "Chat rail uses last-access, not leftover thread_idx: {open}"
+        );
+        let land = src
+            .split("fn land_on_real_chat(")
+            .nth(1)
+            .and_then(|s| s.split("fn new_thread(").next())
+            .expect("land_on_real_chat");
+        assert!(
+            land.contains("scratch()") && land.contains("open_recent_chat"),
+            "background chat must leave Scratch for the last real thread: {land}"
         );
         let house = src
             .split("HeartbeatAct::Housekeep =>")
