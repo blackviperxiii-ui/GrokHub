@@ -20,7 +20,23 @@ pub fn show(ui: &mut Ui, text: &str) {
     ui.style_mut().wrap_mode = Some(TextWrapMode::Wrap);
     let wrap = ui.available_width().max(1.0);
     ui.set_max_width(wrap);
+    let mut in_fence = false;
     for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            wrapping_label(
+                ui,
+                RichText::new(line)
+                    .monospace()
+                    .color(crate::theme::muted()),
+                wrap,
+            );
+            continue;
+        }
+        if in_fence {
+            wrapping_label(ui, RichText::new(line).monospace(), wrap);
+            continue;
+        }
         if let Some(rest) = line.strip_prefix("### ") {
             wrapping_label(ui, RichText::new(rest).strong(), wrap);
         } else if let Some(rest) = line.strip_prefix("## ") {
@@ -34,14 +50,6 @@ pub fn show(ui: &mut Ui, text: &str) {
                 ui.label("·");
                 inline(ui, rest, (wrap - 18.0).max(1.0));
             });
-        } else if line.starts_with("```") {
-            wrapping_label(
-                ui,
-                RichText::new(line)
-                    .monospace()
-                    .color(crate::theme::muted()),
-                wrap,
-            );
         } else if line.is_empty() {
             ui.add_space(6.0);
         } else {
@@ -113,6 +121,18 @@ mod tests {
     #[test]
     fn splits_markers() {
         assert!("**bold** and `code`".contains("**"));
+    }
+
+    #[test]
+    fn fenced_code_body_is_monospace() {
+        let src = include_str!("markdown.rs");
+        let start = src.find("pub fn show").expect("show");
+        let slice = &src[start..start + 1600];
+        assert!(slice.contains("in_fence"), "{slice}");
+        assert!(
+            slice.contains("RichText::new(line).monospace()"),
+            "fence body must stay monospace: {slice}"
+        );
     }
 
     #[test]
