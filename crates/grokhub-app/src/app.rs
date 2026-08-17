@@ -3785,6 +3785,9 @@ impl Cabin {
             self.status = "No OpenClaw workspace (~/.openclaw/workspace)".into();
             return;
         };
+        if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
+            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+        }
         let mut imported = 0u32;
         let mut memory = config::read_memory("MEMORY.md");
         if let Ok(rd) = std::fs::read_dir(&root) {
@@ -9719,6 +9722,11 @@ mod tests {
         assert!(
             import.contains("mem_name") && import.contains("mem_body"),
             "/import must reload the Memory editor onto MEMORY.md: {import}"
+        );
+        let merge_read = import.find("read_memory(\"MEMORY.md\")").expect("import memory");
+        assert!(
+            import[..merge_read].contains("write_memory") && import[..merge_read].contains("mem_body"),
+            "/import must flush the Memory editor before merging MEMORY.md: {import}"
         );
         let sign_out = src
             .split("fn sign_out_oauth")
