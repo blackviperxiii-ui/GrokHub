@@ -4036,6 +4036,7 @@ impl Cabin {
 
     fn sign_out_oauth(&mut self) {
         self.secrets.oauth = None;
+        self.oauth_pending = None;
         self.clear_oauth_photo();
         let _ = secrets::save(&self.secrets);
         self.status = "Signed out".into();
@@ -9550,6 +9551,15 @@ mod tests {
         assert!(
             import.contains("merge_imported_memory"),
             "/import must merge MEMORY.md instead of last-file-wins: {import}"
+        );
+        let sign_out = src
+            .split("fn sign_out_oauth")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_oauth_photo").next())
+            .expect("sign_out_oauth");
+        assert!(
+            sign_out.contains("oauth_pending = None"),
+            "Sign out during device-code poll must not reconnect when the browser finishes: {sign_out}"
         );
         let kick = src
             .split("fn kick_model(")
