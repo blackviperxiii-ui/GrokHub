@@ -7295,12 +7295,20 @@ impl Cabin {
                 st.device_name = self.cfg.device_name.clone();
             }
         }
+        let p = expand_home(&self.cfg.project_dir);
+        self.cfg.project_dir = p.clone();
+        if !p.trim().is_empty() {
+            let _ = std::fs::create_dir_all(&p);
+        }
+        self.project_sel = upsert_bound(&mut self.projects, &p);
+        self.touch_projects();
         let _ = secrets::save(&self.secrets);
         match config::save(&self.cfg) {
             Ok(()) => self.status = "Saved".into(),
             Err(e) => self.status = e,
         }
         self.sync_hub_voice();
+        self.flush_projects();
     }
 
     fn ui_settings(&mut self, ctx: &egui::Context) {
@@ -9689,6 +9697,10 @@ mod tests {
         assert!(
             settings_save.contains("sync_hub_voice"),
             "Settings Save must refresh the hub voice mint key: {settings_save}"
+        );
+        assert!(
+            settings_save.contains("upsert_bound") && settings_save.contains("touch_projects"),
+            "Settings Save must keep the sidebar selection on the bound path: {settings_save}"
         );
         let unbound = src
             .split("Slash::ProjectClear =>")
