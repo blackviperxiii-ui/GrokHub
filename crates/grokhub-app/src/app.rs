@@ -2619,6 +2619,8 @@ impl Cabin {
             Self::local_clock().hour as u8,
         );
         if !persist_user_turn(self.has_key()) {
+            self.hands_attach = false;
+            self.eyes_attach = false;
             self.status = "Connect Grok OAuth in Settings".into();
             return;
         }
@@ -5227,6 +5229,10 @@ impl Cabin {
 
     fn take_over_desktop(&mut self) {
         self.nav = Nav::Chat;
+        if !self.has_key() {
+            self.status = "Connect Grok OAuth in Settings".into();
+            return;
+        }
         self.hands_attach = true;
         self.eyes_attach = true;
         if !crate::desktop::hands_ready() {
@@ -9335,6 +9341,28 @@ mod tests {
         assert!(
             pushed < saved,
             "VERIFY_RESULT must hit disk or a restart drops it: {verify}"
+        );
+        let takeover = src
+            .split("fn take_over_desktop")
+            .nth(1)
+            .and_then(|s| s.split("fn replay_saved_recipe").next())
+            .expect("take_over_desktop");
+        let key = takeover.find("has_key").expect("takeover auth");
+        let hands = takeover.find("hands_attach = true").expect("takeover hands");
+        assert!(
+            key < hands,
+            "Take over without OAuth must not arm windshield: {takeover}"
+        );
+        let send_auth = src
+            .split("fn send_chat")
+            .nth(1)
+            .and_then(|s| s.split("fn send_followup_turn").next())
+            .expect("send_chat auth");
+        let gate = send_auth.find("persist_user_turn").expect("send auth");
+        assert!(
+            send_auth[gate..].contains("hands_attach = false")
+                && send_auth[gate..].contains("eyes_attach = false"),
+            "auth-fail send must disarm leftover take-over flags: {send_auth}"
         );
         let host_done_facts = src
             .split("Ok(JobOut::HostDone(block))")
