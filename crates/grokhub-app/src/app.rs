@@ -28,7 +28,7 @@ use grokhub_core::{
     blend_thread_goal, flush_visible_goal,
     build_hub_snapshot,
     build_quick_chips, build_windshield, bump_skill_run, bump_usage,
-    inhabit_ready, hub_pair_url, pair_code_is_live, parse_hostname_i, pick_lan_ipv4,
+    inhabit_ready, hub_pair_url, devices_shows_pair_code, pair_code_is_live, parse_hostname_i, pick_lan_ipv4,
     start_hub_rotates_pair,
     catalog_line, chip_suggest_prompt, compact_keep_pin, compose_imagine_prompt,
     context_fingerprint,
@@ -6989,7 +6989,11 @@ impl Cabin {
                     st.device_name.clone(),
                     self.hub_on,
                     st.pair.as_ref().and_then(|p| {
-                        pair_code_is_live(p.expires_at, now_ms()).then(|| p.code.clone())
+                        devices_shows_pair_code(
+                            self.hub_on,
+                            pair_code_is_live(p.expires_at, now_ms()),
+                        )
+                        .then(|| p.code.clone())
                     }),
                 )
             } else {
@@ -9260,8 +9264,8 @@ mod tests {
             .and_then(|s| s.split("fn ui_memory").next())
             .expect("ui_devices");
         assert!(
-            devices.contains("pair_code_is_live"),
-            "Devices must hide a dead pair code: {devices}"
+            devices.contains("pair_code_is_live") && devices.contains("devices_shows_pair_code"),
+            "Devices must hide a dead pair code and any code while the hub is off: {devices}"
         );
         let clear = src
             .split("Slash::Clear =>")

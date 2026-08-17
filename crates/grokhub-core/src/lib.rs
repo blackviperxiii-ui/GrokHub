@@ -169,8 +169,8 @@ pub use review::{
     ReviewDigest, SuggestionKind, SuggestionStore, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
 };
 pub use pair::{
-    hub_pair_url, make_pair_code, normalize_code, pair_code_is_live, parse_hostname_i, pick_lan_ipv4,
-    start_hub_rotates_pair, CODE_ALPH, PAIR_TTL_MS,
+    devices_shows_pair_code, hub_pair_url, make_pair_code, normalize_code, pair_code_is_live,
+    parse_hostname_i, pick_lan_ipv4, start_hub_rotates_pair, CODE_ALPH, PAIR_TTL_MS,
 };
 pub use automation::{
     automation_blocked_by_policy, compute_next_run, due_automations, ensure_automation_schedule,

@@ -59,6 +59,11 @@ pub fn start_hub_rotates_pair(expires_at: Option<u64>, now_ms: u64) -> bool {
     }
 }
 
+/// A pair tile is only useful while the hub is actually listening.
+pub fn devices_shows_pair_code(sharing: bool, code_live: bool) -> bool {
+    sharing && code_live
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +118,11 @@ mod tests {
             "an expired leftover must rotate on Start share"
         );
         assert!(!start_hub_rotates_pair(Some(2_000), 1_000));
+        assert!(
+            !devices_shows_pair_code(false, true),
+            "a leftover code must not paint while the hub is off"
+        );
+        assert!(devices_shows_pair_code(true, true));
+        assert!(!devices_shows_pair_code(true, false));
     }
 }
