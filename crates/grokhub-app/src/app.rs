@@ -100,6 +100,7 @@ use grokhub_core::{
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
+    chip_scan,
     build_review_digest, dedupe_suggestions, merge_suggestion_store, parse_suggest_lines,
     parse_suggest_skill_patches, parse_trajectory_jsonl, summarize_trajectory, trajectory_jsonl_line,
     trim_result_bodies, yesterday_ms, RESULT_TRIM_KEEP_HOPS,
@@ -2165,6 +2166,15 @@ impl Cabin {
             .collect()
     }
 
+    /// Chat pairs for chip rebuild: scan a 4KB prefix so an 8MB complete
+    /// does not get cloned into `chip_suggest_prompt` / `chip_thread_from_messages`.
+    fn chip_chat_pairs(&self) -> Vec<(String, String)> {
+        self.messages
+            .iter()
+            .map(|m| (m.role.clone(), chip_scan(&m.content).to_string()))
+            .collect()
+    }
+
     fn chip_hour() -> u8 {
         Self::local_clock().hour as u8
     }
@@ -2513,7 +2523,7 @@ impl Cabin {
             return;
         }
         self.chip_paint_key = key;
-        let chat = self.chat_pairs();
+        let chat = self.chip_chat_pairs();
         let others = self.other_chip_threads();
         let input = ChipInput {
             chat: &chat,
@@ -2571,7 +2581,7 @@ impl Cabin {
         if key.trim().is_empty() {
             return;
         }
-        let chat = self.chat_pairs();
+        let chat = self.chip_chat_pairs();
         let title = self
             .threads
             .get(self.thread_idx)
@@ -2607,7 +2617,7 @@ impl Cabin {
             self.cfg.mode.as_str()
         };
         let tag = context_fingerprint(
-            &self.chat_pairs(),
+            &self.chip_chat_pairs(),
             &self.composer,
             self.last_receipt_ok == Some(false),
             hour,
@@ -10332,6 +10342,10 @@ mod tests {
         assert!(
             chips[..pairs].contains("self.running") && chips[..pairs].contains("return"),
             "a growing stream must not clone the transcript to rebuild chips: {chips}"
+        );
+        assert!(
+            chips.contains("chip_chat_pairs") || chips.contains("chip_scan"),
+            "chip rebuild must not clone an 8MB complete into chat_pairs: {chips}"
         );
     }
 
