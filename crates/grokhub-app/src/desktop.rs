@@ -333,11 +333,9 @@ pub fn hands_ready() -> bool {
 }
 
 fn pyatspi_import_ok() -> bool {
-    Command::new("python3")
-        .args(["-c", "import pyatspi"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    let mut cmd = Command::new("python3");
+    cmd.args(["-c", "import pyatspi"]);
+    run_limited(cmd, DESK_LIST_TIMEOUT).is_some_and(|o| o.status.success())
 }
 
 pub fn install_hands_status() -> String {
@@ -459,9 +457,11 @@ fn run_bin_steps(bin: &str, steps: &[Vec<String>], cancel: Option<&AtomicBool>) 
         if bin == "ydotool" {
             cmd.env("YDOTOOL_SOCKET", ydotool_sock());
         }
-        let st = cmd.args(step).status().map_err(|e| e.to_string())?;
-        if !st.success() {
-            return Err(format!("{bin} {} failed", step.join(" ")));
+        cmd.args(step);
+        match run_limited(cmd, DESK_LIST_TIMEOUT) {
+            Some(out) if out.status.success() => {}
+            Some(_) => return Err(format!("{bin} {} failed", step.join(" "))),
+            None => return Err(format!("{bin} {} timed out", step.join(" "))),
         }
     }
     Ok(())
@@ -527,10 +527,10 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     let Some(bin) = act_window_search_bin(which("xdotool")) else {
         return Err(format!("act {name}: not found"));
     };
-    let out = spawn_bin(bin)
-        .args(["search", "--onlyvisible", "--name", name])
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut search = spawn_bin(bin);
+    search.args(["search", "--onlyvisible", "--name", name]);
+    let out = run_limited(search, DESK_LIST_TIMEOUT)
+        .ok_or_else(|| format!("act {name}: not found"))?;
     let id = String::from_utf8_lossy(&out.stdout)
         .lines()
         .next()
@@ -540,10 +540,10 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     if id.is_empty() {
         return Err(format!("act {name}: not found"));
     }
-    let geo = spawn_bin(bin)
-        .args(["getwindowgeometry", &id])
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut geo_cmd = spawn_bin(bin);
+    geo_cmd.args(["getwindowgeometry", &id]);
+    let geo = run_limited(geo_cmd, DESK_LIST_TIMEOUT)
+        .ok_or_else(|| format!("act {name}: no geometry"))?;
     let text = String::from_utf8_lossy(&geo.stdout);
     let (x, y, w, h) = parse_getwindowgeometry(&text).ok_or_else(|| {
         format!("act {name}: no geometry")
@@ -1459,6 +1459,24 @@ mod tests {
         assert!(
             xrandr.contains("run_limited("),
             "xrandr must time out: {xrandr}"
+        );
+        let steps = src
+            .split("fn run_bin_steps(")
+            .nth(1)
+            .and_then(|s| s.split("\nfn run_pointer_steps").next())
+            .expect("run_bin_steps");
+        assert!(
+            steps.contains("run_limited(") && !steps.contains(".status()"),
+            "hung xdotool/ydotool must not freeze the UI: {steps}"
+        );
+        let py = src
+            .split("fn pyatspi_import_ok(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn install_hands_status").next())
+            .expect("pyatspi_import_ok");
+        assert!(
+            py.contains("run_limited(") && !py.contains(".status()"),
+            "pyatspi import must time out: {py}"
         );
     }
 }
