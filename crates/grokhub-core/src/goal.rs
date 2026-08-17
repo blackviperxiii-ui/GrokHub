@@ -1,7 +1,7 @@
 //! Goal pin survives compact. Incomplete turns stay open.
 //! Fast mode names the chat tab from the current topics.
 
-use crate::chat_view::assistant_prose;
+use crate::chat_view::{assistant_prose, is_workload_user};
 use serde::{Deserialize, Serialize};
 
 /// Turns a topic can stay unseen before the tab drops it.
@@ -277,11 +277,20 @@ pub fn compact_keep_pin(
     pin: Option<&str>,
 ) -> Vec<(String, String)> {
     let keep = keep.max(1);
-    let mut out = if messages.len() > keep {
-        messages[messages.len() - keep..].to_vec()
+    let visible_users: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, (role, content))| role == "user" && !is_workload_user(content))
+        .map(|(i, _)| i)
+        .collect();
+    let start = if visible_users.len() > keep {
+        visible_users[visible_users.len() - keep]
+    } else if visible_users.is_empty() && messages.len() > keep {
+        messages.len() - keep
     } else {
-        messages.to_vec()
+        0
     };
+    let mut out = messages[start..].to_vec();
     let Some(pin) = pin.map(str::trim).filter(|s| !s.is_empty()) else {
         return out;
     };
@@ -498,6 +507,24 @@ mod tests {
             .collect::<Vec<_>>();
         let pinned = compact_keep_pin(&api, 8, Some("pi"));
         assert_eq!(pinned[0], ("system".into(), "GOAL PIN: pi".into()));
+        let mut hosty = Vec::new();
+        for i in 0..10 {
+            hosty.push(("user".into(), format!("ask {i}")));
+            hosty.push(("assistant".into(), format!("ans {i}")));
+            hosty.push((
+                "user".into(),
+                "HOST_RESULT (facts only):\n$ x\nexit 0\n".into(),
+            ));
+        }
+        let kept = compact_keep_pin(&hosty, 8, None);
+        assert!(
+            kept.iter().any(|(_, c)| c == "ask 2"),
+            "last 8 visible asks must survive: {kept:?}"
+        );
+        assert!(
+            !kept.iter().any(|(_, c)| c == "ask 0" || c == "ask 1"),
+            "/compact help says turns, not raw host rows: {kept:?}"
+        );
         assert!(
             !looks_incomplete(""),
             "empty prose is not a reason to start another turn"
