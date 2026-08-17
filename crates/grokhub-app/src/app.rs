@@ -85,7 +85,7 @@ use grokhub_core::{
     greeting_fingerprint, greeting_prompt, local_greeting, pick_greeting,
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
-    rewind_can_queue, rewind_snapshot_ready,
+    is_rewind_copy_cmd, rewind_can_queue, rewind_copy_cmd, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
     clear_pending_after_complete,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
@@ -3054,15 +3054,17 @@ impl Cabin {
                 return;
             }
         }
-        self.snapshot_project();
-        self.status = "No snapshot yet — took one. /rewind again to restore.".into();
+        if let Some(cmd) = self.snapshot_project() {
+            self.queue_sh(cmd);
+            self.status = "No snapshot yet — took one. /rewind again to restore.".into();
+        }
     }
 
-    fn snapshot_project(&mut self) {
+    fn snapshot_project(&mut self) -> Option<String> {
         let home = std::env::var("HOME").unwrap_or_default();
         let src = self.cfg.project_dir.trim().to_string();
         if !rewind_allowed(&src, &home) {
-            return;
+            return None;
         }
         if !rewind_can_queue(self.cfg.host_on, self.running) {
             self.status = if !self.cfg.host_on {
@@ -3070,17 +3072,12 @@ impl Cabin {
             } else {
                 "Busy — wait, then rewind".into()
             };
-            return;
+            return None;
         }
         let id = uid("rw");
         let dest = rewind_dest(&config::config_dir().display().to_string(), &id);
         let _ = std::fs::create_dir_all(&dest);
-        let quoted_src = src.replace('\'', r#"'"'"'"#);
-        let quoted_dest = dest.replace('\'', r#"'"'"'"#);
-        if !self.run_cmds(vec![format!("cp -a '{quoted_src}/.' '{quoted_dest}'")]) {
-            let _ = std::fs::remove_dir_all(&dest);
-            return;
-        }
+        let cmd = rewind_copy_cmd(&src, &dest);
         self.rewind_rows.insert(
             0,
             RewindRecord {
@@ -3094,6 +3091,7 @@ impl Cabin {
         self.rewind_rows = keep_last_rewinds(&self.rewind_rows, 5);
         self.last_rewind_id = Some(id);
         let _ = crate::night::save_rewinds(&self.rewind_rows);
+        Some(cmd)
     }
 
     fn doctor_text(&self) -> String {
@@ -4674,7 +4672,11 @@ impl Cabin {
             }
             return blocked;
         }
-        self.snapshot_project();
+        if !gated.iter().any(|c| is_rewind_copy_cmd(c)) {
+            if let Some(snap) = self.snapshot_project() {
+                gated.insert(0, snap);
+            }
+        }
         self.last_host = gated.clone();
         self.host_halt.store(false, Ordering::SeqCst);
         self.running = true;
@@ -9161,11 +9163,17 @@ mod tests {
         let snap = src
             .split("fn snapshot_project")
             .nth(1)
-            .and_then(|s| s.split("fn ").nth(1))
+            .and_then(|s| s.split("fn doctor_text").next())
             .expect("snapshot_project");
         assert!(
-            src.contains("rewind_can_queue") && src.contains("rewind_snapshot_ready"),
-            "rewind must not restore an empty dest over the project: {snap}"
+            snap.contains("rewind_can_queue")
+                && snap.contains("rewind_copy_cmd")
+                && !snap.contains("run_cmds"),
+            "snapshot must record a dest and return the cp, not nest run_cmds: {snap}"
+        );
+        assert!(
+            src.contains("is_rewind_copy_cmd"),
+            "host jobs must prepend a snapshot instead of nesting run_cmds"
         );
     }
 

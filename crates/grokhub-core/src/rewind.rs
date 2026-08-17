@@ -70,6 +70,18 @@ pub fn rewind_snapshot_ready(path: &str) -> bool {
     }
 }
 
+pub fn rewind_copy_cmd(src: &str, dest: &str) -> String {
+    let src = src.replace('\'', r#"'"'"'"#);
+    let dest = dest.replace('\'', r#"'"'"'"#);
+    format!("cp -a '{src}/.' '{dest}'")
+}
+
+/// `run_cmds` already snapshots; a rewind `cp` must not start a nested host job.
+pub fn is_rewind_copy_cmd(cmd: &str) -> bool {
+    let t = cmd.trim();
+    t.contains("cp -a") && t.contains("/rewind/")
+}
+
 pub fn keep_last_rewinds(rows: &[RewindRecord], max: usize) -> Vec<RewindRecord> {
     let mut v = rows.to_vec();
     v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -147,5 +159,12 @@ mod tests {
         std::fs::write(empty.join("kept.txt"), "ok").unwrap();
         assert!(rewind_snapshot_ready(&empty.to_string_lossy()));
         let _ = std::fs::remove_dir_all(&empty);
+        let copy = rewind_copy_cmd("/proj", "/cfg/rewind/rw1");
+        assert!(is_rewind_copy_cmd(&copy));
+        assert!(!is_rewind_copy_cmd("uname -a"));
+        assert!(
+            !is_rewind_copy_cmd("cp -a /proj/. /tmp/other"),
+            "only cabin rewind dests count"
+        );
     }
 }
