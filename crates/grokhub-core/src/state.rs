@@ -309,6 +309,15 @@ pub enum CompleteError {
     Forbidden,
 }
 
+/// Drop `pending_hub_task` only when the inbox row is gone or completed.
+pub fn clear_pending_after_complete(err: Option<CompleteError>) -> bool {
+    match err {
+        None => true,
+        Some(CompleteError::NotFound) => true,
+        Some(CompleteError::Forbidden) => false,
+    }
+}
+
 pub fn state_for_disk(st: &HubState) -> HubState {
     let mut out = st.clone();
     out.last_frame = None;
@@ -493,6 +502,12 @@ mod tests {
             st.get_task(&done.id, &phone.id).unwrap().status,
             "done",
             "ack must not hide a completed result from GET /v1/results"
+        );
+        assert!(clear_pending_after_complete(None));
+        assert!(clear_pending_after_complete(Some(CompleteError::NotFound)));
+        assert!(
+            !clear_pending_after_complete(Some(CompleteError::Forbidden)),
+            "a forbidden complete must keep pending so the claimed row can still finish"
         );
         for i in 0..90 {
             st.enqueue_local("local", &format!("do {i}")).unwrap();
