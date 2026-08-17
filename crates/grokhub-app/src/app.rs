@@ -7214,21 +7214,29 @@ impl Cabin {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::cards::ghost_pill(ui, "Restore") {
-                        match config::restore_memory(&self.mem_name) {
-                            Ok(body) => {
-                                self.mem_body = body;
-                                self.status = format!("Restored {}.prev", self.mem_name);
+                        if self.scratch() {
+                            self.status = "Scratch — no memory writes".into();
+                        } else {
+                            match config::restore_memory(&self.mem_name) {
+                                Ok(body) => {
+                                    self.mem_body = body;
+                                    self.status = format!("Restored {}.prev", self.mem_name);
+                                }
+                                Err(e) => self.status = e,
                             }
-                            Err(e) => self.status = e,
                         }
                     }
                     if crate::cards::ghost_pill(ui, "Reflect") {
                         self.run_reflect();
                     }
                     if crate::cards::white_pill(ui, "Save") {
-                        match config::write_memory(&self.mem_name, &self.mem_body) {
-                            Ok(()) => self.status = format!("Wrote {}", self.mem_name),
-                            Err(e) => self.status = e,
+                        if self.scratch() {
+                            self.status = "Scratch — no memory writes".into();
+                        } else {
+                            match config::write_memory(&self.mem_name, &self.mem_body) {
+                                Ok(()) => self.status = format!("Wrote {}", self.mem_name),
+                                Err(e) => self.status = e,
+                            }
                         }
                     }
                 });
@@ -9602,6 +9610,15 @@ mod tests {
         assert!(
             forget.contains("self.scratch()") && forget.contains("no memory writes"),
             "/forget on Scratch must not wipe MEMORY.md: {forget}"
+        );
+        let memory_ui = src
+            .split("fn ui_memory")
+            .nth(1)
+            .and_then(|s| s.split("fn save_settings").next())
+            .expect("ui_memory");
+        assert!(
+            memory_ui.contains("self.scratch()") && memory_ui.contains("no memory writes"),
+            "Memory Save on Scratch must not write MEMORY.md: {memory_ui}"
         );
         let unbound = src
             .split("Slash::ProjectClear =>")
