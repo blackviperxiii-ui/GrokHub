@@ -167,10 +167,13 @@ pub fn poll_until_ready(device_code: &str, interval_s: u64) -> Result<XaiOAuthTo
                     .ok_or_else(|| "OAuth ready without tokens".to_string())?;
                 return Ok(enrich_tokens(t));
             }
-            PollStatus::SlowDown => wait = wait.saturating_add(2),
+            PollStatus::SlowDown | PollStatus::Pending => {
+                if let Some(next) = grokhub_core::next_oauth_poll_secs(wait, r.status) {
+                    wait = next;
+                }
+            }
             PollStatus::Expired => return Err(r.error.unwrap_or_else(|| "expired".into())),
             PollStatus::Denied => return Err(r.error.unwrap_or_else(|| "denied".into())),
-            PollStatus::Pending => {}
         }
     }
     Err("OAuth timed out".into())
