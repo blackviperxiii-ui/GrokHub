@@ -5435,12 +5435,15 @@ impl Cabin {
             match op {
                 ReplayOp::Reshoot => {
                     t.push_str("reshoot: screen changed, skip coordinate clicks\n");
-                    if let Ok(url) = capture_data_url() {
-                        if let Ok(mut st) = self.hub.lock() {
-                            st.store_frame(&url);
+                    let titles: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+                    if !lock_blocks_hands(&titles) {
+                        if let Ok(url) = capture_data_url() {
+                            if let Ok(mut st) = self.hub.lock() {
+                                st.store_frame(&url);
+                            }
+                            self.last_frame_url = Some(url);
+                            t.push_str("frame: captured\n");
                         }
-                        self.last_frame_url = Some(url);
-                        t.push_str("frame: captured\n");
                     }
                 }
                 ReplayOp::Op(op) => cmds.push(computer_cmd_line(&op)),
@@ -9651,6 +9654,14 @@ mod tests {
         assert!(
             replay.contains("self.running"),
             "recipe replay must report whether host actually started: {replay}"
+        );
+        let reshoot = replay
+            .split("ReplayOp::Reshoot")
+            .nth(1)
+            .expect("reshoot");
+        assert!(
+            reshoot.contains("lock_blocks_hands"),
+            "recipe reshoot must not capture a lock screen: {reshoot}"
         );
         let saved_replay = src
             .split("fn replay_saved_recipe")
