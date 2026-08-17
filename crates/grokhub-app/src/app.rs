@@ -9513,6 +9513,9 @@ fn eyes_frame_tex(ctx: &egui::Context, url: &str) -> Option<(TextureHandle, [usi
     if (buf.len() as u64) > IMAGE_FILE_CAP {
         return None;
     }
+    if !crate::desktop::image_pixels_ok_for_bytes(&buf) {
+        return None;
+    }
     let img = image::load_from_memory(&buf).ok()?.to_rgba8();
     let size = [img.width() as usize, img.height() as usize];
     let tex = ctx.load_texture(
@@ -11647,6 +11650,10 @@ mod tests {
         assert!(
             cap < decode,
             "Eyes last-frame paint must not decode a huge JPEG on the UI thread: {tex}"
+        );
+        assert!(
+            tex.contains("image_pixels_ok") || tex.contains("IMAGE_PIXEL_CAP"),
+            "Eyes last-frame paint must not decode a pixel bomb on the UI thread: {tex}"
         );
     }
 
