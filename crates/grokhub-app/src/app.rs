@@ -60,7 +60,7 @@ use grokhub_core::{
     visible_tree, ProjectKind, ProjectMenuAct,
     ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_text, load_hub_state, mark_automation_ran,
-    night_counts_run, night_unauth_should_skip,
+    night_check_may_fire, night_counts_run, night_unauth_should_skip,
     match_skill, mode_from_chip_value, model_for_mode, nav_from_chip_value,
     cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
     next_chat_image, next_goal_prompt, paint_connect_banner,
@@ -3368,7 +3368,9 @@ impl Cabin {
                     self.mark_auto_skipped(&id, now_ms);
                     self.status = format!("Night skipped {name} (check)");
                 } else if let Some(a) = self.automations.iter().find(|x| x.id == id).cloned() {
-                    self.fire_night(a, now_ms);
+                    if night_check_may_fire(self.running) {
+                        self.fire_night(a, now_ms);
+                    }
                 }
                 true
             }
@@ -9181,6 +9183,15 @@ mod tests {
             fire_night.contains("night_unauth_should_skip")
                 && fire_night.contains("mark_auto_skipped"),
             "missing OAuth must skip the night slot: {fire_night}"
+        );
+        let night_check = src
+            .split("fn poll_night_check")
+            .nth(1)
+            .and_then(|s| s.split("fn spawn_night_check").next())
+            .expect("poll_night_check");
+        assert!(
+            night_check.contains("night_check_may_fire"),
+            "a finished night check must not halt a live job: {night_check}"
         );
         let send = src
             .split("fn send_chat")

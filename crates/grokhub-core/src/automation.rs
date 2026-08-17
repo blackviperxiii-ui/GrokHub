@@ -177,6 +177,11 @@ pub fn night_unauth_should_skip(has_key: bool) -> bool {
     !has_key
 }
 
+/// A finished night check must not halt a live chat/update job.
+pub fn night_check_may_fire(running: bool) -> bool {
+    !running
+}
+
 /// `replay last` or `every day at 21, replay last` — night runs the saved recipe, not a chat hop.
 pub fn replay_automation_target(instructions: &str) -> Option<&str> {
     let t = instructions.trim();
@@ -398,6 +403,11 @@ mod tests {
             "no key must skip the night slot so tick_night stops re-firing"
         );
         assert!(!night_unauth_should_skip(true));
+        assert!(
+            !night_check_may_fire(true),
+            "a passing check must wait until the cabin is idle"
+        );
+        assert!(night_check_may_fire(false));
         assert_eq!(replay_automation_target("summarize the workboard"), None);
         let blocked = Automation {
             id: "n0".into(),
