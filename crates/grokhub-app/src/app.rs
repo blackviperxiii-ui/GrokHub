@@ -92,12 +92,15 @@ use grokhub_core::{
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
     clear_pending_after_complete, inbox_claim_ready,
-    should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
+    should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm,
+    should_trim_result_bodies, shortcut_help,
     user_asks_takeover, windshield_prompt,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
     build_review_digest, dedupe_suggestions, merge_suggestion_store, parse_suggest_lines,
+    parse_suggest_skill_patches, parse_trajectory_jsonl, summarize_trajectory, trajectory_jsonl_line,
+    trim_result_bodies, yesterday_ms, RESULT_TRIM_KEEP_HOPS,
     partition_suggestions, prune_live_suggestions, review_due,
     review_status_line, review_system_prompt, DigestLine, ReviewDigest, SuggestionStore,
     CABIN_GITHUB_TOOLS, REVIEW_NIGHT_HOUR,
@@ -3099,6 +3102,78 @@ impl Cabin {
         }
     }
 
+    fn apply_review_skill_patches(&mut self, raw: &str) {
+        let patches = parse_suggest_skill_patches(raw);
+        if patches.is_empty() {
+            return;
+        }
+        for p in patches {
+            let Some(existing) = self
+                .skill_list
+                .iter()
+                .find(|s| s.name.eq_ignore_ascii_case(&p.name))
+                .cloned()
+            else {
+                continue;
+            };
+            let proposed = SkillMd {
+                name: existing.name.clone(),
+                description: existing.description.clone(),
+                slash: existing.slash.clone(),
+                trigger: p.trigger,
+                instructions: p.instructions,
+                pitfalls: String::new(),
+                verify: String::new(),
+                runs: existing.runs,
+            };
+            let patched = patch_skill(&existing, &proposed);
+            let _ = skills::save_skill(&patched);
+        }
+        self.skill_list = skills::list_skills();
+    }
+
+    fn append_host_trajectory(&self, ok: bool, block: &str) {
+        let line = trajectory_jsonl_line(now_ms(), &self.last_host, ok, block);
+        let _ = crate::store::append_trajectory(&line);
+    }
+
+    fn trim_job_result_dumps(&mut self) {
+        let vis = self.visible_thread_id();
+        let origin = self
+            .chat_job_thread
+            .clone()
+            .unwrap_or_else(|| vis.clone());
+        let pairs: Vec<(String, String)> =
+            if self.chat_job_thread.as_deref().is_none_or(|id| id == vis) {
+                self.messages
+                    .iter()
+                    .map(|m| (m.role.clone(), m.content.clone()))
+                    .collect()
+            } else {
+                self.threads
+                    .iter()
+                    .find(|t| t.id == origin)
+                    .map(|t| t.messages.clone())
+                    .unwrap_or_default()
+            };
+        if !should_trim_result_bodies(estimate_messages(&pairs), CONTEXT_BUDGET_TOKENS) {
+            return;
+        }
+        let trimmed = trim_result_bodies(&pairs, RESULT_TRIM_KEEP_HOPS);
+        if self.chat_job_thread.as_deref().is_none_or(|id| id == vis) {
+            self.messages = trimmed
+                .iter()
+                .map(|(role, content)| Msg {
+                    role: role.clone(),
+                    content: content.clone(),
+                })
+                .collect();
+        }
+        if let Some(t) = self.threads.iter_mut().find(|t| t.id == origin) {
+            t.messages = trimmed;
+        }
+    }
+
     fn queue_sh(&mut self, cmd: String) {
         self.run_cmds(vec![cmd]);
     }
@@ -3668,6 +3743,11 @@ impl Cabin {
             host_receipts,
             chip_habits: top_habit_labels(&self.chip_memory, 6),
             thread_lines,
+            trajectory: summarize_trajectory(
+                &parse_trajectory_jsonl(&crate::store::read_trajectory()),
+                yesterday_ms(now_ms()),
+                12,
+            ),
         };
         build_review_digest(&input)
     }
@@ -3717,6 +3797,7 @@ impl Cabin {
     fn apply_review_reply(&mut self, raw: Result<String, String>) {
         match raw {
             Ok(text) => {
+                self.apply_review_skill_patches(&text);
                 let skill_names: Vec<String> =
                     self.skill_list.iter().map(|s| s.name.clone()).collect();
                 let auto_names: Vec<String> =
@@ -4363,6 +4444,9 @@ impl Cabin {
         if !sys.is_empty() {
             msgs.insert(0, ("system".into(), sys));
         }
+        if should_trim_result_bodies(estimate_messages(&msgs), CONTEXT_BUDGET_TOKENS) {
+            msgs = trim_result_bodies(&msgs, RESULT_TRIM_KEEP_HOPS);
+        }
         let user_img = if kick_consumes_attach(consume_attach) {
             self.attach_name = None;
             self.attach_url.take()
@@ -4817,6 +4901,8 @@ impl Cabin {
                     let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
                     self.commit_proposed_skill(proposed);
                 }
+                self.append_host_trajectory(ok, &block);
+                self.trim_job_result_dumps();
                 if !self.pending_connectors.is_empty() {
                     let origin = self.chat_job_thread.clone();
                     let (id, tool, args) = self.pending_connectors.remove(0);
@@ -4838,6 +4924,7 @@ impl Cabin {
                     format!("CONNECTOR_RESULT (facts only):\n{detail}"),
                 );
                 self.persist();
+                self.trim_job_result_dumps();
                 if !self.pending_connectors.is_empty() {
                     let origin = self.chat_job_thread.clone();
                     let (id, tool, args) = self.pending_connectors.remove(0);
@@ -10681,6 +10768,10 @@ mod tests {
                 && !host_done.contains("parse_computer_cmd_loose"),
             "a leftover type cargo in last_host must not be labeled COMPUTER_RESULT: {host_done}"
         );
+        assert!(
+            host_done.contains("append_host_trajectory") && host_done.contains("trim_job_result_dumps"),
+            "HostDone must record a trajectory line and trim old tool dumps: {host_done}"
+        );
         let run_cmds = src
             .split("fn run_cmds")
             .nth(1)
@@ -11016,6 +11107,10 @@ mod tests {
         assert!(
             apply.contains("prune_live_suggestions"),
             "a successful review must drop wired GitHub tiles already sitting in the store: {apply}"
+        );
+        assert!(
+            apply.contains("apply_review_skill_patches"),
+            "nightly review must patch existing skills from SUGGEST_SKILL_PATCH: {apply}"
         );
         assert!(src.contains("self.tick_review()"));
         assert!(
