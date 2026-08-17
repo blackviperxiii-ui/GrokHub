@@ -252,7 +252,8 @@ pub use project::{
 pub use redact::{forget_topic, is_plain_text, redact_secrets};
 pub use skill::{
     bump_skill_run, is_hard_run, match_skill, parse_skill_md, patch_skill, prefer_patch,
-    propose_skill_from_turn, render_skill_md, skill_dir_name, skill_follow_block, skill_safe,
+    propose_skill_from_turn, render_skill_md, skill_dir_name, skill_follow_block,
+    skill_use_in_chat_prompt, skill_safe,
     SkillMd,
 };
 pub use slash::{
