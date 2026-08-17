@@ -55,7 +55,7 @@ use grokhub_core::{
     hey_grok_route, hey_grok_starts_ptt, import_memory_file, merge_imported_memory, insight_pin, is_openclaw_workspace,
     add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
     host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
-    verify_ok_after_user_turn,
+    verify_ok_after_user_turn, VerifyResult,
     project_menu_acts, project_menu_label, rename_node, restore_bound_path, seed_from_bound,
     settle_project_path, should_seed_sidebar, stage_project, toggle_folder, upsert_bound,
     visible_tree, ProjectKind, ProjectMenuAct,
@@ -739,6 +739,7 @@ pub struct Cabin {
     kick_frame: Option<String>,
     kick_skip: bool,
     recipe_cap_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    verify_rx: Option<mpsc::Receiver<Option<VerifyResult>>>,
     #[allow(dead_code)]
     hotkeys: Option<GlobalHotKeyManager>,
     hotkey_hey: u32,
@@ -1037,6 +1038,7 @@ impl Cabin {
             kick_frame: None,
             kick_skip: false,
             recipe_cap_rx: None,
+            verify_rx: None,
             hotkeys: None,
             hotkey_hey: 0,
             hotkey_halt: 0,
@@ -1305,6 +1307,7 @@ impl Cabin {
         self.kick_frame = None;
         self.kick_skip = false;
         self.recipe_cap_rx = None;
+        self.verify_rx = None;
         self.plan_pending = None;
         self.agents.clear();
         self.active_skill_follow = None;
@@ -4396,6 +4399,15 @@ impl Cabin {
                 CabinFrame::Skip => {}
             }
         }
+        if self.verify_rx.is_some() {
+            self.pending_kick = Some(consume_attach);
+            if self.chat_job_thread.is_none() {
+                self.chat_job_thread = Some(self.visible_thread_id());
+            }
+            self.running = true;
+            self.status = "Verifying…".into();
+            return;
+        }
         self.running = true;
         self.status = "Thinking…".into();
         if self.chat_job_thread.is_none() {
@@ -5645,13 +5657,33 @@ impl Cabin {
     }
 
     fn run_skill_verify(&mut self) {
-        if self.skill_name.is_empty() {
+        if self.skill_name.is_empty() || self.verify_rx.is_some() {
             return;
         }
+        let name = self.skill_name.clone();
         let cwd = host_working_dir(&self.cfg.project_dir);
-        let Some(v) = skills::run_verify(&self.skill_name, cwd.as_deref()) else {
+        let (tx, rx) = mpsc::channel();
+        self.verify_rx = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send(skills::run_verify(&name, cwd.as_deref()));
+        });
+    }
+
+    fn poll_verify(&mut self) {
+        let Some(rx) = self.verify_rx.take() else {
             return;
         };
+        match rx.try_recv() {
+            Ok(Some(v)) => self.apply_verify_result(v),
+            Ok(None) => {}
+            Err(mpsc::TryRecvError::Empty) => {
+                self.verify_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    fn apply_verify_result(&mut self, v: VerifyResult) {
         self.verify_ok_turn = v.ok;
         self.verify_chip = if v.ok {
             "verify pass".into()
@@ -6230,6 +6262,7 @@ impl eframe::App for Cabin {
         self.poll_persist();
         self.poll_eyes_cap();
         self.poll_recipe_cap();
+        self.poll_verify();
         self.poll_pending_kick();
         self.live_room();
         self.tick_heartbeat();
@@ -6316,7 +6349,8 @@ impl eframe::App for Cabin {
                 || self.review_busy
                 || self.pending_kick.is_some()
                 || self.kick_cap_rx.is_some()
-                || self.recipe_cap_rx.is_some(),
+                || self.recipe_cap_rx.is_some()
+                || self.verify_rx.is_some(),
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -10339,6 +10373,23 @@ mod tests {
         assert!(
             verify.contains("host_working_dir") && verify.contains("run_verify"),
             "skill verify must run in the bound project, not the cabin cwd: {verify}"
+        );
+        let spawn = verify
+            .find("thread::spawn")
+            .expect("skill verify must leave the UI thread");
+        let run = verify.find("run_verify").expect("run_verify");
+        assert!(
+            spawn < run,
+            "HostDone verify must not block the cabin for 12s: {verify}"
+        );
+        let kick = src
+            .split("fn kick_model(")
+            .nth(1)
+            .and_then(|s| s.split("fn upsert_stream_assistant").next())
+            .expect("kick_model");
+        assert!(
+            kick.contains("verify_rx"),
+            "kick_model must wait for off-thread verify before the follow-up turn: {kick}"
         );
         let reflect = src
             .split("fn run_reflect")
