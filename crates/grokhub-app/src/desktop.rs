@@ -1,7 +1,7 @@
 use grokhub_core::{
     act_window_search_bin, capture_kinds, clip_image_args, computer_cmd_line, computer_drive_for, diagnose_hands,
     empty_hands_steps_error, ffmpeg_webcam_args, ffmpeg_x11_args, filter_atspi_rows, frame_is_blank,
-    gnome_shell_screenshot_args, grim_capture_args, hands_backend_name, hands_blocked_by_lock,
+    frame_origin_for, gnome_shell_screenshot_args, grim_capture_args, hands_backend_name, hands_blocked_by_lock,
     hands_chip_label, hands_chip_live, hands_down_receipt, image_to_global, infer_wayland_display,
     jpeg_data_url, layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var,
     parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
@@ -174,10 +174,7 @@ fn remember_from_jpeg(bytes: &[u8], outputs: &[DisplayOutput], grim_name: Option
         return;
     };
     let (w, h) = img.dimensions();
-    let origin = grim_name
-        .and_then(|n| outputs.iter().find(|o| o.name == n))
-        .map(|o| (o.x, o.y))
-        .unwrap_or((0, 0));
+    let origin = frame_origin_for(w, h, outputs, grim_name);
     remember_desk_frame(w, h, origin.0, origin.1, outputs.to_vec());
 }
 
@@ -668,7 +665,7 @@ fn run_capture_kind(
     kind: CaptureKind,
     dest: &Path,
     grim_output: Option<&str>,
-) -> Result<PathBuf, String> {
+) -> Result<(PathBuf, Option<String>), String> {
     let jpg = dest.to_path_buf();
     let png = dest.with_extension("png");
     match kind {
@@ -678,45 +675,45 @@ fn run_capture_kind(
                 let args = grim_capture_args(&p, Some(name));
                 let refs: Vec<&str> = args.iter().map(String::as_str).collect();
                 if run_ok("grim", &refs).is_ok() {
-                    return Ok(png);
+                    return Ok((png, Some(name.to_string())));
                 }
             }
             let args = grim_capture_args(&p, None);
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             run_ok("grim", &refs)?;
-            Ok(png)
+            Ok((png, None))
         }
         CaptureKind::GnomeScreenshot => {
             let p = png.to_string_lossy().to_string();
             run_ok("gnome-screenshot", &["-f", &p])?;
-            Ok(png)
+            Ok((png, None))
         }
         CaptureKind::Spectacle => {
             let p = png.to_string_lossy().to_string();
             run_ok("spectacle", &["-b", "-n", "-o", &p])?;
-            Ok(png)
+            Ok((png, None))
         }
         CaptureKind::GnomeShell => {
             let p = png.to_string_lossy().to_string();
             let args = gnome_shell_screenshot_args(&p);
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             run_ok("gdbus", &refs)?;
-            Ok(png)
+            Ok((png, None))
         }
         CaptureKind::Maim => {
             let p = png.to_string_lossy().to_string();
             run_ok("maim", &[&p])?;
-            Ok(png)
+            Ok((png, None))
         }
         CaptureKind::Scrot => {
             let p = jpg.to_string_lossy().to_string();
             run_ok("scrot", &["-o", &p])?;
-            Ok(jpg)
+            Ok((jpg, None))
         }
         CaptureKind::Import => {
             let p = png.to_string_lossy().to_string();
             run_ok("import", &["-window", "root", &p])?;
-            Ok(png)
+            Ok((png, None))
         }
         CaptureKind::FfmpegX11 => {
             let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
@@ -725,7 +722,7 @@ fn run_capture_kind(
             let args = ffmpeg_x11_args(&display, w, h, &p);
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             run_ok("ffmpeg", &refs)?;
-            Ok(jpg)
+            Ok((jpg, None))
         }
     }
 }
@@ -788,7 +785,7 @@ pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
     let mut last = "no desktop frame".to_string();
     for kind in plan {
         match run_capture_kind(kind, path, grim_out.as_deref()) {
-            Ok(written) => {
+            Ok((written, captured_output)) => {
                 let jpeg = if written
                     .extension()
                     .and_then(|s| s.to_str())
@@ -824,7 +821,7 @@ pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
                     last = format!("{kind:?} was a black frame");
                     continue;
                 }
-                remember_from_jpeg(&jpeg, &outputs, grim_out.as_deref());
+                remember_from_jpeg(&jpeg, &outputs, captured_output.as_deref());
                 let _ = std::fs::write(path, &jpeg);
                 return Ok(jpeg);
             }

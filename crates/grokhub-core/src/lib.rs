@@ -109,7 +109,7 @@ pub use chips::{
 pub use doctor::{doctor_extras, doctor_hands_line, doctor_lines, doctor_ok, DoctorLine};
 pub use capture::{
     capture_kinds, ffmpeg_webcam_args, ffmpeg_x11_args, frame_is_blank, gnome_shell_screenshot_args,
-    grim_capture_args, image_to_global, infer_wayland_display, layout_prompt, luma_mean_var,
+    frame_origin_for, grim_capture_args, image_to_global, infer_wayland_display, layout_prompt, luma_mean_var,
     output_containing, parse_xdpy_size, parse_xrandr_outputs, parse_xrandr_size, pick_capture_output,
     session_is_wayland, virtual_desktop_size, windshield_frame_geom, x11_grab_size, CaptureKind,
     DisplayOutput,
