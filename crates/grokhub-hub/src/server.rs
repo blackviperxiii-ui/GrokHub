@@ -113,12 +113,18 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     }
 
     if method == Method::Get && path == "/v1/snapshot" {
-        return send_json(req, 200, json!({ "ok": true, "snapshot": st.snapshot }));
+        let snapshot = st.snapshot.clone();
+        drop(st);
+        return send_json(req, 200, json!({ "ok": true, "snapshot": snapshot }));
     }
     if method == Method::Put && path == "/v1/snapshot" {
+        drop(st);
         let body = read_json(&mut req);
         let snap = body.get("snapshot").cloned().unwrap_or(body);
-        return match st.put_snapshot(snap) {
+        let mut st = state.lock().map_err(|_| ())?;
+        let result = st.put_snapshot(snap);
+        drop(st);
+        return match result {
             Ok(()) => send_json(req, 200, json!({ "ok": true })),
             Err(e) => send_json(req, 400, json!({ "ok": false, "error": e })),
         };
@@ -227,17 +233,23 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     }
 
     if method == Method::Post && path == "/v1/frame" {
+        drop(st);
         let body = read_json(&mut req);
         let url = body
             .get("dataUrl")
             .or_else(|| body.get("jpeg"))
             .and_then(|v| v.as_str())
-            .unwrap_or("");
-        st.store_frame(url);
+            .unwrap_or("")
+            .to_string();
+        let mut st = state.lock().map_err(|_| ())?;
+        st.store_frame(&url);
+        drop(st);
         return send_json(req, 200, json!({ "ok": true }));
     }
     if method == Method::Get && path == "/v1/frame" {
-        return send_json(req, 200, json!({ "ok": true, "frame": st.last_frame }));
+        let frame = st.last_frame.clone();
+        drop(st);
+        return send_json(req, 200, json!({ "ok": true, "frame": frame }));
     }
     if method == Method::Get && path == "/v1/frame.jpg" {
         let since = query
@@ -245,7 +257,9 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             .find_map(|p| p.strip_prefix("since="))
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
-        match get_jpeg(st.last_frame.as_ref(), since) {
+        let frame = st.last_frame.clone();
+        drop(st);
+        match get_jpeg(frame.as_ref(), since) {
             FrameGet::Missing => {
                 return send_json(req, 404, json!({ "ok": false, "error": "no frame" }));
             }
@@ -668,5 +682,63 @@ mod tests {
         );
         assert_eq!(st_ok, 200, "{}", String::from_utf8_lossy(&body));
         assert!(String::from_utf8_lossy(&body).contains("stay kind"));
+    }
+
+    #[test]
+    fn snapshot_and_frame_drop_hub_lock_before_io() {
+        let src = include_str!("server.rs");
+        let get_snap = src
+            .split("Method::Get && path == \"/v1/snapshot\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Put && path == \"/v1/snapshot\"").next())
+            .expect("GET /v1/snapshot");
+        assert!(
+            get_snap.contains("drop(st)"),
+            "GET snapshot must release the hub lock before send_json or persist freezes: {get_snap}"
+        );
+        assert!(
+            get_snap.contains("snapshot.clone()"),
+            "GET snapshot must clone before drop: {get_snap}"
+        );
+        let put_snap = src
+            .split("Method::Put && path == \"/v1/snapshot\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Post && path == \"/v1/task\"").next())
+            .expect("PUT /v1/snapshot");
+        let drop_at = put_snap.find("drop(st)").expect("PUT snapshot must drop before read_json");
+        let read_at = put_snap.find("read_json").expect("PUT snapshot reads a body");
+        assert!(
+            drop_at < read_at,
+            "PUT snapshot must not read the body while holding the hub lock: {put_snap}"
+        );
+        let get_frame = src
+            .split("Method::Get && path == \"/v1/frame\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Get && path == \"/v1/frame.jpg\"").next())
+            .expect("GET /v1/frame");
+        assert!(
+            get_frame.contains("drop(st)"),
+            "GET frame must release the hub lock before send_json: {get_frame}"
+        );
+        let get_jpg = src
+            .split("Method::Get && path == \"/v1/frame.jpg\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Post && path == \"/v1/voice/client-secret\"").next())
+            .expect("GET /v1/frame.jpg");
+        assert!(
+            get_jpg.contains("drop(st)"),
+            "GET frame.jpg must release the hub lock before send_raw: {get_jpg}"
+        );
+        let post_frame = src
+            .split("Method::Post && path == \"/v1/frame\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Get && path == \"/v1/frame\"").next())
+            .expect("POST /v1/frame");
+        let drop_at = post_frame.find("drop(st)").expect("POST frame must drop before read_json");
+        let read_at = post_frame.find("read_json").expect("POST frame reads a body");
+        assert!(
+            drop_at < read_at,
+            "POST frame must not read a JPEG while holding the hub lock: {post_frame}"
+        );
     }
 }
