@@ -1162,7 +1162,9 @@ pub fn clipboard_image() -> Option<PathBuf> {
         if !which(bin) {
             continue;
         }
-        if let Ok(o) = Command::new(bin).args(args).output() {
+        let mut cmd = Command::new(bin);
+        cmd.args(args);
+        if let Some(o) = run_limited(cmd, DESK_LIST_TIMEOUT) {
             if !o.status.success() || o.stdout.len() < 24 {
                 continue;
             }
@@ -1203,7 +1205,9 @@ pub fn clipboard_once() -> Option<String> {
         ("xclip", &["-o", "-selection", "clipboard"]),
         ("xsel", &["-ob"]),
     ] {
-        if let Ok(o) = Command::new(bin).args(args).output() {
+        let mut cmd = Command::new(bin);
+        cmd.args(args);
+        if let Some(o) = run_limited(cmd, DESK_LIST_TIMEOUT) {
             if o.status.success() {
                 let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
                 if !s.is_empty() {
@@ -1477,6 +1481,24 @@ mod tests {
         assert!(
             py.contains("run_limited(") && !py.contains(".status()"),
             "pyatspi import must time out: {py}"
+        );
+        let clip = src
+            .split("pub fn clipboard_once(")
+            .nth(1)
+            .and_then(|s| s.split("\n#[cfg(test)]").next())
+            .expect("clipboard_once");
+        assert!(
+            clip.contains("run_limited(") && !clip.contains(".output()"),
+            "clipboard paste must time out: {clip}"
+        );
+        let img = src
+            .split("pub fn clipboard_image(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn load_image_data_url").next())
+            .expect("clipboard_image");
+        assert!(
+            img.contains("run_limited(") && !img.contains(".output()"),
+            "clipboard image paste must time out: {img}"
         );
     }
 }
