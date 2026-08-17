@@ -7222,6 +7222,7 @@ impl Cabin {
                     if let Ok(mut s) = self.hub.lock() {
                         s.rotate_pair();
                     }
+                    self.persist();
                 }
             } else if crate::cards::empty_prompt_tile(
                 ui,
@@ -9790,6 +9791,16 @@ mod tests {
         assert!(
             devices.contains("pair_code_is_live") && devices.contains("devices_shows_pair_code"),
             "Devices must hide a dead pair code and any code while the hub is off: {devices}"
+        );
+        let new_code = devices
+            .split("New code")
+            .nth(1)
+            .and_then(|s| s.split("empty_prompt_tile").next())
+            .expect("new code");
+        let rotated = new_code.find("rotate_pair").expect("rotate");
+        assert!(
+            new_code[rotated..].contains("self.persist()"),
+            "New code must persist the rotated pair before a restart: {new_code}"
         );
         let clear = src
             .split("Slash::Clear =>")
