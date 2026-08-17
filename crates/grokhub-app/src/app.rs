@@ -3682,9 +3682,13 @@ impl Cabin {
             self.status = "Connect Grok OAuth in Settings".into();
             return;
         }
-        self.halt_in_flight();
+        if self.running {
+            self.halt_in_flight();
+        }
         self.running = true;
-        self.chat_job_thread = Some(self.visible_thread_id());
+        if self.chat_job_thread.is_none() {
+            self.chat_job_thread = Some(self.visible_thread_id());
+        }
         self.status = "Consult…".into();
         let key = self.bearer();
         let model = model_for_mode("fast").to_string();
@@ -9094,6 +9098,19 @@ mod tests {
         assert!(
             host_done.contains("pending_connectors"),
             "queued connectors must run after host before the next kick_model"
+        );
+        let consult = src
+            .split("fn run_consult")
+            .nth(1)
+            .and_then(|s| s.split("fn open_palette").next())
+            .expect("run_consult");
+        assert!(
+            consult.contains("if self.running") && consult.contains("halt_in_flight"),
+            "consult must not drop a finished parent reply: {consult}"
+        );
+        assert!(
+            consult.contains("if self.chat_job_thread.is_none()"),
+            "consult must stay on the origin thread: {consult}"
         );
     }
 
