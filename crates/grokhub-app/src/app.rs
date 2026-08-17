@@ -1498,6 +1498,7 @@ impl Cabin {
     }
 
     fn push_bound_msg(&mut self, role: &str, content: String) {
+        let content = take_ui_text(content, IMAGE_FILE_CAP);
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.as_deref();
         if job.is_none() || job == Some(vis.as_str()) {
@@ -11407,6 +11408,10 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn apply_live_assistant").next())
             .expect("push_bound_msg");
+        assert!(
+            push.contains("IMAGE_FILE_CAP") || push.contains("take_ui_text"),
+            "host/consult receipts must not land a huge body in the transcript: {push}"
+        );
         assert!(
             push.contains("accessed_ms"),
             "background job writes must bump accessed_ms or /sync LWW drops the new messages: {push}"
