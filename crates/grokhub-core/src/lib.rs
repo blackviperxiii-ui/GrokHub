@@ -110,11 +110,13 @@ pub use chips::{
 };
 pub use doctor::{doctor_extras, doctor_hands_line, doctor_lines, doctor_ok, DoctorLine};
 pub use capture::{
-    capture_kinds, ffmpeg_webcam_args, ffmpeg_x11_args, frame_is_blank, gnome_shell_screenshot_args,
-    frame_origin_for, grim_capture_args, image_to_global, infer_wayland_display, layout_prompt, luma_mean_var,
-    output_containing, parse_xdpy_size, parse_xrandr_outputs, parse_xrandr_size, pick_capture_output,
-    session_is_wayland, virtual_desktop_size, windshield_frame_geom, x11_grab_size, CaptureKind,
-    DisplayOutput,
+    capture_kinds, clamp_to_desktop, cursor_on_output, ffmpeg_webcam_args, ffmpeg_x11_args,
+    format_cursor_line, format_cursor_line_miss, frame_is_blank, gnome_shell_screenshot_args,
+    frame_origin_for, pointer_slop_miss,
+    grim_capture_args, image_to_global, infer_wayland_display, layout_prompt, luma_mean_var,
+    monitor_local_to_global, output_containing, parse_xdpy_size, parse_xrandr_outputs,
+    parse_xrandr_size, pick_capture_output, session_is_wayland, virtual_desktop_size,
+    windshield_frame_geom, x11_grab_size, CaptureKind, DisplayOutput,
 };
 pub use frame::{encode_b64, frame_bytes, jpeg_data_url, FrameGet, PresenceFrame, FRAME_CAP};
 pub use host_plan::{
@@ -159,7 +161,8 @@ pub use recipe::{
     empty_hands_steps_error, extract_computer_ops, hands_backend_name,
     hands_blocked_by_lock, hands_protocol, lock_blocks_hands, pointer_op_blocked_on_lock,
     needs_reshoot, parse_computer_cmd_loose, parse_computer_op, parse_recipe, parse_screen,
-    pick_hands_backend, recipe_from_cmds, recipe_from_json, recipe_to_json, replay_ops,
+    pick_hands_backend, recipe_from_cmds, recipe_from_json, recipe_to_json, relative_move_steps,
+    replay_ops,
     screen_from_extents, see_drive_attach, should_attach_hands_frame, user_asks_cabin_eyes,
     user_asks_desktop_hands, user_asks_gui_help, user_asks_guide_only, user_asks_takeover,
     hands_step_label, ComputerDrive, ComputerOp, HandsBackend, Recipe, RecipeDoc, ReplayOp,
