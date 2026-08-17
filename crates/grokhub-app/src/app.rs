@@ -7292,6 +7292,7 @@ impl Cabin {
             Ok(()) => self.status = "Saved".into(),
             Err(e) => self.status = e,
         }
+        self.sync_hub_voice();
     }
 
     fn ui_settings(&mut self, ctx: &egui::Context) {
@@ -9662,6 +9663,15 @@ mod tests {
         assert!(
             memory_ui.contains("self.scratch()") && memory_ui.contains("no memory writes"),
             "Memory Save on Scratch must not write MEMORY.md: {memory_ui}"
+        );
+        let settings_save = src
+            .split("fn save_settings")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_settings").next())
+            .expect("save_settings");
+        assert!(
+            settings_save.contains("sync_hub_voice"),
+            "Settings Save must refresh the hub voice mint key: {settings_save}"
         );
         let unbound = src
             .split("Slash::ProjectClear =>")
