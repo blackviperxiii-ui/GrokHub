@@ -4312,7 +4312,6 @@ impl Cabin {
                 }
                 let mut host_needs_kick = false;
                 if let Some(plan) = plan_from_text(&text) {
-                    self.chat_job_thread = origin.clone();
                     self.pending_update = false;
                     if self.cfg.yolo {
                         let (run, hold) = yolo_plan_split(
@@ -4321,6 +4320,7 @@ impl Cabin {
                             &self.cfg.project_dir,
                         );
                         if !run.is_empty() {
+                            self.chat_job_thread = origin.clone();
                             host_needs_kick = self.run_cmds(run);
                         }
                         if !hold.is_empty() {
@@ -4330,7 +4330,11 @@ impl Cabin {
                             }
                         }
                     } else {
-                        host_needs_kick = self.run_cmds(approved_cmds(&plan));
+                        let cmds = approved_cmds(&plan);
+                        if !cmds.is_empty() {
+                            self.chat_job_thread = origin.clone();
+                            host_needs_kick = self.run_cmds(cmds);
+                        }
                     }
                 }
                 for c in extract_connector_cmds(&text) {
@@ -9346,6 +9350,17 @@ mod tests {
         assert!(
             run_cmds.contains("mint_host_halt") && !run_cmds.contains("host_halt.store(false"),
             "a new host job must not clear the previous job's halt flag: {run_cmds}"
+        );
+        let plan = src
+            .split("if let Some(plan) = plan_from_text")
+            .nth(1)
+            .and_then(|s| s.split("for c in extract_connector_cmds").next())
+            .expect("plan_from_text");
+        let restore = plan.find("chat_job_thread = origin");
+        let split = plan.find("yolo_plan_split").expect("yolo_plan_split");
+        assert!(
+            restore.is_none_or(|r| r > split),
+            "a held-only YOLO plan must not park chat_job_thread on the old tab: {plan}"
         );
     }
 
