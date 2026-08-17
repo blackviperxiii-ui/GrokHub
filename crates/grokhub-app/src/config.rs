@@ -196,6 +196,16 @@ pub fn read_memory(name: &str) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }
 
+pub fn memory_updated_at(name: &str) -> u64 {
+    let path = memory_dir().join(name);
+    fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 pub fn write_memory(name: &str, body: &str) -> Result<(), String> {
     if !is_plain_text(body) {
         return Err("Secrets never in markdown".into());
@@ -297,6 +307,10 @@ mod tests {
         assert_eq!(loaded.source_dir, "/tmp/Grok-Hub");
         write_memory("SOUL.md", "be useful").expect("mem");
         assert_eq!(read_memory("SOUL.md"), "be useful");
+        assert!(
+            memory_updated_at("SOUL.md") > 0,
+            "sync LWW needs a real file time, not now_ms"
+        );
         append_memory("MEMORY.md", "prefer nvim").expect("append");
         assert!(read_memory("MEMORY.md").contains("prefer nvim"));
         save_chat(&[("user".into(), "hi".into())]).expect("chat");

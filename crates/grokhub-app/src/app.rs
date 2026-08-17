@@ -3252,7 +3252,7 @@ impl Cabin {
             .map(|n| HubMemoryFile {
                 name: n.into(),
                 content: config::read_memory(n),
-                updated_at: now_ms(),
+                updated_at: config::memory_updated_at(n),
             })
             .collect();
         let threads = self
@@ -9730,6 +9730,15 @@ mod tests {
         assert!(
             thread_rows.contains("accessed_ms") && !thread_rows.contains("now_ms()"),
             "/sync must not stamp every thread now or local stale data wins LWW: {thread_rows}"
+        );
+        let mem_rows = sync
+            .split("let mem = ")
+            .nth(1)
+            .and_then(|s| s.split("let threads = self").next())
+            .expect("sync mem");
+        assert!(
+            mem_rows.contains("memory_updated_at") && !mem_rows.contains("now_ms()"),
+            "/sync must not stamp MEMORY.md now or stale local wins LWW: {mem_rows}"
         );
         let send = src
             .split("fn dispatch_send")
