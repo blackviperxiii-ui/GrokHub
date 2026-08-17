@@ -419,7 +419,7 @@ fn pointer_drive(op: &ComputerOp) -> ComputerDrive {
     )
 }
 
-fn lock_titles() -> Vec<String> {
+pub fn lock_titles() -> Vec<String> {
     let atspi = Command::new("python3")
         .args(["-c", ATSPI_PY])
         .output()

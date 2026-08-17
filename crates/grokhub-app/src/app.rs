@@ -8,7 +8,7 @@ use crate::titlebar::{
 use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin, load_image_data_url,
-    pick_file, play_audio, prepare_windshield, read_text_capped, record_once,
+    lock_titles, pick_file, play_audio, prepare_windshield, read_text_capped, record_once,
     run_computer_op_cancel, transcribe_local,
 };
 use crate::host::{run_host, run_host_stream};
@@ -3986,6 +3986,10 @@ impl Cabin {
             .find(|n| !n.is_empty() && *n != "cursor")
             .unwrap_or("")
             .to_string();
+        let lock = lock_titles();
+        if lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
+            return;
+        }
         if let Ok(url) = capture_data_url() {
             if should_send_screenshot(&self.last_window_title, "") {
                 if let Ok(mut st) = self.hub.lock() {
@@ -4717,7 +4721,10 @@ impl Cabin {
                     self.hands_attach = true;
                     let rows = collect_rows();
                     let titles: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-                    if !lock_blocks_hands(&titles) {
+                    let lock = lock_titles();
+                    if !lock_blocks_hands(&titles)
+                        && !lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+                    {
                         match capture_data_url() {
                             Ok(url) => {
                                 if let Ok(mut st) = self.hub.lock() {
@@ -5152,7 +5159,10 @@ impl Cabin {
             .find(|n| !n.is_empty() && *n != "cursor")
             .unwrap_or("")
             .to_string();
-        if !should_send_screenshot(&self.last_window_title, "") {
+        let lock = lock_titles();
+        if lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+            || !should_send_screenshot(&self.last_window_title, "")
+        {
             self.status = "eyes: skipped lock/password frame".into();
             return None;
         }
@@ -5448,7 +5458,10 @@ impl Cabin {
                 ReplayOp::Reshoot => {
                     t.push_str("reshoot: screen changed, skip coordinate clicks\n");
                     let titles: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-                    if !lock_blocks_hands(&titles) {
+                    let lock = lock_titles();
+                    if !lock_blocks_hands(&titles)
+                        && !lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+                    {
                         if let Ok(url) = capture_data_url() {
                             if let Ok(mut st) = self.hub.lock() {
                                 st.store_frame(&url);
@@ -5502,7 +5515,10 @@ impl Cabin {
                 .find(|n| !n.is_empty() && *n != "cursor")
                 .unwrap_or("")
                 .to_string();
-            if !should_send_screenshot(&self.last_window_title, "") {
+            let lock = lock_titles();
+            if lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+                || !should_send_screenshot(&self.last_window_title, "")
+            {
                 frame_note = Some("frame: skipped lock/password\n".into());
                 false
             } else {
@@ -9723,6 +9739,10 @@ mod tests {
             reshoot.contains("lock_blocks_hands"),
             "recipe reshoot must not capture a lock screen: {reshoot}"
         );
+        assert!(
+            reshoot.contains("lock_titles"),
+            "recipe reshoot must see lock windows that collect_rows drops: {reshoot}"
+        );
         let saved_replay = src
             .split("fn replay_saved_recipe")
             .nth(1)
@@ -9886,6 +9906,10 @@ mod tests {
             pushed < saved && saved < recipe,
             "HOST_RESULT must hit disk before recipe/skill side effects: {host_done}"
         );
+        assert!(
+            host_done.contains("lock_titles"),
+            "HostDone capture must see lock windows that collect_rows drops: {host_done}"
+        );
         let import = src
             .split("fn import_openclaw")
             .nth(1)
@@ -9944,6 +9968,15 @@ mod tests {
             cap < glass,
             "Windshield frame: must come from this-turn capture, not last JPEG: {kick}"
         );
+        let cap_fn = src
+            .split("fn capture_cabin_frame_this_turn")
+            .nth(1)
+            .and_then(|s| s.split("fn apply_job_fail").next())
+            .expect("capture_cabin_frame_this_turn");
+        assert!(
+            cap_fn.contains("lock_titles"),
+            "chat windshield capture must see lock windows that collect_rows drops: {cap_fn}"
+        );
         let soul = kick.find("read_memory(\"SOUL.md\")").expect("soul prompt");
         assert!(
             kick[..soul].contains("write_memory")
@@ -9994,6 +10027,10 @@ mod tests {
                 || eyes[..store].contains("lock_blocks_hands"),
             "Eyes Scan must not put a lock-screen frame on the hub: {eyes}"
         );
+        assert!(
+            eyes[..store].contains("lock_titles"),
+            "Eyes Scan must see lock windows that collect_rows drops: {eyes}"
+        );
         let live = src
             .split("fn live_room")
             .nth(1)
@@ -10004,6 +10041,10 @@ mod tests {
         assert!(
             live.contains("collect_rows") && title < gate,
             "presence stream must refresh the foreground title before sending a frame: {live}"
+        );
+        assert!(
+            live.contains("lock_titles"),
+            "presence stream must see lock windows that collect_rows drops: {live}"
         );
         let devices = src
             .split("fn ui_devices")
