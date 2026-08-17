@@ -90,7 +90,7 @@ pub fn plan_room(utterance: &str, home: &str) -> RoomPlan {
         l.contains("doc") && !(l.contains("flash") || l.contains("lab") || l.contains("firmware") || l.contains("code"))
     };
     let workspace = if docs_only { "docs".into() } else { slug.clone() };
-    let root = format!("{}/GrokHub-Work/{slug}", home.trim_end_matches('/'));
+    let root = format!("{}/GrokHub-Work/{workspace}", home.trim_end_matches('/'));
     let quoted = sh_single(&root);
     let script = format!(
         "mkdir -p {quoted} && command -v hyprctl >/dev/null && hyprctl dispatch workspace name:{workspace} || true && command -v qdbus >/dev/null && qdbus org.kde.KWin /KWin org.kde.KWin.showDesktop false || true"
@@ -269,6 +269,12 @@ mod tests {
         assert_eq!(g.last_fail.as_deref(), Some("verify fail"));
         let r = plan_room("stage a docs desk", "/home/jeremy");
         assert_eq!(r.workspace, "docs");
+        assert_eq!(r.project_rel, "GrokHub-Work/docs");
+        assert!(
+            r.host_script.contains("'/home/jeremy/GrokHub-Work/docs'"),
+            "bind path and mkdir must be the same folder: {}",
+            r.host_script
+        );
         assert!(r.host_script.contains("mkdir -p"));
         assert_eq!(passenger_label(4), "Night / Dispatch");
         assert_eq!(on_wheel_grab(true), (true, true));
