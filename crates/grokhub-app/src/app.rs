@@ -3084,6 +3084,7 @@ impl Cabin {
         if let Ok(mut st) = self.hub.lock() {
             st.inhabit = Some(bundle);
         }
+        self.persist();
         self.status = format!("Inhabit staged for {peer}");
         self.nav = Nav::Devices;
     }
@@ -9848,6 +9849,16 @@ mod tests {
         assert!(
             send[queued..].contains("self.persist()"),
             "/send must persist a queued hub task before leaving Devices: {send}"
+        );
+        let inhabit = src
+            .split("fn queue_inhabit")
+            .nth(1)
+            .and_then(|s| s.split("fn rewind_project").next())
+            .expect("queue_inhabit");
+        let staged = inhabit.find("inhabit = Some").expect("stage inhabit");
+        assert!(
+            inhabit[staged..].contains("self.persist()"),
+            "/inhabit must persist the staged bundle before leaving Devices: {inhabit}"
         );
         let dream = src
             .split("fn run_dream")
