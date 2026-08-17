@@ -110,11 +110,11 @@ pub use chips::{
 };
 pub use doctor::{doctor_extras, doctor_hands_line, doctor_lines, doctor_ok, DoctorLine};
 pub use capture::{
-    capture_kinds, clamp_to_desktop, cursor_on_output, ffmpeg_webcam_args, ffmpeg_x11_args,
-    format_cursor_line, format_cursor_line_miss, frame_is_blank, gnome_shell_screenshot_args,
-    frame_origin_for, pointer_slop_miss,
-    grim_capture_args, image_to_global, infer_wayland_display, layout_prompt, luma_mean_var,
-    monitor_local_to_global, output_containing, parse_xdpy_size, parse_xrandr_outputs,
+    capture_kinds, clamp_to_desktop, clamp_to_output, cursor_on_output, ffmpeg_webcam_args,
+    ffmpeg_x11_args, format_cursor_line, format_cursor_line_miss, format_pointer_hint, frame_is_blank,
+    gnome_shell_screenshot_args, frame_origin_for, output_for_point, pointer_hop_plan, pointer_slop_miss,
+    relative_needed, grim_capture_args, image_to_global, infer_wayland_display, layout_prompt,
+    luma_mean_var, monitor_local_to_global, output_containing, parse_xdpy_size, parse_xrandr_outputs,
     parse_xrandr_size, pick_capture_output, session_is_wayland, virtual_desktop_size,
     windshield_frame_geom, x11_grab_size, CaptureKind, DisplayOutput,
 };

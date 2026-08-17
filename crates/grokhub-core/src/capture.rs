@@ -258,6 +258,73 @@ pub fn clamp_to_desktop(x: i32, y: i32, outputs: &[DisplayOutput]) -> (i32, i32)
     (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
 }
 
+pub fn clamp_to_output(x: i32, y: i32, output: &DisplayOutput) -> (i32, i32) {
+    let max_x = output.x + output.w - 1;
+    let max_y = output.y + output.h - 1;
+    (x.clamp(output.x, max_x), y.clamp(output.y, max_y))
+}
+
+pub fn output_for_point(outputs: &[DisplayOutput], x: i32, y: i32) -> Option<&DisplayOutput> {
+    if let Some(o) = output_containing(outputs, x, y) {
+        return Some(o);
+    }
+    outputs.iter().min_by_key(|o| {
+        let (cx, cy) = clamp_to_output(x, y, o);
+        (x - cx).abs() + (y - cy).abs()
+    })
+}
+
+pub fn pointer_hop_plan(
+    from: Option<(i32, i32)>,
+    to: (i32, i32),
+    outputs: &[DisplayOutput],
+) -> Vec<(i32, i32)> {
+    let dest = match output_for_point(outputs, to.0, to.1) {
+        Some(o) => o,
+        None => return vec![clamp_to_desktop(to.0, to.1, outputs)],
+    };
+    let target = clamp_to_output(to.0, to.1, dest);
+    let Some((fx, fy)) = from else {
+        return vec![target];
+    };
+    let src = output_for_point(outputs, fx, fy);
+    if src.map(|o| o.name.as_str()) == Some(dest.name.as_str()) {
+        return vec![target];
+    }
+    let center = (dest.x + dest.w / 2, dest.y + dest.h / 2);
+    if center == target {
+        vec![target]
+    } else {
+        vec![center, target]
+    }
+}
+
+pub fn relative_needed(
+    abs_ok: bool,
+    intended: (i32, i32),
+    actual: Option<(i32, i32)>,
+    slop: i32,
+) -> Option<(i32, i32)> {
+    let actual = actual?;
+    if abs_ok && !pointer_slop_miss(intended, actual, slop) {
+        return None;
+    }
+    let dx = intended.0 - actual.0;
+    let dy = intended.1 - actual.1;
+    if dx == 0 && dy == 0 {
+        None
+    } else {
+        Some((dx, dy))
+    }
+}
+
+pub fn format_pointer_hint(x: i32, y: i32, monitor: Option<&str>) -> String {
+    match monitor {
+        Some(name) if !name.is_empty() => format!("hint {x},{y} monitor={name}"),
+        _ => format!("hint {x},{y}"),
+    }
+}
+
 pub fn monitor_local_to_global(
     outputs: &[DisplayOutput],
     name: &str,
@@ -304,6 +371,7 @@ pub fn layout_prompt(
     origin_x: i32,
     origin_y: i32,
     cursor: Option<(i32, i32)>,
+    hint: Option<(i32, i32)>,
 ) -> String {
     let mut s = String::new();
     if let Some((min_x, min_y, w, h)) = virtual_desktop_bounds(outputs) {
@@ -325,6 +393,16 @@ pub fn layout_prompt(
         let line = format_cursor_line(cx, cy, mon);
         s.push_str("cursor: ");
         s.push_str(line.strip_prefix("cursor ").unwrap_or(&line));
+        s.push('\n');
+    }
+    if let Some((hx, hy)) = hint {
+        let mon = output_for_point(outputs, hx, hy).map(|o| o.name.as_str());
+        s.push_str("hint: ");
+        s.push_str(
+            format_pointer_hint(hx, hy, mon)
+                .strip_prefix("hint ")
+                .unwrap_or(""),
+        );
         s.push('\n');
     }
     if frame_w > 0 && frame_h > 0 {
@@ -575,7 +653,7 @@ DP-1 disconnected (normal left inverted right x axis y axis)
             grim_capture_args("/tmp/desk.png", Some("HDMI-1")),
             vec!["-o", "HDMI-1", "/tmp/desk.png"]
         );
-        let glass = layout_prompt(&outs, 1920, 1080, 1920, 0, None);
+        let glass = layout_prompt(&outs, 1920, 1080, 1920, 0, None, None);
         assert!(glass.contains("eDP-1 0,0 1920x1080"));
         assert!(glass.contains("HDMI-1 1920,0 1920x1080"));
         assert!(glass.contains("frame: 1920x1080 origin 1920,0"));
@@ -685,10 +763,50 @@ DP-2 connected 1920x1440+5360+0 (normal left inverted right x axis y axis) 527mm
             format_cursor_line_miss(5, 25, Some("HDMI-A-2"), true),
             "cursor 5,25 monitor=HDMI-A-2 miss"
         );
-        let glass = layout_prompt(&outs, 1920, 1440, 5360, 0, Some((7279, 25)));
+        let glass = layout_prompt(&outs, 1920, 1440, 5360, 0, Some((7279, 25)), None);
         assert!(glass.contains("desk: 0,0 7280x1440"), "{glass}");
         assert!(glass.contains("cursor: 7279,25 monitor=DP-2"), "{glass}");
         assert!(glass.contains("DP-2 5360,0 1920x1440"), "{glass}");
+    }
+
+    #[test]
+    fn hop_plan_stages_through_the_destination_monitor_center() {
+        let outs = parse_xrandr_outputs(TRIPLE_XRANDR);
+        let dp1 = outs.iter().find(|o| o.name == "DP-1").unwrap();
+        assert_eq!(
+            clamp_to_output(7285, 25, dp1),
+            (5359, 25),
+            "a point past DP-1 must stay on DP-1, not wrap"
+        );
+        assert_eq!(
+            clamp_to_output(7285, 25, outs.iter().find(|o| o.name == "DP-2").unwrap()),
+            (7279, 25)
+        );
+        assert_eq!(
+            output_for_point(&outs, 5350, 15).map(|o| o.name.as_str()),
+            Some("DP-1")
+        );
+        assert_eq!(
+            pointer_hop_plan(Some((100, 100)), (5350, 15), &outs),
+            vec![(3960, 720), (5350, 15)],
+            "HDMI-A-2 → DP-1 must hop via DP-1 center 3960,720"
+        );
+        assert_eq!(
+            pointer_hop_plan(Some((5400, 40)), (5460, 20), &outs),
+            vec![(5460, 20)],
+            "same-output hop is just the clamped target"
+        );
+        assert_eq!(
+            relative_needed(false, (5350, 15), Some((1920, 0)), 8),
+            Some((3430, 15))
+        );
+        assert_eq!(relative_needed(true, (100, 20), Some((102, 20)), 8), None);
+        assert_eq!(
+            format_pointer_hint(5350, 15, Some("DP-1")),
+            "hint 5350,15 monitor=DP-1"
+        );
+        let glass = layout_prompt(&outs, 0, 0, 0, 0, Some((1920, 0)), Some((5350, 15)));
+        assert!(glass.contains("hint: 5350,15 monitor=DP-1"), "{glass}");
     }
 
     #[test]
