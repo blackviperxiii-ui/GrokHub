@@ -5530,17 +5530,20 @@ impl Cabin {
         let Some(id) = self.pending_hub_task.clone() else {
             return;
         };
-        let Ok(mut st) = self.hub.lock() else {
-            return;
-        };
-        let peer = st.device_id.clone();
-        let status = if ok { "done" } else { "failed" };
-        let err = st
-            .complete_task(&peer, &id, result, vec![], Some(status))
-            .err();
-        if clear_pending_after_complete(err) {
-            self.pending_hub_task = None;
+        {
+            let Ok(mut st) = self.hub.lock() else {
+                return;
+            };
+            let peer = st.device_id.clone();
+            let status = if ok { "done" } else { "failed" };
+            let err = st
+                .complete_task(&peer, &id, result, vec![], Some(status))
+                .err();
+            if clear_pending_after_complete(err) {
+                self.pending_hub_task = None;
+            }
         }
+        self.persist();
     }
 
     fn hide_to_tray(&mut self, ctx: &egui::Context) {
@@ -10089,6 +10092,12 @@ mod tests {
             finish.contains("self.pending_hub_task.clone()")
                 && finish.contains("clear_pending_after_complete"),
             "do not drop pending_hub_task before the hub mutex is held"
+        );
+        let complete_at = finish.find("complete_task").expect("complete_task");
+        let persist_at = finish.find("self.persist()").expect("persist hub complete");
+        assert!(
+            complete_at < persist_at,
+            "phone task completion must hit disk so a restart does not requeue the claimed row: {finish}"
         );
         let host_done = src
             .split("Ok(JobOut::HostDone(block))")
