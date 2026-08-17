@@ -3236,6 +3236,7 @@ impl Cabin {
                     return;
                 }
             }
+            self.persist();
             self.status = "Task queued on hub".into();
             self.nav = Nav::Devices;
             return;
@@ -9716,6 +9717,16 @@ mod tests {
         assert!(
             thread_rows.contains("accessed_ms") && !thread_rows.contains("now_ms()"),
             "/sync must not stamp every thread now or local stale data wins LWW: {thread_rows}"
+        );
+        let send = src
+            .split("fn dispatch_send")
+            .nth(1)
+            .and_then(|s| s.split("fn sync_hub(&mut self)").next())
+            .expect("dispatch_send");
+        let queued = send.find("enqueue_local").expect("enqueue");
+        assert!(
+            send[queued..].contains("self.persist()"),
+            "/send must persist a queued hub task before leaving Devices: {send}"
         );
         let dream = src
             .split("fn run_dream")
