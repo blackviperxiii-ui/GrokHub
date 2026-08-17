@@ -854,13 +854,13 @@ impl Cabin {
             .ok()
             .map(|home| format!("{home}/GrokHub-Work"))
             .unwrap_or_default();
-        cfg.project_dir = restore_bound_path(&cfg.project_dir, &work, sidebar_file);
+        cfg.project_dir = expand_home(&restore_bound_path(&cfg.project_dir, &work, sidebar_file));
         if should_seed_sidebar(sidebar_file, &projects) {
             projects = seed_from_bound(&cfg.project_dir);
         }
         let project_sel = projects
             .iter()
-            .find(|n| n.kind == ProjectKind::Project && n.path == cfg.project_dir)
+            .find(|n| n.kind == ProjectKind::Project && expand_home(&n.path) == cfg.project_dir)
             .or_else(|| projects.iter().find(|n| n.kind == ProjectKind::Project))
             .map(|n| n.id.clone());
         let secrets = secrets::load();
@@ -1702,7 +1702,7 @@ impl Cabin {
         let Some(n) = self.projects.iter().find(|n| n.id == id && n.kind == ProjectKind::Project) else {
             return;
         };
-        let path = n.path.clone();
+        let path = expand_home(&n.path);
         let name = n.name.clone();
         if !path.trim().is_empty() {
             if !std::path::Path::new(&path).is_dir() {
@@ -3139,22 +3139,24 @@ impl Cabin {
 
     fn rewind_project(&mut self) {
         let home = std::env::var("HOME").unwrap_or_default();
-        let src = self.cfg.project_dir.trim();
+        let src = expand_home(self.cfg.project_dir.trim());
         if src.is_empty() {
             self.status = "Bind a project first — /project bind".into();
             return;
         }
-        if !rewind_allowed(src, &home) {
+        if !rewind_allowed(&src, &home) {
             self.status = "will not rewind $HOME unbound".into();
             return;
         }
         if let Some(last) = self.rewind_rows.first().cloned() {
-            if rewind_restore_matches(&last.root, src) && rewind_snapshot_ready(&last.path) {
+            if rewind_restore_matches(&expand_home(&last.root), &src)
+                && rewind_snapshot_ready(&last.path)
+            {
                 if let Some(why) = rewind_blocked_reason(self.cfg.host_on, self.running) {
                     self.status = why.into();
                     return;
                 }
-                self.queue_sh(rewind_copy_cmd(&last.path, src));
+                self.queue_sh(rewind_copy_cmd(&last.path, &src));
                 if self.running {
                     self.status = format!("Restoring {}", last.job_id);
                 }
@@ -3171,7 +3173,7 @@ impl Cabin {
 
     fn snapshot_project(&mut self) -> Option<String> {
         let home = std::env::var("HOME").unwrap_or_default();
-        let src = self.cfg.project_dir.trim().to_string();
+        let src = expand_home(self.cfg.project_dir.trim());
         if !rewind_allowed(&src, &home) {
             return None;
         }
@@ -3230,8 +3232,9 @@ impl Cabin {
     }
 
     fn dream_rewind_id(&self) -> Option<&str> {
+        let cur = expand_home(self.cfg.project_dir.trim());
         self.rewind_rows.first().and_then(|r| {
-            if rewind_restore_matches(&r.root, self.cfg.project_dir.trim()) {
+            if rewind_restore_matches(&expand_home(&r.root), &cur) {
                 Some(r.job_id.as_str())
             } else {
                 None
@@ -10587,6 +10590,10 @@ mod tests {
             rewind.contains("rewind_copy_cmd"),
             "/rewind restore must copy snapshot contents into the project, not nest the dest folder: {rewind}"
         );
+        assert!(
+            rewind.contains("expand_home"),
+            "/rewind must expand ~ before quoting the bound tree: {rewind}"
+        );
         let snap = src
             .split("fn snapshot_project")
             .nth(1)
@@ -10599,8 +10606,25 @@ mod tests {
             "snapshot must record a dest and return the cp, not nest run_cmds: {snap}"
         );
         assert!(
+            snap.contains("expand_home"),
+            "snapshot must expand ~ before quoting the bound tree: {snap}"
+        );
+        assert!(
             src.contains("is_rewind_copy_cmd"),
             "host jobs must prepend a snapshot instead of nesting run_cmds"
+        );
+        assert!(
+            src.contains("expand_home(&restore_bound_path"),
+            "boot must expand a tilde-bound project or rewind quotes a literal ~ folder"
+        );
+        let dream_id = src
+            .split("fn dream_rewind_id")
+            .nth(1)
+            .and_then(|s| s.split("fn run_dream").next())
+            .expect("dream_rewind_id");
+        assert!(
+            dream_id.contains("expand_home"),
+            "/dream rewind cite must expand ~ before matching the snapshot root: {dream_id}"
         );
         let host_done = src
             .split("Ok(JobOut::HostDone(block))")
