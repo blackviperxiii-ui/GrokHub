@@ -1410,6 +1410,8 @@ impl Cabin {
         self.attach_name = None;
         self.followup_step = 0;
         self.active_skill_follow = None;
+        self.hands_attach = false;
+        self.eyes_attach = false;
     }
 
     fn pick_entries(dir: &Path) -> Vec<(String, bool)> {
@@ -9304,6 +9306,15 @@ mod tests {
         assert!(
             switched.contains("drop_leaving_thread_chrome"),
             "switching tabs must not send the previous tab's image or skill follow: {switched}"
+        );
+        let chrome = src
+            .split("fn drop_leaving_thread_chrome")
+            .nth(1)
+            .and_then(|s| s.split("fn pick_entries").next())
+            .expect("drop_leaving_thread_chrome");
+        assert!(
+            chrome.contains("hands_attach = false") && chrome.contains("eyes_attach = false"),
+            "leaving a tab must not leave windshield/hands armed for the next tab: {chrome}"
         );
         let deleted = src
             .split("fn delete_thread_at")
