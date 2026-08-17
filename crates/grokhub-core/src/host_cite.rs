@@ -51,11 +51,17 @@ fn write_dest(c: &str) -> Option<String> {
     let bits: Vec<&str> = c.split_whitespace().collect();
     for (i, w) in bits.iter().enumerate() {
         if matches!(*w, "tee" | "mv" | "cp") {
-            let dest = bits[i + 1..]
+            let args: Vec<&str> = bits[i + 1..]
                 .iter()
-                .find(|x| !x.starts_with('-'))
                 .copied()
-                .unwrap_or("");
+                .filter(|x| !x.starts_with('-'))
+                .collect();
+            let dest = if *w == "tee" {
+                args.first().copied()
+            } else {
+                args.last().copied()
+            }
+            .unwrap_or("");
             if !dest.is_empty() {
                 return Some(dest.to_string());
             }
@@ -126,6 +132,20 @@ mod tests {
             Some("wrote to /tmp/out")
         );
         assert!(summarize_write("ls /tmp", "").is_none());
+        assert_eq!(
+            summarize_write("cp src.txt dest.txt", "").as_deref(),
+            Some("wrote to dest.txt"),
+            "cp must cite the destination, not the source"
+        );
+        assert_eq!(
+            summarize_write("cp -a src.txt dest.txt", "").as_deref(),
+            Some("wrote to dest.txt")
+        );
+        assert_eq!(
+            summarize_write("mv old.txt new.txt", "").as_deref(),
+            Some("wrote to new.txt"),
+            "mv must cite the destination, not the source"
+        );
         assert_eq!(last_host_line("a\n  compiling cabin  \n"), "compiling cabin");
         assert_eq!(host_status_line("make", "compiling cabin", 3), "host: compiling cabin");
         assert!(host_status_line("sleep 9", "", 4).contains("4s"));
