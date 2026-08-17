@@ -4250,7 +4250,18 @@ impl Cabin {
                 (role, content)
             })
             .collect();
-        if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
+        let stored_scratch: Vec<(String, bool)> = self
+            .threads
+            .iter()
+            .map(|t| (t.id.clone(), t.scratch))
+            .collect();
+        let job_scratch = job_is_scratch(
+            self.chat_job_thread.as_deref(),
+            &vis,
+            self.scratch(),
+            &stored_scratch,
+        );
+        if !job_scratch && config::read_memory(&self.mem_name) != self.mem_body {
             let _ = config::write_memory(&self.mem_name, &self.mem_body);
         }
         let soul = config::read_memory("SOUL.md");
@@ -9983,8 +9994,8 @@ mod tests {
         assert!(
             kick[..soul].contains("write_memory")
                 && kick[..soul].contains("mem_body")
-                && kick[..soul].contains("scratch()"),
-            "kick_model must flush the Memory editor before the system prompt: {kick}"
+                && kick[..soul].contains("job_is_scratch"),
+            "kick_model must flush the Memory editor for the origin thread, not the visible Scratch tab: {kick}"
         );
         let sys = kick.find("cabin_system_prompt").expect("system prompt");
         assert!(
