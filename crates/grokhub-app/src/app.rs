@@ -4618,6 +4618,7 @@ impl Cabin {
                                 Some(t.goal.label.as_str())
                             };
                             t.messages = compact_keep_pin(&t.messages, 8, pin);
+                            t.accessed_ms = now_ms();
                         }
                         self.persist();
                     }
@@ -10695,6 +10696,14 @@ mod tests {
         assert!(
             chat.contains("should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, compact_step)"),
             "auto-compact must use the post-outcome goal step, not the pre-outcome job_step: {chat}"
+        );
+        let bg_compact = chat
+            .split("compact_keep_pin")
+            .nth(1)
+            .expect("background compact");
+        assert!(
+            bg_compact.contains("accessed_ms"),
+            "background auto-compact must bump accessed_ms or /sync LWW can restore the dropped turns: {bg_compact}"
         );
         let pins = chat.find("extract_work_pins").expect("work pins");
         let host_plan = chat.find("plan_from_text").expect("host plan");
