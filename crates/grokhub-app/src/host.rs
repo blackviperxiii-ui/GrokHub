@@ -1,9 +1,26 @@
+use grokhub_core::TEXT_FILE_CAP;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+
+fn push_host_line(buf: &mut String, line: &str, cap: usize) -> bool {
+    if buf.len() >= cap {
+        return false;
+    }
+    buf.push_str(line);
+    buf.push('\n');
+    if buf.len() <= cap {
+        return true;
+    }
+    buf.truncate(cap);
+    while !buf.is_empty() && !buf.is_char_boundary(buf.len()) {
+        buf.pop();
+    }
+    false
+}
 
 pub fn host_working_dir(project_dir: &str) -> Option<String> {
     let root = grokhub_core::expand_project_root(
@@ -108,26 +125,22 @@ pub fn run_host_stream(
         }
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok((is_err, line)) => {
-                on_line(&line);
-                if is_err {
-                    err_buf.push_str(&line);
-                    err_buf.push('\n');
-                } else {
-                    out_buf.push_str(&line);
-                    out_buf.push('\n');
+                let room = if is_err { &mut err_buf } else { &mut out_buf };
+                if !push_host_line(room, &line, TEXT_FILE_CAP) {
+                    kill_host(&mut child);
+                    return format!("$ {cmd}\nHOST_RECEIPT: output capped\n{out_buf}");
                 }
+                on_line(&line);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Ok(Some(_)) = child.try_wait() {
                     while let Ok((is_err, line)) = rx.try_recv() {
-                        on_line(&line);
-                        if is_err {
-                            err_buf.push_str(&line);
-                            err_buf.push('\n');
-                        } else {
-                            out_buf.push_str(&line);
-                            out_buf.push('\n');
+                        let room = if is_err { &mut err_buf } else { &mut out_buf };
+                        if !push_host_line(room, &line, TEXT_FILE_CAP) {
+                            kill_host(&mut child);
+                            return format!("$ {cmd}\nHOST_RECEIPT: output capped\n{out_buf}");
                         }
+                        on_line(&line);
                     }
                     break;
                 }
@@ -292,5 +305,32 @@ mod tests {
             started.elapsed()
         );
         assert!(out.contains("halted"), "{out}");
+    }
+
+    #[test]
+    fn run_host_stream_caps_a_huge_dump() {
+        let src = include_str!("host.rs");
+        let stream = src
+            .split("pub fn run_host_stream(")
+            .nth(1)
+            .and_then(|s| s.split("fn kill_host(").next())
+            .expect("run_host_stream");
+        assert!(
+            stream.contains("TEXT_FILE_CAP"),
+            "a huge host dump must not grow the receipt without bound: {stream}"
+        );
+        let out = run_host(
+            "python3 -c \"print('x'*200000)\"",
+            Duration::from_secs(5),
+        );
+        assert!(
+            out.len() <= grokhub_core::TEXT_FILE_CAP + 256,
+            "capped host receipt stayed huge: {}",
+            out.len()
+        );
+        assert!(
+            out.contains("output capped") || !out.contains(&"x".repeat(200000)),
+            "huge host stdout must not land in the receipt: {out}"
+        );
     }
 }
