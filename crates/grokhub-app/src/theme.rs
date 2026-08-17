@@ -11,7 +11,7 @@ use grokhub_core::{
 };
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub fn title_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("inter-bold".into()))
@@ -164,10 +164,9 @@ fn probe_os_dark() -> bool {
 }
 
 fn cmd_stdout(bin: &str, args: &[&str]) -> String {
-    std::process::Command::new(bin)
-        .args(args)
-        .output()
-        .ok()
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(args);
+    crate::desktop::run_limited(cmd, Duration::from_millis(400))
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .unwrap_or_default()
         .trim()
@@ -511,5 +510,23 @@ mod tests {
         let light = lift_fill(Color32::from_rgb(244, 244, 245), 0.10);
         assert!(light.r() < 244);
         set_paint_dark(true);
+    }
+
+    #[test]
+    fn os_dark_probe_must_time_out() {
+        let src = include_str!("theme.rs");
+        let cmd = src
+            .split("fn cmd_stdout(")
+            .nth(1)
+            .and_then(|s| s.split("\npub const SIDEBAR_W").next())
+            .expect("cmd_stdout");
+        assert!(
+            cmd.contains("run_limited("),
+            "gsettings/xfconf on the UI thread must time out: {cmd}"
+        );
+        assert!(
+            !cmd.contains(".output()"),
+            "os dark probe must not block paint: {cmd}"
+        );
     }
 }
