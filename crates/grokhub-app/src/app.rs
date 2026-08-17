@@ -99,7 +99,8 @@ use grokhub_core::{
     HEARTBEAT_MS,
     build_review_digest, dedupe_suggestions, merge_suggestion_store, parse_suggest_lines,
     partition_suggestions, review_due,
-    review_status_line, review_system_prompt, DigestLine, ReviewDigest, SuggestionStore, REVIEW_NIGHT_HOUR,
+    review_status_line, review_system_prompt, DigestLine, ReviewDigest, SuggestionStore,
+    CABIN_GITHUB_TOOLS, REVIEW_NIGHT_HOUR,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title_in, apply_manual_rename, delete_thread, display_tab_title, history_order,
     should_name_thread,
@@ -3720,11 +3721,13 @@ impl Cabin {
                     self.skill_list.iter().map(|s| s.name.clone()).collect();
                 let auto_names: Vec<String> =
                     self.automations.iter().map(|a| a.name.clone()).collect();
+                let live_tools: Vec<String> =
+                    CABIN_GITHUB_TOOLS.iter().map(|t| (*t).to_string()).collect();
                 let items = dedupe_suggestions(
                     parse_suggest_lines(&text),
                     &skill_names,
                     &auto_names,
-                    &[],
+                    &live_tools,
                 );
                 let day = Some(Self::local_day());
                 let ms = now_ms();
@@ -10981,6 +10984,10 @@ mod tests {
         assert!(
             apply.contains("merge_suggestion_store"),
             "a partial nightly review must not wipe the other suggestion grids: {apply}"
+        );
+        assert!(
+            apply.contains("CABIN_GITHUB_TOOLS") && !apply.contains("&[]"),
+            "nightly review must drop already-wired GitHub tools: {apply}"
         );
         assert!(src.contains("self.tick_review()"));
         assert!(
