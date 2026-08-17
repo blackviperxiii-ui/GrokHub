@@ -97,7 +97,11 @@ pub fn create_project(
         return Err("id taken");
     }
     let mut path = project_work_path(work_root, &name);
-    if nodes.iter().any(|n| n.path == path) {
+    let home = std::env::var("HOME").ok();
+    if nodes
+        .iter()
+        .any(|n| bound_paths_match(&n.path, &path, home.as_deref()))
+    {
         path = format!("{path}-{}", nodes.len());
     }
     nodes.push(ProjectNode {
@@ -147,7 +151,11 @@ pub fn settle_project_path(
     }
     let name = node.name.clone();
     let mut path = project_work_path(work_root, &name);
-    if nodes.iter().any(|n| n.id != id && n.path == path) {
+    let home = std::env::var("HOME").ok();
+    if nodes
+        .iter()
+        .any(|n| n.id != id && bound_paths_match(&n.path, &path, home.as_deref()))
+    {
         path = format!("{path}-{}", nodes.len());
     }
     let node = nodes.iter_mut().find(|n| n.id == id).ok_or("not found")?;
@@ -780,6 +788,28 @@ mod tests {
         assert!(out.dropped);
         assert!(!out.unbound);
         assert!(nodes.is_empty());
+    }
+
+    #[test]
+    fn create_project_does_not_reuse_tilde_tree() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/j".into());
+        let work = format!("{home}/GrokHub-Work");
+        let mut nodes = vec![ProjectNode {
+            id: "old".into(),
+            name: "Night watch".into(),
+            kind: ProjectKind::Project,
+            path: "~/GrokHub-Work/night-watch".into(),
+            parent: None,
+            open: false,
+        }];
+        create_project(&mut nodes, "p2", "Night watch", None, &work).unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert!(
+            !bound_paths_match(&nodes[0].path, &nodes[1].path, Some(&home)),
+            "a second Night watch must not reuse the tilde-bound tree: {} vs {}",
+            nodes[0].path,
+            nodes[1].path
+        );
     }
 
     #[test]
