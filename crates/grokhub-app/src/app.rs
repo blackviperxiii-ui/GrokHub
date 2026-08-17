@@ -484,6 +484,7 @@ fn push_stream_capped(buf: &mut String, d: &str, cap: u64) -> bool {
 }
 
 fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool) -> egui::Response {
+    let body = crate::markdown::display_text(body);
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
     let wrap = bubble_wrap_width(avail, BUBBLE_PAD_X);
     let content = crate::markdown::measure_text(ui, body, wrap);
