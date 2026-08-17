@@ -2661,6 +2661,7 @@ impl Cabin {
             self.eyes_attach = true;
         }
         self.followup_step = 0;
+        self.stamp_current_access();
         self.persist();
         self.kick_model(true);
     }
@@ -9526,6 +9527,13 @@ mod tests {
         assert!(
             slash_at < kind_at,
             "/compact during a live job must stay local, not become a redirect: {send}"
+        );
+        let pushed = send.find("messages.push").expect("user turn");
+        let saved = send.find("self.persist()").expect("send persist");
+        assert!(
+            send[pushed..saved].contains("stamp_current_access")
+                || send[pushed..saved].contains("accessed_ms"),
+            "a sent turn must bump accessed_ms or /sync LWW can drop it: {send}"
         );
         let created = src
             .split("fn new_thread")
