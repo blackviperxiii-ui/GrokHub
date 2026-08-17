@@ -5495,18 +5495,29 @@ impl Cabin {
             .map(|m| m.content.as_str());
         let mut frame_note = None;
         let captured_ok = if self.cfg.cabin_eyes {
-            match capture_data_url() {
-                Ok(url) => {
-                    if let Ok(mut st) = self.hub.lock() {
-                        st.store_frame(&url);
+            self.last_window_title = rows
+                .iter()
+                .map(|r| r.name.as_str())
+                .find(|n| !n.is_empty() && *n != "cursor")
+                .unwrap_or("")
+                .to_string();
+            if !should_send_screenshot(&self.last_window_title, "") {
+                frame_note = Some("frame: skipped lock/password\n".into());
+                false
+            } else {
+                match capture_data_url() {
+                    Ok(url) => {
+                        if let Ok(mut st) = self.hub.lock() {
+                            st.store_frame(&url);
+                        }
+                        self.last_frame_url = Some(url);
+                        frame_note = Some("frame: captured (on hub, not disk)\n".into());
+                        true
                     }
-                    self.last_frame_url = Some(url);
-                    frame_note = Some("frame: captured (on hub, not disk)\n".into());
-                    true
-                }
-                Err(e) => {
-                    frame_note = Some(format!("frame: {e}\n"));
-                    false
+                    Err(e) => {
+                        frame_note = Some(format!("frame: {e}\n"));
+                        false
+                    }
                 }
             }
         } else {
@@ -9961,6 +9972,17 @@ mod tests {
         assert!(
             start_err.contains("sharing = false"),
             "Start share must not leave sharing on when serve_lan fails: {start_hub}"
+        );
+        let eyes = src
+            .split("fn refresh_eyes")
+            .nth(1)
+            .and_then(|s| s.split("fn halt_work").next())
+            .expect("refresh_eyes");
+        let store = eyes.find("store_frame").expect("eyes store");
+        assert!(
+            eyes[..store].contains("should_send_screenshot")
+                || eyes[..store].contains("lock_blocks_hands"),
+            "Eyes Scan must not put a lock-screen frame on the hub: {eyes}"
         );
         let live = src
             .split("fn live_room")
