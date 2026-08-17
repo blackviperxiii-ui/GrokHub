@@ -41,7 +41,7 @@ use grokhub_core::{
     doctor_hands_line, due_automations, ensure_automation_schedule, estimate_messages,
     extract_connector_cmds, mark_automation_skipped, retain_held_plan, yolo_plan_split, chat_bearer,
     oauth_access_live,
-    drop_trailing_assistant_on, job_error_goes_to_chat, kick_messages_for_job, last_user_for_job,
+    drop_trailing_assistant_on, job_error_goes_to_chat, job_is_scratch, kick_messages_for_job, last_user_for_job,
     persist_user_turn, push_bound_message, refund_host_reserved, daily_units_blocked,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
@@ -88,7 +88,7 @@ use grokhub_core::{
     greeting_fingerprint, greeting_prompt, local_greeting, pick_greeting,
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
-    is_rewind_copy_cmd, rewind_blocked_reason, rewind_can_queue, rewind_copy_cmd, rewind_snapshot_ready,
+    is_rewind_copy_cmd, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
     clear_pending_after_complete, inbox_claim_ready,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
@@ -4276,10 +4276,17 @@ impl Cabin {
                     &visible_pairs,
                     &stored,
                 );
-                let job_scratch = job
-                    .as_deref()
-                    .and_then(|id| self.threads.iter().find(|t| t.id == id).map(|t| t.scratch))
-                    .unwrap_or_else(|| self.scratch());
+                let stored_scratch: Vec<(String, bool)> = self
+                    .threads
+                    .iter()
+                    .map(|t| (t.id.clone(), t.scratch))
+                    .collect();
+                let job_scratch = job_is_scratch(
+                    job.as_deref(),
+                    &vis,
+                    self.scratch(),
+                    &stored_scratch,
+                );
                 if self.policy().learns() && !job_scratch {
                     let facts = fact_candidates(&job_pairs);
                     extract_insights(&mut self.learning, &facts);
@@ -4490,6 +4497,18 @@ impl Cabin {
                 } else {
                     "HOST_RESULT (facts only):"
                 };
+                let vis = self.visible_thread_id();
+                let stored_scratch: Vec<(String, bool)> = self
+                    .threads
+                    .iter()
+                    .map(|t| (t.id.clone(), t.scratch))
+                    .collect();
+                let job_scratch = job_is_scratch(
+                    self.chat_job_thread.as_deref(),
+                    &vis,
+                    self.scratch(),
+                    &stored_scratch,
+                );
                 self.push_bound_msg("user", format!("{prefix}\n{block}"));
                 if any_hands {
                     self.hands_attach = true;
@@ -4511,7 +4530,7 @@ impl Cabin {
                             self.last_recipe = Some(recipe);
                         }
                     }
-                    if !self.scratch() {
+                    if !job_scratch {
                         let user = self.last_user_on_job();
                         let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
                         self.commit_proposed_skill(proposed);
@@ -4533,7 +4552,7 @@ impl Cabin {
                     }
                 }
                 if !any_hands
-                    && is_hard_run(self.last_host.len() as u32, !ok, false, self.scratch())
+                    && is_hard_run(self.last_host.len() as u32, !ok, false, job_scratch)
                 {
                     let user = self.last_user_on_job();
                     let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
@@ -9309,6 +9328,15 @@ mod tests {
         assert!(
             src.contains("is_rewind_copy_cmd"),
             "host jobs must prepend a snapshot instead of nesting run_cmds"
+        );
+        let host_done = src
+            .split("Ok(JobOut::HostDone(block))")
+            .nth(1)
+            .and_then(|s| s.split("Ok(JobOut::Connector").next())
+            .expect("HostDone");
+        assert!(
+            host_done.contains("job_is_scratch"),
+            "HostDone must use the origin thread scratch flag: {host_done}"
         );
     }
 
