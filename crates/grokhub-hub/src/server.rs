@@ -150,7 +150,9 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     }
 
     if method == Method::Get && path == "/v1/inbox" {
-        return send_json(req, 200, json!({ "ok": true, "tasks": st.queued_for(&peer_id) }));
+        let tasks = st.queued_for(&peer_id);
+        drop(st);
+        return send_json(req, 200, json!({ "ok": true, "tasks": tasks }));
     }
 
     if let Some(id) = strip_prefix_suffix(&path, "/v1/inbox/", "/ack") {
@@ -210,7 +212,9 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     }
 
     if method == Method::Get && path == "/v1/results" {
-        return send_json(req, 200, json!({ "ok": true, "tasks": st.claim_results(&peer_id) }));
+        let tasks = st.claim_results(&peer_id);
+        drop(st);
+        return send_json(req, 200, json!({ "ok": true, "tasks": tasks }));
     }
 
     if method == Method::Post && path == "/v1/inhabit" {
@@ -234,13 +238,16 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     }
     if method == Method::Get && path == "/v1/inhabit" {
         if !grokhub_core::inhabit_claim_allowed(&peer.name) {
+            drop(st);
             return send_json(
                 req,
                 403,
                 json!({ "ok": false, "error": "inhabit is not for the phone" }),
             );
         }
-        return send_json(req, 200, json!({ "ok": true, "bundle": st.claim_inhabit() }));
+        let bundle = st.claim_inhabit();
+        drop(st);
+        return send_json(req, 200, json!({ "ok": true, "bundle": bundle }));
     }
 
     if method == Method::Post && path == "/v1/frame" {
@@ -783,6 +790,33 @@ mod tests {
         assert!(
             drop_at < read_at,
             "POST inhabit must not read the bundle while holding the hub lock: {inhabit}"
+        );
+        let inbox = src
+            .split("path == \"/v1/inbox\"")
+            .nth(1)
+            .and_then(|s| s.split("/v1/inbox/").next())
+            .expect("GET /v1/inbox");
+        assert!(
+            inbox.contains("drop(st)"),
+            "GET inbox must release the hub lock before send_json: {inbox}"
+        );
+        let results = src
+            .split("path == \"/v1/results\"")
+            .nth(1)
+            .and_then(|s| s.split("path == \"/v1/inhabit\"").next())
+            .expect("GET /v1/results");
+        assert!(
+            results.contains("drop(st)"),
+            "GET results must release the hub lock before send_json: {results}"
+        );
+        let get_inhabit = src
+            .split("Method::Get && path == \"/v1/inhabit\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Post && path == \"/v1/frame\"").next())
+            .expect("GET /v1/inhabit");
+        assert!(
+            get_inhabit.contains("drop(st)"),
+            "GET inhabit must release the hub lock before send_json: {get_inhabit}"
         );
     }
 }
