@@ -240,7 +240,7 @@ fn value_key(value: &str, kind: ChipKind) -> String {
     format!("{kind}:{}", v.chars().take(160).collect::<String>())
 }
 
-fn chip_scan(s: &str) -> &str {
+pub fn chip_scan(s: &str) -> &str {
     if s.len() <= CHIP_SCAN_CAP {
         return s;
     }
