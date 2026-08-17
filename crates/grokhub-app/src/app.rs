@@ -3081,6 +3081,9 @@ impl Cabin {
             self.status = "Inhabit needs a paired idle box".into();
             return;
         }
+        if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
+            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+        }
         let bundle = InhabitBundle {
             soul: config::read_memory("SOUL.md"),
             skill_ids: self.skill_list.iter().map(|s| s.name.clone()).collect(),
@@ -9978,6 +9981,11 @@ mod tests {
         assert!(
             inhabit[staged..].contains("self.persist()"),
             "/inhabit must persist the staged bundle before leaving Devices: {inhabit}"
+        );
+        let soul = inhabit.find("read_memory(\"SOUL.md\")").expect("inhabit soul");
+        assert!(
+            inhabit[..soul].contains("write_memory") && inhabit[..soul].contains("mem_body"),
+            "/inhabit must flush the Memory editor before packing SOUL.md: {inhabit}"
         );
         let dream = src
             .split("fn run_dream")
