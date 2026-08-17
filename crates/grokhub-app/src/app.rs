@@ -74,7 +74,7 @@ use grokhub_core::{
     BUBBLE_PAD_Y,
     BUBBLE_RADIUS,
     plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
-    parse_computer_cmd_loose, user_asks_cabin_eyes,
+    parse_computer_op, user_asks_cabin_eyes,
     user_asks_desktop_hands,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
     goal_continue_pin, goal_pin_for_job, goal_step_after_outcome, hub_dispatch_ok, should_auto_continue_goal,
@@ -4740,11 +4740,11 @@ impl Cabin {
                     && self
                         .last_host
                         .iter()
-                        .all(|c| parse_computer_cmd_loose(c).is_some());
+                        .all(|c| parse_computer_op(c).is_some());
                 let any_hands = self
                     .last_host
                     .iter()
-                    .any(|c| parse_computer_cmd_loose(c).is_some());
+                    .any(|c| parse_computer_op(c).is_some());
                 let prefix = if all_hands {
                     "COMPUTER_RESULT (facts only):"
                 } else {
@@ -5013,7 +5013,7 @@ impl Cabin {
                 count = count.saturating_add(1);
                 let tx_line = tx.clone();
                 let cmd = c.clone();
-                let receipt = if let Some(op) = parse_computer_cmd_loose(c) {
+                let receipt = if let Some(op) = parse_computer_op(c) {
                     let _ = tx_line.send(JobOut::HostLine(format!(
                         "Hands: {}",
                         computer_cmd_line(&op)
@@ -9598,6 +9598,10 @@ mod tests {
                 && cmds.contains("run_host_stream"),
             "host shell must start in the bound project, not the cabin process cwd: {cmds}"
         );
+        assert!(
+            cmds.contains("parse_computer_op") && !cmds.contains("parse_computer_cmd_loose"),
+            "HOST_CMD / Command-pane type cargo must stay shell, not desktop type-in: {cmds}"
+        );
         let ret = cmds.find("return blocked;").expect("return blocked");
         let rewind = cmds.rfind("is_rewind_copy_cmd").expect("rewind copy");
         assert!(
@@ -10671,6 +10675,11 @@ mod tests {
         assert!(
             host_done.contains("job_is_scratch"),
             "HostDone must use the origin thread scratch flag: {host_done}"
+        );
+        assert!(
+            host_done.contains("parse_computer_op")
+                && !host_done.contains("parse_computer_cmd_loose"),
+            "a leftover type cargo in last_host must not be labeled COMPUTER_RESULT: {host_done}"
         );
         let run_cmds = src
             .split("fn run_cmds")
