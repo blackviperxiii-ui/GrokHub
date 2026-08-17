@@ -3270,7 +3270,7 @@ impl Cabin {
         let skills = self
             .skill_list
             .iter()
-            .map(|s| serde_json::json!({"id": s.name, "name": s.name, "updatedAt": now_ms()}))
+            .map(|s| serde_json::json!({"id": s.name, "name": s.name, "updatedAt": skills::skill_updated_at(&s.name)}))
             .collect();
         let autos = self
             .automations
@@ -9754,6 +9754,15 @@ mod tests {
         assert!(
             mem_rows.contains("memory_updated_at") && !mem_rows.contains("now_ms()"),
             "/sync must not stamp MEMORY.md now or stale local wins LWW: {mem_rows}"
+        );
+        let skill_rows = sync
+            .split("let skills = self")
+            .nth(1)
+            .and_then(|s| s.split("let autos = self").next())
+            .expect("sync skills");
+        assert!(
+            skill_rows.contains("skill_updated_at") && !skill_rows.contains("now_ms()"),
+            "/sync must not stamp every skill now or local stale data wins LWW: {skill_rows}"
         );
         let inbound = src
             .split("fn apply_inbound_snapshot")
