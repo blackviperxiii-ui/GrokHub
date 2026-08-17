@@ -48,6 +48,28 @@ pub fn greet_from_last_job(
     }
 }
 
+/// Host/computer receipt bodies from this thread, oldest first.
+pub fn thread_host_receipts(messages: &[(String, String)]) -> Vec<String> {
+    messages
+        .iter()
+        .filter(|(role, content)| {
+            role == "user"
+                && (content.trim_start().starts_with("HOST_RESULT")
+                    || content.trim_start().starts_with("COMPUTER_RESULT"))
+        })
+        .map(|(_, content)| {
+            content
+                .lines()
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join("\n")
+                .chars()
+                .take(160)
+                .collect()
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomPlan {
     pub slug: String,
@@ -269,6 +291,25 @@ mod tests {
             ])
             .as_deref(),
             Some("check the box")
+        );
+        let receipts = thread_host_receipts(&[
+            ("user".into(), "flash the pi".into()),
+            (
+                "user".into(),
+                "HOST_RESULT (facts only):\n$ dd if=img of=/dev/sda\nexit 0 · 3ms\n".into(),
+            ),
+            (
+                "user".into(),
+                "COMPUTER_RESULT (facts only):\nclicked 10,20\n".into(),
+            ),
+            ("assistant".into(), "HOST_RESULT (facts only):\nignore".into()),
+        ]);
+        assert_eq!(
+            receipts,
+            vec![
+                "$ dd if=img of=/dev/sda\nexit 0 · 3ms".to_string(),
+                "clicked 10,20".to_string(),
+            ]
         );
     }
 }
