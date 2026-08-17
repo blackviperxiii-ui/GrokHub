@@ -31,11 +31,23 @@ fn grok_json(
         .timeout(std::time::Duration::from_secs(timeout_secs))
         .send_json(body)
         .map_err(http_err)?;
-    let v: serde_json::Value = resp.into_json().map_err(|e| e.to_string())?;
+    let v = read_json_capped(resp)?;
     if let Some(err) = json_error(&v) {
         return Err(err);
     }
     Ok(v)
+}
+
+fn read_json_capped(resp: ureq::Response) -> Result<serde_json::Value, String> {
+    let mut buf = Vec::new();
+    resp.into_reader()
+        .take(MEDIA_FILE_CAP + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| e.to_string())?;
+    if buf.len() as u64 > MEDIA_FILE_CAP {
+        return Err("response too large".into());
+    }
+    serde_json::from_slice(&buf).map_err(|e| e.to_string())
 }
 
 fn consume_sse(
@@ -52,10 +64,15 @@ fn consume_sse(
         if n == 0 {
             break;
         }
+        if (raw.len() as u64).saturating_add(n as u64) > MEDIA_FILE_CAP
+            || acc.len() as u64 > MEDIA_FILE_CAP
+        {
+            return Err("reply too large".into());
+        }
         raw.push_str(&String::from_utf8_lossy(&buf[..n]));
         while let Some(idx) = raw.find('\n') {
             let line = raw[..idx].trim_end_matches('\r').to_string();
-            raw = raw[idx + 1..].to_string();
+            raw.drain(..=idx);
             if let Some(reason) = parse_sse_finish(&line) {
                 finish = Some(reason);
             }
@@ -282,7 +299,7 @@ pub fn grok_imagine_video(
             .timeout(std::time::Duration::from_secs(30))
             .call()
             .map_err(http_err)?;
-        let v: serde_json::Value = poll.into_json().map_err(|e| e.to_string())?;
+        let v = read_json_capped(poll)?;
         if let Some(err) = json_error(&v) {
             return Err(err);
         }
@@ -360,7 +377,7 @@ pub fn grok_stt(api_key: &str, wav: &[u8]) -> Result<String, String> {
         .timeout(std::time::Duration::from_secs(60))
         .send_bytes(&body)
         .map_err(|e| e.to_string())?;
-    let v: serde_json::Value = resp.into_json().map_err(|e| e.to_string())?;
+    let v = read_json_capped(resp)?;
     if let Some(err) = v
         .get("error")
         .and_then(|e| e.get("message").and_then(|m| m.as_str()).or(e.as_str()))
@@ -433,7 +450,7 @@ pub fn grok_realtime_secret(api_key: &str) -> Result<serde_json::Value, String> 
         .timeout(std::time::Duration::from_secs(20))
         .send_json(client_secrets_body())
         .map_err(http_err)?;
-    let v: serde_json::Value = resp.into_json().map_err(|e| e.to_string())?;
+    let v = read_json_capped(resp)?;
     if let Some(err) = v
         .get("error")
         .and_then(|e| e.get("message").and_then(|m| m.as_str()).or(e.as_str()))
@@ -484,6 +501,24 @@ mod tests {
         assert!(
             tts_take < tts_read && tts.contains("MEDIA_FILE_CAP"),
             "TTS must not slurp a huge audio body: {tts}"
+        );
+        let json = src
+            .split("fn grok_json(")
+            .nth(1)
+            .and_then(|s| s.split("fn consume_sse(").next())
+            .expect("grok_json");
+        assert!(
+            json.contains(".take(") && json.contains("MEDIA_FILE_CAP") && !json.contains("into_json()"),
+            "chat JSON must not slurp an unbounded completion: {json}"
+        );
+        let sse = src
+            .split("fn consume_sse(")
+            .nth(1)
+            .and_then(|s| s.split("fn apply_sse_line(").next())
+            .expect("consume_sse");
+        assert!(
+            sse.contains("MEDIA_FILE_CAP") && !sse.contains("raw[idx + 1..]"),
+            "SSE must cap the reply and not recopy the remainder every line: {sse}"
         );
         let err = src
             .split("pub fn http_err(")
