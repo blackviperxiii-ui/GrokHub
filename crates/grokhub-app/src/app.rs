@@ -67,7 +67,7 @@ use grokhub_core::{
     visible_chat, ChatKind, ChatView,
     apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     worker_gone_status, ChatSendKind,
-    bubble_outer_height, bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X,
+    bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X,
     BUBBLE_PAD_Y,
     BUBBLE_RADIUS,
     plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
@@ -450,36 +450,38 @@ fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool
         .rounding(BUBBLE_RADIUS)
         .inner_margin(egui::Margin::symmetric(BUBBLE_PAD_X, BUBBLE_PAD_Y));
     let mut resp = None;
-    let row_h = bubble_outer_height(content.y, BUBBLE_PAD_Y).max(1.0);
-    let layout = if user {
-        egui::Layout::right_to_left(egui::Align::TOP)
-    } else {
-        egui::Layout::left_to_right(egui::Align::TOP)
-    };
-    ui.allocate_ui_with_layout(egui::vec2(avail, row_h), layout, |ui| {
-        ui.set_max_width(outer_w);
-        resp = Some(
-            frame
-                .show(ui, |ui| {
-                    ui.set_width(inner_w);
-                    ui.set_max_width(inner_w);
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                    if markdown {
-                        crate::markdown::show(ui, body);
-                    } else {
-                        ui.add(
-                            egui::Label::new(RichText::new(body).color(crate::theme::fg()))
-                                .wrap(),
-                        );
-                    }
-                })
-                .response,
-        );
+    ui.scope(|ui| {
+        ui.set_max_width(avail);
+        ui.horizontal(|ui| {
+            ui.set_max_width(avail);
+            if user {
+                ui.add_space((avail - outer_w).max(0.0));
+            }
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                ui.set_max_width(outer_w);
+                resp = Some(
+                    frame
+                        .show(ui, |ui| {
+                            ui.set_max_width(inner_w);
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                            if markdown {
+                                crate::markdown::show(ui, body);
+                            } else {
+                                ui.add(
+                                    egui::Label::new(RichText::new(body).color(crate::theme::fg()))
+                                        .wrap(),
+                                );
+                            }
+                        })
+                        .response,
+                );
+            });
+        });
     });
     resp.expect("speech bubble")
 }
 
-fn paint_msg_acts(ui: &mut egui::Ui, user: bool, body: &str, avail: f32, _align_w: f32) -> ChatBlockAct {
+fn paint_msg_acts(ui: &mut egui::Ui, user: bool, body: &str, avail: f32, align_w: f32) -> ChatBlockAct {
     let mut act = ChatBlockAct::None;
     let mut paint = |ui: &mut egui::Ui| {
         let copy = ui.add(
@@ -505,12 +507,16 @@ fn paint_msg_acts(ui: &mut egui::Ui, user: bool, body: &str, avail: f32, _align_
             act = ChatBlockAct::Reply(body.to_string());
         }
     };
-    let layout = if user {
-        egui::Layout::right_to_left(egui::Align::TOP)
-    } else {
-        egui::Layout::left_to_right(egui::Align::TOP)
-    };
-    ui.allocate_ui_with_layout(egui::vec2(avail, 28.0), layout, paint);
+    ui.scope(|ui| {
+        ui.set_max_width(avail);
+        ui.horizontal(|ui| {
+            ui.set_max_width(avail);
+            if user {
+                ui.add_space((avail - align_w.max(96.0)).max(0.0));
+            }
+            paint(ui);
+        });
+    });
     act
 }
 
@@ -8717,6 +8723,40 @@ mod tests {
     }
 
     #[test]
+    fn markdown_reply_grows_past_plain_measure() {
+        with_fonts_ui(|ui| {
+            ui.allocate_ui(egui::vec2(800.0, 900.0), |ui| {
+                ui.set_max_width(800.0);
+                let body = "## Heading\n\n- bullet one\n- bullet two\n\nClosing line.";
+                let wrap = grokhub_core::bubble_wrap_width(800.0, grokhub_core::BUBBLE_PAD_X);
+                let measured = crate::markdown::measure_text(ui, body, wrap);
+                let mut md_h = 0.0;
+                ui.allocate_ui(egui::vec2(wrap, 800.0), |ui| {
+                    let r = ui
+                        .scope(|ui| {
+                            ui.set_max_width(wrap);
+                            crate::markdown::show(ui, body);
+                        })
+                        .response;
+                    md_h = r.rect.height();
+                });
+                let resp = super::paint_speech_bubble(ui, body, false, true);
+                assert!(
+                    md_h > measured.y + 2.0,
+                    "fixture must be taller as markdown than plain measure: md {md_h} plain {}",
+                    measured.y
+                );
+                assert!(
+                    resp.rect.height() + 2.0 >= md_h,
+                    "markdown bubble clipped: painted {} markdown {}",
+                    resp.rect.height(),
+                    md_h
+                );
+            });
+        });
+    }
+
+    #[test]
     fn long_user_bubble_stays_inside_the_row() {
         with_fonts_ui(|ui| {
             ui.allocate_ui(egui::vec2(480.0, 400.0), |ui| {
@@ -8768,6 +8808,14 @@ mod tests {
         assert!(
             !bubble_fn.contains("set_clip_rect"),
             "clip_rect on the row hides wrapped text: {bubble_fn}"
+        );
+        assert!(
+            !bubble_fn.contains("right_to_left"),
+            "RTL user rows clip long lines off the left: {bubble_fn}"
+        );
+        assert!(
+            !bubble_fn.contains("row_h"),
+            "a measured-height lock clips markdown: {bubble_fn}"
         );
         let chat = src
             .split("fn ui_chat(")
