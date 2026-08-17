@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 
+use crate::attach::TEXT_FILE_CAP;
 use crate::chat::XAI_BASE;
 use crate::stream::StreamTokenKind;
 
@@ -425,6 +426,11 @@ pub fn tts_url() -> String {
 }
 
 pub fn tts_request_body(text: &str) -> Value {
+    let mut end = (TEXT_FILE_CAP as usize).min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let text = &text[..end];
     json!({
         "text": text,
         "voice_id": "eve",
@@ -490,6 +496,18 @@ pub fn stt_multipart(wav: &[u8], filename: &str, boundary: &str) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::stream::{fold_stream_token, StreamTokenKind};
+
+    #[test]
+    fn tts_request_body_caps_text() {
+        let huge = "a".repeat(TEXT_FILE_CAP as usize + 8);
+        let body = tts_request_body(&huge);
+        let text = body.get("text").and_then(|v| v.as_str()).unwrap();
+        assert!(
+            text.len() <= TEXT_FILE_CAP as usize,
+            "TTS must not serialize an 8MB complete: {}",
+            text.len()
+        );
+    }
 
     #[test]
     fn hey_and_url() {
