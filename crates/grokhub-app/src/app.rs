@@ -42,7 +42,7 @@ use grokhub_core::{
     extract_connector_cmds, mark_automation_skipped, retain_held_plan, yolo_plan_split, chat_bearer,
     oauth_access_live,
     drop_trailing_assistant_on, job_error_goes_to_chat, job_is_scratch, kick_messages_for_job, last_user_for_job,
-    persist_user_turn, push_bound_message, refund_host_reserved, daily_units_blocked,
+    persist_user_turn, refund_host_reserved, daily_units_blocked,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     imagine_aspect_label, imagine_aspect_name, imagine_image_resolution, imagine_style_label,
@@ -1439,43 +1439,22 @@ impl Cabin {
 
     fn push_bound_msg(&mut self, role: &str, content: String) {
         let vis = self.visible_thread_id();
-        let mut visible: Vec<(String, String)> = self
-            .messages
-            .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
-            .collect();
-        let mut stored: Vec<(String, Vec<(String, String)>)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.messages.clone()))
-            .collect();
-        push_bound_message(
-            self.chat_job_thread.as_deref(),
-            &vis,
-            &mut visible,
-            &mut stored,
-            role,
-            content,
-        );
-        self.messages = visible
-            .into_iter()
-            .map(|(role, content)| Msg { role, content })
-            .collect();
-        let target = self
-            .chat_job_thread
-            .clone()
-            .unwrap_or_else(|| vis.clone());
-        if let Some(job) = self.chat_job_thread.as_deref() {
-            if job != vis {
-                if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job) {
-                    if let Some(t) = self.threads.iter_mut().find(|t| t.id == job) {
-                        t.messages = msgs.clone();
-                    }
-                }
+        let job = self.chat_job_thread.as_deref();
+        if job.is_none() || job == Some(vis.as_str()) {
+            self.messages.push(Msg {
+                role: role.to_string(),
+                content,
+            });
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == vis) {
+                t.accessed_ms = now_ms();
             }
+            return;
         }
-        if let Some(t) = self.threads.iter_mut().find(|t| t.id == target) {
-            t.accessed_ms = now_ms();
+        if let Some(job_id) = job {
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == job_id) {
+                t.messages.push((role.to_string(), content));
+                t.accessed_ms = now_ms();
+            }
         }
     }
 
@@ -11225,6 +11204,10 @@ mod tests {
         assert!(
             push.contains("accessed_ms"),
             "background job writes must bump accessed_ms or /sync LWW drops the new messages: {push}"
+        );
+        assert!(
+            !push.contains("t.messages.clone()"),
+            "host receipts must not clone every thread: {push}"
         );
         let snap = src
             .split("fn apply_assistant_snapshot")
