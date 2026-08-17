@@ -9,7 +9,7 @@ use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin, load_image_data_url,
     lock_titles, pick_file, play_audio, prepare_windshield, read_text_capped, record_once,
-    run_computer_op_cancel, transcribe_local,
+    run_computer_op_cancel, run_limited, transcribe_local,
 };
 use crate::host::{host_working_dir, resolve_host_cite_path, run_host, run_host_stream};
 use crate::secrets::{self, Secrets};
@@ -3369,13 +3369,16 @@ impl Cabin {
         self.nav = Nav::Devices;
     }
 
-    fn local_clock() -> LocalClock {
-        let out = std::process::Command::new("date")
-            .arg("+%w %H %M")
-            .output()
-            .ok()
+    fn date_out(fmt: &str) -> String {
+        let mut cmd = std::process::Command::new("date");
+        cmd.arg(fmt);
+        run_limited(cmd, Duration::from_millis(400))
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
+
+    fn local_clock() -> LocalClock {
+        let out = Self::date_out("+%w %H %M");
         parse_local_clock(&out, now_ms()).unwrap_or(LocalClock {
             now_ms: now_ms(),
             weekday: 1,
@@ -3385,13 +3388,12 @@ impl Cabin {
     }
 
     fn local_day() -> String {
-        std::process::Command::new("date")
-            .arg("+%F")
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "1970-01-01".into())
+        let out = Self::date_out("+%F");
+        if out.is_empty() {
+            "1970-01-01".into()
+        } else {
+            out
+        }
     }
 
     fn tick_heartbeat(&mut self) {
@@ -6125,13 +6127,7 @@ impl Cabin {
     }
 
     fn roll_today(&mut self) {
-        let today = std::process::Command::new("date")
-            .arg("+%F")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
+        let today = Self::date_out("+%F");
         if !today.is_empty() {
             roll_usage_day(&mut self.usage, &today);
         }
@@ -9531,6 +9527,47 @@ mod tests {
         assert!(
             drop_at.is_none_or(|d| d > spawn_at),
             "dropping the tray before spawn leaves a headless cabin when restart fails: {restart}"
+        );
+    }
+
+    #[test]
+    fn ui_date_spawns_must_time_out() {
+        let src = include_str!("app.rs");
+        let date = src
+            .split("fn date_out(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn local_clock()").next())
+            .expect("date_out");
+        assert!(
+            date.contains("run_limited("),
+            "date_out must kill a hung date: {date}"
+        );
+        let clock = src
+            .split("fn local_clock()")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn local_day()").next())
+            .expect("local_clock");
+        assert!(
+            clock.contains("date_out(") && !clock.contains(".output()"),
+            "local_clock must use the timed date helper: {clock}"
+        );
+        let day = src
+            .split("fn local_day()")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn tick_heartbeat").next())
+            .expect("local_day");
+        assert!(
+            day.contains("date_out(") && !day.contains(".output()"),
+            "local_day must use the timed date helper: {day}"
+        );
+        let roll = src
+            .split("fn roll_today(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ui_settings_menu").next())
+            .expect("roll_today");
+        assert!(
+            roll.contains("date_out(") && !roll.contains(".output()"),
+            "roll_today must use the timed date helper: {roll}"
         );
     }
 
