@@ -3696,6 +3696,7 @@ impl Cabin {
         }
         if self.running {
             self.halt_in_flight();
+            self.finish_hub_dispatch("Interrupted by consult", false);
         }
         self.running = true;
         if self.chat_job_thread.is_none() {
@@ -4333,6 +4334,7 @@ impl Cabin {
                 }
                 if let Some(q) = parse_consult(&text) {
                     if !self.running {
+                        self.finish_hub_dispatch(&text, hub_dispatch_ok(&text));
                         self.chat_job_thread = origin.clone();
                         self.run_consult(q);
                     }
@@ -4430,7 +4432,6 @@ impl Cabin {
             Ok(JobOut::Consult(detail)) => {
                 self.running = false;
                 self.push_bound_msg("assistant", detail.clone());
-                self.finish_hub_dispatch(&detail, true);
                 self.chat_job_thread = None;
                 self.persist();
             }
@@ -9127,6 +9128,30 @@ mod tests {
         assert!(
             consult.contains("if self.chat_job_thread.is_none()"),
             "consult must stay on the origin thread: {consult}"
+        );
+        assert!(
+            consult.contains("Interrupted by consult"),
+            "slash consult during a phone job must fail the dispatch: {consult}"
+        );
+        let consult_out = src
+            .split("Ok(JobOut::Consult(detail))")
+            .nth(1)
+            .and_then(|s| s.split("Ok(JobOut::HostLine").next())
+            .expect("Consult");
+        assert!(
+            !consult_out.contains("finish_hub_dispatch"),
+            "consult must not complete a phone task as the consult reply: {consult_out}"
+        );
+        let chat_consult = src
+            .split("if let Some(q) = parse_consult")
+            .nth(1)
+            .and_then(|s| s.split("let outcome = parse_goal_outcome").next())
+            .expect("parse_consult");
+        let finish_at = chat_consult.find("finish_hub_dispatch");
+        let run_at = chat_consult.find("run_consult");
+        assert!(
+            finish_at.is_some_and(|f| run_at.is_some_and(|r| f < r)),
+            "finish the phone task before starting consult: {chat_consult}"
         );
         let snap = src
             .split("fn snapshot_project")
