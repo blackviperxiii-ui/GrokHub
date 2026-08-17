@@ -8,7 +8,7 @@ pub fn path() -> std::path::PathBuf {
 }
 
 pub fn load() -> Vec<Automation> {
-    let raw = fs::read_to_string(path()).unwrap_or_default();
+    let raw = config::read_file_capped(&path(), config::MEMORY_FILE_CAP);
     let mut list: Vec<Automation> = serde_json::from_str(&raw).unwrap_or_default();
     for a in &mut list {
         if a.id.is_empty() {
@@ -28,7 +28,7 @@ pub fn rewind_index_path() -> std::path::PathBuf {
 }
 
 pub fn load_rewinds() -> Vec<grokhub_core::RewindRecord> {
-    let raw = fs::read_to_string(rewind_index_path()).unwrap_or_default();
+    let raw = config::read_file_capped(&rewind_index_path(), config::MEMORY_FILE_CAP);
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
@@ -67,5 +67,15 @@ mod tests {
         assert_eq!(loaded[0].schedule, "weekdays");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn night_loads_do_not_slurp_huge_files() {
+        let src = include_str!("night.rs");
+        let code = src.split("#[cfg(test)]").next().expect("night");
+        assert!(
+            code.contains("read_file_capped") && !code.contains("read_to_string"),
+            "boot must not slurp huge automations/rewind JSON: {code}"
+        );
     }
 }

@@ -9,7 +9,7 @@ use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin, load_image_data_url,
     lock_titles, pick_file, play_audio, prepare_windshield, read_text_capped, record_once,
-    run_computer_op_cancel, transcribe_local,
+    run_computer_op_cancel, run_limited, transcribe_local,
 };
 use crate::host::{host_working_dir, resolve_host_cite_path, run_host, run_host_stream};
 use crate::secrets::{self, Secrets};
@@ -42,7 +42,7 @@ use grokhub_core::{
     extract_connector_cmds, mark_automation_skipped, retain_held_plan, yolo_plan_split, chat_bearer,
     oauth_access_live,
     drop_trailing_assistant_on, job_error_goes_to_chat, job_is_scratch, kick_messages_for_job, last_user_for_job,
-    persist_user_turn, push_bound_message, refund_host_reserved, daily_units_blocked,
+    persist_user_turn, refund_host_reserved, daily_units_blocked,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
     imagine_aspect_label, imagine_aspect_name, imagine_image_resolution, imagine_style_label,
@@ -55,7 +55,7 @@ use grokhub_core::{
     hey_grok_route, hey_grok_starts_ptt, import_memory_file, merge_imported_memory, insight_pin, is_openclaw_workspace,
     add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
     host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
-    verify_ok_after_user_turn,
+    verify_ok_after_user_turn, VerifyResult,
     project_menu_acts, project_menu_label, rename_node, restore_bound_path, seed_from_bound,
     settle_project_path, should_seed_sidebar, stage_project, toggle_folder, upsert_bound,
     visible_tree, ProjectKind, ProjectMenuAct,
@@ -68,7 +68,8 @@ use grokhub_core::{
     this_turn_cabin_frame,
     is_workload_user, merge_thinking, prefer_complete_reply, quote_for_reply, strip_thinking,
     visible_chat, visible_turn_count, ChatKind, ChatView,
-    apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
+    apply_job_error, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
+    upsert_assistant_turn,
     worker_gone_status, ChatSendKind,
     bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X,
     BUBBLE_PAD_Y,
@@ -91,6 +92,7 @@ use grokhub_core::{
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
+    state_for_disk,
     clear_pending_after_complete, inbox_claim_ready,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
     user_asks_takeover, windshield_prompt,
@@ -117,7 +119,7 @@ use grokhub_core::{
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, MintRealtimeFn, Policy, Recipe, ReplayOp, RewindRecord,
     HostPlanStep, HostRisk, forbidden_reason, mint_host_halt,
     AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
-    VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
+    VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX, IMAGE_FILE_CAP,
     user_pref_facts,
     DEFAULT_MODEL, FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND,
     IDLE_REFLECT_MS, IMAGINE_ASPECTS,
@@ -395,15 +397,22 @@ fn listen_turn(api_key: &str) -> String {
     };
     let has_local = first_bin(TRANSCRIBERS).is_some();
     match transcribe_route(!api_key.trim().is_empty(), has_local) {
-        TranscribeRoute::Xai => match std::fs::read(&wav) {
-            Ok(bytes) => match grok_stt(api_key, &bytes) {
-                Ok(t) => t,
-                Err(e) => transcribe_local(&wav).unwrap_or_else(|local| {
-                    format!("VOICE_RECEIPT: {e}; {local}")
-                }),
-            },
-            Err(e) => format!("VOICE_RECEIPT: {e}"),
-        },
+        TranscribeRoute::Xai => {
+            let len = std::fs::metadata(&wav).map(|m| m.len()).unwrap_or(u64::MAX);
+            if len > IMAGE_FILE_CAP {
+                "VOICE_RECEIPT: recording too large".into()
+            } else {
+                match std::fs::read(&wav) {
+                    Ok(bytes) => match grok_stt(api_key, &bytes) {
+                        Ok(t) => t,
+                        Err(e) => transcribe_local(&wav).unwrap_or_else(|local| {
+                            format!("VOICE_RECEIPT: {e}; {local}")
+                        }),
+                    },
+                    Err(e) => format!("VOICE_RECEIPT: {e}"),
+                }
+            }
+        }
         TranscribeRoute::Local => match transcribe_local(&wav) {
             Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
             Ok(_) => "VOICE_RECEIPT: empty transcript".into(),
@@ -584,6 +593,53 @@ fn screen_from_rows(rows: &[grokhub_core::AtspiRow]) -> Option<grokhub_core::Scr
     screen_from_extents(mx, my)
 }
 
+struct LiveCap {
+    url: Option<String>,
+    cam: Option<String>,
+}
+
+enum CabinFrame {
+    Skip,
+    Pending,
+    Ready(String),
+}
+
+struct PersistSnap {
+    threads: Vec<ChatThread>,
+    msgs: Vec<(String, String)>,
+    board: Vec<BoardCard>,
+    automations: Vec<Automation>,
+    rewind_rows: Vec<RewindRecord>,
+    learning: LearningState,
+    suggestions: SuggestionStore,
+    usage: UsageDay,
+    chip_memory: ChipMemory,
+    wall: ImagineWall,
+    cfg: AppConfig,
+    hub: Option<HubState>,
+    projects: Option<Vec<ProjectNode>>,
+}
+
+fn write_persist_disk(snap: &PersistSnap) {
+    let _ = threads::save(&snap.threads);
+    let _ = config::save_chat(&snap.msgs);
+    let _ = config::save_board(&snap.board);
+    let _ = crate::night::save(&snap.automations);
+    let _ = crate::night::save_rewinds(&snap.rewind_rows);
+    let _ = crate::store::save_learning(&snap.learning);
+    let _ = crate::store::save_suggestions(&snap.suggestions);
+    let _ = crate::store::save_usage(&snap.usage);
+    let _ = crate::store::save_chips(&snap.chip_memory);
+    let _ = crate::store::save_wall(&snap.wall);
+    if let Some(p) = &snap.projects {
+        let _ = crate::store::save_projects(p);
+    }
+    let _ = config::save(&snap.cfg);
+    if let Some(st) = &snap.hub {
+        let _ = save_hub_state(&config::hub_state_path(), st);
+    }
+}
+
 pub struct Cabin {
     nav: Nav,
     cfg: AppConfig,
@@ -601,6 +657,9 @@ pub struct Cabin {
     mem_name: String,
     mem_body: String,
     last_persist: Instant,
+    persist_idle_key: String,
+    persist_rx: Option<mpsc::Receiver<()>>,
+    persist_io: Arc<Mutex<()>>,
     board: Vec<BoardCard>,
     board_title: String,
     imagine_prompt: String,
@@ -674,6 +733,10 @@ pub struct Cabin {
     followup_step: u32,
     stream_buf: String,
     thought_buf: String,
+    chat_views: Vec<ChatView>,
+    chat_view_tid: String,
+    chat_view_n: usize,
+    chat_view_last: usize,
     presence_ring: Vec<(u64, String)>,
     webcam_url: Option<String>,
     voice_sock: Option<crate::voice_ws::VoiceSock>,
@@ -682,6 +745,14 @@ pub struct Cabin {
     cmd_hist: Vec<String>,
     agents: Vec<AgentJob>,
     last_live: Instant,
+    live_cap_rx: Option<mpsc::Receiver<LiveCap>>,
+    eyes_cap_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    kick_cap_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    pending_kick: Option<bool>,
+    kick_frame: Option<String>,
+    kick_skip: bool,
+    recipe_cap_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    verify_rx: Option<mpsc::Receiver<Option<VerifyResult>>>,
     #[allow(dead_code)]
     hotkeys: Option<GlobalHotKeyManager>,
     hotkey_hey: u32,
@@ -699,9 +770,16 @@ pub struct Cabin {
     chip_rx: Option<mpsc::Receiver<Vec<QuickChip>>>,
     chip_busy: bool,
     chip_fp: String,
+    chip_paint_key: String,
     chip_llm_at: u64,
     greeting: String,
     greeting_fp: String,
+    greeting_user_at: u64,
+    greeting_memory_at: u64,
+    greeting_user_md: String,
+    greeting_memory_md: String,
+    greeting_flush_name: String,
+    greeting_flush_len: usize,
     greeting_llm_fp: String,
     greeting_rx: Option<mpsc::Receiver<String>>,
     greeting_busy: bool,
@@ -747,6 +825,7 @@ pub struct Cabin {
     plus_ignore_close: bool,
     file_pick: Option<PlusTarget>,
     pick_dir: String,
+    pick_cache: Option<(String, Vec<(String, bool)>)>,
     projects: Vec<ProjectNode>,
     project_sel: Option<String>,
     proj_menu_pos: egui::Pos2,
@@ -886,6 +965,9 @@ impl Cabin {
             mem_name,
             mem_body,
             last_persist: Instant::now(),
+            persist_idle_key: String::new(),
+            persist_rx: None,
+            persist_io: Arc::new(Mutex::new(())),
             board: config::load_board(),
             board_title: String::new(),
             imagine_prompt: String::new(),
@@ -963,6 +1045,10 @@ impl Cabin {
             followup_step: 0,
             stream_buf: String::new(),
             thought_buf: String::new(),
+            chat_views: vec![],
+            chat_view_tid: String::new(),
+            chat_view_n: usize::MAX,
+            chat_view_last: usize::MAX,
             presence_ring: vec![],
             webcam_url: None,
             voice_sock: None,
@@ -971,6 +1057,14 @@ impl Cabin {
             cmd_hist: vec![],
             agents: vec![],
             last_live: Instant::now(),
+            live_cap_rx: None,
+            eyes_cap_rx: None,
+            kick_cap_rx: None,
+            pending_kick: None,
+            kick_frame: None,
+            kick_skip: false,
+            recipe_cap_rx: None,
+            verify_rx: None,
             hotkeys: None,
             hotkey_hey: 0,
             hotkey_halt: 0,
@@ -987,9 +1081,16 @@ impl Cabin {
             chip_rx: None,
             chip_busy: false,
             chip_fp: String::new(),
+            chip_paint_key: String::new(),
             chip_llm_at: 0,
             greeting: String::new(),
             greeting_fp: String::new(),
+            greeting_user_at: 0,
+            greeting_memory_at: 0,
+            greeting_user_md: String::new(),
+            greeting_memory_md: String::new(),
+            greeting_flush_name: String::new(),
+            greeting_flush_len: usize::MAX,
             greeting_llm_fp: String::new(),
             greeting_rx: None,
             greeting_busy: false,
@@ -1035,6 +1136,7 @@ impl Cabin {
             plus_ignore_close: false,
             file_pick: None,
             pick_dir: std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()),
+            pick_cache: None,
             projects,
             project_sel,
             proj_menu_pos: egui::Pos2::ZERO,
@@ -1116,6 +1218,17 @@ impl Cabin {
     }
 
     fn persist(&mut self) {
+        let snap = self.persist_snap();
+        self.flush_projects();
+        self.sync_hub_voice();
+        if let Ok(_g) = self.persist_io.lock() {
+            write_persist_disk(&snap);
+        }
+        self.last_persist = Instant::now();
+        self.geom_dirty = false;
+    }
+
+    fn persist_snap(&mut self) -> PersistSnap {
         let msgs: Vec<(String, String)> = self
             .messages
             .iter()
@@ -1125,24 +1238,79 @@ impl Cabin {
             t.messages = msgs.clone();
             self.cfg.current_thread = t.id.clone();
         }
-        let _ = threads::save(&self.threads);
-        let _ = config::save_chat(&msgs);
-        let _ = config::save_board(&self.board);
-        let _ = crate::night::save(&self.automations);
-        let _ = crate::night::save_rewinds(&self.rewind_rows);
-        let _ = crate::store::save_learning(&self.learning);
-        let _ = crate::store::save_suggestions(&self.suggestions);
-        let _ = crate::store::save_usage(&self.usage);
-        let _ = crate::store::save_chips(&self.chip_memory);
-        let _ = crate::store::save_wall(&self.wall);
-        self.flush_projects();
-        let _ = config::save(&self.cfg);
-        self.sync_hub_voice();
-        if let Ok(st) = self.hub.lock() {
-            let _ = save_hub_state(&config::hub_state_path(), &st);
+        let projects = if self.projects_dirty {
+            Some(self.projects.clone())
+        } else {
+            None
+        };
+        PersistSnap {
+            threads: self.threads.clone(),
+            msgs,
+            board: self.board.clone(),
+            automations: self.automations.clone(),
+            rewind_rows: self.rewind_rows.clone(),
+            learning: self.learning.clone(),
+            suggestions: self.suggestions.clone(),
+            usage: self.usage.clone(),
+            chip_memory: self.chip_memory.clone(),
+            wall: self.wall.clone(),
+            cfg: self.cfg.clone(),
+            hub: self.hub.lock().ok().map(|st| state_for_disk(&st)),
+            projects,
         }
+    }
+
+    fn persist_bg(&mut self) {
+        if self.persist_rx.is_some() {
+            return;
+        }
+        let key = format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            self.threads.len(),
+            self.thread_idx,
+            self.messages.len(),
+            self.messages.last().map(|m| m.content.len()).unwrap_or(0),
+            self.board.len(),
+            self.automations.len(),
+            self.geom_dirty,
+            self.projects_dirty,
+            self.usage.day,
+            self.usage.messages,
+            self.cfg.current_thread
+        );
+        if !self.geom_dirty && !self.projects_dirty && self.persist_idle_key == key {
+            self.last_persist = Instant::now();
+            return;
+        }
+        self.persist_idle_key = key;
+        let snap = self.persist_snap();
+        if snap.projects.is_some() {
+            self.projects_dirty = false;
+        }
+        self.sync_hub_voice();
         self.last_persist = Instant::now();
         self.geom_dirty = false;
+        let io = self.persist_io.clone();
+        let (tx, rx) = mpsc::channel();
+        self.persist_rx = Some(rx);
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                write_persist_disk(&snap);
+            }
+            let _ = tx.send(());
+        });
+    }
+
+    fn poll_persist(&mut self) {
+        let Some(rx) = self.persist_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => {}
+            Err(mpsc::TryRecvError::Empty) => {
+                self.persist_rx = Some(rx);
+            }
+        }
     }
 
     fn sync_hub_voice(&self) {
@@ -1187,6 +1355,12 @@ impl Cabin {
             self.host_reserved = 0;
         }
         self.pending_connectors.clear();
+        self.pending_kick = None;
+        self.kick_cap_rx = None;
+        self.kick_frame = None;
+        self.kick_skip = false;
+        self.recipe_cap_rx = None;
+        self.verify_rx = None;
         self.plan_pending = None;
         self.agents.clear();
         self.active_skill_follow = None;
@@ -1201,11 +1375,7 @@ impl Cabin {
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        let mut stored: Vec<(String, Vec<(String, String)>)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.messages.clone()))
-            .collect();
+        let mut stored = self.job_stored_pairs(job.as_deref(), &vis);
         drop_trailing_assistant_on(job.as_deref(), &vis, &mut visible, &mut stored);
         self.messages = visible
             .into_iter()
@@ -1239,40 +1409,32 @@ impl Cabin {
             return;
         }
         let vis = self.visible_thread_id();
-        let mut visible: Vec<(String, String)> = self
-            .messages
-            .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
-            .collect();
-        let mut stored: Vec<(String, Vec<(String, String)>)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.messages.clone()))
-            .collect();
-        apply_stream_snapshot(
-            self.chat_job_thread.as_deref(),
-            &vis,
-            &mut visible,
-            &mut stored,
-            &content,
-        );
-        self.messages = visible
-            .into_iter()
-            .map(|(role, content)| Msg { role, content })
-            .collect();
+        let job = self.chat_job_thread.as_deref();
+        if job.is_none() || job == Some(vis.as_str()) {
+            if let Some(m) = self.messages.last_mut() {
+                if m.role == "assistant" {
+                    m.content = content;
+                } else {
+                    self.messages.push(Msg {
+                        role: "assistant".into(),
+                        content,
+                    });
+                }
+            } else {
+                self.messages.push(Msg {
+                    role: "assistant".into(),
+                    content,
+                });
+            }
+        } else if let Some(job_id) = job {
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == job_id) {
+                upsert_assistant_turn(&mut t.messages, &content);
+            }
+        }
         let target = self
             .chat_job_thread
             .clone()
-            .unwrap_or_else(|| vis.clone());
-        if let Some(job) = self.chat_job_thread.as_deref() {
-            if job != vis {
-                if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job) {
-                    if let Some(t) = self.threads.iter_mut().find(|t| t.id == job) {
-                        t.messages = msgs.clone();
-                    }
-                }
-            }
-        }
+            .unwrap_or_else(|| vis);
         if let Some(t) = self.threads.iter_mut().find(|t| t.id == target) {
             t.accessed_ms = now_ms();
         }
@@ -1280,43 +1442,22 @@ impl Cabin {
 
     fn push_bound_msg(&mut self, role: &str, content: String) {
         let vis = self.visible_thread_id();
-        let mut visible: Vec<(String, String)> = self
-            .messages
-            .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
-            .collect();
-        let mut stored: Vec<(String, Vec<(String, String)>)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.messages.clone()))
-            .collect();
-        push_bound_message(
-            self.chat_job_thread.as_deref(),
-            &vis,
-            &mut visible,
-            &mut stored,
-            role,
-            content,
-        );
-        self.messages = visible
-            .into_iter()
-            .map(|(role, content)| Msg { role, content })
-            .collect();
-        let target = self
-            .chat_job_thread
-            .clone()
-            .unwrap_or_else(|| vis.clone());
-        if let Some(job) = self.chat_job_thread.as_deref() {
-            if job != vis {
-                if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job) {
-                    if let Some(t) = self.threads.iter_mut().find(|t| t.id == job) {
-                        t.messages = msgs.clone();
-                    }
-                }
+        let job = self.chat_job_thread.as_deref();
+        if job.is_none() || job == Some(vis.as_str()) {
+            self.messages.push(Msg {
+                role: role.to_string(),
+                content,
+            });
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == vis) {
+                t.accessed_ms = now_ms();
             }
+            return;
         }
-        if let Some(t) = self.threads.iter_mut().find(|t| t.id == target) {
-            t.accessed_ms = now_ms();
+        if let Some(job_id) = job {
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == job_id) {
+                t.messages.push((role.to_string(), content));
+                t.accessed_ms = now_ms();
+            }
         }
     }
 
@@ -1439,11 +1580,15 @@ impl Cabin {
         let mut files = Vec::new();
         if let Ok(rd) = std::fs::read_dir(dir) {
             for e in rd.flatten() {
+                if dirs.len() + files.len() >= 400 {
+                    break;
+                }
                 let name = e.file_name().to_string_lossy().to_string();
                 if name.starts_with('.') || name.is_empty() {
                     continue;
                 }
-                if e.path().is_dir() {
+                let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                if is_dir {
                     dirs.push(name);
                 } else {
                     files.push(name);
@@ -1460,6 +1605,22 @@ impl Cabin {
             out.push((f, false));
         }
         out
+    }
+
+    fn cached_pick_entries(&mut self) -> &[(String, bool)] {
+        let dir = self.pick_dir.clone();
+        let stale = self
+            .pick_cache
+            .as_ref()
+            .map(|(cached, _)| cached != &dir)
+            .unwrap_or(true);
+        if stale {
+            self.pick_cache = Some((dir.clone(), Self::pick_entries(Path::new(&dir))));
+        }
+        self.pick_cache
+            .as_ref()
+            .map(|(_, entries)| entries.as_slice())
+            .unwrap_or(&[])
     }
 
     fn ui_plus_overlays(&mut self, ctx: &egui::Context) {
@@ -1500,7 +1661,7 @@ impl Cabin {
             let mut cancel = false;
             let mut paste = false;
             let dir = PathBuf::from(&self.pick_dir);
-            let entries = Self::pick_entries(&dir);
+            let entries = self.cached_pick_entries().to_vec();
             egui::Window::new("Upload")
                 .collapsible(false)
                 .resizable(true)
@@ -1998,11 +2159,36 @@ impl Cabin {
             }
             return;
         }
-        if config::read_memory(&self.mem_name) != self.mem_body {
-            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+        if !self.scratch()
+            && (self.greeting_flush_name != self.mem_name
+                || self.greeting_flush_len != self.mem_body.len())
+        {
+            if config::read_memory(&self.mem_name) != self.mem_body {
+                let _ = config::write_memory(&self.mem_name, &self.mem_body);
+            }
+            self.greeting_flush_name = self.mem_name.clone();
+            self.greeting_flush_len = self.mem_body.len();
         }
-        let user_md = config::read_memory("USER.md");
-        let memory_md = config::read_memory("MEMORY.md");
+        let user_at = config::memory_updated_at("USER.md");
+        if self.greeting_user_at != user_at {
+            self.greeting_user_md = config::read_memory("USER.md");
+            self.greeting_user_at = user_at;
+        }
+        let memory_at = config::memory_updated_at("MEMORY.md");
+        if self.greeting_memory_at != memory_at {
+            self.greeting_memory_md = config::read_memory("MEMORY.md");
+            self.greeting_memory_at = memory_at;
+        }
+        let user_md = if self.mem_name == "USER.md" {
+            self.mem_body.clone()
+        } else {
+            self.greeting_user_md.clone()
+        };
+        let memory_md = if self.mem_name == "MEMORY.md" {
+            self.mem_body.clone()
+        } else {
+            self.greeting_memory_md.clone()
+        };
         let insights: Vec<String> = self
             .learning
             .insights
@@ -2226,14 +2412,38 @@ impl Cabin {
     }
 
     fn refresh_chips(&mut self) {
-        let chat = self.chat_pairs();
         let hour = Self::chip_hour();
+        let n = self.messages.len();
+        let last = self.messages.last().map(|m| m.content.len()).unwrap_or(0);
         let title = self
             .threads
             .get(self.thread_idx)
             .map(|t| t.title.clone())
             .unwrap_or_default();
         let last_failed = self.last_receipt_ok == Some(false);
+        let draft_head: String = self.composer.chars().take(16).collect();
+        let draft_tail: String = self.composer.chars().rev().take(16).collect();
+        let key = format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            self.thread_idx,
+            n,
+            last,
+            self.composer.len(),
+            draft_head,
+            draft_tail,
+            hour,
+            last_failed,
+            title,
+            self.chip_dismissed.len(),
+            self.llm_chips.len(),
+            self.has_key(),
+            self.usage.messages
+        );
+        if self.chip_paint_key == key && !self.visible_chips.is_empty() {
+            return;
+        }
+        self.chip_paint_key = key;
+        let chat = self.chat_pairs();
         let others = self.other_chip_threads();
         let input = ChipInput {
             chat: &chat,
@@ -3057,6 +3267,24 @@ impl Cabin {
         Policy::max()
     }
 
+    fn job_stored_pairs(
+        &self,
+        job_thread_id: Option<&str>,
+        visible_thread_id: &str,
+    ) -> Vec<(String, Vec<(String, String)>)> {
+        let Some(id) = job_thread_id else {
+            return Vec::new();
+        };
+        if id == visible_thread_id {
+            return Vec::new();
+        }
+        self.threads
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| vec![(t.id.clone(), t.messages.clone())])
+            .unwrap_or_default()
+    }
+
     fn last_user_on_job(&self) -> String {
         let vis = self.visible_thread_id();
         let visible_pairs: Vec<(String, String)> = self
@@ -3064,11 +3292,7 @@ impl Cabin {
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        let stored: Vec<(String, Vec<(String, String)>)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.messages.clone()))
-            .collect();
+        let stored = self.job_stored_pairs(self.chat_job_thread.as_deref(), &vis);
         last_user_for_job(
             self.chat_job_thread.as_deref(),
             &vis,
@@ -3367,29 +3591,53 @@ impl Cabin {
         self.nav = Nav::Devices;
     }
 
-    fn local_clock() -> LocalClock {
-        let out = std::process::Command::new("date")
-            .arg("+%w %H %M")
-            .output()
-            .ok()
+    fn date_out(fmt: &str) -> String {
+        let mut cmd = std::process::Command::new("date");
+        cmd.arg(fmt);
+        run_limited(cmd, Duration::from_millis(400))
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default();
-        parse_local_clock(&out, now_ms()).unwrap_or(LocalClock {
+            .unwrap_or_default()
+    }
+
+    fn local_clock() -> LocalClock {
+        if let Ok(g) = LAST_CLOCK.lock() {
+            if let Some((at, clock)) = g.as_ref() {
+                if at.elapsed() < CLOCK_TTL {
+                    return *clock;
+                }
+            }
+        }
+        let out = Self::date_out("+%w %H %M");
+        let clock = parse_local_clock(&out, now_ms()).unwrap_or(LocalClock {
             now_ms: now_ms(),
             weekday: 1,
             hour: 12,
             minute: 0,
-        })
+        });
+        if let Ok(mut g) = LAST_CLOCK.lock() {
+            *g = Some((Instant::now(), clock));
+        }
+        clock
     }
 
     fn local_day() -> String {
-        std::process::Command::new("date")
-            .arg("+%F")
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "1970-01-01".into())
+        if let Ok(g) = LAST_DAY.lock() {
+            if let Some((at, day)) = g.as_ref() {
+                if at.elapsed() < CLOCK_TTL {
+                    return day.clone();
+                }
+            }
+        }
+        let out = Self::date_out("+%F");
+        let day = if out.is_empty() {
+            "1970-01-01".into()
+        } else {
+            out
+        };
+        if let Ok(mut g) = LAST_DAY.lock() {
+            *g = Some((Instant::now(), day.clone()));
+        }
+        day
     }
 
     fn tick_heartbeat(&mut self) {
@@ -3407,7 +3655,7 @@ impl Cabin {
                         self.stamp_current_access();
                     }
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
-                        self.persist();
+                        self.persist_bg();
                     }
                 }
                 HeartbeatAct::Inbox => self.drain_inbox(),
@@ -3861,7 +4109,7 @@ impl Cabin {
         if let Ok(rd) = std::fs::read_dir(&root) {
             for e in rd.flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
-                if let Ok(body) = std::fs::read_to_string(e.path()) {
+                if let Ok(body) = read_text_capped(&e.path()) {
                     if let Some((dest, content)) = import_memory_file(&name, &body) {
                         if dest == "MEMORY.md" {
                             memory = merge_imported_memory(&memory, &content, &name);
@@ -3882,7 +4130,7 @@ impl Cabin {
         if let Ok(rd) = std::fs::read_dir(skills_dir) {
             for e in rd.flatten() {
                 let md = e.path().join("SKILL.md");
-                if let Ok(raw) = std::fs::read_to_string(md) {
+                if let Ok(raw) = read_text_capped(&md) {
                     let parsed = grokhub_core::parse_skill_md(&raw);
                     if !parsed.name.is_empty() && skills::save_skill(&parsed).is_ok() {
                         imported += 1;
@@ -4024,18 +4272,38 @@ impl Cabin {
         if lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
             return;
         }
-        if let Ok(url) = capture_data_url() {
-            if should_send_screenshot(&self.last_window_title, "") {
-                if let Ok(mut st) = self.hub.lock() {
-                    st.store_frame(&url);
+        if let Some(rx) = self.live_cap_rx.take() {
+            match rx.try_recv() {
+                Ok(cap) => {
+                    if let Some(url) = cap.url {
+                        if should_send_screenshot(&self.last_window_title, "") {
+                            if let Ok(mut st) = self.hub.lock() {
+                                st.store_frame(&url);
+                            }
+                            self.last_frame_url = Some(url.clone());
+                            self.push_presence(url);
+                        }
+                    }
+                    if let Some(cam) = cap.cam {
+                        self.webcam_url = Some(cam);
+                    }
                 }
-                self.last_frame_url = Some(url.clone());
-                self.push_presence(url);
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.live_cap_rx = Some(rx);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {}
             }
         }
-        if let Ok(cam) = capture_webcam() {
-            self.webcam_url = Some(cam);
+        if self.live_cap_rx.is_some() {
+            return;
         }
+        let (tx, rx) = mpsc::channel();
+        self.live_cap_rx = Some(rx);
+        std::thread::spawn(move || {
+            let url = capture_data_url().ok();
+            let cam = capture_webcam().ok();
+            let _ = tx.send(LiveCap { url, cam });
+        });
     }
 
     fn tick_mid_thought(&mut self) {
@@ -4235,6 +4503,36 @@ impl Cabin {
             self.status = "Connect Grok OAuth in Settings".into();
             return;
         }
+        if !self.kick_skip
+            && self.kick_frame.is_none()
+            && (self.kick_cap_rx.is_some()
+                || should_capture_before_chat(self.eyes_attach || self.hands_attach))
+        {
+            match self.poll_cabin_frame() {
+                CabinFrame::Pending => {
+                    self.pending_kick = Some(consume_attach);
+                    if self.chat_job_thread.is_none() {
+                        self.chat_job_thread = Some(self.visible_thread_id());
+                    }
+                    self.running = true;
+                    self.status = "Capturing…".into();
+                    return;
+                }
+                CabinFrame::Ready(url) => {
+                    self.kick_frame = Some(url);
+                }
+                CabinFrame::Skip => {}
+            }
+        }
+        if self.verify_rx.is_some() {
+            self.pending_kick = Some(consume_attach);
+            if self.chat_job_thread.is_none() {
+                self.chat_job_thread = Some(self.visible_thread_id());
+            }
+            self.running = true;
+            self.status = "Verifying…".into();
+            return;
+        }
         self.running = true;
         self.status = "Thinking…".into();
         if self.chat_job_thread.is_none() {
@@ -4246,11 +4544,7 @@ impl Cabin {
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        let stored: Vec<(String, Vec<(String, String)>)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.messages.clone()))
-            .collect();
+        let stored = self.job_stored_pairs(self.chat_job_thread.as_deref(), &vis);
         let raw = kick_messages_for_job(
             self.chat_job_thread.as_deref(),
             &vis,
@@ -4316,7 +4610,14 @@ impl Cabin {
         if self.cfg.cabin_eyes && user_asks_cabin_eyes(&last_user) {
             self.eyes_attach = true;
         }
-        let captured = self.capture_cabin_frame_this_turn();
+        let captured = if self.kick_skip {
+            self.kick_skip = false;
+            self.kick_frame.take()
+        } else {
+            self.kick_frame
+                .take()
+                .or_else(|| self.capture_cabin_frame_this_turn())
+        };
         let mut hands = hands_protocol().to_string();
         if self.eyes_attach || self.hands_attach {
             let rows = collect_rows();
@@ -4490,11 +4791,7 @@ impl Cabin {
                     .iter()
                     .map(|m| (m.role.clone(), m.content.clone()))
                     .collect();
-                let stored: Vec<(String, Vec<(String, String)>)> = self
-                    .threads
-                    .iter()
-                    .map(|t| (t.id.clone(), t.messages.clone()))
-                    .collect();
+                let stored = self.job_stored_pairs(job.as_deref(), &vis);
                 let job_pairs = kick_messages_for_job(
                     job.as_deref(),
                     &vis,
@@ -4772,14 +5069,8 @@ impl Cabin {
                     if !lock_blocks_hands(&titles)
                         && !lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
                     {
-                        match capture_data_url() {
-                            Ok(url) => {
-                                if let Ok(mut st) = self.hub.lock() {
-                                    st.store_frame(&url);
-                                }
-                                self.last_frame_url = Some(url);
-                            }
-                            Err(_) => {}
+                        if let Some(url) = self.capture_cabin_frame_this_turn() {
+                            self.kick_frame = Some(url);
                         }
                     }
                     if let Some(recipe) = recipe_from_cmds(&self.last_host, screen_from_rows(&rows)) {
@@ -4803,7 +5094,7 @@ impl Cabin {
                 ) {
                     if let Some(path) = cite.split_whitespace().last() {
                         let path = resolve_host_cite_path(&self.cfg.project_dir, path);
-                        if let Ok(after) = std::fs::read_to_string(&path) {
+                        if let Ok(after) = read_text_capped(std::path::Path::new(&path)) {
                             let diff = unified_diff_cite(&path, "", &after);
                             self.push_bound_msg("user", format!("HOST_DIFF:\n{diff}"));
                             self.persist();
@@ -5205,8 +5496,44 @@ impl Cabin {
     }
 
     fn capture_cabin_frame_this_turn(&mut self) -> Option<String> {
+        match self.poll_cabin_frame() {
+            CabinFrame::Ready(url) => Some(url),
+            CabinFrame::Skip | CabinFrame::Pending => None,
+        }
+    }
+
+    fn poll_cabin_frame(&mut self) -> CabinFrame {
+        if let Some(rx) = self.kick_cap_rx.take() {
+            return match rx.try_recv() {
+                Ok(Ok(url)) => {
+                    if let Ok(mut st) = self.hub.lock() {
+                        st.store_frame(&url);
+                    }
+                    self.last_frame_url = Some(url.clone());
+                    CabinFrame::Ready(url)
+                }
+                Ok(Err(e)) => {
+                    if self.status.is_empty()
+                        || self.status == "Thinking…"
+                        || self.status == "Capturing…"
+                    {
+                        self.status = format!("eyes: {e}");
+                    }
+                    self.kick_skip = true;
+                    CabinFrame::Skip
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.kick_cap_rx = Some(rx);
+                    CabinFrame::Pending
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.kick_skip = true;
+                    CabinFrame::Skip
+                }
+            };
+        }
         if !should_capture_before_chat(self.eyes_attach || self.hands_attach) {
-            return None;
+            return CabinFrame::Skip;
         }
         let rows = collect_rows();
         self.last_window_title = rows
@@ -5220,21 +5547,38 @@ impl Cabin {
             || !should_send_screenshot(&self.last_window_title, "")
         {
             self.status = "eyes: skipped lock/password frame".into();
-            return None;
+            return CabinFrame::Skip;
         }
-        match capture_data_url() {
-            Ok(url) => {
-                if let Ok(mut st) = self.hub.lock() {
-                    st.store_frame(&url);
-                }
-                self.last_frame_url = Some(url.clone());
-                Some(url)
+        let (tx, rx) = mpsc::channel();
+        self.kick_cap_rx = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send(capture_data_url());
+        });
+        CabinFrame::Pending
+    }
+
+    fn poll_pending_kick(&mut self) {
+        let Some(consume) = self.pending_kick else {
+            return;
+        };
+        if self.kick_frame.is_some()
+            || (self.kick_cap_rx.is_none()
+                && !should_capture_before_chat(self.eyes_attach || self.hands_attach))
+        {
+            self.pending_kick = None;
+            self.kick_model(consume);
+            return;
+        }
+        match self.poll_cabin_frame() {
+            CabinFrame::Pending => {}
+            CabinFrame::Ready(url) => {
+                self.kick_frame = Some(url);
+                self.pending_kick = None;
+                self.kick_model(consume);
             }
-            Err(e) => {
-                if self.status.is_empty() || self.status == "Thinking…" {
-                    self.status = format!("eyes: {e}");
-                }
-                None
+            CabinFrame::Skip => {
+                self.pending_kick = None;
+                self.kick_model(consume);
             }
         }
     }
@@ -5359,11 +5703,7 @@ impl Cabin {
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        let stored: Vec<(String, Vec<(String, String)>)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.messages.clone()))
-            .collect();
+        let stored = self.job_stored_pairs(self.chat_job_thread.as_deref(), &vis);
         let msgs = kick_messages_for_job(
             self.chat_job_thread.as_deref(),
             &vis,
@@ -5430,13 +5770,33 @@ impl Cabin {
     }
 
     fn run_skill_verify(&mut self) {
-        if self.skill_name.is_empty() {
+        if self.skill_name.is_empty() || self.verify_rx.is_some() {
             return;
         }
+        let name = self.skill_name.clone();
         let cwd = host_working_dir(&self.cfg.project_dir);
-        let Some(v) = skills::run_verify(&self.skill_name, cwd.as_deref()) else {
+        let (tx, rx) = mpsc::channel();
+        self.verify_rx = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send(skills::run_verify(&name, cwd.as_deref()));
+        });
+    }
+
+    fn poll_verify(&mut self) {
+        let Some(rx) = self.verify_rx.take() else {
             return;
         };
+        match rx.try_recv() {
+            Ok(Some(v)) => self.apply_verify_result(v),
+            Ok(None) => {}
+            Err(mpsc::TryRecvError::Empty) => {
+                self.verify_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    fn apply_verify_result(&mut self, v: VerifyResult) {
         self.verify_ok_turn = v.ok;
         self.verify_chip = if v.ok {
             "verify pass".into()
@@ -5518,14 +5878,14 @@ impl Cabin {
                     let lock = lock_titles();
                     if !lock_blocks_hands(&titles)
                         && !lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+                        && self.recipe_cap_rx.is_none()
                     {
-                        if let Ok(url) = capture_data_url() {
-                            if let Ok(mut st) = self.hub.lock() {
-                                st.store_frame(&url);
-                            }
-                            self.last_frame_url = Some(url);
-                            t.push_str("frame: captured\n");
-                        }
+                        let (tx, rx) = mpsc::channel();
+                        self.recipe_cap_rx = Some(rx);
+                        std::thread::spawn(move || {
+                            let _ = tx.send(capture_data_url());
+                        });
+                        t.push_str("frame: capturing…\n");
                     }
                 }
                 ReplayOp::Op(op) => cmds.push(computer_cmd_line(&op)),
@@ -5555,6 +5915,7 @@ impl Cabin {
     }
 
     fn refresh_eyes(&mut self) {
+        let pending = self.poll_eyes_cap();
         let rows = collect_rows();
         let labels: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
         let refused = refused_lock(&labels);
@@ -5578,13 +5939,9 @@ impl Cabin {
             {
                 frame_note = Some("frame: skipped lock/password\n".into());
                 false
-            } else {
-                match capture_data_url() {
-                    Ok(url) => {
-                        if let Ok(mut st) = self.hub.lock() {
-                            st.store_frame(&url);
-                        }
-                        self.last_frame_url = Some(url);
+            } else if let Some(cap) = pending {
+                match cap {
+                    Ok(_) => {
                         frame_note = Some("frame: captured (on hub, not disk)\n".into());
                         true
                     }
@@ -5593,6 +5950,16 @@ impl Cabin {
                         false
                     }
                 }
+            } else {
+                if self.eyes_cap_rx.is_none() {
+                    let (tx, rx) = mpsc::channel();
+                    self.eyes_cap_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let _ = tx.send(capture_data_url());
+                    });
+                }
+                frame_note = Some("frame: capturing…\n".into());
+                false
             }
         } else {
             false
@@ -5623,6 +5990,64 @@ impl Cabin {
         }
         self.eyes_text = t;
         self.status = format!("{} objects", frame.objects.len());
+    }
+
+    fn poll_eyes_cap(&mut self) -> Option<Result<String, String>> {
+        let Some(rx) = self.eyes_cap_rx.take() else {
+            return None;
+        };
+        match rx.try_recv() {
+            Ok(cap) => {
+                if let Ok(url) = &cap {
+                    if should_send_screenshot(&self.last_window_title, "") {
+                        if let Ok(mut st) = self.hub.lock() {
+                            st.store_frame(url);
+                        }
+                        self.last_frame_url = Some(url.clone());
+                    }
+                    self.eyes_text = self.eyes_text.replace(
+                        "frame: capturing…\n",
+                        "frame: captured (on hub, not disk)\n",
+                    );
+                } else if let Err(e) = &cap {
+                    self.eyes_text =
+                        self.eyes_text.replace("frame: capturing…\n", &format!("frame: {e}\n"));
+                }
+                Some(cap)
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.eyes_cap_rx = Some(rx);
+                None
+            }
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        }
+    }
+
+    fn poll_recipe_cap(&mut self) {
+        let Some(rx) = self.recipe_cap_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(url)) => {
+                if let Ok(mut st) = self.hub.lock() {
+                    st.store_frame(&url);
+                }
+                self.last_frame_url = Some(url);
+                self.eyes_text = self.eyes_text.replace(
+                    "frame: capturing…\n",
+                    "frame: captured\n",
+                );
+            }
+            Ok(Err(e)) => {
+                self.eyes_text = self
+                    .eyes_text
+                    .replace("frame: capturing…\n", &format!("frame: {e}\n"));
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.recipe_cap_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
     }
 
     fn halt_work(&mut self, status: impl Into<String>) {
@@ -5947,6 +6372,11 @@ impl eframe::App for Cabin {
         self.poll_global_hotkeys();
         self.poll_night_check(now_ms());
         self.poll_wall();
+        self.poll_persist();
+        self.poll_eyes_cap();
+        self.poll_recipe_cap();
+        self.poll_verify();
+        self.poll_pending_kick();
         self.live_room();
         self.tick_heartbeat();
         let close_requested = ctx.input(|i| i.viewport().close_requested());
@@ -6018,7 +6448,7 @@ impl eframe::App for Cabin {
         self.capture_window(ctx);
         self.flush_window(ctx);
         if self.last_persist.elapsed() > Duration::from_secs(2) {
-            self.persist();
+            self.persist_bg();
         }
         let wait = next_heartbeat_wait_ms(
             self.last_heartbeat.elapsed().as_millis() as u64,
@@ -6026,7 +6456,14 @@ impl eframe::App for Cabin {
         );
         let live = wants_live_repaint(
             self.running,
-            self.chip_busy || self.goal_busy || self.oauth_photo_busy || self.review_busy,
+            self.chip_busy
+                || self.goal_busy
+                || self.oauth_photo_busy
+                || self.review_busy
+                || self.pending_kick.is_some()
+                || self.kick_cap_rx.is_some()
+                || self.recipe_cap_rx.is_some()
+                || self.verify_rx.is_some(),
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -6123,13 +6560,7 @@ impl Cabin {
     }
 
     fn roll_today(&mut self) {
-        let today = std::process::Command::new("date")
-            .arg("+%F")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
+        let today = Self::date_out("+%F");
         if !today.is_empty() {
             roll_usage_day(&mut self.usage, &today);
         }
@@ -6927,6 +7358,24 @@ impl Cabin {
             });
     }
 
+    fn cached_chat_views(&mut self) -> &[ChatView] {
+        let tid = self.visible_thread_id();
+        let n = self.messages.len();
+        let last = self.messages.last().map(|m| m.content.len()).unwrap_or(0);
+        if self.chat_view_tid != tid || self.chat_view_n != n || self.chat_view_last != last {
+            let pairs: Vec<(String, String)> = self
+                .messages
+                .iter()
+                .map(|m| (m.role.clone(), m.content.clone()))
+                .collect();
+            self.chat_views = visible_chat(&pairs);
+            self.chat_view_tid = tid;
+            self.chat_view_n = n;
+            self.chat_view_last = last;
+        }
+        &self.chat_views
+    }
+
     fn ui_chat(&mut self, ctx: &egui::Context) {
         let empty = self.messages.is_empty();
         if !empty {
@@ -6958,38 +7407,44 @@ impl Cabin {
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         ui.set_max_width(pane);
-                        let pairs: Vec<(String, String)> = self
-                            .messages
-                            .iter()
-                            .map(|m| (m.role.clone(), m.content.clone()))
-                            .collect();
-                        let views = visible_chat(&pairs);
-                        let last_thought = views.iter().rposition(|v| v.kind == ChatKind::Thought);
-                        for (i, block) in views.iter().enumerate() {
-                            match paint_chat_block(
-                                ui,
-                                block,
-                                i,
-                                self.thinking_here() && last_thought == Some(i),
-                            ) {
-                                ChatBlockAct::Copy(body) => {
-                                    ui.ctx().copy_text(body);
-                                    self.status = "Copied".into();
+                        let thinking = self.thinking_here();
+                        let mut act = ChatBlockAct::None;
+                        let last_kind;
+                        {
+                            let views = self.cached_chat_views();
+                            let last_thought =
+                                views.iter().rposition(|v| v.kind == ChatKind::Thought);
+                            last_kind = views.last().map(|v| v.kind);
+                            for (i, block) in views.iter().enumerate() {
+                                match paint_chat_block(
+                                    ui,
+                                    block,
+                                    i,
+                                    thinking && last_thought == Some(i),
+                                ) {
+                                    ChatBlockAct::None => {}
+                                    other => act = other,
                                 }
-                                ChatBlockAct::Reply(body) => {
-                                    self.composer =
-                                        append_composer(&self.composer, &quote_for_reply(&body));
-                                    if !self.composer.ends_with('\n') {
-                                        self.composer.push('\n');
-                                    }
-                                    self.composer_want_focus = true;
-                                }
-                                ChatBlockAct::None => {}
+                                ui.add_space(10.0);
                             }
-                            ui.add_space(10.0);
                         }
-                        if self.thinking_here() {
-                            match views.last().map(|v| v.kind) {
+                        match act {
+                            ChatBlockAct::Copy(body) => {
+                                ui.ctx().copy_text(body);
+                                self.status = "Copied".into();
+                            }
+                            ChatBlockAct::Reply(body) => {
+                                self.composer =
+                                    append_composer(&self.composer, &quote_for_reply(&body));
+                                if !self.composer.ends_with('\n') {
+                                    self.composer.push('\n');
+                                }
+                                self.composer_want_focus = true;
+                            }
+                            ChatBlockAct::None => {}
+                        }
+                        if thinking {
+                            match last_kind {
                                 None | Some(ChatKind::User) => {
                                     ui.label(
                                         RichText::new("Thinking…")
@@ -9062,6 +9517,12 @@ fn eyes_frame_tex(ctx: &egui::Context, url: &str) -> Option<(TextureHandle, [usi
         at: 0,
     };
     let (_, buf) = frame_bytes(&frame)?;
+    if (buf.len() as u64) > IMAGE_FILE_CAP {
+        return None;
+    }
+    if !crate::desktop::image_pixels_ok_for_bytes(&buf) {
+        return None;
+    }
     let img = image::load_from_memory(&buf).ok()?.to_rgba8();
     let size = [img.width() as usize, img.height() as usize];
     let tex = ctx.load_texture(
@@ -9109,14 +9570,41 @@ fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {
     state.store(ui.ctx(), id);
 }
 
-fn discover_hub_pair_url(port: u16) -> String {
-    let out = std::process::Command::new("hostname")
-        .arg("-I")
-        .output()
-        .ok()
+struct LanHostCache {
+    at: Instant,
+    out: String,
+}
+
+static LAN_HOST: Mutex<Option<LanHostCache>> = Mutex::new(None);
+const CLOCK_TTL: Duration = Duration::from_millis(1000);
+static LAST_CLOCK: Mutex<Option<(Instant, LocalClock)>> = Mutex::new(None);
+static LAST_DAY: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+
+fn hostname_i() -> String {
+    if let Ok(g) = LAN_HOST.lock() {
+        if let Some(c) = g.as_ref() {
+            if c.at.elapsed().as_secs() < 5 {
+                return c.out.clone();
+            }
+        }
+    }
+    let mut cmd = std::process::Command::new("hostname");
+    cmd.arg("-I");
+    let out = run_limited(cmd, Duration::from_millis(400))
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default();
+    if let Ok(mut g) = LAN_HOST.lock() {
+        *g = Some(LanHostCache {
+            at: Instant::now(),
+            out: out.clone(),
+        });
+    }
+    out
+}
+
+fn discover_hub_pair_url(port: u16) -> String {
+    let out = hostname_i();
     let addrs = parse_hostname_i(&out);
     let refs: Vec<&str> = addrs.iter().map(|s| s.as_str()).collect();
     hub_pair_url(port, pick_lan_ipv4(&refs).as_deref())
@@ -9134,6 +9622,33 @@ mod tests {
         assert!(url.starts_with("http://"), "{url}");
         assert!(url.contains(":18766"), "{url}");
         assert!(!url.contains("<lan>"), "{url}");
+    }
+
+    #[test]
+    fn devices_hostname_must_not_block_the_ui() {
+        let src = include_str!("app.rs");
+        let host = src
+            .split("fn hostname_i()")
+            .nth(1)
+            .and_then(|s| s.split("\nfn discover_hub_pair_url(").next())
+            .expect("hostname_i");
+        assert!(
+            host.contains("run_limited("),
+            "hostname -I on Devices paint must time out: {host}"
+        );
+        assert!(
+            !host.contains(".output()"),
+            "hostname -I must not block Devices paint: {host}"
+        );
+        let disc = src
+            .split("fn discover_hub_pair_url(")
+            .nth(1)
+            .and_then(|s| s.split("\n#[cfg(test)]").next())
+            .expect("discover_hub_pair_url");
+        assert!(
+            disc.contains("hostname_i()"),
+            "Devices pair URL must use the timed hostname helper: {disc}"
+        );
     }
 
     #[test]
@@ -9354,6 +9869,10 @@ mod tests {
             !chat.contains("composer_pill_w"),
             "bubbles must not lock to the composer pill: {chat}"
         );
+        assert!(
+            chat.contains("cached_chat_views") && !chat.contains("visible_chat(&pairs)"),
+            "idle chat must not clone the whole transcript every paint: {chat}"
+        );
     }
 
     fn with_fonts_ui(mut add: impl FnMut(&mut egui::Ui)) {
@@ -9533,6 +10052,250 @@ mod tests {
     }
 
     #[test]
+    fn ui_date_spawns_must_time_out() {
+        let src = include_str!("app.rs");
+        let date = src
+            .split("fn date_out(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn local_clock()").next())
+            .expect("date_out");
+        assert!(
+            date.contains("run_limited("),
+            "date_out must kill a hung date: {date}"
+        );
+        let clock = src
+            .split("fn local_clock()")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn local_day()").next())
+            .expect("local_clock");
+        assert!(
+            clock.contains("date_out(") && !clock.contains(".output()"),
+            "local_clock must use the timed date helper: {clock}"
+        );
+        assert!(
+            clock.contains("CLOCK_TTL"),
+            "chips and greeting must not spawn date on every paint: {clock}"
+        );
+        let day = src
+            .split("fn local_day()")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn tick_heartbeat").next())
+            .expect("local_day");
+        assert!(
+            day.contains("date_out(") && !day.contains(".output()"),
+            "local_day must use the timed date helper: {day}"
+        );
+        let roll = src
+            .split("fn roll_today(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ui_settings_menu").next())
+            .expect("roll_today");
+        assert!(
+            roll.contains("date_out(") && !roll.contains(".output()"),
+            "roll_today must use the timed date helper: {roll}"
+        );
+    }
+
+    #[test]
+    fn persist_does_not_hold_hub_lock_across_disk() {
+        let src = include_str!("app.rs");
+        let persist = src
+            .split("fn persist(&mut self)")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn sync_hub_voice").next())
+            .expect("persist");
+        assert!(
+            persist.contains("state_for_disk"),
+            "persist must clone hub state before the disk write: {persist}"
+        );
+        assert!(
+            !persist.contains("if let Ok(st) = self.hub.lock()"),
+            "persist must not hold hub.lock() across save_hub_state: {persist}"
+        );
+    }
+
+    #[test]
+    fn refresh_chips_does_not_rebuild_every_frame() {
+        let src = include_str!("app.rs");
+        let chips = src
+            .split("fn refresh_chips(")
+            .nth(1)
+            .and_then(|s| s.split("fn spawn_chip_llm(").next())
+            .expect("refresh_chips");
+        assert!(
+            chips.contains("chip_paint_key") && chips.contains("return;"),
+            "chips must not clone the transcript and walk other threads on every paint: {chips}"
+        );
+    }
+
+    #[test]
+    fn periodic_persist_leaves_the_ui_thread() {
+        let src = include_str!("app.rs");
+        let beat = src
+            .split("fn tick_heartbeat")
+            .nth(1)
+            .and_then(|s| s.split("fn tick_anticipate").next())
+            .expect("tick_heartbeat");
+        assert!(
+            beat.contains("persist_bg(") && !beat.contains("self.persist()"),
+            "2s housekeep persist must not block the cabin: {beat}"
+        );
+        let paint = src
+            .split("self.flush_window(ctx)")
+            .nth(1)
+            .and_then(|s| s.split("next_heartbeat_wait_ms").next())
+            .expect("update persist");
+        assert!(
+            paint.contains("persist_bg(") && !paint.contains("self.persist()"),
+            "2s paint persist must not block the cabin: {paint}"
+        );
+        let bg = src
+            .split("fn persist_bg(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ").next())
+            .expect("persist_bg");
+        let spawn = bg.find("thread::spawn").expect("persist_bg must leave the UI thread");
+        let save = bg
+            .find("write_persist_disk")
+            .expect("periodic persist must write on the worker");
+        assert!(
+            spawn < save,
+            "periodic persist must write after spawn: {bg}"
+        );
+        assert!(
+            bg.contains("persist_idle_key") && bg.contains("return;"),
+            "idle 2s persist must not clone every thread on the UI thread: {bg}"
+        );
+    }
+
+    #[test]
+    fn refresh_eyes_captures_off_the_ui_thread() {
+        let src = include_str!("app.rs");
+        let eyes = src
+            .split("fn refresh_eyes")
+            .nth(1)
+            .and_then(|s| s.split("fn halt_work").next())
+            .expect("refresh_eyes");
+        let spawn = eyes
+            .find("thread::spawn")
+            .expect("Eyes Scan grim must leave the UI thread");
+        let shot = eyes.find("capture_data_url").expect("screen capture");
+        assert!(
+            spawn < shot,
+            "Eyes Scan must not block the cabin: {eyes}"
+        );
+        assert!(
+            eyes.contains("lock_titles") && eyes.contains("should_send_screenshot"),
+            "Eyes Scan lock gates stay on the UI thread: {eyes}"
+        );
+    }
+
+    #[test]
+    fn chat_capture_leaves_the_ui_thread() {
+        let src = include_str!("app.rs");
+        let cap = src
+            .split("fn capture_cabin_frame_this_turn")
+            .nth(1)
+            .and_then(|s| s.split("fn apply_job_fail").next())
+            .expect("capture_cabin_frame_this_turn");
+        let spawn = cap
+            .find("thread::spawn")
+            .expect("chat grim must leave the UI thread");
+        let shot = cap.find("capture_data_url").expect("screen capture");
+        assert!(
+            spawn < shot,
+            "send/HostDone capture must not block the cabin: {cap}"
+        );
+        let kick = src
+            .split("fn kick_model(")
+            .nth(1)
+            .and_then(|s| s.split("fn upsert_stream_assistant").next())
+            .expect("kick_model");
+        assert!(
+            kick.contains("pending_kick") && kick.contains("kick_cap_rx"),
+            "kick_model must wait for the off-thread frame instead of blocking: {kick}"
+        );
+    }
+
+    #[test]
+    fn plus_upload_does_not_rescan_the_folder_every_frame() {
+        let src = include_str!("app.rs");
+        let overlay = src
+            .split("fn ui_plus_overlays(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_imagine_overlays(").next())
+            .expect("ui_plus_overlays");
+        assert!(
+            overlay.contains("cached_pick_entries") && !overlay.contains("Self::pick_entries"),
+            "Upload window must not read_dir every paint: {overlay}"
+        );
+        let cache = src
+            .split("fn cached_pick_entries(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_plus_overlays(").next())
+            .expect("cached_pick_entries");
+        assert!(
+            cache.contains("pick_cache") && cache.contains("pick_entries("),
+            "folder listing must reuse the last scan until pick_dir changes: {cache}"
+        );
+    }
+
+    #[test]
+    fn recipe_reshoot_leaves_the_ui_thread() {
+        let src = include_str!("app.rs");
+        let replay = src
+            .split("fn replay_recipe(")
+            .nth(1)
+            .and_then(|s| s.split("fn speak_reply").next())
+            .expect("replay_recipe");
+        let reshoot = replay
+            .split("ReplayOp::Reshoot")
+            .nth(1)
+            .expect("reshoot");
+        let spawn = reshoot
+            .find("thread::spawn")
+            .expect("recipe reshoot grim must leave the UI thread");
+        let shot = reshoot.find("capture_data_url").expect("screen capture");
+        assert!(
+            spawn < shot,
+            "recipe reshoot must not block the cabin: {reshoot}"
+        );
+        assert!(
+            reshoot.contains("lock_titles") && reshoot.contains("lock_blocks_hands"),
+            "recipe reshoot lock gates stay on the UI thread: {reshoot}"
+        );
+    }
+
+    #[test]
+    fn live_room_captures_off_the_ui_thread() {
+        let src = include_str!("app.rs");
+        let live = src
+            .split("fn live_room")
+            .nth(1)
+            .and_then(|s| s.split("fn tick_mid_thought").next())
+            .expect("live_room");
+        let spawn = live
+            .find("thread::spawn")
+            .expect("grim/ffmpeg must leave the UI thread");
+        let shot = live.find("capture_data_url").expect("screen capture");
+        let cam = live.find("capture_webcam").expect("webcam");
+        assert!(
+            spawn < shot && spawn < cam,
+            "presence capture must not block the cabin: {live}"
+        );
+        assert!(
+            live.contains("try_recv") && live.contains("live_cap_rx"),
+            "UI thread must apply one in-flight frame without stacking grim: {live}"
+        );
+        assert!(
+            live.contains("collect_rows")
+                && live.contains("lock_titles")
+                && live.contains("should_send_screenshot"),
+            "lock and title gates stay on the UI thread: {live}"
+        );
+    }
+
+    #[test]
     fn chat_side_effects_keep_the_origin_thread() {
         let src = include_str!("app.rs");
         assert!(
@@ -9547,6 +10310,17 @@ mod tests {
         assert!(
             agent_job.contains("thread_id"),
             "Queue jobs must remember the origin thread: {agent_job}"
+        );
+        let listen = src
+            .split("fn listen_turn(")
+            .nth(1)
+            .and_then(|s| s.split("fn fit_rail_label").next())
+            .expect("listen_turn");
+        let wav_read = listen.find("std::fs::read(&wav)").expect("wav read");
+        assert!(
+            listen.contains("IMAGE_FILE_CAP")
+                && listen.find("IMAGE_FILE_CAP").expect("wav cap") < wav_read,
+            "voice STT must not slurp a huge wav: {listen}"
         );
         let queue = src
             .split("fn ui_agents")
@@ -9806,6 +10580,27 @@ mod tests {
             verify.contains("host_working_dir") && verify.contains("run_verify"),
             "skill verify must run in the bound project, not the cabin cwd: {verify}"
         );
+        let spawn = verify
+            .find("thread::spawn")
+            .expect("skill verify must leave the UI thread");
+        let run = verify.find("run_verify").expect("run_verify");
+        assert!(
+            spawn < run,
+            "HostDone verify must not block the cabin for 12s: {verify}"
+        );
+        let kick = src
+            .split("fn kick_model(")
+            .nth(1)
+            .and_then(|s| s.split("fn upsert_stream_assistant").next())
+            .expect("kick_model");
+        assert!(
+            kick.contains("verify_rx"),
+            "kick_model must wait for off-thread verify before the follow-up turn: {kick}"
+        );
+        assert!(
+            !kick.contains("t.messages.clone()"),
+            "kick_model must not clone every thread to read the origin: {kick}"
+        );
         let reflect = src
             .split("fn run_reflect")
             .nth(1)
@@ -9814,6 +10609,10 @@ mod tests {
         assert!(
             reflect.contains("kick_messages_for_job"),
             "/learn reflect must read the origin thread, not only the visible tab: {reflect}"
+        );
+        assert!(
+            !reflect.contains("t.messages.clone()"),
+            "/learn reflect must not clone every thread to read the origin: {reflect}"
         );
         let mem = reflect.find("read_memory(\"MEMORY.md\")").expect("reflect memory");
         assert!(
@@ -9886,6 +10685,15 @@ mod tests {
             send_auth[gate..].contains("speak_next = false"),
             "auth-fail send must not leave TTS armed for the next reply: {send_auth}"
         );
+        let last_user = src
+            .split("fn last_user_on_job")
+            .nth(1)
+            .and_then(|s| s.split("fn commit_proposed_skill").next())
+            .expect("last_user_on_job");
+        assert!(
+            last_user.contains("last_user_for_job") && !last_user.contains("t.messages.clone()"),
+            "skill draft after host must not clone every thread: {last_user}"
+        );
         let halt_flight = src
             .split("fn halt_in_flight")
             .nth(1)
@@ -9905,6 +10713,10 @@ mod tests {
             halt_flight.contains("stamp_current_access") && halt_flight.contains("accessed_ms"),
             "halt must stamp the origin thread when it is not the visible tab: {halt_flight}"
         );
+        assert!(
+            !halt_flight.contains("t.messages.clone()"),
+            "Stop must not clone every thread to drop one trailing assistant: {halt_flight}"
+        );
         let host_done_facts = src
             .split("Ok(JobOut::HostDone(block))")
             .nth(1)
@@ -9920,6 +10732,11 @@ mod tests {
         assert!(
             host_done_facts.contains("resolve_host_cite_path"),
             "HOST_DIFF must read the write from the bound tree, not the cabin cwd: {host_done_facts}"
+        );
+        assert!(
+            host_done_facts.contains("read_text_capped")
+                && !host_done_facts.contains("read_to_string"),
+            "HOST_DIFF must not slurp a huge host write on the UI thread: {host_done_facts}"
         );
         let deleted = src
             .split("fn delete_thread_at")
@@ -10078,6 +10895,10 @@ mod tests {
             after_loop.contains("read_memory(\"MEMORY.md\")")
                 && after_loop.contains("write_memory(\"MEMORY.md\""),
             "/import must not rotate MEMORY.md.prev when the merge is unchanged: {after_loop}"
+        );
+        assert!(
+            import.contains("read_text_capped") && !import.contains("read_to_string"),
+            "/import must not slurp huge OpenClaw files on the UI thread: {import}"
         );
         let sign_out = src
             .split("fn sign_out_oauth")
@@ -10424,6 +11245,10 @@ mod tests {
             push.contains("accessed_ms"),
             "background job writes must bump accessed_ms or /sync LWW drops the new messages: {push}"
         );
+        assert!(
+            !push.contains("t.messages.clone()"),
+            "host receipts must not clone every thread: {push}"
+        );
         let snap = src
             .split("fn apply_assistant_snapshot")
             .nth(1)
@@ -10432,6 +11257,10 @@ mod tests {
         assert!(
             snap.contains("accessed_ms"),
             "background stream writes must bump accessed_ms or /sync LWW drops the new messages: {snap}"
+        );
+        assert!(
+            !snap.contains("t.messages.clone()"),
+            "stream deltas must not clone every thread: {snap}"
         );
         let mem_rows = sync
             .split("let mem = ")
@@ -10501,6 +11330,10 @@ mod tests {
                 && greet[..user].contains("mem_body")
                 && greet[..user].contains("scratch()"),
             "empty-chat greeting must flush the Memory editor before reading USER/MEMORY: {greet}"
+        );
+        assert!(
+            greet[..user].contains("memory_updated_at"),
+            "empty-chat greeting must not slurp USER/MEMORY on every paint: {greet}"
         );
         let dream = src
             .split("fn run_dream")
@@ -10823,6 +11656,26 @@ mod tests {
     }
 
     #[test]
+    fn eyes_frame_tex_rejects_a_huge_frame() {
+        let src = include_str!("app.rs");
+        let tex = src
+            .split("fn eyes_frame_tex(")
+            .nth(1)
+            .and_then(|s| s.split("fn project_row_active(").next())
+            .expect("eyes_frame_tex");
+        let cap = tex.find("IMAGE_FILE_CAP").expect("size check before decode");
+        let decode = tex.find("load_from_memory").expect("decode");
+        assert!(
+            cap < decode,
+            "Eyes last-frame paint must not decode a huge JPEG on the UI thread: {tex}"
+        );
+        assert!(
+            tex.contains("image_pixels_ok") || tex.contains("IMAGE_PIXEL_CAP"),
+            "Eyes last-frame paint must not decode a pixel bomb on the UI thread: {tex}"
+        );
+    }
+
+    #[test]
     fn thought_uses_live_theme_tokens() {
         let src = include_str!("app.rs");
         let start = src.find("ChatKind::Thought =>").expect("thought");
@@ -11118,6 +11971,10 @@ mod tests {
         assert!(
             chat.contains("estimate_messages(&job_pairs)"),
             "auto-compact must use the origin thread, not only the visible tab: {chat}"
+        );
+        assert!(
+            !chat.contains("t.messages.clone()"),
+            "Chat complete must not clone every thread to learn from one reply: {chat}"
         );
         assert!(
             chat.contains("should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, compact_step)"),
