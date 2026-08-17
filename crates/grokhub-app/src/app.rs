@@ -25,7 +25,7 @@ use grokhub_core::{
     append_composer, anticipate_consumes_slot, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
     cabin_system_prompt,
     appearance_choices, appearance_hint, approved_cmds, auth_bearer, automation_blocked_by_policy,
-    blend_thread_goal,
+    blend_thread_goal, flush_visible_goal,
     build_hub_snapshot,
     build_quick_chips, build_windshield, bump_skill_run, bump_usage,
     inhabit_ready, hub_pair_url, pair_code_is_live, parse_hostname_i, pick_lan_ipv4,
@@ -2382,10 +2382,7 @@ impl Cabin {
                 .iter()
                 .map(|m| (m.role.clone(), m.content.clone()))
                 .collect();
-            t.goal.step = self.goal_step;
-            if !self.cfg.goal_pin.is_empty() {
-                t.goal.label = self.cfg.goal_pin.clone();
-            }
+            flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
         }
         self.thread_idx = idx.min(self.threads.len().saturating_sub(1));
         self.rename_idx = None;
@@ -2441,6 +2438,7 @@ impl Cabin {
                 .iter()
                 .map(|m| (m.role.clone(), m.content.clone()))
                 .collect();
+            flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
         }
         let title = if scratch { "Scratch" } else { "Chat" };
         self.threads.push(ChatThread::new(title, scratch));
@@ -9160,6 +9158,15 @@ mod tests {
             fire_night.contains("night_unauth_should_skip")
                 && fire_night.contains("mark_auto_skipped"),
             "missing OAuth must skip the night slot: {fire_night}"
+        );
+        let created = src
+            .split("fn new_thread")
+            .nth(1)
+            .and_then(|s| s.split("fn begin_chat_rename").next())
+            .expect("new_thread");
+        assert!(
+            created.contains("flush_visible_goal"),
+            "/new must persist the left tab's goal before clearing it: {created}"
         );
         let anticipate = src
             .split("fn tick_anticipate")
