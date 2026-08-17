@@ -14,7 +14,7 @@ use image::GenericImageView;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -71,6 +71,12 @@ const DESK_CAPTURE_TIMEOUT: Duration = Duration::from_secs(8);
 const DESK_WEBCAM_TIMEOUT: Duration = Duration::from_secs(4);
 /// Plus-button image attach. Bigger files decode on the UI thread and can OOM.
 const IMAGE_FILE_CAP: u64 = 8 * 1024 * 1024;
+static CAPTURE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn capture_temp(kind: &str, ext: &str) -> PathBuf {
+    let n = CAPTURE_SEQ.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("grokhub-{kind}-{n}.{ext}"))
+}
 /// Local whisper on a worker thread — still must not hang halt forever.
 const DESK_TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -857,7 +863,7 @@ pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 pub fn capture_data_url() -> Result<String, String> {
-    let path = std::env::temp_dir().join("grokhub-desk.jpg");
+    let path = capture_temp("desk", "jpg");
     let bytes = capture_jpeg(&path)?;
     let _ = std::fs::remove_file(&path);
     if bytes.len() < 32 {
@@ -1109,7 +1115,7 @@ pub fn capture_webcam() -> Result<String, String> {
     if !which("ffmpeg") {
         return Err("ffmpeg missing for webcam".into());
     }
-    let path = std::env::temp_dir().join("grokhub-cam.jpg");
+    let path = capture_temp("cam", "jpg");
     let dest = path.to_string_lossy().to_string();
     let args = ffmpeg_webcam_args("/dev/video0", &dest);
     let mut cam = Command::new("ffmpeg");
@@ -1485,6 +1491,29 @@ mod tests {
             started.elapsed() < Duration::from_secs(3),
             "UI-thread desktop spawn must not wait out the child: {:?}",
             started.elapsed()
+        );
+    }
+
+    #[test]
+    fn capture_paths_must_not_share_one_temp_file() {
+        let src = include_str!("desktop.rs");
+        let desk = src
+            .split("pub fn capture_data_url(")
+            .nth(1)
+            .and_then(|s| s.split("pub const PLAYERS").next())
+            .expect("capture_data_url");
+        assert!(
+            !desk.contains("\"grokhub-desk.jpg\"") && desk.contains("capture_temp("),
+            "live presence and chat capture must not write the same JPEG: {desk}"
+        );
+        let cam = src
+            .split("pub fn capture_webcam(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn record_pcm_chunks(").next())
+            .expect("capture_webcam");
+        assert!(
+            !cam.contains("\"grokhub-cam.jpg\"") && cam.contains("capture_temp("),
+            "webcam capture must not collide with a second ffmpeg: {cam}"
         );
     }
 
