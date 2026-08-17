@@ -724,6 +724,10 @@ pub struct Cabin {
     followup_step: u32,
     stream_buf: String,
     thought_buf: String,
+    chat_views: Vec<ChatView>,
+    chat_view_tid: String,
+    chat_view_n: usize,
+    chat_view_last: usize,
     presence_ring: Vec<(u64, String)>,
     webcam_url: Option<String>,
     voice_sock: Option<crate::voice_ws::VoiceSock>,
@@ -1030,6 +1034,10 @@ impl Cabin {
             followup_step: 0,
             stream_buf: String::new(),
             thought_buf: String::new(),
+            chat_views: vec![],
+            chat_view_tid: String::new(),
+            chat_view_n: usize::MAX,
+            chat_view_last: usize::MAX,
             presence_ring: vec![],
             webcam_url: None,
             voice_sock: None,
@@ -7326,6 +7334,24 @@ impl Cabin {
             });
     }
 
+    fn cached_chat_views(&mut self) -> &[ChatView] {
+        let tid = self.visible_thread_id();
+        let n = self.messages.len();
+        let last = self.messages.last().map(|m| m.content.len()).unwrap_or(0);
+        if self.chat_view_tid != tid || self.chat_view_n != n || self.chat_view_last != last {
+            let pairs: Vec<(String, String)> = self
+                .messages
+                .iter()
+                .map(|m| (m.role.clone(), m.content.clone()))
+                .collect();
+            self.chat_views = visible_chat(&pairs);
+            self.chat_view_tid = tid;
+            self.chat_view_n = n;
+            self.chat_view_last = last;
+        }
+        &self.chat_views
+    }
+
     fn ui_chat(&mut self, ctx: &egui::Context) {
         let empty = self.messages.is_empty();
         if !empty {
@@ -7357,38 +7383,44 @@ impl Cabin {
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         ui.set_max_width(pane);
-                        let pairs: Vec<(String, String)> = self
-                            .messages
-                            .iter()
-                            .map(|m| (m.role.clone(), m.content.clone()))
-                            .collect();
-                        let views = visible_chat(&pairs);
-                        let last_thought = views.iter().rposition(|v| v.kind == ChatKind::Thought);
-                        for (i, block) in views.iter().enumerate() {
-                            match paint_chat_block(
-                                ui,
-                                block,
-                                i,
-                                self.thinking_here() && last_thought == Some(i),
-                            ) {
-                                ChatBlockAct::Copy(body) => {
-                                    ui.ctx().copy_text(body);
-                                    self.status = "Copied".into();
+                        let thinking = self.thinking_here();
+                        let mut act = ChatBlockAct::None;
+                        let last_kind;
+                        {
+                            let views = self.cached_chat_views();
+                            let last_thought =
+                                views.iter().rposition(|v| v.kind == ChatKind::Thought);
+                            last_kind = views.last().map(|v| v.kind);
+                            for (i, block) in views.iter().enumerate() {
+                                match paint_chat_block(
+                                    ui,
+                                    block,
+                                    i,
+                                    thinking && last_thought == Some(i),
+                                ) {
+                                    ChatBlockAct::None => {}
+                                    other => act = other,
                                 }
-                                ChatBlockAct::Reply(body) => {
-                                    self.composer =
-                                        append_composer(&self.composer, &quote_for_reply(&body));
-                                    if !self.composer.ends_with('\n') {
-                                        self.composer.push('\n');
-                                    }
-                                    self.composer_want_focus = true;
-                                }
-                                ChatBlockAct::None => {}
+                                ui.add_space(10.0);
                             }
-                            ui.add_space(10.0);
                         }
-                        if self.thinking_here() {
-                            match views.last().map(|v| v.kind) {
+                        match act {
+                            ChatBlockAct::Copy(body) => {
+                                ui.ctx().copy_text(body);
+                                self.status = "Copied".into();
+                            }
+                            ChatBlockAct::Reply(body) => {
+                                self.composer =
+                                    append_composer(&self.composer, &quote_for_reply(&body));
+                                if !self.composer.ends_with('\n') {
+                                    self.composer.push('\n');
+                                }
+                                self.composer_want_focus = true;
+                            }
+                            ChatBlockAct::None => {}
+                        }
+                        if thinking {
+                            match last_kind {
                                 None | Some(ChatKind::User) => {
                                     ui.label(
                                         RichText::new("Thinking…")
@@ -9809,6 +9841,10 @@ mod tests {
         assert!(
             !chat.contains("composer_pill_w"),
             "bubbles must not lock to the composer pill: {chat}"
+        );
+        assert!(
+            chat.contains("cached_chat_views") && !chat.contains("visible_chat(&pairs)"),
+            "idle chat must not clone the whole transcript every paint: {chat}"
         );
     }
 
