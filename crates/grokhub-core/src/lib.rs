@@ -87,7 +87,7 @@ pub use chat::{
 };
 pub use chat_view::{
     assistant_prose, is_workload_user, merge_thinking, merge_thinking_capped, quote_for_reply, scrub_thought, strip_thinking,
-    visible_chat, visible_turn_count, ChatKind, ChatView,
+    refresh_last_stretch, visible_chat, visible_chat_refs, visible_turn_count, ChatKind, ChatView,
 };
 pub use chat_bubble::{
     bubble_max_width, bubble_outer_height, bubble_outer_width, bubble_wrap_width, clamp_row_width,
