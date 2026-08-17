@@ -3467,6 +3467,7 @@ impl Cabin {
         }
         let replay = replay_automation_target(&a.instructions).map(|id| self.replay_saved_recipe(id));
         if !night_counts_run(replay) {
+            self.mark_auto_skipped(&a.id, now_ms);
             return;
         }
         self.mark_auto_ran(&a.id, now_ms);
@@ -9271,6 +9272,11 @@ mod tests {
             fire_night.contains("night_unauth_should_skip")
                 && fire_night.contains("mark_auto_skipped"),
             "missing OAuth must skip the night slot: {fire_night}"
+        );
+        let counts = fire_night.find("night_counts_run").expect("night_counts_run");
+        assert!(
+            fire_night[counts..].contains("mark_auto_skipped"),
+            "a missing night recipe must skip the slot, not hammer every 5s: {fire_night}"
         );
         let night_check = src
             .split("fn poll_night_check")
