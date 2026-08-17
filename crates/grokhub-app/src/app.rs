@@ -3896,6 +3896,9 @@ impl Cabin {
         };
         for f in remote.memory_files {
             if import_memory_file(&f.name, &f.content).is_some() {
+                if config::read_memory(&f.name) == f.content {
+                    continue;
+                }
                 let _ = config::write_memory(&f.name, &f.content);
                 if self.mem_name == f.name {
                     self.mem_body = f.content;
@@ -9772,6 +9775,11 @@ mod tests {
         assert!(
             inbound.contains("mem_body") && inbound.contains("mem_name"),
             "inbound MEMORY.md must refresh the open Memory editor: {inbound}"
+        );
+        let wrote = inbound.find("write_memory").expect("inbound write");
+        assert!(
+            inbound[..wrote].contains("read_memory"),
+            "inbound must not rotate .prev when the merged file is unchanged: {inbound}"
         );
         let send = src
             .split("fn dispatch_send")
