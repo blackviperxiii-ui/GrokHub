@@ -87,6 +87,7 @@ use grokhub_core::{
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     rewind_can_queue, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
+    clear_pending_after_complete,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm, shortcut_help,
     user_asks_takeover, windshield_prompt,
     composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
@@ -5287,8 +5288,12 @@ impl Cabin {
         };
         let peer = st.device_id.clone();
         let status = if ok { "done" } else { "failed" };
-        let _ = st.complete_task(&peer, &id, result, vec![], Some(status));
-        self.pending_hub_task = None;
+        let err = st
+            .complete_task(&peer, &id, result, vec![], Some(status))
+            .err();
+        if clear_pending_after_complete(err) {
+            self.pending_hub_task = None;
+        }
     }
 
     fn hide_to_tray(&mut self, ctx: &egui::Context) {
@@ -9104,7 +9109,7 @@ mod tests {
             .expect("finish_hub_dispatch");
         assert!(
             finish.contains("self.pending_hub_task.clone()")
-                && finish.contains("self.pending_hub_task = None"),
+                && finish.contains("clear_pending_after_complete"),
             "do not drop pending_hub_task before the hub mutex is held"
         );
         let host_done = src
