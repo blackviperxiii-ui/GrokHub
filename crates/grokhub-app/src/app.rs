@@ -2188,7 +2188,7 @@ impl Cabin {
                 .map(|t| t.messages.clone())
                 .unwrap_or_default()
         };
-        let user_turns = pairs.iter().filter(|(r, _)| r == "user").count();
+        let user_turns = visible_turn_count(&pairs);
         let locked = self
             .threads
             .iter()
@@ -9732,6 +9732,16 @@ mod tests {
         assert!(
             goal.contains("accessed_ms"),
             "auto-title must bump accessed_ms or /sync LWW can drop the new name: {goal}"
+        );
+        let spawn_goal = src
+            .split("fn spawn_thread_goal_on(")
+            .nth(1)
+            .and_then(|s| s.split("fn refresh_chips(").next())
+            .expect("spawn_thread_goal_on");
+        assert!(
+            spawn_goal.contains("visible_turn_count")
+                || spawn_goal.contains("is_workload_user"),
+            "auto-title must ignore HOST_RESULT or a Command-pane job names the thread: {spawn_goal}"
         );
         let created = src
             .split("fn new_thread")
