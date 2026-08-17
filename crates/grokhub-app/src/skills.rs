@@ -23,7 +23,7 @@ pub fn list_skills() -> Vec<SkillMd> {
     };
     for e in rd.flatten() {
         let p = e.path().join("SKILL.md");
-        if let Ok(raw) = fs::read_to_string(p) {
+        if let Ok(raw) = crate::desktop::read_text_capped(&p) {
             if skill_safe(&raw) {
                 out.push(parse_skill_md(&raw));
             }
@@ -227,6 +227,20 @@ mod tests {
         assert!(
             !verify.contains(".output()"),
             "run_verify must not block the UI on Command::output: {verify}"
+        );
+    }
+
+    #[test]
+    fn list_skills_does_not_slurp_huge_skill_md() {
+        let src = include_str!("skills.rs");
+        let list = src
+            .split("pub fn list_skills(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn save_skill(").next())
+            .expect("list_skills");
+        assert!(
+            list.contains("read_text_capped") && !list.contains("read_to_string"),
+            "listing skills must not slurp a huge SKILL.md on the UI thread: {list}"
         );
     }
 }
