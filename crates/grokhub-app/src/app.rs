@@ -2443,12 +2443,17 @@ impl Cabin {
                 .unwrap_or(false)
         };
         let pairs = if on_visible {
-            self.chat_pairs()
+            self.chip_chat_pairs()
         } else {
             self.threads
                 .iter()
                 .find(|t| t.id == tid)
-                .map(|t| t.messages.clone())
+                .map(|t| {
+                    t.messages
+                        .iter()
+                        .map(|(r, c)| (r.clone(), chip_scan(c).to_string()))
+                        .collect()
+                })
                 .unwrap_or_default()
         };
         let user_turns = visible_turn_count(&pairs);
@@ -10773,6 +10778,10 @@ mod tests {
             spawn_goal.contains("visible_turn_count")
                 || spawn_goal.contains("is_workload_user"),
             "auto-title must ignore HOST_RESULT or a Command-pane job names the thread: {spawn_goal}"
+        );
+        assert!(
+            spawn_goal.contains("chip_chat_pairs") || spawn_goal.contains("chip_scan"),
+            "auto-title must not clone an 8MB complete into chat_pairs: {spawn_goal}"
         );
         let created = src
             .split("fn new_thread")
