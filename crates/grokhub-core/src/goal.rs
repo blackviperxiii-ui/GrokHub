@@ -165,7 +165,11 @@ pub fn visible_goal_step_on_continue(visible: u32, job_step: u32, here: bool) ->
 }
 
 pub fn thread_goal_prompt(messages: &[(String, String)]) -> String {
-    let recent = messages
+    let kept: Vec<&(String, String)> = messages
+        .iter()
+        .filter(|(role, content)| role != "user" || !is_workload_user(content))
+        .collect();
+    let recent = kept
         .iter()
         .rev()
         .take(8)
@@ -485,6 +489,23 @@ pub fn flush_visible_goal(goal: &mut ThreadGoal, step: u32, pin: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thread_goal_prompt_skips_host_results() {
+        let p = thread_goal_prompt(&[
+            ("user".into(), "paint the cabin".into()),
+            (
+                "user".into(),
+                "HOST_RESULT (facts only):\n$ ls\nexit 0\n".into(),
+            ),
+            ("assistant".into(), "done".into()),
+        ]);
+        assert!(p.contains("paint the cabin"), "{p}");
+        assert!(
+            !p.contains("HOST_RESULT"),
+            "auto-title must not name the thread from a host receipt: {p}"
+        );
+    }
 
     #[test]
     fn pin_survives_and_outcome() {
