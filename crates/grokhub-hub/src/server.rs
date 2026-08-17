@@ -55,7 +55,11 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
         let device_id = body.get("deviceId").and_then(|v| v.as_str()).unwrap_or("");
         let device_name = body.get("deviceName").and_then(|v| v.as_str()).unwrap_or("Computer");
-        return match st.pair_with(code, device_id, device_name) {
+        let result = st.pair_with(code, device_id, device_name);
+        let hub_id = st.device_id.clone();
+        let hub_name = st.device_name.clone();
+        drop(st);
+        return match result {
             Ok(peer) => send_json(
                 req,
                 200,
@@ -63,7 +67,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
                     "ok": true,
                     "token": peer.token,
                     "deviceId": peer.id,
-                    "hub": { "id": st.device_id, "name": st.device_name }
+                    "hub": { "id": hub_id, "name": hub_name }
                 }),
             ),
             Err(grokhub_core::state::PairError::NoCode) => send_json(
@@ -100,36 +104,44 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         }))
         .chain(st.peers.iter().map(|p| json!({ "id": p.id, "name": p.name, "role": "peer" })))
         .collect();
-        return send_json(
-            req,
-            200,
-            json!({
-                "ok": true,
-                "hub": { "id": st.device_id, "name": st.device_name },
-                "you": { "id": peer.id, "name": peer.name },
-                "peers": peers
-            }),
-        );
+        let body = json!({
+            "ok": true,
+            "hub": { "id": st.device_id, "name": st.device_name },
+            "you": { "id": peer.id, "name": peer.name },
+            "peers": peers
+        });
+        drop(st);
+        return send_json(req, 200, body);
     }
 
     if method == Method::Get && path == "/v1/snapshot" {
-        return send_json(req, 200, json!({ "ok": true, "snapshot": st.snapshot }));
+        let snapshot = st.snapshot.clone();
+        drop(st);
+        return send_json(req, 200, json!({ "ok": true, "snapshot": snapshot }));
     }
     if method == Method::Put && path == "/v1/snapshot" {
+        drop(st);
         let body = read_json(&mut req);
         let snap = body.get("snapshot").cloned().unwrap_or(body);
-        return match st.put_snapshot(snap) {
+        let mut st = state.lock().map_err(|_| ())?;
+        let result = st.put_snapshot(snap);
+        drop(st);
+        return match result {
             Ok(()) => send_json(req, 200, json!({ "ok": true })),
             Err(e) => send_json(req, 400, json!({ "ok": false, "error": e })),
         };
     }
 
     if method == Method::Post && path == "/v1/task" {
+        drop(st);
         let body = read_json(&mut req);
         let prompt = body.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
         let title = body.get("title").and_then(|v| v.as_str()).unwrap_or("");
         let target = body.get("targetDeviceId").and_then(|v| v.as_str()).unwrap_or("");
-        return match st.enqueue_task(&peer, target, title, prompt) {
+        let mut st = state.lock().map_err(|_| ())?;
+        let result = st.enqueue_task(&peer, target, title, prompt);
+        drop(st);
+        return match result {
             Ok(t) => send_json(
                 req,
                 200,
@@ -140,12 +152,16 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     }
 
     if method == Method::Get && path == "/v1/inbox" {
-        return send_json(req, 200, json!({ "ok": true, "tasks": st.queued_for(&peer_id) }));
+        let tasks = st.queued_for(&peer_id);
+        drop(st);
+        return send_json(req, 200, json!({ "ok": true, "tasks": tasks }));
     }
 
     if let Some(id) = strip_prefix_suffix(&path, "/v1/inbox/", "/ack") {
         if method == Method::Post {
-            return match st.ack_inbox(id, &peer_id) {
+            let result = st.ack_inbox(id, &peer_id);
+            drop(st);
+            return match result {
                 Ok(()) => send_json(req, 200, json!({ "ok": true })),
                 Err(CompleteError::NotFound) => send_json(
                     req,
@@ -163,6 +179,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
 
     if let Some(id) = strip_prefix_suffix(&path, "/v1/task/", "/complete") {
         if method == Method::Post {
+            drop(st);
             let body = read_json(&mut req);
             let result = body.get("result").and_then(|v| v.as_str()).unwrap_or("");
             let status = body.get("status").and_then(|v| v.as_str());
@@ -170,7 +187,10 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
                 .get("receipts")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
-            return match st.complete_task(&peer_id, id, result, receipts, status) {
+            let mut st = state.lock().map_err(|_| ())?;
+            let done = st.complete_task(&peer_id, id, result, receipts, status);
+            drop(st);
+            return match done {
                 Ok(t) => send_json(req, 200, json!({ "ok": true, "task": t })),
                 Err(CompleteError::NotFound) => send_json(
                     req,
@@ -188,7 +208,9 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
 
     if let Some(id) = path.strip_prefix("/v1/task/") {
         if method == Method::Get && !id.contains('/') {
-            return match st.get_task(id, &peer_id) {
+            let task = st.get_task(id, &peer_id).cloned();
+            drop(st);
+            return match task {
                 Some(t) => send_json(req, 200, json!({ "ok": true, "task": t })),
                 None => send_json(req, 404, json!({ "ok": false, "error": "task not found" })),
             };
@@ -196,10 +218,13 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     }
 
     if method == Method::Get && path == "/v1/results" {
-        return send_json(req, 200, json!({ "ok": true, "tasks": st.claim_results(&peer_id) }));
+        let tasks = st.claim_results(&peer_id);
+        drop(st);
+        return send_json(req, 200, json!({ "ok": true, "tasks": tasks }));
     }
 
     if method == Method::Post && path == "/v1/inhabit" {
+        drop(st);
         let body = read_json(&mut req);
         let raw = body.get("bundle").cloned().unwrap_or(body);
         let bundle: InhabitBundle = match serde_json::from_value(raw) {
@@ -212,32 +237,43 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
                 );
             }
         };
+        let mut st = state.lock().map_err(|_| ())?;
         st.store_inhabit(bundle, &peer);
+        drop(st);
         return send_json(req, 200, json!({ "ok": true }));
     }
     if method == Method::Get && path == "/v1/inhabit" {
         if !grokhub_core::inhabit_claim_allowed(&peer.name) {
+            drop(st);
             return send_json(
                 req,
                 403,
                 json!({ "ok": false, "error": "inhabit is not for the phone" }),
             );
         }
-        return send_json(req, 200, json!({ "ok": true, "bundle": st.claim_inhabit() }));
+        let bundle = st.claim_inhabit();
+        drop(st);
+        return send_json(req, 200, json!({ "ok": true, "bundle": bundle }));
     }
 
     if method == Method::Post && path == "/v1/frame" {
+        drop(st);
         let body = read_json(&mut req);
         let url = body
             .get("dataUrl")
             .or_else(|| body.get("jpeg"))
             .and_then(|v| v.as_str())
-            .unwrap_or("");
-        st.store_frame(url);
+            .unwrap_or("")
+            .to_string();
+        let mut st = state.lock().map_err(|_| ())?;
+        st.store_frame(&url);
+        drop(st);
         return send_json(req, 200, json!({ "ok": true }));
     }
     if method == Method::Get && path == "/v1/frame" {
-        return send_json(req, 200, json!({ "ok": true, "frame": st.last_frame }));
+        let frame = st.last_frame.clone();
+        drop(st);
+        return send_json(req, 200, json!({ "ok": true, "frame": frame }));
     }
     if method == Method::Get && path == "/v1/frame.jpg" {
         let since = query
@@ -245,7 +281,9 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             .find_map(|p| p.strip_prefix("since="))
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
-        match get_jpeg(st.last_frame.as_ref(), since) {
+        let frame = st.last_frame.clone();
+        drop(st);
+        match get_jpeg(frame.as_ref(), since) {
             FrameGet::Missing => {
                 return send_json(req, 404, json!({ "ok": false, "error": "no frame" }));
             }
@@ -262,6 +300,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         if let Some(err) = grokhub_core::voice_client_secret_denied(grokhub_core::realtime_can_connect(
             &st.console_api_key,
         )) {
+            drop(st);
             return send_json(req, 400, json!({ "ok": false, "error": err }));
         }
         let key = st.console_api_key.clone();
@@ -294,6 +333,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         };
     }
 
+    drop(st);
     send_json(req, 404, json!({ "ok": false, "error": "unknown hub route" }))
 }
 
@@ -668,5 +708,189 @@ mod tests {
         );
         assert_eq!(st_ok, 200, "{}", String::from_utf8_lossy(&body));
         assert!(String::from_utf8_lossy(&body).contains("stay kind"));
+    }
+
+    #[test]
+    fn snapshot_and_frame_drop_hub_lock_before_io() {
+        let src = include_str!("server.rs");
+        let get_snap = src
+            .split("Method::Get && path == \"/v1/snapshot\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Put && path == \"/v1/snapshot\"").next())
+            .expect("GET /v1/snapshot");
+        assert!(
+            get_snap.contains("drop(st)"),
+            "GET snapshot must release the hub lock before send_json or persist freezes: {get_snap}"
+        );
+        assert!(
+            get_snap.contains("snapshot.clone()"),
+            "GET snapshot must clone before drop: {get_snap}"
+        );
+        let put_snap = src
+            .split("Method::Put && path == \"/v1/snapshot\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Post && path == \"/v1/task\"").next())
+            .expect("PUT /v1/snapshot");
+        let drop_at = put_snap.find("drop(st)").expect("PUT snapshot must drop before read_json");
+        let read_at = put_snap.find("read_json").expect("PUT snapshot reads a body");
+        assert!(
+            drop_at < read_at,
+            "PUT snapshot must not read the body while holding the hub lock: {put_snap}"
+        );
+        let get_frame = src
+            .split("Method::Get && path == \"/v1/frame\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Get && path == \"/v1/frame.jpg\"").next())
+            .expect("GET /v1/frame");
+        assert!(
+            get_frame.contains("drop(st)"),
+            "GET frame must release the hub lock before send_json: {get_frame}"
+        );
+        let get_jpg = src
+            .split("Method::Get && path == \"/v1/frame.jpg\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Post && path == \"/v1/voice/client-secret\"").next())
+            .expect("GET /v1/frame.jpg");
+        assert!(
+            get_jpg.contains("drop(st)"),
+            "GET frame.jpg must release the hub lock before send_raw: {get_jpg}"
+        );
+        let post_frame = src
+            .split("Method::Post && path == \"/v1/frame\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Get && path == \"/v1/frame\"").next())
+            .expect("POST /v1/frame");
+        let drop_at = post_frame.find("drop(st)").expect("POST frame must drop before read_json");
+        let read_at = post_frame.find("read_json").expect("POST frame reads a body");
+        assert!(
+            drop_at < read_at,
+            "POST frame must not read a JPEG while holding the hub lock: {post_frame}"
+        );
+        let post_task = src
+            .split("Method::Post && path == \"/v1/task\"")
+            .nth(1)
+            .and_then(|s| s.split("path == \"/v1/inbox\"").next())
+            .expect("POST /v1/task");
+        let drop_at = post_task.find("drop(st)").expect("POST task must drop before read_json");
+        let read_at = post_task.find("read_json").expect("POST task reads a body");
+        assert!(
+            drop_at < read_at,
+            "POST task must not read the body while holding the hub lock: {post_task}"
+        );
+        let complete = src
+            .split("/v1/task/")
+            .nth(1)
+            .and_then(|s| s.split("path.strip_prefix(\"/v1/task/\")").next())
+            .expect("POST complete");
+        let drop_at = complete.find("drop(st)").expect("complete must drop before read_json");
+        let read_at = complete.find("read_json").expect("complete reads a body");
+        assert!(
+            drop_at < read_at,
+            "task complete must not read receipts while holding the hub lock: {complete}"
+        );
+        let inhabit = src
+            .split("Method::Post && path == \"/v1/inhabit\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Get && path == \"/v1/inhabit\"").next())
+            .expect("POST /v1/inhabit");
+        let drop_at = inhabit.find("drop(st)").expect("POST inhabit must drop before read_json");
+        let read_at = inhabit.find("read_json").expect("POST inhabit reads a body");
+        assert!(
+            drop_at < read_at,
+            "POST inhabit must not read the bundle while holding the hub lock: {inhabit}"
+        );
+        let inbox = src
+            .split("path == \"/v1/inbox\"")
+            .nth(1)
+            .and_then(|s| s.split("/v1/inbox/").next())
+            .expect("GET /v1/inbox");
+        assert!(
+            inbox.contains("drop(st)"),
+            "GET inbox must release the hub lock before send_json: {inbox}"
+        );
+        let results = src
+            .split("path == \"/v1/results\"")
+            .nth(1)
+            .and_then(|s| s.split("path == \"/v1/inhabit\"").next())
+            .expect("GET /v1/results");
+        assert!(
+            results.contains("drop(st)"),
+            "GET results must release the hub lock before send_json: {results}"
+        );
+        let get_inhabit = src
+            .split("Method::Get && path == \"/v1/inhabit\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Post && path == \"/v1/frame\"").next())
+            .expect("GET /v1/inhabit");
+        assert!(
+            get_inhabit.contains("drop(st)"),
+            "GET inhabit must release the hub lock before send_json: {get_inhabit}"
+        );
+        let status = src
+            .split("path == \"/v1/status\"")
+            .nth(1)
+            .and_then(|s| s.split("path == \"/v1/snapshot\"").next())
+            .expect("GET /v1/status");
+        assert!(
+            status.contains("drop(st)"),
+            "GET status must release the hub lock before send_json: {status}"
+        );
+        let pair = src
+            .split("path == \"/v1/pair\"")
+            .nth(1)
+            .and_then(|s| s.split("fn bearer").next().or_else(|| s.split("let token = bearer").next()))
+            .expect("POST /v1/pair");
+        let drop_at = pair.find("drop(st)").expect("POST pair must drop before send_json");
+        let send_at = pair.find("send_json").expect("POST pair sends");
+        assert!(
+            drop_at < send_at,
+            "POST pair must not send while holding the hub lock: {pair}"
+        );
+        let get_task = src
+            .split("path.strip_prefix(\"/v1/task/\")")
+            .nth(1)
+            .and_then(|s| s.split("path == \"/v1/results\"").next())
+            .expect("GET /v1/task");
+        assert!(
+            get_task.contains("drop(st)"),
+            "GET task must release the hub lock before send_json: {get_task}"
+        );
+        let ack = src
+            .split("/v1/inbox/")
+            .nth(1)
+            .and_then(|s| s.split("/v1/task/").next())
+            .expect("POST inbox ack");
+        let drop_at = ack.find("drop(st)").expect("ack must drop before send_json");
+        let send_at = ack.find("send_json").expect("ack sends");
+        assert!(
+            drop_at < send_at,
+            "inbox ack must not send while holding the hub lock: {ack}"
+        );
+        let voice_deny = src
+            .split("voice_client_secret_denied")
+            .nth(1)
+            .and_then(|s| s.split("let key = st.console_api_key").next())
+            .expect("voice deny");
+        let drop_at = voice_deny
+            .find("drop(st)")
+            .expect("voice 400 must drop before send_json");
+        let send_at = voice_deny.find("send_json").expect("voice 400 sends");
+        assert!(
+            drop_at < send_at,
+            "voice deny must not send while holding the hub lock: {voice_deny}"
+        );
+        let unknown = src
+            .split("Err(e) => send_json(req, 502")
+            .nth(1)
+            .and_then(|s| s.split("fn split_url").next())
+            .expect("unknown hub route");
+        let drop_at = unknown
+            .find("drop(st)")
+            .expect("unknown route must drop before send_json");
+        let send_at = unknown.find("send_json").expect("unknown route sends");
+        assert!(
+            drop_at < send_at,
+            "unknown route must not send while holding the hub lock: {unknown}"
+        );
     }
 }

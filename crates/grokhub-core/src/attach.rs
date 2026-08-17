@@ -20,6 +20,32 @@ pub enum PlusAct {
 }
 
 pub const TEXT_FILE_CAP: usize = 64 * 1024;
+/// Plus-button and Imagine wall stills. Bigger files decode on the UI thread and can OOM.
+pub const IMAGE_FILE_CAP: u64 = 8 * 1024 * 1024;
+/// Imagine video / TTS download. A huge body must not fill RAM.
+pub const MEDIA_FILE_CAP: u64 = 64 * 1024 * 1024;
+/// 8K still fits. A tiny PNG that claims 50k×50k must not decode on the UI thread.
+pub const IMAGE_PIXEL_CAP: u64 = 36_000_000;
+
+pub fn image_pixels_ok(width: u32, height: u32) -> bool {
+    (width as u64).saturating_mul(height as u64) <= IMAGE_PIXEL_CAP
+}
+
+/// PNG IHDR only — do not decode IDAT. A 50k×50k bomb is still a tiny file.
+pub fn png_ihdr_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 {
+        return None;
+    }
+    if bytes[0..8] != [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] {
+        return None;
+    }
+    if &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+    let height = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+    Some((width, height))
+}
 
 pub fn attach_kind(path: &str) -> AttachKind {
     let ext = std::path::Path::new(path)
@@ -186,6 +212,23 @@ pub fn chat_attach_status(kind: AttachKind, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_pixels_ok_rejects_a_decompression_bomb() {
+        assert!(image_pixels_ok(3840, 2160));
+        assert!(image_pixels_ok(7680, 4320));
+        assert!(!image_pixels_ok(50_000, 50_000));
+        assert!(!image_pixels_ok(u32::MAX, 2));
+        assert_eq!(IMAGE_PIXEL_CAP, 36_000_000);
+        assert_eq!(MEDIA_FILE_CAP, 64 * 1024 * 1024);
+        let mut hdr = vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+        hdr.extend_from_slice(&13u32.to_be_bytes());
+        hdr.extend_from_slice(b"IHDR");
+        hdr.extend_from_slice(&50_000u32.to_be_bytes());
+        hdr.extend_from_slice(&50_000u32.to_be_bytes());
+        assert_eq!(png_ihdr_size(&hdr), Some((50_000, 50_000)));
+        assert!(png_ihdr_size(b"not a png").is_none());
+    }
 
     #[test]
     fn classifies_image_text_other() {

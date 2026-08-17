@@ -6,16 +6,17 @@ use grokhub_core::{
     jpeg_data_url, layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var,
     parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
     parse_xrandr_outputs, pcm_from_capture, pick_capture_output, pick_hands_backend, pick_named_row,
-    picker_args, rank_atspi_rows, resolve_bin_in, session_is_wayland, take_text_body,
+    picker_args, rank_atspi_rows, resolve_bin_in, session_is_wayland, take_text_body, IMAGE_FILE_CAP,
+    TEXT_FILE_CAP, image_pixels_ok, png_ihdr_size,
     virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path, AtspiRow, CaptureKind, ComputerDrive,
     ComputerOp, DisplayOutput, HandsBackend, HandsDown, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
 };
 use image::GenericImageView;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const ATSPI_PY: &str = r#"
@@ -54,6 +55,124 @@ struct LastDeskFrame {
 
 static LAST_DESK_FRAME: Mutex<Option<LastDeskFrame>> = Mutex::new(None);
 
+#[derive(Clone)]
+struct DeskScan {
+    rows: Vec<AtspiRow>,
+    lock: Vec<String>,
+}
+
+static LAST_DESK_SCAN: Mutex<Option<(Instant, DeskScan)>> = Mutex::new(None);
+const DESK_SCAN_TTL: Duration = Duration::from_millis(400);
+
+/// Listing bins (AT-SPI, wmctrl, xrandr) on the UI thread.
+const DESK_LIST_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Screenshot / grim / ffmpeg on the UI thread.
+const DESK_CAPTURE_TIMEOUT: Duration = Duration::from_secs(8);
+/// Webcam ffmpeg on the UI thread.
+const DESK_WEBCAM_TIMEOUT: Duration = Duration::from_secs(4);
+static CAPTURE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn capture_temp(kind: &str, ext: &str) -> PathBuf {
+    let n = CAPTURE_SEQ.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("grokhub-{kind}-{n}.{ext}"))
+}
+/// Local whisper on a worker thread — still must not hang halt forever.
+const DESK_TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(20);
+
+fn kill_limited(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{pid}")])
+            .status();
+    }
+    let _ = child.kill();
+}
+
+fn read_capped(r: &mut impl Read, buf: &mut Vec<u8>, cap: usize) -> std::io::Result<()> {
+    let mut tmp = [0u8; 8192];
+    loop {
+        if buf.len() >= cap {
+            return Ok(());
+        }
+        let n = match r.read(&mut tmp) {
+            Ok(0) => return Ok(()),
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        let room = cap - buf.len();
+        buf.extend_from_slice(&tmp[..n.min(room)]);
+    }
+}
+
+fn read_pipe_capped(mut r: impl Read, cap: usize, overflow: &AtomicBool) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let _ = read_capped(&mut r, &mut buf, cap);
+    if buf.len() >= cap {
+        overflow.store(true, Ordering::SeqCst);
+    }
+    buf
+}
+
+/// Spawn `cmd` and kill the process group if it exceeds `timeout`.
+/// Used by presence / windshield paths that run on the UI thread.
+pub(crate) fn run_limited(mut cmd: Command, timeout: Duration) -> Option<Output> {
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn().ok()?;
+    let cap = (IMAGE_FILE_CAP as usize).saturating_add(1);
+    let overflow = Arc::new(AtomicBool::new(false));
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let out_flag = overflow.clone();
+    let err_flag = overflow.clone();
+    let h_out = std::thread::spawn(move || match stdout {
+        Some(s) => read_pipe_capped(s, cap, &out_flag),
+        None => Vec::new(),
+    });
+    let h_err = std::thread::spawn(move || match stderr {
+        Some(s) => read_pipe_capped(s, cap, &err_flag),
+        None => Vec::new(),
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline || overflow.load(Ordering::SeqCst) => {
+                kill_limited(&mut child);
+                match child.wait() {
+                    Ok(status) if overflow.load(Ordering::SeqCst) => break status,
+                    _ => {
+                        let _ = h_out.join();
+                        let _ = h_err.join();
+                        return None;
+                    }
+                }
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(15)),
+            Err(_) => {
+                kill_limited(&mut child);
+                let _ = child.wait();
+                let _ = h_out.join();
+                let _ = h_err.join();
+                return None;
+            }
+        }
+    };
+    Some(Output {
+        status,
+        stdout: h_out.join().unwrap_or_default(),
+        stderr: h_err.join().unwrap_or_default(),
+    })
+}
+
 fn remember_desk_frame(
     jpeg_w: u32,
     jpeg_h: u32,
@@ -84,10 +203,9 @@ fn last_desk_frame_geom() -> (u32, u32, i32, i32) {
 }
 
 pub fn read_display_outputs() -> Vec<DisplayOutput> {
-    Command::new("xrandr")
-        .arg("-q")
-        .output()
-        .ok()
+    let mut cmd = Command::new("xrandr");
+    cmd.arg("-q");
+    run_limited(cmd, DESK_LIST_TIMEOUT)
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|t| parse_xrandr_outputs(&t))
         .unwrap_or_default()
@@ -202,11 +320,9 @@ fn start_ydotoold() {
         let _ = std::fs::create_dir_all(parent);
     }
     std::env::set_var("YDOTOOL_SOCKET", &sock);
-    let _ = Command::new("systemctl")
-        .args(["--user", "start", "ydotoold"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    let mut sys = Command::new("systemctl");
+    sys.args(["--user", "start", "ydotoold"]);
+    let _ = run_limited(sys, DESK_LIST_TIMEOUT);
     if ydotool_socket_ready() {
         return;
     }
@@ -269,11 +385,9 @@ pub fn hands_ready() -> bool {
 }
 
 fn pyatspi_import_ok() -> bool {
-    Command::new("python3")
-        .args(["-c", "import pyatspi"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    let mut cmd = Command::new("python3");
+    cmd.args(["-c", "import pyatspi"]);
+    run_limited(cmd, DESK_LIST_TIMEOUT).is_some_and(|o| o.status.success())
 }
 
 pub fn install_hands_status() -> String {
@@ -288,27 +402,49 @@ pub fn install_hands_status() -> String {
     out
 }
 
-pub fn collect_rows() -> Vec<AtspiRow> {
-    let mut rows = Vec::new();
-    if let Ok(out) = Command::new("python3").args(["-c", ATSPI_PY]).output() {
-        if out.status.success() {
-            for line in String::from_utf8_lossy(&out.stdout).lines() {
-                if let Some(r) = parse_atspi_line(line) {
-                    rows.push(r);
-                }
+fn desk_scan() -> DeskScan {
+    if let Ok(g) = LAST_DESK_SCAN.lock() {
+        if let Some((at, scan)) = g.as_ref() {
+            if at.elapsed() < DESK_SCAN_TTL {
+                return scan.clone();
             }
+        }
+    }
+    let scan = desk_scan_now();
+    if let Ok(mut g) = LAST_DESK_SCAN.lock() {
+        *g = Some((Instant::now(), scan.clone()));
+    }
+    scan
+}
+
+fn desk_scan_now() -> DeskScan {
+    let mut atspi_cmd = Command::new("python3");
+    atspi_cmd.args(["-c", ATSPI_PY]);
+    let atspi = run_limited(atspi_cmd, DESK_LIST_TIMEOUT)
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let mut wmctrl_cmd = spawn_bin("wmctrl");
+    wmctrl_cmd.args(["-lG"]);
+    let wmctrl = run_limited(wmctrl_cmd, DESK_LIST_TIMEOUT)
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let mut rows = Vec::new();
+    for line in atspi.lines() {
+        if let Some(r) = parse_atspi_line(line) {
+            rows.push(r);
         }
     }
     if rows.is_empty() {
-        if let Ok(out) = spawn_bin("wmctrl").args(["-lG"]).output() {
-            for line in String::from_utf8_lossy(&out.stdout).lines() {
-                if let Some(r) = parse_wmctrl_line(line) {
-                    rows.push(r);
-                }
+        for line in wmctrl.lines() {
+            if let Some(r) = parse_wmctrl_line(line) {
+                rows.push(r);
             }
         }
     }
-    if let Ok(out) = spawn_bin("xdotool").args(["getmouselocation"]).output() {
+    let mut mouse = spawn_bin("xdotool");
+    mouse.args(["getmouselocation"]);
+    if let Some(out) = run_limited(mouse, DESK_LIST_TIMEOUT) {
         if let Some(r) = parse_xdotool_mouse(&String::from_utf8_lossy(&out.stdout)) {
             rows.push(r);
         }
@@ -317,7 +453,14 @@ pub fn collect_rows() -> Vec<AtspiRow> {
     let (dw, dh) = virtual_desktop_size(&outputs)
         .map(|(w, h)| (w as i32, h as i32))
         .unwrap_or((0, 0));
-    filter_atspi_rows(&rows, dw, dh)
+    DeskScan {
+        rows: filter_atspi_rows(&rows, dw, dh),
+        lock: lock_titles_from_stdout(&atspi, &wmctrl),
+    }
+}
+
+pub fn collect_rows() -> Vec<AtspiRow> {
+    desk_scan().rows
 }
 
 pub fn named_row<'a>(rows: &'a [AtspiRow], name: &str) -> Option<&'a AtspiRow> {
@@ -389,9 +532,11 @@ fn run_bin_steps(bin: &str, steps: &[Vec<String>], cancel: Option<&AtomicBool>) 
         if bin == "ydotool" {
             cmd.env("YDOTOOL_SOCKET", ydotool_sock());
         }
-        let st = cmd.args(step).status().map_err(|e| e.to_string())?;
-        if !st.success() {
-            return Err(format!("{bin} {} failed", step.join(" ")));
+        cmd.args(step);
+        match run_limited(cmd, DESK_LIST_TIMEOUT) {
+            Some(out) if out.status.success() => {}
+            Some(_) => return Err(format!("{bin} {} failed", step.join(" "))),
+            None => return Err(format!("{bin} {} timed out", step.join(" "))),
         }
     }
     Ok(())
@@ -417,20 +562,7 @@ fn pointer_drive(op: &ComputerOp) -> ComputerDrive {
 }
 
 pub fn lock_titles() -> Vec<String> {
-    let atspi = Command::new("python3")
-        .args(["-c", ATSPI_PY])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default();
-    let wmctrl = Command::new("wmctrl")
-        .args(["-lG"])
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default();
-    lock_titles_from_stdout(&atspi, &wmctrl)
+    desk_scan().lock
 }
 
 pub fn lock_titles_from_stdout(atspi: &str, wmctrl: &str) -> Vec<String> {
@@ -459,10 +591,10 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     let Some(bin) = act_window_search_bin(which("xdotool")) else {
         return Err(format!("act {name}: not found"));
     };
-    let out = spawn_bin(bin)
-        .args(["search", "--onlyvisible", "--name", name])
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut search = spawn_bin(bin);
+    search.args(["search", "--onlyvisible", "--name", name]);
+    let out = run_limited(search, DESK_LIST_TIMEOUT)
+        .ok_or_else(|| format!("act {name}: not found"))?;
     let id = String::from_utf8_lossy(&out.stdout)
         .lines()
         .next()
@@ -472,10 +604,10 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     if id.is_empty() {
         return Err(format!("act {name}: not found"));
     }
-    let geo = spawn_bin(bin)
-        .args(["getwindowgeometry", &id])
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut geo_cmd = spawn_bin(bin);
+    geo_cmd.args(["getwindowgeometry", &id]);
+    let geo = run_limited(geo_cmd, DESK_LIST_TIMEOUT)
+        .ok_or_else(|| format!("act {name}: no geometry"))?;
     let text = String::from_utf8_lossy(&geo.stdout);
     let (x, y, w, h) = parse_getwindowgeometry(&text).ok_or_else(|| {
         format!("act {name}: no geometry")
@@ -589,14 +721,11 @@ fn pin_wayland_for_capture() {
 }
 
 fn x11_size() -> (u32, u32) {
-    let xdpy = Command::new("xdpyinfo")
-        .output()
-        .ok()
+    let xdpy = run_limited(Command::new("xdpyinfo"), DESK_LIST_TIMEOUT)
         .and_then(|o| String::from_utf8(o.stdout).ok());
-    let xrandr = Command::new("xrandr")
-        .arg("-q")
-        .output()
-        .ok()
+    let mut xrandr_cmd = Command::new("xrandr");
+    xrandr_cmd.arg("-q");
+    let xrandr = run_limited(xrandr_cmd, DESK_LIST_TIMEOUT)
         .and_then(|o| String::from_utf8(o.stdout).ok());
     x11_grab_size(xdpy.as_deref(), xrandr.as_deref())
 }
@@ -636,13 +765,8 @@ fn run_capture_kind(
         CaptureKind::GnomeShell => {
             let p = png.to_string_lossy().to_string();
             let args = gnome_shell_screenshot_args(&p);
-            let st = spawn_bin("gdbus")
-                .args(&args)
-                .status()
-                .map_err(|e| e.to_string())?;
-            if !st.success() {
-                return Err("gnome-shell screenshot failed".into());
-            }
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            run_ok("gdbus", &refs)?;
             Ok((png, None))
         }
         CaptureKind::Maim => {
@@ -665,19 +789,48 @@ fn run_capture_kind(
             let (w, h) = x11_size();
             let p = jpg.to_string_lossy().to_string();
             let args = ffmpeg_x11_args(&display, w, h, &p);
-            let st = spawn_bin("ffmpeg")
-                .args(&args)
-                .status()
-                .map_err(|e| e.to_string())?;
-            if !st.success() {
-                return Err("ffmpeg x11grab failed".into());
-            }
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            run_ok("ffmpeg", &refs)?;
             Ok((jpg, None))
         }
     }
 }
 
+fn image_pixels_ok_for_path(path: &Path) -> Result<(), String> {
+    let mut hdr = [0u8; 24];
+    if let Ok(n) = std::fs::File::open(path).and_then(|mut f| f.read(&mut hdr)) {
+        if let Some((w, h)) = png_ihdr_size(&hdr[..n]) {
+            if !image_pixels_ok(w, h) {
+                return Err("image too large".into());
+            }
+            return Ok(());
+        }
+    }
+    let (w, h) = image::image_dimensions(path).map_err(|e| e.to_string())?;
+    if !image_pixels_ok(w, h) {
+        return Err("image too large".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn image_pixels_ok_for_bytes(bytes: &[u8]) -> bool {
+    if let Some((w, h)) = png_ihdr_size(bytes) {
+        return image_pixels_ok(w, h);
+    }
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()
+        .and_then(|r| r.into_dimensions().ok())
+        .map(|(w, h)| image_pixels_ok(w, h))
+        .unwrap_or(true)
+}
+
 fn image_file_to_jpeg(path: &Path) -> Result<Vec<u8>, String> {
+    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
+    if len > IMAGE_FILE_CAP {
+        return Err("image too large".into());
+    }
+    image_pixels_ok_for_path(path)?;
     let img = image::open(path).map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     let mut cur = std::io::Cursor::new(&mut buf);
@@ -741,6 +894,12 @@ pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
                     .and_then(|s| s.to_str())
                     .is_some_and(|e| e == "jpg" || e == "jpeg")
                 {
+                    let len = std::fs::metadata(&written).map(|m| m.len()).unwrap_or(u64::MAX);
+                    if len > IMAGE_FILE_CAP {
+                        last = format!("{kind:?} too large");
+                        let _ = std::fs::remove_file(&written);
+                        continue;
+                    }
                     match std::fs::read(&written) {
                         Ok(b) if b.len() >= 32 => b,
                         Ok(_) => {
@@ -782,7 +941,7 @@ pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 pub fn capture_data_url() -> Result<String, String> {
-    let path = std::env::temp_dir().join("grokhub-desk.jpg");
+    let path = capture_temp("desk", "jpg");
     let bytes = capture_jpeg(&path)?;
     let _ = std::fs::remove_file(&path);
     if bytes.len() < 32 {
@@ -953,37 +1112,48 @@ fn transcribe(wav: &Path) -> Result<String, String> {
     let dest = wav.to_str().ok_or("wav")?;
     let bin = first_bin(TRANSCRIBERS).ok_or("install whisper (openai-whisper or whisper.cpp)")?;
     let out_dir = std::env::temp_dir();
-    let status = match bin.as_str() {
-        "whisper-cli" | "whisper.cpp" => Command::new(&bin)
-            .args([dest, "-otxt", "-of", out_dir.join("grokhub-voice").to_str().unwrap_or("/tmp/grokhub-voice")])
-            .status(),
-        _ => Command::new(&bin)
-            .args([
+    let mut cmd = Command::new(&bin);
+    match bin.as_str() {
+        "whisper-cli" | "whisper.cpp" => {
+            cmd.args([
+                dest,
+                "-otxt",
+                "-of",
+                out_dir
+                    .join("grokhub-voice")
+                    .to_str()
+                    .unwrap_or("/tmp/grokhub-voice"),
+            ]);
+        }
+        _ => {
+            cmd.args([
                 dest,
                 "--output_format",
                 "txt",
                 "--output_dir",
                 out_dir.to_str().unwrap_or("/tmp"),
-            ])
-            .status(),
+            ]);
+        }
     }
-    .map_err(|e| e.to_string())?;
-    if !status.success() {
+    let out = match run_limited(cmd, DESK_TRANSCRIBE_TIMEOUT) {
+        Some(o) => o,
+        None => return Err(format!("{bin} timed out")),
+    };
+    if !out.status.success() {
         return Err(format!("{bin} failed"));
     }
     let txt = wav.with_extension("txt");
     let alt = out_dir.join("grokhub-voice.txt");
-    std::fs::read_to_string(&txt)
-        .or_else(|_| std::fs::read_to_string(alt))
-        .map_err(|e| e.to_string())
+    read_text_capped(&txt).or_else(|_| read_text_capped(&alt))
 }
 
 fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {
-    let st = spawn_bin(bin).args(args).status().map_err(|e| e.to_string())?;
-    if st.success() {
-        Ok(())
-    } else {
-        Err(format!("{bin} failed"))
+    let mut cmd = spawn_bin(bin);
+    cmd.args(args);
+    match run_limited(cmd, DESK_CAPTURE_TIMEOUT) {
+        Some(out) if out.status.success() => Ok(()),
+        Some(_) => Err(format!("{bin} failed")),
+        None => Err(format!("{bin} timed out")),
     }
 }
 
@@ -999,6 +1169,11 @@ pub fn imagine_save_path_ext(slug: &str, ext: &str) -> PathBuf {
 
 /// Second frame for a wall cover when the second Imagine call fails.
 pub fn sibling_still(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    let len = std::fs::metadata(src).map(|m| m.len()).unwrap_or(u64::MAX);
+    if len > IMAGE_FILE_CAP {
+        return Err("image too large".into());
+    }
+    image_pixels_ok_for_path(src)?;
     let img = image::open(src).map_err(|e| e.to_string())?;
     let (w, h) = img.dimensions();
     let x = ((w as f32) * 0.05) as u32;
@@ -1021,16 +1196,19 @@ pub fn capture_webcam() -> Result<String, String> {
     if !which("ffmpeg") {
         return Err("ffmpeg missing for webcam".into());
     }
-    let path = std::env::temp_dir().join("grokhub-cam.jpg");
+    let path = capture_temp("cam", "jpg");
     let dest = path.to_string_lossy().to_string();
     let args = ffmpeg_webcam_args("/dev/video0", &dest);
-    let ok = Command::new("ffmpeg")
-        .args(&args)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let mut cam = Command::new("ffmpeg");
+    cam.args(&args);
+    let ok = run_limited(cam, DESK_WEBCAM_TIMEOUT).is_some_and(|o| o.status.success());
     if !ok {
         return Err("webcam capture failed".into());
+    }
+    let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(u64::MAX);
+    if len > IMAGE_FILE_CAP {
+        let _ = std::fs::remove_file(&path);
+        return Err("image too large".into());
     }
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&path);
@@ -1048,23 +1226,30 @@ pub fn record_pcm_chunks() -> Vec<Vec<u8>> {
     let dest = std::env::temp_dir().join("grokhub-voice-live.wav");
     let path = dest.to_string_lossy().to_string();
     let ok = match first_bin(RECORDERS).as_deref() {
-        Some("arecord") => Command::new("arecord")
-            .args(["-q", "-d", "1", "-f", "S16_LE", "-r", "24000", "-c", "1", "-t", "wav", &path])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false),
-        Some("ffmpeg") => Command::new("ffmpeg")
-            .args([
+        Some("arecord") => {
+            let mut cmd = Command::new("arecord");
+            cmd.args([
+                "-q", "-d", "1", "-f", "S16_LE", "-r", "24000", "-c", "1", "-t", "wav", &path,
+            ]);
+            run_limited(cmd, DESK_CAPTURE_TIMEOUT).is_some_and(|o| o.status.success())
+        }
+        Some("ffmpeg") => {
+            let mut cmd = Command::new("ffmpeg");
+            cmd.args([
                 "-y", "-hide_banner", "-loglevel", "error",
                 "-f", "pulse", "-i", "default", "-t", "1", "-ac", "1", "-ar", "24000",
                 "-f", "s16le", &path,
-            ])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false),
+            ]);
+            run_limited(cmd, DESK_CAPTURE_TIMEOUT).is_some_and(|o| o.status.success())
+        }
         _ => false,
     };
     if !ok {
+        return vec![];
+    }
+    let len = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(u64::MAX);
+    if len > IMAGE_FILE_CAP {
+        let _ = std::fs::remove_file(&dest);
         return vec![];
     }
     let bytes = std::fs::read(&dest).unwrap_or_default();
@@ -1108,8 +1293,13 @@ pub fn clipboard_image() -> Option<PathBuf> {
         if !which(bin) {
             continue;
         }
-        if let Ok(o) = Command::new(bin).args(args).output() {
+        let mut cmd = Command::new(bin);
+        cmd.args(args);
+        if let Some(o) = run_limited(cmd, DESK_LIST_TIMEOUT) {
             if !o.status.success() || o.stdout.len() < 24 {
+                continue;
+            }
+            if o.stdout.len() as u64 > IMAGE_FILE_CAP {
                 continue;
             }
             let b = &o.stdout;
@@ -1127,6 +1317,11 @@ pub fn clipboard_image() -> Option<PathBuf> {
 }
 
 pub fn load_image_data_url(path: &Path) -> Result<String, String> {
+    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
+    if len > IMAGE_FILE_CAP {
+        return Err("image too large".into());
+    }
+    image_pixels_ok_for_path(path)?;
     let img = image::open(path).map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     let mut cur = std::io::Cursor::new(&mut buf);
@@ -1139,7 +1334,14 @@ pub fn load_image_data_url(path: &Path) -> Result<String, String> {
 }
 
 pub fn read_text_capped(path: &Path) -> Result<String, String> {
-    let s = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; TEXT_FILE_CAP];
+    let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+    buf.truncate(n);
+    while !buf.is_empty() && std::str::from_utf8(&buf).is_err() {
+        buf.pop();
+    }
+    let s = String::from_utf8(buf).map_err(|e| e.to_string())?;
     Ok(take_text_body(&s))
 }
 
@@ -1149,9 +1351,12 @@ pub fn clipboard_once() -> Option<String> {
         ("xclip", &["-o", "-selection", "clipboard"]),
         ("xsel", &["-ob"]),
     ] {
-        if let Ok(o) = Command::new(bin).args(args).output() {
+        let mut cmd = Command::new(bin);
+        cmd.args(args);
+        if let Some(o) = run_limited(cmd, DESK_LIST_TIMEOUT) {
             if o.status.success() {
-                let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                let n = o.stdout.len().min(TEXT_FILE_CAP);
+                let s = String::from_utf8_lossy(&o.stdout[..n]).trim().to_string();
                 if !s.is_empty() {
                     return Some(s);
                 }
@@ -1164,6 +1369,37 @@ pub fn clipboard_once() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn png_crc(data: &[u8]) -> u32 {
+        let mut crc = 0xffff_ffffu32;
+        for &b in data {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        crc ^ 0xffff_ffff
+    }
+
+    fn png_ihdr_only(width: u32, height: u32) -> Vec<u8> {
+        let mut ihdr = Vec::from(*b"IHDR");
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+        let crc = png_crc(&ihdr);
+        let mut out = vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+        out.extend_from_slice(&13u32.to_be_bytes());
+        out.extend_from_slice(&ihdr);
+        out.extend_from_slice(&crc.to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(b"IEND");
+        out.extend_from_slice(&png_crc(b"IEND").to_be_bytes());
+        out
+    }
 
     #[test]
     fn bins_are_named() {
@@ -1210,6 +1446,64 @@ mod tests {
         let txt = dir.join("note.txt");
         std::fs::write(&txt, "hello cabin").unwrap();
         assert_eq!(read_text_capped(&txt).unwrap(), "hello cabin");
+    }
+
+    #[test]
+    fn load_image_data_url_rejects_a_huge_file() {
+        let src = include_str!("desktop.rs");
+        let load = src
+            .split("pub fn load_image_data_url(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn read_text_capped(").next())
+            .expect("load_image_data_url");
+        let meta = load.find("metadata").expect("size check before decode");
+        let open = load.find("image::open").expect("decode");
+        assert!(
+            meta < open && load.contains("IMAGE_FILE_CAP"),
+            "a huge attach must not decode on the UI thread: {load}"
+        );
+        let dir = std::env::temp_dir().join("grokhub-img-cap-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("huge.bin");
+        std::fs::write(&path, vec![0u8; (IMAGE_FILE_CAP as usize) + 1]).unwrap();
+        assert_eq!(
+            load_image_data_url(&path).unwrap_err(),
+            "image too large"
+        );
+        assert!(
+            load.contains("IMAGE_PIXEL_CAP") || load.contains("image_pixels_ok"),
+            "a tiny PNG with huge pixels must not decode on the UI thread: {load}"
+        );
+        let bomb = dir.join("bomb.png");
+        std::fs::write(&bomb, png_ihdr_only(50_000, 50_000)).unwrap();
+        assert_eq!(
+            load_image_data_url(&bomb).unwrap_err(),
+            "image too large"
+        );
+    }
+
+    #[test]
+    fn read_text_capped_does_not_slurp_the_whole_file() {
+        let src = include_str!("desktop.rs");
+        let read = src
+            .split("pub fn read_text_capped(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn clipboard_once(").next())
+            .expect("read_text_capped");
+        assert!(
+            !read.contains("read_to_string"),
+            "attaching a huge log must not load the whole file on the UI thread: {read}"
+        );
+        assert!(
+            read.contains("TEXT_FILE_CAP"),
+            "capped attach must stop at TEXT_FILE_CAP: {read}"
+        );
+        let dir = std::env::temp_dir().join("grokhub-cap-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("huge.txt");
+        std::fs::write(&path, "x".repeat(grokhub_core::TEXT_FILE_CAP + 4096)).unwrap();
+        let out = read_text_capped(&path).unwrap();
+        assert_eq!(out.len(), grokhub_core::TEXT_FILE_CAP);
     }
 
     #[test]
@@ -1318,5 +1612,279 @@ mod tests {
         );
         assert_eq!(act_window_search_bin(false), None);
         assert_eq!(act_window_search_bin(true), Some("xdotool"));
+    }
+
+    #[test]
+    fn run_limited_kills_a_hung_desktop_command() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        let started = Instant::now();
+        let out = run_limited(cmd, Duration::from_millis(250));
+        assert!(
+            out.is_none(),
+            "hung desktop spawn must time out, got {out:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "UI-thread desktop spawn must not wait out the child: {:?}",
+            started.elapsed()
+        );
+        let limited = include_str!("desktop.rs")
+            .split("pub(crate) fn run_limited(")
+            .nth(1)
+            .and_then(|s| s.split("\nfn remember_desk_frame(").next())
+            .expect("run_limited");
+        assert!(
+            !limited.contains("read_to_end"),
+            "a huge clipboard dump must not slurp the whole pipe on the UI thread: {limited}"
+        );
+        assert!(
+            limited.contains("IMAGE_FILE_CAP"),
+            "run_limited must stop reading past IMAGE_FILE_CAP: {limited}"
+        );
+        let mut dump = Command::new("head");
+        dump.args(["-c", &(IMAGE_FILE_CAP + 2 * 1024 * 1024).to_string(), "/dev/zero"]);
+        let out = run_limited(dump, Duration::from_secs(3)).expect("head exited");
+        assert!(
+            out.stdout.len() as u64 <= IMAGE_FILE_CAP + 1,
+            "huge stdout must stay capped, got {}",
+            out.stdout.len()
+        );
+    }
+
+    #[test]
+    fn capture_paths_must_not_share_one_temp_file() {
+        let src = include_str!("desktop.rs");
+        let desk = src
+            .split("pub fn capture_data_url(")
+            .nth(1)
+            .and_then(|s| s.split("pub const PLAYERS").next())
+            .expect("capture_data_url");
+        assert!(
+            !desk.contains("\"grokhub-desk.jpg\"") && desk.contains("capture_temp("),
+            "live presence and chat capture must not write the same JPEG: {desk}"
+        );
+        let cam = src
+            .split("pub fn capture_webcam(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn record_pcm_chunks(").next())
+            .expect("capture_webcam");
+        assert!(
+            !cam.contains("\"grokhub-cam.jpg\"") && cam.contains("capture_temp("),
+            "webcam capture must not collide with a second ffmpeg: {cam}"
+        );
+    }
+
+    #[test]
+    fn live_room_desktop_spawns_must_time_out() {
+        let src = include_str!("desktop.rs");
+        let scan = src
+            .split("fn desk_scan_now(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn collect_rows(").next())
+            .expect("desk_scan_now");
+        assert!(
+            scan.contains("run_limited(") && !scan.contains(".output()"),
+            "desk scan must kill hung ATSPI/wmctrl: {scan}"
+        );
+        let collect = src
+            .split("pub fn collect_rows(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn named_row").next())
+            .expect("collect_rows");
+        assert!(
+            collect.contains("desk_scan("),
+            "collect_rows must reuse the shared desk scan: {collect}"
+        );
+        let lock = src
+            .split("pub fn lock_titles(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn lock_titles_from_stdout").next())
+            .expect("lock_titles");
+        assert!(
+            lock.contains("desk_scan("),
+            "lock_titles must reuse the shared desk scan: {lock}"
+        );
+        let cam = src
+            .split("pub fn capture_webcam(")
+            .nth(1)
+            .and_then(|s| s.split("\n/// Short PCM").next())
+            .expect("capture_webcam");
+        assert!(
+            cam.contains("run_limited("),
+            "webcam ffmpeg must time out: {cam}"
+        );
+        assert!(
+            !cam.contains(".status()"),
+            "webcam ffmpeg must not block the UI on Command::status: {cam}"
+        );
+        let run_ok = src
+            .split("fn run_ok(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn imagine_save_path(").next())
+            .expect("run_ok");
+        assert!(
+            run_ok.contains("run_limited("),
+            "screenshot bins must time out: {run_ok}"
+        );
+        let cap = src
+            .split("fn run_capture_kind(")
+            .nth(1)
+            .and_then(|s| s.split("\nfn image_file_to_jpeg").next())
+            .expect("run_capture_kind");
+        assert!(
+            !cap.contains(".status()"),
+            "capture bins must not block the UI on Command::status: {cap}"
+        );
+        let xrandr = src
+            .split("pub fn read_display_outputs(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn prepare_windshield").next())
+            .expect("read_display_outputs");
+        assert!(
+            xrandr.contains("run_limited("),
+            "xrandr must time out: {xrandr}"
+        );
+        let steps = src
+            .split("fn run_bin_steps(")
+            .nth(1)
+            .and_then(|s| s.split("\nfn run_pointer_steps").next())
+            .expect("run_bin_steps");
+        assert!(
+            steps.contains("run_limited(") && !steps.contains(".status()"),
+            "hung xdotool/ydotool must not freeze the UI: {steps}"
+        );
+        let py = src
+            .split("fn pyatspi_import_ok(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn install_hands_status").next())
+            .expect("pyatspi_import_ok");
+        assert!(
+            py.contains("run_limited(") && !py.contains(".status()"),
+            "pyatspi import must time out: {py}"
+        );
+        let clip = src
+            .split("pub fn clipboard_once(")
+            .nth(1)
+            .and_then(|s| s.split("\n#[cfg(test)]").next())
+            .expect("clipboard_once");
+        assert!(
+            clip.contains("run_limited(") && !clip.contains(".output()"),
+            "clipboard paste must time out: {clip}"
+        );
+        let img = src
+            .split("pub fn clipboard_image(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn load_image_data_url").next())
+            .expect("clipboard_image");
+        assert!(
+            img.contains("run_limited(") && !img.contains(".output()"),
+            "clipboard image paste must time out: {img}"
+        );
+        assert!(
+            img.contains("IMAGE_FILE_CAP"),
+            "clipboard image paste must not keep a huge bitmap: {img}"
+        );
+        let text = src
+            .split("pub fn clipboard_once(")
+            .nth(1)
+            .and_then(|s| s.split("\n#[cfg(test)]").next())
+            .expect("clipboard_once");
+        assert!(
+            text.contains("TEXT_FILE_CAP"),
+            "clipboard text paste must not keep a huge paste: {text}"
+        );
+        let ydo = src
+            .split("fn start_ydotoold(")
+            .nth(1)
+            .and_then(|s| s.split("\nfn hands_facts(").next())
+            .expect("start_ydotoold");
+        assert!(
+            ydo.contains("run_limited(") && !ydo.contains(".status()"),
+            "systemctl start ydotoold must not freeze hands: {ydo}"
+        );
+        let tr = src
+            .split("fn transcribe(")
+            .nth(1)
+            .and_then(|s| s.split("\nfn run_ok(").next())
+            .expect("transcribe");
+        assert!(
+            tr.contains("run_limited(") && !tr.contains(".status()"),
+            "whisper must not hang forever: {tr}"
+        );
+        assert!(
+            tr.contains("read_text_capped") && !tr.contains("read_to_string"),
+            "whisper must not slurp a huge transcript: {tr}"
+        );
+        let pcm = src
+            .split("pub fn record_pcm_chunks(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn pick_file(").next())
+            .expect("record_pcm_chunks");
+        assert!(
+            pcm.contains("run_limited(") && !pcm.contains(".status()"),
+            "live mic arecord must time out so Voice halt can finish: {pcm}"
+        );
+        let pcm_read = pcm.find("std::fs::read(&dest)").expect("pcm read");
+        assert!(
+            pcm.contains("IMAGE_FILE_CAP") && pcm.find("IMAGE_FILE_CAP").expect("pcm cap") < pcm_read,
+            "live mic must not slurp a huge wav: {pcm}"
+        );
+    }
+
+    #[test]
+    fn sibling_still_rejects_a_huge_file() {
+        let src = include_str!("desktop.rs");
+        let still = src
+            .split("pub fn sibling_still(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn capture_webcam(").next())
+            .expect("sibling_still");
+        let meta = still.find("metadata").expect("size check before decode");
+        let open = still.find("image::open").expect("decode");
+        assert!(
+            meta < open && still.contains("IMAGE_FILE_CAP"),
+            "wall cover fallback must not decode a huge still: {still}"
+        );
+        let jpeg = src
+            .split("fn image_file_to_jpeg(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn frame_bytes_are_blank(").next())
+            .expect("image_file_to_jpeg");
+        let jmeta = jpeg.find("metadata").expect("jpeg size check");
+        let jopen = jpeg.find("image::open").expect("jpeg decode");
+        assert!(
+            jmeta < jopen && jpeg.contains("IMAGE_FILE_CAP"),
+            "capture JPEG convert must not decode a huge file: {jpeg}"
+        );
+        assert!(
+            still.contains("image_pixels_ok") && jpeg.contains("image_pixels_ok"),
+            "a tiny still with huge pixels must not decode on the UI thread: {still} {jpeg}"
+        );
+    }
+
+    #[test]
+    fn capture_jpeg_reads_reject_a_huge_file() {
+        let src = include_str!("desktop.rs");
+        let cap = src
+            .split("pub fn capture_jpeg(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn capture_data_url(").next())
+            .expect("capture_jpeg");
+        let jpg_read = cap.find("std::fs::read(&written)").expect("jpg read");
+        assert!(
+            cap.contains("IMAGE_FILE_CAP") && cap.find("IMAGE_FILE_CAP").expect("cap") < jpg_read,
+            "grim/ffmpeg JPEG must not slurp a huge file: {cap}"
+        );
+        let cam = src
+            .split("pub fn capture_webcam(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn record_pcm_chunks(").next())
+            .expect("capture_webcam");
+        let cam_read = cam.find("std::fs::read(&path)").expect("cam read");
+        assert!(
+            cam.contains("IMAGE_FILE_CAP") && cam.find("IMAGE_FILE_CAP").expect("cam cap") < cam_read,
+            "webcam JPEG must not slurp a huge file: {cam}"
+        );
     }
 }
