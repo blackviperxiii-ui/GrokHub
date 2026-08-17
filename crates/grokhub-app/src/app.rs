@@ -1188,6 +1188,7 @@ impl Cabin {
         self.agents.clear();
         self.active_skill_follow = None;
         self.followup_step = 0;
+        self.speak_next = false;
         self.stream_buf.clear();
         self.thought_buf.clear();
         let vis = self.visible_thread_id();
@@ -2622,6 +2623,7 @@ impl Cabin {
         if !persist_user_turn(self.has_key()) {
             self.hands_attach = false;
             self.eyes_attach = false;
+            self.speak_next = false;
             self.status = "Connect Grok OAuth in Settings".into();
             return;
         }
@@ -9456,6 +9458,19 @@ mod tests {
             send_auth[gate..].contains("hands_attach = false")
                 && send_auth[gate..].contains("eyes_attach = false"),
             "auth-fail send must disarm leftover take-over flags: {send_auth}"
+        );
+        assert!(
+            send_auth[gate..].contains("speak_next = false"),
+            "auth-fail send must not leave TTS armed for the next reply: {send_auth}"
+        );
+        let halt_flight = src
+            .split("fn halt_in_flight")
+            .nth(1)
+            .and_then(|s| s.split("fn apply_assistant_snapshot").next())
+            .expect("halt_in_flight");
+        assert!(
+            halt_flight.contains("speak_next = false"),
+            "Stop must cancel a pending voice speak: {halt_flight}"
         );
         let host_done_facts = src
             .split("Ok(JobOut::HostDone(block))")
