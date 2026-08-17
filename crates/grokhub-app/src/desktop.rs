@@ -6,7 +6,7 @@ use grokhub_core::{
     jpeg_data_url, layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var,
     parse_atspi_line, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
     parse_xrandr_outputs, pcm_from_capture, pick_capture_output, pick_hands_backend, pick_named_row,
-    picker_args, rank_atspi_rows, resolve_bin_in, session_is_wayland, take_text_body,
+    picker_args, rank_atspi_rows, resolve_bin_in, session_is_wayland, take_text_body, TEXT_FILE_CAP,
     virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path, AtspiRow, CaptureKind, ComputerDrive,
     ComputerOp, DisplayOutput, HandsBackend, HandsDown, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
 };
@@ -1227,7 +1227,14 @@ pub fn load_image_data_url(path: &Path) -> Result<String, String> {
 }
 
 pub fn read_text_capped(path: &Path) -> Result<String, String> {
-    let s = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; TEXT_FILE_CAP];
+    let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+    buf.truncate(n);
+    while !buf.is_empty() && std::str::from_utf8(&buf).is_err() {
+        buf.pop();
+    }
+    let s = String::from_utf8(buf).map_err(|e| e.to_string())?;
     Ok(take_text_body(&s))
 }
 
@@ -1300,6 +1307,30 @@ mod tests {
         let txt = dir.join("note.txt");
         std::fs::write(&txt, "hello cabin").unwrap();
         assert_eq!(read_text_capped(&txt).unwrap(), "hello cabin");
+    }
+
+    #[test]
+    fn read_text_capped_does_not_slurp_the_whole_file() {
+        let src = include_str!("desktop.rs");
+        let read = src
+            .split("pub fn read_text_capped(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn clipboard_once(").next())
+            .expect("read_text_capped");
+        assert!(
+            !read.contains("read_to_string"),
+            "attaching a huge log must not load the whole file on the UI thread: {read}"
+        );
+        assert!(
+            read.contains("TEXT_FILE_CAP"),
+            "capped attach must stop at TEXT_FILE_CAP: {read}"
+        );
+        let dir = std::env::temp_dir().join("grokhub-cap-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("huge.txt");
+        std::fs::write(&path, "x".repeat(grokhub_core::TEXT_FILE_CAP + 4096)).unwrap();
+        let out = read_text_capped(&path).unwrap();
+        assert_eq!(out.len(), grokhub_core::TEXT_FILE_CAP);
     }
 
     #[test]
