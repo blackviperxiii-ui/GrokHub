@@ -4230,8 +4230,7 @@ impl Cabin {
         for c in self.board.iter().take(8) {
             board.push_str(&format!("- [{}] {}\n", c.status.as_str(), c.title));
         }
-        let last_host = self
-            .last_host
+        let last_host = thread_host_receipts(&msgs)
             .last()
             .map(|h| h.chars().take(400).collect::<String>())
             .unwrap_or_default();
@@ -9803,6 +9802,11 @@ mod tests {
                 && kick[..soul].contains("mem_body")
                 && kick[..soul].contains("scratch()"),
             "kick_model must flush the Memory editor before the system prompt: {kick}"
+        );
+        let sys = kick.find("cabin_system_prompt").expect("system prompt");
+        assert!(
+            kick[..sys].contains("thread_host_receipts") && !kick[..sys].contains("self.last_host"),
+            "kick_model must not inject another tab's last_host into this job's prompt: {kick}"
         );
         let anticipate = src
             .split("fn tick_anticipate")
