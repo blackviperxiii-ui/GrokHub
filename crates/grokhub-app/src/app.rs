@@ -3800,6 +3800,8 @@ impl Cabin {
             }
         }
         self.skill_list = skills::list_skills();
+        self.mem_name = "MEMORY.md".into();
+        self.mem_body = config::read_memory("MEMORY.md");
         self.status = format!("Imported {imported} files from {root}");
         self.nav = Nav::Memory;
     }
@@ -9551,6 +9553,10 @@ mod tests {
         assert!(
             import.contains("merge_imported_memory"),
             "/import must merge MEMORY.md instead of last-file-wins: {import}"
+        );
+        assert!(
+            import.contains("mem_name") && import.contains("mem_body"),
+            "/import must reload the Memory editor onto MEMORY.md: {import}"
         );
         let sign_out = src
             .split("fn sign_out_oauth")
