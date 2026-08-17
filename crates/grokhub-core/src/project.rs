@@ -553,6 +553,14 @@ mod tests {
         assert_eq!(refund_host_reserved(3, 3), 0);
         assert_eq!(refund_host_reserved(3, 1), 2);
         assert_eq!(refund_host_reserved(0, 2), 0);
+        assert!(
+            host_cmd_leaves_project_in(
+                "cp -a '/home/j/proj/.' '/home/j/.config/GrokHub/rewind/rw1'",
+                "/home/j/proj",
+                Some("/home/j")
+            ),
+            "cabin rewind dest is outside the bound tree — run_cmds must exempt it"
+        );
     }
 
     #[test]
