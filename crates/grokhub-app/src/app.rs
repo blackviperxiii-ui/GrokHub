@@ -2137,6 +2137,7 @@ impl Cabin {
             };
             if apply_auto_title_in(&mut tab, &t.goal.label, renaming) {
                 t.title = tab.title;
+                t.accessed_ms = now_ms();
             }
             if tid == current {
                 self.cfg.goal_pin = t.goal.label.clone();
@@ -2511,6 +2512,7 @@ impl Cabin {
         if apply_manual_rename(&mut tab, title) {
             t.title = tab.title;
             t.title_locked = true;
+            t.accessed_ms = now_ms();
             self.status = format!("Renamed {}", t.title);
             self.rename_idx = None;
             self.rename_focus = false;
@@ -2524,6 +2526,7 @@ impl Cabin {
             return;
         };
         t.pinned = toggle_pin(t.pinned);
+        t.accessed_ms = now_ms();
         self.status = if t.pinned {
             format!("Pinned {}", t.title)
         } else {
@@ -9555,6 +9558,33 @@ mod tests {
         assert!(
             fail.contains("accessed_ms") || fail.contains("stamp_current_access"),
             "a job error on the origin thread must bump accessed_ms or /sync LWW can drop it: {fail}"
+        );
+        let renamed = src
+            .split("fn rename_thread")
+            .nth(1)
+            .and_then(|s| s.split("fn pin_thread").next())
+            .expect("rename_thread");
+        assert!(
+            renamed.contains("accessed_ms"),
+            "rename must bump accessed_ms or /sync LWW can drop the new title: {renamed}"
+        );
+        let pinned = src
+            .split("fn pin_thread")
+            .nth(1)
+            .and_then(|s| s.split("fn delete_thread_at").next())
+            .expect("pin_thread");
+        assert!(
+            pinned.contains("accessed_ms"),
+            "pin must bump accessed_ms or /sync LWW can drop the pin: {pinned}"
+        );
+        let goal = src
+            .split("fn apply_thread_goal")
+            .nth(1)
+            .and_then(|s| s.split("fn spawn_thread_goal").next())
+            .expect("apply_thread_goal");
+        assert!(
+            goal.contains("accessed_ms"),
+            "auto-title must bump accessed_ms or /sync LWW can drop the new name: {goal}"
         );
         let created = src
             .split("fn new_thread")
