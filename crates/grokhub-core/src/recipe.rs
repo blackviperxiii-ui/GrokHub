@@ -443,6 +443,25 @@ fn ydotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
     }
 }
 
+pub fn relative_move_steps(backend: HandsBackend, dx: i32, dy: i32) -> Vec<Vec<String>> {
+    if dx == 0 && dy == 0 {
+        return vec![];
+    }
+    match backend {
+        HandsBackend::Ydotool => vec![vec![
+            "mousemove".into(),
+            dx.to_string(),
+            dy.to_string(),
+        ]],
+        HandsBackend::Xdotool => vec![vec![
+            "mousemove_relative".into(),
+            "--".into(),
+            dx.to_string(),
+            dy.to_string(),
+        ]],
+    }
+}
+
 fn ydotool_key_tokens(name: &str) -> Option<Vec<String>> {
     let parts: Vec<&str> = name
         .split('+')
@@ -1449,5 +1468,23 @@ mod tests {
             }),
             "Moved to monitor DP-2"
         );
+        assert_eq!(
+            relative_move_steps(HandsBackend::Ydotool, 5600, -10),
+            vec![vec![
+                "mousemove".to_string(),
+                "5600".to_string(),
+                "-10".to_string()
+            ]]
+        );
+        assert_eq!(
+            relative_move_steps(HandsBackend::Xdotool, -12, 4),
+            vec![vec![
+                "mousemove_relative".to_string(),
+                "--".to_string(),
+                "-12".to_string(),
+                "4".to_string()
+            ]]
+        );
+        assert!(relative_move_steps(HandsBackend::Xdotool, 0, 0).is_empty());
     }
 }
