@@ -1,7 +1,7 @@
 # GrokHub native Rust — product, not sidecar
 
 **Date:** 2026-08-14  
-**Version:** 2.6.16  
+**Version:** 2.6.17  
 **Decision:** The shipping Linux / Windows / Android product is Rust. No Electron. No Tauri.
 
 ## Why
