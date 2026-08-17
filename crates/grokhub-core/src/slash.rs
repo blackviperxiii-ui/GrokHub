@@ -390,7 +390,7 @@ pub fn slash_help() -> String {
         "After 21:00 a quiet Balanced review fills Suggested tiles from what it learned. Night can patch an existing skill from yesterday's host/hands trajectory.",
         "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
         "Chat rail opens the last-accessed thread. MidThought can greet Continue {title}.",
-        "Host, hands, and connector work stay off the chat. Chat shows each thought as its own bubble and the final reply. User bubbles sit on the right. Bubbles wrap with the chat pane. Copy and Reply sit on visible messages. Hands map JPEG clicks through xrandr; act picks the smallest AT-SPI match. A full-desktop frame stays at 0,0 — it does not inherit a single-monitor origin. tab list/close/focus talks to localhost CDP when it is up. GUI-help turns show a Hands chip and a how-to. Hung desktop tools time out so the cabin does not freeze. GitHub, CDP, chat SSE, and OAuth JSON bodies are capped. Chat-complete text is clipped before strip/merge. Live thought+stream merge stays capped; leftover deltas skip upsert.",
+        "Host, hands, and connector work stay off the chat. Chat shows each thought as its own bubble and the final reply. User bubbles sit on the right. Bubbles wrap with the chat pane. Copy and Reply sit on visible messages. Hands map JPEG clicks through xrandr; act picks the smallest AT-SPI match. A full-desktop frame stays at 0,0 — it does not inherit a single-monitor origin. tab list/close/focus talks to localhost CDP when it is up. GUI-help turns show a Hands chip and a how-to. Hung desktop tools time out so the cabin does not freeze. GitHub, CDP, chat SSE, and OAuth JSON bodies are capped. Chat-complete text is clipped before strip/merge. Live thought+stream merge stays capped; leftover deltas skip upsert. Chat bubble layout clips paint to TEXT_FILE_CAP.",
         "Five chips sit centered over the composer.",
     ]
     .join("\n")
@@ -513,6 +513,7 @@ mod tests {
         assert!(slash_help().contains("GitHub, CDP, chat SSE, and OAuth JSON bodies are capped"));
         assert!(slash_help().contains("Chat-complete text is clipped before strip/merge"));
         assert!(slash_help().contains("Live thought+stream merge stays capped"));
+        assert!(slash_help().contains("Chat bubble layout clips paint to TEXT_FILE_CAP"));
         assert!(slash_help().contains("patch an existing skill"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
