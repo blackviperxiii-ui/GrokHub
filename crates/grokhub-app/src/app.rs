@@ -383,6 +383,7 @@ struct AgentJob {
     title: String,
     status: String,
     prompt: String,
+    thread_id: String,
 }
 
 fn listen_turn(api_key: &str) -> String {
@@ -4609,8 +4610,9 @@ impl Cabin {
                         self.goal_step = visible_goal_step_on_continue(self.goal_step, job_step, here);
                         self.agents.push(AgentJob {
                             title: format!("{} · step {}", pin, next_step + 1),
-                            status: "queued".into(),
+                            status: "running".into(),
                             prompt: next.clone(),
+                            thread_id: origin.clone().unwrap_or_else(|| vis.clone()),
                         });
                         self.chat_job_thread = origin.clone();
                         self.push_bound_msg("user", next);
@@ -6397,10 +6399,20 @@ impl Cabin {
             }
             if let Some(i) = run_at {
                 if i < self.agents.len() {
-                    self.agents[i].status = "running".into();
-                    let p = self.agents[i].prompt.clone();
-                    self.nav = Nav::Chat;
-                    self.send_chat(p);
+                    if self.running {
+                        self.status = "Busy — wait, then run".into();
+                    } else {
+                        self.agents[i].status = "running".into();
+                        let p = self.agents[i].prompt.clone();
+                        let tid = self.agents[i].thread_id.clone();
+                        self.nav = Nav::Chat;
+                        if !tid.is_empty() {
+                            self.chat_job_thread = Some(tid);
+                        }
+                        self.push_bound_msg("user", p);
+                        self.persist();
+                        self.kick_model(false);
+                    }
                 }
             }
         });
@@ -9493,6 +9505,27 @@ mod tests {
             src.contains("let origin = self.chat_job_thread.take()"),
             "host/connector/imagine after Chat must rebind the origin tab"
         );
+        let agent_job = src
+            .split("struct AgentJob")
+            .nth(1)
+            .and_then(|s| s.split("fn listen_turn").next())
+            .expect("AgentJob");
+        assert!(
+            agent_job.contains("thread_id"),
+            "Queue jobs must remember the origin thread: {agent_job}"
+        );
+        let queue = src
+            .split("fn ui_agents")
+            .nth(1)
+            .and_then(|s| s.split("fn page_nav").next())
+            .expect("ui_agents");
+        assert!(
+            !queue.contains("send_chat")
+                && queue.contains("chat_job_thread")
+                && queue.contains("push_bound_msg")
+                && queue.contains("kick_model"),
+            "Queue Run must kick the origin thread, not send_chat on the visible tab: {queue}"
+        );
         assert!(
             src.contains("finish_hub_dispatch"),
             "phone dispatch must complete the hub task so GET /v1/results can see it"
@@ -10922,6 +10955,14 @@ mod tests {
         assert!(
             chat.contains("should_auto_continue_goal"),
             "goal continue must not send_chat while host is running: {chat}"
+        );
+        let queued = chat
+            .split("self.agents.push")
+            .nth(1)
+            .expect("auto-continue queue");
+        assert!(
+            queued.contains("thread_id") && queued.contains("\"running\""),
+            "auto-continue must remember the origin thread and mark the queue row running: {queued}"
         );
         assert!(
             chat.contains("estimate_messages(&job_pairs)"),
