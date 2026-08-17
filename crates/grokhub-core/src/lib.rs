@@ -116,7 +116,7 @@ pub use capture::{
     session_is_wayland, virtual_desktop_size, windshield_frame_geom, x11_grab_size, CaptureKind,
     DisplayOutput,
 };
-pub use frame::{encode_b64, frame_bytes, jpeg_data_url, FrameGet, PresenceFrame};
+pub use frame::{encode_b64, frame_bytes, jpeg_data_url, FrameGet, PresenceFrame, FRAME_CAP};
 pub use host_plan::{
     approved_cmds, explain_host_risk, host_risk, move_step, parse_host_plan, plan_from_text,
     retain_held_plan, step_from_cmd, strip_host_cmd_line, yolo_plan_split, HostPlanStep, HostRisk,
