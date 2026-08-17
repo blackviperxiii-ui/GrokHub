@@ -165,8 +165,9 @@ pub use reflect::{
     IDLE_REFLECT_MS,
 };
 pub use review::{
-    build_review_digest, cabin_real_text, dedupe_suggestions, parse_suggest_lines,
-    partition_suggestions, review_due, review_status_line, review_system_prompt, DigestLine, LearnedSuggestion,
+    build_review_digest, cabin_real_text, dedupe_suggestions, merge_suggestion_store,
+    parse_suggest_lines, partition_suggestions, review_due, review_status_line, review_system_prompt,
+    DigestLine, LearnedSuggestion,
     ReviewDigest, SuggestionKind, SuggestionStore, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
 };
 pub use pair::{
