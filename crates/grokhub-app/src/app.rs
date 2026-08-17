@@ -761,6 +761,7 @@ pub struct Cabin {
     chip_rx: Option<mpsc::Receiver<Vec<QuickChip>>>,
     chip_busy: bool,
     chip_fp: String,
+    chip_paint_key: String,
     chip_llm_at: u64,
     greeting: String,
     greeting_fp: String,
@@ -1070,6 +1071,7 @@ impl Cabin {
             chip_rx: None,
             chip_busy: false,
             chip_fp: String::new(),
+            chip_paint_key: String::new(),
             chip_llm_at: 0,
             greeting: String::new(),
             greeting_fp: String::new(),
@@ -2414,14 +2416,38 @@ impl Cabin {
     }
 
     fn refresh_chips(&mut self) {
-        let chat = self.chat_pairs();
         let hour = Self::chip_hour();
+        let n = self.messages.len();
+        let last = self.messages.last().map(|m| m.content.len()).unwrap_or(0);
         let title = self
             .threads
             .get(self.thread_idx)
             .map(|t| t.title.clone())
             .unwrap_or_default();
         let last_failed = self.last_receipt_ok == Some(false);
+        let draft_head: String = self.composer.chars().take(16).collect();
+        let draft_tail: String = self.composer.chars().rev().take(16).collect();
+        let key = format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            self.thread_idx,
+            n,
+            last,
+            self.composer.len(),
+            draft_head,
+            draft_tail,
+            hour,
+            last_failed,
+            title,
+            self.chip_dismissed.len(),
+            self.llm_chips.len(),
+            self.has_key(),
+            self.usage.messages
+        );
+        if self.chip_paint_key == key && !self.visible_chips.is_empty() {
+            return;
+        }
+        self.chip_paint_key = key;
+        let chat = self.chat_pairs();
         let others = self.other_chip_threads();
         let input = ChipInput {
             chat: &chat,
@@ -10084,6 +10110,20 @@ mod tests {
         assert!(
             !persist.contains("if let Ok(st) = self.hub.lock()"),
             "persist must not hold hub.lock() across save_hub_state: {persist}"
+        );
+    }
+
+    #[test]
+    fn refresh_chips_does_not_rebuild_every_frame() {
+        let src = include_str!("app.rs");
+        let chips = src
+            .split("fn refresh_chips(")
+            .nth(1)
+            .and_then(|s| s.split("fn spawn_chip_llm(").next())
+            .expect("refresh_chips");
+        assert!(
+            chips.contains("chip_paint_key") && chips.contains("return;"),
+            "chips must not clone the transcript and walk other threads on every paint: {chips}"
         );
     }
 
