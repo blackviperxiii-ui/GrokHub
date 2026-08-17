@@ -69,6 +69,8 @@ const DESK_LIST_TIMEOUT: Duration = Duration::from_millis(1500);
 const DESK_CAPTURE_TIMEOUT: Duration = Duration::from_secs(8);
 /// Webcam ffmpeg on the UI thread.
 const DESK_WEBCAM_TIMEOUT: Duration = Duration::from_secs(4);
+/// Plus-button image attach. Bigger files decode on the UI thread and can OOM.
+const IMAGE_FILE_CAP: u64 = 8 * 1024 * 1024;
 /// Local whisper on a worker thread — still must not hang halt forever.
 const DESK_TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -1215,6 +1217,10 @@ pub fn clipboard_image() -> Option<PathBuf> {
 }
 
 pub fn load_image_data_url(path: &Path) -> Result<String, String> {
+    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
+    if len > IMAGE_FILE_CAP {
+        return Err("image too large".into());
+    }
     let img = image::open(path).map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     let mut cur = std::io::Cursor::new(&mut buf);
@@ -1307,6 +1313,30 @@ mod tests {
         let txt = dir.join("note.txt");
         std::fs::write(&txt, "hello cabin").unwrap();
         assert_eq!(read_text_capped(&txt).unwrap(), "hello cabin");
+    }
+
+    #[test]
+    fn load_image_data_url_rejects_a_huge_file() {
+        let src = include_str!("desktop.rs");
+        let load = src
+            .split("pub fn load_image_data_url(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn read_text_capped(").next())
+            .expect("load_image_data_url");
+        let meta = load.find("metadata").expect("size check before decode");
+        let open = load.find("image::open").expect("decode");
+        assert!(
+            meta < open && load.contains("IMAGE_FILE_CAP"),
+            "a huge attach must not decode on the UI thread: {load}"
+        );
+        let dir = std::env::temp_dir().join("grokhub-img-cap-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("huge.bin");
+        std::fs::write(&path, vec![0u8; (IMAGE_FILE_CAP as usize) + 1]).unwrap();
+        assert_eq!(
+            load_image_data_url(&path).unwrap_err(),
+            "image too large"
+        );
     }
 
     #[test]
