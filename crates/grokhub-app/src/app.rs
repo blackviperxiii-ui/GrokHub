@@ -3977,6 +3977,13 @@ impl Cabin {
         {
             return;
         }
+        let rows = collect_rows();
+        self.last_window_title = rows
+            .iter()
+            .map(|r| r.name.as_str())
+            .find(|n| !n.is_empty() && *n != "cursor")
+            .unwrap_or("")
+            .to_string();
         if let Ok(url) = capture_data_url() {
             if should_send_screenshot(&self.last_window_title, "") {
                 if let Ok(mut st) = self.hub.lock() {
@@ -9952,6 +9959,17 @@ mod tests {
         assert!(
             start_err.contains("sharing = false"),
             "Start share must not leave sharing on when serve_lan fails: {start_hub}"
+        );
+        let live = src
+            .split("fn live_room")
+            .nth(1)
+            .and_then(|s| s.split("fn tick_mid_thought").next())
+            .expect("live_room");
+        let title = live.find("last_window_title").expect("live title");
+        let gate = live.find("should_send_screenshot").expect("live gate");
+        assert!(
+            live.contains("collect_rows") && title < gate,
+            "presence stream must refresh the foreground title before sending a frame: {live}"
         );
         let devices = src
             .split("fn ui_devices")
