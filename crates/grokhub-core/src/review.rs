@@ -450,6 +450,59 @@ pub fn dedupe_suggestions(
     out
 }
 
+fn suggestion_key(item: &LearnedSuggestion) -> String {
+    match item.kind {
+        SuggestionKind::Auto => item.title.to_ascii_lowercase(),
+        SuggestionKind::Skill => item
+            .name
+            .as_deref()
+            .unwrap_or(&item.title)
+            .to_ascii_lowercase(),
+        SuggestionKind::Connector => {
+            format!(
+                "github:{}",
+                item.tool.as_deref().unwrap_or("").to_ascii_lowercase()
+            )
+        }
+    }
+}
+
+fn merge_suggest_bucket(
+    existing: &[LearnedSuggestion],
+    incoming: Vec<LearnedSuggestion>,
+) -> Vec<LearnedSuggestion> {
+    let mut out = Vec::new();
+    let mut seen = Vec::new();
+    for item in incoming.into_iter().chain(existing.iter().cloned()) {
+        let key = suggestion_key(&item);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        out.push(item);
+        if out.len() >= SUGGEST_CAP {
+            break;
+        }
+    }
+    out
+}
+
+/// Keep prior tiles when tonight's review only names some kinds.
+pub fn merge_suggestion_store(
+    existing: &SuggestionStore,
+    incoming: SuggestionStore,
+) -> SuggestionStore {
+    SuggestionStore {
+        last_review_day: incoming
+            .last_review_day
+            .or_else(|| existing.last_review_day.clone()),
+        last_review_ms: incoming.last_review_ms.max(existing.last_review_ms),
+        autos: merge_suggest_bucket(&existing.autos, incoming.autos),
+        skills: merge_suggest_bucket(&existing.skills, incoming.skills),
+        connectors: merge_suggest_bucket(&existing.connectors, incoming.connectors),
+    }
+}
+
 /// Split a mixed list into the three store buckets, capped.
 pub fn partition_suggestions(items: Vec<LearnedSuggestion>) -> SuggestionStore {
     let mut store = SuggestionStore::default();
@@ -594,6 +647,37 @@ SUGGEST_AUTO: Night wrap | Close the day | every day at 21, say good night
         assert!(digest.contains("[redacted]"));
         assert!(digest.contains("user: please run HOST_CMD"));
         assert!(digest.contains("GitHub PAT: present"));
+    }
+
+    #[test]
+    fn merge_keeps_prior_tiles_when_tonight_is_partial() {
+        let prior = partition_suggestions(parse_suggest_lines(
+            "SUGGEST_AUTO: Night wrap | Close | every day at 21, say hi\n\
+             SUGGEST_CONNECTOR: Who | me | github user\n",
+        ));
+        let incoming = partition_suggestions(parse_suggest_lines(
+            "SUGGEST_SKILL: desk-tidy | Desk | Body | trig | do it\n",
+        ));
+        let merged = merge_suggestion_store(&prior, incoming);
+        assert_eq!(merged.autos.len(), 1, "prior autos must survive a skill-only night");
+        assert_eq!(merged.autos[0].title, "Night wrap");
+        assert_eq!(merged.skills.len(), 1);
+        assert_eq!(merged.skills[0].name.as_deref(), Some("desk-tidy"));
+        assert_eq!(merged.connectors.len(), 1);
+        assert_eq!(merged.connectors[0].tool.as_deref(), Some("user"));
+    }
+
+    #[test]
+    fn merge_prefers_tonight_when_titles_collide() {
+        let prior = partition_suggestions(parse_suggest_lines(
+            "SUGGEST_AUTO: Night wrap | Old body | every day at 21, say hi\n",
+        ));
+        let incoming = partition_suggestions(parse_suggest_lines(
+            "SUGGEST_AUTO: Night wrap | New body | every day at 21, say bye\n",
+        ));
+        let merged = merge_suggestion_store(&prior, incoming);
+        assert_eq!(merged.autos.len(), 1);
+        assert_eq!(merged.autos[0].body, "New body");
     }
 
     #[test]
