@@ -2709,6 +2709,9 @@ impl Cabin {
                     self.status = "Secrets never in markdown".into();
                     return;
                 }
+                if config::read_memory(&self.mem_name) != self.mem_body {
+                    let _ = config::write_memory(&self.mem_name, &self.mem_body);
+                }
                 match config::append_memory("MEMORY.md", &note) {
                     Ok(()) => {
                         if self.mem_name == "MEMORY.md" {
@@ -9804,6 +9807,16 @@ mod tests {
         assert!(
             forget.contains("self.scratch()") && forget.contains("no memory writes"),
             "/forget on Scratch must not wipe MEMORY.md: {forget}"
+        );
+        let note = src
+            .split("Slash::MemoryNote")
+            .nth(1)
+            .and_then(|s| s.split("Slash::Board").next())
+            .expect("MemoryNote");
+        let append = note.find("append_memory").expect("append");
+        assert!(
+            note[..append].contains("write_memory") && note[..append].contains("mem_body"),
+            "/remember must flush the Memory editor before appending to disk: {note}"
         );
         let topic = forget
             .split("Some(q)")
