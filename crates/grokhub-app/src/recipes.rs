@@ -31,15 +31,12 @@ pub fn save_recipe(id: &str, recipe: &Recipe) -> Result<std::path::PathBuf, Stri
 }
 
 pub fn load_recipe(id: &str) -> Option<Recipe> {
-    let raw = fs::read_to_string(path_for(id)).ok()?;
+    let raw = crate::desktop::read_text_capped(&path_for(id)).ok()?;
     recipe_from_json(&raw).ok().map(|(_, r)| r)
 }
 
 pub fn load_last() -> Option<Recipe> {
-    load_recipe("last").or_else(|| {
-        let raw = fs::read_to_string(last_path()).ok()?;
-        recipe_from_json(&raw).ok().map(|(_, r)| r)
-    })
+    load_recipe("last")
 }
 
 #[cfg(test)]
@@ -63,5 +60,28 @@ mod tests {
         assert_eq!(load_last().unwrap(), recipe);
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn load_recipe_does_not_slurp_a_huge_file() {
+        let src = include_str!("recipes.rs");
+        let load = src
+            .split("pub fn load_recipe(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn load_last(").next())
+            .expect("load_recipe");
+        assert!(
+            load.contains("read_text_capped") && !load.contains("read_to_string"),
+            "recipe replay must not slurp a huge last.json on the UI thread: {load}"
+        );
+        let last = src
+            .split("pub fn load_last(")
+            .nth(1)
+            .and_then(|s| s.split("#[cfg(test)]").next())
+            .expect("load_last");
+        assert!(
+            !last.contains("read_to_string"),
+            "load_last must not slurp last.json either: {last}"
+        );
     }
 }
