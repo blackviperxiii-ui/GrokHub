@@ -1,8 +1,11 @@
 use grokhub_core::{is_plain_text, BoardCard};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+
+/// SOUL/USER/MEMORY on the UI thread. Bigger files freeze kick_model and the editor.
+pub const MEMORY_FILE_CAP: usize = 1024 * 1024;
 
 /// Write, fsync, then rename so a kill mid-persist cannot leave a truncated JSON.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -193,7 +196,20 @@ pub fn save(cfg: &AppConfig) -> Result<(), String> {
 
 pub fn read_memory(name: &str) -> String {
     let path = memory_dir().join(name);
-    fs::read_to_string(path).unwrap_or_default()
+    let mut f = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return String::new(),
+    };
+    let mut buf = vec![0u8; MEMORY_FILE_CAP];
+    let n = match f.read(&mut buf) {
+        Ok(n) => n,
+        Err(_) => return String::new(),
+    };
+    buf.truncate(n);
+    while !buf.is_empty() && std::str::from_utf8(&buf).is_err() {
+        buf.pop();
+    }
+    String::from_utf8(buf).unwrap_or_default()
 }
 
 pub fn memory_updated_at(name: &str) -> u64 {
@@ -335,6 +351,29 @@ mod tests {
                 & 0o777;
             assert_eq!(mode, 0o600, "app.json holds the console key");
         }
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn read_memory_does_not_slurp_a_huge_file() {
+        let src = include_str!("config.rs");
+        let read = src
+            .split("pub fn read_memory(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn memory_updated_at(").next())
+            .expect("read_memory");
+        assert!(
+            read.contains("MEMORY_FILE_CAP") && !read.contains("read_to_string"),
+            "Memory editor and kick_model must not slurp a huge MEMORY.md: {read}"
+        );
+        let _g = TEST_CONFIG_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("grokhub-mem-cap-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        fs::create_dir_all(memory_dir()).unwrap();
+        fs::write(memory_dir().join("MEMORY.md"), "x".repeat(MEMORY_FILE_CAP + 4096)).unwrap();
+        assert_eq!(read_memory("MEMORY.md").len(), MEMORY_FILE_CAP);
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
