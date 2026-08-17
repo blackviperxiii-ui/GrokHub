@@ -22,7 +22,7 @@ use crate::xai::{
 };
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use grokhub_core::{
-    append_composer, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
+    append_composer, anticipate_consumes_slot, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
     cabin_system_prompt,
     appearance_choices, appearance_hint, approved_cmds, auth_bearer, automation_blocked_by_policy,
     blend_thread_goal,
@@ -3310,6 +3310,9 @@ impl Cabin {
         };
         self.roll_today();
         if daily_units_blocked(self.usage.automation, self.cfg.daily_auto_cap) {
+            return;
+        }
+        if !anticipate_consumes_slot(self.has_key()) {
             return;
         }
         self.last_anticipate_ms = now_ms();
@@ -9157,6 +9160,19 @@ mod tests {
             fire_night.contains("night_unauth_should_skip")
                 && fire_night.contains("mark_auto_skipped"),
             "missing OAuth must skip the night slot: {fire_night}"
+        );
+        let anticipate = src
+            .split("fn tick_anticipate")
+            .nth(1)
+            .and_then(|s| s.split("fn tick_night").next())
+            .expect("tick_anticipate");
+        let bump = anticipate.find("bump_usage").expect("anticipate usage");
+        let gate = anticipate
+            .find("anticipate_consumes_slot")
+            .expect("anticipate auth");
+        assert!(
+            gate < bump,
+            "anticipate must not burn quota before auth: {anticipate}"
         );
         let start_hub = src
             .split("fn start_hub")
