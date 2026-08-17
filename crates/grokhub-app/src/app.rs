@@ -3621,6 +3621,9 @@ impl Cabin {
         if key.trim().is_empty() {
             return;
         }
+        if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
+            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+        }
         let digest = self.review_digest();
         let model = model_for_mode("balanced").to_string();
         let prompt = review_system_prompt().to_string();
@@ -10403,6 +10406,11 @@ mod tests {
         assert!(
             spawn.contains("model_for_mode(\"balanced\")"),
             "nightly review forces Balance: {spawn}"
+        );
+        let digest = spawn.find("review_digest").expect("review digest");
+        assert!(
+            spawn[..digest].contains("write_memory") && spawn[..digest].contains("mem_body"),
+            "nightly review must flush the Memory editor before the digest: {spawn}"
         );
         let apply = src
             .split("fn apply_review_reply(")
