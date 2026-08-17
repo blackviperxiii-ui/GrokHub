@@ -2479,6 +2479,9 @@ impl Cabin {
     }
 
     fn refresh_chips(&mut self) {
+        if self.running {
+            return;
+        }
         let hour = Self::chip_hour();
         let n = self.messages.len();
         let last = self.messages.last().map(|m| m.content.len()).unwrap_or(0);
@@ -10324,6 +10327,11 @@ mod tests {
         assert!(
             chips.contains("chip_paint_key") && chips.contains("return;"),
             "chips must not clone the transcript and walk other threads on every paint: {chips}"
+        );
+        let pairs = chips.find("chat_pairs").expect("chip chat_pairs");
+        assert!(
+            chips[..pairs].contains("self.running") && chips[..pairs].contains("return"),
+            "a growing stream must not clone the transcript to rebuild chips: {chips}"
         );
     }
 
