@@ -115,6 +115,23 @@ pub fn hands_chip_live(reason: HandsDown) -> bool {
     reason == HandsDown::Ready
 }
 
+/// One windshield header line: `hands: ydotool ready` or `hands: daemon`.
+pub fn hands_windshield_line(reason: HandsDown, driver: &str) -> String {
+    match reason {
+        HandsDown::Ready => {
+            let d = if driver.is_empty() || driver == "missing" {
+                "pointer"
+            } else {
+                driver
+            };
+            format!("hands: {d} ready\n")
+        }
+        HandsDown::Missing => "hands: missing\n".into(),
+        HandsDown::Uinput => "hands: uinput\n".into(),
+        HandsDown::Daemon => "hands: daemon\n".into(),
+    }
+}
+
 pub fn ydotool_socket_path(explicit: Option<&str>, runtime_dir: Option<&str>) -> PathBuf {
     if let Some(p) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
         return PathBuf::from(p);
@@ -207,6 +224,11 @@ mod tests {
         assert_eq!(hands_chip_label(HandsDown::Ready, "ydotool"), "ydotool");
         assert!(!hands_chip_live(HandsDown::Missing));
         assert!(hands_chip_live(HandsDown::Ready));
+        assert_eq!(
+            hands_windshield_line(HandsDown::Ready, "ydotool"),
+            "hands: ydotool ready\n"
+        );
+        assert_eq!(hands_windshield_line(HandsDown::Daemon, "ydotool"), "hands: daemon\n");
         assert_eq!(HANDS_PACMAN, "scripts/build-hands.sh");
         let build = include_str!("../../../scripts/build-hands.sh");
         assert!(

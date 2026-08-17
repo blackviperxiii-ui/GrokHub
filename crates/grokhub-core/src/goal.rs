@@ -3,6 +3,7 @@
 
 use crate::attach::bound_scan;
 use crate::chat_view::{assistant_prose, is_workload_user};
+use crate::recipe::{user_asks_desktop_hands, user_asks_gui_help};
 use serde::{Deserialize, Serialize};
 
 /// Turns a topic can stay unseen before the tab drops it.
@@ -311,7 +312,7 @@ pub fn compact_keep_pin(
 pub const GOAL_MAX_STEPS: u32 = 6;
 pub const FOLLOWUP_MAX_STEPS: u32 = 4;
 pub const FOLLOWUP_PROMPT: &str =
-    "FOLLOWUP: Finish the incomplete work from your last reply. Act now (HOST_CMD if needed). End with status.";
+    "FOLLOWUP: Finish the incomplete work from your last reply. Act now (COMPUTER_CMD or HOST_CMD if needed). End with status.";
 
 fn reply_has_work_lines(assistant: &str) -> bool {
     assistant.lines().any(|line| {
@@ -428,6 +429,21 @@ fn polite_closer(assistant: &str) -> bool {
     .any(|p| t.contains(p))
 }
 
+fn desktop_thought_needs_followup(user: &str, assistant: &str) -> bool {
+    if reply_has_work_lines(assistant) {
+        return false;
+    }
+    if !user_asks_gui_help(user) && !user_asks_desktop_hands(user) {
+        return false;
+    }
+    let low = assistant.to_ascii_lowercase();
+    assistant.contains("<tool_call")
+        || low.contains("i'll")
+        || low.contains("i will")
+        || low.contains("let me ")
+        || low.contains("windshield")
+}
+
 /// Stream-end check: continue when the reply was cut off, promised work,
 /// or handed the next command back to the user instead of running it.
 pub fn reply_needs_followup(user: &str, assistant: &str, truncated: bool) -> bool {
@@ -437,7 +453,7 @@ pub fn reply_needs_followup(user: &str, assistant: &str, truncated: bool) -> boo
     let assistant = bound_scan(assistant);
     let assistant = assistant.as_ref();
     if assistant_prose(assistant).is_empty() {
-        return false;
+        return desktop_thought_needs_followup(user, assistant);
     }
     if reply_has_work_lines(assistant) {
         return false;
@@ -475,7 +491,7 @@ pub fn next_goal_prompt(pin: &str, prior: &str, step: u32, max_steps: u32) -> Op
         return None;
     }
     Some(format!(
-        "[Goal step {}/{}]\nTask: {}\nLast progress:\n{}\n\nContinue autonomously. Use HOST_CMD as needed.\nWhen fully finished, say clearly: GOAL_COMPLETE\nIf blocked on the user, say: GOAL_BLOCKED: <reason>",
+        "[Goal step {}/{}]\nTask: {}\nLast progress:\n{}\n\nContinue autonomously. Use COMPUTER_CMD or HOST_CMD as needed.\nWhen fully finished, say clearly: GOAL_COMPLETE\nIf blocked on the user, say: GOAL_BLOCKED: <reason>",
         step + 1,
         max_steps.max(1),
         pin.trim(),
@@ -676,6 +692,23 @@ If this fails, tell me your distro.";
         assert!(is_auto_continue_prompt(FOLLOWUP_PROMPT));
         assert_eq!(FOLLOWUP_MAX_STEPS, 4);
         assert!(FOLLOWUP_PROMPT.starts_with("FOLLOWUP:"));
+        assert!(
+            FOLLOWUP_PROMPT.contains("COMPUTER_CMD"),
+            "mouse/tab stalls must not be steered to HOST_CMD only: {FOLLOWUP_PROMPT}"
+        );
+        assert!(
+            reply_needs_followup(
+                "use my mouse and select a new tab in firefox",
+                "THINKING:\nI'll find Firefox and click New Tab.\n<tool_call>\n",
+                false
+            ),
+            "thinking-only XML tool_call on a mouse ask must continue"
+        );
+        let goal = next_goal_prompt("open a new tab", "found Firefox", 0, 6).unwrap();
+        assert!(
+            goal.contains("COMPUTER_CMD"),
+            "goal continue must mention COMPUTER_CMD: {goal}"
+        );
     }
 
     #[test]

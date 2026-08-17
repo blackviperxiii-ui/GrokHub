@@ -25,6 +25,7 @@ pub enum TabAction {
     List,
     Close,
     Focus,
+    New,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,6 +221,10 @@ pub fn parse_computer_op(line: &str) -> Option<ComputerOp> {
                         })
                     }
                 }
+                "new" | "open" => Some(ComputerOp::Tab {
+                    action: TabAction::New,
+                    query: bits.collect::<Vec<_>>().join(" "),
+                }),
                 _ => None,
             }
         }
@@ -483,6 +488,13 @@ pub fn computer_cmd_line(op: &ComputerOp) -> String {
             TabAction::List => "COMPUTER_CMD: tab list".into(),
             TabAction::Close => format!("COMPUTER_CMD: tab close {query}"),
             TabAction::Focus => format!("COMPUTER_CMD: tab focus {query}"),
+            TabAction::New => {
+                if query.is_empty() {
+                    "COMPUTER_CMD: tab new".into()
+                } else {
+                    format!("COMPUTER_CMD: tab new {query}")
+                }
+            }
         },
     }
 }
@@ -544,15 +556,17 @@ pub fn hands_protocol() -> &'static str {
      COMPUTER_CMD: act <accessible-name>\n\
      COMPUTER_CMD: wait_for title=<window>\n\
      COMPUTER_CMD: tab list\n\
+     COMPUTER_CMD: tab new [url]\n\
      COMPUTER_CMD: tab close <title-or-url>\n\
      COMPUTER_CMD: tab focus <title-or-url>\n\
-     Prefer act, wait_for, tab list/close/focus, and key over guessed JPEG coordinates. After each COMPUTER_CMD hop, look at the new JPEG and Windshield before the next click.\n\
-     Coordinates are the global desktop. A JPEG may be one output — use Windshield outputs / frame. When Windshield says browser: cdp, close or focus a tab with tab close / tab focus. Otherwise wait_for that window then key ctrl+w; do not guess the × from the still.\n\
+     Prefer act, wait_for, tab list/new/close/focus, and key over guessed JPEG coordinates. After each COMPUTER_CMD hop, look at the new JPEG and Windshield before the next click.\n\
+     Coordinates are the global desktop. A JPEG may be one output — use Windshield outputs / frame. When Windshield says browser: cdp, open/close/focus a tab with tab new / tab close / tab focus. New tab: act the New Tab or + control; if Windshield has no such row, wait_for title=Firefox then key ctrl+t. Otherwise wait_for that window then key ctrl+w to close; do not guess the × from the still.\n\
+     Never emit XML or JSON <tool_call> tags. The first reply must include a COMPUTER_CMD line — do not only plan.\n\
      A JPEG is attached when the user asks for hands, cabin eyes, or GUI help (close a tab, Settings, turn this on, how do I, for me). If the thing is on the glass and there is no honest shell, use COMPUTER_CMD — do not invent a CLI.\n\
      Guide-only (just tell me / don't click / walk me through without do it): describe the control from the Windshield; do not emit COMPUTER_CMD unless they then say do it.\n\
      Do-it / I can't / default GUI help: drive, then end with a short how-to the user can repeat (Settings → Bluetooth → the switch).\n\
      Lock/password screens are won'ts — never click them or type into them. Do not read ~/.ssh or /etc/shadow.\n\
-     If COMPUTER_RESULT says hands are down (not installed, uinput, or ydotoold), tell the user how to enable them. Do not pkill, kill, or otherwise terminate apps as a stand-in for mouse or keyboard control."
+     If Windshield says hands: daemon, hands: uinput, or hands: missing — or COMPUTER_RESULT says hands are down (not installed, uinput, or ydotoold) — tell the user how to enable them. Do not pkill, kill, or otherwise terminate apps as a stand-in for mouse or keyboard control."
 }
 
 pub fn user_asks_cabin_eyes(text: &str) -> bool {
@@ -636,6 +650,11 @@ pub fn user_asks_desktop_hands(text: &str) -> bool {
     NEEDLES.iter().any(|n| t.contains(n)) || user_asks_takeover(text)
 }
 
+fn has_tab_token(t: &str) -> bool {
+    t.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| w == "tab" || w == "tabs")
+}
+
 fn has_gui_context(t: &str) -> bool {
     t.contains("tab")
         || t.contains("window")
@@ -674,6 +693,20 @@ pub fn user_asks_gui_help(text: &str) -> bool {
             || t.contains("firefox")
             || t.contains("chrome")
             || t.contains("browser"))
+    {
+        return true;
+    }
+    if has_tab_token(&t)
+        && (t.contains("new tab")
+            || t.contains("open a tab")
+            || t.contains("open the tab")
+            || t.contains("select a tab")
+            || t.contains("select a new tab")
+            || t.contains("switch tab")
+            || t.contains("switch the tab")
+            || t.contains("open")
+            || t.contains("select")
+            || t.contains("switch"))
     {
         return true;
     }
@@ -769,6 +802,16 @@ fn label_for_op(op: &ComputerOp) -> String {
             action: TabAction::List,
             ..
         } => "Listed tabs".into(),
+        ComputerOp::Tab {
+            action: TabAction::New,
+            query,
+        } => {
+            if query.is_empty() {
+                "Opened a new tab".into()
+            } else {
+                format!("Opened tab {query}")
+            }
+        }
         ComputerOp::Key { name } => format!("Pressed {}", pretty_key(name)),
         ComputerOp::Click { x, y } => format!("Clicked {x},{y}"),
         ComputerOp::DoubleClick { x, y } => format!("Double-clicked {x},{y}"),
@@ -949,6 +992,27 @@ mod tests {
                 query: "news.ycombinator".into()
             })
         );
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: tab new"),
+            Some(ComputerOp::Tab {
+                action: TabAction::New,
+                query: String::new()
+            })
+        );
+        assert_eq!(
+            parse_computer_op("COMPUTER_CMD: tab open https://example.com"),
+            Some(ComputerOp::Tab {
+                action: TabAction::New,
+                query: "https://example.com".into()
+            })
+        );
+        assert_eq!(
+            computer_cmd_line(&ComputerOp::Tab {
+                action: TabAction::New,
+                query: String::new()
+            }),
+            "COMPUTER_CMD: tab new"
+        );
         assert!(parse_computer_op("COMPUTER_CMD: tab close").is_none());
         assert!(matches!(
             computer_drive(&ComputerOp::Tab {
@@ -961,6 +1025,10 @@ mod tests {
         assert!(proto.contains("HOST_CMD:"));
         assert!(proto.contains("COMPUTER_CMD:"));
         assert!(proto.contains("tab close"));
+        assert!(
+            proto.contains("tab new") && proto.contains("ctrl+t") && proto.contains("<tool_call>"),
+            "new tab and no XML tool_call: {proto}"
+        );
         assert!(proto.to_ascii_lowercase().contains("unsandboxed"));
         assert!(
             proto.contains("Do not pkill") && proto.contains("hands are down"),
@@ -985,6 +1053,12 @@ mod tests {
         assert!(!user_asks_guide_only("walk me through this and do it for me"));
         assert!(!user_asks_guide_only("click the Save button"));
         assert_eq!(see_drive_attach("close that firefox tab"), (true, true));
+        assert_eq!(
+            see_drive_attach("select a new tab in firefox"),
+            (true, true)
+        );
+        assert_eq!(see_drive_attach("open a new tab"), (true, true));
+        assert_eq!(see_drive_attach("open a table in postgres"), (false, false));
         assert_eq!(see_drive_attach("just tell me don't click"), (true, false));
         assert_eq!(see_drive_attach("what is rust ownership?"), (false, false));
         assert_eq!(
