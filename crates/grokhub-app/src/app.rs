@@ -1214,9 +1214,14 @@ impl Cabin {
                 if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job_id) {
                     if let Some(t) = self.threads.iter_mut().find(|t| t.id == job_id) {
                         t.messages = msgs.clone();
+                        t.accessed_ms = now_ms();
                     }
                 }
+            } else {
+                self.stamp_current_access();
             }
+        } else {
+            self.stamp_current_access();
         }
         self.chat_job_thread = None;
         self.persist();
@@ -9829,6 +9834,16 @@ mod tests {
         assert!(
             halt_flight.contains("speak_next = false"),
             "Stop must cancel a pending voice speak: {halt_flight}"
+        );
+        let halt_persist = halt_flight.find("self.persist()").expect("halt persist");
+        assert!(
+            halt_flight[..halt_persist].contains("accessed_ms")
+                || halt_flight[..halt_persist].contains("stamp_current_access"),
+            "halt must bump accessed_ms or /sync LWW can restore the dropped assistant: {halt_flight}"
+        );
+        assert!(
+            halt_flight.contains("stamp_current_access") && halt_flight.contains("accessed_ms"),
+            "halt must stamp the origin thread when it is not the visible tab: {halt_flight}"
         );
         let host_done_facts = src
             .split("Ok(JobOut::HostDone(block))")
