@@ -269,10 +269,22 @@ pub fn monitor_local_to_global(
 }
 
 pub fn format_cursor_line(x: i32, y: i32, monitor: Option<&str>) -> String {
-    match monitor {
+    format_cursor_line_miss(x, y, monitor, false)
+}
+
+pub fn format_cursor_line_miss(x: i32, y: i32, monitor: Option<&str>, miss: bool) -> String {
+    let mut s = match monitor {
         Some(name) if !name.is_empty() => format!("cursor {x},{y} monitor={name}"),
         _ => format!("cursor {x},{y}"),
+    };
+    if miss {
+        s.push_str(" miss");
     }
+    s
+}
+
+pub fn pointer_slop_miss(intended: (i32, i32), actual: (i32, i32), slop: i32) -> bool {
+    (intended.0 - actual.0).abs() + (intended.1 - actual.1).abs() > slop
 }
 
 pub fn grim_capture_args(dest: &str, output: Option<&str>) -> Vec<String> {
@@ -667,6 +679,12 @@ DP-2 connected 1920x1440+5360+0 (normal left inverted right x axis y axis) 527mm
             Some((5460, 20))
         );
         assert_eq!(format_cursor_line(7279, 25, Some("DP-2")), "cursor 7279,25 monitor=DP-2");
+        assert!(!pointer_slop_miss((7279, 25), (7275, 25), 8));
+        assert!(pointer_slop_miss((7279, 25), (5, 25), 8));
+        assert_eq!(
+            format_cursor_line_miss(5, 25, Some("HDMI-A-2"), true),
+            "cursor 5,25 monitor=HDMI-A-2 miss"
+        );
         let glass = layout_prompt(&outs, 1920, 1440, 5360, 0, Some((7279, 25)));
         assert!(glass.contains("desk: 0,0 7280x1440"), "{glass}");
         assert!(glass.contains("cursor: 7279,25 monitor=DP-2"), "{glass}");
