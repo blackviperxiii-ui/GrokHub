@@ -8767,6 +8767,12 @@ impl Cabin {
                         self.send_chat(skill_use_in_chat_prompt(&slash, &name));
                     }
                     if crate::cards::ghost_pill(ui, "Run verify") && !self.skill_name.is_empty() {
+                        if !self.skill_body.is_empty() {
+                            let parsed = grokhub_core::parse_skill_md(&self.skill_body);
+                            if skills::save_skill(&parsed).is_ok() {
+                                self.skill_list = skills::list_skills();
+                            }
+                        }
                         self.run_skill_verify();
                         if self.verify_ok_turn {
                             self.status = format!(
@@ -9610,6 +9616,17 @@ mod tests {
         assert!(
             flushed < sent,
             "Use in chat must flush the editor before the prompt: {use_chat}"
+        );
+        let verify_btn = skills_ui
+            .split("Run verify")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_eyes").next())
+            .expect("run verify");
+        let flushed_v = verify_btn.find("save_skill").expect("flush skill before verify");
+        let ran = verify_btn.find("run_skill_verify").expect("run verify");
+        assert!(
+            flushed_v < ran,
+            "Run verify must flush the editor so verify.sh matches the open SKILL.md: {verify_btn}"
         );
         let new_skill = skills_ui
             .split("New Skill")
