@@ -99,11 +99,9 @@ pub fn run_update(source: &std::path::Path) -> Result<String, String> {
 }
 
 fn unit_is_active(unit: &str) -> bool {
-    Command::new("systemctl")
-        .args(["--user", "is-active", "--quiet", unit])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    let mut cmd = Command::new("systemctl");
+    cmd.args(["--user", "is-active", "--quiet", unit]);
+    crate::desktop::run_limited(cmd, Duration::from_millis(1500)).is_some_and(|o| o.status.success())
 }
 
 fn spawn_detached(argv: &[String]) -> Result<(), String> {
@@ -150,12 +148,12 @@ pub fn restart_system(hidden: bool) -> Result<(), String> {
         match act {
             RestartAct::Systemd { units } => {
                 let args = systemd_user_restart_args(&units);
-                let st = Command::new("systemctl")
-                    .args(&args)
-                    .status()
-                    .map_err(|e| format!("systemctl: {e}"))?;
-                if !st.success() {
-                    return Err("systemctl --user restart failed".into());
+                let mut cmd = Command::new("systemctl");
+                cmd.args(&args);
+                match crate::desktop::run_limited(cmd, Duration::from_secs(3)) {
+                    Some(out) if out.status.success() => {}
+                    Some(_) => return Err("systemctl --user restart failed".into()),
+                    None => return Err("systemctl --user restart timed out".into()),
                 }
             }
             RestartAct::Spawn { argv } => replace_process(&argv)?,
@@ -363,6 +361,19 @@ mod tests {
         assert!(
             !slice.contains("unit_is_active(\"grokhub.service\")"),
             "must not systemctl-restart the running cabin: {slice}"
+        );
+        let unit = src
+            .split("fn unit_is_active(")
+            .nth(1)
+            .and_then(|s| s.split("\nfn spawn_detached").next())
+            .expect("unit_is_active");
+        assert!(
+            unit.contains("run_limited(") && !unit.contains(".status()"),
+            "systemctl is-active must not freeze update restart: {unit}"
+        );
+        assert!(
+            slice.contains("run_limited("),
+            "systemctl --user restart must not freeze the UI: {slice}"
         );
     }
 }
