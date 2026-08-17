@@ -4947,11 +4947,11 @@ impl Cabin {
         }
         self.persist();
         self.status = "Restarting GrokHub…".into();
-        if let Some(tray) = self.tray.take() {
-            crate::tray::drop_off_thread(tray);
-        }
         match crate::update::restart_system(!self.window_visible) {
             Ok(()) => {
+                if let Some(tray) = self.tray.take() {
+                    crate::tray::drop_off_thread(tray);
+                }
                 self.want_quit = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -8994,6 +8994,17 @@ mod tests {
         assert!(
             show.contains("CancelClose"),
             "Show cabin must clear a sticky close so the window does not hide again"
+        );
+        let restart = src
+            .split("fn restart_after_update")
+            .nth(1)
+            .and_then(|s| s.split("fn start_overlay_update").next())
+            .expect("restart_after_update");
+        let spawn_at = restart.find("restart_system").expect("restart_system");
+        let drop_at = restart.find("drop_off_thread");
+        assert!(
+            drop_at.is_none_or(|d| d > spawn_at),
+            "dropping the tray before spawn leaves a headless cabin when restart fails: {restart}"
         );
     }
 
