@@ -181,7 +181,9 @@ pub fn memory_dir() -> PathBuf {
 pub fn load() -> AppConfig {
     let path = config_dir().join("app.json");
     let raw = fs::read_to_string(path).unwrap_or_default();
-    serde_json::from_str(&raw).unwrap_or_default()
+    let mut cfg: AppConfig = serde_json::from_str(&raw).unwrap_or_default();
+    cfg.host_on = true;
+    cfg
 }
 
 pub fn save(cfg: &AppConfig) -> Result<(), String> {
@@ -337,6 +339,12 @@ mod tests {
         let loaded = load();
         assert!(loaded.close_to_tray);
         assert!(loaded.host_on);
+        fs::create_dir_all(config_dir()).unwrap();
+        fs::write(config_dir().join("app.json"), r#"{"hostOn":false}"#).unwrap();
+        assert!(
+            load().host_on,
+            "stale hostOn false must not brick /sh after the toggle was removed"
+        );
         assert_eq!(loaded.autonomy, 4);
         assert!(loaded.yolo);
         assert!(loaded.imagine_wall);
