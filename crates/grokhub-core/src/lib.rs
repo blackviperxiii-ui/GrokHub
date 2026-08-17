@@ -71,7 +71,7 @@ pub use autonomy::{
 pub use attach::{
     append_composer, attach_kind, attach_name, attach_prompt_line, chat_attach_status,
     cabin_eyes_request_text, cabin_frame_only, clip_image_args, imagine_ref_status, list_pick_names,
-    next_chat_image, parse_picker_stdout, this_turn_cabin_frame,
+    kick_consumes_attach, next_chat_image, parse_picker_stdout, this_turn_cabin_frame,
     picker_args, plus_empty_status, plus_menu_rows, take_text_body, AttachKind, PlusAct, PlusTarget,
     TEXT_FILE_CAP,
 };
