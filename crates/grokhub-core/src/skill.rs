@@ -35,9 +35,11 @@ pub fn skill_dir_name(name: &str) -> String {
 
 pub fn render_skill_md(s: &SkillMd) -> String {
     format!(
-        "---\nname: {}\ndescription: {}\nruns: {}\n---\n\n# {}\n\nTrigger when the user says {}.\n\n## Steps\n{}\n\n## Pitfalls\n{}\n\n## Verify\n{}\n",
+        "---\nname: {}\ndescription: {}\nslash: {}\ntrigger: {}\nruns: {}\n---\n\n# {}\n\nTrigger when the user says {}.\n\n## Steps\n{}\n\n## Pitfalls\n{}\n\n## Verify\n{}\n",
         s.name,
         s.description,
+        s.slash,
+        s.trigger,
         s.runs,
         s.name.replace('-', " "),
         if s.trigger.is_empty() { s.slash.as_str() } else { s.trigger.as_str() },
@@ -295,6 +297,11 @@ mod tests {
         assert!(md.contains("## Verify"));
         let parsed = parse_skill_md(&md);
         assert_eq!(parsed.name, "deploy-user-install");
+        assert_eq!(
+            parsed.slash, "/deploy",
+            "slash must survive save/reload or /deploy never matches"
+        );
+        assert_eq!(parsed.trigger, "deploy OR update the install");
         assert!(parsed.verify.contains("version"));
         assert_eq!(bump_skill_run(0), 1);
         assert!(is_hard_run(5, false, false, false));
