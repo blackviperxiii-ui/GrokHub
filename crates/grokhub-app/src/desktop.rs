@@ -266,11 +266,9 @@ fn start_ydotoold() {
         let _ = std::fs::create_dir_all(parent);
     }
     std::env::set_var("YDOTOOL_SOCKET", &sock);
-    let _ = Command::new("systemctl")
-        .args(["--user", "start", "ydotoold"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    let mut sys = Command::new("systemctl");
+    sys.args(["--user", "start", "ydotoold"]);
+    let _ = run_limited(sys, DESK_LIST_TIMEOUT);
     if ydotool_socket_ready() {
         return;
     }
@@ -1499,6 +1497,15 @@ mod tests {
         assert!(
             img.contains("run_limited(") && !img.contains(".output()"),
             "clipboard image paste must time out: {img}"
+        );
+        let ydo = src
+            .split("fn start_ydotoold(")
+            .nth(1)
+            .and_then(|s| s.split("\nfn hands_facts(").next())
+            .expect("start_ydotoold");
+        assert!(
+            ydo.contains("run_limited(") && !ydo.contains(".status()"),
+            "systemctl start ydotoold must not freeze hands: {ydo}"
         );
     }
 }
