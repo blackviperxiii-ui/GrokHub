@@ -496,15 +496,28 @@ pub fn host_cmd_leaves_project(cmd: &str, project_root: &str) -> bool {
     host_cmd_leaves_project_in(cmd, project_root, std::env::var("HOME").ok().as_deref())
 }
 
+fn host_cd_argv<'a>(bits: &'a [&'a str]) -> Option<&'a [&'a str]> {
+    let mut i = 0;
+    if matches!(bits.first().copied(), Some("builtin") | Some("command")) {
+        i += 1;
+        while i < bits.len() && (bits[i] == "--" || bits[i].starts_with('-')) {
+            i += 1;
+        }
+    }
+    if bits.get(i).copied() != Some("cd") {
+        return None;
+    }
+    Some(&bits[i + 1..])
+}
+
 fn host_cd_dest_leaves(cmd: &str, root: &str, home: Option<&str>) -> bool {
     for seg in cmd.split(|c: char| matches!(c, '&' | '|' | ';')) {
         let bits: Vec<&str> = seg.split_whitespace().collect();
-        if bits.first().copied() != Some("cd") {
+        let Some(after_cd) = host_cd_argv(&bits) else {
             continue;
-        }
-        let dest = bits
+        };
+        let dest = after_cd
             .iter()
-            .skip(1)
             .find(|w| **w != "--" && !w.starts_with('-'))
             .copied();
         let Some(dest) = dest else {
@@ -655,6 +668,30 @@ mod tests {
         assert!(
             !host_cmd_leaves_project_in("echo cd", "/home/j/proj", Some("/home/j")),
             "the word cd in another command is not a directory change"
+        );
+    }
+
+    #[test]
+    fn wrapped_cd_without_dest_leaves_the_bound_tree() {
+        assert!(
+            host_cmd_leaves_project_in("builtin cd", "/home/j/proj", Some("/home/j")),
+            "builtin cd with no dest goes to HOME"
+        );
+        assert!(
+            host_cmd_leaves_project_in("command cd && ls", "/home/j/proj", Some("/home/j")),
+            "command cd && ls lists HOME, not the bound tree"
+        );
+        assert!(
+            host_cmd_leaves_project_in("builtin -- cd", "/home/j/proj", Some("/home/j")),
+            "builtin -- cd with no dest goes to HOME"
+        );
+        assert!(
+            !host_cmd_leaves_project_in("builtin cd src && ls", "/home/j/proj", Some("/home/j")),
+            "builtin cd into a project subdir stays in-world"
+        );
+        assert!(
+            !host_cmd_leaves_project_in("command echo cd", "/home/j/proj", Some("/home/j")),
+            "command echo cd is not a directory change"
         );
     }
 
