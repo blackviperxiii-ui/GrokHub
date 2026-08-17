@@ -1,18 +1,19 @@
 use grokhub_core::{
     act_window_search_bin, browser_windshield_line, capture_kinds, cdp_new_tab_path,
-    cdp_page_close_payload, cdp_page_focus_payload, clip_image_args, computer_cmd_line,
-    computer_drive_for, diagnose_hands, empty_hands_steps_error, ffmpeg_webcam_args, ffmpeg_x11_args,
-    filter_atspi_rows, format_tab_list, frame_is_blank, frame_origin_for, gnome_shell_screenshot_args,
-    grim_capture_args, hands_backend_name, hands_blocked_by_lock, hands_chip_label, hands_chip_live,
-    hands_down_receipt, hands_windshield_line, image_pixels_ok, image_to_global, infer_wayland_display,
-    jpeg_data_url, layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var, parse_atspi_line,
-    parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse, parse_xrandr_outputs,
-    pcm_from_capture, pick_browser_tab, pick_capture_output, pick_hands_backend, pick_named_row,
-    picker_args, png_ihdr_size, rank_atspi_rows, resolve_bin_in, session_is_wayland, tab_list_from_rows,
-    take_text_body, IMAGE_FILE_CAP, TEXT_FILE_CAP, virtual_desktop_size, windshield_frame_geom,
-    x11_grab_size, ydotool_socket_path, AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp,
-    DisplayOutput, HandsBackend, HandsDown, TabAction, CDP_DOWN, CDP_PORTS, RECORDERS, TRANSCRIBERS,
-    PYATSPI_MISSING,
+    cdp_page_close_payload, cdp_page_focus_payload, clamp_to_desktop, clip_image_args,
+    computer_cmd_line, computer_drive_for, cursor_on_output, diagnose_hands, empty_hands_steps_error,
+    ffmpeg_webcam_args, ffmpeg_x11_args, filter_atspi_rows, format_cursor_line_miss,
+    format_tab_list, frame_is_blank, frame_origin_for, gnome_shell_screenshot_args, grim_capture_args,
+    hands_backend_name, hands_blocked_by_lock, hands_chip_label, hands_chip_live, hands_down_receipt,
+    hands_windshield_line, image_pixels_ok, image_to_global, infer_wayland_display, jpeg_data_url,
+    layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var, monitor_local_to_global,
+    parse_atspi_line, parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
+    parse_xrandr_outputs, pcm_from_capture, pick_browser_tab, pick_capture_output, pick_hands_backend,
+    pick_named_row, picker_args, png_ihdr_size, pointer_slop_miss, rank_atspi_rows, relative_move_steps,
+    resolve_bin_in, session_is_wayland, tab_list_from_rows, take_text_body, IMAGE_FILE_CAP,
+    TEXT_FILE_CAP, virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path,
+    AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp, DisplayOutput, HandsBackend,
+    HandsDown, TabAction, CDP_DOWN, CDP_PORTS, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
 };
 use image::GenericImageView;
 use std::io::{Read, Write};
@@ -231,7 +232,7 @@ pub fn prepare_windshield(
     let kept = filter_atspi_rows(rows, dw, dh);
     let ranked = rank_atspi_rows(&kept, ask, 40);
     let (fw, fh, ox, oy) = windshield_frame_geom(captured_this_turn, last_desk_frame_geom());
-    let mut header = layout_prompt(&outputs, fw, fh, ox, oy);
+    let mut header = layout_prompt(&outputs, fw, fh, ox, oy, read_cursor_xy());
     let (up, n) = cached_cdp_status();
     header.push_str(&browser_windshield_line(up, n));
     header.push_str(&hands_windshield_line(hands_peek(), hands_driver_name()));
@@ -458,9 +459,11 @@ fn run_pointer_op(op: &ComputerOp, cancel: Option<&AtomicBool>) -> Result<(), St
             }
             run_pointer_steps(&steps, cancel)
         }
-        ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) | ComputerDrive::Tab(_, _) => {
-            Err("not a pointer op".into())
-        }
+        ComputerDrive::Act(_)
+        | ComputerDrive::WaitFor(_)
+        | ComputerDrive::Tab(_, _)
+        | ComputerDrive::Cursor
+        | ComputerDrive::MoveMonitor { .. } => Err("not a pointer op".into()),
     }
 }
 
@@ -522,20 +525,26 @@ fn remember_from_jpeg(bytes: &[u8], outputs: &[DisplayOutput], grim_name: Option
 }
 
 fn map_pointer_xy(x: i32, y: i32) -> (i32, i32) {
-    let Ok(g) = LAST_DESK_FRAME.lock() else {
-        return (x, y);
+    let (mapped, outputs) = if let Ok(g) = LAST_DESK_FRAME.lock() {
+        if let Some(f) = g.as_ref() {
+            (
+                image_to_global(
+                    x,
+                    y,
+                    f.jpeg_w,
+                    f.jpeg_h,
+                    &f.outputs,
+                    Some((f.origin_x, f.origin_y)),
+                ),
+                f.outputs.clone(),
+            )
+        } else {
+            ((x, y), read_display_outputs())
+        }
+    } else {
+        ((x, y), read_display_outputs())
     };
-    let Some(f) = g.as_ref() else {
-        return (x, y);
-    };
-    image_to_global(
-        x,
-        y,
-        f.jpeg_w,
-        f.jpeg_h,
-        &f.outputs,
-        Some((f.origin_x, f.origin_y)),
-    )
+    clamp_to_desktop(mapped.0, mapped.1, &outputs)
 }
 
 fn map_pointer_op(op: &ComputerOp) -> ComputerOp {
@@ -728,12 +737,8 @@ fn desk_scan_now() -> DeskScan {
             }
         }
     }
-    let mut mouse = spawn_bin("xdotool");
-    mouse.args(["getmouselocation"]);
-    if let Some(out) = run_limited(mouse, DESK_LIST_TIMEOUT) {
-        if let Some(r) = parse_xdotool_mouse(&String::from_utf8_lossy(&out.stdout)) {
-            rows.push(r);
-        }
+    if let Some(r) = read_cursor_row() {
+        rows.push(r);
     }
     let outputs = read_display_outputs();
     let (dw, dh) = virtual_desktop_size(&outputs)
@@ -847,6 +852,73 @@ fn pointer_drive(op: &ComputerOp) -> ComputerDrive {
     )
 }
 
+const POINTER_SLOP: i32 = 8;
+
+fn read_cursor_row() -> Option<AtspiRow> {
+    let mut mouse = spawn_bin("xdotool");
+    mouse.args(["getmouselocation"]);
+    let out = run_limited(mouse, DESK_LIST_TIMEOUT)?;
+    parse_xdotool_mouse(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn read_cursor_xy() -> Option<(i32, i32)> {
+    read_cursor_row().map(|r| (r.x, r.y))
+}
+
+fn cursor_monitor_name(x: i32, y: i32) -> Option<String> {
+    cursor_on_output(&read_display_outputs(), x, y).map(|o| o.name.clone())
+}
+
+fn cursor_detail_line(x: i32, y: i32, miss: bool) -> String {
+    format_cursor_line_miss(x, y, cursor_monitor_name(x, y).as_deref(), miss)
+}
+
+fn append_cursor_detail(detail: &str, intended: (i32, i32), actual: Option<(i32, i32)>) -> String {
+    let Some((ax, ay)) = actual else {
+        return format!("{detail}\ncursor unread");
+    };
+    let miss = pointer_slop_miss(intended, (ax, ay), POINTER_SLOP);
+    format!("{detail}\n{}", cursor_detail_line(ax, ay, miss))
+}
+
+fn after_move_click_steps(op: &ComputerOp) -> Vec<Vec<String>> {
+    match pointer_drive(op) {
+        ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
+            steps.into_iter().skip(1).collect()
+        }
+        ComputerDrive::Act(_)
+        | ComputerDrive::WaitFor(_)
+        | ComputerDrive::Tab(_, _)
+        | ComputerDrive::Cursor
+        | ComputerDrive::MoveMonitor { .. } => vec![],
+    }
+}
+
+fn drive_pointer_to(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(i32, i32), String> {
+    let outputs = read_display_outputs();
+    let (x, y) = clamp_to_desktop(x, y, &outputs);
+    match pointer_drive(&ComputerOp::Move { x, y }) {
+        ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
+            run_pointer_steps(&steps, cancel)?;
+        }
+        ComputerDrive::Act(_)
+        | ComputerDrive::WaitFor(_)
+        | ComputerDrive::Tab(_, _)
+        | ComputerDrive::Cursor
+        | ComputerDrive::MoveMonitor { .. } => return Err("not a pointer op".into()),
+    }
+    if let Some((ax, ay)) = read_cursor_xy() {
+        if pointer_slop_miss((x, y), (ax, ay), POINTER_SLOP) {
+            let backend = live_hands_backend().unwrap_or(HandsBackend::Xdotool);
+            let steps = relative_move_steps(backend, x - ax, y - ay);
+            if !steps.is_empty() {
+                run_pointer_steps(&steps, cancel)?;
+            }
+        }
+    }
+    Ok((x, y))
+}
+
 pub fn lock_titles() -> Vec<String> {
     desk_scan().lock
 }
@@ -856,19 +928,24 @@ pub fn lock_titles_from_stdout(atspi: &str, wmctrl: &str) -> Vec<String> {
     grokhub_core::lock_check_titles(&lines)
 }
 
+fn click_after_move(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(), String> {
+    let steps = after_move_click_steps(&ComputerOp::Click { x, y });
+    if steps.is_empty() {
+        return Ok(());
+    }
+    run_pointer_steps(&steps, cancel)
+}
+
 fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), String> {
     if cancelled(cancel) {
         return Err("halted".into());
     }
     let rows = collect_rows();
     if let Some(r) = named_row(&rows, name) {
-        let (x, y) = row_center(r);
-        match pointer_drive(&ComputerOp::Click { x, y }) {
-            ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
-                run_pointer_steps(&steps, cancel)?;
-            }
-            ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) | ComputerDrive::Tab(_, _) => {}
-        }
+        let (cx, cy) = row_center(r);
+        let (x, y) = clamp_to_desktop(cx, cy, &read_display_outputs());
+        drive_pointer_to(x, y, cancel)?;
+        click_after_move(x, y, cancel)?;
         return Ok((x, y));
     }
     if live_hands_backend().is_none() {
@@ -898,14 +975,9 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     let (x, y, w, h) = parse_getwindowgeometry(&text).ok_or_else(|| {
         format!("act {name}: no geometry")
     })?;
-    let cx = x + w / 2;
-    let cy = y + h / 2;
-    match pointer_drive(&ComputerOp::Click { x: cx, y: cy }) {
-        ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
-            run_pointer_steps(&steps, cancel)?;
-        }
-        ComputerDrive::Act(_) | ComputerDrive::WaitFor(_) | ComputerDrive::Tab(_, _) => {}
-    }
+    let (cx, cy) = clamp_to_desktop(x + w / 2, y + h / 2, &read_display_outputs());
+    drive_pointer_to(cx, cy, cancel)?;
+    click_after_move(cx, cy, cancel)?;
     Ok((cx, cy))
 }
 
@@ -958,26 +1030,71 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
             if let Some(detail) = empty_hands_steps_error(&op, &steps) {
                 return hands_receipt(&line, started, false, &detail);
             }
-            match run_pointer_steps(&steps, cancel) {
-                Ok(()) => {
-                    let detail = match &op {
-                        ComputerOp::Click { x, y } => format!("clicked {x},{y}"),
-                        ComputerOp::DoubleClick { x, y } => format!("double-clicked {x},{y}"),
-                        ComputerOp::Move { x, y } => format!("moved {x},{y}"),
-                        ComputerOp::Type { text } => format!("typed {} chars", text.chars().count()),
-                        ComputerOp::Key { name } => format!("key {name}"),
-                        ComputerOp::Scroll { dy } => format!("scrolled {dy}"),
-                        ComputerOp::Act { .. }
-                        | ComputerOp::WaitFor { .. }
-                        | ComputerOp::Tab { .. } => "ok".into(),
-                    };
-                    hands_receipt(&line, started, true, &detail)
+            match &op {
+                ComputerOp::Click { x, y }
+                | ComputerOp::DoubleClick { x, y }
+                | ComputerOp::Move { x, y } => {
+                    match drive_pointer_to(*x, *y, cancel) {
+                        Ok((x, y)) => {
+                            let click_steps = after_move_click_steps(&op);
+                            if let Err(e) = run_pointer_steps(&click_steps, cancel) {
+                                return hands_receipt(&line, started, false, &e);
+                            }
+                            let detail = match &op {
+                                ComputerOp::Click { .. } => format!("clicked {x},{y}"),
+                                ComputerOp::DoubleClick { .. } => {
+                                    format!("double-clicked {x},{y}")
+                                }
+                                ComputerOp::Move { .. } => format!("moved {x},{y}"),
+                                ComputerOp::Type { .. }
+                                | ComputerOp::Key { .. }
+                                | ComputerOp::Scroll { .. }
+                                | ComputerOp::Act { .. }
+                                | ComputerOp::WaitFor { .. }
+                                | ComputerOp::Tab { .. }
+                                | ComputerOp::Cursor
+                                | ComputerOp::MoveMonitor { .. } => "ok".into(),
+                            };
+                            hands_receipt(
+                                &line,
+                                started,
+                                true,
+                                &append_cursor_detail(&detail, (x, y), read_cursor_xy()),
+                            )
+                        }
+                        Err(e) => hands_receipt(&line, started, false, &e),
+                    }
                 }
-                Err(e) => hands_receipt(&line, started, false, &e),
+                other => match run_pointer_steps(&steps, cancel) {
+                    Ok(()) => {
+                        let detail = match other {
+                            ComputerOp::Type { text } => {
+                                format!("typed {} chars", text.chars().count())
+                            }
+                            ComputerOp::Key { name } => format!("key {name}"),
+                            ComputerOp::Scroll { dy } => format!("scrolled {dy}"),
+                            ComputerOp::Click { .. }
+                            | ComputerOp::DoubleClick { .. }
+                            | ComputerOp::Move { .. }
+                            | ComputerOp::Act { .. }
+                            | ComputerOp::WaitFor { .. }
+                            | ComputerOp::Tab { .. }
+                            | ComputerOp::Cursor
+                            | ComputerOp::MoveMonitor { .. } => "ok".into(),
+                        };
+                        hands_receipt(&line, started, true, &detail)
+                    }
+                    Err(e) => hands_receipt(&line, started, false, &e),
+                },
             }
         }
         ComputerDrive::Act(name) => match act_click(name.as_str(), cancel) {
-            Ok((x, y)) => hands_receipt(&line, started, true, &format!("act {name} @{x},{y}")),
+            Ok((x, y)) => hands_receipt(
+                &line,
+                started,
+                true,
+                &append_cursor_detail(&format!("act {name} @{x},{y}"), (x, y), read_cursor_xy()),
+            ),
             Err(e) => hands_receipt(&line, started, false, &e),
         },
         ComputerDrive::WaitFor(title) => match wait_for_title(title.as_deref(), cancel) {
@@ -988,6 +1105,28 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
             Ok(detail) => hands_receipt(&line, started, true, &detail),
             Err(e) => hands_receipt(&line, started, false, &e),
         },
+        ComputerDrive::Cursor => match read_cursor_xy() {
+            Some((x, y)) => hands_receipt(&line, started, true, &cursor_detail_line(x, y, false)),
+            None => hands_receipt(&line, started, false, "cursor unread"),
+        },
+        ComputerDrive::MoveMonitor { name, x, y } => {
+            let local = match (x, y) {
+                (Some(a), Some(b)) => Some((a, b)),
+                _ => None,
+            };
+            match monitor_local_to_global(&read_display_outputs(), &name, local) {
+                Some((gx, gy)) => match drive_pointer_to(gx, gy, cancel) {
+                    Ok((gx, gy)) => hands_receipt(
+                        &line,
+                        started,
+                        true,
+                        &append_cursor_detail(&format!("moved {gx},{gy}"), (gx, gy), read_cursor_xy()),
+                    ),
+                    Err(e) => hands_receipt(&line, started, false, &e),
+                },
+                None => hands_receipt(&line, started, false, &format!("unknown monitor {name}")),
+            }
+        }
     }
 }
 
@@ -1913,12 +2052,16 @@ mod tests {
         });
         assert!(out.contains("exit 0"), "{out}");
         assert!(out.contains("moved 1500,400"), "{out}");
+        assert!(out.contains("cursor"), "{out}");
         let loc = Command::new("xdotool")
             .args(["getmouselocation"])
             .output()
             .unwrap();
         let row = parse_xdotool_mouse(&String::from_utf8_lossy(&loc.stdout)).unwrap();
         assert_eq!((row.x, row.y), (dest_x, dest_y), "{out} {} {}", row.x, row.y);
+        let cursor = run_computer_op(&ComputerOp::Cursor);
+        assert!(cursor.contains("exit 0"), "{cursor}");
+        assert!(cursor.contains("cursor"), "{cursor}");
         match grokhub_core::computer_drive(&ComputerOp::Click { x: 1, y: 2 }) {
             ComputerDrive::Xdotool(steps) => {
                 assert!(!steps.iter().any(|s| s.iter().any(|a| a == "--sync")));
