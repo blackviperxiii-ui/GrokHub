@@ -131,11 +131,15 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     }
 
     if method == Method::Post && path == "/v1/task" {
+        drop(st);
         let body = read_json(&mut req);
         let prompt = body.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
         let title = body.get("title").and_then(|v| v.as_str()).unwrap_or("");
         let target = body.get("targetDeviceId").and_then(|v| v.as_str()).unwrap_or("");
-        return match st.enqueue_task(&peer, target, title, prompt) {
+        let mut st = state.lock().map_err(|_| ())?;
+        let result = st.enqueue_task(&peer, target, title, prompt);
+        drop(st);
+        return match result {
             Ok(t) => send_json(
                 req,
                 200,
@@ -169,6 +173,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
 
     if let Some(id) = strip_prefix_suffix(&path, "/v1/task/", "/complete") {
         if method == Method::Post {
+            drop(st);
             let body = read_json(&mut req);
             let result = body.get("result").and_then(|v| v.as_str()).unwrap_or("");
             let status = body.get("status").and_then(|v| v.as_str());
@@ -176,7 +181,10 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
                 .get("receipts")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
-            return match st.complete_task(&peer_id, id, result, receipts, status) {
+            let mut st = state.lock().map_err(|_| ())?;
+            let done = st.complete_task(&peer_id, id, result, receipts, status);
+            drop(st);
+            return match done {
                 Ok(t) => send_json(req, 200, json!({ "ok": true, "task": t })),
                 Err(CompleteError::NotFound) => send_json(
                     req,
@@ -206,6 +214,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     }
 
     if method == Method::Post && path == "/v1/inhabit" {
+        drop(st);
         let body = read_json(&mut req);
         let raw = body.get("bundle").cloned().unwrap_or(body);
         let bundle: InhabitBundle = match serde_json::from_value(raw) {
@@ -218,7 +227,9 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
                 );
             }
         };
+        let mut st = state.lock().map_err(|_| ())?;
         st.store_inhabit(bundle, &peer);
+        drop(st);
         return send_json(req, 200, json!({ "ok": true }));
     }
     if method == Method::Get && path == "/v1/inhabit" {
@@ -739,6 +750,39 @@ mod tests {
         assert!(
             drop_at < read_at,
             "POST frame must not read a JPEG while holding the hub lock: {post_frame}"
+        );
+        let post_task = src
+            .split("Method::Post && path == \"/v1/task\"")
+            .nth(1)
+            .and_then(|s| s.split("path == \"/v1/inbox\"").next())
+            .expect("POST /v1/task");
+        let drop_at = post_task.find("drop(st)").expect("POST task must drop before read_json");
+        let read_at = post_task.find("read_json").expect("POST task reads a body");
+        assert!(
+            drop_at < read_at,
+            "POST task must not read the body while holding the hub lock: {post_task}"
+        );
+        let complete = src
+            .split("/v1/task/")
+            .nth(1)
+            .and_then(|s| s.split("path.strip_prefix(\"/v1/task/\")").next())
+            .expect("POST complete");
+        let drop_at = complete.find("drop(st)").expect("complete must drop before read_json");
+        let read_at = complete.find("read_json").expect("complete reads a body");
+        assert!(
+            drop_at < read_at,
+            "task complete must not read receipts while holding the hub lock: {complete}"
+        );
+        let inhabit = src
+            .split("Method::Post && path == \"/v1/inhabit\"")
+            .nth(1)
+            .and_then(|s| s.split("Method::Get && path == \"/v1/inhabit\"").next())
+            .expect("POST /v1/inhabit");
+        let drop_at = inhabit.find("drop(st)").expect("POST inhabit must drop before read_json");
+        let read_at = inhabit.find("read_json").expect("POST inhabit reads a body");
+        assert!(
+            drop_at < read_at,
+            "POST inhabit must not read the bundle while holding the hub lock: {inhabit}"
         );
     }
 }
