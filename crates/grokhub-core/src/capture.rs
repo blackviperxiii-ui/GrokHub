@@ -263,6 +263,18 @@ pub fn layout_prompt(
     s
 }
 
+/// Leftover JPEG size must not appear when this turn did not capture.
+pub fn windshield_frame_geom(
+    captured_this_turn: bool,
+    leftover: (u32, u32, i32, i32),
+) -> (u32, u32, i32, i32) {
+    if captured_this_turn {
+        leftover
+    } else {
+        (0, 0, 0, 0)
+    }
+}
+
 pub fn parse_xrandr_size(text: &str) -> Option<(u32, u32)> {
     for line in text.lines() {
         if let Some(rest) = line.split("current").nth(1) {
@@ -495,6 +507,15 @@ DP-1 disconnected (normal left inverted right x axis y axis)
         assert!(glass.contains("eDP-1 0,0 1920x1080"));
         assert!(glass.contains("HDMI-1 1920,0 1920x1080"));
         assert!(glass.contains("frame: 1920x1080 origin 1920,0"));
+        assert_eq!(
+            windshield_frame_geom(false, (1920, 1080, 1920, 0)),
+            (0, 0, 0, 0),
+            "a skipped capture must not advertise last turn's frame"
+        );
+        assert_eq!(
+            windshield_frame_geom(true, (1920, 1080, 1920, 0)),
+            (1920, 1080, 1920, 0)
+        );
     }
 
     const LEFT_DUAL_XRANDR: &str = "\
