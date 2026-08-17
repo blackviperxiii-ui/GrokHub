@@ -122,6 +122,7 @@ use grokhub_core::{
     HostPlanStep, HostRisk, forbidden_reason, mint_host_halt,
     AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
     VoiceState, CONTEXT_BUDGET_TOKENS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX, FRAME_CAP, IMAGE_FILE_CAP,
+    TEXT_FILE_CAP,
     user_pref_facts,
     DEFAULT_MODEL, FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND,
     IDLE_REFLECT_MS, IMAGINE_ASPECTS,
@@ -1526,7 +1527,7 @@ impl Cabin {
         self.apply_assistant_snapshot(merge_thinking_capped(
             &self.thought_buf,
             &self.stream_buf,
-            IMAGE_FILE_CAP as usize,
+            TEXT_FILE_CAP,
         ));
     }
 
@@ -12263,6 +12264,10 @@ mod tests {
                 || live.contains("take_ui_text")
                 || live.contains("IMAGE_FILE_CAP"),
             "live thought+stream merge must not allocate two 8MB buffers unbounded: {live}"
+        );
+        assert!(
+            live.contains("TEXT_FILE_CAP"),
+            "live snapshot must not copy an 8MB stream into the transcript every delta: {live}"
         );
         assert!(
             delta.contains("if push_stream_capped") || delta.contains("changed"),
