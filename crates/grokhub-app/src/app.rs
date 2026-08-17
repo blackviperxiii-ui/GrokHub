@@ -9107,14 +9107,38 @@ fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {
     state.store(ui.ctx(), id);
 }
 
-fn discover_hub_pair_url(port: u16) -> String {
-    let out = std::process::Command::new("hostname")
-        .arg("-I")
-        .output()
-        .ok()
+struct LanHostCache {
+    at: Instant,
+    out: String,
+}
+
+static LAN_HOST: Mutex<Option<LanHostCache>> = Mutex::new(None);
+
+fn hostname_i() -> String {
+    if let Ok(g) = LAN_HOST.lock() {
+        if let Some(c) = g.as_ref() {
+            if c.at.elapsed().as_secs() < 5 {
+                return c.out.clone();
+            }
+        }
+    }
+    let mut cmd = std::process::Command::new("hostname");
+    cmd.arg("-I");
+    let out = run_limited(cmd, Duration::from_millis(400))
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default();
+    if let Ok(mut g) = LAN_HOST.lock() {
+        *g = Some(LanHostCache {
+            at: Instant::now(),
+            out: out.clone(),
+        });
+    }
+    out
+}
+
+fn discover_hub_pair_url(port: u16) -> String {
+    let out = hostname_i();
     let addrs = parse_hostname_i(&out);
     let refs: Vec<&str> = addrs.iter().map(|s| s.as_str()).collect();
     hub_pair_url(port, pick_lan_ipv4(&refs).as_deref())
@@ -9132,6 +9156,33 @@ mod tests {
         assert!(url.starts_with("http://"), "{url}");
         assert!(url.contains(":18766"), "{url}");
         assert!(!url.contains("<lan>"), "{url}");
+    }
+
+    #[test]
+    fn devices_hostname_must_not_block_the_ui() {
+        let src = include_str!("app.rs");
+        let host = src
+            .split("fn hostname_i()")
+            .nth(1)
+            .and_then(|s| s.split("\nfn discover_hub_pair_url(").next())
+            .expect("hostname_i");
+        assert!(
+            host.contains("run_limited("),
+            "hostname -I on Devices paint must time out: {host}"
+        );
+        assert!(
+            !host.contains(".output()"),
+            "hostname -I must not block Devices paint: {host}"
+        );
+        let disc = src
+            .split("fn discover_hub_pair_url(")
+            .nth(1)
+            .and_then(|s| s.split("\n#[cfg(test)]").next())
+            .expect("discover_hub_pair_url");
+        assert!(
+            disc.contains("hostname_i()"),
+            "Devices pair URL must use the timed hostname helper: {disc}"
+        );
     }
 
     #[test]
