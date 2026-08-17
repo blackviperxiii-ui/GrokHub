@@ -7240,7 +7240,10 @@ impl Cabin {
             ui.horizontal(|ui| {
                 for name in ["SOUL.md", "USER.md", "MEMORY.md"] {
                     if crate::cards::tab_pill(ui, name, self.mem_name == name) {
-                        if !self.scratch() && self.mem_name != name {
+                        if !self.scratch()
+                            && self.mem_name != name
+                            && config::read_memory(&self.mem_name) != self.mem_body
+                        {
                             let _ = config::write_memory(&self.mem_name, &self.mem_body);
                         }
                         self.mem_name = name.into();
@@ -9743,6 +9746,10 @@ mod tests {
         assert!(
             flush < switch && tabs.contains("scratch()"),
             "Memory tab switch must flush the leaving file like thread switch: {tabs}"
+        );
+        assert!(
+            tabs[..flush].contains("read_memory"),
+            "Memory tab switch must not rotate .prev when the leaving file is unchanged: {tabs}"
         );
         let settings_save = src
             .split("fn save_settings")
