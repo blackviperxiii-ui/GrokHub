@@ -4110,11 +4110,12 @@ impl Cabin {
         if self.cfg.cabin_eyes && user_asks_cabin_eyes(&last_user) {
             self.eyes_attach = true;
         }
+        let captured = self.capture_cabin_frame_this_turn();
         let mut hands = hands_protocol().to_string();
         if self.eyes_attach || self.hands_attach {
             let rows = collect_rows();
             let titles: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-            let (rows, header) = prepare_windshield(&rows, Some(&last_user));
+            let (rows, header) = prepare_windshield(&rows, Some(&last_user), captured.is_some());
             let frame = build_windshield(
                 &rows,
                 None,
@@ -4156,7 +4157,6 @@ impl Cabin {
         if !sys.is_empty() {
             msgs.insert(0, ("system".into(), sys));
         }
-        let captured = self.capture_cabin_frame_this_turn();
         let user_img = if kick_consumes_attach(consume_attach) {
             self.attach_name = None;
             self.attach_url.take()
@@ -5281,7 +5281,26 @@ impl Cabin {
             .rev()
             .find(|m| m.role == "user")
             .map(|m| m.content.as_str());
-        let (rows, header) = prepare_windshield(&rows, ask);
+        let mut frame_note = None;
+        let captured_ok = if self.cfg.cabin_eyes {
+            match capture_data_url() {
+                Ok(url) => {
+                    if let Ok(mut st) = self.hub.lock() {
+                        st.store_frame(&url);
+                    }
+                    self.last_frame_url = Some(url);
+                    frame_note = Some("frame: captured (on hub, not disk)\n".into());
+                    true
+                }
+                Err(e) => {
+                    frame_note = Some(format!("frame: {e}\n"));
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        let (rows, header) = prepare_windshield(&rows, ask, captured_ok);
         let frame = build_windshield(
             &rows,
             None,
@@ -5302,17 +5321,8 @@ impl Cabin {
         if let Some(g) = &frame.goal {
             t.push_str(&format!("goal: {g}\n"));
         }
-        if self.cfg.cabin_eyes {
-            match capture_data_url() {
-                Ok(url) => {
-                    if let Ok(mut st) = self.hub.lock() {
-                        st.store_frame(&url);
-                    }
-                    self.last_frame_url = Some(url);
-                    t.push_str("frame: captured (on hub, not disk)\n");
-                }
-                Err(e) => t.push_str(&format!("frame: {e}\n")),
-            }
+        if let Some(n) = frame_note {
+            t.push_str(&n);
         }
         self.eyes_text = t;
         self.status = format!("{} objects", frame.objects.len());
@@ -9288,6 +9298,19 @@ mod tests {
         assert!(
             import.contains("merge_imported_memory"),
             "/import must merge MEMORY.md instead of last-file-wins: {import}"
+        );
+        let kick = src
+            .split("fn kick_model(")
+            .nth(1)
+            .and_then(|s| s.split("fn upsert_stream_assistant").next())
+            .expect("kick_model");
+        let cap = kick
+            .find("capture_cabin_frame_this_turn")
+            .expect("this-turn capture");
+        let glass = kick.find("prepare_windshield").expect("windshield");
+        assert!(
+            cap < glass,
+            "Windshield frame: must come from this-turn capture, not last JPEG: {kick}"
         );
         let anticipate = src
             .split("fn tick_anticipate")
