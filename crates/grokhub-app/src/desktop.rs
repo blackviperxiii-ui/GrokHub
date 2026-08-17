@@ -275,7 +275,12 @@ fn cdp_http(port: u16, path: &str) -> Result<String, String> {
         .timeout(Duration::from_millis(400))
         .call()
         .map_err(|e| e.to_string())?;
-    resp.into_string().map_err(|e| e.to_string())
+    let mut buf = Vec::new();
+    resp.into_reader()
+        .take(TEXT_FILE_CAP as u64)
+        .read_to_end(&mut buf)
+        .map_err(|e| e.to_string())?;
+    String::from_utf8(buf).map_err(|e| e.to_string())
 }
 
 fn probe_cdp() -> Option<(u16, Vec<BrowserTab>)> {
@@ -2040,6 +2045,19 @@ mod tests {
         assert!(
             header.contains("browser: cdp"),
             "windshield must report cdp up or down: {header}"
+        );
+        let cdp = include_str!("desktop.rs")
+            .split("fn cdp_http(")
+            .nth(1)
+            .and_then(|s| s.split("fn probe_cdp(").next())
+            .expect("cdp_http");
+        assert!(
+            cdp.contains(".take(") && !cdp.contains("into_string()"),
+            "CDP list on the windshield must not slurp a huge /json/list: {cdp}"
+        );
+        assert!(
+            cdp.contains("TEXT_FILE_CAP") || cdp.contains("IMAGE_FILE_CAP"),
+            "CDP HTTP must stop at a cabin cap: {cdp}"
         );
     }
 }
