@@ -35,12 +35,38 @@ pub fn is_workload_user(content: &str) -> bool {
 }
 
 pub fn merge_thinking(thought: &str, content: &str) -> String {
+    merge_thinking_capped(thought, content, usize::MAX)
+}
+
+/// Same as [`merge_thinking`], but never allocates past `cap` (UTF-8 safe).
+pub fn merge_thinking_capped(thought: &str, content: &str, cap: usize) -> String {
     let thought = thought.trim();
+    let mut out = String::new();
     if thought.is_empty() {
-        content.to_string()
-    } else {
-        format!("THINKING:\n{thought}\n\n{content}")
+        push_capped(&mut out, content, cap);
+        return out;
     }
+    push_capped(&mut out, "THINKING:\n", cap);
+    push_capped(&mut out, thought, cap);
+    push_capped(&mut out, "\n\n", cap);
+    push_capped(&mut out, content, cap);
+    out
+}
+
+fn push_capped(buf: &mut String, part: &str, cap: usize) {
+    if buf.len() >= cap {
+        return;
+    }
+    let room = cap.saturating_sub(buf.len());
+    if part.len() <= room {
+        buf.push_str(part);
+        return;
+    }
+    let mut end = room;
+    while end > 0 && !part.is_char_boundary(end) {
+        end -= 1;
+    }
+    buf.push_str(&part[..end]);
 }
 
 pub fn strip_thinking(content: &str) -> String {
@@ -421,6 +447,12 @@ mod tests {
         assert!(merged.starts_with("THINKING:"));
         assert!(merged.contains("I'll look."));
         assert_eq!(strip_thinking(&merged), "I'll look.");
+        let thought = "t".repeat(80);
+        let content = "c".repeat(80);
+        let capped = merge_thinking_capped(&thought, &content, 40);
+        assert!(capped.len() <= 40, "live merge must stay inside the UI cap");
+        assert!(capped.starts_with("THINKING:\n"));
+        assert!(capped.is_char_boundary(capped.len()));
         assert_eq!(
             assistant_prose("THINKING:\nnot found, I'll apt install\n\nHands are ready."),
             "Hands are ready."
