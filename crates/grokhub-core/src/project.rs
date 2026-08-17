@@ -496,15 +496,22 @@ pub fn host_cmd_leaves_project(cmd: &str, project_root: &str) -> bool {
     host_cmd_leaves_project_in(cmd, project_root, std::env::var("HOME").ok().as_deref())
 }
 
+fn host_cmd_name(tok: &str) -> &str {
+    tok.trim_start_matches('\\')
+}
+
 fn host_cd_argv<'a>(bits: &'a [&'a str]) -> Option<&'a [&'a str]> {
     let mut i = 0;
-    if matches!(bits.first().copied(), Some("builtin") | Some("command")) {
+    if matches!(
+        bits.first().copied().map(host_cmd_name),
+        Some("builtin") | Some("command") | Some("exec")
+    ) {
         i += 1;
         while i < bits.len() && (bits[i] == "--" || bits[i].starts_with('-')) {
             i += 1;
         }
     }
-    if bits.get(i).copied() != Some("cd") {
+    if bits.get(i).copied().map(host_cmd_name) != Some("cd") {
         return None;
     }
     Some(&bits[i + 1..])
@@ -692,6 +699,18 @@ mod tests {
         assert!(
             !host_cmd_leaves_project_in("command echo cd", "/home/j/proj", Some("/home/j")),
             "command echo cd is not a directory change"
+        );
+        assert!(
+            host_cmd_leaves_project_in("exec cd", "/home/j/proj", Some("/home/j")),
+            "exec cd with no dest goes to HOME"
+        );
+        assert!(
+            host_cmd_leaves_project_in("\\cd", "/home/j/proj", Some("/home/j")),
+            "backslash cd skips aliases and still goes to HOME"
+        );
+        assert!(
+            !host_cmd_leaves_project_in("exec cd src", "/home/j/proj", Some("/home/j")),
+            "exec cd into a project subdir stays in-world"
         );
     }
 
