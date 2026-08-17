@@ -5246,6 +5246,9 @@ impl Cabin {
         if self.policy().learns() {
             extract_insights(&mut self.learning, &facts);
         }
+        if config::read_memory(&self.mem_name) != self.mem_body {
+            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+        }
         let current = config::read_memory("MEMORY.md");
         let edit = surgical_memory_edit(&current, &facts);
         let mut wrote = false;
@@ -9505,6 +9508,11 @@ mod tests {
         assert!(
             reflect.contains("kick_messages_for_job"),
             "/learn reflect must read the origin thread, not only the visible tab: {reflect}"
+        );
+        let mem = reflect.find("read_memory(\"MEMORY.md\")").expect("reflect memory");
+        assert!(
+            reflect[..mem].contains("write_memory") && reflect[..mem].contains("mem_body"),
+            "/learn reflect must flush the Memory editor before surgical edit: {reflect}"
         );
         let takeover = src
             .split("fn take_over_desktop")
