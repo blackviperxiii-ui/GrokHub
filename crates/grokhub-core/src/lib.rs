@@ -73,7 +73,7 @@ pub use attach::{
     cabin_eyes_request_text, cabin_frame_only, clip_image_args, imagine_ref_status, list_pick_names,
     kick_consumes_attach, next_chat_image, parse_picker_stdout, this_turn_cabin_frame,
     picker_args, plus_empty_status, plus_menu_rows, take_text_body, AttachKind, PlusAct, PlusTarget,
-    TEXT_FILE_CAP,
+    IMAGE_FILE_CAP, TEXT_FILE_CAP,
 };
 pub use chat::{
     chat_request_body, chat_request_body_for_mode, chat_request_body_vision, chat_timeout_secs,
