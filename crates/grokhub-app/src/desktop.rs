@@ -758,6 +758,10 @@ fn run_capture_kind(
 }
 
 fn image_file_to_jpeg(path: &Path) -> Result<Vec<u8>, String> {
+    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
+    if len > IMAGE_FILE_CAP {
+        return Err("image too large".into());
+    }
     let img = image::open(path).map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     let mut cur = std::io::Cursor::new(&mut buf);
@@ -1092,6 +1096,10 @@ pub fn imagine_save_path_ext(slug: &str, ext: &str) -> PathBuf {
 
 /// Second frame for a wall cover when the second Imagine call fails.
 pub fn sibling_still(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    let len = std::fs::metadata(src).map(|m| m.len()).unwrap_or(u64::MAX);
+    if len > IMAGE_FILE_CAP {
+        return Err("image too large".into());
+    }
     let img = image::open(src).map_err(|e| e.to_string())?;
     let (w, h) = img.dimensions();
     let x = ((w as f32) * 0.05) as u32;
@@ -1648,6 +1656,33 @@ mod tests {
         assert!(
             pcm.contains("run_limited(") && !pcm.contains(".status()"),
             "live mic arecord must time out so Voice halt can finish: {pcm}"
+        );
+    }
+
+    #[test]
+    fn sibling_still_rejects_a_huge_file() {
+        let src = include_str!("desktop.rs");
+        let still = src
+            .split("pub fn sibling_still(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn capture_webcam(").next())
+            .expect("sibling_still");
+        let meta = still.find("metadata").expect("size check before decode");
+        let open = still.find("image::open").expect("decode");
+        assert!(
+            meta < open && still.contains("IMAGE_FILE_CAP"),
+            "wall cover fallback must not decode a huge still: {still}"
+        );
+        let jpeg = src
+            .split("fn image_file_to_jpeg(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn frame_bytes_are_blank(").next())
+            .expect("image_file_to_jpeg");
+        let jmeta = jpeg.find("metadata").expect("jpeg size check");
+        let jopen = jpeg.find("image::open").expect("jpeg decode");
+        assert!(
+            jmeta < jopen && jpeg.contains("IMAGE_FILE_CAP"),
+            "capture JPEG convert must not decode a huge file: {jpeg}"
         );
     }
 }
