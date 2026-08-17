@@ -123,20 +123,30 @@ fn parse_xrandr_geom(line: &str) -> Option<(i32, i32, i32, i32)> {
     None
 }
 
-pub fn virtual_desktop_size(outputs: &[DisplayOutput]) -> Option<(u32, u32)> {
+pub fn virtual_desktop_bounds(outputs: &[DisplayOutput]) -> Option<(i32, i32, u32, u32)> {
     if outputs.is_empty() {
         return None;
     }
-    let mut max_x = 0i32;
-    let mut max_y = 0i32;
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
     for o in outputs {
+        min_x = min_x.min(o.x);
+        min_y = min_y.min(o.y);
         max_x = max_x.max(o.x + o.w);
         max_y = max_y.max(o.y + o.h);
     }
-    if max_x < 64 || max_y < 64 {
+    let w = max_x.saturating_sub(min_x);
+    let h = max_y.saturating_sub(min_y);
+    if w < 64 || h < 64 {
         return None;
     }
-    Some((max_x as u32, max_y as u32))
+    Some((min_x, min_y, w as u32, h as u32))
+}
+
+pub fn virtual_desktop_size(outputs: &[DisplayOutput]) -> Option<(u32, u32)> {
+    virtual_desktop_bounds(outputs).map(|(_, _, w, h)| (w, h))
 }
 
 /// JPEG pixel → global desktop. `frame_origin` is the captured output's top-left.
@@ -151,13 +161,14 @@ pub fn image_to_global(
     if jpeg_w == 0 || jpeg_h == 0 {
         return (jx, jy);
     }
-    let (desk_w, desk_h) = virtual_desktop_size(outputs).unwrap_or((jpeg_w, jpeg_h));
-    if (jx >= jpeg_w as i32 || jy >= jpeg_h as i32)
-        && jx >= 0
-        && jy >= 0
-        && (jx as u32) < desk_w
-        && (jy as u32) < desk_h
-        && (desk_w > jpeg_w || desk_h > jpeg_h)
+    let (min_x, min_y, desk_w, desk_h) =
+        virtual_desktop_bounds(outputs).unwrap_or((0, 0, jpeg_w, jpeg_h));
+    if (jx >= jpeg_w as i32 || jy >= jpeg_h as i32 || jx < 0 || jy < 0)
+        && jx >= min_x
+        && jy >= min_y
+        && jx < min_x + desk_w as i32
+        && jy < min_y + desk_h as i32
+        && (desk_w > jpeg_w || desk_h > jpeg_h || min_x < 0 || min_y < 0)
     {
         return (jx, jy);
     }
@@ -484,6 +495,33 @@ DP-1 disconnected (normal left inverted right x axis y axis)
         assert!(glass.contains("eDP-1 0,0 1920x1080"));
         assert!(glass.contains("HDMI-1 1920,0 1920x1080"));
         assert!(glass.contains("frame: 1920x1080 origin 1920,0"));
+    }
+
+    const LEFT_DUAL_XRANDR: &str = "\
+Screen 0: minimum 320 x 200, current 3840 x 1080, maximum 16384 x 16384
+HDMI-1 connected 1920x1080+-1920+0 (normal left inverted right x axis y axis) 480mm x 270mm
+eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm
+";
+
+    #[test]
+    fn left_of_primary_stays_on_the_virtual_desktop() {
+        let outs = parse_xrandr_outputs(LEFT_DUAL_XRANDR);
+        assert_eq!(outs.len(), 2);
+        assert_eq!((outs[0].x, outs[0].y), (-1920, 0));
+        assert_eq!(
+            virtual_desktop_size(&outs),
+            Some((3840, 1080)),
+            "a monitor at -1920 must widen the desk, not clip to the primary"
+        );
+        assert_eq!(
+            image_to_global(40, 18, 1920, 1080, &outs, Some((-1920, 0))),
+            (-1880, 18)
+        );
+        assert_eq!(
+            image_to_global(-1880, 18, 1920, 1080, &outs, Some((-1920, 0))),
+            (-1880, 18),
+            "already-global left-monitor coords must not get a second origin"
+        );
     }
 
     #[test]
