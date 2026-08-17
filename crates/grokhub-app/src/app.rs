@@ -4701,6 +4701,7 @@ impl Cabin {
             Ok(JobOut::Consult(detail)) => {
                 self.running = false;
                 self.push_bound_msg("assistant", detail.clone());
+                self.status.clear();
                 self.chat_job_thread = None;
                 self.persist();
             }
@@ -10544,6 +10545,10 @@ mod tests {
         assert!(
             !consult_out.contains("finish_hub_dispatch"),
             "consult must not complete a phone task as the consult reply: {consult_out}"
+        );
+        assert!(
+            consult_out.contains("status.clear()") || consult_out.contains("status ="),
+            "consult must not leave the status bar on Consult… after the reply lands: {consult_out}"
         );
         let chat_consult = src
             .split("if let Some(q) = parse_consult")
