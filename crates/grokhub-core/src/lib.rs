@@ -118,7 +118,7 @@ pub use host_plan::{
     approved_cmds, explain_host_risk, host_risk, move_step, parse_host_plan, plan_from_text,
     retain_held_plan, step_from_cmd, strip_host_cmd_line, yolo_plan_split, HostPlanStep, HostRisk,
 };
-pub use host_safety::{forbidden_reason, recall_hits};
+pub use host_safety::{forbidden_reason, mint_host_halt, recall_hits};
 pub use imagine::{
     compose_imagine_prompt, curate_wall, dedicated_imagine_model, dedicated_video_model,
     extract_imagine_prompt, imagine_aspect_label, imagine_aspect_name, imagine_dest,
