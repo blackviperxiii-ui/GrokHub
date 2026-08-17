@@ -8530,6 +8530,12 @@ impl Cabin {
             .show(ctx, |ui| {
             if crate::cards::page_header(ui, "Skills and Connectors", "New Skill") {
                 self.skills_tab_connectors = false;
+                if !self.skill_body.is_empty() {
+                    let parsed = grokhub_core::parse_skill_md(&self.skill_body);
+                    if skills::save_skill(&parsed).is_ok() {
+                        self.skill_list = skills::list_skills();
+                    }
+                }
                 let existing: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
                 let stub = crate::cards::starter_skill(&next_starter_skill_name(&existing));
                 if skills::save_skill(&stub).is_ok() {
@@ -9604,6 +9610,16 @@ mod tests {
         assert!(
             flushed < sent,
             "Use in chat must flush the editor before the prompt: {use_chat}"
+        );
+        let new_skill = skills_ui
+            .split("New Skill")
+            .nth(1)
+            .and_then(|s| s.split("verify_chip").next())
+            .expect("new skill");
+        let stub = new_skill.find("starter_skill").expect("new stub");
+        assert!(
+            new_skill[..stub].contains("skill_body") && new_skill[..stub].contains("save_skill"),
+            "New Skill must flush the leaving editor before the stub: {new_skill}"
         );
         let skill_slash = src
             .split("Slash::Skill(name)")
