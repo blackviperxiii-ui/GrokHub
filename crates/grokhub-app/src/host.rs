@@ -1,17 +1,52 @@
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+pub fn host_working_dir(project_dir: &str) -> Option<String> {
+    let root = grokhub_core::expand_project_root(
+        project_dir,
+        std::env::var("HOME").ok().as_deref(),
+    );
+    if root.is_empty() {
+        return None;
+    }
+    Path::new(&root).is_dir().then_some(root)
+}
+
+pub fn resolve_host_cite_path(project_dir: &str, cited: &str) -> String {
+    let cited = cited.trim();
+    if cited.is_empty() {
+        return String::new();
+    }
+    let expanded = grokhub_core::expand_project_root(
+        cited,
+        std::env::var("HOME").ok().as_deref(),
+    );
+    if expanded.starts_with('/') {
+        return expanded;
+    }
+    match host_working_dir(project_dir) {
+        Some(root) => format!(
+            "{}/{}",
+            root.trim_end_matches('/'),
+            expanded.trim_start_matches("./")
+        ),
+        None => expanded,
+    }
+}
+
 pub fn run_host(cmd: &str, timeout: Duration) -> String {
-    run_host_stream(cmd, timeout, None, |_| {})
+    run_host_stream(cmd, timeout, None, None, |_| {})
 }
 
 pub fn run_host_stream(
     cmd: &str,
     timeout: Duration,
     cancel: Option<&AtomicBool>,
+    cwd: Option<&str>,
     mut on_line: impl FnMut(&str),
 ) -> String {
     let start = Instant::now();
@@ -21,6 +56,9 @@ pub fn run_host_stream(
         .arg(cmd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(dir) = cwd.filter(|d| !d.is_empty()) {
+        spawn.current_dir(dir);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -145,11 +183,95 @@ mod tests {
         assert!(out.contains("grokhub-smoke"), "{out}");
         assert!(out.contains("exit 0"), "{out}");
         let mut lines = Vec::new();
-        let streamed = run_host_stream("printf 'a\\nb\\n'", Duration::from_secs(5), None, |l| {
+        let streamed = run_host_stream("printf 'a\\nb\\n'", Duration::from_secs(5), None, None, |l| {
             lines.push(l.to_string());
         });
         assert!(streamed.contains("exit 0"), "{streamed}");
         assert!(lines.contains(&"a".to_string()) || streamed.contains("a"), "{streamed:?} {lines:?}");
+    }
+
+    #[test]
+    fn host_working_dir_uses_an_existing_bound_tree() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(&home).join(format!(
+            "grokhub-host-cwd-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp project");
+        let path = dir.to_string_lossy().into_owned();
+        assert_eq!(host_working_dir(""), None);
+        assert_eq!(host_working_dir("   "), None);
+        assert_eq!(host_working_dir(&path), Some(path.clone()));
+        assert_eq!(
+            host_working_dir(&format!("{path}/missing-bound")),
+            None,
+            "a missing bound tree must not become Command cwd"
+        );
+        let rest = path.trim_start_matches(&format!("{home}/"));
+        assert_eq!(
+            host_working_dir(&format!("~/{rest}")),
+            Some(path.clone()),
+            "tilde bound paths must expand before cwd"
+        );
+        assert_eq!(
+            host_working_dir(&format!("$HOME/{rest}")),
+            Some(path),
+            "$HOME bound paths must expand before cwd"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_host_cite_path_joins_relative_writes_to_the_bound_tree() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(&home).join(format!(
+            "grokhub-host-cite-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp project");
+        let path = dir.to_string_lossy().into_owned();
+        assert_eq!(resolve_host_cite_path("", "notes.md"), "notes.md");
+        assert_eq!(
+            resolve_host_cite_path(&path, "notes.md"),
+            format!("{path}/notes.md")
+        );
+        assert_eq!(
+            resolve_host_cite_path(&path, "/tmp/abs.txt"),
+            "/tmp/abs.txt"
+        );
+        let rest = path.trim_start_matches(&format!("{home}/"));
+        assert_eq!(
+            resolve_host_cite_path(&format!("~/{rest}"), "notes.md"),
+            format!("{path}/notes.md"),
+            "tilde bound trees must expand before joining a relative write"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_host_stream_starts_in_the_bound_cwd() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-host-pwd-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp project");
+        let path = dir.to_string_lossy().into_owned();
+        let out = run_host_stream("pwd", Duration::from_secs(5), None, Some(path.as_str()), |_| {});
+        let canon = std::fs::canonicalize(&dir).unwrap_or(dir.clone());
+        assert!(
+            out.contains(&canon.to_string_lossy().into_owned()) || out.contains(&path),
+            "host shell must start in the bound project: {out}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -159,7 +281,7 @@ mod tests {
         let stop_t = stop.clone();
         let started = Instant::now();
         let handle = std::thread::spawn(move || {
-            run_host_stream("sleep 8", Duration::from_secs(20), Some(&stop_t), |_| {})
+            run_host_stream("sleep 8", Duration::from_secs(20), Some(&stop_t), None, |_| {})
         });
         std::thread::sleep(Duration::from_millis(250));
         stop.store(true, Ordering::SeqCst);

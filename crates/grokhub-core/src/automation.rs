@@ -167,6 +167,21 @@ pub fn automation_blocked_by_policy(quiet: bool, destructive: bool, autonomy: u8
     (quiet && destructive) || (autonomy == 0 && destructive)
 }
 
+/// Replay that did not start must not consume the night slot.
+pub fn night_counts_run(replay_started: Option<bool>) -> bool {
+    !matches!(replay_started, Some(false))
+}
+
+/// Missing OAuth must leave the due set, same as quiet/policy — not hammer every tick.
+pub fn night_unauth_should_skip(has_key: bool) -> bool {
+    !has_key
+}
+
+/// A finished night check must not halt a live chat/update job.
+pub fn night_check_may_fire(running: bool) -> bool {
+    !running
+}
+
 /// `replay last` or `every day at 21, replay last` — night runs the saved recipe, not a chat hop.
 pub fn replay_automation_target(instructions: &str) -> Option<&str> {
     let t = instructions.trim();
@@ -377,6 +392,22 @@ mod tests {
         assert_eq!(replay_automation_target("replay last"), Some("last"));
         assert_eq!(replay_automation_target("every day at 21, replay last"), Some("last"));
         assert_eq!(replay_automation_target("REPLAY desk-1"), Some("desk-1"));
+        assert!(night_counts_run(None), "a chat night job still counts");
+        assert!(night_counts_run(Some(true)));
+        assert!(
+            !night_counts_run(Some(false)),
+            "a missing recipe must not consume the night slot"
+        );
+        assert!(
+            night_unauth_should_skip(false),
+            "no key must skip the night slot so tick_night stops re-firing"
+        );
+        assert!(!night_unauth_should_skip(true));
+        assert!(
+            !night_check_may_fire(true),
+            "a passing check must wait until the cabin is idle"
+        );
+        assert!(night_check_may_fire(false));
         assert_eq!(replay_automation_target("summarize the workboard"), None);
         let blocked = Automation {
             id: "n0".into(),

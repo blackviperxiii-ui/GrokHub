@@ -35,9 +35,11 @@ pub fn skill_dir_name(name: &str) -> String {
 
 pub fn render_skill_md(s: &SkillMd) -> String {
     format!(
-        "---\nname: {}\ndescription: {}\nruns: {}\n---\n\n# {}\n\nTrigger when the user says {}.\n\n## Steps\n{}\n\n## Pitfalls\n{}\n\n## Verify\n{}\n",
+        "---\nname: {}\ndescription: {}\nslash: {}\ntrigger: {}\nruns: {}\n---\n\n# {}\n\nTrigger when the user says {}.\n\n## Steps\n{}\n\n## Pitfalls\n{}\n\n## Verify\n{}\n",
         s.name,
         s.description,
+        s.slash,
+        s.trigger,
         s.runs,
         s.name.replace('-', " "),
         if s.trigger.is_empty() { s.slash.as_str() } else { s.trigger.as_str() },
@@ -170,6 +172,16 @@ pub fn match_skill<'a>(user_text: &str, skills: &'a [SkillMd]) -> Option<&'a Ski
     best
 }
 
+/// Skills "Use in chat" must send a line `match_skill` actually hits.
+pub fn skill_use_in_chat_prompt(slash: &str, name: &str) -> String {
+    let s = slash.trim();
+    if s.starts_with('/') {
+        s.to_string()
+    } else {
+        format!("Follow skill {name}")
+    }
+}
+
 pub fn skill_follow_block(skill: &SkillMd) -> String {
     format!(
         "Active skill {} — follow these steps:\n## Steps\n{}\n\n## Pitfalls\n{}\n\n## Verify\n{}",
@@ -295,6 +307,11 @@ mod tests {
         assert!(md.contains("## Verify"));
         let parsed = parse_skill_md(&md);
         assert_eq!(parsed.name, "deploy-user-install");
+        assert_eq!(
+            parsed.slash, "/deploy",
+            "slash must survive save/reload or /deploy never matches"
+        );
+        assert_eq!(parsed.trigger, "deploy OR update the install");
         assert!(parsed.verify.contains("version"));
         assert_eq!(bump_skill_run(0), 1);
         assert!(is_hard_run(5, false, false, false));
@@ -312,6 +329,17 @@ mod tests {
         let skills = [flash.clone()];
         let hit = match_skill("flash the pi", &skills).unwrap();
         assert_eq!(hit.name, "flash-pi");
+        let use_chat = skill_use_in_chat_prompt("/flash", "flash-pi");
+        assert_eq!(use_chat, "/flash");
+        assert_eq!(
+            match_skill(&use_chat, &skills).unwrap().name,
+            "flash-pi",
+            "Use in chat must activate the skill, not send a vague Follow skill line"
+        );
+        assert!(
+            match_skill("Follow skill flash-pi", &skills).is_none(),
+            "Follow skill <name> is below the Jaccard gate"
+        );
         let proposed = propose_skill_from_turn("flash the pi", "ok", &["dd if=a".into()]);
         assert_eq!(proposed.slash, "/flash");
         assert_eq!(prefer_patch(&[flash.clone()], &proposed), Some("flash-pi".into()));
