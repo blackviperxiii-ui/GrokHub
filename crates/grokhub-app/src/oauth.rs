@@ -1,5 +1,6 @@
 use grokhub_core::{
     apply_profile, merge_refreshed, parse_device_start, parse_poll_result, parse_token_json,
+    TEXT_FILE_CAP,
     parse_userinfo_profile, token_needs_refresh, trusted_profile_photo_url, trusted_xai_url,
     DeviceCodeStart, PollResult, PollStatus, XaiOAuthTokens, XAI_DEVICE_CODE_GRANT,
     XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY, XAI_OAUTH_SCOPE, XAI_OAUTH_USERINFO,
@@ -37,6 +38,15 @@ fn urlencode(s: &str) -> String {
     out
 }
 
+fn read_json_capped(resp: ureq::Response) -> Result<Value, String> {
+    let mut buf = Vec::new();
+    resp.into_reader()
+        .take(TEXT_FILE_CAP as u64)
+        .read_to_end(&mut buf)
+        .map_err(|e| e.to_string())?;
+    serde_json::from_slice(&buf).map_err(|e| e.to_string())
+}
+
 fn discovery() -> Result<Discovery, String> {
     let resp = ureq::get(XAI_OAUTH_DISCOVERY)
         .set("accept", "application/json")
@@ -44,7 +54,7 @@ fn discovery() -> Result<Discovery, String> {
         .timeout(Duration::from_secs(20))
         .call()
         .map_err(|e| e.to_string())?;
-    let v: Value = resp.into_json().map_err(|e| e.to_string())?;
+    let v = read_json_capped(resp)?;
     let device = v
         .get("device_authorization_endpoint")
         .and_then(|x| x.as_str())
@@ -68,11 +78,11 @@ fn post_form(url: &str, body: &str) -> Result<(bool, Value), String> {
         .send_string(body);
     match resp {
         Ok(r) => {
-            let v: Value = r.into_json().map_err(|e| e.to_string())?;
+            let v = read_json_capped(r)?;
             Ok((true, v))
         }
         Err(ureq::Error::Status(code, r)) => {
-            let v: Value = r.into_json().unwrap_or(Value::Null);
+            let v = read_json_capped(r).unwrap_or(Value::Null);
             let _ = code;
             Ok((false, v))
         }
@@ -188,7 +198,7 @@ pub fn fetch_userinfo(access: &str) -> Result<grokhub_core::OAuthProfile, String
         .timeout(Duration::from_secs(20))
         .call()
         .map_err(|e| e.to_string())?;
-    let v: Value = resp.into_json().map_err(|e| e.to_string())?;
+    let v = read_json_capped(resp)?;
     Ok(parse_userinfo_profile(&v))
 }
 
@@ -291,6 +301,35 @@ mod tests {
     #[test]
     fn avatar_rgba_rejects_garbage() {
         assert!(avatar_rgba(b"not-an-image").is_none());
+    }
+
+    #[test]
+    fn oauth_json_does_not_slurp_a_huge_body() {
+        let src = include_str!("oauth.rs");
+        let helper = src
+            .split("fn read_json_capped(")
+            .nth(1)
+            .and_then(|s| s.split("fn discovery(").next())
+            .expect("read_json_capped");
+        assert!(
+            helper.contains(".take(") && helper.contains("TEXT_FILE_CAP"),
+            "OAuth JSON must stop at TEXT_FILE_CAP: {helper}"
+        );
+        for (name, next) in [
+            ("fn discovery(", "fn post_form("),
+            ("fn post_form(", "pub fn start_device("),
+            ("pub fn fetch_userinfo(", "pub fn enrich_tokens("),
+        ] {
+            let slice = src
+                .split(name)
+                .nth(1)
+                .and_then(|s| s.split(next).next())
+                .unwrap_or(name);
+            assert!(
+                slice.contains("read_json_capped") && !slice.contains("into_json()"),
+                "OAuth on the UI thread must not slurp a huge JSON body: {name} {slice}"
+            );
+        }
     }
 
     #[test]
