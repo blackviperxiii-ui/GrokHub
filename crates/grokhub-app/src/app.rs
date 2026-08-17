@@ -454,6 +454,33 @@ enum ChatBlockAct {
     Reply(String),
 }
 
+fn take_ui_text(mut s: String, cap: u64) -> String {
+    if (s.len() as u64) <= cap {
+        return s;
+    }
+    s.truncate(cap as usize);
+    while !s.is_empty() && !s.is_char_boundary(s.len()) {
+        s.pop();
+    }
+    s
+}
+
+fn push_stream_capped(buf: &mut String, d: &str, cap: u64) {
+    if (buf.len() as u64) >= cap {
+        return;
+    }
+    let room = (cap as usize).saturating_sub(buf.len());
+    if d.len() <= room {
+        buf.push_str(d);
+        return;
+    }
+    let mut end = room;
+    while end > 0 && !d.is_char_boundary(end) {
+        end -= 1;
+    }
+    buf.push_str(&d[..end]);
+}
+
 fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool) -> egui::Response {
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
     let wrap = bubble_wrap_width(avail, BUBBLE_PAD_X);
@@ -1434,6 +1461,7 @@ impl Cabin {
     }
 
     fn apply_assistant_snapshot(&mut self, content: String) {
+        let content = take_ui_text(content, IMAGE_FILE_CAP);
         if content.is_empty() {
             return;
         }
@@ -1470,6 +1498,7 @@ impl Cabin {
     }
 
     fn push_bound_msg(&mut self, role: &str, content: String) {
+        let content = take_ui_text(content, IMAGE_FILE_CAP);
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.as_deref();
         if job.is_none() || job == Some(vis.as_str()) {
@@ -4861,7 +4890,7 @@ impl Cabin {
         match rx.try_recv() {
             Ok(JobOut::ChatDelta(d)) => {
                 self.rx = Some(rx);
-                self.stream_buf.push_str(&d);
+                push_stream_capped(&mut self.stream_buf, &d, IMAGE_FILE_CAP);
                 if chat_stream_is_visible(
                     self.chat_job_thread.as_deref(),
                     &self.visible_thread_id(),
@@ -4872,7 +4901,7 @@ impl Cabin {
             }
             Ok(JobOut::ThoughtDelta(d)) => {
                 self.rx = Some(rx);
-                self.thought_buf.push_str(&d);
+                push_stream_capped(&mut self.thought_buf, &d, IMAGE_FILE_CAP);
                 if chat_stream_is_visible(
                     self.chat_job_thread.as_deref(),
                     &self.visible_thread_id(),
@@ -11380,6 +11409,10 @@ mod tests {
             .and_then(|s| s.split("fn apply_live_assistant").next())
             .expect("push_bound_msg");
         assert!(
+            push.contains("IMAGE_FILE_CAP") || push.contains("take_ui_text"),
+            "host/consult receipts must not land a huge body in the transcript: {push}"
+        );
+        assert!(
             push.contains("accessed_ms"),
             "background job writes must bump accessed_ms or /sync LWW drops the new messages: {push}"
         );
@@ -12107,6 +12140,38 @@ mod tests {
         assert!(
             skills.contains("review_status_line"),
             "Skills Suggested header shows review status: {skills}"
+        );
+    }
+
+    #[test]
+    fn stream_deltas_do_not_grow_without_bound() {
+        let src = include_str!("app.rs");
+        let delta = src
+            .split("Ok(JobOut::ChatDelta(d))")
+            .nth(1)
+            .and_then(|s| s.split("Ok(JobOut::ThoughtDelta(d))").next())
+            .expect("ChatDelta");
+        assert!(
+            delta.contains("IMAGE_FILE_CAP"),
+            "stream deltas must not grow stream_buf without bound: {delta}"
+        );
+        let thought = src
+            .split("Ok(JobOut::ThoughtDelta(d))")
+            .nth(1)
+            .and_then(|s| s.split("Ok(JobOut::Chat {").next())
+            .expect("ThoughtDelta");
+        assert!(
+            thought.contains("IMAGE_FILE_CAP"),
+            "thought deltas must not grow thought_buf without bound: {thought}"
+        );
+        let snap = src
+            .split("fn apply_assistant_snapshot(")
+            .nth(1)
+            .and_then(|s| s.split("fn push_bound_msg(").next())
+            .expect("apply_assistant_snapshot");
+        assert!(
+            snap.contains("IMAGE_FILE_CAP"),
+            "a huge complete reply must not land in the transcript unbounded: {snap}"
         );
     }
 
