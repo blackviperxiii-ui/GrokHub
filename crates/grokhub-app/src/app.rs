@@ -6505,15 +6505,11 @@ impl Cabin {
                     self.ui_empty_home(ui);
                     return;
                 }
+                let pane = clamp_row_width(ui.available_width());
                 egui::ScrollArea::vertical()
                     .stick_to_bottom(true)
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
-                        let pane = crate::cards::composer_pill_w(ui.ctx().screen_rect().width())
-                            .min(clamp_row_width(
-                                ui.available_width().min(ui.max_rect().width()),
-                            ));
-                        ui.set_width(pane);
                         ui.set_max_width(pane);
                         let pairs: Vec<(String, String)> = self
                             .messages
@@ -8747,7 +8743,19 @@ mod tests {
             !bubble_fn.contains("set_clip_rect"),
             "clip_rect on the row hides wrapped text: {bubble_fn}"
         );
-        assert!(src.contains("composer_pill_w"), "thread follows the chat pane");
+        let chat = src
+            .split("fn ui_chat(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_empty_home(").next())
+            .expect("ui_chat");
+        assert!(
+            chat.contains("available_width") && chat.contains("set_max_width(pane)"),
+            "thread uses the CentralPanel pane: {chat}"
+        );
+        assert!(
+            !chat.contains("composer_pill_w"),
+            "bubbles must not lock to the composer pill: {chat}"
+        );
     }
 
     fn with_fonts_ui(mut add: impl FnMut(&mut egui::Ui)) {
