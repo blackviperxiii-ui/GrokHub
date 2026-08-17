@@ -1,5 +1,6 @@
 use grokhub_core::{
-    empty_chip_memory, ChipMemory, ImagineWall, LearningState, ProjectNode, SuggestionStore, UsageDay,
+    empty_chip_memory, rotate_trajectory, ChipMemory, ImagineWall, LearningState, ProjectNode,
+    SuggestionStore, UsageDay, TRAJECTORY_MAX_BYTES,
 };
 use std::fs;
 
@@ -87,6 +88,29 @@ pub fn load_suggestions() -> SuggestionStore {
 pub fn save_suggestions(s: &SuggestionStore) -> Result<(), String> {
     let body = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
     config::atomic_write(&suggestions_path(), body.as_bytes())
+}
+
+pub fn trajectory_path() -> std::path::PathBuf {
+    config::config_dir().join("trajectory.jsonl")
+}
+
+pub fn read_trajectory() -> String {
+    fs::read_to_string(trajectory_path()).unwrap_or_default()
+}
+
+pub fn append_trajectory(line: &str) -> Result<(), String> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Ok(());
+    }
+    let mut raw = read_trajectory();
+    if !raw.is_empty() && !raw.ends_with('\n') {
+        raw.push('\n');
+    }
+    raw.push_str(line);
+    raw.push('\n');
+    raw = rotate_trajectory(&raw, TRAJECTORY_MAX_BYTES);
+    config::atomic_write(&trajectory_path(), raw.as_bytes())
 }
 
 #[cfg(test)]
@@ -205,5 +229,19 @@ mod tests {
             code.contains("read_file_capped") && !code.contains("read_to_string"),
             "boot must not slurp huge learning/chips/wall JSON: {code}"
         );
+    }
+
+    #[test]
+    fn trajectory_appends() {
+        let _g = TEST_CONFIG_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("grokhub-traj-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        append_trajectory(r#"{"ts":1,"cmds":["HOST_CMD: ls"],"ok":true,"excerpt":"ok"}"#)
+            .expect("append");
+        let raw = read_trajectory();
+        assert!(raw.contains("HOST_CMD: ls"), "{raw}");
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
     }
 }

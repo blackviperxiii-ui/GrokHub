@@ -92,6 +92,11 @@ pub fn build_windshield(
     }
 }
 
+/// CDP status for the windshield header. `browser: cdp N tabs` or `browser: cdp down`.
+pub fn windshield_browser_line(up: bool, tabs: usize) -> String {
+    crate::browser::browser_windshield_line(up, tabs)
+}
+
 /// Compact object list for the model. Prefer `act <label>` over guess-clicks.
 pub fn windshield_prompt(frame: &WindshieldFrame) -> String {
     if frame.objects.is_empty() {
@@ -436,6 +441,8 @@ mod tests {
             "lock windows must not become click targets"
         );
         assert!(parse_wmctrl_line("0x03 0 0 0 1920 1080 GDM Greeter").is_none());
+        assert_eq!(windshield_browser_line(true, 2), "browser: cdp 2 tabs\n");
+        assert_eq!(windshield_browser_line(false, 0), "browser: cdp down\n");
         let prompt = windshield_prompt(&f);
         assert!(prompt.contains("[window] Terminal"));
         assert!(prompt.contains("[wont] lock screen"));
