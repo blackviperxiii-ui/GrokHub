@@ -9,12 +9,13 @@ use grokhub_core::{
     layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var, monitor_local_to_global,
     output_for_point, parse_atspi_line, parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line,
     parse_xdotool_mouse, parse_xrandr_outputs, pcm_from_capture, pick_browser_tab, pick_capture_output,
-    pick_hands_backend, pick_named_row, picker_args, png_ihdr_size, pointer_hop_plan, pointer_slop_miss,
-    rank_atspi_rows, relative_move_steps, relative_needed,
+    pick_hands_backend, pick_named_row, pick_window_row, picker_args, png_ihdr_size, pointer_hop_plan,
+    pointer_slop_miss,
+    rank_atspi_rows, relative_move_steps, relative_needed, window_chrome_point,
     resolve_bin_in, session_is_wayland, tab_list_from_rows, take_text_body, IMAGE_FILE_CAP,
     TEXT_FILE_CAP, virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path,
     AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp, DisplayOutput, HandsBackend,
-    HandsDown, TabAction, CDP_DOWN, CDP_PORTS, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
+    HandsDown, TabAction, WindowChrome, CDP_DOWN, CDP_PORTS, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
 };
 use image::GenericImageView;
 use std::io::{Read, Write};
@@ -466,7 +467,8 @@ fn run_pointer_op(op: &ComputerOp, cancel: Option<&AtomicBool>) -> Result<(), St
         | ComputerDrive::WaitFor(_)
         | ComputerDrive::Tab(_, _)
         | ComputerDrive::Cursor
-        | ComputerDrive::MoveMonitor { .. } => Err("not a pointer op".into()),
+        | ComputerDrive::MoveMonitor { .. }
+        | ComputerDrive::ClickWindow { .. } => Err("not a pointer op".into()),
     }
 }
 
@@ -921,7 +923,8 @@ fn after_move_click_steps(op: &ComputerOp) -> Vec<Vec<String>> {
         | ComputerDrive::WaitFor(_)
         | ComputerDrive::Tab(_, _)
         | ComputerDrive::Cursor
-        | ComputerDrive::MoveMonitor { .. } => vec![],
+        | ComputerDrive::MoveMonitor { .. }
+        | ComputerDrive::ClickWindow { .. } => vec![],
     }
 }
 
@@ -939,7 +942,8 @@ fn drive_waypoint(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(), Str
         | ComputerDrive::WaitFor(_)
         | ComputerDrive::Tab(_, _)
         | ComputerDrive::Cursor
-        | ComputerDrive::MoveMonitor { .. } => return Err("not a pointer op".into()),
+        | ComputerDrive::MoveMonitor { .. }
+        | ComputerDrive::ClickWindow { .. } => return Err("not a pointer op".into()),
     };
     if let Some((dx, dy)) = relative_needed(abs_ok, (x, y), read_cursor_xy(), POINTER_SLOP) {
         let backend = live_hands_backend().unwrap_or(HandsBackend::Xdotool);
@@ -975,6 +979,27 @@ pub fn lock_titles() -> Vec<String> {
 pub fn lock_titles_from_stdout(atspi: &str, wmctrl: &str) -> Vec<String> {
     let lines: Vec<&str> = atspi.lines().chain(wmctrl.lines()).collect();
     grokhub_core::lock_check_titles(&lines)
+}
+
+fn click_window_chrome(
+    title: &str,
+    chrome: WindowChrome,
+    cancel: Option<&AtomicBool>,
+) -> Result<(i32, i32), String> {
+    if cancelled(cancel) {
+        return Err("halted".into());
+    }
+    let rows = collect_rows();
+    let row = pick_window_row(&rows, title).ok_or_else(|| format!("window {title}: not found"))?;
+    let (x, y) = window_chrome_point(row, chrome);
+    let outputs = read_display_outputs();
+    let (x, y) = match output_for_point(&outputs, x, y) {
+        Some(o) => clamp_to_output(x, y, o),
+        None => clamp_to_desktop(x, y, &outputs),
+    };
+    drive_pointer_to(x, y, cancel)?;
+    click_after_move(x, y, cancel)?;
+    Ok((x, y))
 }
 
 fn click_after_move(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(), String> {
@@ -1102,7 +1127,8 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
                                 | ComputerOp::WaitFor { .. }
                                 | ComputerOp::Tab { .. }
                                 | ComputerOp::Cursor
-                                | ComputerOp::MoveMonitor { .. } => "ok".into(),
+                                | ComputerOp::MoveMonitor { .. }
+                                | ComputerOp::ClickWindow { .. } => "ok".into(),
                             };
                             hands_receipt(
                                 &line,
@@ -1129,7 +1155,8 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
                             | ComputerOp::WaitFor { .. }
                             | ComputerOp::Tab { .. }
                             | ComputerOp::Cursor
-                            | ComputerOp::MoveMonitor { .. } => "ok".into(),
+                            | ComputerOp::MoveMonitor { .. }
+                            | ComputerOp::ClickWindow { .. } => "ok".into(),
                         };
                         hands_receipt(&line, started, true, &detail)
                     }
@@ -1174,6 +1201,25 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
                     Err(e) => hands_receipt(&line, started, false, &e),
                 },
                 None => hands_receipt(&line, started, false, &format!("unknown monitor {name}")),
+            }
+        }
+        ComputerDrive::ClickWindow { title, chrome } => {
+            match click_window_chrome(&title, chrome, cancel) {
+                Ok((x, y)) => hands_receipt(
+                    &line,
+                    started,
+                    true,
+                    &append_cursor_detail(
+                        &match chrome {
+                            WindowChrome::Close => {
+                                format!("clicked window {title} close @{x},{y}")
+                            }
+                        },
+                        (x, y),
+                        read_cursor_xy(),
+                    ),
+                ),
+                Err(e) => hands_receipt(&line, started, false, &e),
             }
         }
     }
