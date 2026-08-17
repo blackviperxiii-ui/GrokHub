@@ -2781,6 +2781,8 @@ impl Cabin {
                     self.status = "Undid in-flight reply".into();
                 } else if let Some(i) = self.messages.iter().rposition(|m| m.role == "assistant") {
                     self.messages.remove(i);
+                    self.followup_step = 0;
+                    self.active_skill_follow = None;
                     self.persist();
                     self.status = "Undid last assistant turn".into();
                 } else {
@@ -9531,6 +9533,15 @@ mod tests {
         assert!(
             clear.contains("followup_step = 0") && clear.contains("active_skill_follow = None"),
             "/clear must reset followup budget and skill follow with the pane: {clear}"
+        );
+        let undo = src
+            .split("Slash::Undo =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::Retry =>").next())
+            .expect("Undo");
+        assert!(
+            undo.contains("followup_step = 0") && undo.contains("active_skill_follow = None"),
+            "/undo must reset followup budget like /clear: {undo}"
         );
         let forget = src
             .split("Slash::Forget")
