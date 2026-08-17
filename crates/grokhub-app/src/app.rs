@@ -2757,6 +2757,8 @@ impl Cabin {
                     self.finish_hub_dispatch("Cleared in-flight reply", false);
                 }
                 self.messages.clear();
+                self.followup_step = 0;
+                self.active_skill_follow = None;
                 self.persist();
                 self.status = "Cleared".into();
             }
@@ -9408,6 +9410,10 @@ mod tests {
         assert!(
             clear.contains("halt_in_flight"),
             "/clear during a job must halt or the stream refills the pane: {clear}"
+        );
+        assert!(
+            clear.contains("followup_step = 0") && clear.contains("active_skill_follow = None"),
+            "/clear must reset followup budget and skill follow with the pane: {clear}"
         );
         let unbound = src
             .split("Slash::ProjectClear =>")
