@@ -49,7 +49,13 @@ pub fn greeting_name(user_md: &str, display_name: &str) -> String {
 }
 
 fn split_name_line<'a>(lower: &str, raw: &'a str) -> Option<&'a str> {
-    if !lower.starts_with("name") {
+    let is_name_key = lower.starts_with("name:")
+        || lower.starts_with("name :")
+        || lower.starts_with("name-")
+        || lower.starts_with("name -")
+        || lower.starts_with("name–")
+        || lower.starts_with("name –");
+    if !is_name_key {
         return None;
     }
     raw.split_once(':')
@@ -321,6 +327,11 @@ mod tests {
         );
         assert_eq!(greeting_name("# User\n", "Jeremy Strickland"), "Jeremy");
         assert_eq!(greeting_name("", ""), "");
+        assert_eq!(
+            greeting_name("Named: my project\n", "Jeremy"),
+            "Jeremy",
+            "nameplate-style lines must not steal the greeting"
+        );
     }
 
     #[test]

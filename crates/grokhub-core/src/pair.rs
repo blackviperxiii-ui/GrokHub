@@ -1,4 +1,4 @@
-use getrandom::getrandom;
+use crate::fill_random;
 
 pub const CODE_ALPH: &str = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 pub const PAIR_TTL_MS: u64 = 15 * 60 * 1000;
@@ -12,7 +12,7 @@ pub fn normalize_code(c: &str) -> String {
 
 pub fn make_pair_code() -> String {
     let mut bytes = [0u8; 6];
-    let _ = getrandom(&mut bytes);
+    fill_random(&mut bytes);
     let alph = CODE_ALPH.as_bytes();
     let mut s = String::with_capacity(7);
     for (i, b) in bytes.iter().enumerate() {
@@ -29,14 +29,41 @@ pub fn parse_hostname_i(stdout: &str) -> Vec<String> {
 }
 
 pub fn pick_lan_ipv4(candidates: &[&str]) -> Option<String> {
-    candidates.iter().find_map(|a| {
-        let ip: std::net::Ipv4Addr = a.parse().ok()?;
-        if ip.is_loopback() || ip.is_unspecified() || ip.is_link_local() || ip.is_multicast() {
-            None
-        } else {
-            Some(ip.to_string())
+    let mut best: Option<(u8, String)> = None;
+    for a in candidates {
+        let Ok(ip) = a.parse::<std::net::Ipv4Addr>() else {
+            continue;
+        };
+        let Some(rank) = lan_rank(ip) else {
+            continue;
+        };
+        match &best {
+            None => best = Some((rank, ip.to_string())),
+            Some((r, _)) if rank < *r => best = Some((rank, ip.to_string())),
+            _ => {}
         }
-    })
+    }
+    best.map(|(_, s)| s)
+}
+
+fn lan_rank(ip: std::net::Ipv4Addr) -> Option<u8> {
+    if ip.is_loopback() || ip.is_unspecified() || ip.is_link_local() || ip.is_multicast() {
+        return None;
+    }
+    let o = ip.octets();
+    if o[0] == 192 && o[1] == 168 {
+        return Some(0);
+    }
+    if o[0] == 10 {
+        return Some(1);
+    }
+    if o[0] == 172 && (16..=31).contains(&o[1]) {
+        if o[1] == 17 {
+            return Some(4);
+        }
+        return Some(2);
+    }
+    Some(3)
 }
 
 pub fn hub_pair_url(port: u16, lan_ip: Option<&str>) -> String {
@@ -90,6 +117,16 @@ mod tests {
         assert_eq!(
             pick_lan_ipv4(&["127.0.0.1", "192.168.1.40", "10.0.0.8"]),
             Some("192.168.1.40".into())
+        );
+        assert_eq!(
+            pick_lan_ipv4(&["172.17.0.1", "192.168.1.40"]),
+            Some("192.168.1.40".into()),
+            "Docker bridge must not beat a Wi-Fi LAN address"
+        );
+        assert_eq!(
+            pick_lan_ipv4(&["172.17.0.1"]),
+            Some("172.17.0.1".into()),
+            "docker-only hosts still need a pair URL"
         );
         assert_eq!(pick_lan_ipv4(&["127.0.0.1", "0.0.0.0"]), None);
         assert_eq!(

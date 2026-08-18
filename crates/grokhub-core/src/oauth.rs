@@ -232,7 +232,7 @@ pub fn oauth_access_live(tokens: &XaiOAuthTokens, now_ms: u64) -> bool {
     if tokens.connected_at > 0 {
         return now_ms.saturating_sub(tokens.connected_at) < TOKEN_MAX_AGE_WITHOUT_EXP_MS;
     }
-    true
+    false
 }
 
 pub fn token_needs_refresh(tokens: &XaiOAuthTokens, now_ms: u64) -> bool {
@@ -253,7 +253,10 @@ pub fn token_needs_refresh(tokens: &XaiOAuthTokens, now_ms: u64) -> bool {
     if let Some(exp) = exp {
         return exp.saturating_sub(TOKEN_REFRESH_SKEW_MS) < now_ms;
     }
-    tokens.connected_at > 0 && now_ms.saturating_sub(tokens.connected_at) >= TOKEN_MAX_AGE_WITHOUT_EXP_MS
+    if tokens.connected_at == 0 {
+        return true;
+    }
+    now_ms.saturating_sub(tokens.connected_at) >= TOKEN_MAX_AGE_WITHOUT_EXP_MS
 }
 
 pub fn jwt_exp_ms(token: &str) -> Option<u64> {
@@ -542,6 +545,26 @@ mod tests {
         assert!(!token_needs_refresh(&dead, 1_000));
         assert_eq!(
             chat_bearer("xai-live-key", "dead-oauth", oauth_access_live(&dead, 1_000))
+                .as_deref(),
+            Some("xai-live-key")
+        );
+        let opaque = XaiOAuthTokens {
+            access_token: "dead-opaque".into(),
+            refresh_token: Some("ref".into()),
+            expires_at: None,
+            connected_at: 0,
+            ..Default::default()
+        };
+        assert!(
+            token_needs_refresh(&opaque, 9_000_000_000),
+            "legacy opaque tokens with no expiry metadata must refresh"
+        );
+        assert!(
+            !oauth_access_live(&opaque, 9_000_000_000),
+            "unknown-age OAuth must not beat a console key"
+        );
+        assert_eq!(
+            chat_bearer("xai-live-key", "dead-opaque", oauth_access_live(&opaque, 9_000_000_000))
                 .as_deref(),
             Some("xai-live-key")
         );

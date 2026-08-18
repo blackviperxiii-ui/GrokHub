@@ -113,7 +113,7 @@ pub fn is_rewind_copy_cmd_in(cmd: &str, project_root: &str, home: Option<&str>) 
 
 fn is_cabin_rewind_store(path: &str) -> bool {
     let p = path.trim().trim_end_matches('/').trim_end_matches("/.");
-    p.contains("/GrokHub/rewind/") || p.ends_with("/GrokHub/rewind")
+    p.contains("/.config/GrokHub/rewind/") || p.ends_with("/.config/GrokHub/rewind")
 }
 
 fn parse_rewind_copy(cmd: &str) -> Option<(String, String)> {
@@ -275,6 +275,14 @@ mod tests {
                 Some("/home/j")
             ),
             "a snapshot into a fake /tmp/rewind folder must not skip the project gate"
+        );
+        assert!(
+            !is_rewind_copy_cmd_in(
+                &rewind_copy_cmd("/home/j/proj", "/tmp/evil/GrokHub/rewind/stolen"),
+                "/home/j/proj",
+                Some("/home/j")
+            ),
+            "a dest that only contains /GrokHub/rewind/ is not the cabin store"
         );
         assert!(is_rewind_copy_cmd_in(
             &rewind_copy_cmd("/home/j/.config/GrokHub/rewind/rw1", "/home/j/proj"),
