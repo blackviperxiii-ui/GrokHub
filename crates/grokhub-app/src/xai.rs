@@ -2,7 +2,7 @@ use grokhub_core::{
     chat_include_usage, chat_request_body_vision, chat_stream_flag, chat_timeout_secs,
     MEDIA_FILE_CAP, TEXT_FILE_CAP,
     client_secrets_body, client_secrets_url, dedicated_imagine_model, dedicated_video_model,
-    fold_sse_acc, frame_bytes, imagine_image_fallback_model, imagine_image_shaped,
+    fold_sse_acc, frame_bytes, imagine_image_fallback_model, imagine_image_shaped, keep_sse_acc,
     imagine_should_retry_model, imagine_slug, imagine_video_fallback_model, media_ext_from_bytes,
     merge_thinking, parse_client_secret, parse_imagine_url, parse_model_reasoning,
     parse_model_text, parse_sse_finish, parse_sse_text, parse_sse_thought, parse_stt_text,
@@ -188,7 +188,7 @@ pub fn grok_chat_stream(
         &mut on_delta,
         &mut on_thought,
     ) {
-        if !acc.is_empty() {
+        if keep_sse_acc(&acc, truncated) {
             return Ok((acc, truncated));
         }
     }
@@ -203,7 +203,7 @@ pub fn grok_chat_stream(
         &mut on_delta,
         &mut on_thought,
     ) {
-        Ok((acc, truncated)) if !acc.is_empty() => Ok((acc, truncated)),
+        Ok((acc, truncated)) if keep_sse_acc(&acc, truncated) => Ok((acc, truncated)),
         Ok(_) => grok_chat(api_key, model, messages, image_data_url, effort).map(|t| (t, false)),
         Err(e) => grok_chat(api_key, model, messages, image_data_url, effort)
             .map(|t| (t, false))

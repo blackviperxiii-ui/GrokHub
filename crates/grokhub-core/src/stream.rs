@@ -280,6 +280,10 @@ pub fn parse_sse_finish(line: &str) -> Option<String> {
     None
 }
 
+pub fn keep_sse_acc(acc: &str, truncated: bool) -> bool {
+    !acc.is_empty() || truncated
+}
+
 pub fn stream_was_truncated(reason: Option<&str>) -> bool {
     let Some(r) = reason.map(|s| s.trim().to_ascii_lowercase()) else {
         return false;
@@ -317,6 +321,12 @@ mod tests {
         assert!(stream_was_truncated(Some("max_tokens")));
         assert!(!stream_was_truncated(Some("stop")));
         assert!(!stream_was_truncated(None));
+        assert!(keep_sse_acc("hello", false));
+        assert!(
+            keep_sse_acc("", true),
+            "a length cutoff with no text deltas is still truncated"
+        );
+        assert!(!keep_sse_acc("", false));
         let incomplete = r#"data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}"#;
         assert_eq!(parse_sse_finish(incomplete).as_deref(), Some("max_output_tokens"));
         assert!(stream_was_truncated(parse_sse_finish(incomplete).as_deref()));

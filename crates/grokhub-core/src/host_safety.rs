@@ -16,6 +16,16 @@ fn contains_path_leaf(cmd: &str, leaf: &str) -> bool {
         })
 }
 
+const FORBIDDEN_LEAVES: &[(&str, &str)] = &[
+    (".ssh", "forbidden path: ssh keys"),
+    (".gnupg", "forbidden path: gnupg"),
+    (".aws", "forbidden path: aws credentials"),
+    (".kube", "forbidden path: kube config"),
+    ("app.json", "forbidden path: app secrets"),
+    ("secrets.json", "forbidden path: app secrets"),
+    ("hub-state.json", "forbidden path: hub pair tokens"),
+];
+
 pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
     let c = cmd.to_ascii_lowercase();
     if c.contains("/etc/shadow") {
@@ -24,14 +34,10 @@ pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
     if c.contains("/etc/sudoers") {
         return Some("forbidden path: /etc/sudoers");
     }
-    if contains_path_leaf(&c, ".ssh") {
-        return Some("forbidden path: ssh keys");
-    }
-    if contains_path_leaf(&c, ".gnupg") {
-        return Some("forbidden path: gnupg");
-    }
-    if contains_path_leaf(&c, "app.json") {
-        return Some("forbidden path: app secrets");
+    for (leaf, why) in FORBIDDEN_LEAVES {
+        if contains_path_leaf(&c, leaf) {
+            return Some(*why);
+        }
     }
     None
 }
@@ -80,11 +86,20 @@ mod tests {
         assert!(forbidden_reason("cat /etc/sudoers").is_some());
         assert!(forbidden_reason("ls ~/.gnupg").is_some());
         assert!(forbidden_reason("cat ~/.config/GrokHub/app.json").is_some());
+        assert!(forbidden_reason("cat ~/.config/GrokHub/secrets.json").is_some());
+        assert!(forbidden_reason("cat $HOME/.config/GrokHub/secrets.json").is_some());
+        assert!(forbidden_reason("cat ~/.config/GrokHub/hub-state.json").is_some());
+        assert!(forbidden_reason("cat ~/.aws/credentials").is_some());
+        assert!(forbidden_reason("cat ~/.kube/config").is_some());
         assert!(
             forbidden_reason("CAT /ETC/SHADOW").is_some(),
             "path rails are case-insensitive"
         );
         assert!(forbidden_reason("cat /etc/passwd").is_none());
+        assert!(
+            forbidden_reason("cp -a '/home/j/.config/GrokHub/rewind/rw1/.' '/home/j/proj'").is_none(),
+            "cabin rewind copies must still run"
+        );
         assert!(
             forbidden_reason("cat my.gnupg_backup/file").is_none(),
             "unrelated names that contain .gnupg must not trip the rail"
