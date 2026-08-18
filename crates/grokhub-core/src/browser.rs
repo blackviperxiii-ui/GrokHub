@@ -242,7 +242,7 @@ mod tests {
         );
         assert_eq!(
             cdp_new_tab_path("https://example.com/search?q=grok&lang=en"),
-            "/json/new?https://example.com/search%3Fq%3Dgrok%26lang%3Den"
+            "/json/new?https://example.com/search%3Fq=grok%26lang=en"
         );
     }
 
