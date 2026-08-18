@@ -1,0 +1,4 @@
+{
+  "name": "GrokHub",
+  "install": "sudo apt-get update\nsudo apt-get install -y --no-install-recommends pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxtst-dev libxinerama-dev libglib2.0-dev libgl1-mesa-dev libxrandr-dev libxi-dev libxcursor-dev cmake\ncargo fetch --locked"
+}
