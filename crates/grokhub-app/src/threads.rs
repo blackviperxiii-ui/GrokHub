@@ -1,0 +1,137 @@
+use grokhub_core::{uid, ThreadGoal};
+use serde::{Deserialize, Serialize};
+use std::fs;
+
+use crate::config;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatThread {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub scratch: bool,
+    #[serde(default)]
+    pub messages: Vec<(String, String)>,
+    #[serde(default)]
+    pub goal: ThreadGoal,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub title_locked: bool,
+    #[serde(default)]
+    pub accessed_ms: u64,
+}
+
+impl ChatThread {
+    pub fn new(title: &str, scratch: bool) -> Self {
+        Self {
+            id: uid("thr"),
+            title: title.to_string(),
+            scratch,
+            messages: vec![],
+            goal: ThreadGoal::default(),
+            pinned: false,
+            title_locked: false,
+            accessed_ms: 0,
+        }
+    }
+}
+
+/// Highest `accessed_ms`. Skip scratch when another thread exists.
+pub fn most_recently_accessed_index(threads: &[ChatThread]) -> Option<usize> {
+    let has_real = threads.iter().any(|t| !t.scratch);
+    threads
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| !has_real || !t.scratch)
+        .max_by_key(|(i, t)| (t.accessed_ms, *i))
+        .map(|(i, _)| i)
+}
+
+/// Quiet MidThought line for a last-accessed titled thread. Empty for scratch or default names.
+pub fn continue_thread_hint(threads: &[ChatThread]) -> String {
+    let Some(idx) = most_recently_accessed_index(threads) else {
+        return String::new();
+    };
+    let Some(t) = threads.get(idx) else {
+        return String::new();
+    };
+    let title = t.title.trim();
+    if t.scratch || title.is_empty() {
+        return String::new();
+    }
+    if title.eq_ignore_ascii_case("chat") || title.eq_ignore_ascii_case("scratch") {
+        return String::new();
+    }
+    format!("Continue {title}").chars().take(80).collect()
+}
+
+pub fn threads_path() -> std::path::PathBuf {
+    config::config_dir().join("threads.json")
+}
+
+pub fn load() -> Vec<ChatThread> {
+    let raw = fs::read_to_string(threads_path()).unwrap_or_default();
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+pub fn save(threads: &[ChatThread]) -> Result<(), String> {
+    let s = serde_json::to_string_pretty(threads).map_err(|e| e.to_string())?;
+    config::atomic_write(&threads_path(), s.as_bytes())
+}
+
+pub fn export_markdown(t: &ChatThread) -> String {
+    let mut out = format!("# {}\n\n", t.title);
+    for (role, content) in &t.messages {
+        out.push_str(&format!("## {role}\n\n{content}\n\n"));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::TEST_CONFIG_LOCK;
+
+    #[test]
+    fn thread_roundtrip() {
+        let _g = TEST_CONFIG_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("grokhub-thr-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut t = ChatThread::new("night", true);
+        t.messages.push(("user".into(), "hi".into()));
+        save(&[t.clone()]).expect("save");
+        let loaded = load();
+        assert_eq!(loaded[0].title, "night");
+        assert!(loaded[0].scratch);
+        assert!(loaded[0].goal.label.is_empty());
+        assert!(!loaded[0].pinned);
+        assert!(!loaded[0].title_locked);
+        assert_eq!(loaded[0].accessed_ms, 0);
+        assert!(export_markdown(&loaded[0]).contains("hi"));
+        let old: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
+        assert_eq!(old.accessed_ms, 0);
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn most_recent_skips_scratch_and_prefers_access() {
+        let mut scratch = ChatThread::new("Scratch", true);
+        scratch.accessed_ms = 9_000;
+        let mut older = ChatThread::new("Older", false);
+        older.accessed_ms = 1_000;
+        let mut newer = ChatThread::new("Night cabin", false);
+        newer.accessed_ms = 5_000;
+        let threads = vec![scratch, older, newer];
+        assert_eq!(most_recently_accessed_index(&threads), Some(2));
+        assert_eq!(continue_thread_hint(&threads), "Continue Night cabin");
+        let only_scratch = vec![ChatThread::new("Scratch", true)];
+        assert_eq!(most_recently_accessed_index(&only_scratch), Some(0));
+        assert!(continue_thread_hint(&only_scratch).is_empty());
+        let untitled = vec![ChatThread::new("Chat", false)];
+        assert!(continue_thread_hint(&untitled).is_empty());
+    }
+}
