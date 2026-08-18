@@ -154,7 +154,7 @@ pub use hands::{
 pub use browser::{
     browser_windshield_line, cdp_activate_payload, cdp_new_tab_path, cdp_page_close_payload,
     cdp_page_focus_payload, format_tab_list, match_browser_tabs, parse_cdp_targets, pick_browser_tab,
-    BrowserTab, CDP_DOWN, CDP_PORTS,
+    tab_close_fallback_may_send_key, BrowserTab, CDP_DOWN, CDP_PORTS,
 };
 pub use recipe::{
     act_window_search_bin, bin_on_path, computer_cmd_line, computer_drive, computer_drive_for, default_bin_extra_dirs,
