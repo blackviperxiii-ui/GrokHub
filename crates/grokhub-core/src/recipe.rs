@@ -715,7 +715,7 @@ pub fn hands_protocol() -> &'static str {
      COMPUTER_CMD: move monitor <name> [x y]\n\
      COMPUTER_CMD: click window <title> close\n\
      Prefer act, wait_for, tab list/new/close/focus, click window <title> close, and key over guessed JPEG coordinates. After each COMPUTER_CMD hop, look at the new JPEG and Windshield before the next click.\n\
-     Coordinates are the global desktop (xrandr). A JPEG may be one output — use Windshield desk / outputs / frame. If the target is on another output, emit move monitor <name> first. After move or click, COMPUTER_RESULT cursor X,Y monitor=NAME is the real pointer — treat failed or miss as do-not-click; hop or use click window. Prefer move monitor <name> and click window <title> close over hard-coded 7000-wide numbers. When Windshield says browser: cdp, open/close/focus a tab with tab new / tab close / tab focus. New tab: act the New Tab or + control; if Windshield has no such row, wait_for title=Firefox then key ctrl+t. Otherwise wait_for that window then key ctrl+w to close; do not guess the × from the still.\n\
+     Coordinates are the global desktop (xrandr). A JPEG may be one output — use Windshield desk / outputs / frame. If Windshield says desk: needs calibrate, do not click — tell the user to Calibrate desk. First hands use probes every monitor; COMPUTER_CMD waits until desk: calibrated. If the target is on another output, emit move monitor <name> first. After move or click, COMPUTER_RESULT cursor X,Y monitor=NAME is the real pointer — treat failed or miss as do-not-click; hop or use click window. Prefer move monitor <name> and click window <title> close over hard-coded 7000-wide numbers. When Windshield says browser: cdp, open/close/focus a tab with tab new / tab close / tab focus. New tab: act the New Tab or + control; if Windshield has no such row, wait_for title=Firefox then key ctrl+t. Otherwise wait_for that window then key ctrl+w to close; do not guess the × from the still.\n\
      Never emit XML or JSON <tool_call> tags. The first reply must include a COMPUTER_CMD line — do not only plan.\n\
      A JPEG is attached when the user asks for hands, cabin eyes, or GUI help (close a tab, Settings, turn this on, how do I, for me). If the thing is on the glass and there is no honest shell, use COMPUTER_CMD — do not invent a CLI.\n\
      Guide-only (just tell me / don't click / walk me through without do it): describe the control from the Windshield; do not emit COMPUTER_CMD unless they then say do it.\n\
@@ -1574,6 +1574,7 @@ mod tests {
         assert!(proto.contains("move monitor"), "{proto}");
         assert!(proto.contains("click window"), "{proto}");
         assert!(proto.contains("miss"), "{proto}");
+        assert!(proto.contains("desk: calibrated"), "{proto}");
         assert!(proto.contains("monitor="), "{proto}");
         assert_eq!(label_for_op(&ComputerOp::Cursor), "Read cursor");
         assert_eq!(

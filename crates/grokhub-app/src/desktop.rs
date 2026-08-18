@@ -10,13 +10,15 @@ use grokhub_core::{
     output_for_point, parse_atspi_line, parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line,
     parse_xdotool_mouse, parse_xrandr_outputs, pcm_from_capture, pick_browser_tab, pick_capture_output,
     pick_hands_backend, pick_named_row, picker_args, png_ihdr_size, pointer_hop_plan,
-    pointer_slop_miss,
+    pointer_slop_miss, pointer_op_needs_calib,
     rank_atspi_rows, relative_move_steps, relative_needed_or_last, resolve_window_row,
-    should_click_after_hop, window_chrome_point, wmctrl_window_rows,
+    should_click_after_hop, window_chrome_point, wmctrl_window_rows, apply_output_calib,
+    assemble_desk_calib, calib_probe_points, calib_stale, desk_status_line, output_scale_from_jpeg,
     resolve_bin_in, session_is_wayland, tab_list_from_rows, take_text_body, IMAGE_FILE_CAP,
     TEXT_FILE_CAP, virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path,
-    AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp, DisplayOutput, HandsBackend,
-    HandsDown, TabAction, WindowChrome, CDP_DOWN, CDP_PORTS, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
+    AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp, DeskCalib, DisplayOutput,
+    HandsBackend, HandsDown, OutputCalib, TabAction, WindowChrome, CDP_DOWN, CDP_PORTS, RECORDERS,
+    TRANSCRIBERS, PYATSPI_MISSING,
 };
 use image::GenericImageView;
 use std::io::{Read, Write};
@@ -238,6 +240,8 @@ pub fn prepare_windshield(
     let (fw, fh, ox, oy) = windshield_frame_geom(captured_this_turn, last_desk_frame_geom());
     let hint = LAST_POINTER_HINT.lock().ok().and_then(|g| *g);
     let mut header = layout_prompt(&outputs, fw, fh, ox, oy, read_cursor_xy(), hint);
+    header.push_str(desk_status_line(desk_is_calibrated(&outputs)));
+    header.push('\n');
     let (up, n) = cached_cdp_status();
     header.push_str(&browser_windshield_line(up, n));
     header.push_str(&hands_windshield_line(hands_peek(), hands_driver_name()));
@@ -533,10 +537,11 @@ fn remember_from_jpeg(bytes: &[u8], outputs: &[DisplayOutput], grim_name: Option
 fn map_pointer_xy(x: i32, y: i32) -> (i32, i32) {
     let (mapped, outputs) = if let Ok(g) = LAST_DESK_FRAME.lock() {
         if let Some(f) = g.as_ref() {
+            let (jx, jy) = scale_jpeg_xy(x, y, f.origin_x, f.origin_y, &f.outputs);
             (
                 image_to_global(
-                    x,
-                    y,
+                    jx,
+                    jy,
                     f.jpeg_w,
                     f.jpeg_h,
                     &f.outputs,
@@ -551,6 +556,29 @@ fn map_pointer_xy(x: i32, y: i32) -> (i32, i32) {
         ((x, y), read_display_outputs())
     };
     clamp_to_desktop(mapped.0, mapped.1, &outputs)
+}
+
+fn scale_jpeg_xy(x: i32, y: i32, ox: i32, oy: i32, outputs: &[DisplayOutput]) -> (i32, i32) {
+    let Some(calib) = load_desk_calib().filter(|c| !calib_stale(c, outputs)) else {
+        return (x, y);
+    };
+    let Some(o) = output_for_point(outputs, ox, oy) else {
+        return (x, y);
+    };
+    let Some(c) = calib
+        .outputs
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case(&o.name))
+    else {
+        return (x, y);
+    };
+    if c.sx <= 0.0 || c.sy <= 0.0 || (c.sx - 1.0).abs() < 0.01 && (c.sy - 1.0).abs() < 0.01 {
+        return (x, y);
+    }
+    (
+        (x as f32 / c.sx).round() as i32,
+        (y as f32 / c.sy).round() as i32,
+    )
 }
 
 fn map_pointer_op(op: &ComputerOp) -> ComputerOp {
@@ -678,11 +706,18 @@ pub fn ensure_hands() -> HandsDown {
 }
 
 pub fn hands_chip_text() -> String {
+    if hands_chip_live(hands_peek()) && !desk_calibrated_now() {
+        return "needs calibrate".into();
+    }
     hands_chip_label(hands_peek(), hands_driver_name())
 }
 
 pub fn hands_ready() -> bool {
     hands_chip_live(hands_peek())
+}
+
+pub fn desk_calibrated_now() -> bool {
+    desk_is_calibrated(&read_display_outputs())
 }
 
 fn pyatspi_import_ok() -> bool {
@@ -700,7 +735,138 @@ pub fn install_hands_status() -> String {
         }
         out.push_str(PYATSPI_MISSING);
     }
+    if reason == HandsDown::Ready {
+        match ensure_desk_calib(None) {
+            Ok(_) => {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(desk_status_line(true));
+            }
+            Err(e) => {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(&e);
+            }
+        }
+    }
     out
+}
+
+fn desk_calib_path() -> PathBuf {
+    crate::config::config_dir().join("desk.json")
+}
+
+pub fn load_desk_calib() -> Option<DeskCalib> {
+    load_desk_calib_at(&desk_calib_path())
+}
+
+pub fn load_desk_calib_at(path: &Path) -> Option<DeskCalib> {
+    let raw = crate::config::read_file_capped(path, crate::config::MEMORY_FILE_CAP);
+    if raw.trim().is_empty() {
+        return None;
+    }
+    serde_json::from_str(&raw).ok()
+}
+
+pub fn save_desk_calib(calib: &DeskCalib) -> Result<(), String> {
+    save_desk_calib_at(&desk_calib_path(), calib)
+}
+
+pub fn save_desk_calib_at(path: &Path, calib: &DeskCalib) -> Result<(), String> {
+    let s = serde_json::to_string_pretty(calib).map_err(|e| e.to_string())?;
+    crate::config::atomic_write(path, s.as_bytes())
+}
+
+pub fn desk_is_calibrated(outputs: &[DisplayOutput]) -> bool {
+    desk_is_calibrated_at(&desk_calib_path(), outputs)
+}
+
+pub fn desk_is_calibrated_at(path: &Path, outputs: &[DisplayOutput]) -> bool {
+    match load_desk_calib_at(path) {
+        Some(c) => !calib_stale(&c, outputs),
+        None => false,
+    }
+}
+
+pub fn calibrate_desk(cancel: Option<&AtomicBool>) -> Result<DeskCalib, String> {
+    match ensure_hands() {
+        HandsDown::Ready => {}
+        reason => return Err(hands_down_receipt(reason).into()),
+    }
+    if cancelled(cancel) {
+        return Err("halted".into());
+    }
+    let outputs = read_display_outputs();
+    if outputs.is_empty() {
+        return Err("desk not calibrated — no outputs".into());
+    }
+    let mut samples = Vec::new();
+    for o in &outputs {
+        let mut pairs = Vec::new();
+        for (px, py) in calib_probe_points(o) {
+            if cancelled(cancel) {
+                return Err("halted".into());
+            }
+            drive_pointer_raw(px, py, cancel)?;
+            let actual = read_cursor_xy().ok_or_else(|| {
+                format!("desk not calibrated — output {} unread", o.name)
+            })?;
+            pairs.push(((px, py), actual));
+        }
+        samples.push((o.name.clone(), pairs));
+    }
+    let mut calib = assemble_desk_calib(&outputs, &samples, POINTER_SLOP)?;
+    for c in &mut calib.outputs {
+        if let Some((jw, jh)) = grim_output_jpeg_size(&c.name) {
+            if let Some(o) = outputs.iter().find(|o| o.name.eq_ignore_ascii_case(&c.name)) {
+                let (sx, sy) = output_scale_from_jpeg(jw, jh, o.w, o.h);
+                c.sx = sx;
+                c.sy = sy;
+            }
+        }
+    }
+    save_desk_calib(&calib)?;
+    Ok(calib)
+}
+
+pub fn ensure_desk_calib(cancel: Option<&AtomicBool>) -> Result<DeskCalib, String> {
+    let outputs = read_display_outputs();
+    if let Some(c) = load_desk_calib() {
+        if !calib_stale(&c, &outputs) {
+            return Ok(c);
+        }
+    }
+    calibrate_desk(cancel)
+}
+
+pub fn calibrate_desk_status() -> String {
+    match ensure_desk_calib(None) {
+        Ok(_) => desk_status_line(true).to_string(),
+        Err(e) => e,
+    }
+}
+
+fn grim_output_jpeg_size(name: &str) -> Option<(u32, u32)> {
+    if !which("grim") {
+        return None;
+    }
+    let dest = std::env::temp_dir().join(format!("grokhub-calib-{name}.jpg"));
+    let mut cmd = spawn_bin("grim");
+    cmd.args(grim_capture_args(dest.to_str()?, Some(name)));
+    let out = run_limited(cmd, Duration::from_secs(8))?;
+    if !out.status.success() {
+        let _ = std::fs::remove_file(&dest);
+        return None;
+    }
+    let bytes = std::fs::read(&dest).ok()?;
+    let _ = std::fs::remove_file(&dest);
+    if bytes.len() as u64 > IMAGE_FILE_CAP || !image_pixels_ok_for_bytes(&bytes) {
+        return None;
+    }
+    let img = image::load_from_memory(&bytes).ok()?;
+    Some((img.width(), img.height()))
 }
 
 fn desk_scan() -> DeskScan {
@@ -930,12 +1096,17 @@ fn after_move_click_steps(op: &ComputerOp) -> Vec<Vec<String>> {
 }
 
 fn drive_waypoint(
-    x: i32,
-    y: i32,
+    intended_x: i32,
+    intended_y: i32,
+    send_x: i32,
+    send_y: i32,
     last: &mut Option<(i32, i32)>,
     cancel: Option<&AtomicBool>,
 ) -> Result<(), String> {
-    let abs_ok = match pointer_drive(&ComputerOp::Move { x, y }) {
+    let abs_ok = match pointer_drive(&ComputerOp::Move {
+        x: send_x,
+        y: send_y,
+    }) {
         ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
             match run_pointer_steps(&steps, cancel) {
                 Ok(()) => true,
@@ -955,7 +1126,9 @@ fn drive_waypoint(
     if after.is_some() {
         *last = after;
     }
-    if let Some((dx, dy)) = relative_needed_or_last(abs_ok, (x, y), after, *last, POINTER_SLOP) {
+    if let Some((dx, dy)) =
+        relative_needed_or_last(abs_ok, (intended_x, intended_y), after, *last, POINTER_SLOP)
+    {
         let backend = live_hands_backend().unwrap_or(HandsBackend::Xdotool);
         let steps = relative_move_steps(backend, dx, dy);
         if !steps.is_empty() {
@@ -973,7 +1146,7 @@ fn drive_waypoint(
     Ok(())
 }
 
-fn drive_pointer_to(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(i32, i32), String> {
+fn drive_pointer_raw(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(i32, i32), String> {
     let outputs = read_display_outputs();
     let (x, y) = match output_for_point(&outputs, x, y) {
         Some(o) => clamp_to_output(x, y, o),
@@ -981,7 +1154,25 @@ fn drive_pointer_to(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(i32,
     };
     let mut last = read_cursor_xy();
     for (hx, hy) in pointer_hop_plan(last, (x, y), &outputs) {
-        drive_waypoint(hx, hy, &mut last, cancel)?;
+        drive_waypoint(hx, hy, hx, hy, &mut last, cancel)?;
+    }
+    Ok((x, y))
+}
+
+fn drive_pointer_to(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(i32, i32), String> {
+    let outputs = read_display_outputs();
+    let (x, y) = match output_for_point(&outputs, x, y) {
+        Some(o) => clamp_to_output(x, y, o),
+        None => clamp_to_desktop(x, y, &outputs),
+    };
+    let calib = load_desk_calib().filter(|c| !calib_stale(c, &outputs));
+    let mut last = read_cursor_xy();
+    for (hx, hy) in pointer_hop_plan(last, (x, y), &outputs) {
+        let (sx, sy) = match &calib {
+            Some(c) => apply_output_calib(hx, hy, &outputs, c),
+            None => (hx, hy),
+        };
+        drive_waypoint(hx, hy, sx, sy, &mut last, cancel)?;
     }
     Ok((x, y))
 }
@@ -1132,6 +1323,11 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
         return hands_receipt(&line, started, false, "blocked: lock screen");
     }
     let op = map_pointer_op(op);
+    if pointer_op_needs_calib(&op) {
+        if let Err(e) = ensure_desk_calib(cancel) {
+            return hands_receipt(&line, started, false, &e);
+        }
+    }
     match pointer_drive(&op) {
         ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
             if let Some(detail) = empty_hands_steps_error(&op, &steps) {
@@ -1939,6 +2135,7 @@ pub fn clipboard_once() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     fn png_crc(data: &[u8]) -> u32 {
         let mut crc = 0xffff_ffffu32;
@@ -1969,6 +2166,52 @@ mod tests {
         out.extend_from_slice(b"IEND");
         out.extend_from_slice(&png_crc(b"IEND").to_be_bytes());
         out
+    }
+
+    #[test]
+    fn desk_json_roundtrip_matches_fingerprint() {
+        let dir = std::env::temp_dir().join(format!("grokhub-desk-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("desk.json");
+        let _ = std::fs::remove_file(&path);
+        let outs = vec![
+            DisplayOutput {
+                name: "HDMI-A-2".into(),
+                x: 0,
+                y: 0,
+                w: 2560,
+                h: 1440,
+                primary: true,
+            },
+            DisplayOutput {
+                name: "DP-1".into(),
+                x: 2560,
+                y: 0,
+                w: 2800,
+                h: 1440,
+                primary: false,
+            },
+        ];
+        assert!(!desk_is_calibrated_at(&path, &outs));
+        let samples: Vec<(String, Vec<((i32, i32), (i32, i32))>)> = outs
+            .iter()
+            .map(|o| {
+                let pts = calib_probe_points(o);
+                (o.name.clone(), pts.into_iter().map(|p| (p, p)).collect())
+            })
+            .collect();
+        let calib = assemble_desk_calib(&outs, &samples, 8).unwrap();
+        save_desk_calib_at(&path, &calib).unwrap();
+        assert!(desk_is_calibrated_at(&path, &outs));
+        let loaded = load_desk_calib_at(&path).expect("desk.json");
+        assert_eq!(loaded.fingerprint, calib.fingerprint);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let mut shrunk = outs.clone();
+        shrunk[1].w = 1920;
+        assert!(!desk_is_calibrated_at(&path, &shrunk));
     }
 
     #[test]
@@ -2532,6 +2775,10 @@ mod tests {
         assert!(
             header.contains("hands:"),
             "windshield must report hands health: {header}"
+        );
+        assert!(
+            header.contains("desk: calibrated") || header.contains("desk: needs calibrate"),
+            "windshield must report desk calibration: {header}"
         );
         let cdp = include_str!("desktop.rs")
             .split("fn cdp_http(")

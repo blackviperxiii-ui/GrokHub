@@ -59,7 +59,8 @@ pub fn doctor_hands_line(driver: &str) -> DoctorLine {
     let ok = driver != "missing"
         && driver != "not installed"
         && driver != "uinput"
-        && driver != "daemon";
+        && driver != "daemon"
+        && driver != "needs calibrate";
     DoctorLine {
         ok,
         text: format!("hands {driver}"),
@@ -92,5 +93,6 @@ mod tests {
         assert!(!doctor_hands_line("not installed").ok);
         assert!(!doctor_hands_line("uinput").ok);
         assert!(!doctor_hands_line("daemon").ok);
+        assert!(!doctor_hands_line("needs calibrate").ok);
     }
 }
