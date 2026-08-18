@@ -116,9 +116,9 @@ pub use capture::{
     relative_needed, relative_needed_or_last, should_click_after_hop, grim_capture_args, image_to_global, infer_wayland_display, layout_prompt,
     luma_mean_var, monitor_local_to_global, output_containing, parse_xdpy_size, parse_xrandr_outputs,
     parse_xrandr_size, pick_capture_output, session_is_wayland, virtual_desktop_size,
-    windshield_frame_geom, x11_grab_size, apply_output_calib, calib_probe_points, calib_stale,
-    desk_fingerprint, desk_status_line, median_calib_offset, CaptureKind, DeskCalib, DisplayOutput,
-    OutputCalib,
+    windshield_frame_geom, x11_grab_size, apply_output_calib, assemble_desk_calib, calib_probe_points,
+    calib_stale, desk_fingerprint, desk_status_line, median_calib_offset, output_scale_from_jpeg,
+    CaptureKind, DeskCalib, DisplayOutput, OutputCalib,
 };
 pub use frame::{encode_b64, frame_bytes, jpeg_data_url, FrameGet, PresenceFrame, FRAME_CAP};
 pub use host_plan::{
