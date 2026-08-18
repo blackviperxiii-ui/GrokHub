@@ -1028,6 +1028,24 @@ pub fn hands_blocked_by_lock(op: &ComputerOp, titles: &[&str]) -> bool {
     pointer_op_blocked_on_lock(op) && lock_blocks_hands(titles)
 }
 
+/// Pointer drives that land on glass need a live desk.json. Cursor / wait / tab do not.
+pub fn pointer_op_needs_calib(op: &ComputerOp) -> bool {
+    match op {
+        ComputerOp::Click { .. }
+        | ComputerOp::DoubleClick { .. }
+        | ComputerOp::Move { .. }
+        | ComputerOp::MoveMonitor { .. }
+        | ComputerOp::ClickWindow { .. }
+        | ComputerOp::Act { .. } => true,
+        ComputerOp::Type { .. }
+        | ComputerOp::Key { .. }
+        | ComputerOp::Scroll { .. }
+        | ComputerOp::WaitFor { .. }
+        | ComputerOp::Tab { .. }
+        | ComputerOp::Cursor => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1522,6 +1540,26 @@ mod tests {
             ComputerDrive::MoveMonitor { name, x, y } if name == "DP-2" && x == Some(100) && y == Some(20)
         ));
         assert!(!pointer_op_blocked_on_lock(&ComputerOp::Cursor));
+        assert!(pointer_op_needs_calib(&ComputerOp::Click { x: 10, y: 20 }));
+        assert!(pointer_op_needs_calib(&ComputerOp::Move { x: 10, y: 20 }));
+        assert!(pointer_op_needs_calib(&ComputerOp::MoveMonitor {
+            name: "DP-1".into(),
+            x: None,
+            y: None
+        }));
+        assert!(pointer_op_needs_calib(&ComputerOp::ClickWindow {
+            title: "Firefox".into(),
+            chrome: WindowChrome::Close
+        }));
+        assert!(pointer_op_needs_calib(&ComputerOp::Act { name: "Save".into() }));
+        assert!(!pointer_op_needs_calib(&ComputerOp::Cursor));
+        assert!(!pointer_op_needs_calib(&ComputerOp::WaitFor {
+            title: Some("Firefox".into())
+        }));
+        assert!(!pointer_op_needs_calib(&ComputerOp::Tab {
+            action: TabAction::List,
+            query: String::new()
+        }));
         assert!(pointer_op_blocked_on_lock(&ComputerOp::MoveMonitor {
             name: "DP-2".into(),
             x: None,

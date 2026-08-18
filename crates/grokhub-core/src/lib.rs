@@ -116,7 +116,9 @@ pub use capture::{
     relative_needed, relative_needed_or_last, should_click_after_hop, grim_capture_args, image_to_global, infer_wayland_display, layout_prompt,
     luma_mean_var, monitor_local_to_global, output_containing, parse_xdpy_size, parse_xrandr_outputs,
     parse_xrandr_size, pick_capture_output, session_is_wayland, virtual_desktop_size,
-    windshield_frame_geom, x11_grab_size, CaptureKind, DisplayOutput,
+    windshield_frame_geom, x11_grab_size, apply_output_calib, calib_probe_points, calib_stale,
+    desk_fingerprint, desk_status_line, median_calib_offset, CaptureKind, DeskCalib, DisplayOutput,
+    OutputCalib,
 };
 pub use frame::{encode_b64, frame_bytes, jpeg_data_url, FrameGet, PresenceFrame, FRAME_CAP};
 pub use host_plan::{
@@ -160,6 +162,7 @@ pub use recipe::{
     act_window_search_bin, bin_on_path, computer_cmd_line, computer_drive, computer_drive_for, default_bin_extra_dirs,
     empty_hands_steps_error, extract_computer_ops, hands_backend_name,
     hands_blocked_by_lock, hands_protocol, lock_blocks_hands, pointer_op_blocked_on_lock,
+    pointer_op_needs_calib,
     needs_reshoot, parse_computer_cmd_loose, parse_computer_op, parse_recipe, parse_screen,
     pick_hands_backend, recipe_from_cmds, recipe_from_json, recipe_to_json, relative_move_steps,
     replay_ops,

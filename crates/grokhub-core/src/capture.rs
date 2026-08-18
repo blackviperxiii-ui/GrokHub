@@ -1,5 +1,7 @@
 //! Desktop / webcam grab plan. X11 root + one ffmpeg frame is a black void on Wayland.
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureKind {
     Grim,
@@ -338,6 +340,91 @@ pub fn should_click_after_hop(
     match actual {
         Some(a) => !pointer_slop_miss(intended, a, slop),
         None => false,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OutputCalib {
+    pub name: String,
+    pub dx: i32,
+    pub dy: i32,
+    pub sx: f32,
+    pub sy: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeskCalib {
+    pub fingerprint: String,
+    pub outputs: Vec<OutputCalib>,
+}
+
+pub fn desk_fingerprint(outputs: &[DisplayOutput]) -> String {
+    let mut rows: Vec<String> = outputs
+        .iter()
+        .map(|o| format!("{},{},{},{},{}", o.name, o.x, o.y, o.w, o.h))
+        .collect();
+    rows.sort();
+    rows.join(";")
+}
+
+pub fn calib_stale(calib: &DeskCalib, outputs: &[DisplayOutput]) -> bool {
+    calib.fingerprint != desk_fingerprint(outputs)
+}
+
+pub fn apply_output_calib(
+    x: i32,
+    y: i32,
+    outputs: &[DisplayOutput],
+    calib: &DeskCalib,
+) -> (i32, i32) {
+    let Some(o) = output_for_point(outputs, x, y) else {
+        return (x, y);
+    };
+    let Some(c) = calib
+        .outputs
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case(&o.name))
+    else {
+        return (x, y);
+    };
+    (x + c.dx, y + c.dy)
+}
+
+pub fn calib_probe_points(output: &DisplayOutput) -> Vec<(i32, i32)> {
+    vec![
+        (output.x + output.w / 2, output.y + output.h / 2),
+        (output.x, output.y),
+        (output.x + output.w - 1, output.y + output.h - 1),
+    ]
+}
+
+pub fn median_calib_offset(pairs: &[((i32, i32), (i32, i32))], slop: i32) -> (i32, i32) {
+    let mut dxs = Vec::new();
+    let mut dys = Vec::new();
+    for (intended, actual) in pairs {
+        let dx = intended.0 - actual.0;
+        let dy = intended.1 - actual.1;
+        if dx.abs() + dy.abs() > slop {
+            dxs.push(dx);
+            dys.push(dy);
+        }
+    }
+    (median_i32(&mut dxs), median_i32(&mut dys))
+}
+
+fn median_i32(vals: &mut [i32]) -> i32 {
+    if vals.is_empty() {
+        return 0;
+    }
+    vals.sort_unstable();
+    vals[vals.len() / 2]
+}
+
+pub fn desk_status_line(calibrated: bool) -> &'static str {
+    if calibrated {
+        "desk: calibrated"
+    } else {
+        "desk: needs calibrate"
     }
 }
 
@@ -846,6 +933,82 @@ DP-2 connected 1920x1440+5360+0 (normal left inverted right x axis y axis) 527mm
         );
         let glass = layout_prompt(&outs, 0, 0, 0, 0, Some((1920, 0)), Some((5350, 15)));
         assert!(glass.contains("hint: 5350,15 monitor=DP-1"), "{glass}");
+    }
+
+    #[test]
+    fn desk_calib_fingerprint_and_offsets() {
+        let outs = parse_xrandr_outputs(TRIPLE_XRANDR);
+        let fp = desk_fingerprint(&outs);
+        assert_eq!(fp, desk_fingerprint(&outs), "same layout must be stable");
+        assert!(fp.contains("HDMI-A-2"), "{fp}");
+        assert!(fp.contains("DP-1"), "{fp}");
+        assert!(fp.contains("DP-2"), "{fp}");
+        let mut extra = outs.clone();
+        extra.push(DisplayOutput {
+            name: "HDMI-3".into(),
+            x: 7280,
+            y: 0,
+            w: 1920,
+            h: 1080,
+            primary: false,
+        });
+        assert_ne!(
+            desk_fingerprint(&outs),
+            desk_fingerprint(&extra),
+            "adding a monitor must change the fingerprint"
+        );
+        let identity = DeskCalib {
+            fingerprint: fp.clone(),
+            outputs: outs
+                .iter()
+                .map(|o| OutputCalib {
+                    name: o.name.clone(),
+                    dx: 0,
+                    dy: 0,
+                    sx: 1.0,
+                    sy: 1.0,
+                })
+                .collect(),
+        };
+        assert!(!calib_stale(&identity, &outs));
+        let mut shrunk = outs.clone();
+        shrunk[2].w = 1600;
+        assert!(calib_stale(&identity, &shrunk));
+        let mut shifted = identity.clone();
+        shifted.outputs[1].dx = -12;
+        assert_eq!(
+            apply_output_calib(5350, 15, &outs, &shifted),
+            (5338, 15),
+            "DP-1 target must pick up that output's dx"
+        );
+        assert_eq!(
+            apply_output_calib(100, 100, &outs, &shifted),
+            (100, 100),
+            "HDMI-A-2 must stay unshifted"
+        );
+        let dp1 = outs.iter().find(|o| o.name == "DP-1").unwrap();
+        assert_eq!(
+            calib_probe_points(dp1),
+            vec![(3960, 720), (2560, 0), (5359, 1439)]
+        );
+        assert_eq!(
+            median_calib_offset(
+                &[
+                    ((3960, 720), (3972, 720)),
+                    ((2560, 0), (2572, 0)),
+                    ((5359, 1439), (5371, 1439)),
+                ],
+                8
+            ),
+            (-12, 0)
+        );
+        assert_eq!(
+            median_calib_offset(&[((100, 20), (102, 20))], 8),
+            (0, 0),
+            "in-slop samples stay identity"
+        );
+        assert_eq!(desk_status_line(true), "desk: calibrated");
+        assert_eq!(desk_status_line(false), "desk: needs calibrate");
     }
 
     #[test]
