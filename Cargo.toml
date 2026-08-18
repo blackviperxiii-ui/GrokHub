@@ -11,7 +11,7 @@ members = [
 version = "2.6.30"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/blackviperxiii-ui/Grok-Hub"
+repository = "https://origin.cursor.com/blackviperxiii-ui/grok-hub.git"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

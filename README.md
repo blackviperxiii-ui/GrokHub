@@ -6,7 +6,7 @@ Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 
 | Platform | Repository | Latest |
 |----------|------------|--------|
-| **Linux** (this) | [Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub) | **v2.6.30** |
+| **Linux** (this) | [Grok-Hub](https://cursor.com/codebase/blackviperxiii-ui/grok-hub) | **v2.6.30** |
 | **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | sibling — same `grokhub-core` |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
@@ -15,8 +15,9 @@ Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 ```bash
 sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 cmake meson ninja wayland wayland-protocols pixman libpng libx11 libxtst libxinerama glib2 libxmu
 rustup default stable
-git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
-cd Grok-Hub
+origin auth login
+git clone https://origin.cursor.com/blackviperxiii-ui/grok-hub.git
+cd grok-hub
 cargo test --workspace
 ./scripts/install.sh --user
 grokhub
@@ -56,7 +57,7 @@ Imagine stills use dedicated **`grok-imagine-image-2.0`** (chat model is ignored
 
 Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is the sign-in. Device-code against `auth.x.ai` — same public client as Grok CLI. The footer paints the Grok profile photo when the session has one. A console API key is the fallback for chat and the only path for duplex Voice. Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600), never in markdown. Settings → Appearance is **Dark**, **Light**, or **System**.
 
-Settings → **Update** (or `grokhub --update` / `/update`) does `git pull --ff-only origin main` in the source clone, then `./scripts/install.sh --user`. The clone must be on `main` with an `origin`. Overlay only — config stays. User install enables `grokhub.service` (no `--now`), `enable --now` hub, rebuilds sidecars into `~/.local/lib/grokhub/bin` (skip only when that prefix already has the file), and restarts `ydotoold`. Overlay-safe `pacman` / `apt-get` / `dnf` for build tools, `python-atspi`, ffmpeg, alsa-utils. Progress stays on Settings (bar + percent). After a clean overlay, **Restart** reloads live sidecar units (`ydotoold` → hub), drops the cabin pid lock, starts a new overlay `grokhub`, and exits this process. It does not `systemctl restart grokhub.service` from inside the cabin.
+Settings → **Update** (or `grokhub --update` / `/update`) fetches Origin `main` in the source clone, fast-forwards when behind, then `./scripts/install.sh --user`. Already-current clones skip the overlay rebuild. The clone must be on `main` with a clean worktree. A leftover GitHub `origin` for this repo is rewritten to Origin. Origin git may need `origin auth login`. Overlay only — config stays. User install enables `grokhub.service` (no `--now`), `enable --now` hub, rebuilds sidecars into `~/.local/lib/grokhub/bin` (skip only when that prefix already has the file), and restarts `ydotoold`. Overlay-safe `pacman` / `apt-get` / `dnf` for build tools, `python-atspi`, ffmpeg, alsa-utils. Progress stays on Settings (bar + percent). After a clean overlay, **Restart** reloads live sidecar units (`ydotoold` → hub), drops the cabin pid lock, starts a new overlay `grokhub`, and exits this process. It does not `systemctl restart grokhub.service` from inside the cabin.
 
 The cabin drives. Host plans run without a confirm. A saved desktop recipe whose `screen=` does not match the current desktop reshoots and skips coordinate clicks. Night `replay last` runs the last GUI recipe without a chat hop. A 15s heartbeat always runs housekeep, inbox, night, review, wall, mid-thought, reflect, and anticipate. Hidden idle cabins wait for that pulse instead of spinning every 400ms. Review defers if Night just fired or chat is running. Last-night context folds into the empty-chat greeting — no fake “You sit down” turn. Quiet MidThought can fold `Continue {title}` into that greeting when there is no last-night receipt. After 21:00 a quiet Balanced review writes learned tiles to `suggestions.json` (Suggested Automations / Skills / Connectors show Reviewed today / Review due tonight). Yesterday's redacted host/hands lines in `trajectory.jsonl` can become a `SUGGEST_SKILL_PATCH` on an existing skill. Idle ≥ 10 minutes (or `/learn reflect`) does a surgical `MEMORY.md` edit with a diff and `.prev` restore. Halt / Stop / Ctrl+Shift+Esc kill a running job. Host follow-up stays on the origin thread. A truncated stream, a promised-work reply with no `HOST_CMD`, or a diagnostic that hands `sudo apt` / “not found” back to the user can quiet-continue up to four times (`FOLLOWUP:`). Follow-up scores only visible assistant prose — thinking and empty replies do not start another turn. An empty `goal_pin` falls back to the last real user task; goal continue stays on the origin thread and does not `send_chat` while host is live. Night usage shares the daily cap. Night checks parse the receipt `exit N` line; a forbidden check is skipped. Phone dispatch completes on halt / error and persists that completion so a claimed inbox row does not stay claimed forever; `GOAL_BLOCKED` is failed, not done; boot requeues leftover claimed rows and will not claim a second inbox row while one is pending. Ack of a finished inbox row does not hide the result. Host context (goal steps, consult, compact, reflect) stays on the origin thread. `/rewind` restores only the bound project root.
 
