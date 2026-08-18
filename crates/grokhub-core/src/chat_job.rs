@@ -2,6 +2,7 @@
 //! New chat must stay empty and idle while the origin thread keeps the reply.
 
 use crate::organs::last_user_text;
+use crate::slash::is_cabin_slash_turn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatSendKind {
@@ -178,17 +179,17 @@ pub fn kick_messages_for_job(
     visible_messages: &[(String, String)],
     stored: &[(String, Vec<(String, String)>)],
 ) -> Vec<(String, String)> {
-    let Some(job) = job_thread_id else {
-        return visible_messages.to_vec();
+    let raw = match job_thread_id {
+        Some(job) if job != visible_thread_id => stored
+            .iter()
+            .find(|(id, _)| id == job)
+            .map(|(_, msgs)| msgs.clone())
+            .unwrap_or_else(|| visible_messages.to_vec()),
+        _ => visible_messages.to_vec(),
     };
-    if job == visible_thread_id {
-        return visible_messages.to_vec();
-    }
-    stored
-        .iter()
-        .find(|(id, _)| id == job)
-        .map(|(_, msgs)| msgs.clone())
-        .unwrap_or_else(|| visible_messages.to_vec())
+    raw.into_iter()
+        .filter(|(role, content)| !is_cabin_slash_turn(role, content))
+        .collect()
 }
 
 /// Skill draft after host must use the origin thread's last real user turn.
@@ -396,5 +397,16 @@ mod tests {
         assert_eq!(msgs, origin);
         let user = last_user_for_job(Some("thr-a"), "thr-b", &visible, &stored);
         assert_eq!(user.as_deref(), Some("run ls"));
+    }
+
+    #[test]
+    fn kick_drops_slash_help_dumps() {
+        let visible = vec![
+            ("user".into(), "hi".into()),
+            ("assistant".into(), "SLASH_RESULT:\n/help — this list".into()),
+            ("assistant".into(), "/help — this list\n/new — new chat".into()),
+        ];
+        let msgs = kick_messages_for_job(None, "thr-a", &visible, &[]);
+        assert_eq!(msgs, vec![("user".into(), "hi".into())]);
     }
 }

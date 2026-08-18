@@ -98,6 +98,59 @@ pub fn looks_like_user_pref(fact: &str) -> bool {
         || l.contains("project")
 }
 
+fn is_greeting_chitchat(fact: &str) -> bool {
+    let mut l = fact.trim().to_ascii_lowercase();
+    while l.ends_with(['!', '?', '.', ',']) {
+        l.pop();
+    }
+    let l = l.trim();
+    matches!(
+        l,
+        "hi" | "hey"
+            | "hello"
+            | "yo"
+            | "sup"
+            | "hiya"
+            | "howdy"
+            | "hi there"
+            | "hey there"
+            | "hello there"
+            | "how are you"
+            | "how are you doing"
+            | "how's it going"
+            | "hows it going"
+            | "what's up"
+            | "whats up"
+            | "good morning"
+            | "good afternoon"
+            | "good evening"
+            | "hi how are you"
+            | "hey how are you"
+            | "hello how are you"
+            | "say hi"
+            | "say hello"
+    ) || l.starts_with("say hi ")
+        || l.starts_with("say hello ")
+}
+
+/// Greeting chit-chat and in-flight redirects are not durable memory.
+pub fn is_durable_fact(fact: &str) -> bool {
+    let c = fact.trim();
+    if c.is_empty() || c.starts_with("New direction:") {
+        return false;
+    }
+    if looks_like_user_pref(c) {
+        return true;
+    }
+    !is_greeting_chitchat(c)
+}
+
+pub fn prune_ephemeral_insights(state: &mut LearningState) -> bool {
+    let n = state.insights.len();
+    state.insights.retain(|i| is_durable_fact(&i.text));
+    state.insights.len() != n
+}
+
 pub fn user_pref_facts(facts: &[String]) -> Vec<String> {
     facts
         .iter()
@@ -108,6 +161,9 @@ pub fn user_pref_facts(facts: &[String]) -> Vec<String> {
 
 pub fn extract_insights(state: &mut LearningState, facts: &[String]) {
     for fact in facts {
+        if !is_durable_fact(fact) {
+            continue;
+        }
         upsert_insight(state, &insight_key_for_fact(fact), fact);
     }
 }
@@ -142,5 +198,29 @@ mod tests {
             user_pref_facts(&["prefer nvim".into(), "need wifi".into()]),
             vec!["prefer nvim".to_string()]
         );
+    }
+
+    #[test]
+    fn greeting_chitchat_is_not_a_fact() {
+        assert!(!is_durable_fact("hi how are you"));
+        assert!(!is_durable_fact("say hi in one sentence"));
+        assert!(!is_durable_fact("New direction: firefox --remote-debugging-port=9222\n\n(Previous ask: )"));
+        assert!(is_durable_fact("prefer nvim"));
+        let mut s = LearningState::default();
+        extract_insights(
+            &mut s,
+            &[
+                "hi how are you".into(),
+                "prefer helix".into(),
+                "say hi in one sentence".into(),
+            ],
+        );
+        assert_eq!(s.insights.len(), 1);
+        assert!(s.insights[0].text.contains("helix"));
+        upsert_insight(&mut s, "fact:hi-how-are-you", "hi how are you");
+        assert!(prune_ephemeral_insights(&mut s));
+        assert_eq!(s.insights.len(), 1);
+        assert!(s.insights[0].text.contains("helix"));
+        assert!(!prune_ephemeral_insights(&mut s));
     }
 }

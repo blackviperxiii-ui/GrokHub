@@ -191,6 +191,44 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
     }
 }
 
+/// Local slash that the composer should not send to Grok (`/project binding`, retired `/approve`).
+pub fn unknown_cabin_slash(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with('/') && parse_slash(t).is_none()
+}
+
+pub const SLASH_RESULT_PREFIX: &str = "SLASH_RESULT:";
+
+pub fn mark_slash_result(body: &str) -> String {
+    format!("{SLASH_RESULT_PREFIX}\n{body}")
+}
+
+pub fn strip_slash_result(text: &str) -> &str {
+    let t = text
+        .strip_prefix(SLASH_RESULT_PREFIX)
+        .map(|s| s.strip_prefix('\n').unwrap_or(s))
+        .unwrap_or(text);
+    t
+}
+
+/// Help / models / recall dumps stay on the pane and out of the next model kick.
+pub fn is_cabin_slash_turn(role: &str, content: &str) -> bool {
+    let t = content.trim_start();
+    if t.starts_with(SLASH_RESULT_PREFIX) {
+        return true;
+    }
+    if role == "user" {
+        return parse_slash(t).is_some_and(|s| {
+            matches!(s, Slash::Help | Slash::Models | Slash::Recall(_))
+        });
+    }
+    if role != "assistant" {
+        return false;
+    }
+    t.starts_with("/help — this list")
+        || (t.starts_with("grok-3-mini-fast — ") && t.contains("grok-4.6 — "))
+}
+
 pub fn slash_kind(s: &Slash) -> &'static str {
     match s {
         Slash::Forget(_) => "forget",
@@ -450,6 +488,10 @@ mod tests {
         assert_eq!(parse_slash("$ echo hi"), Some(Slash::Sh("echo hi".into())));
         assert_eq!(parse_slash("/project bind ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
         assert_eq!(parse_slash("/project binding ~/GrokHub-Work"), None);
+        assert!(unknown_cabin_slash("/project binding ~/GrokHub-Work"));
+        assert!(unknown_cabin_slash("/approve"));
+        assert!(!unknown_cabin_slash("/help"));
+        assert!(!unknown_cabin_slash("hello"));
         assert_eq!(parse_slash("/project ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
         assert_eq!(parse_slash("/project /tmp/cabin"), Some(Slash::ProjectBind(Some("/tmp/cabin".into()))));
         assert_eq!(parse_slash("/project typo"), None);
@@ -548,5 +590,18 @@ mod tests {
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());
+        let help = mark_slash_result(&slash_help());
+        assert!(is_cabin_slash_turn("assistant", &help));
+        assert_eq!(
+            strip_slash_result(&help).lines().next(),
+            Some("/help — this list")
+        );
+        assert!(is_cabin_slash_turn("assistant", &slash_help()));
+        assert!(is_cabin_slash_turn(
+            "assistant",
+            "grok-3-mini-fast — Grok 3 Mini Fast (chat)\ngrok-4.6 — Grok 4.6 (chat)"
+        ));
+        assert!(!is_cabin_slash_turn("assistant", "Hello Viper"));
+        assert!(is_cabin_slash_turn("user", "/help"));
     }
 }

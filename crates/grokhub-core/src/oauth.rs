@@ -117,6 +117,10 @@ fn profile_photo_host_ok(host: &str) -> bool {
         || host.ends_with(".twimg.com")
         || host == "googleusercontent.com"
         || host.ends_with(".googleusercontent.com")
+        || host == "x.com"
+        || host.ends_with(".x.com")
+        || host == "twitter.com"
+        || host.ends_with(".twitter.com")
 }
 
 fn claim_text(v: &Value, keys: &[&str]) -> Option<String> {
@@ -130,7 +134,19 @@ fn claim_text(v: &Value, keys: &[&str]) -> Option<String> {
 }
 
 fn picture_from_claims(v: &Value) -> Option<String> {
-    let raw = claim_text(v, &["picture", "profile_image_url", "profileImageUrl"])?;
+    let raw = claim_text(
+        v,
+        &[
+            "picture",
+            "profile_image_url",
+            "profileImageUrl",
+            "avatar",
+            "avatar_url",
+            "avatarUrl",
+            "picture_url",
+            "image",
+        ],
+    )?;
     trusted_profile_photo_url(&raw).ok()
 }
 
@@ -649,6 +665,13 @@ mod tests {
             p.picture.as_deref(),
             Some("https://pbs.twimg.com/profile_images/viper.jpg")
         );
+        let avatar = parse_userinfo_profile(&json!({
+            "avatar_url": "https://x.com/users/viper.png"
+        }));
+        assert_eq!(
+            avatar.picture.as_deref(),
+            Some("https://x.com/users/viper.png")
+        );
     }
 
     #[test]
@@ -668,6 +691,7 @@ mod tests {
             "https://lh3.googleusercontent.com/a/viper"
         )
         .is_ok());
+        assert!(trusted_profile_photo_url("https://x.com/users/viper.png").is_ok());
         assert!(trusted_profile_photo_url("https://evil.com/x.png").is_err());
         assert!(trusted_profile_photo_url("http://assets.grok.com/users/viper.png").is_err());
     }
