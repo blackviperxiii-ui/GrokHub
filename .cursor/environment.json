@@ -1,0 +1,4 @@
+{
+  "name": "GrokHub",
+  "install": "bash .cursor/install.sh"
+}
