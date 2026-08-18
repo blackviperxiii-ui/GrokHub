@@ -4,7 +4,7 @@ pkgver=2.6.30
 pkgrel=1
 pkgdesc="Grok-native Linux cabin — Rust binary, no Electron"
 arch=('x86_64')
-url="https://github.com/blackviperxiii-ui/Grok-Hub"
+url="https://cursor.com/codebase/viperxiii/GrokHub"
 license=('MIT')
 depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme' 'python' 'python-atspi')
 optdepends=(
@@ -16,7 +16,7 @@ optdepends=(
 makedepends=('cargo' 'rust' 'pkgconf' 'git' 'cmake' 'meson' 'ninja' 'wayland' 'wayland-protocols' 'pixman' 'libpng' 'libx11' 'libxtst' 'libxinerama' 'libxkbcommon' 'glib2' 'libxmu')
 options=('!debug')
 install=grokhub.install
-source=("${pkgname}::git+https://github.com/blackviperxiii-ui/Grok-Hub.git#tag=v${pkgver}")
+source=("${pkgname}::git+https://origin.cursor.com/git/viperxiii/GrokHub.git#tag=v${pkgver}")
 sha256sums=('SKIP')
 
 build() {
