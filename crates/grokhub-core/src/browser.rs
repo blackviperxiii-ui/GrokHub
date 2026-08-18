@@ -223,6 +223,37 @@ mod tests {
     }
 
     #[test]
+    fn firefox_cdp_keeps_tab_and_typeless_targets() {
+        let firefox = parse_cdp_targets(
+            r#"[
+              {"id":"ff1","type":"tab","title":"Mozilla Firefox","url":"about:newtab","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/ff1"},
+              {"id":"ff2","title":"GitHub","url":"https://github.com/foo","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/ff2"},
+              {"id":"bg","type":"background_page","title":"","url":"https://github.com/bg"}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            firefox.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec!["ff1", "ff2"],
+            "Firefox lists type=tab and typeless http/about pages; drop background_page"
+        );
+        assert_eq!(pick_browser_tab(&firefox, "github").unwrap().id, "ff2");
+        assert_eq!(pick_browser_tab(&firefox, "new tab").unwrap().id, "ff1");
+        let two_blanks = parse_cdp_targets(
+            r#"[
+              {"id":"a","type":"tab","title":"","url":"about:newtab"},
+              {"id":"b","type":"tab","title":"","url":"about:blank"}
+            ]"#,
+        )
+        .unwrap();
+        let miss = pick_browser_tab(&two_blanks, "new tab").unwrap_err();
+        assert!(
+            miss.contains("no tab") || miss.contains("ambiguous"),
+            "two blank tabs must not silently pick one: {miss}"
+        );
+    }
+
+    #[test]
     fn new_tab_path_defaults_to_blank() {
         assert_eq!(cdp_new_tab_path(""), "/json/new?about:blank");
         assert_eq!(
