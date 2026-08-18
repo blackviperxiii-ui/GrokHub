@@ -39,7 +39,7 @@ fn main() {
         }
         Launch::Help => {
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  git pull + install.sh --user\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  fetch Origin main + overlay when behind\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
                 env!("CARGO_PKG_VERSION")
             );
         }
