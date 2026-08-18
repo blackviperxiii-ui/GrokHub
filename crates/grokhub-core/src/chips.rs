@@ -2286,6 +2286,21 @@ mod tests {
     }
 
     #[test]
+    fn chip_scan_stops_at_4kb() {
+        let short = "close that firefox tab";
+        assert_eq!(chip_scan(short), short);
+        let huge = format!("head-chip {} tail-chip", "z".repeat(6000));
+        let scan = chip_scan(&huge);
+        assert_eq!(scan.len(), 4096);
+        assert!(scan.starts_with("head-chip"), "{scan}");
+        assert!(
+            !scan.contains("tail-chip"),
+            "chip rebuild must not walk an 8MB complete: {}",
+            scan.len()
+        );
+    }
+
+    #[test]
     fn chip_scan_caps_before_lowercase() {
         let src = include_str!("chips.rs");
         let last = src

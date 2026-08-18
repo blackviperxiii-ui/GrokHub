@@ -305,6 +305,30 @@ mod tests {
             .as_deref(),
             Some("check the box")
         );
+        let borrowed = [
+            ("user", "close that tab"),
+            ("user", "COMPUTER_RESULT (facts only):\nclicked 10,20\n"),
+        ];
+        assert_eq!(
+            last_user_scan(borrowed).as_deref(),
+            Some("close that tab"),
+            "job-thread last user must read borrowed refs, not a cloned transcript"
+        );
+        let mut huge = "head-ask ".to_string();
+        huge.push_str(&"x".repeat(crate::attach::TEXT_FILE_CAP + 32));
+        huge.push_str(" tail-marker");
+        let clipped = last_user_text(&[("user".into(), huge)]).expect("huge user");
+        assert!(
+            clipped.len() <= crate::attach::TEXT_FILE_CAP,
+            "last user must not clone an 8MB paste: {}",
+            clipped.len()
+        );
+        assert!(clipped.contains("head-ask"), "{clipped}");
+        assert!(
+            clipped.contains("tail-marker"),
+            "bound_scan must keep the tail of a huge user paste: {}",
+            clipped.len()
+        );
         let src = include_str!("organs.rs");
         let last = src
             .split("pub fn last_user_scan")

@@ -692,6 +692,40 @@ DP-2 connected 1920x1440+5360+0 (normal left inverted right x axis y axis) 527mm
     }
 
     #[test]
+    fn clamp_and_monitor_map_refuse_off_desk_and_unknown() {
+        let outs = parse_xrandr_outputs(LEFT_DUAL_XRANDR);
+        assert_eq!(
+            clamp_to_desktop(-2000, -40, &outs),
+            (-1920, 0),
+            "left-of-primary overflow must stay on HDMI, not wrap"
+        );
+        assert_eq!(
+            clamp_to_desktop(40, 2000, &outs),
+            (40, 1079),
+            "y overflow must stay on the virtual desk"
+        );
+        assert_eq!(
+            clamp_to_desktop(10, 10, &[]),
+            (10, 10),
+            "no xrandr outputs: leave the click alone"
+        );
+        assert_eq!(
+            monitor_local_to_global(&outs, "hdmi-1", Some((10, 20))),
+            Some((-1910, 20)),
+            "monitor names are case-insensitive"
+        );
+        assert!(
+            monitor_local_to_global(&outs, "DP-9", None).is_none(),
+            "unknown monitor must not invent a global click"
+        );
+        assert_eq!(
+            format_cursor_line(10, 20, Some("")),
+            "cursor 10,20",
+            "empty monitor name must not paint monitor="
+        );
+    }
+
+    #[test]
     fn ffmpeg_skips_the_black_warmup_frame() {
         let args = ffmpeg_x11_args(":1", 1920, 1080, "/tmp/desk.jpg");
         assert!(args.contains(&"x11grab".into()));
