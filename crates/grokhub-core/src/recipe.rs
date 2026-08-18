@@ -1486,5 +1486,29 @@ mod tests {
             ]]
         );
         assert!(relative_move_steps(HandsBackend::Xdotool, 0, 0).is_empty());
+        assert!(
+            parse_computer_op("COMPUTER_CMD: move monitor DP-2 100").is_none(),
+            "one local coord is not a monitor move"
+        );
+        assert!(parse_computer_op("COMPUTER_CMD: move monitor").is_none());
+        let recipe = parse_recipe(
+            "RECIPE: screen=1920x1080\n\
+             COMPUTER_CMD: click 10 20\n\
+             COMPUTER_CMD: cursor\n\
+             COMPUTER_CMD: move monitor DP-2\n",
+        )
+        .unwrap();
+        let replay = replay_ops(&recipe, Some(ScreenSize { w: 800, h: 600 }));
+        assert_eq!(replay[0], ReplayOp::Reshoot);
+        assert!(!replay
+            .iter()
+            .any(|r| matches!(r, ReplayOp::Op(ComputerOp::Click { .. }))));
+        assert!(replay
+            .iter()
+            .any(|r| matches!(r, ReplayOp::Op(ComputerOp::Cursor))));
+        assert!(replay.iter().any(|r| matches!(
+            r,
+            ReplayOp::Op(ComputerOp::MoveMonitor { name, .. }) if name == "DP-2"
+        )));
     }
 }

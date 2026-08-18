@@ -575,6 +575,32 @@ mod tests {
     }
 
     #[test]
+    fn tab_list_from_atspi_rows_when_cdp_is_down() {
+        let rows = [
+            row("Firefox", "frame", 0, 0, 1920, 1080),
+            row("GitHub", "page tab", 20, 8, 80, 20),
+            row("", "page-tab", 110, 8, 72, 20),
+            row("Tabs", "page tab list", 0, 0, 400, 32),
+            row("New Tab", "push button", 200, 8, 16, 16),
+        ];
+        let listed = tab_list_from_rows(&rows);
+        assert!(listed.contains("- GitHub"), "{listed}");
+        assert!(
+            listed.contains("- (untitled)"),
+            "empty page-tab name must still list: {listed}"
+        );
+        assert!(
+            !listed.contains("Tabs"),
+            "page tab list chrome is not a tab: {listed}"
+        );
+        assert!(
+            !listed.contains("New Tab"),
+            "the + control is not a listed tab: {listed}"
+        );
+        assert_eq!(tab_list_from_rows(&[row("Firefox", "frame", 0, 0, 1920, 1080)]), "no page tabs");
+    }
+
+    #[test]
     fn lock_check_titles_keep_lock_windows() {
         let titles = lock_check_titles(&[
             "0x01 0 10 20 800 600 GrokHub",
