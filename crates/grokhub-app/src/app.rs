@@ -114,7 +114,8 @@ use grokhub_core::{
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
     unified_diff_cite, usage_line,
-    transcribe_route, uid, update_cmds, overlay_update_begin, overlay_update_finish,
+    transcribe_route, uid, plan_update, overlay_update_begin, overlay_update_current,
+    overlay_update_finish, source_origin_url, update_settings_note, UpdatePlan,
     realtime_bearer, realtime_can_connect, voice_log_role, voice_stream_token, voice_transcript_sends_chat,
     fold_stream_token, StreamTokenKind,
     update_wipes_config, voice_session_url, Automation, BoardCard,
@@ -383,6 +384,7 @@ enum JobOut {
     HostDone(String),
     UpdateProgress { pct: u8, msg: String },
     UpdateDone { ok: bool },
+    UpdateCurrent { status: String },
     Connector(String),
     Consult(String),
     Err(String),
@@ -5378,6 +5380,14 @@ impl Cabin {
                 self.update_can_restart = view.can_restart;
                 self.status = view.status;
             }
+            Ok(JobOut::UpdateCurrent { status }) => {
+                self.running = false;
+                self.last_receipt_ok = Some(true);
+                let view = overlay_update_current(&status);
+                self.update_pct = Some(view.pct);
+                self.update_can_restart = view.can_restart;
+                self.status = view.status;
+            }
             Ok(JobOut::Err(e)) => {
                 self.running = false;
                 self.voice_orb = "idle".into();
@@ -5824,13 +5834,7 @@ impl Cabin {
         self.cfg.source_dir = src.display().to_string();
         remember_source(&src);
         let _ = config::save(&self.cfg);
-        match update_cmds(&src) {
-            Ok(cmds) if !update_wipes_config(&cmds) => {
-                self.start_overlay_update(cmds);
-            }
-            Ok(_) => self.status = "refusing an update that would wipe config".into(),
-            Err(e) => self.status = e,
-        }
+        self.start_planned_update(src);
     }
 
     fn restart_after_update(&mut self, ctx: &egui::Context) {
@@ -5885,6 +5889,54 @@ impl Cabin {
                 Err(e) if crate::update::host_receipt_failed(&e) => JobOut::UpdateDone { ok: false },
                 Err(e) => JobOut::Err(e),
             });
+        });
+    }
+
+    fn start_planned_update(&mut self, src: std::path::PathBuf) {
+        if self.running {
+            self.status = "Busy — wait, then update".into();
+            return;
+        }
+        self.nav = Nav::Settings;
+        self.settings_sec = SettingsSec::Update;
+        let begin = overlay_update_begin(2);
+        self.running = begin.running;
+        self.chat_job_thread = None;
+        self.update_pct = Some(begin.pct);
+        self.update_can_restart = begin.can_restart;
+        self.status = begin.status;
+        let (tx, rx) = mpsc::channel();
+        self.rx = Some(rx);
+        std::thread::spawn(move || {
+            match plan_update(&src) {
+                Ok(UpdatePlan::Current { status }) => {
+                    let _ = tx.send(JobOut::UpdateCurrent { status });
+                }
+                Ok(UpdatePlan::Overlay { cmds }) if update_wipes_config(&cmds) => {
+                    let _ = tx.send(JobOut::Err(
+                        "refusing an update that would wipe config".into(),
+                    ));
+                }
+                Ok(UpdatePlan::Overlay { cmds }) => {
+                    let progress = tx.clone();
+                    let r = crate::update::run_update_cmds_with_progress(&cmds, |pct, msg| {
+                        let _ = progress.send(JobOut::UpdateProgress {
+                            pct,
+                            msg: msg.to_string(),
+                        });
+                    });
+                    let _ = tx.send(match r {
+                        Ok(_) => JobOut::UpdateDone { ok: true },
+                        Err(e) if crate::update::host_receipt_failed(&e) => {
+                            JobOut::UpdateDone { ok: false }
+                        }
+                        Err(e) => JobOut::Err(e),
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(JobOut::Err(e));
+                }
+            }
         });
     }
 
@@ -8434,9 +8486,14 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Bound project", "The world. Host, Imagine, and memory stay here.", &mut self.cfg.project_dir, false);
                                                         }
                                                         SettingsSec::Update => {
-                                                            crate::cards::settings_note(ui, "Overlay only — git pull --ff-only origin main, then install.sh --user. The clone must be on main. Does not wipe ~/.config/GrokHub.");
+                                                            crate::cards::settings_note(ui, &update_settings_note(env!("CARGO_PKG_VERSION")));
+                                                            if let Some(src) = resolve_source(&self.cfg.source_dir) {
+                                                                if let Some(url) = source_origin_url(&src) {
+                                                                    crate::cards::settings_note(ui, &format!("Remote: {url}"));
+                                                                }
+                                                            }
                                                             crate::cards::settings_field(ui, "Source clone", "Empty uses GROKHUB_SRC or the install receipt.", &mut self.cfg.source_dir, false);
-                                                            if crate::cards::settings_action(ui, "Install overlay", "Pulls this clone and runs the user install.", "Update") {
+                                                            if crate::cards::settings_action(ui, "Install overlay", "Fetches Origin main and overlays when behind.", "Update") {
                                                                 update = true;
                                                             }
                                                             if let Some(pct) = self.update_pct {

@@ -1,6 +1,11 @@
 use crate::host_plan::{explain_host_risk, host_risk, HostPlanStep, HostRisk};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
+
+pub const GROKHUB_ORIGIN_REMOTE: &str = "https://origin.cursor.com/blackviperxiii-ui/grok-hub.git";
+pub const GROKHUB_ORIGIN_BROWSE: &str = "https://cursor.com/codebase/blackviperxiii-ui/grok-hub";
+pub const ORIGIN_AUTH_HINT: &str =
+    "Origin git needs sign-in — run origin auth login, then Update";
 
 /// Overlay update only. Never wipes `~/.config/GrokHub`.
 pub fn is_grokhub_source(dir: &Path) -> bool {
@@ -41,13 +46,43 @@ fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-fn git_head_branch(source: &Path) -> Result<String, String> {
-    let out = Command::new("git")
+fn git_output(source: &Path, args: &[&str]) -> Result<Output, String> {
+    Command::new("git")
         .arg("-C")
         .arg(source)
-        .args(["symbolic-ref", "-q", "--short", "HEAD"])
+        .args(args)
         .output()
-        .map_err(|e| format!("git: {e}"))?;
+        .map_err(|e| format!("git: {e}"))
+}
+
+fn git_fail_message(args: &[&str], out: &Output) -> String {
+    let err = String::from_utf8_lossy(&out.stderr);
+    let combined = format!("{err}\n{}", String::from_utf8_lossy(&out.stdout));
+    if looks_like_origin_auth_error(&combined) {
+        return ORIGIN_AUTH_HINT.to_string();
+    }
+    let msg = err.trim();
+    if msg.is_empty() {
+        format!("git {} failed", args.join(" "))
+    } else {
+        msg.to_string()
+    }
+}
+
+fn git_stdout(source: &Path, args: &[&str]) -> Result<String, String> {
+    let out = git_output(source, args)?;
+    if !out.status.success() {
+        return Err(git_fail_message(args, &out));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn git_run(source: &Path, args: &[&str]) -> Result<(), String> {
+    git_stdout(source, args).map(|_| ())
+}
+
+fn git_head_branch(source: &Path) -> Result<String, String> {
+    let out = git_output(source, &["symbolic-ref", "-q", "--short", "HEAD"])?;
     if !out.status.success() {
         return Err("source clone is not on a branch — checkout main, then Update".into());
     }
@@ -58,20 +93,67 @@ fn git_head_branch(source: &Path) -> Result<String, String> {
     Ok(branch)
 }
 
-fn git_has_origin(source: &Path) -> Result<(), String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(source)
-        .args(["remote", "get-url", "origin"])
-        .output()
-        .map_err(|e| format!("git: {e}"))?;
-    if !out.status.success() {
-        return Err("source clone has no origin — add origin, then Update".into());
-    }
-    Ok(())
+pub fn is_legacy_github_remote(url: &str) -> bool {
+    let lowered = url.trim().to_ascii_lowercase();
+    let stripped = lowered.trim_end_matches(".git");
+    let after_auth = stripped.rsplit_once('@').map(|(_, rest)| rest).unwrap_or(stripped);
+    let after_scheme = after_auth
+        .strip_prefix("https://")
+        .or_else(|| after_auth.strip_prefix("http://"))
+        .or_else(|| after_auth.strip_prefix("ssh://git@"))
+        .or_else(|| after_auth.strip_prefix("ssh://"))
+        .or_else(|| after_auth.strip_prefix("git@"))
+        .unwrap_or(after_auth);
+    let normalized = after_scheme.replace(':', "/");
+    normalized == "github.com/blackviperxiii-ui/grok-hub"
+        || normalized.starts_with("github.com/blackviperxiii-ui/grok-hub/")
 }
 
-pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
+pub fn looks_like_origin_auth_error(text: &str) -> bool {
+    let l = text.to_ascii_lowercase();
+    l.contains("authentication failed")
+        || l.contains("could not read username")
+        || l.contains("permission denied")
+        || l.contains("access rights")
+        || l.contains("authorization")
+        || l.contains("http basic")
+        || l.contains("401")
+        || l.contains("403")
+        || (l.contains("origin.cursor.com")
+            && (l.contains("denied") || l.contains("unauthorized") || l.contains("login")))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OriginRemoteAct {
+    Unchanged,
+    Added,
+    Retargeted,
+}
+
+pub fn source_origin_url(source: &Path) -> Option<String> {
+    git_stdout(source, &["remote", "get-url", "origin"]).ok().filter(|s| !s.is_empty())
+}
+
+pub fn ensure_origin_remote(source: &Path) -> Result<OriginRemoteAct, String> {
+    match git_stdout(source, &["remote", "get-url", "origin"]) {
+        Ok(url) if is_legacy_github_remote(&url) => {
+            git_run(source, &["remote", "set-url", "origin", GROKHUB_ORIGIN_REMOTE])?;
+            Ok(OriginRemoteAct::Retargeted)
+        }
+        Ok(_) => Ok(OriginRemoteAct::Unchanged),
+        Err(_) => {
+            git_run(source, &["remote", "add", "origin", GROKHUB_ORIGIN_REMOTE])?;
+            Ok(OriginRemoteAct::Added)
+        }
+    }
+}
+
+fn git_dirty(source: &Path) -> Result<bool, String> {
+    let out = git_stdout(source, &["status", "--porcelain"])?;
+    Ok(!out.is_empty())
+}
+
+fn require_source_on_main(source: &Path) -> Result<(), String> {
     if !is_grokhub_source(source) {
         return Err("not a GrokHub source tree — set Settings → source or GROKHUB_SRC".into());
     }
@@ -81,19 +163,85 @@ pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
             "source clone is on {branch} — checkout main, then Update"
         ));
     }
-    git_has_origin(source)?;
+    Ok(())
+}
+
+pub fn prepare_update(source: &Path) -> Result<OriginRemoteAct, String> {
+    require_source_on_main(source)?;
+    if git_dirty(source)? {
+        return Err("source clone has local changes — commit or stash, then Update".into());
+    }
+    ensure_origin_remote(source)
+}
+
+fn fetch_origin_main(source: &Path) -> Result<(), String> {
+    git_run(source, &["fetch", "origin", "main"])
+}
+
+fn tip_sha(source: &Path) -> Result<String, String> {
+    match git_stdout(source, &["rev-parse", "origin/main"]) {
+        Ok(sha) if !sha.is_empty() => Ok(sha),
+        _ => git_stdout(source, &["rev-parse", "FETCH_HEAD"]),
+    }
+}
+
+fn heads_match(source: &Path) -> Result<bool, String> {
+    let head = git_stdout(source, &["rev-parse", "HEAD"])?;
+    let tip = tip_sha(source)?;
+    Ok(head == tip)
+}
+
+fn already_current_status() -> String {
+    format!("Already current — v{}", env!("CARGO_PKG_VERSION"))
+}
+
+fn overlay_cmds(source: &Path) -> Vec<String> {
     let src = sh_quote(&source.display().to_string());
-    Ok(vec![
-        format!("git -C {src} pull --ff-only origin main"),
+    vec![
+        format!("git -C {src} merge --ff-only origin/main"),
         format!("{src}/scripts/install.sh --user"),
-    ])
+    ]
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdatePlan {
+    Current { status: String },
+    Overlay { cmds: Vec<String> },
+}
+
+pub fn plan_update(source: &Path) -> Result<UpdatePlan, String> {
+    prepare_update(source)?;
+    fetch_origin_main(source)?;
+    if heads_match(source)? {
+        return Ok(UpdatePlan::Current {
+            status: already_current_status(),
+        });
+    }
+    Ok(UpdatePlan::Overlay {
+        cmds: overlay_cmds(source),
+    })
+}
+
+pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
+    match plan_update(source)? {
+        UpdatePlan::Current { .. } => Ok(vec![]),
+        UpdatePlan::Overlay { cmds } => Ok(cmds),
+    }
+}
+
+pub fn update_settings_note(version: &str) -> String {
+    format!(
+        "Installed v{version}. Overlay only — fetch Origin main, fast-forward when behind, then install.sh --user. The clone must be on main with a clean worktree. Origin git may need `origin auth login`. Does not wipe ~/.config/GrokHub."
+    )
 }
 
 pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
     cmds.into_iter()
         .map(|cmd| {
-            let explain = if cmd.contains("pull --ff-only") {
+            let explain = if cmd.contains("merge --ff-only") || cmd.contains("pull --ff-only") {
                 "fast-forward origin/main — config stays".into()
+            } else if cmd.contains("fetch origin") {
+                "fetch origin/main — config stays".into()
             } else if cmd.contains("install.sh") {
                 "overlay ~/.local/bin — does not wipe config".into()
             } else {
@@ -125,8 +273,12 @@ pub fn update_progress_pct(done_cmds: usize, total_cmds: usize) -> u8 {
 }
 
 pub fn update_step_label(cmd: &str) -> &'static str {
-    if cmd.contains("pull --ff-only") {
-        "Pulling origin/main…"
+    if cmd.contains("remote set-url") || cmd.contains("remote add") {
+        "Pointing origin at Origin…"
+    } else if cmd.contains("fetch origin") {
+        "Fetching origin/main…"
+    } else if cmd.contains("merge --ff-only") || cmd.contains("pull --ff-only") {
+        "Updating origin/main…"
     } else if cmd.contains("install.sh") {
         "Installing overlay…"
     } else {
@@ -182,6 +334,10 @@ pub fn overlay_update_finish(ok: bool, last_pct: u8) -> OverlayUpdateView {
     } else {
         overlay_view(last_pct, "Update failed".into(), false, false)
     }
+}
+
+pub fn overlay_update_current(status: &str) -> OverlayUpdateView {
+    overlay_view(100, status.to_string(), false, false)
 }
 
 pub fn overlay_update_can_restart(finished_ok: bool, running: bool) -> bool {
@@ -293,8 +449,67 @@ mod tests {
         run(&["commit", "-m", "seed"]);
     }
 
+    fn git_in(root: &std::path::Path, args: &[&str]) {
+        let st = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .status()
+            .unwrap();
+        assert!(st.success(), "git {args:?}");
+    }
+
+    fn attach_bare_origin(root: &std::path::Path, bare: &std::path::Path) {
+        let _ = fs::remove_dir_all(bare);
+        assert!(Command::new("git")
+            .args(["init", "--bare"])
+            .arg(bare)
+            .status()
+            .unwrap()
+            .success());
+        git_in(root, &["remote", "add", "origin", &bare.display().to_string()]);
+        git_in(root, &["push", "-u", "origin", "main"]);
+        assert!(Command::new("git")
+            .args(["-C", &bare.display().to_string(), "symbolic-ref", "HEAD", "refs/heads/main"])
+            .status()
+            .unwrap()
+            .success());
+    }
+
     #[test]
-    fn update_requires_main_and_pulls_origin_main() {
+    fn legacy_github_urls_match_this_repo_only() {
+        assert!(is_legacy_github_remote(
+            "https://github.com/blackviperxiii-ui/Grok-Hub.git"
+        ));
+        assert!(is_legacy_github_remote(
+            "https://github.com/blackviperxiii-ui/grok-hub"
+        ));
+        assert!(is_legacy_github_remote(
+            "git@github.com:blackviperxiii-ui/Grok-Hub.git"
+        ));
+        assert!(is_legacy_github_remote(
+            "https://x-access-token:secret@github.com/blackviperxiii-ui/grok-hub.git"
+        ));
+        assert!(!is_legacy_github_remote(
+            "https://github.com/other/Grok-Hub.git"
+        ));
+        assert!(!is_legacy_github_remote(GROKHUB_ORIGIN_REMOTE));
+        assert!(!is_legacy_github_remote("https://example.invalid/grokhub.git"));
+    }
+
+    #[test]
+    fn auth_errors_map_to_origin_login() {
+        assert!(looks_like_origin_auth_error("fatal: Authentication failed"));
+        assert!(looks_like_origin_auth_error("HTTP 401"));
+        assert!(looks_like_origin_auth_error("remote: 403 Forbidden"));
+        assert!(looks_like_origin_auth_error(
+            "fatal: could not read Username for 'https://origin.cursor.com'"
+        ));
+        assert!(looks_like_origin_auth_error("Permission denied (publickey)"));
+        assert!(!looks_like_origin_auth_error("Already up to date."));
+    }
+
+    #[test]
+    fn update_requires_main_and_refuses_dirty() {
         let root = std::env::temp_dir().join(format!("grokhub-src-main-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         seed_git_source(&root, "dev");
@@ -306,22 +521,127 @@ mod tests {
             .current_dir(&root)
             .status()
             .unwrap();
-        let no_origin = update_cmds(&root).unwrap_err();
-        assert!(no_origin.contains("origin"), "{no_origin}");
-        std::process::Command::new("git")
-            .args(["remote", "add", "origin", "https://example.invalid/grokhub.git"])
-            .current_dir(&root)
-            .status()
-            .unwrap();
-        let cmds = update_cmds(&root).unwrap();
-        assert!(cmds[0].contains("pull --ff-only origin main"), "{cmds:?}");
-        assert!(cmds[1].ends_with("--user"));
-        assert!(!update_wipes_config(&cmds));
-        let plan = update_plan_steps(cmds);
-        assert!(plan[0].explain.contains("origin/main"), "{plan:?}");
-        assert!(plan[1].explain.contains("overlay"), "{plan:?}");
-        assert_ne!(plan[0].explain, "read-only");
+        fs::write(root.join("dirty.txt"), "nope\n").unwrap();
+        let dirty = plan_update(&root).unwrap_err();
+        assert!(dirty.contains("local changes"), "{dirty}");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn origin_remote_is_added_or_retargeted() {
+        let root = std::env::temp_dir().join(format!("grokhub-src-remote-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        seed_git_source(&root, "main");
+        assert_eq!(
+            ensure_origin_remote(&root).unwrap(),
+            OriginRemoteAct::Added
+        );
+        assert_eq!(
+            source_origin_url(&root).as_deref(),
+            Some(GROKHUB_ORIGIN_REMOTE)
+        );
+        assert_eq!(
+            ensure_origin_remote(&root).unwrap(),
+            OriginRemoteAct::Unchanged
+        );
+
+        git_in(
+            &root,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://github.com/blackviperxiii-ui/Grok-Hub.git",
+            ],
+        );
+        assert_eq!(
+            ensure_origin_remote(&root).unwrap(),
+            OriginRemoteAct::Retargeted
+        );
+        assert_eq!(
+            source_origin_url(&root).as_deref(),
+            Some(GROKHUB_ORIGIN_REMOTE)
+        );
+
+        git_in(
+            &root,
+            &["remote", "set-url", "origin", "https://example.invalid/fork.git"],
+        );
+        assert_eq!(
+            ensure_origin_remote(&root).unwrap(),
+            OriginRemoteAct::Unchanged
+        );
+        assert_eq!(
+            source_origin_url(&root).as_deref(),
+            Some("https://example.invalid/fork.git")
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn plan_skips_overlay_when_already_current() {
+        let pid = std::process::id();
+        let root = std::env::temp_dir().join(format!("grokhub-src-tip-{pid}"));
+        let bare = std::env::temp_dir().join(format!("grokhub-src-tip-{pid}.git"));
+        let _ = fs::remove_dir_all(&root);
+        seed_git_source(&root, "main");
+        attach_bare_origin(&root, &bare);
+        let plan = plan_update(&root).expect("plan");
+        match plan {
+            UpdatePlan::Current { status } => {
+                assert!(status.contains("Already current"), "{status}");
+                assert!(status.contains(env!("CARGO_PKG_VERSION")), "{status}");
+            }
+            UpdatePlan::Overlay { cmds } => panic!("expected current, got {cmds:?}"),
+        }
+        let cmds = update_cmds(&root).expect("cmds");
+        assert!(cmds.is_empty(), "{cmds:?}");
+        assert!(!cmds.iter().any(|c| c.contains("install.sh")));
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&bare);
+    }
+
+    #[test]
+    fn plan_overlays_when_behind_origin_main() {
+        let pid = std::process::id();
+        let root = std::env::temp_dir().join(format!("grokhub-src-behind-{pid}"));
+        let bare = std::env::temp_dir().join(format!("grokhub-src-behind-{pid}.git"));
+        let other = std::env::temp_dir().join(format!("grokhub-src-behind-other-{pid}"));
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&other);
+        seed_git_source(&root, "main");
+        attach_bare_origin(&root, &bare);
+        assert!(Command::new("git")
+            .args([
+                "clone",
+                "-b",
+                "main",
+                &bare.display().to_string(),
+                &other.display().to_string(),
+            ])
+            .status()
+            .unwrap()
+            .success());
+        git_in(&other, &["config", "user.email", "cabin@test"]);
+        git_in(&other, &["config", "user.name", "Cabin"]);
+        fs::write(other.join("ahead.txt"), "tip\n").unwrap();
+        git_in(&other, &["add", "ahead.txt"]);
+        git_in(&other, &["commit", "-m", "ahead"]);
+        git_in(&other, &["push", "origin", "main"]);
+
+        let plan = plan_update(&root).expect("plan");
+        let UpdatePlan::Overlay { cmds } = plan else {
+            panic!("expected overlay when behind");
+        };
+        assert!(cmds[0].contains("merge --ff-only origin/main"), "{cmds:?}");
+        assert!(cmds[1].ends_with("--user"), "{cmds:?}");
+        assert!(!update_wipes_config(&cmds));
+        let steps = update_plan_steps(cmds);
+        assert!(steps[0].explain.contains("origin/main"), "{steps:?}");
+        assert!(steps[1].explain.contains("overlay"), "{steps:?}");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&other);
+        let _ = fs::remove_dir_all(&bare);
     }
 
     #[test]
@@ -347,14 +667,14 @@ mod tests {
         let pull = overlay_update_progress(
             1,
             2,
-            update_step_label("git pull --ff-only origin main"),
+            update_step_label("git merge --ff-only origin/main"),
         );
         assert_eq!(pull.pct, 50);
         assert!(pull.running);
         assert!(!pull.posts_chat);
         assert!(pull.stay_on_update);
         assert!(!pull.can_restart);
-        assert!(pull.status.contains("Pulling"));
+        assert!(pull.status.contains("Updating"));
 
         let ok = overlay_update_finish(true, 50);
         assert_eq!(ok.pct, 100);
@@ -376,6 +696,14 @@ mod tests {
         assert!(!fail.can_restart);
         assert!(fail.status.contains("failed"));
         assert!(!fail.status.contains("HOST_RESULT"));
+
+        let current = overlay_update_current("Already current — v2.6.30");
+        assert_eq!(current.pct, 100);
+        assert!(!current.running);
+        assert!(!current.can_restart);
+        assert!(current.status.contains("Already current"));
+        assert!(update_settings_note("2.6.30").contains("Installed v2.6.30"));
+        assert!(update_settings_note("2.6.30").contains("origin auth login"));
     }
 
     #[test]
@@ -442,10 +770,18 @@ mod tests {
     }
 
     #[test]
-    fn overlay_step_labels_name_pull_and_install() {
+    fn overlay_step_labels_name_fetch_merge_and_install() {
         assert_eq!(
-            update_step_label("git -C '/x' pull --ff-only origin main"),
-            "Pulling origin/main…"
+            update_step_label("git -C '/x' merge --ff-only origin/main"),
+            "Updating origin/main…"
+        );
+        assert_eq!(
+            update_step_label("git -C '/x' fetch origin main"),
+            "Fetching origin/main…"
+        );
+        assert_eq!(
+            update_step_label("git remote set-url origin https://origin.cursor.com/x"),
+            "Pointing origin at Origin…"
         );
         assert_eq!(
             update_step_label("'/x/scripts/install.sh' --user"),
