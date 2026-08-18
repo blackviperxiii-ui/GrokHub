@@ -1,0 +1,532 @@
+//! Cabin chrome measured from live grok.com dark (`scheme-dark`, 2026-08-15).
+//! Recreated in egui — no grok.com JS, no webview.
+
+use eframe::egui::{
+    self, Color32, ColorImage, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
+    TextureHandle, TextureOptions,
+};
+use grokhub_core::{
+    feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb, os_prefers_dark, HOVER_EXPANSION,
+    HOVER_SECS, PRESS_EXPANSION, PRESS_SECS,
+};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+pub fn title_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("inter-bold".into()))
+}
+
+/// `--surface-base` / body `rgb(5,5,5)`
+pub const BG: Color32 = Color32::from_rgb(0x05, 0x05, 0x05);
+/// `--surface-l1` `0 0% 8%`
+pub const SURFACE: Color32 = Color32::from_rgb(0x14, 0x14, 0x14);
+/// `--surface-l2` `0 0% 13%`
+pub const PANEL: Color32 = Color32::from_rgb(0x21, 0x21, 0x21);
+/// query-bar `oklab(0.193 / 0.75)` over base
+pub const ELEVATED: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x1a);
+/// `--fg-primary` `rgb(252,252,252)`
+pub const FG: Color32 = Color32::from_rgb(0xfc, 0xfc, 0xfc);
+/// `--fg-secondary` `0 0% 62%`
+pub const MUTED: Color32 = Color32::from_rgb(0x9e, 0x9e, 0x9e);
+/// `--fg-tertiary` `0 0% 52%`
+pub const SUBTLE: Color32 = Color32::from_rgb(0x85, 0x85, 0x85);
+/// Empty-chat greeting — fainter than tertiary chrome so it does not steal focus
+pub const GREETING: Color32 = Color32::from_rgb(0x5c, 0x5c, 0x5c);
+pub const GREETING_SIZE: f32 = 13.0;
+/// `--border-l1` ~8% white on base
+pub const BORDER: Color32 = Color32::from_rgb(0x26, 0x26, 0x26);
+/// `--border-l2` ~14% white
+pub const BORDER_STRONG: Color32 = Color32::from_rgb(0x38, 0x38, 0x38);
+/// `--sidebar-accent` `240 5% 26%`
+pub const NAV_ACTIVE: Color32 = Color32::from_rgb(0x3f, 0x3f, 0x46);
+pub const BUBBLE_USER: Color32 = Color32::from_rgb(0x2a, 0x2a, 0x2a);
+pub const BUBBLE_ASSISTANT: Color32 = PANEL;
+pub const LIVE: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
+pub const SETUP: Color32 = Color32::from_rgb(0xea, 0xb3, 0x08);
+pub const OFFLINE: Color32 = Color32::from_rgb(0xef, 0x44, 0x44);
+/// grok.com light `--surface-base` (System when the desktop is light).
+pub const LIGHT_BG: Color32 = Color32::from_rgb(0xf4, 0xf4, 0xf5);
+pub const LIGHT_SURFACE: Color32 = Color32::from_rgb(0xee, 0xee, 0xf0);
+pub const LIGHT_PANEL: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
+pub const LIGHT_ELEVATED: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);
+pub const LIGHT_FG: Color32 = Color32::from_rgb(0x0a, 0x0a, 0x0a);
+pub const LIGHT_MUTED: Color32 = Color32::from_rgb(0x73, 0x73, 0x73);
+pub const LIGHT_SUBTLE: Color32 = Color32::from_rgb(0x8a, 0x8a, 0x8a);
+pub const LIGHT_GREETING: Color32 = Color32::from_rgb(0xb0, 0xb0, 0xb0);
+pub const LIGHT_BORDER: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
+pub const LIGHT_BORDER_STRONG: Color32 = Color32::from_rgb(0xd4, 0xd4, 0xd8);
+pub const LIGHT_NAV_ACTIVE: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
+pub const LIGHT_BUBBLE_USER: Color32 = Color32::from_rgb(0xe8, 0xe8, 0xea);
+pub const LIGHT_HOVER: Color32 = Color32::from_rgb(0xda, 0xda, 0xdd);
+
+static USE_LIGHT: AtomicBool = AtomicBool::new(false);
+static LAST_PAINT: AtomicU8 = AtomicU8::new(255);
+
+struct OsDarkCache {
+    at: Instant,
+    dark: bool,
+}
+
+static OS_DARK: Mutex<Option<OsDarkCache>> = Mutex::new(None);
+
+fn tok(dark: Color32, light: Color32) -> Color32 {
+    if USE_LIGHT.load(Ordering::Relaxed) {
+        light
+    } else {
+        dark
+    }
+}
+
+pub fn bg() -> Color32 {
+    tok(BG, LIGHT_BG)
+}
+pub fn surface() -> Color32 {
+    tok(SURFACE, LIGHT_SURFACE)
+}
+pub fn panel() -> Color32 {
+    tok(PANEL, LIGHT_PANEL)
+}
+pub fn elevated() -> Color32 {
+    tok(ELEVATED, LIGHT_ELEVATED)
+}
+pub fn fg() -> Color32 {
+    tok(FG, LIGHT_FG)
+}
+pub fn muted() -> Color32 {
+    tok(MUTED, LIGHT_MUTED)
+}
+pub fn subtle() -> Color32 {
+    tok(SUBTLE, LIGHT_SUBTLE)
+}
+pub fn whisper() -> Color32 {
+    tok(GREETING, LIGHT_GREETING)
+}
+pub fn border() -> Color32 {
+    tok(BORDER, LIGHT_BORDER)
+}
+pub fn border_strong() -> Color32 {
+    tok(BORDER_STRONG, LIGHT_BORDER_STRONG)
+}
+pub fn nav_active() -> Color32 {
+    tok(NAV_ACTIVE, LIGHT_NAV_ACTIVE)
+}
+pub fn bubble_user() -> Color32 {
+    tok(BUBBLE_USER, LIGHT_BUBBLE_USER)
+}
+pub fn bubble_assistant() -> Color32 {
+    panel()
+}
+pub fn live() -> Color32 {
+    LIVE
+}
+pub fn setup() -> Color32 {
+    SETUP
+}
+pub fn offline() -> Color32 {
+    OFFLINE
+}
+
+#[cfg(test)]
+pub fn set_paint_dark(dark: bool) {
+    USE_LIGHT.store(!dark, Ordering::Relaxed);
+    LAST_PAINT.store(255, Ordering::SeqCst);
+}
+
+pub fn desktop_prefers_dark() -> bool {
+    if let Ok(v) = std::env::var("GROKHUB_COLOR_SCHEME") {
+        return os_prefers_dark(&v, "", "");
+    }
+    if let Ok(mut g) = OS_DARK.lock() {
+        if let Some(c) = g.as_ref() {
+            if c.at.elapsed().as_secs() < 2 {
+                return c.dark;
+            }
+        }
+        let dark = probe_os_dark();
+        *g = Some(OsDarkCache {
+            at: Instant::now(),
+            dark,
+        });
+        return dark;
+    }
+    true
+}
+
+fn probe_os_dark() -> bool {
+    let scheme = cmd_stdout(
+        "gsettings",
+        &["get", "org.gnome.desktop.interface", "color-scheme"],
+    );
+    let gtk = std::env::var("GTK_THEME").unwrap_or_default();
+    let xfce = cmd_stdout("xfconf-query", &["-c", "xsettings", "-p", "/Net/ThemeName"]);
+    os_prefers_dark(&scheme, &gtk, &xfce)
+}
+
+fn cmd_stdout(bin: &str, args: &[&str]) -> String {
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(args);
+    crate::desktop::run_limited(cmd, Duration::from_millis(400))
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default()
+        .trim()
+        .trim_matches('\'')
+        .to_string()
+}
+
+pub const SIDEBAR_W: f32 = 260.0;
+pub const TITLEBAR_H: f32 = 28.0;
+/// `.query-bar` measured max-width
+pub const QUERY_MAX_W: f32 = 800.0;
+/// `[data-testid=chat-input]` `min-h-[60px]`
+pub const QUERY_MIN_H: f32 = 60.0;
+/// `.query-bar` computed `border-radius: 160px`
+pub const QUERY_RADIUS: f32 = 160.0;
+/// Attach / Submit `h-10 w-10 rounded-full`
+pub const HIT: f32 = 40.0;
+/// Rail / chrome row (`h-10`, `--font-size-chrome`)
+pub const NAV_ROW_H: f32 = 40.0;
+pub const FONT_UI: f32 = 15.0;
+pub const FONT_CHROME: f32 = 14.0;
+pub const FONT_META: f32 = 13.0;
+/// Settings / pane titles — larger than Body.
+pub const FONT_HEADING: f32 = 22.0;
+pub const WORDMARK: f32 = 56.0;
+/// grok.com/imagine `h1.text-[22px].leading-7`
+pub const IMAGINE_TITLE: f32 = 22.0;
+/// gap from h1 to `.query-bar` on /imagine
+pub const IMAGINE_GAP: f32 = 32.0;
+/// measured Imagine query-bar width
+pub const IMAGINE_BAR_W: f32 = 768.0;
+/// grok.com/imagine `.query-bar` measured height
+pub const IMAGINE_BAR_H: f32 = 94.0;
+/// Imagine `.query-bar` `border-radius: 20px` — not the chat pill
+pub const IMAGINE_BAR_RADIUS: f32 = 20.0;
+/// Imagine Upload / Submit `size-9`
+pub const IMAGINE_HIT: f32 = 36.0;
+/// grok.com/imagine masonry short tile (~230)
+pub const IMAGINE_TILE_SHORT: f32 = 230.0;
+/// grok.com/imagine masonry tall tile (~345)
+pub const IMAGINE_TILE_TALL: f32 = 345.0;
+/// Cover GIF cycle — two stills crossfade like grok.com inspiration MP4s.
+pub const IMAGINE_FRAME_MS: u64 = 1600;
+
+/// Live grok.com primary rail. Settings is an avatar menu, not a row.
+pub const GROK_NAV: &[(&str, &str)] = &[
+    ("chat", "Chat"),
+    ("imagine", "Imagine"),
+    ("automations", "Automations"),
+    ("skills", "Skills and Connectors"),
+];
+
+/// Cabin-only panes. Opened from the avatar settings menu.
+pub const CABIN_MENU: &[(&str, &str)] = &[
+    ("settings", "Settings"),
+    ("workboard", "Workboard"),
+    ("memory", "Memory"),
+    ("devices", "Devices"),
+    ("command", "Command"),
+    ("queue", "Queue"),
+    ("eyes", "Eyes"),
+];
+
+pub const WORKSPACE: &[(&str, &str)] = GROK_NAV;
+pub const TOOLS: &[(&str, &str)] = CABIN_MENU;
+
+#[allow(dead_code)]
+pub fn stage_subtitle(id: &str) -> &'static str {
+    match id {
+        "history" => "Past chats",
+        "chat" => "Recent chat",
+        "imagine" => "Images",
+        "workboard" => "Pinned tasks",
+        "skills" => "Personal skills and connectors",
+        "automations" => "Scheduled tasks",
+        "command" => "Overview",
+        "queue" => "Background jobs",
+        "settings" => "Preferences",
+        "devices" => "Paired computers",
+        "memory" => "SOUL / USER / MEMORY",
+        "eyes" => "Windshield",
+        "connectors" => "GitHub",
+        _ => "GrokHub",
+    }
+}
+
+fn install_inter(ctx: &egui::Context) {
+    let mut fonts = FontDefinitions::default();
+    if let Ok(regular) = std::fs::read("/usr/share/fonts/truetype/macos/Inter-Regular.ttf") {
+        fonts
+            .font_data
+            .insert("inter".into(), FontData::from_owned(regular));
+        if let Some(fam) = fonts.families.get_mut(&FontFamily::Proportional) {
+            fam.insert(0, "inter".into());
+        }
+    }
+    if let Ok(medium) = std::fs::read("/usr/share/fonts/truetype/macos/Inter-Medium.ttf") {
+        fonts
+            .font_data
+            .insert("inter-medium".into(), FontData::from_owned(medium));
+        if let Some(fam) = fonts.families.get_mut(&FontFamily::Proportional) {
+            fam.insert(0, "inter-medium".into());
+        }
+    }
+    let mut bold_stack = Vec::new();
+    if let Ok(bold) = std::fs::read("/usr/share/fonts/truetype/macos/Inter-Bold.ttf") {
+        fonts
+            .font_data
+            .insert("inter-bold".into(), FontData::from_owned(bold));
+        bold_stack.push("inter-bold".into());
+    }
+    if fonts.font_data.contains_key("inter") {
+        bold_stack.push("inter".into());
+    }
+    if let Some(prop) = fonts.families.get(&FontFamily::Proportional) {
+        for name in prop {
+            if !bold_stack.contains(name) {
+                bold_stack.push(name.clone());
+            }
+        }
+    }
+    if !bold_stack.is_empty() {
+        fonts
+            .families
+            .insert(FontFamily::Name("inter-bold".into()), bold_stack);
+    }
+    let mono = std::fs::read("/usr/share/fonts/truetype/macos/JetBrainsMono-Regular.ttf")
+        .or_else(|_| std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"));
+    if let Ok(mono) = mono {
+        fonts
+            .font_data
+            .insert("mono".into(), FontData::from_owned(mono));
+        if let Some(fam) = fonts.families.get_mut(&FontFamily::Monospace) {
+            fam.insert(0, "mono".into());
+        }
+    }
+    ctx.set_fonts(fonts);
+}
+
+pub fn install_fonts(ctx: &egui::Context) {
+    static FONTS: AtomicBool = AtomicBool::new(false);
+    if !FONTS.swap(true, Ordering::SeqCst) {
+        install_inter(ctx);
+    }
+}
+
+pub fn apply(ctx: &egui::Context, dark: bool) {
+    install_fonts(ctx);
+    USE_LIGHT.store(!dark, Ordering::Relaxed);
+    let flag = if dark { 1 } else { 0 };
+    if LAST_PAINT.swap(flag, Ordering::SeqCst) == flag {
+        return;
+    }
+    let mut visuals = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    let hover = if dark {
+        Color32::from_rgb(0x29, 0x29, 0x29)
+    } else {
+        LIGHT_HOVER
+    };
+    visuals.dark_mode = dark;
+    visuals.override_text_color = Some(fg());
+    visuals.panel_fill = surface();
+    visuals.window_fill = panel();
+    visuals.extreme_bg_color = bg();
+    visuals.faint_bg_color = elevated();
+    visuals.code_bg_color = elevated();
+    visuals.hyperlink_color = fg();
+    visuals.warn_fg_color = setup();
+    visuals.error_fg_color = offline();
+    visuals.selection.bg_fill = elevated();
+    visuals.selection.stroke = Stroke::new(1.0_f32, border_strong());
+    visuals.widgets.noninteractive.bg_fill = panel();
+    visuals.widgets.noninteractive.weak_bg_fill = surface();
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, muted());
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, border());
+    visuals.widgets.inactive.bg_fill = elevated();
+    visuals.widgets.inactive.weak_bg_fill = elevated();
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, fg());
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, border());
+    let press = if dark {
+        Color32::from_rgb(0x1f, 0x1f, 0x1f)
+    } else {
+        Color32::from_rgb(0xc8, 0xc8, 0xcc)
+    };
+    visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
+    visuals.widgets.hovered.bg_fill = hover;
+    visuals.widgets.hovered.weak_bg_fill = hover;
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, fg());
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, border_strong());
+    visuals.widgets.hovered.expansion = HOVER_EXPANSION;
+    visuals.widgets.active.bg_fill = press;
+    visuals.widgets.active.weak_bg_fill = press;
+    visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, fg());
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, border_strong());
+    visuals.widgets.active.expansion = PRESS_EXPANSION;
+    visuals.widgets.open.bg_fill = elevated();
+    visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, fg());
+    visuals.window_stroke = Stroke::new(1.0_f32, border());
+    visuals.window_rounding = 8.0.into();
+    visuals.menu_rounding = 8.0.into();
+    visuals.widgets.noninteractive.rounding = 8.0.into();
+    visuals.widgets.inactive.rounding = 8.0.into();
+    visuals.widgets.hovered.rounding = 8.0.into();
+    visuals.widgets.active.rounding = 8.0.into();
+    ctx.set_visuals(visuals);
+
+    let mut style = (*ctx.style()).clone();
+    style.text_styles.insert(TextStyle::Small, FontId::new(FONT_META, FontFamily::Proportional));
+    style.text_styles.insert(TextStyle::Body, FontId::new(FONT_UI, FontFamily::Proportional));
+    style.text_styles.insert(TextStyle::Button, FontId::new(FONT_CHROME, FontFamily::Proportional));
+    style.text_styles.insert(TextStyle::Heading, FontId::new(FONT_HEADING, FontFamily::Proportional));
+    style.text_styles.insert(TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace));
+    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    style.spacing.button_padding = egui::vec2(10.0, 6.0);
+    style.spacing.scroll.bar_width = 8.0;
+    style.spacing.scroll.handle_min_length = 24.0;
+    style.visuals = ctx.style().visuals.clone();
+    ctx.set_style(style);
+}
+
+pub fn pointing(resp: egui::Response) -> egui::Response {
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+pub fn lift_fill(fill: Color32, mix: f32) -> Color32 {
+    let toward_white = !USE_LIGHT.load(Ordering::Relaxed);
+    if fill.a() == 0 {
+        let a = hover_alpha(0, mix);
+        return if toward_white {
+            Color32::from_white_alpha(a)
+        } else {
+            Color32::from_black_alpha(a)
+        };
+    }
+    let (r, g, b) = lift_rgb(fill.r(), fill.g(), fill.b(), mix, toward_white);
+    Color32::from_rgba_unmultiplied(r, g, b, fill.a())
+}
+
+pub fn feel_response(
+    ui: &egui::Ui,
+    resp: egui::Response,
+    fill: Color32,
+) -> (egui::Response, egui::Rect, Color32) {
+    let hovered = resp.hovered();
+    let pressed = resp.is_pointer_button_down_on();
+    let id = resp.id;
+    let base = resp.rect;
+    let resp = pointing(resp);
+    let hover_t = ui
+        .ctx()
+        .animate_bool_with_time(id.with("feel-h"), hovered, HOVER_SECS);
+    let press_t = ui
+        .ctx()
+        .animate_bool_with_time(id.with("feel-p"), pressed, PRESS_SECS);
+    let scale = feel_scale(hover_t, press_t);
+    let mix = hover_mix(hover_t, press_t);
+    let (x, y, w, h) = felt_rect(base.min.x, base.min.y, base.width(), base.height(), scale);
+    let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+    (resp, rect, lift_fill(fill, mix))
+}
+
+#[allow(dead_code)]
+pub fn mark(ctx: &egui::Context) -> TextureHandle {
+    let bytes = include_bytes!("../assets/grokhub-32.png");
+    let img = image::load_from_memory(bytes).expect("grokhub mark");
+    let rgba = img.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    ctx.load_texture(
+        "grokhub-mark",
+        ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+        TextureOptions::LINEAR,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grok_com_chrome_tokens() {
+        assert_eq!(BG, Color32::from_rgb(5, 5, 5));
+        assert_eq!(SURFACE, Color32::from_rgb(20, 20, 20));
+        assert_eq!(PANEL, Color32::from_rgb(33, 33, 33));
+        assert_eq!(FG, Color32::from_rgb(252, 252, 252));
+        assert_eq!(MUTED, Color32::from_rgb(158, 158, 158));
+        assert!(GREETING.r() < SUBTLE.r(), "greeting stays fainter than chrome");
+        assert!(GREETING.r() < MUTED.r());
+        assert_ne!(GREETING, FG);
+        assert_eq!(GREETING_SIZE, 13.0);
+        assert_eq!(QUERY_MAX_W, 800.0);
+        assert_eq!(QUERY_MIN_H, 60.0);
+        assert_eq!(QUERY_RADIUS, 160.0);
+        assert_eq!(HIT, 40.0);
+        assert_eq!(NAV_ROW_H, 40.0);
+        assert_eq!(FONT_UI, 15.0);
+        assert_eq!(FONT_CHROME, 14.0);
+        assert_eq!(FONT_HEADING, 22.0);
+        assert!(FONT_HEADING > FONT_UI);
+        assert_eq!(IMAGINE_TITLE, 22.0);
+        assert_eq!(IMAGINE_GAP, 32.0);
+        assert_eq!(IMAGINE_BAR_W, 768.0);
+        assert_eq!(IMAGINE_BAR_H, 94.0);
+        assert_eq!(IMAGINE_BAR_RADIUS, 20.0);
+        assert_eq!(IMAGINE_HIT, 36.0);
+        assert_eq!(IMAGINE_TILE_SHORT, 230.0);
+        assert_eq!(IMAGINE_TILE_TALL, 345.0);
+        assert_eq!(IMAGINE_FRAME_MS, 1600);
+        assert_ne!(IMAGINE_BAR_RADIUS, QUERY_RADIUS);
+        assert_eq!(GROK_NAV[0], ("chat", "Chat"));
+        assert_eq!(GROK_NAV[1], ("imagine", "Imagine"));
+        assert!(GROK_NAV.iter().all(|(id, _)| *id != "settings"));
+        assert_eq!(CABIN_MENU[0], ("settings", "Settings"));
+        assert!(TOOLS.iter().all(|(id, _)| *id != "connectors"));
+        assert_eq!(stage_subtitle("history"), "Past chats");
+        assert_eq!(stage_subtitle("chat"), "Recent chat");
+        assert_eq!(stage_subtitle("imagine"), "Images");
+        assert_eq!(stage_subtitle("connectors"), "GitHub");
+        assert_eq!(title_font(40.0).size, 40.0);
+        set_paint_dark(true);
+        assert_eq!(bg(), BG);
+        set_paint_dark(false);
+        assert_eq!(bg(), LIGHT_BG);
+        assert_eq!(fg(), LIGHT_FG);
+        set_paint_dark(true);
+        assert_eq!(bg(), BG);
+    }
+
+    #[test]
+    fn lift_fill_washes_transparent() {
+        set_paint_dark(true);
+        assert_eq!(lift_fill(Color32::TRANSPARENT, 0.0).a(), 0);
+        let hover = lift_fill(Color32::TRANSPARENT, 0.10);
+        assert!(hover.a() > 8);
+        let solid = lift_fill(Color32::from_rgb(20, 20, 20), 0.10);
+        assert!(solid.r() > 20);
+        set_paint_dark(false);
+        let light = lift_fill(Color32::from_rgb(244, 244, 245), 0.10);
+        assert!(light.r() < 244);
+        set_paint_dark(true);
+    }
+
+    #[test]
+    fn os_dark_probe_must_time_out() {
+        let src = include_str!("theme.rs");
+        let cmd = src
+            .split("fn cmd_stdout(")
+            .nth(1)
+            .and_then(|s| s.split("\npub const SIDEBAR_W").next())
+            .expect("cmd_stdout");
+        assert!(
+            cmd.contains("run_limited("),
+            "gsettings/xfconf on the UI thread must time out: {cmd}"
+        );
+        assert!(
+            !cmd.contains(".output()"),
+            "os dark probe must not block paint: {cmd}"
+        );
+    }
+}

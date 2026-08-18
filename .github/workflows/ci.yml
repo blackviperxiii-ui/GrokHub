@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Native GUI build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libgl1-mesa-dev libwayland-dev libasound2-dev
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo build -p grokhub-app -p grokhub-hub -p grokhub-ffi
+      - name: Cabin binary exists
+        run: test -x target/debug/grokhub && test -x target/debug/grokhub-hub
+      - name: No Electron leftover
+        run: |
+          test ! -f package.json
+          test ! -d src
+          test ! -d desktop
+          test ! -f docs/superpowers/specs/2026-08-14-electron-cabin-bake-design.md
+          test ! -f docs/superpowers/specs/2026-08-14-electron-look-design.md
+          test ! -f docs/superpowers/plans/2026-08-14-grokhub-2.0-implementation.md
+          if git ls-files | grep -E '^(src/|desktop/|package.json$)'; then
+            echo "Electron app paths still tracked" >&2
+            exit 1
+          fi
+          if git grep -l 'exec electron' -- . ':!.github/**' ':!.git/**'; then
+            echo "electron launch path still present" >&2
+            exit 1
+          fi
+          echo "rust-only tree ok"
+
+  windows-package:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p grokhub-app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-grokhub
+          path: target/release/grokhub.exe
