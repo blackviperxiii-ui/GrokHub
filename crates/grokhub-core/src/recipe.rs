@@ -431,15 +431,33 @@ fn xdotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
 fn ydotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
     match op {
         ComputerOp::Click { x, y } => vec![
-            vec!["mousemove".into(), "--absolute".into(), x.to_string(), y.to_string()],
+            vec![
+                "mousemove".into(),
+                "--absolute".into(),
+                "--".into(),
+                x.to_string(),
+                y.to_string(),
+            ],
             vec!["click".into(), "0xC0".into()],
         ],
         ComputerOp::DoubleClick { x, y } => vec![
-            vec!["mousemove".into(), "--absolute".into(), x.to_string(), y.to_string()],
+            vec![
+                "mousemove".into(),
+                "--absolute".into(),
+                "--".into(),
+                x.to_string(),
+                y.to_string(),
+            ],
             vec!["click".into(), "--repeat".into(), "2".into(), "0xC0".into()],
         ],
         ComputerOp::Move { x, y } => {
-            vec![vec!["mousemove".into(), "--absolute".into(), x.to_string(), y.to_string()]]
+            vec![vec![
+                "mousemove".into(),
+                "--absolute".into(),
+                "--".into(),
+                x.to_string(),
+                y.to_string(),
+            ]]
         }
         ComputerOp::Type { text } => vec![vec!["type".into(), "--".into(), text.clone()]],
         ComputerOp::Key { name } => match ydotool_key_tokens(name) {
@@ -1235,7 +1253,7 @@ mod tests {
         assert_eq!(hands_backend_name(None), "missing");
         match computer_drive_for(HandsBackend::Ydotool, &ComputerOp::Click { x: 10, y: 20 }) {
             ComputerDrive::Ydotool(steps) => {
-                assert_eq!(steps[0], vec!["mousemove", "--absolute", "10", "20"]);
+                assert_eq!(steps[0], vec!["mousemove", "--absolute", "--", "10", "20"]);
                 assert_eq!(steps[1], vec!["click", "0xC0"]);
             }
             other => panic!("{other:?}"),
@@ -1528,6 +1546,19 @@ mod tests {
             }),
             "Moved to monitor DP-2"
         );
+        match computer_drive_for(
+            HandsBackend::Ydotool,
+            &ComputerOp::Move { x: -100, y: 20 },
+        ) {
+            ComputerDrive::Ydotool(steps) => {
+                assert_eq!(
+                    steps[0],
+                    vec!["mousemove", "--absolute", "--", "-100", "20"],
+                    "ydotool treats a leading - as a flag unless -- is first"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
         let ydo_neg = relative_move_steps(HandsBackend::Ydotool, -12, 4);
         assert_eq!(
             ydo_neg,

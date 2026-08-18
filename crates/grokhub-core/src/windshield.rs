@@ -1,3 +1,5 @@
+use crate::recipe::WindowChrome;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindshieldObject {
     pub id: String,
@@ -257,7 +259,9 @@ pub fn pick_window_row<'a>(rows: &'a [AtspiRow], title: &str) -> Option<&'a Atsp
         return None;
     }
     rows.iter()
-        .filter(|r| r.role != "cursor" && r.name.to_ascii_lowercase().contains(&q))
+        .filter(|r| {
+            !r.role.eq_ignore_ascii_case("cursor") && r.name.to_ascii_lowercase().contains(&q)
+        })
         .max_by_key(|r| {
             let frame = if r.role.eq_ignore_ascii_case("frame") || r.role.eq_ignore_ascii_case("window")
             {
@@ -270,11 +274,22 @@ pub fn pick_window_row<'a>(rows: &'a [AtspiRow], title: &str) -> Option<&'a Atsp
         })
 }
 
-pub fn window_chrome_point(row: &AtspiRow, chrome: crate::recipe::WindowChrome) -> (i32, i32) {
+pub fn wmctrl_window_rows(text: &str) -> Vec<AtspiRow> {
+    text.lines().filter_map(parse_wmctrl_line).collect()
+}
+
+/// AT-SPI first; if the 80-row cap hid the frame, use `wmctrl -lG` windows.
+pub fn resolve_window_row<'a>(
+    rows: &'a [AtspiRow],
+    wmctrl_rows: &'a [AtspiRow],
+    title: &str,
+) -> Option<&'a AtspiRow> {
+    pick_window_row(rows, title).or_else(|| pick_window_row(wmctrl_rows, title))
+}
+
+pub fn window_chrome_point(row: &AtspiRow, chrome: WindowChrome) -> (i32, i32) {
     match chrome {
-        crate::recipe::WindowChrome::Close => {
-            (row.x + row.w - WINDOW_CLOSE_INSET_X, row.y + WINDOW_CLOSE_INSET_Y)
-        }
+        WindowChrome::Close => (row.x + row.w - WINDOW_CLOSE_INSET_X, row.y + WINDOW_CLOSE_INSET_Y),
     }
 }
 
@@ -639,6 +654,22 @@ mod tests {
         assert_ne!(
             window_chrome_point(win, crate::recipe::WindowChrome::Close),
             (50, 40)
+        );
+        let crowded: Vec<AtspiRow> = (0..80)
+            .map(|i| row(&format!("tab-{i}"), "push button", 10, i * 2, 40, 16))
+            .collect();
+        assert!(
+            pick_window_row(&crowded, "Firefox").is_none(),
+            "a deep AT-SPI tree must not invent a frame"
+        );
+        let wm = wmctrl_window_rows(
+            "0x01 0 5360 0 1920 1440 hostname Mozilla Firefox\n0x02 0 0 0 800 600 hostname Terminal\n",
+        );
+        let hit = resolve_window_row(&crowded, &wm, "Firefox").unwrap();
+        assert_eq!((hit.x, hit.y, hit.w, hit.h), (5360, 0, 1920, 1440));
+        assert_eq!(
+            window_chrome_point(hit, crate::recipe::WindowChrome::Close),
+            (7262, 16)
         );
     }
 }

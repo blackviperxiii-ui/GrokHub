@@ -9,9 +9,10 @@ use grokhub_core::{
     layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var, monitor_local_to_global,
     output_for_point, parse_atspi_line, parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line,
     parse_xdotool_mouse, parse_xrandr_outputs, pcm_from_capture, pick_browser_tab, pick_capture_output,
-    pick_hands_backend, pick_named_row, pick_window_row, picker_args, png_ihdr_size, pointer_hop_plan,
+    pick_hands_backend, pick_named_row, picker_args, png_ihdr_size, pointer_hop_plan,
     pointer_slop_miss,
-    rank_atspi_rows, relative_move_steps, relative_needed, window_chrome_point,
+    rank_atspi_rows, relative_move_steps, relative_needed_or_last, resolve_window_row,
+    should_click_after_hop, window_chrome_point, wmctrl_window_rows,
     resolve_bin_in, session_is_wayland, tab_list_from_rows, take_text_body, IMAGE_FILE_CAP,
     TEXT_FILE_CAP, virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path,
     AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp, DisplayOutput, HandsBackend,
@@ -928,7 +929,12 @@ fn after_move_click_steps(op: &ComputerOp) -> Vec<Vec<String>> {
     }
 }
 
-fn drive_waypoint(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(), String> {
+fn drive_waypoint(
+    x: i32,
+    y: i32,
+    last: &mut Option<(i32, i32)>,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), String> {
     let abs_ok = match pointer_drive(&ComputerOp::Move { x, y }) {
         ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
             match run_pointer_steps(&steps, cancel) {
@@ -945,7 +951,11 @@ fn drive_waypoint(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(), Str
         | ComputerDrive::MoveMonitor { .. }
         | ComputerDrive::ClickWindow { .. } => return Err("not a pointer op".into()),
     };
-    if let Some((dx, dy)) = relative_needed(abs_ok, (x, y), read_cursor_xy(), POINTER_SLOP) {
+    let after = read_cursor_xy();
+    if after.is_some() {
+        *last = after;
+    }
+    if let Some((dx, dy)) = relative_needed_or_last(abs_ok, (x, y), after, *last, POINTER_SLOP) {
         let backend = live_hands_backend().unwrap_or(HandsBackend::Xdotool);
         let steps = relative_move_steps(backend, dx, dy);
         if !steps.is_empty() {
@@ -955,6 +965,9 @@ fn drive_waypoint(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(), Str
                 Err(e) if cancelled(cancel) || e == "halted" => return Err(e),
                 Err(e) => return Err(e),
             }
+        }
+        if let Some(xy) = read_cursor_xy() {
+            *last = Some(xy);
         }
     }
     Ok(())
@@ -966,8 +979,9 @@ fn drive_pointer_to(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(i32,
         Some(o) => clamp_to_output(x, y, o),
         None => clamp_to_desktop(x, y, &outputs),
     };
-    for (hx, hy) in pointer_hop_plan(read_cursor_xy(), (x, y), &outputs) {
-        drive_waypoint(hx, hy, cancel)?;
+    let mut last = read_cursor_xy();
+    for (hx, hy) in pointer_hop_plan(last, (x, y), &outputs) {
+        drive_waypoint(hx, hy, &mut last, cancel)?;
     }
     Ok((x, y))
 }
@@ -990,20 +1004,39 @@ fn click_window_chrome(
         return Err("halted".into());
     }
     let rows = collect_rows();
-    let row = pick_window_row(&rows, title).ok_or_else(|| format!("window {title}: not found"))?;
-    let (x, y) = window_chrome_point(row, chrome);
+    let wm = wmctrl_window_rows(&wmctrl_lg());
+    let row = resolve_window_row(&rows, &wm, title)
+        .cloned()
+        .ok_or_else(|| format!("window {title}: not found"))?;
+    let (x, y) = window_chrome_point(&row, chrome);
     let outputs = read_display_outputs();
     let (x, y) = match output_for_point(&outputs, x, y) {
         Some(o) => clamp_to_output(x, y, o),
         None => clamp_to_desktop(x, y, &outputs),
     };
     drive_pointer_to(x, y, cancel)?;
-    click_after_move(x, y, cancel)?;
+    click_after_hop(&ComputerOp::Click { x, y }, (x, y), cancel)?;
     Ok((x, y))
 }
 
-fn click_after_move(x: i32, y: i32, cancel: Option<&AtomicBool>) -> Result<(), String> {
-    let steps = after_move_click_steps(&ComputerOp::Click { x, y });
+fn wmctrl_lg() -> String {
+    let mut cmd = spawn_bin("wmctrl");
+    cmd.args(["-lG"]);
+    run_limited(cmd, DESK_LIST_TIMEOUT)
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+fn click_after_hop(
+    op: &ComputerOp,
+    intended: (i32, i32),
+    cancel: Option<&AtomicBool>,
+) -> Result<(), String> {
+    let actual = read_cursor_xy();
+    if !should_click_after_hop(intended, actual, POINTER_SLOP) {
+        return Err(append_cursor_detail("miss — did not click", intended, actual));
+    }
+    let steps = after_move_click_steps(op);
     if steps.is_empty() {
         return Ok(());
     }
@@ -1019,7 +1052,7 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
         let (cx, cy) = row_center(r);
         let (x, y) = clamp_to_desktop(cx, cy, &read_display_outputs());
         drive_pointer_to(x, y, cancel)?;
-        click_after_move(x, y, cancel)?;
+        click_after_hop(&ComputerOp::Click { x, y }, (x, y), cancel)?;
         return Ok((x, y));
     }
     if live_hands_backend().is_none() {
@@ -1051,7 +1084,7 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     })?;
     let (cx, cy) = clamp_to_desktop(x + w / 2, y + h / 2, &read_display_outputs());
     drive_pointer_to(cx, cy, cancel)?;
-    click_after_move(cx, cy, cancel)?;
+    click_after_hop(&ComputerOp::Click { x: cx, y: cy }, (cx, cy), cancel)?;
     Ok((cx, cy))
 }
 
@@ -1110,8 +1143,16 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
                 | ComputerOp::Move { x, y } => {
                     match drive_pointer_to(*x, *y, cancel) {
                         Ok((x, y)) => {
-                            let click_steps = after_move_click_steps(&op);
-                            if let Err(e) = run_pointer_steps(&click_steps, cancel) {
+                            if matches!(
+                                &op,
+                                ComputerOp::Click { .. } | ComputerOp::DoubleClick { .. }
+                            ) {
+                                if let Err(e) = click_after_hop(&op, (x, y), cancel) {
+                                    return hands_receipt(&line, started, false, &e);
+                                }
+                            } else if let Err(e) =
+                                run_pointer_steps(&after_move_click_steps(&op), cancel)
+                            {
                                 return hands_receipt(&line, started, false, &e);
                             }
                             let detail = match &op {
@@ -2116,6 +2157,24 @@ mod tests {
                 &ComputerOp::Click { x: 10, y: 20 },
                 &titles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
             )
+        );
+    }
+
+    #[test]
+    fn pointer_tool_exit_1_is_a_soft_miss() {
+        assert!(pointer_tool_move_failed("ydotool mousemove --absolute -- 5350 15 failed"));
+        assert!(pointer_tool_move_failed("xdotool mousemove --sync 10 20 timed out"));
+        assert!(
+            !pointer_tool_move_failed("ydotool missing"),
+            "not installed must stay a hard fail"
+        );
+        assert!(!pointer_tool_move_failed(&hands_down_receipt(HandsDown::Missing)));
+        assert!(!pointer_tool_move_failed(&hands_down_receipt(HandsDown::Uinput)));
+        assert!(!pointer_tool_move_failed(&hands_down_receipt(HandsDown::Daemon)));
+        assert!(!pointer_tool_move_failed("halted"));
+        assert!(
+            !should_click_after_hop((5350, 15), Some((1920, 0)), POINTER_SLOP),
+            "a leftover miss must not click"
         );
     }
 
