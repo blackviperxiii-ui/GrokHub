@@ -1,0 +1,30 @@
+.env
+.env.*
+*.log
+.DS_Store
+/tmp/
+
+# Rust
+/target/
+**/*.rs.bk
+
+# Leftover / local
+.output/
+node_modules/
+test-results/
+.playwright-mcp/
+
+# Release staging
+dist-release/
+packaging/aur/pkg/
+packaging/aur/src/
+packaging/aur/*.pkg.tar*
+
+# Local
+.project_id
+.github_repo
+.grok/
+artifacts/
+AGENTS.md
+AGENTS.project.md
+startup.sh

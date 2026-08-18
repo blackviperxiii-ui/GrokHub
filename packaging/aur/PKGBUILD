@@ -1,0 +1,47 @@
+# Maintainer: GrokHub contributors
+pkgname=grokhub
+pkgver=2.6.30
+pkgrel=1
+pkgdesc="Grok-native Linux cabin — Rust binary, no Electron"
+arch=('x86_64')
+url="https://github.com/blackviperxiii-ui/Grok-Hub"
+license=('MIT')
+depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme' 'python' 'python-atspi')
+optdepends=(
+  'ydotool: system ydotool if the sidecar build is skipped'
+  'grim: system grim if the sidecar build is skipped'
+  'xdotool: X11 pointer'
+  'wmctrl: X11 window list'
+)
+makedepends=('cargo' 'rust' 'pkgconf' 'git' 'cmake' 'meson' 'ninja' 'wayland' 'wayland-protocols' 'pixman' 'libpng' 'libx11' 'libxtst' 'libxinerama' 'libxkbcommon' 'glib2' 'libxmu')
+options=('!debug')
+install=grokhub.install
+source=("${pkgname}::git+https://github.com/blackviperxiii-ui/Grok-Hub.git#tag=v${pkgver}")
+sha256sums=('SKIP')
+
+build() {
+  cd "${srcdir}/${pkgname}"
+  cargo build --release --locked -p grokhub-app -p grokhub-hub
+}
+
+package() {
+  cd "${srcdir}/${pkgname}"
+  install -Dm755 target/release/grokhub "${pkgdir}/usr/bin/grokhub"
+  install -Dm755 target/release/grokhub-hub "${pkgdir}/usr/bin/grokhub-hub"
+  install -Dm644 packaging/grokhub.desktop \
+    "${pkgdir}/usr/share/applications/grokhub.desktop"
+  install -Dm644 packaging/grokhub.svg \
+    "${pkgdir}/usr/share/icons/hicolor/scalable/apps/grokhub.svg"
+  if [[ -d packaging/icons/hicolor ]]; then
+    cp -a packaging/icons/hicolor/. "${pkgdir}/usr/share/icons/hicolor/"
+  fi
+  PREFIX="${pkgdir}/usr" HANDS_FORCE=1 HANDS_SRC="${srcdir}/hands-src" \
+    bash scripts/build-hands.sh
+  install -Dm644 packaging/systemd/grokhub-hub.service \
+    "${pkgdir}/usr/lib/systemd/user/grokhub-hub.service"
+  install -Dm644 packaging/systemd/ydotoold.service \
+    "${pkgdir}/usr/lib/systemd/user/ydotoold.service"
+  install -Dm644 packaging/udev/60-grokhub-uinput.rules \
+    "${pkgdir}/usr/lib/udev/rules.d/60-grokhub-uinput.rules"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/grokhub/LICENSE"
+}
