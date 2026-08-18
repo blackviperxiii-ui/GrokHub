@@ -6,7 +6,7 @@ Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 
 | Platform | Repository | Latest |
 |----------|------------|--------|
-| **Linux** (this) | [Grok-Hub](https://github.com/blackviperxiii-ui/Grok-Hub) | **v2.6.30** |
+| **Linux** (this) | [GrokHub](https://cursor.com/codebase/viperxiii/GrokHub) | **v2.6.30** |
 | **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | sibling — same `grokhub-core` |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
@@ -15,8 +15,9 @@ Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 ```bash
 sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 cmake meson ninja wayland wayland-protocols pixman libpng libx11 libxtst libxinerama glib2 libxmu
 rustup default stable
-git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
-cd Grok-Hub
+origin auth login
+git clone https://origin.cursor.com/git/viperxiii/GrokHub.git
+cd GrokHub
 cargo test --workspace
 ./scripts/install.sh --user
 grokhub

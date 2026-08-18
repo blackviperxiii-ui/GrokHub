@@ -7,8 +7,9 @@ Native Rust binaries. No Electron.
 ```bash
 sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbcommon-x11 cmake meson ninja wayland wayland-protocols pixman libpng libx11 libxtst libxinerama glib2 libxmu
 rustup default stable
-git clone https://github.com/blackviperxiii-ui/Grok-Hub.git
-cd Grok-Hub
+origin auth login
+git clone https://origin.cursor.com/git/viperxiii/GrokHub.git
+cd GrokHub
 ./scripts/install.sh --user
 grokhub
 ```
