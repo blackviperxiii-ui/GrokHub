@@ -113,7 +113,7 @@ pub use capture::{
     capture_kinds, clamp_to_desktop, clamp_to_output, cursor_on_output, ffmpeg_webcam_args,
     ffmpeg_x11_args, format_cursor_line, format_cursor_line_miss, format_pointer_hint, frame_is_blank,
     gnome_shell_screenshot_args, frame_origin_for, output_for_point, pointer_hop_plan, pointer_slop_miss,
-    relative_needed, grim_capture_args, image_to_global, infer_wayland_display, layout_prompt,
+    relative_needed, relative_needed_or_last, should_click_after_hop, grim_capture_args, image_to_global, infer_wayland_display, layout_prompt,
     luma_mean_var, monitor_local_to_global, output_containing, parse_xdpy_size, parse_xrandr_outputs,
     parse_xrandr_size, pick_capture_output, session_is_wayland, virtual_desktop_size,
     windshield_frame_geom, x11_grab_size, CaptureKind, DisplayOutput,
@@ -304,7 +304,7 @@ pub use voice::{
 pub use windshield::{
     build_windshield, filter_atspi_rows, is_interactive_role, keep_atspi_row, lock_check_titles,
     parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row, pick_window_row,
-    rank_atspi_rows, window_chrome_point,
+    rank_atspi_rows, resolve_window_row, window_chrome_point, wmctrl_window_rows,
     refused_lock, tab_list_from_rows, window_name_from_atspi, window_name_from_wmctrl,
     windshield_browser_line, windshield_prompt, AtspiRow,
     PendingStep, WindshieldFrame,
