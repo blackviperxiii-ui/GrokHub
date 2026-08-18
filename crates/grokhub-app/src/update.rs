@@ -1,8 +1,9 @@
 use crate::config;
 use crate::host::run_host;
 use grokhub_core::{
-    discover_source, forbidden_reason, restart_acts, restart_bin, systemd_user_restart_args,
-    update_cmds, update_progress_pct, update_step_label, update_wipes_config, RestartAct,
+    discover_source, forbidden_reason, plan_update, restart_acts, restart_bin,
+    systemd_user_restart_args, update_progress_pct, update_step_label, update_wipes_config,
+    RestartAct, UpdatePlan,
 };
 use std::env;
 use std::process::{Command, Stdio};
@@ -39,6 +40,7 @@ pub fn resolve_source(cfg_source: &str) -> Option<PathBuf> {
     }
     if let Ok(home) = env::var("HOME") {
         hints.push(PathBuf::from(&home).join("Grok-Hub"));
+        hints.push(PathBuf::from(&home).join("grok-hub"));
         hints.push(PathBuf::from(&home).join("GrokHub"));
     }
     discover_source(&hints)
@@ -93,9 +95,11 @@ pub fn run_update_cmds_with_progress(
 }
 
 pub fn run_update(source: &std::path::Path) -> Result<String, String> {
-    let cmds = update_cmds(source)?;
     remember_source(source);
-    run_update_cmds(&cmds)
+    match plan_update(source)? {
+        UpdatePlan::Current { status } => Ok(status),
+        UpdatePlan::Overlay { cmds } => run_update_cmds(&cmds),
+    }
 }
 
 fn unit_is_active(unit: &str) -> bool {
@@ -248,15 +252,17 @@ mod tests {
     }
 
     #[test]
-    fn run_update_pulls_main_then_overlay() {
+    fn run_update_skips_overlay_at_tip_and_installs_when_behind() {
         let _g = TEST_CONFIG_LOCK.lock().unwrap();
         let pid = std::process::id();
         let root = std::env::temp_dir().join(format!("grokhub-upd-src-{pid}"));
         let bare = std::env::temp_dir().join(format!("grokhub-upd-bare-{pid}.git"));
+        let other = std::env::temp_dir().join(format!("grokhub-upd-other-{pid}"));
         let prev_cfg = env::var("GROKHUB_CONFIG").ok();
         let cfg = std::env::temp_dir().join(format!("grokhub-upd-cfg-{pid}"));
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&bare);
+        let _ = fs::remove_dir_all(&other);
         let _ = fs::remove_dir_all(&cfg);
         env::set_var("GROKHUB_CONFIG", &cfg);
         fs::create_dir_all(root.join("scripts")).unwrap();
@@ -274,30 +280,57 @@ mod tests {
             perm.set_mode(0o755);
             fs::set_permissions(&install, perm).unwrap();
         }
-        let git = |args: &[&str]| {
+        let git = |dir: &std::path::Path, args: &[&str]| {
             assert!(
                 Command::new("git")
                     .args(args)
-                    .current_dir(&root)
+                    .current_dir(dir)
                     .status()
                     .unwrap()
                     .success(),
                 "{args:?}"
             );
         };
-        git(&["init", "-b", "main"]);
-        git(&["config", "user.email", "cabin@test"]);
-        git(&["config", "user.name", "Cabin"]);
-        git(&["add", "."]);
-        git(&["commit", "-m", "seed"]);
+        git(&root, &["init", "-b", "main"]);
+        git(&root, &["config", "user.email", "cabin@test"]);
+        git(&root, &["config", "user.name", "Cabin"]);
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "seed"]);
         assert!(Command::new("git")
             .args(["init", "--bare"])
             .arg(&bare)
             .status()
             .unwrap()
             .success());
-        git(&["remote", "add", "origin", &bare.display().to_string()]);
-        git(&["push", "-u", "origin", "main"]);
+        git(&root, &["remote", "add", "origin", &bare.display().to_string()]);
+        git(&root, &["push", "-u", "origin", "main"]);
+        assert!(Command::new("git")
+            .args(["-C", &bare.display().to_string(), "symbolic-ref", "HEAD", "refs/heads/main"])
+            .status()
+            .unwrap()
+            .success());
+        let at_tip = run_update(&root).expect("current");
+        assert!(at_tip.contains("Already current"), "{at_tip}");
+        assert!(!root.join("overlay.ok").is_file(), "{at_tip}");
+
+        assert!(Command::new("git")
+            .args([
+                "clone",
+                "-b",
+                "main",
+                &bare.display().to_string(),
+                &other.display().to_string(),
+            ])
+            .status()
+            .unwrap()
+            .success());
+        git(&other, &["config", "user.email", "cabin@test"]);
+        git(&other, &["config", "user.name", "Cabin"]);
+        fs::write(other.join("ahead.txt"), "tip\n").unwrap();
+        git(&other, &["add", "ahead.txt"]);
+        git(&other, &["commit", "-m", "ahead"]);
+        git(&other, &["push", "origin", "main"]);
+
         let out = run_update(&root).expect("update");
         assert!(out.contains("exit 0"), "{out}");
         assert!(root.join("overlay.ok").is_file(), "{out}");
@@ -307,6 +340,7 @@ mod tests {
         }
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&bare);
+        let _ = fs::remove_dir_all(&other);
         let _ = fs::remove_dir_all(&cfg);
     }
 
