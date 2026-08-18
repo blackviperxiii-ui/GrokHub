@@ -318,6 +318,29 @@ pub fn relative_needed(
     }
 }
 
+/// After a failed absolute, correct from the last successful cursor when the
+/// post-move read is empty.
+pub fn relative_needed_or_last(
+    abs_ok: bool,
+    intended: (i32, i32),
+    after_move: Option<(i32, i32)>,
+    last_known: Option<(i32, i32)>,
+    slop: i32,
+) -> Option<(i32, i32)> {
+    relative_needed(abs_ok, intended, after_move.or(last_known), slop)
+}
+
+pub fn should_click_after_hop(
+    intended: (i32, i32),
+    actual: Option<(i32, i32)>,
+    slop: i32,
+) -> bool {
+    match actual {
+        Some(a) => !pointer_slop_miss(intended, a, slop),
+        None => false,
+    }
+}
+
 pub fn format_pointer_hint(x: i32, y: i32, monitor: Option<&str>) -> String {
     match monitor {
         Some(name) if !name.is_empty() => format!("hint {x},{y} monitor={name}"),
@@ -801,6 +824,22 @@ DP-2 connected 1920x1440+5360+0 (normal left inverted right x axis y axis) 527mm
             Some((3430, 15))
         );
         assert_eq!(relative_needed(true, (100, 20), Some((102, 20)), 8), None);
+        assert_eq!(
+            relative_needed(false, (5350, 15), None, 8),
+            None,
+            "an unread cursor must not invent a delta"
+        );
+        assert_eq!(
+            relative_needed_or_last(false, (5350, 15), None, Some((1920, 0)), 8),
+            Some((3430, 15)),
+            "absolute exit 1 still relative-corrects from the last successful cursor"
+        );
+        assert!(should_click_after_hop((5350, 15), Some((5352, 16)), 8));
+        assert!(
+            !should_click_after_hop((5350, 15), Some((1920, 0)), 8),
+            "a leftover miss must not click"
+        );
+        assert!(!should_click_after_hop((5350, 15), None, 8));
         assert_eq!(
             format_pointer_hint(5350, 15, Some("DP-1")),
             "hint 5350,15 monitor=DP-1"
