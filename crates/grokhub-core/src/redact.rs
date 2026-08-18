@@ -2,6 +2,10 @@ const PATTERNS: &[(&str, &str)] = &[
     ("sk-", "[redacted]"),
     ("xai-", "[redacted]"),
     ("ghp_", "[redacted]"),
+    ("github_pat_", "[redacted]"),
+    ("gho_", "[redacted]"),
+    ("ghu_", "[redacted]"),
+    ("ghs_", "[redacted]"),
     ("Bearer ", "Bearer [redacted]"),
 ];
 
@@ -69,6 +73,8 @@ mod tests {
         assert!(!xai.contains("xai-abcdefghijklmnopqrstuv"), "{xai}");
         let ghp = redact_secrets("export GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuv");
         assert!(!ghp.contains("ghp_abcdefghijklmnopqrstuv"), "{ghp}");
+        let pat = redact_secrets("token github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        assert!(!pat.contains("github_pat_"), "{pat}");
         let bearer = redact_secrets("Authorization: Bearer abcdefghijklmnop");
         assert!(!bearer.contains("abcdefghijklmnop"), "{bearer}");
         assert!(

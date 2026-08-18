@@ -136,7 +136,18 @@ pub fn pick_browser_tab<'a>(
 pub fn cdp_new_tab_path(url: &str) -> String {
     let url = url.trim();
     let url = if url.is_empty() { "about:blank" } else { url };
-    format!("/json/new?{url}")
+    format!("/json/new?{}", encode_cdp_url(url))
+}
+
+fn encode_cdp_url(url: &str) -> String {
+    let mut out = String::new();
+    for b in url.bytes() {
+        match b {
+            b'?' | b'&' | b'#' | b' ' | b'\n' | b'\r' => out.push_str(&format!("%{b:02X}")),
+            _ => out.push(b as char),
+        }
+    }
+    out
 }
 
 pub fn format_tab_list(tabs: &[BrowserTab]) -> String {
@@ -228,6 +239,10 @@ mod tests {
         assert_eq!(
             cdp_new_tab_path("https://example.com"),
             "/json/new?https://example.com"
+        );
+        assert_eq!(
+            cdp_new_tab_path("https://example.com/search?q=grok&lang=en"),
+            "/json/new?https://example.com/search%3Fq=grok%26lang=en"
         );
     }
 

@@ -1469,6 +1469,13 @@ fn host_chips() -> Vec<QuickChip> {
     ]
 }
 
+fn is_stale_connect_chip(c: &QuickChip) -> bool {
+    c.id == "ctx-connect"
+        || c.id.contains("ctx-connect")
+        || c.label.eq_ignore_ascii_case("Connect Grok")
+        || (c.value == "__nav:settings" && c.label.to_ascii_lowercase().contains("connect"))
+}
+
 fn uniq_by_value(chips: Vec<QuickChip>) -> Vec<QuickChip> {
     let mut seen = std::collections::HashSet::new();
     let mut out = vec![];
@@ -1652,6 +1659,9 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         let val = c.value.trim().to_ascii_lowercase();
         !dismissed.contains(&id) && !dismissed.contains(&val) && is_plain_text(&c.value)
     });
+    if input.grok_connected {
+        chips.retain(|c| !is_stale_connect_chip(c));
+    }
     let draft = input.draft.trim().to_ascii_lowercase();
     chips.retain(|c| c.value.trim().to_ascii_lowercase() != draft);
 
@@ -2089,6 +2099,42 @@ mod tests {
         assert_eq!(chips[0].id, "ctx-connect");
         assert_eq!(chips[0].value, "__nav:settings");
         assert_eq!(nav_from_chip_value(&chips[0].value), Some("settings"));
+    }
+
+    #[test]
+    fn connected_hides_stale_connect_grok_habit() {
+        let mut mem = ChipMemory::default();
+        let connect = QuickChip {
+            id: "ctx-connect".into(),
+            label: "Connect Grok".into(),
+            value: "__nav:settings".into(),
+            kind: ChipKind::Nav,
+            score: 120.0,
+            hint: String::new(),
+            primary: false,
+        };
+        remember_chip_click(&mut mem, &connect, Some("empty+h2+m:auto"), 1, 16);
+        remember_typed_prompt(&mut mem, "hi how are you", 2, 16);
+        mem.last_chip_key = Some("id:ctx-connect".into());
+        let llm = [QuickChip {
+            id: "llm-0-ConnectGrok".into(),
+            label: "Connect Grok".into(),
+            value: "__nav:settings".into(),
+            kind: ChipKind::Nav,
+            score: 99.0,
+            hint: "Suggested from this chat".into(),
+            primary: true,
+        }];
+        let mut inp = input(&[], "", &mem, &[], &llm);
+        inp.grok_connected = true;
+        let chips = build_quick_chips(inp);
+        assert!(
+            chips
+                .iter()
+                .all(|c| !c.label.eq_ignore_ascii_case("Connect Grok") && c.id != "ctx-connect"),
+            "OAuth session must not keep offering Connect Grok: {:?}",
+            chips.iter().map(|c| format!("{}:{}", c.id, c.label)).collect::<Vec<_>>()
+        );
     }
 
     #[test]
