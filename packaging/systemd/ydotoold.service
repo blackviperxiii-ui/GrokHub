@@ -1,0 +1,15 @@
+[Unit]
+Description=ydotool daemon for GrokHub hands
+PartOf=graphical-session.target
+After=graphical-session.target
+ConditionPathExists=/usr/lib/grokhub/bin/ydotoold
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/grokhub/bin/ydotoold --socket-path=%t/ydotool.sock
+Restart=on-failure
+RestartSec=2
+Environment=YDOTOOL_SOCKET=%t/ydotool.sock
+
+[Install]
+WantedBy=graphical-session.target

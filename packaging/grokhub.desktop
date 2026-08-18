@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=GrokHub
+GenericName=Grok Agent Control Plane
+Comment=Grok-native Linux cabin — native Rust, no Electron
+Exec=grokhub
+TryExec=grokhub
+Icon=grokhub
+Terminal=false
+Categories=Utility;Development;Network;
+Keywords=grok;ai;agent;xai;hub;chat;cabin;rust;
+StartupNotify=true
+StartupWMClass=grokhub
+SingleMainWindow=true
+X-GNOME-UsesNotifications=true
