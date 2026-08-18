@@ -323,10 +323,14 @@ pub use thread_tab::{
     ThreadTab, AUTO_TITLE_MAX,
 };
 pub use update::{
-    discover_source, is_grokhub_source, overlay_update_begin, overlay_update_can_restart,
-    overlay_update_finish, overlay_update_progress, restart_acts, restart_argv, restart_bin,
+    discover_source, ensure_origin_remote, is_grokhub_source, is_legacy_github_remote,
+    looks_like_origin_auth_error, overlay_update_begin, overlay_update_can_restart,
+    overlay_update_current, overlay_update_finish, overlay_update_progress, plan_update,
+    prepare_update, restart_acts, restart_argv, restart_bin, source_origin_url,
     systemd_user_restart_args, update_cmds, update_plan_steps, update_progress_pct,
-    update_step_label, update_wipes_config, walk_up_source, OverlayUpdateView, RestartAct,
+    update_settings_note, update_step_label, update_wipes_config, walk_up_source,
+    OriginRemoteAct, OverlayUpdateView, RestartAct, UpdatePlan, GROKHUB_ORIGIN_BROWSE,
+    GROKHUB_ORIGIN_REMOTE, ORIGIN_AUTH_HINT,
 };
 
 pub const PRESENCE_PUSH_MIN_MS: u64 = 400;
