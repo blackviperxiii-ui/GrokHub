@@ -236,6 +236,10 @@ pub fn assistant_prose(text: &str) -> String {
 }
 
 fn visible_assistant(text: &str) -> String {
+    let text = text
+        .strip_prefix("SLASH_RESULT:\n")
+        .or_else(|| text.strip_prefix("SLASH_RESULT:"))
+        .unwrap_or(text);
     let mut lines: Vec<&str> = Vec::new();
     let mut skip_until: Option<String> = None;
     for line in text.lines() {
@@ -890,6 +894,21 @@ mod tests {
         assert_eq!(
             crate::append_composer("draft", &quote_for_reply("check the box")),
             "draft\n> check the box"
+        );
+    }
+
+    #[test]
+    fn slash_result_marker_stays_off_the_pane() {
+        let v = visible_chat(&[(
+            "assistant".into(),
+            "SLASH_RESULT:\n/help — this list\n/new — new chat".into(),
+        )]);
+        assert_eq!(kinds(&v), vec![ChatKind::Assistant]);
+        assert_eq!(v[0].body, "/help — this list\n/new — new chat");
+        assert!(!v[0].body.contains("SLASH_RESULT"));
+        assert_eq!(
+            assistant_prose("SLASH_RESULT:\nGrok 4.6 — chat"),
+            "Grok 4.6 — chat"
         );
     }
 }

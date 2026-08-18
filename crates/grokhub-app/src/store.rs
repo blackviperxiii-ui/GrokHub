@@ -1,6 +1,6 @@
 use grokhub_core::{
-    empty_chip_memory, rotate_trajectory, ChipMemory, ImagineWall, LearningState, ProjectNode,
-    SuggestionStore, UsageDay, TRAJECTORY_MAX_BYTES,
+    empty_chip_memory, prune_ephemeral_insights, rotate_trajectory, ChipMemory, ImagineWall,
+    LearningState, ProjectNode, SuggestionStore, UsageDay, TRAJECTORY_MAX_BYTES,
 };
 use std::fs;
 
@@ -12,7 +12,11 @@ pub fn learning_path() -> std::path::PathBuf {
 
 pub fn load_learning() -> LearningState {
     let raw = config::read_file_capped(&learning_path(), config::MEMORY_FILE_CAP);
-    serde_json::from_str(&raw).unwrap_or_default()
+    let mut s: LearningState = serde_json::from_str(&raw).unwrap_or_default();
+    if prune_ephemeral_insights(&mut s) {
+        let _ = save_learning(&s);
+    }
+    s
 }
 
 pub fn save_learning(s: &LearningState) -> Result<(), String> {
@@ -126,8 +130,11 @@ mod tests {
         std::env::set_var("GROKHUB_CONFIG", &root);
         let mut s = LearningState::default();
         grokhub_core::upsert_insight(&mut s, "pref", "prefer nvim always");
+        grokhub_core::upsert_insight(&mut s, "fact:hi-how-are-you", "hi how are you");
         save_learning(&s).expect("save");
-        assert_eq!(load_learning().insights[0].text, "prefer nvim always");
+        let loaded = load_learning();
+        assert_eq!(loaded.insights.len(), 1);
+        assert_eq!(loaded.insights[0].text, "prefer nvim always");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }

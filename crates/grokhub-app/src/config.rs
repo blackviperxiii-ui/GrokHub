@@ -181,12 +181,51 @@ pub fn memory_dir() -> PathBuf {
     config_dir().join("memory")
 }
 
+pub fn default_device_name() -> String {
+    std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::process::Command::new("hostname")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(|| "This computer".into())
+}
+
 pub fn load() -> AppConfig {
     let path = config_dir().join("app.json");
     let raw = read_file_capped(&path, MEMORY_FILE_CAP);
     let mut cfg: AppConfig = serde_json::from_str(&raw).unwrap_or_default();
     cfg.host_on = true;
+    if cfg.device_name.trim().is_empty() {
+        cfg.device_name = default_device_name();
+    }
     cfg
+}
+
+const SOUL_SEED: &str = "# Soul\n\nWho this cabin is. Edit this.\n";
+const USER_SEED: &str = "# User\n\nWho you are. Edit this.\n";
+const MEMORY_SEED: &str = "# Memory\n\nLong-term notes.\n";
+
+/// First-run SOUL/USER/MEMORY so Settings → Memory is not three empty editors.
+pub fn ensure_memory_seeds() {
+    let dir = memory_dir();
+    let _ = fs::create_dir_all(&dir);
+    for (name, body) in [
+        ("SOUL.md", SOUL_SEED),
+        ("USER.md", USER_SEED),
+        ("MEMORY.md", MEMORY_SEED),
+    ] {
+        if !dir.join(name).exists() {
+            let _ = write_memory(name, body);
+        }
+    }
 }
 
 pub fn save(cfg: &AppConfig) -> Result<(), String> {
@@ -334,7 +373,13 @@ mod tests {
         assert_eq!(loaded.api_key, "xai-test");
         assert_eq!(loaded.device_name, "cabin");
         assert_eq!(loaded.source_dir, "/tmp/Grok-Hub");
+        ensure_memory_seeds();
+        assert!(read_memory("SOUL.md").contains("Who this cabin is"));
+        assert!(read_memory("USER.md").contains("Who you are"));
+        assert!(read_memory("MEMORY.md").contains("Long-term notes"));
         write_memory("SOUL.md", "be useful").expect("mem");
+        assert_eq!(read_memory("SOUL.md"), "be useful");
+        ensure_memory_seeds();
         assert_eq!(read_memory("SOUL.md"), "be useful");
         assert!(
             memory_updated_at("SOUL.md") > 0,
@@ -364,6 +409,21 @@ mod tests {
                 & 0o777;
             assert_eq!(mode, 0o600, "app.json holds the console key");
         }
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn empty_device_name_fills_from_the_box() {
+        let _g = TEST_CONFIG_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("grokhub-devname-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        fs::create_dir_all(&root).expect("dir");
+        fs::write(root.join("app.json"), "{}").expect("write");
+        let loaded = load();
+        assert!(!loaded.device_name.trim().is_empty());
+        assert_eq!(loaded.device_name, default_device_name());
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
