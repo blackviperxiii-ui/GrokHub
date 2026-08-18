@@ -428,6 +428,51 @@ pub fn desk_status_line(calibrated: bool) -> &'static str {
     }
 }
 
+pub fn output_scale_from_jpeg(jpeg_w: u32, jpeg_h: u32, out_w: i32, out_h: i32) -> (f32, f32) {
+    if jpeg_w == 0 || jpeg_h == 0 || out_w <= 0 || out_h <= 0 {
+        return (1.0, 1.0);
+    }
+    (jpeg_w as f32 / out_w as f32, jpeg_h as f32 / out_h as f32)
+}
+
+pub fn assemble_desk_calib(
+    outputs: &[DisplayOutput],
+    samples: &[(String, Vec<((i32, i32), (i32, i32))>)],
+    slop: i32,
+) -> Result<DeskCalib, String> {
+    let mut assembled = Vec::new();
+    for o in outputs {
+        let Some((_, pairs)) = samples
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(&o.name))
+        else {
+            return Err(format!("desk not calibrated — output {} unread", o.name));
+        };
+        let center = calib_probe_points(o)
+            .into_iter()
+            .next()
+            .unwrap_or((o.x, o.y));
+        let Some((_, actual)) = pairs.iter().find(|(intended, _)| *intended == center) else {
+            return Err(format!("desk not calibrated — output {} unread", o.name));
+        };
+        if pointer_slop_miss(center, *actual, slop) {
+            return Err(format!("desk not calibrated — output {} unread", o.name));
+        }
+        let (dx, dy) = median_calib_offset(pairs, slop);
+        assembled.push(OutputCalib {
+            name: o.name.clone(),
+            dx,
+            dy,
+            sx: 1.0,
+            sy: 1.0,
+        });
+    }
+    Ok(DeskCalib {
+        fingerprint: desk_fingerprint(outputs),
+        outputs: assembled,
+    })
+}
+
 pub fn format_pointer_hint(x: i32, y: i32, monitor: Option<&str>) -> String {
     match monitor {
         Some(name) if !name.is_empty() => format!("hint {x},{y} monitor={name}"),
@@ -1009,6 +1054,26 @@ DP-2 connected 1920x1440+5360+0 (normal left inverted right x axis y axis) 527mm
         );
         assert_eq!(desk_status_line(true), "desk: calibrated");
         assert_eq!(desk_status_line(false), "desk: needs calibrate");
+        let samples: Vec<(String, Vec<((i32, i32), (i32, i32))>)> = outs
+            .iter()
+            .map(|o| {
+                let pts = calib_probe_points(o);
+                (
+                    o.name.clone(),
+                    pts.into_iter().map(|p| (p, p)).collect(),
+                )
+            })
+            .collect();
+        let assembled = assemble_desk_calib(&outs, &samples, 8).unwrap();
+        assert_eq!(assembled.fingerprint, desk_fingerprint(&outs));
+        assert!(assembled.outputs.iter().all(|c| c.dx == 0 && c.dy == 0));
+        let mut unread = samples.clone();
+        unread[1].1.clear();
+        let err = assemble_desk_calib(&outs, &unread, 8).unwrap_err();
+        assert!(err.contains("desk not calibrated"), "{err}");
+        assert!(err.contains("DP-1"), "{err}");
+        assert_eq!(output_scale_from_jpeg(2400, 1800, 1920, 1440), (1.25, 1.25));
+        assert_eq!(output_scale_from_jpeg(1920, 1440, 1920, 1440), (1.0, 1.0));
     }
 
     #[test]

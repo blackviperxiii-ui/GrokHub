@@ -9657,7 +9657,7 @@ impl Cabin {
                 crate::cards::status_chip(
                     ui,
                     &chip,
-                    if crate::desktop::hands_ready() {
+                    if crate::desktop::hands_ready() && crate::desktop::desk_calibrated_now() {
                         crate::cards::ChipTone::Live
                     } else {
                         crate::cards::ChipTone::Offline
@@ -9671,6 +9671,9 @@ impl Cabin {
                 }
                 if crate::cards::ghost_pill(ui, "Install hands") {
                     self.status = crate::desktop::install_hands_status();
+                }
+                if crate::cards::ghost_pill(ui, "Calibrate desk") {
+                    self.status = crate::desktop::calibrate_desk_status();
                 }
                 if crate::cards::ghost_pill(ui, "Scan") {
                     self.refresh_eyes();
@@ -11950,6 +11953,7 @@ mod tests {
         );
         assert!(slice.contains("Take over"));
         assert!(slice.contains("Install hands"));
+        assert!(slice.contains("Calibrate desk"));
         assert!(slice.contains("hands_chip_text"));
         assert!(slice.contains("framed_preview") || slice.contains("object_chip"));
         assert!(slice.contains("Look at the screen"));
