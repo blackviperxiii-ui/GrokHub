@@ -238,10 +238,10 @@ pub use shortcuts::{
     shortcut_help, ComposerEnter, ComposerGo, SHORTCUTS,
 };
 pub use stream::{
-    chat_include_usage, chat_stream_flag, fold_sse_acc, fold_stream_token, parse_sse_delta,
-    parse_sse_finish, parse_sse_text, parse_sse_thought, parse_sse_usage, prefer_complete_reply,
-    sse_done, sse_live_delta, should_replace_stream_acc, stream_was_truncated, StreamTokenKind,
-    StreamUsage,
+    chat_include_usage, chat_stream_flag, fold_sse_acc, fold_stream_token, keep_sse_acc,
+    parse_sse_delta, parse_sse_finish, parse_sse_text, parse_sse_thought, parse_sse_usage,
+    prefer_complete_reply, sse_done, sse_live_delta, should_replace_stream_acc, stream_was_truncated,
+    StreamTokenKind, StreamUsage,
 };
 pub use usage::{bump_usage, roll_usage_day, usage_blocked, usage_line, UsageDay};
 pub use hub_sync::{build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, HubMemoryFile, HubSnapshot};
@@ -372,15 +372,21 @@ pub fn next_failover_tier(tier: &str) -> &'static str {
     }
 }
 
+pub fn fill_random(buf: &mut [u8]) {
+    if getrandom::getrandom(buf).is_err() {
+        panic!("getrandom failed — refusing to mint a zero token");
+    }
+}
+
 pub fn uid(prefix: &str) -> String {
     let mut buf = [0u8; 8];
-    let _ = getrandom::getrandom(&mut buf);
+    fill_random(&mut buf);
     format!("{prefix}-{}", hex::encode(buf))
 }
 
 pub fn new_token() -> String {
     let mut buf = [0u8; 24];
-    let _ = getrandom::getrandom(&mut buf);
+    fill_random(&mut buf);
     hex::encode(buf)
 }
 
@@ -405,6 +411,9 @@ mod tests {
         );
         assert_eq!(normalize_code("abc-234"), "ABC234");
         assert_eq!(normalize_code("ab c-23 4"), "ABC234");
+        let tok = new_token();
+        assert_eq!(tok.len(), 48);
+        assert_ne!(tok, "0".repeat(48), "pair tokens must not be all-zero");
     }
 
     fn regex_like_pair(code: &str) -> bool {

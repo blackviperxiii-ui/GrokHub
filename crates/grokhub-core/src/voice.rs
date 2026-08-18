@@ -104,7 +104,18 @@ pub fn reduce_voice_state(state: VoiceState, event: &VoiceEvent) -> VoiceState {
                 VoiceState::Listening
             }
         }
-        VoiceEvent::Transcript { .. } => VoiceState::Listening,
+        VoiceEvent::Transcript { role, .. } => match role {
+            VoiceRole::User => VoiceState::Listening,
+            VoiceRole::Assistant => {
+                if state == VoiceState::Hands {
+                    VoiceState::Hands
+                } else if state == VoiceState::Speaking {
+                    VoiceState::Speaking
+                } else {
+                    VoiceState::Listening
+                }
+            }
+        },
         VoiceEvent::AudioOut { .. } => {
             if state == VoiceState::Hands {
                 VoiceState::Hands
@@ -242,9 +253,12 @@ pub fn encode_input_audio_append(b64_pcm: &str) -> String {
 
 pub fn redact_cabin_from_memory(text: &str) -> String {
     let mut s = text.to_string();
-    for n in ["face", "faces", "webcam"] {
-        let low = s.to_ascii_lowercase();
-        if let Some(i) = low.find(n) {
+    for n in ["faces", "webcam", "face"] {
+        loop {
+            let low = s.to_ascii_lowercase();
+            let Some(i) = low.find(n) else {
+                break;
+            };
             s.replace_range(i..i + n.len(), "[cabin-redacted]");
         }
     }
@@ -542,6 +556,34 @@ mod tests {
         assert!(encode_session_update().contains("session.update"));
         assert!(should_mute_speaker(true));
         assert!(redact_cabin_from_memory("a face here").contains("[cabin-redacted]"));
+        let twice = redact_cabin_from_memory("face by the webcam and another face");
+        assert!(!twice.to_ascii_lowercase().contains("face"), "{twice}");
+        assert!(!twice.to_ascii_lowercase().contains("webcam"), "{twice}");
+        assert_eq!(
+            reduce_voice_state(
+                VoiceState::Speaking,
+                &VoiceEvent::Transcript {
+                    text: "hello".into(),
+                    final_: false,
+                    role: VoiceRole::Assistant,
+                    replace: false,
+                }
+            ),
+            VoiceState::Speaking,
+            "assistant transcript deltas must not demote Speaking"
+        );
+        assert_eq!(
+            reduce_voice_state(
+                VoiceState::Speaking,
+                &VoiceEvent::Transcript {
+                    text: "hey".into(),
+                    final_: false,
+                    role: VoiceRole::User,
+                    replace: false,
+                }
+            ),
+            VoiceState::Listening
+        );
         assert!(should_attach_cabin_frame(CabinEyesState::Seeing, true));
         assert!(!should_attach_cabin_frame(CabinEyesState::Off, true));
         assert!(should_capture_before_chat(true));

@@ -5,7 +5,10 @@ use crate::task::{HubTask, Receipt};
 use crate::{new_token, now_ms, uid};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::io::Read;
 use std::sync::Arc;
+
+const HUB_STATE_CAP: u64 = 8 * 1024 * 1024;
 
 pub const HUB_KIND: &str = "grokhub-hub-v1";
 pub const DEFAULT_PORT: u16 = 18766;
@@ -369,7 +372,12 @@ pub fn save_hub_state(path: &std::path::Path, st: &HubState) -> Result<(), Strin
 }
 
 pub fn load_hub_state(path: &std::path::Path) -> Option<HubState> {
-    let raw = std::fs::read_to_string(path).ok()?;
+    let file = std::fs::File::open(path).ok()?;
+    let mut raw = String::new();
+    let n = file.take(HUB_STATE_CAP.saturating_add(1)).read_to_string(&mut raw).ok()?;
+    if (n as u64) > HUB_STATE_CAP {
+        return None;
+    }
     let mut st: HubState = serde_json::from_str(&raw).ok()?;
     st.last_frame = None;
     Some(st)

@@ -56,6 +56,21 @@ fn looks_like_bind_path(s: &str) -> bool {
     s.starts_with('/') || s.starts_with('~') || s.starts_with('.')
 }
 
+fn strip_bind_word(rest: &str) -> Option<&str> {
+    let rest = rest.trim();
+    if rest.len() < 4 || !rest[..4].eq_ignore_ascii_case("bind") {
+        return None;
+    }
+    let after = &rest[4..];
+    if after.is_empty() {
+        return Some("");
+    }
+    if after.starts_with(char::is_whitespace) {
+        return Some(after.trim());
+    }
+    None
+}
+
 pub fn parse_slash(line: &str) -> Option<Slash> {
     let t = line.trim();
     if t.starts_with("$ ") {
@@ -153,8 +168,7 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
                 } else {
                     Some(Slash::ProjectMove(name.to_string()))
                 }
-            } else if rest.len() >= 4 && rest[..4].eq_ignore_ascii_case("bind") {
-                let path = rest[4..].trim();
+            } else if let Some(path) = strip_bind_word(rest) {
                 if path.is_empty() {
                     None
                 } else {
@@ -435,6 +449,7 @@ mod tests {
         assert_eq!(parse_slash("/sh ls /tmp"), Some(Slash::Sh("ls /tmp".into())));
         assert_eq!(parse_slash("$ echo hi"), Some(Slash::Sh("echo hi".into())));
         assert_eq!(parse_slash("/project bind ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
+        assert_eq!(parse_slash("/project binding ~/GrokHub-Work"), None);
         assert_eq!(parse_slash("/project ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
         assert_eq!(parse_slash("/project /tmp/cabin"), Some(Slash::ProjectBind(Some("/tmp/cabin".into()))));
         assert_eq!(parse_slash("/project typo"), None);

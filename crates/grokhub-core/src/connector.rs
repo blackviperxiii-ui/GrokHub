@@ -26,8 +26,11 @@ pub fn connector_url_allowed(url: &str, extra: &[String]) -> bool {
 
 fn host_of(url: &str) -> Option<String> {
     let rest = url.strip_prefix("https://")?;
-    let host = rest.split('/').next()?.split('@').next_back()?;
-    let host = host.split(':').next()?.to_ascii_lowercase();
+    let authority = rest.split('/').next()?;
+    if authority.contains('@') {
+        return None;
+    }
+    let host = authority.split(':').next()?.to_ascii_lowercase();
     if host.is_empty() {
         None
     } else {
@@ -191,11 +194,22 @@ pub fn map_website_connector_name(name: &str) -> Option<&'static str> {
         ("linear", "linear"),
     ];
     for (alias, id) in aliases {
-        if k == alias || k.contains(alias) || alias.contains(&k) && k.len() > 2 {
+        if alias_hits(&k, alias) {
             return Some(id);
         }
     }
     None
+}
+
+fn alias_hits(name: &str, alias: &str) -> bool {
+    if name == alias {
+        return true;
+    }
+    if alias.contains(' ') && name.contains(alias) {
+        return true;
+    }
+    name.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|tok| tok == alias)
 }
 
 #[cfg(test)]
@@ -211,6 +225,13 @@ mod tests {
             !connector_url_allowed("http://grok.com/rest/connectors", &[]),
             "cleartext connector URLs are not allowed"
         );
+        assert!(
+            !connector_url_allowed("https://evil.com@grok.com/rest/connectors", &[]),
+            "userinfo must not impersonate an allowlisted host"
+        );
+        assert_eq!(map_website_connector_name("teamspeak"), None);
+        assert_eq!(map_website_connector_name("inbox"), None);
+        assert_eq!(map_website_connector_name("Microsoft Teams"), Some("teams"));
         assert!(connector_url_allowed(
             "https://notes.example/x",
             &["example".into()]
