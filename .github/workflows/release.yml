@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  linux-bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Native GUI build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libgl1-mesa-dev libwayland-dev libasound2-dev
+      - run: ./scripts/make-release-bundle.sh
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-release/grokhub-linux-*.tar.gz
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ## Install
+            Extract `grokhub-linux-${{ github.ref_name }}.tar.gz` and run `./install.sh`,
+            or `cargo install --path crates/grokhub-app` from a clone.

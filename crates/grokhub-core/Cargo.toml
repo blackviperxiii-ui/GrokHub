@@ -1,0 +1,12 @@
+[package]
+name = "grokhub-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared GrokHub brain — pair, tasks, frames, inhabit. No HTTP."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+getrandom.workspace = true
+hex.workspace = true

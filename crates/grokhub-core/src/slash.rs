@@ -1,0 +1,537 @@
+//! Composer slash commands. Local — they never go to the model.
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Slash {
+    Forget(Option<String>),
+    MemoryNote(String),
+    MemoryShow,
+    Recall(String),
+    Board,
+    Imagine(String),
+    Compact,
+    Skill(String),
+    LearnReflect,
+    Update,
+    Help,
+    New,
+    Scratch,
+    Clear,
+    Undo,
+    Retry,
+    Stop,
+    Sh(String),
+    ProjectBind(Option<String>),
+    ProjectClear,
+    ProjectShow,
+    ProjectNew(String),
+    ProjectFolder(String),
+    ProjectRename(String),
+    ProjectMove(String),
+    ProjectDelete,
+    Send(String),
+    Sync,
+    Hub,
+    Inhabit(String),
+    Rewind,
+    Room(String),
+    Export,
+    Rename(String),
+    Context,
+    Health,
+    Fix,
+    Remember(String),
+    Mode(String),
+    Dream,
+    HostStatus,
+    Import,
+    Consult(String),
+    Usage,
+    Models,
+    Palette,
+    Pin,
+    Delete,
+}
+
+fn looks_like_bind_path(s: &str) -> bool {
+    s.starts_with('/') || s.starts_with('~') || s.starts_with('.')
+}
+
+pub fn parse_slash(line: &str) -> Option<Slash> {
+    let t = line.trim();
+    if t.starts_with("$ ") {
+        let cmd = t[2..].trim();
+        if cmd.is_empty() {
+            return None;
+        }
+        return Some(Slash::Sh(cmd.to_string()));
+    }
+    if !t.starts_with('/') {
+        return None;
+    }
+    let mut parts = t.splitn(2, char::is_whitespace);
+    let cmd = parts.next().unwrap_or("").to_ascii_lowercase();
+    let rest = parts.next().unwrap_or("").trim();
+    match cmd.as_str() {
+        "/approve" => None,
+        "/forget" => Some(Slash::Forget(if rest.is_empty() {
+            None
+        } else {
+            Some(rest.to_string())
+        })),
+        "/memory" => {
+            if rest.eq_ignore_ascii_case("show") || rest.is_empty() {
+                return Some(Slash::MemoryShow);
+            }
+            let note = rest
+                .strip_prefix("note")
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())?;
+            Some(Slash::MemoryNote(note.to_string()))
+        }
+        "/recall" if !rest.is_empty() => Some(Slash::Recall(rest.to_string())),
+        "/board" => Some(Slash::Board),
+        "/imagine" if !rest.is_empty() => Some(Slash::Imagine(rest.to_string())),
+        "/compact" => Some(Slash::Compact),
+        "/skill" if !rest.is_empty() => Some(Slash::Skill(rest.to_string())),
+        "/learn" if rest.eq_ignore_ascii_case("reflect") => Some(Slash::LearnReflect),
+        "/update" => Some(Slash::Update),
+        "/help" => Some(Slash::Help),
+        "/new" => Some(Slash::New),
+        "/scratch" => Some(Slash::Scratch),
+        "/clear" => Some(Slash::Clear),
+        "/undo" => Some(Slash::Undo),
+        "/retry" => Some(Slash::Retry),
+        "/stop" => Some(Slash::Stop),
+        "/sh" if !rest.is_empty() => Some(Slash::Sh(rest.to_string())),
+        "/host" | "/tools" => Some(Slash::HostStatus),
+        "/rename" if !rest.is_empty() => Some(Slash::Rename(rest.to_string())),
+        "/pin" => Some(Slash::Pin),
+        "/delete" | "/close" => Some(Slash::Delete),
+        "/context" => Some(Slash::Context),
+        "/health" => Some(Slash::Health),
+        "/fix" => Some(Slash::Fix),
+        "/remember" if !rest.is_empty() => Some(Slash::Remember(rest.to_string())),
+        "/mode" if !rest.is_empty() => resolve_mode_arg(rest).map(Slash::Mode),
+        "/dream" => Some(Slash::Dream),
+        "/import" => Some(Slash::Import),
+        "/consult" if !rest.is_empty() => Some(Slash::Consult(rest.to_string())),
+        "/usage" => Some(Slash::Usage),
+        "/models" => Some(Slash::Models),
+        "/palette" => Some(Slash::Palette),
+        "/project" => {
+            if rest.eq_ignore_ascii_case("clear") || rest.eq_ignore_ascii_case("unbind") {
+                Some(Slash::ProjectClear)
+            } else if rest.is_empty() || rest.eq_ignore_ascii_case("show") {
+                Some(Slash::ProjectShow)
+            } else if let Some(name) = rest.strip_prefix("new ") {
+                let name = name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectNew(name.to_string()))
+                }
+            } else if let Some(name) = rest.strip_prefix("folder ") {
+                let name = name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectFolder(name.to_string()))
+                }
+            } else if let Some(name) = rest.strip_prefix("rename ") {
+                let name = name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectRename(name.to_string()))
+                }
+            } else if rest.eq_ignore_ascii_case("delete") {
+                Some(Slash::ProjectDelete)
+            } else if let Some(name) = rest.strip_prefix("move ") {
+                let name = name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectMove(name.to_string()))
+                }
+            } else if rest.len() >= 4 && rest[..4].eq_ignore_ascii_case("bind") {
+                let path = rest[4..].trim();
+                if path.is_empty() {
+                    None
+                } else {
+                    Some(Slash::ProjectBind(Some(path.to_string())))
+                }
+            } else if looks_like_bind_path(rest) {
+                Some(Slash::ProjectBind(Some(rest.to_string())))
+            } else {
+                None
+            }
+        }
+        "/send" if !rest.is_empty() => Some(Slash::Send(rest.to_string())),
+        "/sync" => Some(Slash::Sync),
+        "/hub" => Some(Slash::Hub),
+        "/inhabit" if !rest.is_empty() => Some(Slash::Inhabit(rest.to_string())),
+        "/rewind" => Some(Slash::Rewind),
+        "/room" if !rest.is_empty() => Some(Slash::Room(rest.to_string())),
+        "/export" => Some(Slash::Export),
+        _ => None,
+    }
+}
+
+pub fn slash_kind(s: &Slash) -> &'static str {
+    match s {
+        Slash::Forget(_) => "forget",
+        Slash::MemoryNote(_) => "memory",
+        Slash::MemoryShow => "memory_show",
+        Slash::Recall(_) => "recall",
+        Slash::Board => "board",
+        Slash::Imagine(_) => "imagine",
+        Slash::Compact => "compact",
+        Slash::Skill(_) => "skill",
+        Slash::LearnReflect => "reflect",
+        Slash::Update => "update",
+        Slash::Help => "help",
+        Slash::New => "new",
+        Slash::Scratch => "scratch",
+        Slash::Clear => "clear",
+        Slash::Undo => "undo",
+        Slash::Retry => "retry",
+        Slash::Stop => "stop",
+        Slash::Sh(_) => "sh",
+        Slash::ProjectBind(_) => "project_bind",
+        Slash::ProjectClear => "project_clear",
+        Slash::ProjectShow => "project_show",
+        Slash::ProjectNew(_) => "project_new",
+        Slash::ProjectFolder(_) => "project_folder",
+        Slash::ProjectRename(_) => "project_rename",
+        Slash::ProjectMove(_) => "project_move",
+        Slash::ProjectDelete => "project_delete",
+        Slash::Send(_) => "send",
+        Slash::Sync => "sync",
+        Slash::Hub => "hub",
+        Slash::Inhabit(_) => "inhabit",
+        Slash::Rewind => "rewind",
+        Slash::Room(_) => "room",
+        Slash::Export => "export",
+        Slash::Rename(_) => "rename",
+        Slash::Context => "context",
+        Slash::Health => "health",
+        Slash::Fix => "fix",
+        Slash::Remember(_) => "remember",
+        Slash::Mode(_) => "mode",
+        Slash::Dream => "dream",
+        Slash::HostStatus => "host_status",
+        Slash::Import => "import",
+        Slash::Consult(_) => "consult",
+        Slash::Usage => "usage",
+        Slash::Models => "models",
+        Slash::Palette => "palette",
+        Slash::Pin => "pin",
+        Slash::Delete => "delete",
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlashDef {
+    pub cmd: &'static str,
+    pub hint: &'static str,
+    pub insert: &'static str,
+    pub run_on_pick: bool,
+}
+
+pub const SLASH_COMMANDS: &[SlashDef] = &[
+    SlashDef { cmd: "/help", hint: "Show slash commands", insert: "/help", run_on_pick: true },
+    SlashDef { cmd: "/new", hint: "New chat", insert: "/new", run_on_pick: true },
+    SlashDef { cmd: "/scratch", hint: "New scratch chat (no memory)", insert: "/scratch", run_on_pick: true },
+    SlashDef { cmd: "/clear", hint: "Clear current chat", insert: "/clear", run_on_pick: true },
+    SlashDef { cmd: "/compact", hint: "Compact older turns", insert: "/compact", run_on_pick: true },
+    SlashDef { cmd: "/context", hint: "Show context budget", insert: "/context", run_on_pick: true },
+    SlashDef { cmd: "/health", hint: "Run install/session health pass", insert: "/health", run_on_pick: true },
+    SlashDef { cmd: "/fix", hint: "Self-heal stuck UI + health pass", insert: "/fix", run_on_pick: true },
+    SlashDef { cmd: "/memory", hint: "Show memory files", insert: "/memory ", run_on_pick: false },
+    SlashDef { cmd: "/learn reflect", hint: "Run self-improve reflect", insert: "/learn reflect", run_on_pick: true },
+    SlashDef { cmd: "/mode", hint: "Set mode…", insert: "/mode ", run_on_pick: false },
+    SlashDef { cmd: "/imagine", hint: "Open Imagine", insert: "/imagine ", run_on_pick: false },
+    SlashDef { cmd: "/export", hint: "Export chat markdown", insert: "/export", run_on_pick: true },
+    SlashDef { cmd: "/rename", hint: "Rename chat…", insert: "/rename ", run_on_pick: false },
+    SlashDef { cmd: "/pin", hint: "Pin or unpin this chat", insert: "/pin", run_on_pick: true },
+    SlashDef { cmd: "/delete", hint: "Delete this chat tab", insert: "/delete", run_on_pick: true },
+    SlashDef { cmd: "/remember", hint: "Save durable memory note", insert: "/remember ", run_on_pick: false },
+    SlashDef { cmd: "/project", hint: "Show bound project", insert: "/project", run_on_pick: true },
+    SlashDef { cmd: "/project bind", hint: "Bind a folder as the world", insert: "/project bind ", run_on_pick: false },
+    SlashDef { cmd: "/project new", hint: "Create a project", insert: "/project new ", run_on_pick: false },
+    SlashDef { cmd: "/project folder", hint: "Create a sidebar folder", insert: "/project folder ", run_on_pick: false },
+    SlashDef { cmd: "/project rename", hint: "Rename the selected project", insert: "/project rename ", run_on_pick: false },
+    SlashDef { cmd: "/project move", hint: "Add the selected project to a folder", insert: "/project move ", run_on_pick: false },
+    SlashDef { cmd: "/project delete", hint: "Remove the selected project from the sidebar", insert: "/project delete", run_on_pick: true },
+    SlashDef { cmd: "/board", hint: "Open the Workboard", insert: "/board", run_on_pick: true },
+    SlashDef { cmd: "/skill", hint: "Run a skill…", insert: "/skill ", run_on_pick: false },
+    SlashDef { cmd: "/host", hint: "Desktop host status", insert: "/host", run_on_pick: true },
+    SlashDef { cmd: "/recall", hint: "Search chats and memory", insert: "/recall ", run_on_pick: false },
+    SlashDef { cmd: "/forget", hint: "Remove a memory topic", insert: "/forget ", run_on_pick: false },
+    SlashDef { cmd: "/undo", hint: "Drop last assistant turn", insert: "/undo", run_on_pick: true },
+    SlashDef { cmd: "/retry", hint: "Re-send last user prompt", insert: "/retry", run_on_pick: true },
+    SlashDef { cmd: "/stop", hint: "Stop generation", insert: "/stop", run_on_pick: true },
+    SlashDef { cmd: "/sh", hint: "Run shell on host", insert: "/sh ", run_on_pick: false },
+    SlashDef { cmd: "$", hint: "Host shell shortcut", insert: "$ ", run_on_pick: false },
+    SlashDef { cmd: "/hub", hint: "Device hub status", insert: "/hub", run_on_pick: true },
+    SlashDef { cmd: "/sync", hint: "Sync chats & memory with paired computers", insert: "/sync", run_on_pick: true },
+    SlashDef { cmd: "/send", hint: "Send a task to another computer", insert: "/send ", run_on_pick: false },
+    SlashDef { cmd: "/rewind", hint: "Restore last job snapshot", insert: "/rewind", run_on_pick: true },
+    SlashDef { cmd: "/room", hint: "Speak the room — stage a project", insert: "/room ", run_on_pick: false },
+    SlashDef { cmd: "/dream", hint: "Imagine last night’s job", insert: "/dream", run_on_pick: true },
+    SlashDef { cmd: "/inhabit", hint: "Hand this Grok to another box", insert: "/inhabit ", run_on_pick: false },
+    SlashDef { cmd: "/update", hint: "Overlay install", insert: "/update", run_on_pick: true },
+    SlashDef { cmd: "/import", hint: "Import OpenClaw workspace", insert: "/import", run_on_pick: true },
+    SlashDef { cmd: "/consult", hint: "One-shot consult", insert: "/consult ", run_on_pick: false },
+    SlashDef { cmd: "/usage", hint: "Today's usage", insert: "/usage", run_on_pick: true },
+    SlashDef { cmd: "/models", hint: "Grok catalog", insert: "/models", run_on_pick: true },
+    SlashDef { cmd: "/palette", hint: "Command palette", insert: "/palette", run_on_pick: true },
+];
+
+pub fn filter_slash_commands(draft: &str) -> Vec<&'static SlashDef> {
+    let t = draft.trim_start();
+    if !t.starts_with('/') && !t.starts_with('$') {
+        return vec![];
+    }
+    let parts: Vec<&str> = t.split_whitespace().collect();
+    if parts.len() > 2 {
+        return vec![];
+    }
+    let needle = t.to_ascii_lowercase();
+    SLASH_COMMANDS
+        .iter()
+        .filter(|s| {
+            let c = s.cmd.to_ascii_lowercase();
+            if c.starts_with(&needle) {
+                return true;
+            }
+            if needle.starts_with(&format!("{c} ")) {
+                return true;
+            }
+            if parts.len() == 2 {
+                let want = format!("{} {}", parts[0].to_ascii_lowercase(), parts[1].to_ascii_lowercase());
+                return c.starts_with(&want);
+            }
+            false
+        })
+        .take(12)
+        .collect()
+}
+
+pub fn resolve_mode_arg(arg: &str) -> Option<String> {
+    let a = arg.trim().to_ascii_lowercase();
+    let mapped = match a.as_str() {
+        "auto" | "adaptive" | "smart" => "auto",
+        "fast" => "fast",
+        "balance" | "balanced" => "balanced",
+        "think" | "thinking" | "expert" => "think",
+        "heavy" | "max" | "deep" => "max",
+        "build" => "think",
+        _ => return None,
+    };
+    Some(mapped.into())
+}
+
+pub fn slash_help() -> String {
+    [
+        "/help — this list",
+        "/new — new chat",
+        "/scratch — new scratch chat (no memory; /forget and Memory Save stay off)",
+        "/clear — clear this chat",
+        "/compact — keep last 8 visible turns",
+        "/undo — drop last assistant turn",
+        "/retry — re-send last user prompt",
+        "/stop — halt the current job",
+        "/sh <cmd> — run on this box",
+        "/host — host tools (always on)",
+        "/project bind <path> — bound tree is the world",
+        "/project new <name> — create a project",
+        "/project folder <name> — create a sidebar folder",
+        "/project rename <name> — rename the selected project",
+        "/project move <folder>|root — add the selected project to a folder",
+        "/project delete — remove the selected project from the sidebar",
+        "/board — open the Workboard",
+        "/skill <name> — run a skill",
+        "/memory note <fact> — write MEMORY.md",
+        "/recall <q> — search memory",
+        "/forget <topic> — drop matching memory lines",
+        "/imagine <prompt>",
+        "/update — overlay install (enables hub, rebuilds sidecars); Restart on Settings (ydotoold → hub, then a new cabin process)",
+        "/send <task> — task this box",
+        "/sync — merge chats and memory with paired computers",
+        "/hub — devices / pair",
+        "/inhabit <peer> — hand this Grok to another box (not the phone)",
+        "/rewind — restore last project snapshot (Restoring until host finishes; refuses empty dest and ~/.ssh)",
+        "/room <name> — speak the room",
+        "/export — write this chat as markdown",
+        "/rename <title> — name this chat (permanent)",
+        "/pin — pin or unpin this chat",
+        "/delete — delete this chat tab",
+        "/context — context budget (visible turns, not host rows)",
+        "/health — doctor",
+        "/fix — halt + doctor",
+        "/remember <fact> — write MEMORY.md",
+        "/mode auto|fast|balance|think|max — Auto routes (Settings pin skips if not a ladder default); Fast mini; Balance 4.3; Think 4.6 high; Max 4.6 xhigh",
+        "/dream — Imagine last night",
+        "/tools — same as /host",
+        "/import — OpenClaw workspace",
+        "/consult <q> — one-shot consult",
+        "/usage — today's buckets",
+        "/models — Grok catalog",
+        "/palette — command palette",
+        "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs.",
+        "Mode pill: Auto / Fast / Balance / Think / Max. Pages use catalog chrome.",
+        "Appearance: Dark, Light, System. Chat streams tokens on the thread that started them.",
+        "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Hands: install.sh builds sidecars and installs python-atspi; Eyes Install hands starts ydotoold; /stop kills the worker.",
+        "A truncated, promised-work, or handed-back apt/not-found reply can quiet-continue up to four times. Thinking does not count.",
+        "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
+        "Cabin eyes stay dormant until you ask, hands need a frame, or GUI help (close that tab / turn this on). just tell me looks and does not click. Thought does not announce an attach.",
+        "Pulse every 15s: every organ runs. Hidden idle waits for the pulse.",
+        "After 21:00 a quiet Balanced review fills Suggested tiles from what it learned. Night can patch an existing skill from yesterday's host/hands trajectory.",
+        "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
+        "Chat rail opens the last-accessed thread. MidThought can greet Continue {title}.",
+        "Host, hands, and connector work stay off the chat. Chat shows each thought as its own bubble and the final reply. User bubbles sit on the right. Bubbles wrap with the chat pane. Copy and Reply sit on visible messages. Hands map JPEG clicks through xrandr; act picks the smallest AT-SPI match. A full-desktop frame stays at 0,0 — it does not inherit a single-monitor origin. Pointer receipts report the real cursor and monitor; overflow is clamped to the virtual desktop. tab list/new/close/focus talks to localhost CDP when it is up; otherwise act / key ctrl+t. GUI-help turns show a Hands chip and a how-to. Hung desktop tools time out so the cabin does not freeze. GitHub, CDP, chat SSE, and OAuth JSON bodies are capped. Chat-complete text is clipped before strip/merge. Live thought+stream merge stays capped; leftover deltas skip upsert. Chat bubble layout clips paint to TEXT_FILE_CAP. Stream deltas refresh the trailing chat view without cloning the thread; ChatView bodies stay inside TEXT_FILE_CAP. Eyes last-frame URLs drop above FRAME_CAP. Live webcam JPEGs stay off the UI thread. Periodic persist skips while a job is running. Live stream snapshots stay at TEXT_FILE_CAP. History and /recall search scan a TEXT_FILE_CAP prefix. Chip rebuild skips while a job is running. Chip rebuild and suggest clone a 4KB prefix. Spoken TTS clones a TEXT_FILE_CAP prefix. Learning skips a huge user paste before cloning facts. Goal-outcome scans a head+tail window. Thread naming uses a 4KB prefix. Chat-complete pin/recipe/host/night/consult scans use that window. Redirect send and last-user-on-job read the last user turn from borrowed refs.",
+        "Five chips sit centered over the composer.",
+    ]
+    .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn approve_gone() {
+        assert_eq!(parse_slash("/approve off"), None);
+        assert_eq!(parse_slash("/approve on"), None);
+        assert_eq!(parse_slash("/approve risky"), None);
+        assert_eq!(parse_slash("/approve"), None);
+        assert_eq!(parse_slash("hello"), None);
+    }
+
+    #[test]
+    fn memory_and_recall() {
+        assert_eq!(
+            parse_slash("/memory note prefer nvim"),
+            Some(Slash::MemoryNote("prefer nvim".into()))
+        );
+        assert_eq!(parse_slash("/recall pi"), Some(Slash::Recall("pi".into())));
+        assert_eq!(parse_slash("/forget wifi"), Some(Slash::Forget(Some("wifi".into()))));
+        assert_eq!(parse_slash("/forget"), Some(Slash::Forget(None)));
+        assert_eq!(parse_slash("/board"), Some(Slash::Board));
+        assert_eq!(parse_slash("/imagine a cabin"), Some(Slash::Imagine("a cabin".into())));
+        assert_eq!(parse_slash("/compact"), Some(Slash::Compact));
+        assert_eq!(parse_slash("/learn reflect"), Some(Slash::LearnReflect));
+        assert_eq!(parse_slash("/update"), Some(Slash::Update));
+    }
+
+    #[test]
+    fn cabin_slash() {
+        assert_eq!(parse_slash("/help").as_ref().map(slash_kind), Some("help"));
+        assert_eq!(parse_slash("/new"), Some(Slash::New));
+        assert_eq!(parse_slash("/scratch"), Some(Slash::Scratch));
+        assert_eq!(parse_slash("/undo"), Some(Slash::Undo));
+        assert_eq!(parse_slash("/retry"), Some(Slash::Retry));
+        assert_eq!(parse_slash("/sh ls /tmp"), Some(Slash::Sh("ls /tmp".into())));
+        assert_eq!(parse_slash("$ echo hi"), Some(Slash::Sh("echo hi".into())));
+        assert_eq!(parse_slash("/project bind ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
+        assert_eq!(parse_slash("/project ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
+        assert_eq!(parse_slash("/project /tmp/cabin"), Some(Slash::ProjectBind(Some("/tmp/cabin".into()))));
+        assert_eq!(parse_slash("/project typo"), None);
+        assert_eq!(parse_slash("/project bind"), None);
+        assert_eq!(parse_slash("/project new Night watch"), Some(Slash::ProjectNew("Night watch".into())));
+        assert_eq!(parse_slash("/project folder Cabin"), Some(Slash::ProjectFolder("Cabin".into())));
+        assert_eq!(parse_slash("/project rename Dawn"), Some(Slash::ProjectRename("Dawn".into())));
+        assert_eq!(parse_slash("/project move Cabin"), Some(Slash::ProjectMove("Cabin".into())));
+        assert_eq!(parse_slash("/project delete"), Some(Slash::ProjectDelete));
+        assert_eq!(parse_slash("/inhabit cabin-2"), Some(Slash::Inhabit("cabin-2".into())));
+        assert_eq!(parse_slash("/send flash the pi"), Some(Slash::Send("flash the pi".into())));
+        assert_eq!(slash_kind(&Slash::Update), "update");
+        assert_eq!(parse_slash("/rename night").as_ref().map(slash_kind), Some("rename"));
+        assert_eq!(parse_slash("/pin"), Some(Slash::Pin));
+        assert_eq!(parse_slash("/delete"), Some(Slash::Delete));
+        assert_eq!(parse_slash("/close"), Some(Slash::Delete));
+        assert_eq!(parse_slash("/host"), Some(Slash::HostStatus));
+        assert_eq!(parse_slash("/mode max"), Some(Slash::Mode("max".into())));
+        assert_eq!(parse_slash("/mode think"), Some(Slash::Mode("think".into())));
+        assert_eq!(parse_slash("/mode balance"), Some(Slash::Mode("balanced".into())));
+        assert_eq!(parse_slash("/mode balanced"), Some(Slash::Mode("balanced".into())));
+        assert_eq!(parse_slash("/dream"), Some(Slash::Dream));
+        assert_eq!(parse_slash("/host off"), Some(Slash::HostStatus));
+        assert_eq!(parse_slash("/tools off"), Some(Slash::HostStatus));
+        assert_eq!(parse_slash("/tools on"), Some(Slash::HostStatus));
+        assert!(!slash_help().contains("/approve"));
+        assert_eq!(parse_slash("/import"), Some(Slash::Import));
+        assert_eq!(
+            parse_slash("/consult check the pi"),
+            Some(Slash::Consult("check the pi".into()))
+        );
+        assert_eq!(parse_slash("/usage"), Some(Slash::Usage));
+        assert_eq!(parse_slash("/models"), Some(Slash::Models));
+        assert_eq!(parse_slash("/palette"), Some(Slash::Palette));
+        assert!(slash_help().contains("/import"));
+        assert!(slash_help().contains("/consult"));
+        assert!(slash_help().contains("/project new"));
+        assert!(slash_help().contains("/project folder"));
+        assert!(slash_help().contains("/project delete"));
+        assert!(slash_help().contains("/board"));
+        assert!(slash_help().contains("/skill"));
+        assert!(slash_help().contains("/mode auto|fast|balance|think|max"));
+        assert!(slash_help().contains("Pulse every 15s"));
+        assert!(slash_help().contains("Cabin eyes stay dormant"));
+        assert!(slash_help().contains("Restart on Settings"));
+        assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
+        assert!(slash_help().contains("Mode pill"));
+        assert!(slash_help().contains("quiet Balanced review"));
+        assert!(slash_help().contains("centered over the composer"));
+        assert!(slash_help().contains("Hidden idle waits for the pulse"));
+        assert!(slash_help().contains("Chat rail opens the last-accessed thread"));
+        assert!(slash_help().contains("Host, hands, and connector work stay off the chat"));
+        assert!(slash_help().contains("Copy and Reply"));
+        assert!(slash_help().contains("wrap with the chat pane"));
+        assert!(slash_help().contains("each thought as its own bubble"));
+        assert!(slash_help().contains("User bubbles sit on the right"));
+        assert!(slash_help().contains("smallest AT-SPI match"));
+        assert!(slash_help().contains("full-desktop frame stays at 0,0"));
+        assert!(slash_help().contains("Pointer receipts report the real cursor and monitor"));
+        assert!(slash_help().contains("keep last 8 visible turns"));
+        assert!(slash_help().contains("/forget and Memory Save stay off"));
+        assert!(slash_help().contains("Restoring until host finishes"));
+        assert!(slash_help().contains("/skill <name> — run a skill"));
+        assert!(slash_help().contains("/sync — merge chats and memory"));
+        assert!(slash_help().contains("Expired pair codes hide and rotate"));
+        assert!(slash_help().contains("install.sh builds sidecars and installs python-atspi"));
+        assert!(slash_help().contains("Eyes Install hands starts ydotoold"));
+        assert!(slash_help().contains("handed-back apt/not-found"));
+        assert!(slash_help().contains("Thinking does not count"));
+        assert!(slash_help().contains("pinned taskbar click"));
+        assert!(slash_help().contains("GUI help"));
+        assert!(slash_help().contains("just tell me looks and does not click"));
+        assert!(slash_help().contains("tab list/new/close/focus"));
+        assert!(slash_help().contains("localhost CDP"));
+        assert!(slash_help().contains("Hands chip and a how-to"));
+        assert!(slash_help().contains("Hung desktop tools time out"));
+        assert!(slash_help().contains("GitHub, CDP, chat SSE, and OAuth JSON bodies are capped"));
+        assert!(slash_help().contains("Chat-complete text is clipped before strip/merge"));
+        assert!(slash_help().contains("Live thought+stream merge stays capped"));
+        assert!(slash_help().contains("Chat bubble layout clips paint to TEXT_FILE_CAP"));
+        assert!(slash_help().contains("refresh the trailing chat view without cloning the thread"));
+        assert!(slash_help().contains("Eyes last-frame URLs drop above FRAME_CAP"));
+        assert!(slash_help().contains("Live webcam JPEGs stay off the UI thread"));
+        assert!(slash_help().contains("Periodic persist skips while a job is running"));
+        assert!(slash_help().contains("Live stream snapshots stay at TEXT_FILE_CAP"));
+        assert!(slash_help().contains("History and /recall search scan a TEXT_FILE_CAP prefix"));
+        assert!(slash_help().contains("Chip rebuild skips while a job is running"));
+        assert!(slash_help().contains("Chip rebuild and suggest clone a 4KB prefix"));
+        assert!(slash_help().contains("Spoken TTS clones a TEXT_FILE_CAP prefix"));
+        assert!(slash_help().contains("Learning skips a huge user paste before cloning facts"));
+        assert!(slash_help().contains("Goal-outcome scans a head+tail window"));
+        assert!(slash_help().contains("Thread naming uses a 4KB prefix"));
+        assert!(slash_help().contains("Chat-complete pin/recipe/host/night/consult scans use that window"));
+        assert!(slash_help().contains("Redirect send and last-user-on-job read the last user turn from borrowed refs"));
+        assert!(slash_help().contains("patch an existing skill"));
+        assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
+        assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
+        assert!(filter_slash_commands("hello").is_empty());
+    }
+}

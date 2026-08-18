@@ -1,0 +1,21 @@
+---
+description: When Jeremy says update, land PRs on main, delete leftovers, sync docs.
+alwaysApply: true
+---
+
+# Update
+
+When Jeremy says **update** (or **merge PRs**), that is the whole job:
+
+1. Merge every remaining open PR into `main`.
+2. Delete each PR branch after it is on `main`.
+3. Delete leftover remote and local `cursor/*` (and any other stale) branches. `main` should be the only branch unless he says otherwise.
+4. Bump the cabin release version (patch of `VERSION` / `[workspace.package] version`) and update **all of GitHub** to match: `Cargo.toml`, grokhub rows in `Cargo.lock`, `README.md` latest, shipping specs, `packaging/PKGBUILD`, `packaging/aur/{PKGBUILD,.SRCINFO,grokhub.install}` (`pkgver`, `#tag=v…`, `pkgrel=1`), and version asserts in `cli.rs` / `oauth.rs`. Then tag `vX.Y.Z` and `git push origin vX.Y.Z` so `.github/workflows/release.yml` publishes the GitHub Release. Do not leave GitHub Latest on an older tag (it still showed v2.0.0 after cargo was 2.5.0). Do not bump Imagine `Quality (v2.0)`, specs marked `(do not bump)`, the diagnostics fixture, or `packaging/grokhub.desktop` `Version=` (desktop-entry spec).
+5. Update the documents so they match what actually shipped (`README.md`, `/help` / slash text, shipping specs under `docs/`).
+6. Leave `main` clean: tests pass, no leftover branches, no stale Electron trees, no draft PR heads sitting around.
+
+Do not leave merged PR heads on the remote. GitHub will not delete them for us (`delete_branch_on_merge` is off). After every merge, `git push origin --delete <branch>` until the repo branch list is only `main`.
+
+If a PR is already superseded on `main` (duplicate cabin work, or an Electron-era branch that would restore deleted `src/` / `desktop/`), record it merged with `git merge -s ours` so the PR closes **without** reverting `main`. Then delete that branch too.
+
+Do not start this pass unless he said **update** (or **merge PRs**). "Don't do it now" means leave PRs and branches alone.

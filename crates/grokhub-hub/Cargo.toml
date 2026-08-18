@@ -1,0 +1,12 @@
+[package]
+name = "grokhub-hub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LAN hub HTTP server — /v1 contract for Android and second boxes"
+
+[dependencies]
+grokhub-core = { path = "../grokhub-core" }
+serde.workspace = true
+serde_json.workspace = true
+tiny_http = "0.12"
