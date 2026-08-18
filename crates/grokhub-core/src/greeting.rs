@@ -1,6 +1,7 @@
 //! Empty-chat greeting blurb. Fast mode. Secrets never in the line.
 
 use crate::is_plain_text;
+use crate::strip_thinking;
 
 pub const GREETING_LLM_MODE: &str = "fast";
 pub const GREETING_MAX_CHARS: usize = 92;
@@ -217,7 +218,12 @@ pub fn greeting_prompt(input: &GreetingInput) -> String {
 }
 
 pub fn parse_llm_greeting(raw: &str) -> Option<String> {
-    let mut t = raw.trim().to_string();
+    let stripped = strip_thinking(raw);
+    let mut t = if stripped.trim().is_empty() {
+        return None;
+    } else {
+        stripped.trim().to_string()
+    };
     if let Some(rest) = t.strip_prefix("```") {
         t = rest
             .trim_start_matches("text")
@@ -227,7 +233,11 @@ pub fn parse_llm_greeting(raw: &str) -> Option<String> {
             .trim()
             .to_string();
     }
-    let line = t.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let line = t.lines().map(str::trim).find(|l| {
+        !l.is_empty()
+            && !l.eq_ignore_ascii_case("thinking:")
+            && !l.starts_with("<think>")
+    })?;
     let line = line.trim_matches('"').trim_matches('\'').trim();
     if line.is_empty() || !is_plain_text(line) {
         return None;
@@ -424,6 +434,22 @@ mod tests {
     fn parse_llm_greeting_drops_secrets() {
         assert!(parse_llm_greeting("token sk-abcdefghijklmnopqrstuv in the cabin").is_none());
         assert!(parse_llm_greeting("").is_none());
+    }
+
+    #[test]
+    fn parse_llm_greeting_strips_thinking() {
+        let g = parse_llm_greeting("THINKING:\nplan a quiet line\n\nAfternoon, Viper. The cabin is ready.")
+            .expect("body after thought");
+        assert!(g.to_ascii_lowercase().contains("afternoon"), "{g}");
+        assert!(!g.to_ascii_lowercase().contains("thinking"), "{g}");
+        assert!(
+            parse_llm_greeting("THINKING:").is_none(),
+            "a thought-only Fast reply must not paint THINKING:"
+        );
+        assert_eq!(
+            pick_greeting("Afternoon, Viper.", Some("THINKING:")),
+            "Afternoon, Viper."
+        );
     }
 
     #[test]
