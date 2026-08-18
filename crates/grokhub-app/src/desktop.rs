@@ -10,6 +10,7 @@ use grokhub_core::{
     parse_atspi_line, parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
     parse_xrandr_outputs, pcm_from_capture, pick_browser_tab, pick_capture_output, pick_hands_backend,
     pick_named_row, picker_args, png_ihdr_size, pointer_slop_miss, rank_atspi_rows, relative_move_steps,
+    tab_close_fallback_may_send_key,
     resolve_bin_in, session_is_wayland, tab_list_from_rows, take_text_body, IMAGE_FILE_CAP,
     TEXT_FILE_CAP, virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path,
     AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp, DisplayOutput, HandsBackend,
@@ -403,17 +404,28 @@ fn run_tab_op_fallback(
             }
         }
         TabAction::Close => {
-            if act_click(query, cancel).is_ok() {
+            if tab_close_fallback_may_send_key(act_click(query, cancel).is_ok()) {
+                run_pointer_op(
+                    &ComputerOp::Key {
+                        name: "ctrl+w".into(),
+                    },
+                    cancel,
+                )?;
                 return Ok(format!("closed {query} via act"));
             }
-            let _ = wait_for_title(Some(query), cancel);
-            run_pointer_op(
-                &ComputerOp::Key {
-                    name: "ctrl+w".into(),
-                },
-                cancel,
-            )?;
-            Ok(format!("closed {query} (key ctrl+w)"))
+            wait_for_title(Some(query), cancel)?;
+            if tab_close_fallback_may_send_key(act_click(query, cancel).is_ok()) {
+                run_pointer_op(
+                    &ComputerOp::Key {
+                        name: "ctrl+w".into(),
+                    },
+                    cancel,
+                )?;
+                return Ok(format!("closed {query} via act"));
+            }
+            Err(format!(
+                "no tab matched {query} — {CDP_DOWN}; use act or wait_for then key ctrl+w"
+            ))
         }
         TabAction::Focus => {
             if let Ok((x, y)) = act_click(query, cancel) {
@@ -2352,6 +2364,34 @@ mod tests {
         assert!(
             cam.contains("IMAGE_FILE_CAP") && cam.find("IMAGE_FILE_CAP").expect("cam cap") < cam_read,
             "webcam JPEG must not slurp a huge file: {cam}"
+        );
+    }
+
+    #[test]
+    fn tab_close_fallback_does_not_ctrl_w_after_wait_timeout() {
+        let src = include_str!("desktop.rs");
+        let fallback = src
+            .split("fn run_tab_op_fallback(")
+            .nth(1)
+            .and_then(|s| s.split("fn is_browser_app_name(").next())
+            .expect("run_tab_op_fallback");
+        let close = fallback
+            .split("TabAction::Close =>")
+            .nth(1)
+            .and_then(|s| s.split("TabAction::Focus =>").next())
+            .expect("close");
+        assert!(
+            !close.contains("let _ = wait_for_title"),
+            "a wait_for timeout must not ctrl+w the focused window: {close}"
+        );
+        assert!(
+            close.contains("tab_close_fallback_may_send_key")
+                && close.contains("wait_for_title(Some(query), cancel)?"),
+            "tab close must require focus and surface wait_for failure: {close}"
+        );
+        assert!(
+            !tab_close_fallback_may_send_key(false),
+            "unfocused close must not send ctrl+w"
         );
     }
 
