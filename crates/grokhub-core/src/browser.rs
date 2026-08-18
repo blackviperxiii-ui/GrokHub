@@ -181,6 +181,12 @@ pub fn cdp_activate_payload(target_id: &str) -> String {
     )
 }
 
+/// CDP-down `tab close` may send ctrl+w only after the target is focused.
+/// A wait_for timeout must not close whichever window has keyboard focus.
+pub fn tab_close_fallback_may_send_key(focused: bool) -> bool {
+    focused
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +248,14 @@ mod tests {
         assert!(cdp_page_close_payload().contains("Page.close"));
         assert!(cdp_page_focus_payload().contains("Page.bringToFront"));
         assert!(cdp_activate_payload("t1").contains("t1"));
+    }
+
+    #[test]
+    fn tab_close_fallback_does_not_key_unless_focused() {
+        assert!(tab_close_fallback_may_send_key(true));
+        assert!(
+            !tab_close_fallback_may_send_key(false),
+            "wait_for timeout / miss must not ctrl+w the focused window"
+        );
     }
 }
