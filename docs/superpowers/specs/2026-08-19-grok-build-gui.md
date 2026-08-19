@@ -1,0 +1,33 @@
+# GrokHub is the Grok Build GUI
+
+GrokHub is the native egui cabin. Grok Build (`grok` CLI over ACP) is the agent, the host shell, and computer-use (eyes and hands).
+
+## Split
+
+Cabin owns: window, tray, project sidebar as cwd, LAN hub / Android, Hey Grok voice, Imagine toolbox.
+
+Grok Build owns: coding tools, bash, sandbox, permissions, plan mode, skills/plugins/MCP, sessions, `/imagine` when ACP supports it, and desktop computer-use.
+
+Transport: spawn installed `grok --no-auto-update agent stdio`. Do not vendor grok-build crates. Headless `grok -p` is only a fallback.
+
+## Chat
+
+`send_chat` opens or reuses an ACP session whose cwd is the bound project. Stream thought and text into existing bubbles. Stop / Halt / tray Halt is `session/cancel`.
+
+Composer pills: Code / Plan / Ask and Ask / Auto / Always-approve. Tool cards, diffs, and desk frames render in the pane. Permission prompts Allow / Deny / Always.
+
+## Desk
+
+The Eyes/Desk page is a viewer of the last computer-use frame from ACP. It does not drive grim, ydotool, AT-SPI, or CDP. Take over is a normal ACP prompt.
+
+## History and extensions
+
+History lists `grok sessions` plus cabin chats. The Connectors tab runs `grok inspect` / `grok mcp` / skills / plugins JSON.
+
+## Auth
+
+Agent: `grok login` cached token or `XAI_API_KEY`. Voice and Imagine still use cabin `secrets.json`.
+
+## Overlay vs agent updates
+
+Cabin overlay (`/update`) updates the GUI only. `grok update` updates the agent.

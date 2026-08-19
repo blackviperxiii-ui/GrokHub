@@ -217,18 +217,11 @@ pub enum RestartAct {
     Spawn { argv: Vec<String> },
 }
 
-/// Restart hands and hub units if they are live, then spawn a new cabin.
-///
-/// Never `systemctl restart grokhub.service` from inside the cabin: that
-/// deadlocks (systemd waits for us, we wait for systemctl). The running
-/// process must drop `cabin.pid` before the spawn, then exit, or the child
-/// only raises the old window.
-pub fn restart_acts(hub_unit: bool, hands_unit: bool, exe: &str, hidden: bool) -> Vec<RestartAct> {
+/// Restart hub if live, then spawn a new cabin. Grok Build owns computer-use;
+/// do not restart ydotoold.
+pub fn restart_acts(hub_unit: bool, _hands_unit: bool, exe: &str, hidden: bool) -> Vec<RestartAct> {
     let mut acts = Vec::new();
     let mut units = Vec::new();
-    if hands_unit {
-        units.push("ydotoold.service".into());
-    }
     if hub_unit {
         units.push("grokhub-hub.service".into());
     }
@@ -396,7 +389,7 @@ mod tests {
             restart_acts(true, true, "/opt/grokhub", false),
             vec![
                 RestartAct::Systemd {
-                    units: vec!["ydotoold.service".into(), "grokhub-hub.service".into()]
+                    units: vec!["grokhub-hub.service".into()]
                 },
                 RestartAct::Spawn {
                     argv: vec!["/opt/grokhub".into()]

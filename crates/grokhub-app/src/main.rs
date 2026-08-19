@@ -1,6 +1,7 @@
 //! GrokHub native cabin. No Electron. No Tauri.
 
 mod app;
+mod build_agent;
 mod helpers;
 mod titlebar;
 mod cards;

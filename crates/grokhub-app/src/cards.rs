@@ -57,9 +57,9 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         icon: TileIcon::Host,
         name: "host-snapshot",
         title: "Host snapshot",
-        body: "Read-only uname / whoami / pwd via HOST_CMD.",
+        body: "Read-only uname / whoami / pwd via Grok Build bash.",
         trigger: "host snapshot",
-        instructions: "Emit HOST_CMD: uname -a && whoami && pwd. After HOST_RESULT, summarize in four lines.",
+        instructions: "Run uname -a && whoami && pwd with Grok Build tools. Summarize in four lines.",
         verify: "echo VERIFY_OK",
     },
     SuggestedSkill {
@@ -113,16 +113,16 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         title: "Host health",
         body: "Richer read-only snapshot: load, disk, and grokhub paths.",
         trigger: "host health",
-        instructions: "Emit HOST_CMD: uname -a && whoami && pwd && df -h / && uptime. After HOST_RESULT, four lines: machine, user, disk, load. No secrets.",
+        instructions: "Check uname, whoami, pwd, df -h /, and uptime with Grok Build tools. Four lines: machine, user, disk, load. No secrets.",
         verify: "echo VERIFY_OK",
     },
     SuggestedSkill {
         icon: TileIcon::Host,
         name: "desktop-takeover",
         title: "Desktop takeover",
-        body: "Look at the screen, then drive it with COMPUTER_CMD.",
+        body: "Look at the screen, then drive it with Grok Build computer-use.",
         trigger: "take over the desktop",
-        instructions: "Take over this desktop. Look at the attached frame and Windshield list. Prefer COMPUTER_CMD: act <name> and wait_for. Fix the issue or finish the task. Halt if a lock screen appears.",
+        instructions: "Take over this desktop. Use Grok Build computer-use (screenshot, click, type). Fix the issue or finish the task.",
         verify: "echo VERIFY_OK",
     },
 ];
@@ -180,7 +180,7 @@ pub const SUGGESTED_AUTOS: &[SuggestedAuto] = &[
     SuggestedAuto {
         icon: TileIcon::Host,
         title: "Replay last desktop run",
-        body: "Replay the last saved COMPUTER_CMD recipe. Night does not chat first.",
+        body: "Ask Grok to repeat the last desktop task. Night does not chat first.",
         seed: "every day at 21, replay last",
     },
 ];
@@ -310,10 +310,9 @@ pub fn imagine_send_cluster_w() -> f32 {
 /// Mode pill width inside the composer (replaces ComboBox `.width(84)`).
 pub const MODE_PILL_W: f32 = 84.0;
 
-/// Fast combo + mic + Send/Stop. Extra chrome is the mode pill
-/// past `MODE_PILL_W` — 180px left Fast as the right edge of a 900-wide cabin.
+/// Session + permission pills + mic + Send/Stop.
 pub fn composer_go_cluster_w() -> f32 {
-    MODE_PILL_W + 22.0 + 28.0 + 8.0 * 3.0 + 64.0
+    MODE_PILL_W * 2.0 + 22.0 + 28.0 + 8.0 * 4.0 + 64.0
 }
 
 /// Filled Send/Stop disc. Always reserve this, even when Idle is a 22px arrow.
@@ -741,31 +740,55 @@ pub fn framed_preview(ui: &mut egui::Ui, tex: &TextureHandle, size: [usize; 2], 
 
 pub fn composer_modes() -> &'static [(&'static str, &'static str)] {
     &[
+        ("code", "Code"),
+        ("plan", "Plan"),
+        ("ask", "Ask"),
+    ]
+}
+
+pub fn permission_modes() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("ask", "Ask"),
         ("auto", "Auto"),
-        ("fast", "Fast"),
-        ("balanced", "Balance"),
-        ("think", "Think"),
-        ("max", "Max"),
+        ("always-approve", "Always"),
     ]
 }
 
 pub fn mode_label(id: &str) -> &'static str {
     match id {
+        "plan" => "Plan",
+        "ask" => "Ask",
+        "code" | "normal" | "build" => "Code",
         "max" | "deep" | "heavy" => "Max",
-        "think" | "build" | "expert" => "Think",
+        "think" | "expert" => "Think",
         "balanced" | "balance" => "Balance",
         "fast" => "Fast",
-        _ => "Auto",
+        "always-approve" | "always" | "yolo" => "Always",
+        "auto" => "Auto",
+        _ => "Code",
     }
 }
 
-/// Compact mode picker. Returns a new mode id when the user picks one.
-pub fn mode_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
+pub fn perm_label(id: &str) -> &'static str {
+    match id {
+        "auto" => "Auto",
+        "always-approve" | "always" | "yolo" => "Always",
+        _ => "Ask",
+    }
+}
+
+fn catalog_pill(
+    ui: &mut egui::Ui,
+    popup_id: &'static str,
+    current: &str,
+    items: &[(&'static str, &'static str)],
+    label: &str,
+) -> Option<String> {
     let mut next = None;
-    let popup_id = ui.make_persistent_id("composer-mode-pop");
+    let id = ui.make_persistent_id(popup_id);
     let resp = crate::theme::pointing(ui.add(
         egui::Button::new(
-            RichText::new(mode_label(current))
+            RichText::new(label)
                 .size(crate::theme::FONT_CHROME)
                 .color(crate::theme::muted()),
         )
@@ -775,21 +798,21 @@ pub fn mode_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
         .min_size(egui::vec2(MODE_PILL_W, 28.0)),
     ));
     if resp.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(popup_id));
+        ui.memory_mut(|m| m.toggle_popup(id));
     }
     egui::popup::popup_above_or_below_widget(
         ui,
-        popup_id,
+        id,
         &resp,
         egui::AboveOrBelow::Below,
         egui::popup::PopupCloseBehavior::CloseOnClick,
         |ui| {
             ui.set_min_width(MODE_PILL_W);
-            for (id, label) in composer_modes() {
-                let on = *id == current;
-                if ui.selectable_label(on, *label).clicked() {
+            for (item_id, item_label) in items {
+                let on = *item_id == current;
+                if ui.selectable_label(on, *item_label).clicked() {
                     if !on {
-                        next = Some((*id).to_string());
+                        next = Some((*item_id).to_string());
                     }
                     ui.memory_mut(|m| m.close_popup());
                 }
@@ -797,6 +820,28 @@ pub fn mode_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
         },
     );
     next
+}
+
+/// Compact session picker (Code / Plan / Ask).
+pub fn mode_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
+    catalog_pill(
+        ui,
+        "composer-session-pop",
+        current,
+        composer_modes(),
+        mode_label(current),
+    )
+}
+
+/// Permission Ask / Auto / Always-approve.
+pub fn perm_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
+    catalog_pill(
+        ui,
+        "composer-perm-pop",
+        current,
+        permission_modes(),
+        perm_label(current),
+    )
 }
 
 pub fn clip_status(text: &str, max_chars: usize) -> String {
@@ -1726,12 +1771,14 @@ mod tests {
         assert_eq!(MODE_PILL_W, 84.0);
         assert_eq!(
             composer_go_cluster_w(),
-            MODE_PILL_W + 22.0 + 28.0 + 8.0 * 3.0 + 64.0
+            MODE_PILL_W * 2.0 + 22.0 + 28.0 + 8.0 * 4.0 + 64.0
         );
-        assert_eq!(mode_label("think"), "Think");
-        assert_eq!(mode_label("balanced"), "Balance");
-        assert_eq!(mode_label("mystery"), "Auto");
-        assert_eq!(composer_modes().len(), 5);
+        assert_eq!(mode_label("plan"), "Plan");
+        assert_eq!(mode_label("code"), "Code");
+        assert_eq!(mode_label("mystery"), "Code");
+        assert_eq!(perm_label("always-approve"), "Always");
+        assert_eq!(composer_modes().len(), 3);
+        assert_eq!(permission_modes().len(), 3);
         assert_eq!(clip_status("one\ntwo", 80), "one");
         assert_eq!(clip_status("abcdefghij", 6), "abcde…");
         assert_eq!(chip_tone_color(ChipTone::Offline), crate::theme::offline());
@@ -1855,7 +1902,10 @@ mod tests {
                 || blob.contains("imagine")
                 || blob.contains("verify")
                 || blob.contains("connector_cmd")
-                || blob.contains("computer_cmd");
+                || blob.contains("computer_cmd")
+                || blob.contains("computer-use")
+                || blob.contains("grok build")
+                || blob.contains("uname");
             assert!(real, "skill {} is not a cabin verb", s.name);
             let md = skill_from_suggested(s);
             assert_eq!(md.name, s.name);

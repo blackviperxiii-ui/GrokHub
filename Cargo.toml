@@ -5,6 +5,7 @@ members = [
     "crates/grokhub-hub",
     "crates/grokhub-app",
     "crates/grokhub-ffi",
+    "crates/grokhub-acp",
 ]
 
 [workspace.package]

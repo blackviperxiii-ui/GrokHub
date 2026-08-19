@@ -1,22 +1,18 @@
 post_install() {
   gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
   update-desktop-database /usr/share/applications 2>/dev/null || true
-  udevadm control --reload-rules 2>/dev/null || true
-  udevadm trigger --subsystem-match=misc --attr-match=name=uinput 2>/dev/null || true
 
   cat <<'EOF'
 
-  GrokHub 2.6.30 (native Rust)
+  GrokHub 2.6.30 (native Rust — Grok Build GUI)
 
   Run:    grokhub
   Hub:    grokhub-hub
   Menu:   Applications → GrokHub
+  Agent:  install Grok Build from https://x.ai/cli then grok login
 
   Config: ~/.config/GrokHub
-  Hands:  ydotool, grim, xdotool, wmctrl build into /usr/lib/grokhub/bin during package().
-          First cabin launch or Eyes → Install hands starts ydotoold.
-          Add your user to the input group if /dev/uinput is blocked, then log out once.
-  Unsandboxed host — commands run as your user.
+  Computer-use is Grok Build's. Halt cancels the ACP turn.
 
 EOF
 }

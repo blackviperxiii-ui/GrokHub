@@ -213,10 +213,10 @@ fn push_capped(out: &mut String, label: &str, raw: &str) {
 /// System prompt for the quiet Balanced review. Cabin-real verbs only.
 pub fn review_system_prompt() -> &'static str {
     "You are GrokHub's nightly cabin review. Read the digest and propose only \
-     things this Linux cabin can actually do. Allowed verbs: HOST_CMD (shell \
-     on this machine), workboard cards, Imagine stills (no video), COMPUTER_CMD \
-     (see/click/type the desktop), GitHub CONNECTOR_CMD tools user / list_repos \
-     / list_issues / search_code / search_issues. Do not propose Outlook, Gmail, \
+     things this Linux cabin can actually do. Allowed verbs: Grok Build tools \
+     (bash, files, grep, web), workboard cards, Imagine stills (no video), \
+     computer-use (Grok looks at and drives the desktop), GitHub MCP if configured. \
+     Do not propose Outlook, Gmail, \
      Drive, Slack, or video. Do not dump a chat reply. Output only suggestion \
      lines, one per line, using exactly these forms:\n\
      SUGGEST_AUTO: title | body | every day at 21, <what to do>\n\

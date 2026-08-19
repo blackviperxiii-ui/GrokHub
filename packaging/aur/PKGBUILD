@@ -6,14 +6,12 @@ pkgdesc="Grok-native Linux cabin — Rust binary, no Electron"
 arch=('x86_64')
 url="https://cursor.com/codebase/viperxiii/GrokHub"
 license=('MIT')
-depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme' 'python' 'python-atspi')
+depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme')
 optdepends=(
-  'ydotool: system ydotool if the sidecar build is skipped'
-  'grim: system grim if the sidecar build is skipped'
-  'xdotool: X11 pointer'
-  'wmctrl: X11 window list'
+  'ffmpeg: Imagine video'
+  'alsa-utils: Hey Grok mic'
 )
-makedepends=('cargo' 'rust' 'pkgconf' 'git' 'cmake' 'meson' 'ninja' 'wayland' 'wayland-protocols' 'pixman' 'libpng' 'libx11' 'libxtst' 'libxinerama' 'libxkbcommon' 'glib2' 'libxmu')
+makedepends=('cargo' 'rust' 'pkgconf' 'git')
 options=('!debug')
 install=grokhub.install
 source=("${pkgname}::git+https://origin.cursor.com/git/viperxiii/GrokHub.git#tag=v${pkgver}")
@@ -35,13 +33,7 @@ package() {
   if [[ -d packaging/icons/hicolor ]]; then
     cp -a packaging/icons/hicolor/. "${pkgdir}/usr/share/icons/hicolor/"
   fi
-  PREFIX="${pkgdir}/usr" HANDS_FORCE=1 HANDS_SRC="${srcdir}/hands-src" \
-    bash scripts/build-hands.sh
   install -Dm644 packaging/systemd/grokhub-hub.service \
     "${pkgdir}/usr/lib/systemd/user/grokhub-hub.service"
-  install -Dm644 packaging/systemd/ydotoold.service \
-    "${pkgdir}/usr/lib/systemd/user/ydotoold.service"
-  install -Dm644 packaging/udev/60-grokhub-uinput.rules \
-    "${pkgdir}/usr/lib/udev/rules.d/60-grokhub-uinput.rules"
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/grokhub/LICENSE"
 }

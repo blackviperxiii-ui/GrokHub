@@ -593,17 +593,17 @@ fn last_user_wants_gui(chat: &[(String, String)]) -> bool {
 
 fn finish_tools_prompt(chat: &[(String, String)]) -> &'static str {
     if last_user_wants_gui(chat) {
-        "Don't just plan — drive the desktop now. Emit COMPUTER_CMD lines (act, tab new, key ctrl+t). Summarize after COMPUTER_RESULT."
+        "Don't just plan — drive the desktop now with Grok Build computer-use. Summarize when done."
     } else {
-        "Don't just plan — actually investigate my machine now. Emit HOST_CMD lines for safe read-only checks. Summarize results after HOST_RESULT."
+        "Don't just plan — actually investigate my machine now with Grok Build tools. Summarize when done."
     }
 }
 
 fn finish_job_prompt(chat: &[(String, String)]) -> &'static str {
     if last_user_wants_gui(chat) {
-        "Finish the incomplete work from your last reply. Act now (COMPUTER_CMD: act, tab new, or key ctrl+t). End with status."
+        "Finish the incomplete work from your last reply. Act now (computer-use if needed). End with status."
     } else {
-        "Finish the incomplete work from your last reply. Act now (HOST_CMD if needed). End with status."
+        "Finish the incomplete work from your last reply. Act now with Grok Build tools if needed. End with status."
     }
 }
 
@@ -2494,8 +2494,8 @@ mod tests {
         });
         let finish = finish.expect(&format!("finish chip: {:?}", labels(&chips)));
         assert!(
-            finish.value.contains("COMPUTER_CMD"),
-            "GUI finish chip must ask for COMPUTER_CMD: {}",
+            finish.value.contains("computer-use") || finish.value.contains("desktop"),
+            "GUI finish chip must ask Grok to drive the desktop: {}",
             finish.value
         );
     }

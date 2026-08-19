@@ -312,7 +312,7 @@ pub fn compact_keep_pin(
 pub const GOAL_MAX_STEPS: u32 = 6;
 pub const FOLLOWUP_MAX_STEPS: u32 = 4;
 pub const FOLLOWUP_PROMPT: &str =
-    "FOLLOWUP: Finish the incomplete work from your last reply. Act now (COMPUTER_CMD or HOST_CMD if needed). End with status.";
+    "FOLLOWUP: Finish the incomplete work from your last reply. Act now with Grok Build tools or computer-use if needed. End with status.";
 
 fn reply_has_work_lines(assistant: &str) -> bool {
     assistant.lines().any(|line| {
@@ -491,7 +491,7 @@ pub fn next_goal_prompt(pin: &str, prior: &str, step: u32, max_steps: u32) -> Op
         return None;
     }
     Some(format!(
-        "[Goal step {}/{}]\nTask: {}\nLast progress:\n{}\n\nContinue autonomously. Use COMPUTER_CMD or HOST_CMD as needed.\nWhen fully finished, say clearly: GOAL_COMPLETE\nIf blocked on the user, say: GOAL_BLOCKED: <reason>",
+        "[Goal step {}/{}]\nTask: {}\nLast progress:\n{}\n\nContinue autonomously. Use Grok Build tools and computer-use as needed.\nWhen fully finished, say clearly: GOAL_COMPLETE\nIf blocked on the user, say: GOAL_BLOCKED: <reason>",
         step + 1,
         max_steps.max(1),
         pin.trim(),
@@ -693,8 +693,8 @@ If this fails, tell me your distro.";
         assert_eq!(FOLLOWUP_MAX_STEPS, 4);
         assert!(FOLLOWUP_PROMPT.starts_with("FOLLOWUP:"));
         assert!(
-            FOLLOWUP_PROMPT.contains("COMPUTER_CMD"),
-            "mouse/tab stalls must not be steered to HOST_CMD only: {FOLLOWUP_PROMPT}"
+            FOLLOWUP_PROMPT.contains("computer-use"),
+            "mouse/tab stalls must still mention computer-use: {FOLLOWUP_PROMPT}"
         );
         assert!(
             reply_needs_followup(
@@ -706,8 +706,8 @@ If this fails, tell me your distro.";
         );
         let goal = next_goal_prompt("open a new tab", "found Firefox", 0, 6).unwrap();
         assert!(
-            goal.contains("COMPUTER_CMD"),
-            "goal continue must mention COMPUTER_CMD: {goal}"
+            goal.contains("computer-use"),
+            "goal continue must mention computer-use: {goal}"
         );
     }
 
