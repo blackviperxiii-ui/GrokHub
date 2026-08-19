@@ -8733,7 +8733,7 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Bound project", "The world. Host, Imagine, and memory stay here.", &mut self.cfg.project_dir, false);
                                                         }
                                                         SettingsSec::Update => {
-                                                            crate::cards::settings_note(ui, "Overlay only — retarget leftover GitHub remotes, git pull --ff-only origin main, then install.sh --user. The clone must be on main. Does not wipe ~/.config/GrokHub.");
+                                                            crate::cards::settings_note(ui, "Overlay only — retarget leftover Origin remotes to GitHub, git pull --ff-only origin main, then install.sh --user. The clone must be on main. Does not wipe ~/.config/GrokHub.");
                                                             crate::cards::settings_field(ui, "Source clone", "Empty uses GROKHUB_SRC or the install receipt.", &mut self.cfg.source_dir, false);
                                                             if crate::cards::settings_action(ui, "Install overlay", "Pulls this clone and runs the user install.", "Update") {
                                                                 update = true;
