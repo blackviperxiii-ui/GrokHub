@@ -192,6 +192,7 @@ pub use automation::{
     mark_automation_ran, mark_automation_skipped, night_check_command, night_check_exit_code,
     night_check_may_fire, night_counts_run, night_unauth_should_skip,
     night_check_stdout, parse_nl_automation, replay_automation_target, skip_automation,
+    chat_may_save_automation, user_asked_to_schedule,
     skip_night_check_receipt, Automation,
 };
 pub use connector::{
@@ -226,7 +227,7 @@ pub use greeting::{
 pub use history::{search_corpus, search_text, search_thread_body};
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
 pub use learning::{
-    extract_insights, insight_key_for_fact, insight_pin, is_durable_fact, looks_like_user_pref,
+    extract_insights, insight_key_for_fact, insight_pin, is_actionable_need, is_durable_fact, looks_like_user_pref,
     prune_ephemeral_insights, record_turn, upsert_insight, user_pref_facts, LearningInsight,
     LearningState,
 };

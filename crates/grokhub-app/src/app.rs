@@ -3,7 +3,7 @@ use crate::helpers::{
     next_maximized, next_starter_skill_name, wants_live_repaint,
 };
 use crate::titlebar::{
-    apply_tray_window, titlebar_chrome_btn, titlebar_chrome_hit,
+    apply_tray_window, titlebar_chrome_btn, titlebar_chrome_hit, titlebar_should_start_drag,
 };
 use crate::config::{self, AppConfig};
 use crate::desktop::{
@@ -83,6 +83,7 @@ use grokhub_core::{
     reply_needs_followup,
     recipe_from_cmds, replay_automation_target,
     parse_nl_automation, parse_recipe, parse_slash, parse_theme, pick_theme, plan_from_text, plan_room,
+    chat_may_save_automation, user_asked_to_schedule,
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
     remember_chip_outcome, remember_typed_prompt, roll_usage_day,
@@ -758,6 +759,7 @@ pub struct Cabin {
     tray: Option<crate::tray::TrayHost>,
     tray_rx: Option<mpsc::Receiver<Option<crate::tray::TrayHost>>>,
     window_visible: bool,
+    tray_saw_unfocused: bool,
     want_quit: bool,
     told_tray: bool,
     pending_hub_task: Option<String>,
@@ -1092,6 +1094,7 @@ impl Cabin {
                 None
             },
             window_visible: !hidden,
+            tray_saw_unfocused: false,
             want_quit: false,
             told_tray: false,
             pending_hub_task: None,
@@ -5126,14 +5129,19 @@ impl Cabin {
                     }
                     self.kick_imagine();
                 }
-                if let Some(mut a) = parse_nl_automation(&scan) {
-                    if a.id.is_empty() {
-                        a.id = uid("auto");
-                    }
-                    self.automations.push(a.clone());
-                    let _ = crate::night::save(&self.automations);
-                    if here {
-                        self.status = format!("Night saved: {} {}", a.schedule, a.time);
+                let last_user = last_user_text(&job_pairs).unwrap_or_default();
+                if user_asked_to_schedule(&last_user)
+                    && chat_may_save_automation(&last_user, &scan)
+                {
+                    if let Some(mut a) = parse_nl_automation(&scan) {
+                        if a.id.is_empty() {
+                            a.id = uid("auto");
+                        }
+                        self.automations.push(a.clone());
+                        let _ = crate::night::save(&self.automations);
+                        if here {
+                            self.status = format!("Night saved: {} {}", a.schedule, a.time);
+                        }
                     }
                 }
                 if let Some(q) = parse_consult(&scan) {
@@ -6390,6 +6398,7 @@ impl Cabin {
         self.persist();
         self.geom_dirty = false;
         self.window_visible = false;
+        self.tray_saw_unfocused = false;
         apply_tray_window(ctx, crate::tray::hide_to_tray_window());
         self.ensure_tray_spawn();
     }
@@ -6403,6 +6412,7 @@ impl Cabin {
 
     fn show_from_tray(&mut self, ctx: &egui::Context) {
         self.window_visible = true;
+        self.tray_saw_unfocused = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         apply_tray_window(ctx, crate::tray::show_from_tray_window());
         self.ensure_tray_spawn();
@@ -6739,7 +6749,14 @@ impl eframe::App for Cabin {
             self.show_from_tray(ctx);
         } else if !self.window_visible {
             let focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
-            match crate::tray::hidden_window_tick(true, focused, just_hid) {
+            self.tray_saw_unfocused =
+                crate::tray::remember_hidden_unfocus(focused, self.tray_saw_unfocused);
+            match crate::tray::hidden_window_tick(
+                true,
+                focused,
+                just_hid,
+                self.tray_saw_unfocused,
+            ) {
                 crate::tray::HiddenTick::Raise => self.show_from_tray(ctx),
                 crate::tray::HiddenTick::StayHidden => {
                     apply_tray_window(ctx, crate::tray::hide_to_tray_window());
@@ -7252,6 +7269,13 @@ impl Cabin {
                         }
                         if titlebar_chrome_hit(&titlebar_chrome_btn(ui, "–")) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        }
+                        let (_rect, drag) = ui.allocate_exact_size(
+                            ui.available_size(),
+                            egui::Sense::click_and_drag(),
+                        );
+                        if titlebar_should_start_drag(drag.drag_started()) {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                         }
                     });
                 });
@@ -10316,6 +10340,10 @@ mod tests {
             "Show cabin should keep a live tray: {show}"
         );
         assert!(
+            src.contains("StartDrag") && src.contains("titlebar_should_start_drag"),
+            "undecorated cabin must drag from the titlebar body"
+        );
+        assert!(
             src.contains("force_x11_for_close_to_tray")
                 || include_str!("main.rs").contains("force_x11_for_close_to_tray"),
             "winit 0.30 must drop WAYLAND_DISPLAY so × can unmap"
@@ -10324,6 +10352,35 @@ mod tests {
             src.contains("hidden_window_tick"),
             "a pinned taskbar click must raise the hidden cabin instead of re-unmapping it"
         );
+        let hide = src
+            .split("fn unmap_to_tray")
+            .nth(1)
+            .and_then(|s| s.split("fn ensure_tray_spawn").next())
+            .expect("unmap_to_tray");
+        assert!(
+            hide.contains("tray_saw_unfocused = false"),
+            "× must clear the focus-raise latch so the next focused frame does not map the cabin: {hide}"
+        );
+        let tick = src
+            .split("hidden_window_tick(")
+            .nth(1)
+            .and_then(|s| s.split("match").next())
+            .expect("hidden_window_tick call");
+        assert!(
+            tick.contains("tray_saw_unfocused"),
+            "taskbar raise waits until the hidden cabin actually lost focus: {tick}"
+        );
+        let night_save = src
+            .split("if let Some(mut a) = parse_nl_automation(&scan)")
+            .nth(1)
+            .and_then(|s| s.split("if let Some(q) = parse_consult").next())
+            .expect("chat night save");
+        assert!(
+            src.contains("user_asked_to_schedule")
+                && src.contains("chat_may_save_automation"),
+            "ordinary replies that mention every day at / heartbeat every must not become live night jobs"
+        );
+        let _ = night_save;
         assert!(
             src.contains("ignore_close_while_hidden"),
             "sticky close_requested must not hide the cabin after a taskbar raise"

@@ -122,8 +122,7 @@ pub fn anticipated_need(
 
 fn looks_like_need(key: &str, text: &str) -> bool {
     let key = key.to_ascii_lowercase();
-    let text = text.to_ascii_lowercase();
-    key.starts_with("need:") || text.contains("need") || text.contains("remind")
+    key.starts_with("need:") && crate::learning::is_actionable_need(text)
 }
 
 const MD_CAP: usize = 800;
@@ -254,6 +253,24 @@ mod tests {
             hits: 1,
         }];
         assert!(anticipated_need(&prefs, &skills, 0, 10_000, 1_000).is_none());
+        let polite = [LearningInsight {
+            key: "fact:let-me-know".into(),
+            text: "let me know if you need anything".into(),
+            hits: 1,
+        }];
+        assert!(
+            anticipated_need(&polite, &skills, 0, 10_000, 1_000).is_none(),
+            "a polite closer must not start Follow skill on its own"
+        );
+        let coffee = [LearningInsight {
+            key: "need:i-need-coffee".into(),
+            text: "I need coffee".into(),
+            hits: 1,
+        }];
+        assert!(
+            anticipated_need(&coffee, &skills, 0, 10_000, 1_000).is_none(),
+            "casual 'need' is not a scheduled job"
+        );
     }
 
     #[test]

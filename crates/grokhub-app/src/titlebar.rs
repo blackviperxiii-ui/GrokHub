@@ -13,16 +13,19 @@ pub fn titlebar_chrome_size() -> egui::Vec2 {
 }
 
 /// egui ignores a click held longer than 0.8s (`max_click_duration`). The
-/// titlebar × is a close control — release over it must still hide to tray.
-pub fn chrome_activated(clicked: bool, released_over: bool) -> bool {
-    clicked || released_over
+/// titlebar × is a close control — a drag that started on it must still hide.
+/// A release that started elsewhere (titlebar drag, text select) must not.
+pub fn chrome_activated(clicked: bool, drag_stopped: bool) -> bool {
+    clicked || drag_stopped
 }
 
 pub fn titlebar_chrome_hit(resp: &egui::Response) -> bool {
-    chrome_activated(
-        resp.clicked(),
-        resp.contains_pointer() && resp.ctx.input(|i| i.pointer.primary_released()),
-    )
+    chrome_activated(resp.clicked(), resp.drag_stopped())
+}
+
+/// Undecorated cabin: the titlebar body moves the window.
+pub fn titlebar_should_start_drag(drag_started: bool) -> bool {
+    drag_started
 }
 
 pub fn titlebar_chrome_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
@@ -62,8 +65,14 @@ mod tests {
         assert!(chrome_activated(true, false), "a normal click still closes");
         assert!(
             chrome_activated(false, true),
-            "egui drops clicks held longer than 0.8s — titlebar × must still hide to tray"
+            "egui drops clicks held longer than 0.8s — drag_stopped on × must still hide to tray"
         );
         assert!(!chrome_activated(false, false));
+    }
+
+    #[test]
+    fn titlebar_body_starts_a_window_drag() {
+        assert!(titlebar_should_start_drag(true));
+        assert!(!titlebar_should_start_drag(false));
     }
 }
