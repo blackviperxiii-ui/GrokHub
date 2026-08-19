@@ -6,13 +6,17 @@ use crate::protocol::{
 use crate::protocol::SessionMode;
 use crate::{agent_args, find_grok, grok_stdout};
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStderr, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+
+/// Default cap on `initialize` / `authenticate` / `session/new` so a silent
+/// `grok` cannot freeze the cabin UI thread.
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(12);
 
 enum Cmd {
     Prompt(String),
@@ -40,6 +44,7 @@ pub struct SpawnOpts {
     pub auto: bool,
     pub session_mode: SessionMode,
     pub extra_env: Vec<(String, String)>,
+    pub handshake_timeout: Option<Duration>,
 }
 
 impl SpawnOpts {
@@ -62,6 +67,7 @@ impl SpawnOpts {
             auto,
             session_mode,
             extra_env: Vec::new(),
+            handshake_timeout: None,
         })
     }
 }
@@ -73,8 +79,52 @@ fn write_msg(stdin: &mut impl Write, msg: &JsonRpc) -> Result<(), String> {
     stdin.flush().map_err(|e| e.to_string())
 }
 
+fn drain_stderr(stderr: ChildStderr) -> Arc<Mutex<String>> {
+    let tail = Arc::new(Mutex::new(String::new()));
+    let slot = tail.clone();
+    thread::spawn(move || {
+        let mut reader = stderr;
+        let mut buf = [0u8; 512];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if let Ok(mut held) = slot.lock() {
+                        let chunk = String::from_utf8_lossy(&buf[..n]);
+                        for ch in chunk.chars() {
+                            if ch == '\0' || ch == '\u{fffd}' {
+                                continue;
+                            }
+                            held.push(ch);
+                        }
+                        const CAP: usize = 4096;
+                        if held.len() > CAP * 2 {
+                            let extra = held.len() - CAP;
+                            held.drain(..extra);
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    tail
+}
+
+fn with_stderr(msg: String, tail: &Arc<Mutex<String>>) -> String {
+    let extra = tail
+        .lock()
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    match extra {
+        Some(e) => format!("{msg}\n{e}"),
+        None => msg,
+    }
+}
+
 fn read_until_result(
-    reader: &mut BufReader<impl std::io::Read>,
+    reader: &mut BufReader<impl Read>,
     want: u64,
     early: &mut Vec<AcpEvent>,
 ) -> Result<Value, String> {
@@ -107,34 +157,26 @@ fn read_until_result(
     }
 }
 
-/// Spawn and handshake. Puts `XAI_API_KEY` on the child when provided.
-pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
-    let mut cmd = Command::new(&opts.program);
-    cmd.args(&opts.args)
-        .current_dir(&opts.cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("GROK_NO_AUTO_UPDATE", "1");
-    if let Some(key) = &opts.api_key {
-        if !key.is_empty() {
-            cmd.env("XAI_API_KEY", key);
-        }
-    }
-    for (k, v) in &opts.extra_env {
-        cmd.env(k, v);
-    }
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("spawn {}: {e}", opts.program.display()))?;
-    let mut stdin = child.stdin.take().ok_or("agent stdin")?;
-    let stdout = child.stdout.take().ok_or("agent stdout")?;
+struct HandshakeOk {
+    stdin: std::process::ChildStdin,
+    reader: BufReader<std::process::ChildStdout>,
+    session_id: String,
+    next_id: u64,
+    early: Vec<AcpEvent>,
+}
+
+fn handshake(
+    mut stdin: std::process::ChildStdin,
+    stdout: std::process::ChildStdout,
+    api_key: &str,
+    cwd: &str,
+    always_approve: bool,
+    auto: bool,
+    session_mode: SessionMode,
+) -> Result<HandshakeOk, String> {
     let mut reader = BufReader::new(stdout);
     let mut next_id = 1u64;
-    let api_key = opts.api_key.clone().unwrap_or_default();
-    let cwd = opts.cwd.display().to_string();
     let mut early = Vec::new();
-
     write_msg(&mut stdin, &request(next_id, "initialize", initialize_params()))?;
     let init = read_until_result(&mut reader, next_id, &mut early)?;
     next_id += 1;
@@ -156,7 +198,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
         &request(
             next_id,
             "session/new",
-            session_new_params(&cwd, opts.always_approve, opts.auto, opts.session_mode),
+            session_new_params(cwd, always_approve, auto, session_mode),
         ),
     )?;
     let created = read_until_result(&mut reader, next_id, &mut early)?;
@@ -167,6 +209,84 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
         .and_then(|v| v.as_str())
         .ok_or("session/new missing sessionId")?
         .to_string();
+    Ok(HandshakeOk {
+        stdin,
+        reader,
+        session_id,
+        next_id,
+        early,
+    })
+}
+
+/// Spawn and handshake. Puts `XAI_API_KEY` on the child when provided.
+pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
+    let timeout = opts.handshake_timeout.unwrap_or(HANDSHAKE_TIMEOUT);
+    let mut cmd = Command::new(&opts.program);
+    cmd.args(&opts.args)
+        .current_dir(&opts.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("GROK_NO_AUTO_UPDATE", "1");
+    if let Some(key) = &opts.api_key {
+        if !key.is_empty() {
+            cmd.env("XAI_API_KEY", key);
+        }
+    }
+    for (k, v) in &opts.extra_env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("spawn {}: {e}", opts.program.display()))?;
+    let stdin = child.stdin.take().ok_or("agent stdin")?;
+    let stdout = child.stdout.take().ok_or("agent stdout")?;
+    let stderr_tail = child.stderr.take().map(drain_stderr);
+    let api_key = opts.api_key.clone().unwrap_or_default();
+    let cwd = opts.cwd.display().to_string();
+    let always_approve = opts.always_approve;
+    let auto = opts.auto;
+    let session_mode = opts.session_mode;
+
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(handshake(
+            stdin,
+            stdout,
+            &api_key,
+            &cwd,
+            always_approve,
+            auto,
+            session_mode,
+        ));
+    });
+    let hs = match rx.recv_timeout(timeout) {
+        Ok(Ok(hs)) => hs,
+        Ok(Err(e)) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(match &stderr_tail {
+                Some(t) => with_stderr(e, t),
+                None => e,
+            });
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let msg = "ACP handshake timed out — grok never answered initialize".to_string();
+            return Err(match &stderr_tail {
+                Some(t) => with_stderr(msg, t),
+                None => msg,
+            });
+        }
+    };
+    let HandshakeOk {
+        stdin,
+        mut reader,
+        session_id,
+        next_id,
+        early,
+    } = hs;
 
     let stdin = Arc::new(Mutex::new(stdin));
     let id_gen = Arc::new(Mutex::new(next_id));
