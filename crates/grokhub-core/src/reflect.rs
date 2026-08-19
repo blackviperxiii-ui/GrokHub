@@ -1,4 +1,5 @@
 use crate::is_plain_text;
+use crate::learning::is_durable_fact;
 
 pub const IDLE_REFLECT_MS: u64 = 10 * 60 * 1000;
 
@@ -62,6 +63,7 @@ pub fn fact_candidates(messages: &[(String, String)]) -> Vec<String> {
                 && !c.starts_with("VERIFY_")
                 && c.len() < 200
                 && is_plain_text(c)
+                && is_durable_fact(c)
         })
         .map(|(_, c)| c.trim().to_string())
         .collect()
@@ -86,6 +88,9 @@ mod tests {
         let facts = fact_candidates(&[
             ("user".into(), "prefer nvim".into()),
             ("user".into(), "/forget".into()),
+            ("user".into(), "hi how are you".into()),
+            ("user".into(), "say hi in one sentence".into()),
+            ("user".into(), "New direction: firefox\n\n(Previous ask: )".into()),
             ("assistant".into(), "ok".into()),
         ]);
         assert_eq!(facts, vec!["prefer nvim"]);

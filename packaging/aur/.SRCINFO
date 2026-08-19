@@ -2,7 +2,7 @@ pkgbase = grokhub
 	pkgdesc = Grok-native Linux cabin — Rust binary, no Electron
 	pkgver = 2.6.30
 	pkgrel = 1
-	url = https://github.com/blackviperxiii-ui/Grok-Hub
+	url = https://cursor.com/codebase/viperxiii/GrokHub
 	arch = x86_64
 	license = MIT
 	makedepends = cargo
@@ -32,7 +32,7 @@ pkgbase = grokhub
 	optdepends = grim: system grim if the sidecar build is skipped
 	optdepends = xdotool: X11 pointer
 	optdepends = wmctrl: X11 window list
-	source = grokhub::git+https://github.com/blackviperxiii-ui/Grok-Hub.git#tag=v2.6.30
+	source = grokhub::git+https://origin.cursor.com/git/viperxiii/GrokHub.git#tag=v2.6.30
 	sha256sums = SKIP
 
 pkgname = grokhub

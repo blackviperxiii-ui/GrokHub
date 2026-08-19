@@ -109,6 +109,8 @@ use grokhub_core::{
     CABIN_GITHUB_TOOLS, REVIEW_NIGHT_HOUR,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title_in, apply_manual_rename, delete_thread, display_tab_title, history_order,
+    history_row_visible, leftover_empty_thread, mark_slash_result, reuse_empty_thread_idx,
+    unknown_cabin_slash, ThreadReuseView,
     should_name_thread,
     skill_follow_block, skill_use_in_chat_prompt, slash_help, summarize_write, surgical_memory_edit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
@@ -947,7 +949,12 @@ fn paint_wall_cover(
 
 impl Cabin {
     pub fn new(hidden: bool) -> Self {
-        let cfg = config::load();
+        let mut cfg = config::load();
+        if cfg.device_name.trim().is_empty() {
+            cfg.device_name = config::default_device_name();
+            let _ = config::save(&cfg);
+        }
+        config::ensure_memory_seeds();
         let mut hub = load_hub_state(&config::hub_state_path()).unwrap_or_else(HubState::empty);
         if !cfg.device_name.trim().is_empty() {
             hub.device_name = cfg.device_name.clone();
@@ -964,9 +971,27 @@ impl Cabin {
             t.messages = config::load_chat();
             threads.push(t);
         }
+        let keep_id = threads
+            .iter()
+            .find(|t| t.id == cfg.current_thread)
+            .map(|t| t.id.clone())
+            .or_else(|| threads.first().map(|t| t.id.clone()));
+        let before = threads.len();
+        threads.retain(|t| {
+            keep_id.as_deref() == Some(t.id.as_str())
+                || t.pinned
+                || !leftover_empty_thread(&t.title, t.scratch, t.messages.is_empty())
+        });
+        if threads.is_empty() {
+            threads.push(ChatThread::new("Chat", false));
+        }
+        if threads.len() != before {
+            let _ = threads::save(&threads);
+        }
         let thread_idx = threads
             .iter()
-            .position(|t| t.id == cfg.current_thread)
+            .position(|t| keep_id.as_deref() == Some(t.id.as_str()))
+            .or_else(|| threads.iter().position(|t| t.id == cfg.current_thread))
             .unwrap_or(0);
         let messages: Vec<Msg> = threads
             .get(thread_idx)
@@ -2770,6 +2795,34 @@ impl Cabin {
     }
 
     fn new_thread(&mut self, scratch: bool) {
+        let reuse = {
+            let views: Vec<ThreadReuseView> = self
+                .threads
+                .iter()
+                .enumerate()
+                .map(|(i, t)| ThreadReuseView {
+                    title: t.title.as_str(),
+                    scratch: t.scratch,
+                    empty: if i == self.thread_idx {
+                        self.messages.is_empty()
+                    } else {
+                        t.messages.is_empty()
+                    },
+                })
+                .collect();
+            reuse_empty_thread_idx(&views, self.thread_idx, scratch)
+        };
+        if let Some(idx) = reuse {
+            if idx != self.thread_idx {
+                self.switch_thread(idx);
+            }
+            self.status = if scratch {
+                "Scratch — no memory writes".into()
+            } else {
+                "New chat".into()
+            };
+            return;
+        }
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
             t.messages = self
                 .messages
@@ -2913,6 +2966,10 @@ impl Cabin {
         }
         if let Some(slash) = parse_slash(&text) {
             self.run_slash(slash);
+            return;
+        }
+        if unknown_cabin_slash(&text) {
+            self.status = "Unknown command — /help".into();
             return;
         }
         match chat_send_kind(
@@ -3092,7 +3149,7 @@ impl Cabin {
             Slash::Help => {
                 self.messages.push(Msg {
                     role: "assistant".into(),
-                    content: slash_help(),
+                    content: mark_slash_result(&slash_help()),
                 });
                 self.stamp_current_access();
                 self.persist();
@@ -3207,7 +3264,7 @@ impl Cabin {
             Slash::Models => {
                 self.messages.push(Msg {
                     role: "assistant".into(),
-                    content: catalog_line(),
+                    content: mark_slash_result(&catalog_line()),
                 });
                 self.stamp_current_access();
                 self.persist();
@@ -3325,7 +3382,7 @@ impl Cabin {
                 };
                 self.messages.push(Msg {
                     role: "assistant".into(),
-                    content: body,
+                    content: mark_slash_result(&body),
                 });
                 self.stamp_current_access();
                 self.persist();
@@ -7470,6 +7527,15 @@ impl Cabin {
                         let mut act: Option<TabAct> = None;
                         for i in order {
                             let title = self.threads[i].title.clone();
+                            if !history_row_visible(
+                                &title,
+                                self.threads[i].scratch,
+                                self.threads[i].messages.is_empty(),
+                                i == self.thread_idx,
+                                self.threads[i].pinned,
+                            ) {
+                                continue;
+                            }
                             if !q.is_empty() && !title.to_ascii_lowercase().contains(&q) {
                                 continue;
                             }
@@ -8719,6 +8785,15 @@ impl Cabin {
                     let mut act: Option<TabAct> = None;
                     for i in order {
                         let title = self.threads[i].title.clone();
+                        if !history_row_visible(
+                            &title,
+                            self.threads[i].scratch,
+                            self.threads[i].messages.is_empty(),
+                            i == self.thread_idx,
+                            self.threads[i].pinned,
+                        ) {
+                            continue;
+                        }
                         if self.rename_idx == Some(i) {
                             let edit = ui.add(
                                 egui::TextEdit::singleline(&mut self.rename_buf)
@@ -10731,6 +10806,10 @@ mod tests {
             slash_at < kind_at,
             "/compact during a live job must stay local, not become a redirect: {send}"
         );
+        assert!(
+            send.contains("unknown_cabin_slash") && send.contains("Unknown command"),
+            "unknown /project binding must stay local, not go to Grok: {send}"
+        );
         let compact = src
             .split("Slash::Compact =>")
             .nth(1)
@@ -10809,6 +10888,27 @@ mod tests {
         assert!(
             created.contains("drop_leaving_thread_chrome"),
             "/new must drop plus-attach, followup budget, and skill follow: {created}"
+        );
+        assert!(
+            created.contains("reuse_empty_thread_idx"),
+            "/new must reuse an empty Chat instead of stacking leftover tabs: {created}"
+        );
+        let boot = src
+            .split("pub fn new(hidden: bool)")
+            .nth(1)
+            .and_then(|s| s.split("fn persist(&mut self)").next())
+            .expect("Cabin::new");
+        assert!(
+            boot.contains("ensure_memory_seeds") && boot.contains("default_device_name"),
+            "first run must seed Memory files and a device name: {boot}"
+        );
+        assert!(
+            boot.contains("leftover_empty_thread"),
+            "boot must drop leftover empty Chat tabs: {boot}"
+        );
+        assert!(
+            src.contains("history_row_visible"),
+            "History must hide leftover empty Chat rows"
         );
         let switched = src
             .split("fn switch_thread")
@@ -11350,6 +11450,10 @@ mod tests {
             help.contains("stamp_current_access") || help.contains("accessed_ms"),
             "/help must bump accessed_ms or /sync LWW can drop the help turn: {help}"
         );
+        assert!(
+            help.contains("mark_slash_result") || help.contains("SLASH_RESULT"),
+            "/help must not become the next model turn: {help}"
+        );
         let models = src
             .split("Slash::Models =>")
             .nth(1)
@@ -11358,6 +11462,10 @@ mod tests {
         assert!(
             models.contains("stamp_current_access") || models.contains("accessed_ms"),
             "/models must bump accessed_ms or /sync LWW can drop the catalog turn: {models}"
+        );
+        assert!(
+            models.contains("mark_slash_result") || models.contains("SLASH_RESULT"),
+            "/models must not become the next model turn: {models}"
         );
         let undo = src
             .split("Slash::Undo =>")
@@ -11491,6 +11599,10 @@ mod tests {
         assert!(
             recall.contains("stamp_current_access") || recall.contains("accessed_ms"),
             "/recall must bump accessed_ms or /sync LWW can drop the recall turn: {recall}"
+        );
+        assert!(
+            recall.contains("mark_slash_result") || recall.contains("SLASH_RESULT"),
+            "/recall must not become the next model turn: {recall}"
         );
         let sync = src
             .split("fn sync_hub(&mut self)")
