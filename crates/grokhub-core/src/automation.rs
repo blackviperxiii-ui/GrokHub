@@ -213,6 +213,28 @@ pub fn mark_automation_skipped(mut a: Automation, now_ms: u64, clock: LocalClock
     a
 }
 
+/// Night compose and an explicit "remind me / schedule / automation" ask.
+pub fn user_asked_to_schedule(user: &str) -> bool {
+    let t = user.to_ascii_lowercase();
+    [
+        "every day",
+        "every weekday",
+        "heartbeat every",
+        "remind me",
+        "schedule",
+        "automat",
+        "night job",
+        "nightly",
+    ]
+    .iter()
+    .any(|p| t.contains(p))
+}
+
+/// Chat must not turn advice ("you could heartbeat every 15 min") into a live job.
+pub fn chat_may_save_automation(user: &str, assistant: &str) -> bool {
+    user_asked_to_schedule(user) && parse_nl_automation(assistant).is_some()
+}
+
 pub fn parse_nl_automation(text: &str) -> Option<Automation> {
     let text = bound_scan(text);
     let t = text.trim();
@@ -370,6 +392,26 @@ mod tests {
         let h = parse_nl_automation("heartbeat every 15 min check the board").unwrap();
         assert_eq!(h.schedule, "heartbeat");
         assert_eq!(h.heartbeat_every_min, 15);
+        assert!(
+            user_asked_to_schedule("remind me every weekday at 9 to summarize the board"),
+            "Night compose and an explicit ask still save a job"
+        );
+        assert!(user_asked_to_schedule("add an automation: heartbeat every 15 min"));
+        assert!(
+            !user_asked_to_schedule("what is rust"),
+            "a normal question must not arm a night job"
+        );
+        assert!(
+            !chat_may_save_automation(
+                "how do I check disk",
+                "You could heartbeat every 15 min check the board.\nHOST_CMD: df -h\n"
+            ),
+            "advice that mentions a schedule must not become a live night job"
+        );
+        assert!(chat_may_save_automation(
+            "remind me every weekday at 9",
+            "every weekday at 9, summarize the workboard"
+        ));
         assert!(skip_automation("", 0));
         assert!(skip_automation("ok", 1));
         assert!(!skip_automation("work to do", 0));

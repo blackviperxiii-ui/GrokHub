@@ -81,12 +81,18 @@ pub fn insight_key_for_fact(fact: &str) -> String {
         .join("-");
     let kind = if looks_like_user_pref(&lower) {
         "pref"
-    } else if lower.contains("need") || lower.contains("remind") {
+    } else if is_actionable_need(&lower) {
         "need"
     } else {
         "fact"
     };
     format!("{kind}:{slug}")
+}
+
+/// Anticipate and `need:` keys require a real reminder, not polite "if you need".
+pub fn is_actionable_need(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    t.contains("need to ") || t.contains("remind me") || t.contains("remember to")
 }
 
 pub fn looks_like_user_pref(fact: &str) -> bool {
@@ -217,6 +223,16 @@ mod tests {
         );
         assert_eq!(s.insights.len(), 1);
         assert!(s.insights[0].text.contains("helix"));
+        assert!(
+            !insight_key_for_fact("let me know if you need anything").starts_with("need:"),
+            "polite 'if you need' is not an anticipate trigger"
+        );
+        assert!(
+            !insight_key_for_fact("I need coffee").starts_with("need:"),
+            "bare 'I need X' is not a scheduled reminder"
+        );
+        assert!(insight_key_for_fact("need to flash the pi tonight").starts_with("need:"));
+        assert!(insight_key_for_fact("remind me to check the board").starts_with("need:"));
         upsert_insight(&mut s, "fact:hi-how-are-you", "hi how are you");
         assert!(prune_ephemeral_insights(&mut s));
         assert_eq!(s.insights.len(), 1);
