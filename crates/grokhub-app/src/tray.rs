@@ -148,14 +148,25 @@ pub enum HiddenTick {
     StayHidden,
 }
 
-/// Taskbar activate focuses an unmapped cabin. The hide frame is still focused,
-/// so do not raise on the same tick we unmapped or the window flashes back.
-pub fn hidden_window_tick(hidden: bool, focused: bool, just_hid: bool) -> HiddenTick {
-    if hidden && focused && !just_hid {
+/// Taskbar activate focuses an unmapped cabin. Titlebar × hides after the
+/// raise check, and winit still reports focused on the next frame — do not
+/// raise until the withdrawn cabin actually lost focus.
+pub fn hidden_window_tick(
+    hidden: bool,
+    focused: bool,
+    just_hid: bool,
+    saw_unfocused: bool,
+) -> HiddenTick {
+    if hidden && focused && !just_hid && saw_unfocused {
         HiddenTick::Raise
     } else {
         HiddenTick::StayHidden
     }
+}
+
+/// Latch: a hide that never saw FocusLost must not treat leftover focus as a raise.
+pub fn remember_hidden_unfocus(focused: bool, already: bool) -> bool {
+    already || !focused
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -540,17 +551,28 @@ mod tests {
     #[test]
     fn taskbar_focus_raises_a_hidden_cabin() {
         assert_eq!(
-            hidden_window_tick(true, true, false),
+            hidden_window_tick(true, true, false, true),
             HiddenTick::Raise,
-            "pinned taskbar maps + focuses the unmapped cabin"
+            "pinned taskbar maps + focuses the unmapped cabin after it lost focus"
         );
         assert_eq!(
-            hidden_window_tick(true, true, true),
+            hidden_window_tick(true, true, true, false),
             HiddenTick::StayHidden,
             "the hide frame is still focused — raising it flashes the window back"
         );
-        assert_eq!(hidden_window_tick(true, false, false), HiddenTick::StayHidden);
-        assert_eq!(hidden_window_tick(false, true, false), HiddenTick::StayHidden);
+        assert_eq!(
+            hidden_window_tick(true, true, false, false),
+            HiddenTick::StayHidden,
+            "titlebar × hides after the raise check; next frame is still focused"
+        );
+        assert_eq!(hidden_window_tick(true, false, false, false), HiddenTick::StayHidden);
+        assert_eq!(hidden_window_tick(false, true, false, true), HiddenTick::StayHidden);
+        assert!(
+            !remember_hidden_unfocus(true, false),
+            "a hide that never lost focus must not arm a taskbar raise"
+        );
+        assert!(remember_hidden_unfocus(false, false));
+        assert!(remember_hidden_unfocus(true, true));
     }
 
     #[test]
