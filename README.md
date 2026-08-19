@@ -34,7 +34,7 @@ cargo run -p grokhub-app -- --doctor
 GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub
 ```
 
-The tray icon is there from launch. Close / titlebar × hides the cabin — the window unmaps; it does not minimize to the taskbar. Size and position come back on the next launch. Jobs, hub, and idle reflect keep running. Tray: **Show cabin**, **Halt**, **Quit**. One ping when it first hides; it does not spam the desktop. `grokhub --agent` starts already hidden. `GROKHUB_TRAY=0` quits on close.
+The tray icon is there from launch. Close / titlebar × hides the cabin — the window unmaps and stays unmapped until it loses focus (then a pinned taskbar click, tray **Show cabin**, or a second `grokhub` raises it). It does not minimize to the taskbar. Drag the titlebar body to move the undecorated window. Size and position come back on the next launch. Jobs, hub, and idle reflect keep running. Tray: **Show cabin**, **Halt**, **Quit**. One ping when it first hides; it does not spam the desktop. `grokhub --agent` starts already hidden. `GROKHUB_TRAY=0` quits on close.
 
 `./scripts/install.sh --user` installs [Grok Build](https://x.ai/cli) (`grok`) next to the cabin. Then `grok login`. The cabin spawns `grok --no-auto-update agent stdio` over ACP. Bound project is the ACP cwd. Overlay `/update` updates the GUI and installs `grok` if it is missing; `grok update` updates the agent.
 
@@ -52,7 +52,7 @@ Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is cabin sign-in for 
 
 Settings → **Update** (or `grokhub --update` / `/update`) does `git pull --ff-only origin main` then `./scripts/install.sh --user`. Overlay updates the GUI and installs Grok Build CLI (`grok`) if it is missing. `grok update` updates the agent. Progress stays on Settings. After a clean overlay, **Restart** reloads hub, drops the cabin pid lock, starts a new overlay `grokhub`, and exits this process.
 
-Chat is ACP. Night and phone `/v1/task` enqueue ACP prompts on the bound project. Halt / Stop / Ctrl+Shift+Esc cancel the turn. A 15s heartbeat runs housekeep, inbox, night, review, wall, mid-thought, reflect, and anticipate. Hidden idle cabins wait for that pulse. Phone dispatch completes on halt / error. `/rewind` restores only the bound project root.
+Chat is ACP. Night and phone `/v1/task` enqueue ACP prompts on the bound project. Halt / Stop / Ctrl+Shift+Esc cancel the turn. Chat only saves a night job when you asked to schedule one — a reply that mentions “every day at” or “heartbeat every” as advice does not. Anticipate only fires a `Follow skill` on a real `need to` / `remind me` insight that matches a skill, not polite “if you need” chit-chat. A 15s heartbeat runs housekeep, inbox, night, review, wall, mid-thought, reflect, and anticipate. Hidden idle cabins wait for that pulse. Phone dispatch completes on halt / error. `/rewind` restores only the bound project root.
 
 Android / Windows: link `libgrokhub_ffi` and include `crates/grokhub-ffi/include/grokhub.h`.
 
