@@ -93,7 +93,6 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
         ("Connectors", "nav:connectors"),
         ("Command", "nav:command"),
         ("Agents", "nav:agents"),
-        ("Desk", "nav:eyes"),
         ("Skills", "nav:skills"),
         ("Board", "nav:board"),
         ("Imagine", "nav:imagine"),
@@ -122,7 +121,7 @@ mod tests {
         assert!(shortcut_help().contains("Super+G"));
         assert!(filter_palette("night").iter().any(|(l, _)| *l == "Night"));
         assert!(filter_palette("set").iter().any(|(l, _)| *l == "Settings"));
-        assert_eq!(filter_palette("").len(), 20);
+        assert_eq!(filter_palette("").len(), 19);
     }
 
     #[test]

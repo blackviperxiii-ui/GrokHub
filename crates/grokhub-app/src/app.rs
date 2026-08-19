@@ -762,6 +762,7 @@ pub struct Cabin {
     tray_rx: Option<mpsc::Receiver<Option<crate::tray::TrayHost>>>,
     window_visible: bool,
     tray_saw_unfocused: bool,
+    tray_hid_at: Instant,
     want_quit: bool,
     told_tray: bool,
     pending_hub_task: Option<String>,
@@ -1106,6 +1107,7 @@ impl Cabin {
             },
             window_visible: !hidden,
             tray_saw_unfocused: false,
+            tray_hid_at: Instant::now(),
             want_quit: false,
             told_tray: false,
             pending_hub_task: None,
@@ -4546,7 +4548,10 @@ impl Cabin {
             "nav:connectors" => self.nav = Nav::Connectors,
             "nav:command" => self.nav = Nav::Command,
             "nav:agents" => self.nav = Nav::Agents,
-            "nav:eyes" => self.nav = Nav::Eyes,
+            "nav:eyes" => {
+                self.open_recent_chat();
+                self.nav = Nav::Chat;
+            }
             "nav:skills" => self.nav = Nav::Skills,
             "nav:board" => self.nav = Nav::Workboard,
             "nav:imagine" => {
@@ -6166,15 +6171,6 @@ impl Cabin {
         }
     }
 
-    fn take_over_desktop(&mut self) {
-        self.nav = Nav::Chat;
-        if !self.can_agent() {
-            self.status = "Install Grok Build or Connect Grok in Settings".into();
-            return;
-        }
-        self.send_chat("Take over this desktop. Look at the screen and fix what is broken.".into());
-    }
-
     fn replay_saved_recipe(&mut self, id: &str) -> bool {
         if self.running {
             self.status = "Busy — wait, then replay".into();
@@ -6480,6 +6476,7 @@ impl Cabin {
         self.geom_dirty = false;
         self.window_visible = false;
         self.tray_saw_unfocused = false;
+        self.tray_hid_at = Instant::now();
         apply_tray_window(ctx, crate::tray::hide_to_tray_window());
         self.ensure_tray_spawn();
     }
@@ -6833,15 +6830,23 @@ impl eframe::App for Cabin {
             let focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
             self.tray_saw_unfocused =
                 crate::tray::remember_hidden_unfocus(focused, self.tray_saw_unfocused);
-            match crate::tray::hidden_window_tick(
-                true,
-                focused,
-                just_hid,
-                self.tray_saw_unfocused,
-            ) {
+            let since_ms = self.tray_hid_at.elapsed().as_millis() as u64;
+            let tick = if crate::tray::hidden_raise_ready(since_ms) {
+                crate::tray::hidden_window_tick(
+                    true,
+                    focused,
+                    just_hid,
+                    self.tray_saw_unfocused,
+                )
+            } else {
+                crate::tray::HiddenTick::StayHidden
+            };
+            match tick {
                 crate::tray::HiddenTick::Raise => self.show_from_tray(ctx),
                 crate::tray::HiddenTick::StayHidden => {
-                    apply_tray_window(ctx, crate::tray::hide_to_tray_window());
+                    if crate::tray::reapply_unmap(true, focused) {
+                        apply_tray_window(ctx, crate::tray::hide_to_tray_window());
+                    }
                 }
             }
         }
@@ -6870,7 +6875,7 @@ impl eframe::App for Cabin {
             Nav::Workboard => self.ui_board(ctx),
             Nav::Imagine => self.ui_imagine(ctx),
             Nav::Skills => self.ui_skills(ctx),
-            Nav::Eyes => self.ui_eyes(ctx),
+            Nav::Eyes => self.ui_chat(ctx),
             Nav::Night => self.ui_night(ctx),
             Nav::History => self.ui_history(ctx),
             Nav::Command => self.ui_command(ctx),
@@ -7298,7 +7303,10 @@ impl Cabin {
             "queue" => Nav::Agents,
             "devices" => Nav::Devices,
             "memory" => Nav::Memory,
-            "eyes" => Nav::Eyes,
+            "eyes" => {
+                self.open_recent_chat();
+                Nav::Chat
+            }
             "connectors" => {
                 self.skills_tab_connectors = true;
                 Nav::Connectors
@@ -7335,6 +7343,7 @@ impl Cabin {
                                 self.tray.is_some(),
                             ) && !self.want_quit;
                             if hide {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                                 self.hide_to_tray(ctx);
                             } else {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -9963,58 +9972,9 @@ impl Cabin {
     }
 
     fn ui_eyes(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
-            .show(ctx, |ui| {
-            let _ = crate::cards::page_header(ui, "Desk", "");
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("Last Grok Build computer-use frame. Halt cancels the ACP turn.")
-                        .color(crate::theme::muted()),
-                );
-                crate::cards::status_chip(
-                    ui,
-                    if self.desk_frame.is_some() || self.last_frame_url.is_some() {
-                        "live"
-                    } else {
-                        "idle"
-                    },
-                    if self.desk_frame.is_some() || self.last_frame_url.is_some() {
-                        crate::cards::ChipTone::Live
-                    } else {
-                        crate::cards::ChipTone::Mute
-                    },
-                );
-            });
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                if crate::cards::white_pill(ui, "Take over") {
-                    self.take_over_desktop();
-                }
-                if crate::cards::ghost_pill(ui, "Halt") {
-                    self.halt_work("Stopped");
-                }
-            });
-            ui.add_space(12.0);
-            let url = self.desk_frame.as_deref().or(self.last_frame_url.as_deref());
-            if let Some(url) = url {
-                if let Some((tex, size)) = eyes_frame_tex(ui.ctx(), url) {
-                    let max_w = ui.available_width().min(480.0);
-                    crate::cards::framed_preview(ui, &tex, size, max_w);
-                }
-            } else {
-                let _ = crate::cards::empty_prompt_tile(
-                    ui,
-                    crate::icons::TileIcon::Image,
-                    "No frame yet",
-                    "Ask Grok to look at the desktop. Frames arrive from computer-use tools.",
-                );
-            }
-            ui.add_space(10.0);
-            for card in self.tool_cards.iter().filter(|c| c.is_computer_use()) {
-                crate::cards::object_chip(ui, &card.status, &card.title);
-            }
-        });
+        // Desk was a cabin computer-use menu. Grok Build already drives the
+        // desktop; frames land on the chat pane.
+        self.ui_chat(ctx);
     }
 }
 
@@ -10600,6 +10560,10 @@ mod tests {
         assert!(
             tick.contains("tray_saw_unfocused"),
             "taskbar raise waits until the hidden cabin actually lost focus: {tick}"
+        );
+        assert!(
+            src.contains("hidden_raise_ready") && src.contains("reapply_unmap"),
+            "× must not flash back from a FocusLost/FocusGained bounce or Visible(false) spam"
         );
         let night_save = src
             .split("if let Some(mut a) = parse_nl_automation(&scan)")
@@ -11236,7 +11200,7 @@ mod tests {
         let verify = src
             .split("fn run_skill_verify")
             .nth(1)
-            .and_then(|s| s.split("fn take_over_desktop").next())
+            .and_then(|s| s.split("fn replay_saved_recipe").next())
             .expect("run_skill_verify");
         let pushed = verify.find("push_bound_msg").expect("VERIFY_RESULT push");
         let saved = verify.find("self.persist()").expect("verify persist");
@@ -11293,18 +11257,14 @@ mod tests {
             saved > 0,
             "/learn reflect must persist insights or a restart drops them: {reflect}"
         );
-        let takeover = src
-            .split("fn take_over_desktop")
-            .nth(1)
-            .and_then(|s| s.split("fn replay_saved_recipe").next())
-            .expect("take_over_desktop");
+        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
         assert!(
-            takeover.contains("can_agent") && takeover.contains("send_chat"),
-            "Take over is an ACP prompt, not cabin hands: {takeover}"
+            !impl_src.contains("fn take_over_desktop") && !impl_src.contains("white_pill(ui, \"Take over\")"),
+            "Desk Take over is gone — Grok Build computer-use runs from chat"
         );
         assert!(
-            !takeover.contains("hands_attach = true"),
-            "Take over must not arm cabin windshield: {takeover}"
+            !crate::theme::CABIN_MENU.iter().any(|(id, _)| *id == "eyes"),
+            "Desk must not sit in the cabin menu"
         );
         let replay = src
             .split("fn replay_recipe(")
@@ -12330,12 +12290,14 @@ mod tests {
             !slice.contains("ydotoold") && !slice.contains("xdotool on X11"),
             "Eyes subtitle is not a man page: {slice}"
         );
-        assert!(slice.contains("Take over"));
-        assert!(slice.contains("Halt"));
-        assert!(slice.contains("framed_preview") || slice.contains("object_chip"));
-        assert!(slice.contains("computer-use") || slice.contains("ACP"));
+        assert!(slice.contains("ui_chat"));
+        assert!(!slice.contains("Take over"));
         assert!(!slice.contains("Install hands"));
         assert!(!slice.contains("hands_chip_text"));
+        assert!(
+            slice.contains("Grok Build") || slice.contains("computer-use") || slice.contains("chat pane"),
+            "Eyes leftover must not be a cabin desktop-control menu: {slice}"
+        );
     }
 
     #[test]

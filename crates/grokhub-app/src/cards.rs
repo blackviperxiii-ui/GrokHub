@@ -116,15 +116,6 @@ pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
         instructions: "Check uname, whoami, pwd, df -h /, and uptime with Grok Build tools. Four lines: machine, user, disk, load. No secrets.",
         verify: "echo VERIFY_OK",
     },
-    SuggestedSkill {
-        icon: TileIcon::Host,
-        name: "desktop-takeover",
-        title: "Desktop takeover",
-        body: "Look at the screen, then drive it with Grok Build computer-use.",
-        trigger: "take over the desktop",
-        instructions: "Take over this desktop. Use Grok Build computer-use (screenshot, click, type). Fix the issue or finish the task.",
-        verify: "echo VERIFY_OK",
-    },
 ];
 
 pub const LIVE_CONNECTORS: &[LiveConnector] = &[LiveConnector {
@@ -1891,7 +1882,7 @@ mod tests {
                 assert!(!blob.contains(w), "auto {} mentions {w}", s.title);
             }
         }
-        assert_eq!(SUGGESTED_SKILLS.len(), 9);
+        assert_eq!(SUGGESTED_SKILLS.len(), 8);
         for s in SUGGESTED_SKILLS {
             let blob = format!("{} {} {}", s.name, s.body, s.instructions).to_ascii_lowercase();
             for w in forbidden {
