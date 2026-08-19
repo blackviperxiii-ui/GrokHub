@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 grokhub-core = { path = "../grokhub-core" }
 grokhub-hub = { path = "../grokhub-hub" }
+grokhub-acp = { path = "../grokhub-acp" }
 serde.workspace = true
 serde_json.workspace = true
 eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }

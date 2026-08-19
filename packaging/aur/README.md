@@ -14,7 +14,7 @@ cd GrokHub
 grokhub
 ```
 
-`install.sh --user` builds ydotool, grim, xdotool, and wmctrl next to the cabin and installs `python-atspi` for Eyes / `act` / `wait_for`. One password for build deps, AT-SPI, the uinput udev rule, and the `input` group.
+`install.sh --user` installs the cabin GUI. Install Grok Build from https://x.ai/cli for the agent.
 
 ## makepkg (system)
 
@@ -23,14 +23,13 @@ cd packaging/aur
 makepkg -si
 ```
 
-`makepkg -si` / `yay -S grokhub` compile ydotool, grim, xdotool, and wmctrl into `/usr/lib/grokhub/bin` and depend on `python-atspi`. Pointer sidecars stay optdepends if the build is skipped. First cabin launch or Eyes → Install hands starts `ydotoold`.
+`makepkg -si` / `yay -S grokhub` install the cabin GUI. Computer-use is Grok Build — no grim/ydotool sidecars.
 
 ## Layout
 
 | Path | Role |
 |------|------|
 | `/usr/bin/grokhub` | Cabin |
-| `/usr/lib/grokhub/bin` | Sidecar ydotool / ydotoold / grim / xdotool / wmctrl |
 | `/usr/bin/grokhub-hub` | Standalone LAN hub |
 | `/usr/share/applications/grokhub.desktop` | App menu |
 | `~/.config/GrokHub` | Config + memory (`app.json`, `projects.json`, `secrets.json`) |

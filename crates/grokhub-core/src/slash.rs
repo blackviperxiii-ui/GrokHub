@@ -50,6 +50,12 @@ pub enum Slash {
     Palette,
     Pin,
     Delete,
+    Plan,
+    AlwaysApprove,
+    AutoPerm,
+    Effort(String),
+    Sessions,
+    Inspect,
 }
 
 fn looks_like_bind_path(s: &str) -> bool {
@@ -133,6 +139,12 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/usage" => Some(Slash::Usage),
         "/models" => Some(Slash::Models),
         "/palette" => Some(Slash::Palette),
+        "/plan" => Some(Slash::Plan),
+        "/always-approve" | "/yolo" => Some(Slash::AlwaysApprove),
+        "/auto" => Some(Slash::AutoPerm),
+        "/effort" if !rest.is_empty() => Some(Slash::Effort(rest.to_string())),
+        "/sessions" | "/resume" => Some(Slash::Sessions),
+        "/inspect" => Some(Slash::Inspect),
         "/project" => {
             if rest.eq_ignore_ascii_case("clear") || rest.eq_ignore_ascii_case("unbind") {
                 Some(Slash::ProjectClear)
@@ -279,6 +291,12 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Palette => "palette",
         Slash::Pin => "pin",
         Slash::Delete => "delete",
+        Slash::Plan => "plan",
+        Slash::AlwaysApprove => "always_approve",
+        Slash::AutoPerm => "auto_perm",
+        Slash::Effort(_) => "effort",
+        Slash::Sessions => "sessions",
+        Slash::Inspect => "inspect",
     }
 }
 
@@ -338,6 +356,10 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/usage", hint: "Today's usage", insert: "/usage", run_on_pick: true },
     SlashDef { cmd: "/models", hint: "Grok catalog", insert: "/models", run_on_pick: true },
     SlashDef { cmd: "/palette", hint: "Command palette", insert: "/palette", run_on_pick: true },
+    SlashDef { cmd: "/plan", hint: "Grok Build plan mode", insert: "/plan", run_on_pick: true },
+    SlashDef { cmd: "/always-approve", hint: "Skip Grok tool prompts", insert: "/always-approve", run_on_pick: true },
+    SlashDef { cmd: "/sessions", hint: "List Grok Build sessions", insert: "/sessions", run_on_pick: true },
+    SlashDef { cmd: "/inspect", hint: "Inspect Grok Build config", insert: "/inspect", run_on_pick: true },
 ];
 
 pub fn filter_slash_commands(draft: &str) -> Vec<&'static SlashDef> {
@@ -387,16 +409,22 @@ pub fn resolve_mode_arg(arg: &str) -> Option<String> {
 pub fn slash_help() -> String {
     [
         "/help — this list",
-        "/new — new chat",
+        "/new — new chat (new Grok Build session)",
         "/scratch — new scratch chat (no memory; /forget and Memory Save stay off)",
         "/clear — clear this chat",
         "/compact — keep last 8 visible turns",
         "/undo — drop last assistant turn",
         "/retry — re-send last user prompt",
-        "/stop — halt the current job",
-        "/sh <cmd> — run on this box",
-        "/host — host tools (always on)",
-        "/project bind <path> — bound tree is the world",
+        "/stop — halt the current Grok Build turn",
+        "/sh <cmd> — run a local shell (you, not the agent)",
+        "/host — Grok Build CLI status",
+        "/plan — plan mode (Grok Build)",
+        "/always-approve — skip tool permission prompts",
+        "/auto — auto-approve safe tools",
+        "/effort <low|medium|high|xhigh> — reasoning effort",
+        "/sessions — Grok Build sessions",
+        "/inspect — grok inspect",
+        "/project bind <path> — bound tree is the world (ACP cwd)",
         "/project new <name> — create a project",
         "/project folder <name> — create a sidebar folder",
         "/project rename <name> — rename the selected project",
@@ -408,7 +436,7 @@ pub fn slash_help() -> String {
         "/recall <q> — search memory",
         "/forget <topic> — drop matching memory lines",
         "/imagine <prompt>",
-        "/update — overlay install (enables hub, rebuilds sidecars); Restart on Settings (ydotoold → hub, then a new cabin process)",
+        "/update — overlay install (GUI only). Restart on Settings. `grok update` updates the agent.",
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers",
         "/hub — devices / pair",
@@ -423,7 +451,7 @@ pub fn slash_help() -> String {
         "/health — doctor",
         "/fix — halt + doctor",
         "/remember <fact> — write MEMORY.md",
-        "/mode auto|fast|balance|think|max — Auto routes (Settings pin skips if not a ladder default); Fast mini; Balance 4.3; Think 4.6 high; Max 4.6 xhigh",
+        "/mode auto|fast|balance|think|max — leftover composer ladder (Build uses /plan /effort)",
         "/dream — Imagine last night",
         "/tools — same as /host",
         "/import — OpenClaw workspace",
@@ -432,17 +460,15 @@ pub fn slash_help() -> String {
         "/models — Grok catalog",
         "/palette — command palette",
         "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs.",
-        "Mode pill: Auto / Fast / Balance / Think / Max. Pages use catalog chrome.",
-        "Appearance: Dark, Light, System. Chat streams tokens on the thread that started them.",
-        "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Hands: install.sh builds sidecars and installs python-atspi; Eyes Install hands starts ydotoold; /stop kills the worker.",
-        "A truncated, promised-work, or handed-back apt/not-found reply can quiet-continue up to four times. Thinking does not count.",
+        "Mode pill: Code / Plan / Ask. Permission: Ask / Auto / Always-approve. Grok Build runs the agent.",
+        "Appearance: Dark, Light, System. Chat streams Grok Build ACP tokens on the thread that started them.",
+        "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
+        "Install the grok CLI from x.ai/cli. Settings shows grok --version. Cabin overlay updates the GUI only; grok update updates the agent.",
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
-        "Cabin eyes stay dormant until you ask, hands need a frame, or GUI help (close that tab / turn this on). just tell me looks and does not click. Thought does not announce an attach.",
-        "Pulse every 15s: every organ runs. Hidden idle waits for the pulse.",
-        "After 21:00 a quiet Balanced review fills Suggested tiles from what it learned. Night can patch an existing skill from yesterday's host/hands trajectory.",
+        "Pulse every 15s. Hidden idle waits for the pulse.",
         "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
-        "Chat rail opens the last-accessed thread. MidThought can greet Continue {title}.",
-        "Host, hands, and connector work stay off the chat. Chat shows each thought as its own bubble and the final reply. User bubbles sit on the right. Bubbles wrap with the chat pane. Copy and Reply sit on visible messages. Hands map JPEG clicks through xrandr; act picks the smallest AT-SPI match. A full-desktop frame stays at 0,0 — it does not inherit a single-monitor origin. Pointer receipts report the real cursor and monitor; overflow is clamped to the virtual desktop. tab list/new/close/focus talks to localhost CDP when it is up; otherwise act / key ctrl+t. GUI-help turns show a Hands chip and a how-to. Hung desktop tools time out so the cabin does not freeze. GitHub, CDP, chat SSE, and OAuth JSON bodies are capped. Chat-complete text is clipped before strip/merge. Live thought+stream merge stays capped; leftover deltas skip upsert. Chat bubble layout clips paint to TEXT_FILE_CAP. Stream deltas refresh the trailing chat view without cloning the thread; ChatView bodies stay inside TEXT_FILE_CAP. Eyes last-frame URLs drop above FRAME_CAP. Live webcam JPEGs stay off the UI thread. Periodic persist skips while a job is running. Live stream snapshots stay at TEXT_FILE_CAP. History and /recall search scan a TEXT_FILE_CAP prefix. Chip rebuild skips while a job is running. Chip rebuild and suggest clone a 4KB prefix. Spoken TTS clones a TEXT_FILE_CAP prefix. Learning skips a huge user paste before cloning facts. Goal-outcome scans a head+tail window. Thread naming uses a 4KB prefix. Chat-complete pin/recipe/host/night/consult scans use that window. Redirect send and last-user-on-job read the last user turn from borrowed refs.",
+        "Chat rail opens the last-accessed thread.",
+        "Tool calls, diffs, and desk frames render in the pane. Permission prompts Allow / Deny. User bubbles sit on the right.",
         "Five chips sit centered over the composer.",
     ]
     .join("\n")
@@ -533,60 +559,28 @@ mod tests {
         assert!(slash_help().contains("/project delete"));
         assert!(slash_help().contains("/board"));
         assert!(slash_help().contains("/skill"));
-        assert!(slash_help().contains("/mode auto|fast|balance|think|max"));
+        assert!(slash_help().contains("/plan — plan mode"));
+        assert!(slash_help().contains("/always-approve"));
         assert!(slash_help().contains("Pulse every 15s"));
-        assert!(slash_help().contains("Cabin eyes stay dormant"));
-        assert!(slash_help().contains("Restart on Settings"));
+        assert!(slash_help().contains("Grok Build computer-use"));
         assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
-        assert!(slash_help().contains("Mode pill"));
-        assert!(slash_help().contains("quiet Balanced review"));
+        assert!(slash_help().contains("Mode pill: Code / Plan / Ask"));
         assert!(slash_help().contains("centered over the composer"));
         assert!(slash_help().contains("Hidden idle waits for the pulse"));
         assert!(slash_help().contains("Chat rail opens the last-accessed thread"));
-        assert!(slash_help().contains("Host, hands, and connector work stay off the chat"));
-        assert!(slash_help().contains("Copy and Reply"));
-        assert!(slash_help().contains("wrap with the chat pane"));
-        assert!(slash_help().contains("each thought as its own bubble"));
+        assert!(slash_help().contains("Tool calls, diffs, and desk frames"));
         assert!(slash_help().contains("User bubbles sit on the right"));
-        assert!(slash_help().contains("smallest AT-SPI match"));
-        assert!(slash_help().contains("full-desktop frame stays at 0,0"));
-        assert!(slash_help().contains("Pointer receipts report the real cursor and monitor"));
         assert!(slash_help().contains("keep last 8 visible turns"));
         assert!(slash_help().contains("/forget and Memory Save stay off"));
-        assert!(slash_help().contains("Restoring until host finishes"));
         assert!(slash_help().contains("/skill <name> — run a skill"));
         assert!(slash_help().contains("/sync — merge chats and memory"));
         assert!(slash_help().contains("Expired pair codes hide and rotate"));
-        assert!(slash_help().contains("install.sh builds sidecars and installs python-atspi"));
-        assert!(slash_help().contains("Eyes Install hands starts ydotoold"));
-        assert!(slash_help().contains("handed-back apt/not-found"));
-        assert!(slash_help().contains("Thinking does not count"));
+        assert!(slash_help().contains("x.ai/cli"));
         assert!(slash_help().contains("pinned taskbar click"));
-        assert!(slash_help().contains("GUI help"));
-        assert!(slash_help().contains("just tell me looks and does not click"));
-        assert!(slash_help().contains("tab list/new/close/focus"));
-        assert!(slash_help().contains("localhost CDP"));
-        assert!(slash_help().contains("Hands chip and a how-to"));
-        assert!(slash_help().contains("Hung desktop tools time out"));
-        assert!(slash_help().contains("GitHub, CDP, chat SSE, and OAuth JSON bodies are capped"));
-        assert!(slash_help().contains("Chat-complete text is clipped before strip/merge"));
-        assert!(slash_help().contains("Live thought+stream merge stays capped"));
-        assert!(slash_help().contains("Chat bubble layout clips paint to TEXT_FILE_CAP"));
-        assert!(slash_help().contains("refresh the trailing chat view without cloning the thread"));
-        assert!(slash_help().contains("Eyes last-frame URLs drop above FRAME_CAP"));
-        assert!(slash_help().contains("Live webcam JPEGs stay off the UI thread"));
-        assert!(slash_help().contains("Periodic persist skips while a job is running"));
-        assert!(slash_help().contains("Live stream snapshots stay at TEXT_FILE_CAP"));
-        assert!(slash_help().contains("History and /recall search scan a TEXT_FILE_CAP prefix"));
-        assert!(slash_help().contains("Chip rebuild skips while a job is running"));
-        assert!(slash_help().contains("Chip rebuild and suggest clone a 4KB prefix"));
-        assert!(slash_help().contains("Spoken TTS clones a TEXT_FILE_CAP prefix"));
-        assert!(slash_help().contains("Learning skips a huge user paste before cloning facts"));
-        assert!(slash_help().contains("Goal-outcome scans a head+tail window"));
-        assert!(slash_help().contains("Thread naming uses a 4KB prefix"));
-        assert!(slash_help().contains("Chat-complete pin/recipe/host/night/consult scans use that window"));
-        assert!(slash_help().contains("Redirect send and last-user-on-job read the last user turn from borrowed refs"));
-        assert!(slash_help().contains("patch an existing skill"));
+        assert_eq!(parse_slash("/plan"), Some(Slash::Plan));
+        assert_eq!(parse_slash("/always-approve"), Some(Slash::AlwaysApprove));
+        assert_eq!(parse_slash("/sessions"), Some(Slash::Sessions));
+        assert_eq!(parse_slash("/inspect"), Some(Slash::Inspect));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());

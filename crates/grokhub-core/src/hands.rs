@@ -247,18 +247,13 @@ mod tests {
         assert_eq!(dirs[1], PathBuf::from("/usr/lib/grokhub/bin"));
         let sh = include_str!("../../../scripts/install.sh");
         assert!(
-            sh.contains("build-hands.sh")
-                && sh.contains("usermod -aG input")
-                && sh.contains("sudo install")
-                && sh.contains("60-grokhub-uinput.rules")
-                && sh.contains("modprobe uinput")
-                && sh.contains("python-atspi")
-                && sh.contains("python3-pyatspi")
+            !sh.contains("build-hands.sh")
+                && !sh.contains("ydotoold")
                 && sh.contains("alsa-utils")
                 && sh.contains("enable grokhub.service")
                 && sh.contains("enable --now grokhub-hub.service")
-                && sh.contains("restart ydotoold.service"),
-            "clone install must build sidecars, install runtime deps, enable cabin/hub units, and restart ydotoold"
+                && sh.contains("x.ai/cli"),
+            "clone install must skip grim/ydotool sidecars and point at Grok Build: {sh}"
         );
         assert!(
             !sh.contains("sudo pacman -S --needed ydotool"),
@@ -266,38 +261,33 @@ mod tests {
         );
         let srcinfo = include_str!("../../../packaging/aur/.SRCINFO");
         assert!(
-            srcinfo.contains("optdepends = ydotool")
-                && srcinfo.contains("optdepends = grim")
-                && srcinfo.contains("makedepends = cmake")
-                && srcinfo.contains("makedepends = libx11")
-                && srcinfo.contains("depends = python-atspi")
-                && !srcinfo.contains("\tdepends = ydotool")
+            !srcinfo.contains("optdepends = ydotool")
+                && !srcinfo.contains("depends = python-atspi")
+                && !srcinfo.contains("makedepends = cmake")
+                && srcinfo.contains("optdepends = ffmpeg")
                 && !srcinfo.contains("slurp"),
-            "AUR metadata must treat pointer tools as sidecars and python-atspi as a depend: {srcinfo}"
+            "AUR metadata must not ship pointer sidecars: {srcinfo}"
         );
         let local_pkg = include_str!("../../../packaging/PKGBUILD");
         assert!(
-            local_pkg.contains("build-hands.sh")
-                && local_pkg.contains("cmake")
-                && local_pkg.contains("libx11")
-                && local_pkg.contains("'python-atspi'")
+            !local_pkg.contains("build-hands.sh")
+                && !local_pkg.contains("'python-atspi'")
+                && !local_pkg.contains("ydotoold.service")
                 && !local_pkg.contains("slurp"),
-            "clone makepkg must build sidecars and depend on python-atspi"
+            "clone makepkg must not build grim/ydotool sidecars"
         );
         assert!(
             PYATSPI_MISSING.contains("python-atspi") && PYATSPI_MISSING.contains("wmctrl"),
-            "Install hands must tell the user when pyatspi is missing"
+            "leftover hands copy still mentions pyatspi"
         );
         let bundle = include_str!("../../../scripts/make-release-bundle.sh");
         assert!(
-            bundle.contains("build-hands.sh")
-                && bundle.contains("ydotoold.service")
+            !bundle.contains("build-hands.sh")
+                && !bundle.contains("ydotoold.service")
                 && bundle.contains("grokhub-hub.service")
-                && bundle.contains("modprobe uinput")
-                && bundle.contains("python-atspi")
-                && bundle.contains("python3-pyatspi")
-                && bundle.contains("enable --now grokhub-hub.service"),
-            "release tarball install must ship cabin/hub units, build sidecars, and install runtime deps"
+                && bundle.contains("enable --now grokhub-hub.service")
+                && bundle.contains("x.ai/cli"),
+            "release tarball install must skip sidecars and keep cabin/hub: {bundle}"
         );
         assert!(
             !bundle.contains("sudo pacman -S --needed ydotool"),

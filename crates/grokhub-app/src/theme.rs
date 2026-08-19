@@ -227,7 +227,7 @@ pub const CABIN_MENU: &[(&str, &str)] = &[
     ("devices", "Devices"),
     ("command", "Command"),
     ("queue", "Queue"),
-    ("eyes", "Eyes"),
+    ("eyes", "Desk"),
 ];
 
 pub const WORKSPACE: &[(&str, &str)] = GROK_NAV;
@@ -247,8 +247,8 @@ pub fn stage_subtitle(id: &str) -> &'static str {
         "settings" => "Preferences",
         "devices" => "Paired computers",
         "memory" => "SOUL / USER / MEMORY",
-        "eyes" => "Windshield",
-        "connectors" => "GitHub",
+        "eyes" => "Computer-use frames",
+        "connectors" => "MCP / skills / plugins",
         _ => "GrokHub",
     }
 }
@@ -487,7 +487,7 @@ mod tests {
         assert_eq!(stage_subtitle("history"), "Past chats");
         assert_eq!(stage_subtitle("chat"), "Recent chat");
         assert_eq!(stage_subtitle("imagine"), "Images");
-        assert_eq!(stage_subtitle("connectors"), "GitHub");
+        assert_eq!(stage_subtitle("connectors"), "MCP / skills / plugins");
         assert_eq!(title_font(40.0).size, 40.0);
         set_paint_dark(true);
         assert_eq!(bg(), BG);

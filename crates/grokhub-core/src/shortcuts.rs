@@ -67,12 +67,12 @@ pub const SHORTCUTS: &[Shortcut] = &[
     Shortcut { keys: "Ctrl+N", action: "New chat", scope: "Global" },
     Shortcut { keys: "Ctrl+G", action: "Hey Grok (listen or halt)", scope: "Global" },
     Shortcut { keys: "Super+G", action: "Hey Grok when unfocused", scope: "System" },
-    Shortcut { keys: "Ctrl+Shift+Esc", action: "Halt hands", scope: "Global" },
+    Shortcut { keys: "Ctrl+Shift+Esc", action: "Halt", scope: "Global" },
     Shortcut { keys: "Super+Shift+Esc", action: "Halt when unfocused", scope: "System" },
     Shortcut { keys: "Enter", action: "Send message", scope: "Composer" },
     Shortcut { keys: "Ctrl+Enter", action: "New line", scope: "Composer" },
     Shortcut { keys: "Tab", action: "Accept slash", scope: "Composer" },
-    Shortcut { keys: "Enter / Esc", action: "Allow / deny host plan", scope: "Host" },
+    Shortcut { keys: "Enter / Esc", action: "Allow / deny tool permission", scope: "Chat" },
 ];
 
 pub fn shortcut_help() -> String {
@@ -93,7 +93,7 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
         ("Connectors", "nav:connectors"),
         ("Command", "nav:command"),
         ("Agents", "nav:agents"),
-        ("Eyes", "nav:eyes"),
+        ("Desk", "nav:eyes"),
         ("Skills", "nav:skills"),
         ("Board", "nav:board"),
         ("Imagine", "nav:imagine"),

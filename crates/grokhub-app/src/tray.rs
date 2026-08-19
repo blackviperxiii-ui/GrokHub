@@ -370,7 +370,7 @@ impl ksni::Tray for GrokTray {
             }
             .into(),
             StandardItem {
-                label: "Halt hands".into(),
+                label: "Halt".into(),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.tx.send(TrayCmd::Halt);
                 }),

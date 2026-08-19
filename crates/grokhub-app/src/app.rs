@@ -1,3 +1,4 @@
+use crate::build_agent;
 use crate::helpers::{
     cabin_menu_should_dismiss, click_project_opens_board, collect_other_chip_threads, expand_home,
     next_maximized, next_starter_skill_name, wants_live_repaint,
@@ -21,6 +22,7 @@ use crate::xai::{
     grok_tts, http_status_of,
 };
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
+use grokhub_acp::{AcpEvent, PermissionMode, SessionMode, ToolCard};
 use grokhub_core::{
     append_composer, anticipate_consumes_slot, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
     cabin_system_prompt,
@@ -906,6 +908,15 @@ pub struct Cabin {
     oauth_photo_rx: Option<mpsc::Receiver<OauthPhotoOut>>,
     oauth_photo_busy: bool,
     oauth_profile_tried: bool,
+    acp: Option<grokhub_acp::AcpHandle>,
+    tool_cards: Vec<ToolCard>,
+    desk_frame: Option<String>,
+    perm_ask: Option<grokhub_acp::PermissionAsk>,
+    session_mode: SessionMode,
+    permission_mode: PermissionMode,
+    grok_sessions: Vec<String>,
+    grok_sessions_loaded: bool,
+    inspect_text: String,
 }
 
 fn paint_wall_cover(
@@ -1239,6 +1250,15 @@ impl Cabin {
             oauth_photo_rx: None,
             oauth_photo_busy: false,
             oauth_profile_tried: false,
+            acp: None,
+            tool_cards: Vec::new(),
+            desk_frame: None,
+            perm_ask: None,
+            session_mode: SessionMode::Code,
+            permission_mode: PermissionMode::AlwaysApprove,
+            grok_sessions: Vec::new(),
+            grok_sessions_loaded: false,
+            inspect_text: String::new(),
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
             let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
@@ -1435,6 +1455,9 @@ impl Cabin {
 
     fn halt_in_flight(&mut self) {
         self.host_halt.store(true, Ordering::SeqCst);
+        if let Some(h) = &self.acp {
+            let _ = h.cancel();
+        }
         self.rx = None;
         self.running = false;
         if self.host_reserved > 0 {
@@ -1560,6 +1583,46 @@ impl Cabin {
 
     fn has_key(&self) -> bool {
         has_auth(&self.cfg.api_key, &secrets::access_token(&self.secrets))
+    }
+
+    fn can_agent(&self) -> bool {
+        build_agent::can_agent(self.has_key())
+    }
+
+    fn grok_cwd(&self) -> std::path::PathBuf {
+        let cwd = expand_home(&self.cfg.project_dir);
+        if cwd.trim().is_empty() {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        } else {
+            std::path::PathBuf::from(&cwd)
+        }
+    }
+
+    fn reload_grok_sessions(&mut self) {
+        if let Some(bin) = grokhub_acp::find_grok() {
+            self.grok_sessions =
+                grokhub_acp::list_sessions(&bin, &self.grok_cwd()).unwrap_or_default();
+        } else {
+            self.grok_sessions.clear();
+        }
+        self.grok_sessions_loaded = true;
+    }
+
+    fn ensure_acp(&mut self) -> Result<(), String> {
+        let cwd = self.grok_cwd();
+        if self.acp.as_ref().is_some_and(|h| h.cwd == cwd) {
+            return Ok(());
+        }
+        self.acp = None;
+        let key = self.bearer();
+        let h = build_agent::spawn_session(
+            cwd,
+            if key.is_empty() { None } else { Some(key) },
+            self.permission_mode,
+            self.session_mode,
+        )?;
+        self.acp = Some(h);
+        Ok(())
     }
 
     fn open_plus(&mut self, target: PlusTarget, anchor: egui::Pos2) {
@@ -3001,11 +3064,11 @@ impl Cabin {
             now_ms(),
             Self::local_clock().hour as u8,
         );
-        if !persist_user_turn(self.has_key()) {
+        if !persist_user_turn(self.can_agent()) {
             self.hands_attach = false;
             self.eyes_attach = false;
             self.speak_next = false;
-            self.status = "Connect Grok OAuth in Settings".into();
+            self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
             return;
         }
         self.verify_ok_turn = verify_ok_after_user_turn(self.verify_ok_turn, true);
@@ -3021,16 +3084,8 @@ impl Cabin {
             role: "user".into(),
             content: text.clone(),
         });
-        let (eyes, hands) = see_drive_attach(&text);
-        if eyes {
-            self.eyes_attach = true;
-        }
-        if hands {
-            self.hands_attach = true;
-        }
-        if self.cfg.cabin_eyes && user_asks_cabin_eyes(&text) {
-            self.eyes_attach = true;
-        }
+        self.eyes_attach = false;
+        self.hands_attach = false;
         self.followup_step = 0;
         self.stamp_current_access();
         self.persist();
@@ -3154,7 +3209,10 @@ impl Cabin {
                 self.stamp_current_access();
                 self.persist();
             }
-            Slash::New => self.new_thread(false),
+            Slash::New => {
+                self.acp = None;
+                self.new_thread(false);
+            }
             Slash::Scratch => self.new_thread(true),
             Slash::Clear => {
                 if self.running {
@@ -3200,14 +3258,7 @@ impl Cabin {
             Slash::Stop => self.halt_work("Stopped"),
             Slash::Sh(cmd) => self.queue_sh(cmd),
             Slash::HostStatus => {
-                self.status = format!(
-                    "Host on · {}",
-                    if self.host_live.is_empty() {
-                        "idle"
-                    } else {
-                        &self.host_live
-                    }
-                );
+                self.status = build_agent::grok_banner();
             }
             Slash::Rename(title) => self.rename_thread(self.thread_idx, &title),
             Slash::Pin => self.pin_thread(self.thread_idx),
@@ -3270,6 +3321,59 @@ impl Cabin {
                 self.persist();
             }
             Slash::Palette => self.open_palette(),
+            Slash::Plan => {
+                self.session_mode = SessionMode::Plan;
+                self.acp = None;
+                self.status = "Plan mode — Grok Build will plan first".into();
+            }
+            Slash::AlwaysApprove => {
+                self.permission_mode = if self.permission_mode == PermissionMode::AlwaysApprove {
+                    PermissionMode::Ask
+                } else {
+                    PermissionMode::AlwaysApprove
+                };
+                self.acp = None;
+                self.status = format!("Permission {}", self.permission_mode.as_str());
+            }
+            Slash::AutoPerm => {
+                self.permission_mode = PermissionMode::Auto;
+                self.acp = None;
+                self.status = "Permission auto".into();
+            }
+            Slash::Effort(level) => {
+                self.cfg.mode = match level.to_ascii_lowercase().as_str() {
+                    "xhigh" | "max" => "max".into(),
+                    "high" | "think" => "think".into(),
+                    "low" | "fast" => "fast".into(),
+                    _ => "balanced".into(),
+                };
+                let _ = config::save(&self.cfg);
+                self.status = format!("Effort {level}");
+            }
+            Slash::Sessions => {
+                self.nav = Nav::History;
+                self.reload_grok_sessions();
+                if grokhub_acp::find_grok().is_some() {
+                    self.status = format!("{} Grok sessions", self.grok_sessions.len());
+                } else {
+                    self.status = build_agent::grok_banner();
+                }
+            }
+            Slash::Inspect => {
+                self.nav = Nav::Connectors;
+                if let Some(bin) = grokhub_acp::find_grok() {
+                    let cwd = expand_home(&self.cfg.project_dir);
+                    let cwd = std::path::Path::new(if cwd.is_empty() { "." } else { &cwd });
+                    self.inspect_text = match grokhub_acp::inspect_json(&bin, cwd) {
+                        Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string()),
+                        Err(e) => e,
+                    };
+                    self.status = "Grok inspect".into();
+                } else {
+                    self.inspect_text = build_agent::grok_banner();
+                    self.status = self.inspect_text.clone();
+                }
+            }
             Slash::ProjectBind(path) => {
                 let p = path.unwrap_or_else(|| self.cfg.project_dir.clone());
                 let p = expand_home(&p);
@@ -3277,12 +3381,16 @@ impl Cabin {
                 let _ = std::fs::create_dir_all(&p);
                 self.project_sel = upsert_bound(&mut self.projects, &p);
                 self.touch_projects();
+                self.acp = None;
+                self.grok_sessions_loaded = false;
                 self.persist();
                 self.status = format!("Bound {p}");
             }
             Slash::ProjectClear => {
                 self.cfg.project_dir.clear();
                 self.project_sel = None;
+                self.acp = None;
+                self.grok_sessions_loaded = false;
                 self.touch_projects();
                 self.persist();
                 self.status = "Unbound — full desktop".into();
@@ -3643,13 +3751,35 @@ impl Cabin {
         Some(cmd)
     }
 
+    fn run_grok_extension(&mut self, args: &[&str]) {
+        let Some(bin) = grokhub_acp::find_grok() else {
+            self.inspect_text = build_agent::grok_banner();
+            self.status = self.inspect_text.clone();
+            return;
+        };
+        let cwd = expand_home(&self.cfg.project_dir);
+        let cwd = std::path::Path::new(if cwd.is_empty() { "." } else { &cwd });
+        self.inspect_text = match grokhub_acp::grok_stdout(&bin, cwd, args) {
+            Ok(t) => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
+                    serde_json::to_string_pretty(&v).unwrap_or(t)
+                } else {
+                    t
+                }
+            }
+            Err(e) => e,
+        };
+        self.status = format!("grok {}", args.join(" "));
+    }
+
     fn doctor_text(&self) -> String {
         let mut lines = grokhub_core::doctor_lines(self.has_key(), true, HUB_KIND);
         lines.extend(grokhub_core::doctor_extras(
             self.last_receipt_ok,
             self.skill_list.len(),
         ));
-        lines.push(doctor_hands_line(&crate::desktop::hands_chip_text()));
+        let (ok, text) = grokhub_acp::doctor_grok_line(grokhub_acp::find_grok().as_deref());
+        lines.push(grokhub_core::DoctorLine { ok, text });
         lines
             .into_iter()
             .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
@@ -4494,8 +4624,7 @@ impl Cabin {
             return;
         }
         self.last_live = Instant::now();
-        if !presence_should_stream(self.running, self.nav == Nav::Eyes || self.nav == Nav::Command)
-        {
+        if !presence_should_stream(false, false) {
             return;
         }
         let rows = collect_rows();
@@ -4733,8 +4862,8 @@ impl Cabin {
     }
 
     fn kick_model(&mut self, consume_attach: bool) {
-        if !self.has_key() {
-            self.status = "Connect Grok OAuth in Settings".into();
+        if !self.can_agent() {
+            self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
             return;
         }
         if !self.kick_skip
@@ -4785,191 +4914,177 @@ impl Cabin {
             &visible_pairs,
             &stored,
         );
-        let key = self.bearer();
         let last_user = raw
             .iter()
             .rev()
             .find(|(role, content)| role == "user" && !is_workload_user(content))
             .map(|(_, content)| content.clone())
             .unwrap_or_default();
-        let mode = effective_chat_mode(&self.cfg.mode, &last_user, &self.cfg.model);
-        let model = resolve_chat_model(&mode, &self.cfg.model);
-        let effort = if model == "grok-4.6" {
-            grokhub_core::reasoning_effort_for_mode(&mode)
-        } else {
-            None
-        };
-        let mut msgs: Vec<(String, String)> = raw
-            .into_iter()
-            .map(|(role, content)| {
-                let content = if role == "assistant" {
-                    strip_thinking(&content)
-                } else {
-                    content
-                };
-                (role, content)
-            })
-            .collect();
-        let stored_scratch: Vec<(String, bool)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.scratch))
-            .collect();
-        let job_scratch = job_is_scratch(
-            self.chat_job_thread.as_deref(),
-            &vis,
-            self.scratch(),
-            &stored_scratch,
-        );
-        if !job_scratch && config::read_memory(&self.mem_name) != self.mem_body {
-            let _ = config::write_memory(&self.mem_name, &self.mem_body);
-        }
-        let soul = config::read_memory("SOUL.md");
-        let user_md = config::read_memory("USER.md");
-        let memory_md = config::read_memory("MEMORY.md");
-        let pins = skills::pin_text(&self.skill_list);
-        let mut board = String::new();
-        for c in self.board.iter().take(8) {
-            board.push_str(&format!("- [{}] {}\n", c.status.as_str(), c.title));
-        }
-        let last_host = thread_host_receipts(&msgs)
-            .last()
-            .map(|h| h.chars().take(400).collect::<String>())
-            .unwrap_or_default();
-        let pin = insight_pin(&self.learning);
-        let (eyes, hands) = see_drive_attach(&last_user);
-        if eyes {
-            self.eyes_attach = true;
-        }
-        if hands {
-            self.hands_attach = true;
-        }
-        if self.cfg.cabin_eyes && user_asks_cabin_eyes(&last_user) {
-            self.eyes_attach = true;
-        }
-        let captured = if self.kick_skip {
-            self.kick_skip = false;
-            self.kick_frame.take()
-        } else {
-            self.kick_frame
-                .take()
-                .or_else(|| self.capture_cabin_frame_this_turn())
-        };
-        let mut hands = hands_protocol().to_string();
-        if self.eyes_attach || self.hands_attach {
-            let rows = collect_rows();
-            let titles: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-            let (rows, header) = prepare_windshield(&rows, Some(&last_user), captured.is_some());
-            let frame = build_windshield(
-                &rows,
-                None,
-                refused_lock(&titles),
-                self.board.first().map(|c| c.title.as_str()),
-                self.skill_list.first().map(|s| s.name.as_str()),
-                4,
-            );
-            let glass = windshield_prompt(&frame);
-            if !header.is_empty() || !glass.is_empty() {
-                hands.push_str("\n\nWindshield:\n");
-                hands.push_str(&header);
-                hands.push_str(&glass);
-            }
-        }
-        let stored_pins: Vec<(String, String)> = self
-            .threads
-            .iter()
-            .map(|t| (t.id.clone(), t.goal.label.clone()))
-            .collect();
-        let job_pin = goal_pin_for_job(
-            self.chat_job_thread.as_deref(),
-            &vis,
-            &self.cfg.goal_pin,
-            &stored_pins,
-        );
-        let sys = cabin_system_prompt(
-            &soul,
-            &user_md,
-            &memory_md,
-            &pins,
-            self.active_skill_follow.as_deref(),
-            &job_pin,
-            &board,
-            &last_host,
-            &hands,
-            &pin,
-        );
-        if !sys.is_empty() {
-            msgs.insert(0, ("system".into(), sys));
-        }
-        if should_trim_result_bodies(estimate_messages(&msgs), CONTEXT_BUDGET_TOKENS) {
-            msgs = trim_result_bodies(&msgs, RESULT_TRIM_KEEP_HOPS);
-        }
-        let user_img = if kick_consumes_attach(consume_attach) {
-            self.attach_name = None;
-            self.attach_url.take()
-        } else {
-            None
-        };
-        let eyes_turn = self.eyes_attach;
-        let hands_turn = self.hands_attach;
+        let _ = consume_attach;
+        self.kick_frame.take();
+        self.kick_skip = false;
         self.eyes_attach = false;
         self.hands_attach = false;
-        let cabin = this_turn_cabin_frame(eyes_turn, hands_turn, captured.as_deref())
-            .map(|s| s.to_string());
-        let image = next_chat_image(user_img.as_deref(), cabin.as_deref()).map(|s| s.to_string());
-        if cabin_frame_only(user_img.as_deref(), cabin.as_deref()) {
-            if let Some((_, content)) = msgs
-                .iter_mut()
-                .rev()
-                .find(|(role, c)| role == "user" && !is_workload_user(c))
-            {
-                *content = cabin_eyes_request_text(content);
-            }
-        }
-        let (tx, rx) = mpsc::channel();
-        self.rx = Some(rx);
         self.stream_buf.clear();
         self.thought_buf.clear();
-        std::thread::spawn(move || {
-            let tx_d = tx.clone();
-            let r = grok_chat_stream(
-                &key,
-                &model,
-                &msgs,
-                image.as_deref(),
-                effort,
-                |d| {
-                    let _ = tx_d.send(JobOut::ChatDelta(d.to_string()));
-                },
-                |t| {
-                    let _ = tx_d.send(JobOut::ThoughtDelta(t.to_string()));
-                },
-            );
-            let r = match r {
-                Err(e) => {
-                    if http_status_of(&e).map(should_failover_status).unwrap_or(false) {
-                        if let Some(next) = failover_model(&model) {
-                            grok_chat(&key, next, &msgs, image.as_deref(), None)
-                                .map(|t| (t, false))
-                                .map_err(|e2| format!("{e}; failover {next}: {e2}"))
-                        } else {
-                            Err(e)
-                        }
-                    } else {
-                        Err(e)
-                    }
-                }
-                ok => ok,
-            };
-            let _ = tx.send(match r {
-                Ok((t, truncated)) => JobOut::Chat { text: t, truncated },
-                Err(e) => JobOut::Err(e),
-            });
-        });
+        self.tool_cards.clear();
+        self.perm_ask = None;
+        if let Err(e) = self.ensure_acp() {
+            self.running = false;
+            self.chat_job_thread = None;
+            self.status = e;
+            return;
+        }
+        match self.acp.as_ref().map(|h| h.prompt(&last_user)) {
+            Some(Ok(())) => {}
+            Some(Err(e)) => {
+                self.running = false;
+                self.chat_job_thread = None;
+                self.status = e;
+            }
+            None => {
+                self.running = false;
+                self.status = "Grok Build session missing".into();
+            }
+        }
     }
 
     fn upsert_stream_assistant(&mut self) {
         self.apply_live_assistant();
+    }
+
+    fn poll_acp(&mut self) {
+        let evs = {
+            let Some(h) = &self.acp else { return };
+            let mut v = Vec::new();
+            while let Ok(ev) = h.try_recv() {
+                v.push(ev);
+            }
+            v
+        };
+        let yolo = self.permission_mode == PermissionMode::AlwaysApprove;
+        for ev in evs {
+            match ev {
+                AcpEvent::Ready { .. } => {}
+                AcpEvent::Thought(t) => {
+                    let changed = push_stream_capped(&mut self.thought_buf, &t, IMAGE_FILE_CAP);
+                    if chat_stream_is_visible(
+                        self.chat_job_thread.as_deref(),
+                        &self.visible_thread_id(),
+                    ) {
+                        self.status = "Thinking…".into();
+                    }
+                    if changed {
+                        self.upsert_stream_assistant();
+                    }
+                }
+                AcpEvent::Text(t) => {
+                    let changed = push_stream_capped(&mut self.stream_buf, &t, IMAGE_FILE_CAP);
+                    if chat_stream_is_visible(
+                        self.chat_job_thread.as_deref(),
+                        &self.visible_thread_id(),
+                    ) {
+                        self.status = "Thinking…".into();
+                    }
+                    if changed {
+                        self.upsert_stream_assistant();
+                    }
+                }
+                AcpEvent::Tool(card) => {
+                    if let Some(url) = &card.image_data_url {
+                        self.desk_frame = Some(url.clone());
+                        self.remember_last_frame(url);
+                        if let Ok(mut st) = self.hub.lock() {
+                            st.store_frame(url);
+                        }
+                    }
+                    if let Some(old) = self.tool_cards.iter_mut().find(|c| c.id == card.id) {
+                        *old = card;
+                    } else {
+                        self.tool_cards.push(card);
+                    }
+                }
+                AcpEvent::Plan(t) => {
+                    self.status = format!("Plan · {t}");
+                }
+                AcpEvent::Permission(p) => {
+                    if yolo {
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_permission(p.rpc_id, true);
+                        }
+                    } else {
+                        self.perm_ask = Some(p);
+                        self.status = "Grok wants permission".into();
+                    }
+                }
+                AcpEvent::Done { .. } => {
+                    let text = if self.thought_buf.is_empty() {
+                        self.stream_buf.clone()
+                    } else {
+                        merge_thinking_capped(
+                            &self.thought_buf,
+                            &strip_thinking(&self.stream_buf),
+                            IMAGE_FILE_CAP as usize,
+                        )
+                    };
+                    self.finish_acp_turn(text);
+                }
+                AcpEvent::Err(e) => {
+                    self.running = false;
+                    self.chat_job_thread = None;
+                    self.status = e;
+                }
+            }
+        }
+    }
+
+    fn finish_acp_turn(&mut self, text: String) {
+        let text = take_ui_text(text, IMAGE_FILE_CAP);
+        let here = chat_stream_is_visible(
+            self.chat_job_thread.as_deref(),
+            &self.visible_thread_id(),
+        );
+        self.running = false;
+        self.voice_orb = "idle".into();
+        if here {
+            self.status.clear();
+        }
+        remember_chip_outcome(&mut self.chip_memory, true, now_ms());
+        record_turn(&mut self.learning);
+        bump_usage(&mut self.usage, "message");
+        self.apply_assistant_snapshot(text.clone());
+        self.thought_buf.clear();
+        self.stream_buf.clear();
+        let origin = self.chat_job_thread.take();
+        if here && self.speak_next {
+            self.speak_next = false;
+            self.speak_reply(&text);
+        }
+        if let Some(p) = extract_imagine_prompt(&text) {
+            self.chat_job_thread = origin.clone();
+            self.imagine_prompt = p;
+            if here {
+                self.nav = Nav::Imagine;
+                self.imagine_want_focus = true;
+            }
+            self.kick_imagine();
+        }
+        self.persist();
+        if !self.running {
+            self.finish_hub_dispatch(&text, hub_dispatch_ok(&text));
+        }
+        let vis = self.visible_thread_id();
+        if leftover_empty_thread(
+            self.threads
+                .get(self.thread_idx)
+                .map(|t| t.title.as_str())
+                .unwrap_or(""),
+            self.scratch(),
+            self.messages.is_empty(),
+        ) {
+            let _ = vis;
+        }
+        let _ = origin;
     }
 
     fn poll_job(&mut self) {
@@ -5087,36 +5202,7 @@ impl Cabin {
                 }
                 self.persist();
                 let mut host_needs_kick = false;
-                if let Some(plan) = plan_from_text(&scan) {
-                    self.pending_update = false;
-                    if self.cfg.yolo {
-                        let (run, hold) = yolo_plan_split(
-                            &plan,
-                            self.approve_risky_only,
-                            &self.cfg.project_dir,
-                        );
-                        if !run.is_empty() {
-                            self.chat_job_thread = origin.clone();
-                            host_needs_kick = self.run_cmds(run);
-                        }
-                        if !hold.is_empty() {
-                            self.plan_pending = Some(hold);
-                            if here {
-                                self.status = "Host plan needs approval".into();
-                            }
-                        }
-                    } else {
-                        let cmds = approved_cmds(&plan);
-                        if !cmds.is_empty() {
-                            self.chat_job_thread = origin.clone();
-                            host_needs_kick = self.run_cmds(cmds);
-                        }
-                    }
-                }
-                for c in extract_connector_cmds(&scan) {
-                    self.chat_job_thread = origin.clone();
-                    self.run_connector(&c.connector_id, &c.tool, &c.args);
-                }
+                // Grok Build owns bash, files, and computer-use. Do not parse HOST_CMD / COMPUTER_CMD.
                 if let Some(p) = extract_imagine_prompt(&scan) {
                     self.chat_job_thread = origin.clone();
                     self.imagine_prompt = p;
@@ -6074,14 +6160,9 @@ impl Cabin {
 
     fn take_over_desktop(&mut self) {
         self.nav = Nav::Chat;
-        if !self.has_key() {
-            self.status = "Connect Grok OAuth in Settings".into();
+        if !self.can_agent() {
+            self.status = "Install Grok Build or Connect Grok in Settings".into();
             return;
-        }
-        self.hands_attach = true;
-        self.eyes_attach = true;
-        if !crate::desktop::hands_ready() {
-            self.status = crate::desktop::install_hands_status();
         }
         self.send_chat("Take over this desktop. Look at the screen and fix what is broken.".into());
     }
@@ -6623,6 +6704,7 @@ impl eframe::App for Cabin {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
+        self.poll_acp();
         self.poll_chips();
         self.poll_review();
         self.poll_greeting();
@@ -7734,7 +7816,109 @@ impl Cabin {
                                 | Some(ChatKind::Tool) => {}
                             }
                         }
+                        self.paint_tool_cards(ui);
+                        self.paint_perm_ask(ui);
                     });
+            });
+    }
+
+    fn paint_tool_cards(&self, ui: &mut egui::Ui) {
+        if self.tool_cards.is_empty() {
+            return;
+        }
+        ui.add_space(8.0);
+        for card in &self.tool_cards {
+            egui::Frame::none()
+                .fill(crate::theme::elevated())
+                .rounding(12.0)
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                .inner_margin(egui::Margin::same(10.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(&card.title)
+                                .size(13.0)
+                                .color(crate::theme::fg()),
+                        );
+                        crate::cards::status_chip(
+                            ui,
+                            &card.status,
+                            if card.status == "failed" {
+                                crate::cards::ChipTone::Offline
+                            } else if card.is_computer_use() {
+                                crate::cards::ChipTone::Live
+                            } else {
+                                crate::cards::ChipTone::Mute
+                            },
+                        );
+                    });
+                    if !card.diff.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(card.diff.chars().take(800).collect::<String>())
+                                .size(12.0)
+                                .monospace()
+                                .color(crate::theme::muted()),
+                        );
+                    } else if !card.detail.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(card.detail.chars().take(280).collect::<String>())
+                                .size(12.0)
+                                .color(crate::theme::muted()),
+                        );
+                    }
+                    if let Some(url) = card.image_data_url.as_deref() {
+                        if let Some((tex, size)) = eyes_frame_tex(ui.ctx(), url) {
+                            let max_w = ui.available_width().min(360.0);
+                            crate::cards::framed_preview(ui, &tex, size, max_w);
+                        }
+                    }
+                });
+            ui.add_space(6.0);
+        }
+    }
+
+    fn paint_perm_ask(&mut self, ui: &mut egui::Ui) {
+        let Some(p) = self.perm_ask.clone() else {
+            return;
+        };
+        ui.add_space(8.0);
+        egui::Frame::none()
+            .fill(crate::theme::elevated())
+            .rounding(12.0)
+            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+            .inner_margin(egui::Margin::same(12.0))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(format!("Grok wants permission · {}", p.title))
+                        .size(14.0)
+                        .color(crate::theme::fg()),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if crate::cards::white_pill(ui, "Allow") {
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_permission(p.rpc_id.clone(), true);
+                        }
+                        self.perm_ask = None;
+                    }
+                    if crate::cards::ghost_pill(ui, "Deny") {
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_permission(p.rpc_id.clone(), false);
+                        }
+                        self.perm_ask = None;
+                    }
+                    if crate::cards::ghost_pill(ui, "Always") {
+                        self.permission_mode = PermissionMode::AlwaysApprove;
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_permission(p.rpc_id.clone(), true);
+                        }
+                        self.perm_ask = None;
+                        self.acp = None;
+                        self.status = "Permission always-approve".into();
+                    }
+                });
             });
     }
 
@@ -7781,9 +7965,18 @@ impl Cabin {
             for slot in composer_stack_order() {
                 match slot {
                     ComposerStackSlot::AuthBanner => {
-                        if paint_connect_banner(self.has_key(), self.messages.len()) {
+                        let grok_missing = grokhub_acp::find_grok().is_none();
+                        if grok_missing || paint_connect_banner(self.has_key(), self.messages.len())
+                        {
                             ui.horizontal(|ui| {
-                                crate::cards::settings_note(ui, "Connect Grok to chat.");
+                                crate::cards::settings_note(
+                                    ui,
+                                    if grok_missing {
+                                        "Install Grok Build (x.ai/cli), then grok login."
+                                    } else {
+                                        "Connect Grok for Voice and Imagine. Chat uses grok login."
+                                    },
+                                );
                                 if crate::cards::ghost_pill(ui, "Settings") {
                                     self.nav = Nav::Settings;
                                 }
@@ -7966,13 +8159,21 @@ impl Cabin {
                                 ) {
                                     self.send_chat(t);
                                 }
-                                let mode_now = if self.cfg.mode.trim().is_empty() {
-                                    "auto".to_string()
-                                } else {
-                                    self.cfg.mode.clone()
-                                };
-                                if let Some(mode) = crate::cards::mode_pill(ui, &mode_now) {
-                                    self.run_slash(Slash::Mode(mode));
+                                let session_now = self.session_mode.as_str().to_string();
+                                if let Some(mode) = crate::cards::mode_pill(ui, &session_now) {
+                                    if let Some(m) = SessionMode::parse(&mode) {
+                                        self.session_mode = m;
+                                        self.acp = None;
+                                        self.status = format!("Session {}", m.as_str());
+                                    }
+                                }
+                                let perm_now = self.permission_mode.as_str().to_string();
+                                if let Some(perm) = crate::cards::perm_pill(ui, &perm_now) {
+                                    if let Some(p) = PermissionMode::parse(&perm) {
+                                        self.permission_mode = p;
+                                        self.acp = None;
+                                        self.status = format!("Permission {}", p.as_str());
+                                    }
                                 }
                                 if crate::icons::paint_bar_icon(
                                     ui,
@@ -8416,10 +8617,10 @@ impl Cabin {
                                                             if let Some(p) = &pending {
                                                                 crate::cards::settings_note(ui, p);
                                                             }
-                                                            crate::cards::settings_field(ui, "Console key", "Fallback for chat. Required for duplex Voice (grok-voice-think-fast-2.0). Never in markdown.", &mut self.cfg.api_key, true);
+                                                            crate::cards::settings_field(ui, "Console key", "Voice and Imagine only. Agent auth is grok login (cached token). Never in markdown.", &mut self.cfg.api_key, true);
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
-                                                            crate::cards::settings_field(ui, "Chat model", "Empty or a ladder default (mini / 4.3 / 4.6) lets Auto route. A catalog pin such as grok-3 skips Auto. Imagine never shares this.", &mut self.cfg.model, false);
-                                                            crate::cards::settings_field(ui, "Composer mode", "Auto routes Fast / Balance / Think / Max. Fast is Grok 3 mini. Balance is Grok 4.3. Think is Grok 4.6 high. Max is Grok 4.6 xhigh. The mode pill does not overwrite Chat model.", &mut self.cfg.mode, false);
+                                                            crate::cards::settings_field(ui, "Chat model", "Unused by Grok Build. Session model is /model in grok. Keep empty.", &mut self.cfg.model, false);
+                                                            crate::cards::settings_note(ui, "Session mode is Code / Plan / Ask on the composer. /effort sets reasoning. The leftover ladder pin below is unused by Grok Build.");
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(
@@ -8458,12 +8659,12 @@ impl Cabin {
                                                             if crate::cards::settings_toggle(ui, "Close to tray", "The cabin keeps working in the background.", &mut self.cfg.close_to_tray) {
                                                                 save = true;
                                                             }
-                                                            if crate::cards::settings_toggle(ui, "Cabin eyes", "Armed. They look only when you ask, or when hands need a frame.", &mut self.cfg.cabin_eyes) {
+                                                            if crate::cards::settings_toggle(ui, "Cabin eyes", "Unused. Desk frames come from Grok Build computer-use.", &mut self.cfg.cabin_eyes) {
                                                                 save = true;
                                                             }
                                                         }
                                                         SettingsSec::Host => {
-                                                            crate::cards::settings_note(ui, "Host is always on. The cabin drives. Halt stops a running job.");
+                                                            crate::cards::settings_note(ui, &format!("{}\nInstall: curl -fsSL https://x.ai/cli/install.sh | bash\nThen grok login --device-auth. Halt cancels the ACP turn.", build_agent::grok_banner()));
                                                         }
                                                         SettingsSec::Imagine => {
                                                             crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
@@ -8517,7 +8718,7 @@ impl Cabin {
                                                                 && crate::cards::settings_action(
                                                                     ui,
                                                                     "Restart GrokHub",
-                                                                    "Reload ydotoold and hub, then start a new cabin and exit this one.",
+                                                                    "Reload hub, then start a new cabin and exit this one.",
                                                                     "Restart",
                                                                 )
                                                             {
@@ -8768,6 +8969,49 @@ impl Cabin {
                         ui.label(RichText::new(h).size(13.0).color(crate::theme::fg()));
                     });
                 ui.add_space(6.0);
+            }
+            ui.add_space(16.0);
+            crate::cards::section_label(ui, "Grok Build sessions");
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("ACP sessions on this machine (`grok sessions`). Cabin chats stay below.")
+                        .size(12.0)
+                        .color(crate::theme::subtle()),
+                );
+                if crate::cards::ghost_pill(ui, "Refresh") {
+                    self.reload_grok_sessions();
+                    if grokhub_acp::find_grok().is_some() {
+                        self.status = format!("{} Grok sessions", self.grok_sessions.len());
+                    } else {
+                        self.status = build_agent::grok_banner();
+                    }
+                }
+            });
+            if !self.grok_sessions_loaded {
+                self.reload_grok_sessions();
+            }
+            if self.grok_sessions.is_empty() {
+                ui.label(
+                    RichText::new(if grokhub_acp::find_grok().is_some() {
+                        "No grok sessions listed yet."
+                    } else {
+                        "Install Grok Build (x.ai/cli) to list sessions."
+                    })
+                    .size(13.0)
+                    .color(crate::theme::muted()),
+                );
+            } else {
+                for s in &self.grok_sessions {
+                    crate::cards::grok_tile(
+                        ui,
+                        crate::icons::TileIcon::Chat,
+                        s,
+                        "Grok session",
+                        None,
+                        false,
+                    );
+                    ui.add_space(6.0);
+                }
             }
             ui.add_space(16.0);
             crate::cards::section_label(ui, "Chats");
@@ -9485,83 +9729,60 @@ impl Cabin {
             ui.add_space(16.0);
             egui::ScrollArea::vertical().show(ui, |ui| {
             if self.skills_tab_connectors {
-                crate::cards::section_label(ui, "Live");
+                crate::cards::section_label(ui, "Grok Build extensions");
                 ui.label(
-                    RichText::new("GitHub is the only live connector. No Outlook, Gmail, or Drive — those are not wired.")
+                    RichText::new("MCP, skills, plugins, and hooks live in Grok Build. Inspect is `grok inspect --json`; MCP/Plugins run `grok mcp list` / `grok plugin list`.")
                         .color(crate::theme::muted()),
                 );
-                ui.add_space(12.0);
-                let has_pat = !self.secrets.github_token.trim().is_empty();
-                let mut gh_tool: Option<&'static str> = None;
-                for c in crate::cards::LIVE_CONNECTORS {
-                    if !crate::cards::is_cabin_catalog(c.id) {
-                        continue;
+                ui.add_space(10.0);
+                ui.horizontal_wrapped(|ui| {
+                    if crate::cards::white_pill(ui, "Inspect") {
+                        self.run_grok_extension(&["inspect", "--json"]);
                     }
-                    let body = if has_pat {
-                        "PAT present (never shown). These buttons hit api.github.com."
-                    } else {
-                        "No PAT — set one in Settings, then these buttons work."
-                    };
-                    crate::cards::grok_tile(ui, c.icon, c.title, body, None, false);
-                    ui.add_space(10.0);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.github_args)
-                            .hint_text("repo:owner/name  or  query:…  (issues / search)")
-                            .desired_width(f32::INFINITY),
+                    if crate::cards::ghost_pill(ui, "MCP") {
+                        self.run_grok_extension(&["mcp", "list"]);
+                    }
+                    if crate::cards::ghost_pill(ui, "Skills") {
+                        self.run_grok_extension(&["inspect", "--json"]);
+                    }
+                    if crate::cards::ghost_pill(ui, "Plugins") {
+                        self.run_grok_extension(&["plugin", "list"]);
+                    }
+                });
+                ui.add_space(12.0);
+                if self.inspect_text.is_empty() {
+                    let _ = crate::cards::empty_prompt_tile(
+                        ui,
+                        crate::icons::TileIcon::List,
+                        "No inspect yet",
+                        "Run Inspect to dump Grok Build config.",
                     );
-                    ui.add_space(8.0);
-                    ui.horizontal_wrapped(|ui| {
-                        for (label, tool) in c.tools {
-                            if ui
-                                .add(
-                                    egui::Button::new(RichText::new(*label).color(crate::theme::fg()))
-                                        .fill(crate::theme::elevated())
-                                        .rounding(14.0),
-                                )
-                                .clicked()
-                            {
-                                gh_tool = Some(*tool);
-                            }
-                        }
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new("Settings").color(crate::theme::bg()))
-                                    .fill(crate::theme::fg())
-                                    .rounding(14.0),
-                            )
-                            .clicked()
-                        {
-                            self.nav = Nav::Settings;
-                        }
-                    });
-                }
-                if let Some(tool) = gh_tool {
-                    let args = self.github_args.clone();
-                    self.nav = Nav::Chat;
-                    self.run_connector("github", tool, &args);
+                } else {
+                    egui::Frame::none()
+                        .fill(crate::theme::elevated())
+                        .rounding(12.0)
+                        .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                        .inner_margin(egui::Margin::same(10.0))
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(280.0)
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new(&self.inspect_text)
+                                            .size(12.0)
+                                            .monospace()
+                                            .color(crate::theme::fg()),
+                                    );
+                                });
+                        });
                 }
                 ui.add_space(20.0);
                 crate::cards::section_label(ui, "Suggested");
                 let conn_tiles = crate::cards::merge_suggested_connectors(&self.suggestions.connectors);
-                let mut conn_tool: Option<String> = None;
                 crate::cards::tile_row(ui, conn_tiles.len(), |ui, i| {
-                    let (icon, title, body, tool) = &conn_tiles[i];
-                    if matches!(
-                        crate::cards::grok_tile(ui, *icon, title, body, Some("Add"), false),
-                        crate::cards::TileHit::Add | crate::cards::TileHit::Body
-                    ) {
-                        conn_tool = Some(tool.clone());
-                    }
+                    let (icon, title, body, _tool) = &conn_tiles[i];
+                    let _ = crate::cards::grok_tile(ui, *icon, title, body, None, false);
                 });
-                if let Some(tool) = conn_tool {
-                    if has_pat {
-                        let args = self.github_args.clone();
-                        self.nav = Nav::Chat;
-                        self.run_connector("github", &tool, &args);
-                    } else {
-                        self.nav = Nav::Settings;
-                    }
-                }
             } else {
             crate::cards::section_label(ui, "Suggested");
             ui.label(
@@ -9722,20 +9943,23 @@ impl Cabin {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
-            let _ = crate::cards::page_header(ui, "Eyes", "");
+            let _ = crate::cards::page_header(ui, "Desk", "");
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new("Look at the screen, then drive it. Halt stops a running job.")
+                    RichText::new("Last Grok Build computer-use frame. Halt cancels the ACP turn.")
                         .color(crate::theme::muted()),
                 );
-                let chip = crate::desktop::hands_chip_text();
                 crate::cards::status_chip(
                     ui,
-                    &chip,
-                    if crate::desktop::hands_ready() {
+                    if self.desk_frame.is_some() || self.last_frame_url.is_some() {
+                        "live"
+                    } else {
+                        "idle"
+                    },
+                    if self.desk_frame.is_some() || self.last_frame_url.is_some() {
                         crate::cards::ChipTone::Live
                     } else {
-                        crate::cards::ChipTone::Offline
+                        crate::cards::ChipTone::Mute
                     },
                 );
             });
@@ -9744,18 +9968,13 @@ impl Cabin {
                 if crate::cards::white_pill(ui, "Take over") {
                     self.take_over_desktop();
                 }
-                if crate::cards::ghost_pill(ui, "Install hands") {
-                    self.status = crate::desktop::install_hands_status();
-                }
-                if crate::cards::ghost_pill(ui, "Scan") {
-                    self.refresh_eyes();
-                }
-                if crate::cards::ghost_pill(ui, "Replay") {
-                    self.replay_recipe();
+                if crate::cards::ghost_pill(ui, "Halt") {
+                    self.halt_work("Stopped");
                 }
             });
             ui.add_space(12.0);
-            if let Some(url) = self.last_frame_url.as_deref() {
+            let url = self.desk_frame.as_deref().or(self.last_frame_url.as_deref());
+            if let Some(url) = url {
                 if let Some((tex, size)) = eyes_frame_tex(ui.ctx(), url) {
                     let max_w = ui.available_width().min(480.0);
                     crate::cards::framed_preview(ui, &tex, size, max_w);
@@ -9765,23 +9984,13 @@ impl Cabin {
                     ui,
                     crate::icons::TileIcon::Image,
                     "No frame yet",
-                    "Scan to capture this desktop.",
+                    "Ask Grok to look at the desktop. Frames arrive from computer-use tools.",
                 );
             }
             ui.add_space(10.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                for line in self.eyes_text.lines() {
-                    let Some(rest) = line.strip_prefix("- [") else {
-                        continue;
-                    };
-                    let Some((kind, rest)) = rest.split_once(']') else {
-                        continue;
-                    };
-                    let label = rest.trim().split(" @").next().unwrap_or(rest).trim();
-                    crate::cards::object_chip(ui, kind, label);
-                }
-            });
+            for card in self.tool_cards.iter().filter(|c| c.is_computer_use()) {
+                crate::cards::object_chip(ui, &card.status, &card.title);
+            }
         });
     }
 }
@@ -10545,6 +10754,10 @@ mod tests {
             .and_then(|s| s.split("fn upsert_stream_assistant").next())
             .expect("kick_model");
         assert!(
+            kick.contains("ensure_acp") && kick.contains("prompt("),
+            "kick_model must prompt Grok Build over ACP: {kick}"
+        );
+        assert!(
             kick.contains("pending_kick") && kick.contains("kick_cap_rx"),
             "kick_model must wait for the off-thread frame instead of blocking: {kick}"
         );
@@ -11006,11 +11219,13 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn replay_saved_recipe").next())
             .expect("take_over_desktop");
-        let key = takeover.find("has_key").expect("takeover auth");
-        let hands = takeover.find("hands_attach = true").expect("takeover hands");
         assert!(
-            key < hands,
-            "Take over without OAuth must not arm windshield: {takeover}"
+            takeover.contains("can_agent") && takeover.contains("send_chat"),
+            "Take over is an ACP prompt, not cabin hands: {takeover}"
+        );
+        assert!(
+            !takeover.contains("hands_attach = true"),
+            "Take over must not arm cabin windshield: {takeover}"
         );
         let replay = src
             .split("fn replay_recipe(")
@@ -11052,10 +11267,8 @@ mod tests {
             .and_then(|s| s.split("fn send_followup_turn").next())
             .expect("send_chat auth");
         assert!(
-            send_auth.contains("see_drive_attach")
-                && send_auth.contains("eyes_attach = true")
-                && send_auth.contains("hands_attach = true"),
-            "GUI help must wake eyes and hands together: {send_auth}"
+            send_auth.contains("can_agent") && send_auth.contains("kick_model(true)"),
+            "typed send must go through Grok Build ACP: {send_auth}"
         );
         let gate = send_auth.find("persist_user_turn").expect("send auth");
         assert!(
@@ -11306,13 +11519,9 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn upsert_stream_assistant").next())
             .expect("kick_model");
-        let cap = kick
-            .find("capture_cabin_frame_this_turn")
-            .expect("this-turn capture");
-        let glass = kick.find("prepare_windshield").expect("windshield");
         assert!(
-            cap < glass,
-            "Windshield frame: must come from this-turn capture, not last JPEG: {kick}"
+            kick.contains("ensure_acp") && kick.contains(".prompt("),
+            "kick_model talks to Grok Build ACP, not cabin windshield: {kick}"
         );
         let cap_fn = src
             .split("fn capture_cabin_frame_this_turn")
@@ -11321,19 +11530,7 @@ mod tests {
             .expect("capture_cabin_frame_this_turn");
         assert!(
             cap_fn.contains("lock_titles"),
-            "chat windshield capture must see lock windows that collect_rows drops: {cap_fn}"
-        );
-        let soul = kick.find("read_memory(\"SOUL.md\")").expect("soul prompt");
-        assert!(
-            kick[..soul].contains("write_memory")
-                && kick[..soul].contains("mem_body")
-                && kick[..soul].contains("job_is_scratch"),
-            "kick_model must flush the Memory editor for the origin thread, not the visible Scratch tab: {kick}"
-        );
-        let sys = kick.find("cabin_system_prompt").expect("system prompt");
-        assert!(
-            kick[..sys].contains("thread_host_receipts") && !kick[..sys].contains("self.last_host"),
-            "kick_model must not inject another tab's last_host into this job's prompt: {kick}"
+            "leftover capture helper must still see lock windows: {cap_fn}"
         );
         let anticipate = src
             .split("fn tick_anticipate")
@@ -11940,16 +12137,10 @@ mod tests {
                 && run_cmds.contains("host_cmd_leaves_project"),
             "cabin rewind copies must run when YOLO is off: {run_cmds}"
         );
-        let plan = src
-            .split("if let Some(plan) = plan_from_text")
-            .nth(1)
-            .and_then(|s| s.split("for c in extract_connector_cmds").next())
-            .expect("plan_from_text");
-        let restore = plan.find("chat_job_thread = origin");
-        let split = plan.find("yolo_plan_split").expect("yolo_plan_split");
+        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
         assert!(
-            restore.is_none_or(|r| r > split),
-            "a held-only YOLO plan must not park chat_job_thread on the old tab: {plan}"
+            !impl_src.contains("if let Some(plan) = plan_from_text"),
+            "Chat complete must not parse HOST_CMD / COMPUTER_CMD; Grok Build owns tools"
         );
     }
 
@@ -12061,10 +12252,11 @@ mod tests {
             "Eyes subtitle is not a man page: {slice}"
         );
         assert!(slice.contains("Take over"));
-        assert!(slice.contains("Install hands"));
-        assert!(slice.contains("hands_chip_text"));
+        assert!(slice.contains("Halt"));
         assert!(slice.contains("framed_preview") || slice.contains("object_chip"));
-        assert!(slice.contains("Look at the screen"));
+        assert!(slice.contains("computer-use") || slice.contains("ACP"));
+        assert!(!slice.contains("Install hands"));
+        assert!(!slice.contains("hands_chip_text"));
     }
 
     #[test]
@@ -12521,10 +12713,10 @@ mod tests {
             chat[..pins].contains("bound_scan"),
             "Chat complete must not walk an 8MB body for pins/recipe/host/connectors: {chat}"
         );
-        let host_plan = chat.find("plan_from_text").expect("host plan");
         assert!(
-            pins < host_plan && chat[pins..host_plan].contains("self.persist()"),
-            "workboard pins must hit disk after Chat, not only before extract: {chat}"
+            chat[pins..].contains("self.persist()")
+                && !chat.contains("if let Some(plan) = plan_from_text"),
+            "Chat complete must persist pins and must not parse HOST_CMD: {chat}"
         );
         assert!(
             chat.contains("goal_continue_pin"),

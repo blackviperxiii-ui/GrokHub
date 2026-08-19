@@ -1156,12 +1156,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "grokhub-acp"
+version = "2.6.30"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "grokhub-app"
 version = "2.6.30"
 dependencies = [
  "base64",
  "eframe",
  "global-hotkey",
+ "grokhub-acp",
  "grokhub-core",
  "grokhub-hub",
  "image",

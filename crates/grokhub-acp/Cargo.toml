@@ -1,0 +1,17 @@
+[package]
+name = "grokhub-acp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Grok Build ACP client — spawn grok agent stdio, JSON-RPC sessions"
+
+[[bin]]
+name = "grokhub-fake-acp"
+path = "src/bin/fake_acp.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
