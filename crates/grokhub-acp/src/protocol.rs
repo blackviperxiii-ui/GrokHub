@@ -61,6 +61,12 @@ impl PermissionMode {
             _ => None,
         }
     }
+
+    /// Auto and Always answer ACP permission prompts in the cabin.
+    /// Ask leaves the Allow / Deny / Always bar up.
+    pub fn auto_allows(self) -> bool {
+        matches!(self, Self::AlwaysApprove | Self::Auto)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -461,5 +467,8 @@ mod tests {
             PermissionMode::parse("yolo"),
             Some(PermissionMode::AlwaysApprove)
         );
+        assert!(PermissionMode::AlwaysApprove.auto_allows());
+        assert!(PermissionMode::Auto.auto_allows());
+        assert!(!PermissionMode::Ask.auto_allows());
     }
 }

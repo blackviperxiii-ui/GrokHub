@@ -4965,7 +4965,7 @@ impl Cabin {
             }
             v
         };
-        let yolo = self.permission_mode == PermissionMode::AlwaysApprove;
+        let auto_allow = self.permission_mode.auto_allows();
         for ev in evs {
             match ev {
                 AcpEvent::Ready { .. } => {}
@@ -5011,7 +5011,7 @@ impl Cabin {
                     self.status = format!("Plan · {t}");
                 }
                 AcpEvent::Permission(p) => {
-                    if yolo {
+                    if auto_allow {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission(p.rpc_id, true);
                         }
@@ -7939,7 +7939,6 @@ impl Cabin {
                             let _ = h.answer_permission(p.rpc_id.clone(), true);
                         }
                         self.perm_ask = None;
-                        self.acp = None;
                         self.status = "Permission always-approve".into();
                     }
                 });
@@ -8725,7 +8724,7 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Bound project", "The world. Host, Imagine, and memory stay here.", &mut self.cfg.project_dir, false);
                                                         }
                                                         SettingsSec::Update => {
-                                                            crate::cards::settings_note(ui, "Overlay only — git pull --ff-only origin main, then install.sh --user. The clone must be on main. Does not wipe ~/.config/GrokHub.");
+                                                            crate::cards::settings_note(ui, "Overlay only — retarget leftover GitHub remotes, git pull --ff-only origin main, then install.sh --user. The clone must be on main. Does not wipe ~/.config/GrokHub.");
                                                             crate::cards::settings_field(ui, "Source clone", "Empty uses GROKHUB_SRC or the install receipt.", &mut self.cfg.source_dir, false);
                                                             if crate::cards::settings_action(ui, "Install overlay", "Pulls this clone and runs the user install.", "Update") {
                                                                 update = true;
@@ -10500,6 +10499,29 @@ mod tests {
         let run = super::slash_pick_take(&mut composer, "/project bind ", false);
         assert!(run.is_none());
         assert_eq!(composer, "/project bind ");
+    }
+
+    #[test]
+    fn always_permission_keeps_the_acp_session() {
+        let src = include_str!("app.rs");
+        let ask = src
+            .split("fn paint_perm_ask(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_empty_home").next())
+            .expect("paint_perm_ask");
+        assert!(
+            !ask.contains("self.acp = None"),
+            "Always on a live prompt must not drop the ACP session: {ask}"
+        );
+        let poll = src
+            .split("fn poll_acp(")
+            .nth(1)
+            .and_then(|s| s.split("fn finish_acp_turn").next())
+            .expect("poll_acp");
+        assert!(
+            poll.contains("auto_allows()"),
+            "Auto permission must answer ACP prompts, not only Always: {poll}"
+        );
     }
 
     #[test]

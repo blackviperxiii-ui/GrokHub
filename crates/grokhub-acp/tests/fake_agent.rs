@@ -1,14 +1,9 @@
 use grokhub_acp::{connect, wait_event, AcpEvent, SessionMode, SpawnOpts};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-fn fake_bin() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_BIN_EXE_grokhub-fake-acp"))
-}
-
-#[test]
-fn handshake_prompt_and_stream() {
-    let opts = SpawnOpts {
-        program: fake_bin(),
+fn fake_opts() -> SpawnOpts {
+    SpawnOpts {
+        program: std::path::PathBuf::from(env!("CARGO_BIN_EXE_grokhub-fake-acp")),
         args: vec![],
         cwd: std::env::temp_dir(),
         api_key: None,
@@ -16,8 +11,13 @@ fn handshake_prompt_and_stream() {
         auto: false,
         session_mode: SessionMode::Code,
         extra_env: vec![],
-    };
-    let h = connect(opts).expect("connect fake acp");
+        handshake_timeout: None,
+    }
+}
+
+#[test]
+fn handshake_prompt_and_stream() {
+    let h = connect(fake_opts()).expect("connect fake acp");
     assert_eq!(h.session_id, "sess-test");
     h.prompt("hi").unwrap();
     let mut thought = String::new();
@@ -44,19 +44,11 @@ fn handshake_prompt_and_stream() {
 
 #[test]
 fn computer_tool_emits_frame() {
-    let opts = SpawnOpts {
-        program: fake_bin(),
-        args: vec![],
-        cwd: std::env::temp_dir(),
-        api_key: None,
-        always_approve: true,
-        auto: false,
-        session_mode: SessionMode::Code,
-        extra_env: vec![
-            ("FAKE_ACP_TOOL".into(), "computer_screenshot".into()),
-            ("FAKE_ACP_IMAGE".into(), "QQ==".into()),
-        ],
-    };
+    let mut opts = fake_opts();
+    opts.extra_env = vec![
+        ("FAKE_ACP_TOOL".into(), "computer_screenshot".into()),
+        ("FAKE_ACP_IMAGE".into(), "QQ==".into()),
+    ];
     let h = connect(opts).expect("connect");
     h.prompt("look").unwrap();
     let mut card = None;
@@ -82,17 +74,65 @@ fn computer_tool_emits_frame() {
 
 #[test]
 fn cancel_does_not_panic() {
+    let h = connect(fake_opts()).expect("connect");
+    h.prompt("hi").unwrap();
+    h.cancel().unwrap();
+}
+
+#[test]
+fn handshake_times_out_on_a_silent_child() {
     let opts = SpawnOpts {
-        program: fake_bin(),
-        args: vec![],
+        program: std::path::PathBuf::from("sleep"),
+        args: vec!["30".into()],
         cwd: std::env::temp_dir(),
         api_key: None,
         always_approve: true,
         auto: false,
         session_mode: SessionMode::Code,
         extra_env: vec![],
+        handshake_timeout: Some(Duration::from_secs(2)),
     };
-    let h = connect(opts).expect("connect");
-    h.prompt("hi").unwrap();
-    h.cancel().unwrap();
+    let t = Instant::now();
+    let err = match connect(opts) {
+        Err(e) => e,
+        Ok(_) => panic!("silent child must fail handshake"),
+    };
+    assert!(
+        err.to_ascii_lowercase().contains("timed out") || err.contains("closed"),
+        "{err}"
+    );
+    assert!(
+        t.elapsed() < Duration::from_secs(8),
+        "handshake hung for {:?}",
+        t.elapsed()
+    );
+}
+
+#[test]
+fn handshake_does_not_deadlock_when_stderr_floods() {
+    let opts = SpawnOpts {
+        program: std::path::PathBuf::from("sh"),
+        args: vec![
+            "-c".into(),
+            "dd if=/dev/zero bs=1024 count=256 1>&2 2>/dev/null; sleep 30".into(),
+        ],
+        cwd: std::env::temp_dir(),
+        api_key: None,
+        always_approve: true,
+        auto: false,
+        session_mode: SessionMode::Code,
+        extra_env: vec![],
+        handshake_timeout: Some(Duration::from_secs(2)),
+    };
+    let t = Instant::now();
+    let err = match connect(opts) {
+        Err(e) => e,
+        Ok(_) => panic!("flooded stderr must not deadlock"),
+    };
+    assert!(!err.is_empty(), "{err}");
+    assert!(
+        t.elapsed() < Duration::from_secs(8),
+        "stderr flood deadlocked for {:?}",
+        t.elapsed()
+    );
 }

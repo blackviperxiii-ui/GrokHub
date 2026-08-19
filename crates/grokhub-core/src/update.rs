@@ -58,7 +58,7 @@ fn git_head_branch(source: &Path) -> Result<String, String> {
     Ok(branch)
 }
 
-fn git_has_origin(source: &Path) -> Result<(), String> {
+fn git_origin_url(source: &Path) -> Result<String, String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(source)
@@ -68,7 +68,18 @@ fn git_has_origin(source: &Path) -> Result<(), String> {
     if !out.status.success() {
         return Err("source clone has no origin — add origin, then Update".into());
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Overlay pulls this Origin remote after GitHub Grok-Hub was deleted.
+pub const ORIGIN_REMOTE_URL: &str = "https://origin.cursor.com/viperxiii/GrokHub.git";
+
+pub fn stale_github_origin(url: &str) -> bool {
+    let u = url.trim().to_ascii_lowercase();
+    if !(u.contains("github.com") || u.contains("github.com:")) {
+        return false;
+    }
+    u.contains("grok-hub") || u.contains("grokhub")
 }
 
 pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
@@ -81,12 +92,17 @@ pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
             "source clone is on {branch} — checkout main, then Update"
         ));
     }
-    git_has_origin(source)?;
+    let origin = git_origin_url(source)?;
     let src = sh_quote(&source.display().to_string());
-    Ok(vec![
-        format!("git -C {src} pull --ff-only origin main"),
-        format!("{src}/scripts/install.sh --user"),
-    ])
+    let mut cmds = Vec::new();
+    if stale_github_origin(&origin) {
+        cmds.push(format!(
+            "git -C {src} remote set-url origin {ORIGIN_REMOTE_URL}"
+        ));
+    }
+    cmds.push(format!("git -C {src} pull --ff-only origin main"));
+    cmds.push(format!("{src}/scripts/install.sh --user"));
+    Ok(cmds)
 }
 
 pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
@@ -94,6 +110,8 @@ pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
         .map(|cmd| {
             let explain = if cmd.contains("pull --ff-only") {
                 "fast-forward origin/main — config stays".into()
+            } else if cmd.contains("remote set-url") {
+                "point origin at Cursor Origin — GitHub Grok-Hub is gone".into()
             } else if cmd.contains("install.sh") {
                 "overlay ~/.local/bin — does not wipe config".into()
             } else {
@@ -127,6 +145,8 @@ pub fn update_progress_pct(done_cmds: usize, total_cmds: usize) -> u8 {
 pub fn update_step_label(cmd: &str) -> &'static str {
     if cmd.contains("pull --ff-only") {
         "Pulling origin/main…"
+    } else if cmd.contains("remote set-url") {
+        "Retargeting origin…"
     } else if cmd.contains("install.sh") {
         "Installing overlay…"
     } else {
@@ -309,6 +329,7 @@ mod tests {
         let cmds = update_cmds(&root).unwrap();
         assert!(cmds[0].contains("pull --ff-only origin main"), "{cmds:?}");
         assert!(cmds[1].ends_with("--user"));
+        assert!(!cmds.iter().any(|c| c.contains("set-url")), "{cmds:?}");
         assert!(!update_wipes_config(&cmds));
         let plan = update_plan_steps(cmds);
         assert!(plan[0].explain.contains("origin/main"), "{plan:?}");
@@ -445,5 +466,43 @@ mod tests {
             "Installing overlay…"
         );
         assert_eq!(update_step_label("echo hi"), "Updating…");
+        assert_eq!(
+            update_step_label("git -C '/x' remote set-url origin https://origin.cursor.com/viperxiii/GrokHub.git"),
+            "Retargeting origin…"
+        );
+    }
+
+    #[test]
+    fn overlay_retargets_deleted_github_clone() {
+        assert!(stale_github_origin(
+            "https://github.com/blackviperxiii-ui/Grok-Hub.git"
+        ));
+        assert!(stale_github_origin(
+            "git@github.com:blackviperxiii-ui/GrokHub.git"
+        ));
+        assert!(!stale_github_origin(ORIGIN_REMOTE_URL));
+        assert!(!stale_github_origin("https://example.invalid/grokhub.git"));
+
+        let root = std::env::temp_dir().join(format!("grokhub-src-gh-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        seed_git_source(&root, "main");
+        std::process::Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/blackviperxiii-ui/Grok-Hub.git",
+            ])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        let cmds = update_cmds(&root).unwrap();
+        assert!(
+            cmds[0].contains("remote set-url origin https://origin.cursor.com/viperxiii/GrokHub.git"),
+            "{cmds:?}"
+        );
+        assert!(cmds[1].contains("pull --ff-only origin main"), "{cmds:?}");
+        assert!(cmds[2].ends_with("--user"), "{cmds:?}");
+        let _ = fs::remove_dir_all(&root);
     }
 }
