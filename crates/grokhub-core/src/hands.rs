@@ -245,15 +245,23 @@ mod tests {
             "sidecar prefix must be first: {dirs:?}"
         );
         assert_eq!(dirs[1], PathBuf::from("/usr/lib/grokhub/bin"));
+        let grok_cli = include_str!("../../../scripts/install-grok-cli.sh");
+        assert!(
+            grok_cli.contains("https://x.ai/cli/install.sh")
+                && grok_cli.contains("Grok Build CLI")
+                && grok_cli.contains("cabin install continues"),
+            "install-grok-cli.sh must run the official Grok Build installer without failing the cabin"
+        );
         let sh = include_str!("../../../scripts/install.sh");
         assert!(
             !sh.contains("build-hands.sh")
                 && !sh.contains("ydotoold")
+                && sh.contains("install-grok-cli.sh")
                 && sh.contains("alsa-utils")
                 && sh.contains("enable grokhub.service")
                 && sh.contains("enable --now grokhub-hub.service")
                 && sh.contains("x.ai/cli"),
-            "clone install must skip grim/ydotool sidecars and point at Grok Build: {sh}"
+            "clone install must skip grim/ydotool sidecars and install Grok Build CLI: {sh}"
         );
         assert!(
             !sh.contains("sudo pacman -S --needed ydotool"),
@@ -273,8 +281,9 @@ mod tests {
             !local_pkg.contains("build-hands.sh")
                 && !local_pkg.contains("'python-atspi'")
                 && !local_pkg.contains("ydotoold.service")
+                && local_pkg.contains("install-grok-cli.sh")
                 && !local_pkg.contains("slurp"),
-            "clone makepkg must not build grim/ydotool sidecars"
+            "clone makepkg must not build grim/ydotool sidecars and must ship the Grok CLI helper"
         );
         assert!(
             PYATSPI_MISSING.contains("python-atspi") && PYATSPI_MISSING.contains("wmctrl"),
@@ -284,10 +293,11 @@ mod tests {
         assert!(
             !bundle.contains("build-hands.sh")
                 && !bundle.contains("ydotoold.service")
+                && bundle.contains("install-grok-cli.sh")
                 && bundle.contains("grokhub-hub.service")
                 && bundle.contains("enable --now grokhub-hub.service")
                 && bundle.contains("x.ai/cli"),
-            "release tarball install must skip sidecars and keep cabin/hub: {bundle}"
+            "release tarball install must skip sidecars, install Grok Build CLI, and keep cabin/hub: {bundle}"
         );
         assert!(
             !bundle.contains("sudo pacman -S --needed ydotool"),

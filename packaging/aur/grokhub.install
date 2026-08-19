@@ -1,6 +1,8 @@
 post_install() {
   gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
   update-desktop-database /usr/share/applications 2>/dev/null || true
+  PREFIX=/usr bash /usr/lib/grokhub/install-grok-cli.sh \
+    || echo "grok: install Grok Build CLI with curl -fsSL https://x.ai/cli/install.sh | bash"
 
   cat <<'EOF'
 
@@ -8,8 +10,9 @@ post_install() {
 
   Run:    grokhub
   Hub:    grokhub-hub
+  Grok:   grok  (Grok Build CLI from https://x.ai/cli)
   Menu:   Applications → GrokHub
-  Agent:  install Grok Build from https://x.ai/cli then grok login
+  Agent:  grok login  (or XAI_API_KEY)
 
   Config: ~/.config/GrokHub
   Computer-use is Grok Build's. Halt cancels the ACP turn.

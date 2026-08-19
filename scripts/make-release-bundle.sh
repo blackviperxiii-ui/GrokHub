@@ -23,6 +23,7 @@ cp -a "$ROOT/packaging/grokhub.svg" "$STAGE/grokhub.svg"
 cp -a "$ROOT/LICENSE" "$STAGE/LICENSE"
 cp -a "$ROOT/packaging/systemd/grokhub.service" "$STAGE/grokhub.service"
 cp -a "$ROOT/packaging/systemd/grokhub-hub.service" "$STAGE/grokhub-hub.service"
+cp -a "$ROOT/scripts/install-grok-cli.sh" "$STAGE/install-grok-cli.sh"
 cat >"$STAGE/install.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -60,10 +61,17 @@ if command -v systemctl >/dev/null; then
   systemctl --user enable grokhub.service >/dev/null 2>&1 || true
   systemctl --user enable --now grokhub-hub.service >/dev/null 2>&1 || true
 fi
+PREFIX="$PREFIX" bash "$HERE/install-grok-cli.sh" \
+  || echo "grok: install-grok-cli.sh continued"
 echo "installed $PREFIX/bin/grokhub"
-echo "agent: install Grok Build from https://x.ai/cli"
+if [[ -x "$PREFIX/bin/grok" || -x "$HOME/.grok/bin/grok" ]] || command -v grok >/dev/null 2>&1; then
+  echo "installed Grok Build CLI (grok)"
+else
+  echo "grok: Grok Build CLI not on PATH — curl -fsSL https://x.ai/cli/install.sh | bash"
+fi
 EOF
-chmod 755 "$STAGE/install.sh" "$STAGE/grokhub" "$STAGE/grokhub-hub"
+chmod 755 "$STAGE/install.sh" "$STAGE/grokhub" "$STAGE/grokhub-hub" \
+  "$STAGE/install-grok-cli.sh"
 
 OUT="$ROOT/dist-release/grokhub-linux-v${VER}.tar.gz"
 tar -C "$ROOT/dist-release" -czf "$OUT" grokhub-linux
