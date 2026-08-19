@@ -2,11 +2,11 @@
 
 Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 
-**v2.6.32** — Native Grok Build GUI. The cabin is the window; `grok` is the agent, host, and desk.
+**v2.6.33** — Native Grok Build GUI. The cabin is the window; `grok` is the agent, host, and desk.
 
 | Platform | Repository | Latest |
 |----------|------------|--------|
-| **Linux** (this) | [GrokHub](https://cursor.com/codebase/viperxiii/GrokHub) | **v2.6.32** |
+| **Linux** (this) | [GrokHub](https://cursor.com/codebase/viperxiii/GrokHub) | **v2.6.33** |
 | **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | sibling — same `grokhub-core` |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
@@ -50,7 +50,7 @@ Imagine stills use dedicated **`grok-imagine-image-2.0`**. Video kind calls **`g
 
 Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is cabin sign-in for Voice/Imagine. Agent auth is `grok login` (or `XAI_API_KEY`). Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600), never in markdown. Settings → Appearance is **Dark**, **Light**, or **System**.
 
-Settings → **Update** (or `grokhub --update` / `/update`) does `git pull --ff-only origin main` then `./scripts/install.sh --user`. Overlay updates the GUI and installs Grok Build CLI (`grok`) if it is missing. `grok update` updates the agent. Progress stays on Settings. After a clean overlay, **Restart** reloads hub, drops the cabin pid lock, starts a new overlay `grokhub`, and exits this process.
+Settings → **Update** (or `grokhub --update` / `/update`) retargets a leftover GitHub clone to Origin, then `git pull --ff-only origin main` and `./scripts/install.sh --user`. Overlay updates the GUI and installs Grok Build CLI (`grok`) if it is missing. `grok update` updates the agent. Progress stays on Settings. After a clean overlay, **Restart** reloads hub, drops the cabin pid lock, starts a new overlay `grokhub`, and exits this process.
 
 Chat is ACP. Night and phone `/v1/task` enqueue ACP prompts on the bound project. Halt / Stop / Ctrl+Shift+Esc cancel the turn. Chat only saves a night job when you asked to schedule one — a reply that mentions “every day at” or “heartbeat every” as advice does not. Anticipate only fires a `Follow skill` on a real `need to` / `remind me` insight that matches a skill, not polite “if you need” chit-chat. A 15s heartbeat runs housekeep, inbox, night, review, wall, mid-thought, reflect, and anticipate. Hidden idle cabins wait for that pulse. Phone dispatch completes on halt / error. `/rewind` restores only the bound project root.
 
