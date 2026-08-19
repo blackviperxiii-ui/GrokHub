@@ -226,8 +226,9 @@ pub use greeting::{
 pub use history::{search_corpus, search_text, search_thread_body};
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
 pub use learning::{
-    extract_insights, insight_key_for_fact, insight_pin, looks_like_user_pref, record_turn,
-    upsert_insight, user_pref_facts, LearningInsight, LearningState,
+    extract_insights, insight_key_for_fact, insight_pin, is_durable_fact, looks_like_user_pref,
+    prune_ephemeral_insights, record_turn, upsert_insight, user_pref_facts, LearningInsight,
+    LearningState,
 };
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
 pub use openclaw::{
@@ -281,8 +282,9 @@ pub use skill::{
     SkillMd,
 };
 pub use slash::{
-    filter_slash_commands, parse_slash, resolve_mode_arg, slash_help, slash_kind, Slash, SlashDef,
-    SLASH_COMMANDS,
+    filter_slash_commands, is_cabin_slash_turn, mark_slash_result, parse_slash, resolve_mode_arg,
+    slash_help, slash_kind, strip_slash_result, unknown_cabin_slash, Slash, SlashDef,
+    SLASH_COMMANDS, SLASH_RESULT_PREFIX,
 };
 pub use verify::{
     can_mark_done, has_goal_complete, has_verify_ok, interpret_verify, verify_ok_after_user_turn,
@@ -319,8 +321,9 @@ pub use state::{
 pub use task::{HubTask, Receipt};
 pub use thread_tab::{
     apply_auto_title, apply_auto_title_in, apply_manual_rename, auto_title_blocked, clean_tab_title,
-    delete_thread, display_tab_title, history_order, short_auto_title, toggle_pin, DeleteOutcome,
-    ThreadTab, AUTO_TITLE_MAX,
+    default_thread_title, delete_thread, display_tab_title, history_order, history_row_visible,
+    leftover_empty_thread, reuse_empty_thread_idx, short_auto_title, toggle_pin, DeleteOutcome,
+    ThreadReuseView, ThreadTab, AUTO_TITLE_MAX,
 };
 pub use update::{
     discover_source, is_grokhub_source, overlay_update_begin, overlay_update_can_restart,

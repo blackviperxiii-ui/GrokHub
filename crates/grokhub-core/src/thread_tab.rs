@@ -127,6 +127,53 @@ pub fn delete_thread(count: usize, idx: usize, current: usize) -> DeleteOutcome 
     DeleteOutcome::Removed { next }
 }
 
+/// Default History title for a fresh chat or scratch tab.
+pub fn default_thread_title(scratch: bool) -> &'static str {
+    if scratch {
+        "Scratch"
+    } else {
+        "Chat"
+    }
+}
+
+/// Empty default-titled leftover from New chat / restart. Keep the current tab.
+pub fn leftover_empty_thread(title: &str, scratch: bool, empty: bool) -> bool {
+    empty && title.trim().eq_ignore_ascii_case(default_thread_title(scratch))
+}
+
+pub fn history_row_visible(
+    title: &str,
+    scratch: bool,
+    empty: bool,
+    is_current: bool,
+    pinned: bool,
+) -> bool {
+    is_current || pinned || !leftover_empty_thread(title, scratch, empty)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThreadReuseView<'a> {
+    pub title: &'a str,
+    pub scratch: bool,
+    pub empty: bool,
+}
+
+/// Reuse this empty tab, or another leftover empty of the same kind, instead of stacking Chats.
+pub fn reuse_empty_thread_idx(
+    threads: &[ThreadReuseView<'_>],
+    current: usize,
+    want_scratch: bool,
+) -> Option<usize> {
+    if let Some(t) = threads.get(current) {
+        if t.scratch == want_scratch && t.empty {
+            return Some(current);
+        }
+    }
+    threads.iter().position(|t| {
+        t.scratch == want_scratch && leftover_empty_thread(t.title, t.scratch, t.empty)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +242,51 @@ mod tests {
         assert_eq!(delete_thread(3, 0, 2), DeleteOutcome::Removed { next: 1 });
         assert_eq!(delete_thread(3, 2, 2), DeleteOutcome::Removed { next: 1 });
         assert_eq!(delete_thread(1, 0, 0), DeleteOutcome::ResetLast);
+    }
+
+    #[test]
+    fn new_chat_reuses_empty_tabs_and_hides_leftovers() {
+        assert_eq!(default_thread_title(false), "Chat");
+        assert_eq!(default_thread_title(true), "Scratch");
+        assert!(leftover_empty_thread("Chat", false, true));
+        assert!(leftover_empty_thread("scratch", true, true));
+        assert!(!leftover_empty_thread("night watch", false, true));
+        assert!(!leftover_empty_thread("Chat", false, false));
+        assert!(history_row_visible("Chat", false, true, true, false));
+        assert!(!history_row_visible("Chat", false, true, false, false));
+        assert!(history_row_visible("Chat", false, true, false, true));
+        assert!(history_row_visible("casual greeting", false, false, false, false));
+        let tabs = [
+            ThreadReuseView {
+                title: "casual greeting",
+                scratch: false,
+                empty: false,
+            },
+            ThreadReuseView {
+                title: "Chat",
+                scratch: false,
+                empty: true,
+            },
+            ThreadReuseView {
+                title: "Chat",
+                scratch: false,
+                empty: true,
+            },
+            ThreadReuseView {
+                title: "Scratch",
+                scratch: true,
+                empty: true,
+            },
+        ];
+        assert_eq!(reuse_empty_thread_idx(&tabs, 0, false), Some(1));
+        assert_eq!(reuse_empty_thread_idx(&tabs, 1, false), Some(1));
+        assert_eq!(reuse_empty_thread_idx(&tabs, 0, true), Some(3));
+        let already = [ThreadReuseView {
+            title: "Chat",
+            scratch: false,
+            empty: true,
+        }];
+        assert_eq!(reuse_empty_thread_idx(&already, 0, false), Some(0));
+        assert_eq!(reuse_empty_thread_idx(&already, 0, true), None);
     }
 }
