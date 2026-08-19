@@ -227,7 +227,6 @@ pub const CABIN_MENU: &[(&str, &str)] = &[
     ("devices", "Devices"),
     ("command", "Command"),
     ("queue", "Queue"),
-    ("eyes", "Desk"),
 ];
 
 pub const WORKSPACE: &[(&str, &str)] = GROK_NAV;

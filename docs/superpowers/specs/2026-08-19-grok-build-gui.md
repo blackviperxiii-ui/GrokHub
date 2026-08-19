@@ -16,11 +16,11 @@ Transport: spawn installed `grok --no-auto-update agent stdio`. Do not vendor gr
 
 `send_chat` opens or reuses an ACP session whose cwd is the bound project. Stream thought and text into existing bubbles. Stop / Halt / tray Halt is `session/cancel`.
 
-Composer pills: Code / Plan / Ask and Ask / Auto / Always-approve. Tool cards, diffs, and desk frames render in the pane. Permission prompts Allow / Deny / Always.
+Composer pills: Code / Plan / Ask and Ask / Auto / Always-approve. Tool cards, diffs, and computer-use frames render in the chat pane. Permission prompts Allow / Deny / Always.
 
-## Desk
+## Desktop
 
-The Eyes/Desk page is a viewer of the last computer-use frame from ACP. It does not drive grim, ydotool, AT-SPI, or CDP. Take over is a normal ACP prompt.
+Grok Build owns computer-use. There is no Desk / Take over menu. The cabin renders tool cards and the last ACP frame in chat. Halt cancels the ACP turn.
 
 ## History and extensions
 
