@@ -46,7 +46,7 @@ Projects sit in the left rail. `+` makes a project (`~/GrokHub-Work/<slug>`) or 
 
 History tabs pin, rename, and delete (right-click, or `/pin` `/rename` `/delete`). A manual rename is locked. After each turn Fast names the tab from the first topic (max 16 characters) unless that lock is set. Scratch stays unnamed. The Chat rail opens the last-accessed thread (scratch is skipped when another thread exists). Each thread stores `accessed_ms`; sitting on Chat stamps it.
 
-Imagine stills use dedicated **`grok-imagine-image-2.0`**. Video kind calls **`grok-imagine-video-1.5`**. Hey Grok: console API key for duplex Voice; OAuth is PTT STT + TTS. Desktop control is **Grok Build computer-use** — the cabin renders tool cards, diffs, and the last ACP frame on Desk. Halt / Stop / tray Halt / Ctrl+Shift+Esc cancel the ACP turn (`session/cancel`). Stream buffers clip at `IMAGE_FILE_CAP` / `TEXT_FILE_CAP`. Desk frames drop above `FRAME_CAP`. Titlebar × unmaps to tray.
+Imagine stills use dedicated **`grok-imagine-image-2.0`**. Video kind calls **`grok-imagine-video-1.5`**. Hey Grok: console API key for duplex Voice; OAuth is PTT STT + TTS. Desktop control is **Grok Build computer-use** — the cabin renders tool cards, diffs, and computer-use frames in chat. No Desk / Take over menu. Halt / Stop / tray Halt / Ctrl+Shift+Esc cancel the ACP turn (`session/cancel`). Stream buffers clip at `IMAGE_FILE_CAP` / `TEXT_FILE_CAP`. Desk frames drop above `FRAME_CAP`. Titlebar × unmaps to tray.
 
 Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is cabin sign-in for Voice/Imagine. Agent auth is `grok login` (or `XAI_API_KEY`). Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600), never in markdown. Settings → Appearance is **Dark**, **Light**, or **System**.
 

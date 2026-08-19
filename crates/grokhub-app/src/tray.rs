@@ -164,6 +164,20 @@ pub fn hidden_window_tick(
     }
 }
 
+/// × / WM close can bounce FocusLost then FocusGained in the same beat.
+/// Ignore that bounce so the cabin does not flash back out of the tray.
+pub const HIDE_RAISE_GRACE_MS: u64 = 400;
+
+pub fn hidden_raise_ready(elapsed_ms: u64) -> bool {
+    elapsed_ms >= HIDE_RAISE_GRACE_MS
+}
+
+/// Re-send unmap only while leftover focus is still on the withdrawn cabin.
+/// Spamming Visible(false) every pulse after FocusLost can flash it back.
+pub fn reapply_unmap(hidden: bool, focused: bool) -> bool {
+    hidden && focused
+}
+
 /// Latch: a hide that never saw FocusLost must not treat leftover focus as a raise.
 pub fn remember_hidden_unfocus(focused: bool, already: bool) -> bool {
     already || !focused
@@ -573,6 +587,18 @@ mod tests {
         );
         assert!(remember_hidden_unfocus(false, false));
         assert!(remember_hidden_unfocus(true, true));
+        assert!(!hidden_raise_ready(0));
+        assert!(!hidden_raise_ready(HIDE_RAISE_GRACE_MS - 1));
+        assert!(hidden_raise_ready(HIDE_RAISE_GRACE_MS));
+        assert!(
+            reapply_unmap(true, true),
+            "leftover focus after × must keep the cabin unmapped"
+        );
+        assert!(
+            !reapply_unmap(true, false),
+            "an unfocused tray cabin must not be sent Visible(false) every pulse"
+        );
+        assert!(!reapply_unmap(false, true));
     }
 
     #[test]
