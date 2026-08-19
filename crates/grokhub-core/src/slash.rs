@@ -463,7 +463,7 @@ pub fn slash_help() -> String {
         "Mode pill: Code / Plan / Ask. Permission: Ask / Auto / Always-approve. Grok Build runs the agent.",
         "Appearance: Dark, Light, System. Chat streams Grok Build ACP tokens on the thread that started them.",
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
-        "Install the grok CLI from x.ai/cli. Settings shows grok --version. Cabin overlay updates the GUI only; grok update updates the agent.",
+        "install.sh installs the Grok Build CLI (grok) from https://x.ai/cli. Settings shows grok --version. Cabin overlay updates the GUI and installs grok if missing; grok update updates the agent.",
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
         "Pulse every 15s. Hidden idle waits for the pulse.",
         "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",

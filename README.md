@@ -21,6 +21,7 @@ cd GrokHub
 cargo test --workspace
 ./scripts/install.sh --user
 grokhub
+grok --version
 ```
 
 Or without installing:
@@ -35,7 +36,7 @@ GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub
 
 The tray icon is there from launch. Close / titlebar × hides the cabin — the window unmaps; it does not minimize to the taskbar. Size and position come back on the next launch. Jobs, hub, and idle reflect keep running. Tray: **Show cabin**, **Halt**, **Quit**. One ping when it first hides; it does not spam the desktop. `grokhub --agent` starts already hidden. `GROKHUB_TRAY=0` quits on close.
 
-Install [Grok Build](https://x.ai/cli) (`curl -fsSL https://x.ai/cli/install.sh | bash`) then `grok login`. The cabin spawns `grok --no-auto-update agent stdio` over ACP. Bound project is the ACP cwd. Overlay `/update` updates the GUI only; `grok update` updates the agent.
+`./scripts/install.sh --user` installs [Grok Build](https://x.ai/cli) (`grok`) next to the cabin. Then `grok login`. The cabin spawns `grok --no-auto-update agent stdio` over ACP. Bound project is the ACP cwd. Overlay `/update` updates the GUI and installs `grok` if it is missing; `grok update` updates the agent.
 
 Slash: `/help` · `/new` · `/scratch` · `/clear` · `/undo` · `/retry` · `/stop` · `/sh` · `/host` · `/plan` · `/always-approve` · `/sessions` · `/inspect` · `/project` · `/memory` · `/recall` · `/forget` · `/board` · `/imagine` · `/skill` · `/compact` · `/learn reflect` · `/update` · `/send` · `/sync` · `/hub` · `/inhabit` · `/rewind` · `/room` · `/export` · `/rename` · `/pin` · `/delete` · `/effort` · `/dream` · `/palette`. Type `/help` in the cabin for the rest. `/skill <name>` runs that skill. `/compact` keeps the last 8 visible turns. `/context` counts visible turns. `/scratch` blocks `/forget` and Memory Save. `/rewind` restores the bound project root (or Grok conversation rewind when mapped). `/sync` merges chats and memory with paired computers. `/project` also takes `bind`, `new`, `folder`, `rename`, `move`, `delete`, `clear`. Right-click a sidebar project to rename or remove it — Delete drops the row, not the files.
 
@@ -49,7 +50,7 @@ Imagine stills use dedicated **`grok-imagine-image-2.0`**. Video kind calls **`g
 
 Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is cabin sign-in for Voice/Imagine. Agent auth is `grok login` (or `XAI_API_KEY`). Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600), never in markdown. Settings → Appearance is **Dark**, **Light**, or **System**.
 
-Settings → **Update** (or `grokhub --update` / `/update`) does `git pull --ff-only origin main` then `./scripts/install.sh --user`. Overlay updates the GUI only. `grok update` updates the agent. Progress stays on Settings. After a clean overlay, **Restart** reloads hub, drops the cabin pid lock, starts a new overlay `grokhub`, and exits this process.
+Settings → **Update** (or `grokhub --update` / `/update`) does `git pull --ff-only origin main` then `./scripts/install.sh --user`. Overlay updates the GUI and installs Grok Build CLI (`grok`) if it is missing. `grok update` updates the agent. Progress stays on Settings. After a clean overlay, **Restart** reloads hub, drops the cabin pid lock, starts a new overlay `grokhub`, and exits this process.
 
 Chat is ACP. Night and phone `/v1/task` enqueue ACP prompts on the bound project. Halt / Stop / Ctrl+Shift+Esc cancel the turn. A 15s heartbeat runs housekeep, inbox, night, review, wall, mid-thought, reflect, and anticipate. Hidden idle cabins wait for that pulse. Phone dispatch completes on halt / error. `/rewind` restores only the bound project root.
 
@@ -59,13 +60,14 @@ Android / Windows: link `libgrokhub_ffi` and include `crates/grokhub-ffi/include
 |--------|-------|-----|
 | `grokhub` | `crates/grokhub-app` | Cabin GUI around Grok Build ACP |
 | `grokhub-hub` | `crates/grokhub-hub` | Standalone LAN `/v1` hub (port **18766**) |
+| `grok` | xAI Grok Build CLI | Official coding-agent CLI (`https://x.ai/cli`) — installed with the cabin |
 | `libgrokhub_ffi` | `crates/grokhub-ffi` | C ABI for Android / Windows (pair/port/models; no HOST_CMD) |
 
 Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `suggestions.json`, `secrets.json` mode 0600, `memory/SOUL.md`, `USER.md`, `MEMORY.md`).
 
 ## First run
 
-1. Land in **chat**. Banner: install Grok Build from x.ai/cli, then Connect Grok in Settings for Voice/Imagine.
+1. Land in **chat**. Banner: `grok login` (install.sh already put `grok` on PATH), then Connect Grok in Settings for Voice/Imagine.
 2. `grok login` (or paste `XAI_API_KEY`). Optional cabin OAuth for media.
 3. Optional: Devices → **Start share** for the Android key-fob.
 4. Chat is ACP. Halt cancels the Grok Build turn.
@@ -106,7 +108,9 @@ Contract: [`docs/superpowers/plans/2026-08-14-dispatch-android-notes.md`](docs/s
 | Path | Role |
 |------|------|
 | `~/.local/bin/grokhub` | User install (`./scripts/install.sh --user`) |
+| `~/.local/bin/grok` | Grok Build CLI (official xAI installer; also `~/.grok/bin/grok`) |
 | `/usr/bin/grokhub` | System / makepkg |
+| `/usr/bin/grok` | System Grok Build CLI (AUR `post_install`) |
 | `~/.config/GrokHub` | User data (`app.json`, `projects.json`, `secrets.json`, memory) |
 
 Release tarball: `grokhub-linux-v*.tar.gz` from `./scripts/make-release-bundle.sh`.
@@ -120,6 +124,7 @@ rm -f ~/.local/bin/grokhub ~/.local/bin/grokhub-hub
 rm -rf ~/.local/lib/grokhub
 rm -f ~/.local/share/applications/grokhub.desktop
 # optional: rm -rf ~/.config/GrokHub
+# optional Grok Build CLI: rm -f ~/.local/bin/grok ~/.local/bin/agent; rm -rf ~/.grok
 sudo rm -f /usr/bin/grokhub /usr/bin/grokhub-hub
 sudo rm -f /usr/share/applications/grokhub.desktop
 ```

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install grokhub + grokhub-hub from this clone.
+# Install grokhub + grokhub-hub + Grok Build CLI from this clone.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -77,13 +77,20 @@ if command -v systemctl >/dev/null && [[ "$SYSTEM" -eq 0 ]]; then
   systemctl --user enable --now grokhub-hub.service >/dev/null 2>&1 || true
 fi
 
+PREFIX="$PREFIX" bash "$ROOT/scripts/install-grok-cli.sh" \
+  || echo "grok: install-grok-cli.sh continued"
+
 CONFIG_DIR="${GROKHUB_CONFIG:-$HOME/.config/GrokHub}"
 mkdir -p "$CONFIG_DIR"
 printf '%s\n' "$ROOT" > "$CONFIG_DIR/source"
 
 echo "installed $PREFIX/bin/grokhub"
 echo "installed $PREFIX/bin/grokhub-hub"
-echo "agent: install Grok Build from https://x.ai/cli"
+if [[ -x "$PREFIX/bin/grok" || -x "$HOME/.grok/bin/grok" ]] || command -v grok >/dev/null 2>&1; then
+  echo "installed Grok Build CLI (grok)"
+else
+  echo "grok: Grok Build CLI not on PATH — curl -fsSL https://x.ai/cli/install.sh | bash"
+fi
 if [[ "$SYSTEM" -eq 0 ]]; then
   echo "ensure $PREFIX/bin is on PATH"
 fi
