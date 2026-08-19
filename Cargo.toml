@@ -12,7 +12,7 @@ members = [
 version = "2.6.33"
 edition = "2021"
 license = "MIT"
-repository = "https://origin.cursor.com/git/viperxiii/GrokHub.git"
+repository = "https://github.com/blackviperxiii-ui/GrokHub.git"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
