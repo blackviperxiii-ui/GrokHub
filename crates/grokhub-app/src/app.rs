@@ -1556,12 +1556,18 @@ impl Cabin {
 
     fn persist_snap(&mut self) -> PersistSnap {
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.messages = Arc::new(
-                self.messages
-                    .iter()
-                    .map(|m| (m.role.clone(), m.content.clone()))
-                    .collect(),
-            );
+            let parked = t.messages.len();
+            let parked_last = t.messages.last().map(|(_, c)| c.len()).unwrap_or(0);
+            let live = self.messages.len();
+            let live_last = self.messages.last().map(|m| m.content.len()).unwrap_or(0);
+            if parked != live || parked_last != live_last {
+                t.messages = Arc::new(
+                    self.messages
+                        .iter()
+                        .map(|m| (m.role.clone(), m.content.clone()))
+                        .collect(),
+                );
+            }
             self.cfg.current_thread = t.id.clone();
         }
         let projects = if self.projects_dirty {
@@ -13166,6 +13172,10 @@ mod tests {
         assert!(
             snap.contains("Arc::new") && snap.contains("self.threads.clone()"),
             "persist must clone the live pane into a new Arc, then bump other threads: {snap}"
+        );
+        assert!(
+            snap.contains("parked_last") && snap.contains("live_last"),
+            "persist_snap must not clone the live pane when pin/title left it parked: {snap}"
         );
         assert!(
             snap.contains("self.hub.clone()") && !snap.contains("state_for_disk"),
