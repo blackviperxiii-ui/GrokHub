@@ -2474,6 +2474,8 @@ impl Cabin {
             self.nav = Nav::Workboard;
         }
         self.status = format!("Bound {name}");
+        self.acp = None;
+        self.acp_spawn_rx = None;
         self.persist();
     }
 
@@ -2504,6 +2506,8 @@ impl Cabin {
         }
         if out.unbound {
             self.cfg.project_dir.clear();
+            self.acp = None;
+            self.acp_spawn_rx = None;
         }
         if selected {
             self.project_sel = None;
@@ -3880,6 +3884,7 @@ impl Cabin {
                 self.project_sel = upsert_bound(&mut self.projects, &p);
                 self.touch_projects();
                 self.acp = None;
+                self.acp_spawn_rx = None;
                 self.grok_sessions_loaded = false;
                 self.persist();
                 self.status = format!("Bound {p}");
@@ -3888,6 +3893,7 @@ impl Cabin {
                 self.cfg.project_dir.clear();
                 self.project_sel = None;
                 self.acp = None;
+                self.acp_spawn_rx = None;
                 self.grok_sessions_loaded = false;
                 self.touch_projects();
                 self.persist();
@@ -3940,6 +3946,8 @@ impl Cabin {
                 self.cfg.project_dir = p.clone();
                 self.project_sel = upsert_bound(&mut self.projects, &p);
                 self.touch_projects();
+                self.acp = None;
+                self.acp_spawn_rx = None;
                 self.persist();
                 self.status = format!("Room {} → {p}", plan.slug);
                 self.queue_sh(plan.host_script);
@@ -9143,6 +9151,8 @@ impl Cabin {
         }
         self.project_sel = upsert_bound(&mut self.projects, &p);
         self.touch_projects();
+        self.acp = None;
+        self.acp_spawn_rx = None;
         let _ = secrets::save(&self.secrets);
         match config::save(&self.cfg) {
             Ok(()) => self.status = "Saved".into(),
@@ -11720,6 +11730,37 @@ mod tests {
         assert!(
             bind.contains("resolve_bind_path"),
             "/project bind . must not inherit the cabin process cwd: {bind}"
+        );
+        assert!(
+            bind.contains("acp_spawn_rx = None"),
+            "/project bind during handshake must drop the in-flight agent: {bind}"
+        );
+        let clear = src
+            .split("Slash::ProjectClear =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::ProjectShow =>").next())
+            .expect("ProjectClear handshake");
+        assert!(
+            clear.contains("acp_spawn_rx = None"),
+            "/project clear during handshake must drop the in-flight agent: {clear}"
+        );
+        let sidebar = src
+            .split("fn bind_project_id(")
+            .nth(1)
+            .and_then(|s| s.split("fn make_project(").next())
+            .expect("bind_project_id");
+        assert!(
+            sidebar.contains("acp_spawn_rx = None") && sidebar.contains("self.acp = None"),
+            "sidebar bind during handshake must drop the in-flight agent: {sidebar}"
+        );
+        let room = src
+            .split("Slash::Room(name)")
+            .nth(1)
+            .and_then(|s| s.split("Slash::Export =>").next())
+            .expect("Room");
+        assert!(
+            room.contains("acp_spawn_rx = None"),
+            "/room during handshake must drop the in-flight agent: {room}"
         );
         let ext = src
             .split("fn run_grok_extension(")
