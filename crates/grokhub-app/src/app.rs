@@ -1076,6 +1076,7 @@ pub struct Cabin {
     grok_sessions_rx: Option<mpsc::Receiver<Vec<grokhub_acp::GrokSession>>>,
     inspect_rx: Option<mpsc::Receiver<String>>,
     history_rx: Option<mpsc::Receiver<Vec<String>>>,
+    mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
     session_show_rx: Option<(String, mpsc::Receiver<String>)>,
     import_rx: Option<mpsc::Receiver<ImportOpenclawOut>>,
     inspect_text: String,
@@ -1434,6 +1435,7 @@ impl Cabin {
             grok_sessions_rx: None,
             inspect_rx: None,
             history_rx: None,
+            mem_restore_rx: None,
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -1897,6 +1899,25 @@ impl Cabin {
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.history_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    fn poll_mem_restore(&mut self) {
+        let Some(rx) = self.mem_restore_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((name, Ok(body))) => {
+                if self.mem_name == name {
+                    self.mem_body = body;
+                }
+                self.status = format!("Restored {name}.prev");
+            }
+            Ok((_, Err(e))) => self.status = e,
+            Err(mpsc::TryRecvError::Empty) => {
+                self.mem_restore_rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {}
         }
@@ -5600,13 +5621,16 @@ impl Cabin {
         };
         for f in remote.memory_files {
             if import_memory_file(&f.name, &f.content).is_some() {
-                if config::read_memory(&f.name) == f.content {
-                    continue;
-                }
-                let _ = config::write_memory(&f.name, &f.content);
+                let name = f.name.clone();
+                let content = f.content.clone();
                 if self.mem_name == f.name {
                     self.mem_body = f.content;
                 }
+                std::thread::spawn(move || {
+                    if config::read_memory(&name) != content {
+                        let _ = config::write_memory(&name, &content);
+                    }
+                });
             }
         }
         self.status = format!("Merged hub snapshot from {}", remote.from_device_name);
@@ -7972,6 +7996,7 @@ impl eframe::App for Cabin {
         self.poll_grok_sessions();
         self.poll_inspect();
         self.poll_history_search();
+        self.poll_mem_restore();
         self.poll_session_show();
         self.poll_import_openclaw();
         self.poll_acp_spawn();
@@ -8077,6 +8102,7 @@ impl eframe::App for Cabin {
                 || self.persist_rx.is_some()
                 || self.inspect_rx.is_some()
                 || self.history_rx.is_some()
+                || self.mem_restore_rx.is_some()
                 || self.session_show_rx.is_some()
                 || self.import_rx.is_some()
                 || self.acp_spawn_rx.is_some()
@@ -9746,14 +9772,16 @@ impl Cabin {
                     if crate::cards::ghost_pill(ui, "Restore") {
                         if self.scratch() {
                             self.status = "Scratch — no memory writes".into();
+                        } else if self.mem_restore_rx.is_some() {
+                            self.status = "Restoring…".into();
                         } else {
-                            match config::restore_memory(&self.mem_name) {
-                                Ok(body) => {
-                                    self.mem_body = body;
-                                    self.status = format!("Restored {}.prev", self.mem_name);
-                                }
-                                Err(e) => self.status = e,
-                            }
+                            let name = self.mem_name.clone();
+                            let (tx, rx) = mpsc::channel();
+                            self.mem_restore_rx = Some(rx);
+                            self.status = "Restoring…".into();
+                            std::thread::spawn(move || {
+                                let _ = tx.send((name.clone(), config::restore_memory(&name)));
+                            });
                         }
                     }
                     if crate::cards::ghost_pill(ui, "Reflect") {
@@ -12153,6 +12181,7 @@ mod tests {
                 && live.contains("persist_rx")
                 && live.contains("inspect_rx")
                 && live.contains("history_rx")
+                && live.contains("mem_restore_rx")
                 && live.contains("session_show_rx")
                 && live.contains("import_rx")
                 && live.contains("acp_spawn_rx")
@@ -14119,6 +14148,17 @@ mod tests {
             memory_ui.contains("self.scratch()") && memory_ui.contains("no memory writes"),
             "Memory Save on Scratch must not write MEMORY.md: {memory_ui}"
         );
+        let restore = memory_ui
+            .split("ghost_pill(ui, \"Restore\")")
+            .nth(1)
+            .and_then(|s| s.split("Reflect").next())
+            .expect("memory restore");
+        let restore_spawn = restore.find("thread::spawn").expect("restore must leave the UI thread");
+        let restore_fn = restore.find("restore_memory").expect("restore_memory");
+        assert!(
+            restore_spawn < restore_fn,
+            "Memory Restore must not freeze the cabin reading MEMORY.md.prev: {restore}"
+        );
         let tabs = memory_ui
             .split("tab_pill")
             .nth(1)
@@ -14323,6 +14363,11 @@ mod tests {
         assert!(
             inbound[..wrote].contains("read_memory"),
             "inbound must not rotate .prev when the merged file is unchanged: {inbound}"
+        );
+        let inbound_spawn = inbound.find("thread::spawn").expect("inbound write must leave the UI thread");
+        assert!(
+            inbound_spawn < wrote,
+            "inbound MEMORY.md must not freeze the cabin writing markdown: {inbound}"
         );
         let send = src
             .split("fn dispatch_send")
