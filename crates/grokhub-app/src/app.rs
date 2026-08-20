@@ -185,6 +185,13 @@ enum SettingsGroup {
     About,
 }
 
+enum PlusPick {
+    Native(Option<PathBuf>),
+    ClipImage(PathBuf),
+    ClipText(String),
+    ClipEmpty,
+}
+
 fn settings_group_home(group: SettingsGroup) -> SettingsSec {
     match group {
         SettingsGroup::General => SettingsSec::Account,
@@ -973,7 +980,7 @@ pub struct Cabin {
     plus_anchor: egui::Pos2,
     plus_ignore_close: bool,
     file_pick: Option<PlusTarget>,
-    pick_rx: Option<mpsc::Receiver<(PlusTarget, Option<PathBuf>)>>,
+    pick_rx: Option<mpsc::Receiver<(PlusTarget, PlusPick)>>,
     pick_dir: String,
     pick_cache: Option<(String, Vec<(String, bool)>)>,
     projects: Vec<ProjectNode>,
@@ -2022,10 +2029,28 @@ impl Cabin {
                 self.pick_rx = Some(rx);
                 self.status = "Choose a file…".into();
                 std::thread::spawn(move || {
-                    let _ = tx.send((target, pick_file()));
+                    let _ = tx.send((target, PlusPick::Native(pick_file())));
                 });
             }
-            PlusAct::Paste => self.apply_clipboard(target),
+            PlusAct::Paste => {
+                if self.pick_rx.is_some() {
+                    self.status = "Reading clipboard…".into();
+                    return;
+                }
+                let (tx, rx) = mpsc::channel();
+                self.pick_rx = Some(rx);
+                self.status = "Reading clipboard…".into();
+                std::thread::spawn(move || {
+                    let out = if let Some(p) = clipboard_image() {
+                        PlusPick::ClipImage(p)
+                    } else if let Some(t) = crate::desktop::clipboard_once() {
+                        PlusPick::ClipText(t)
+                    } else {
+                        PlusPick::ClipEmpty
+                    };
+                    let _ = tx.send((target, out));
+                });
+            }
         }
     }
 
@@ -2034,45 +2059,43 @@ impl Cabin {
             return;
         };
         match rx.try_recv() {
-            Ok((target, Some(p))) => {
+            Ok((target, PlusPick::Native(Some(p)))) | Ok((target, PlusPick::ClipImage(p))) => {
                 self.apply_path(target, &p);
             }
-            Ok((target, None)) => {
+            Ok((target, PlusPick::Native(None))) => {
                 self.file_pick = Some(target);
                 if self.status == "Choose a file…" {
                     self.status.clear();
                 }
             }
+            Ok((target, PlusPick::ClipText(clip))) => {
+                self.apply_clipboard(target, &clip);
+            }
+            Ok((_, PlusPick::ClipEmpty)) => {
+                self.status = plus_empty_status().into();
+            }
             Err(mpsc::TryRecvError::Empty) => {
                 self.pick_rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                if self.status == "Choose a file…" {
+                if self.status == "Choose a file…" || self.status == "Reading clipboard…" {
                     self.status.clear();
                 }
             }
         }
     }
 
-    fn apply_clipboard(&mut self, target: PlusTarget) {
-        if let Some(p) = clipboard_image() {
-            self.apply_path(target, &p);
-            return;
-        }
-        if let Some(clip) = crate::desktop::clipboard_once() {
-            match target {
-                PlusTarget::Chat => {
-                    self.composer = append_composer(&self.composer, &clip);
-                    self.status = "Pasted clipboard".into();
-                }
-                PlusTarget::Imagine => {
-                    self.imagine_prompt = append_composer(&self.imagine_prompt, &clip);
-                    self.status = "Pasted clipboard".into();
-                }
+    fn apply_clipboard(&mut self, target: PlusTarget, clip: &str) {
+        match target {
+            PlusTarget::Chat => {
+                self.composer = append_composer(&self.composer, clip);
+                self.status = "Pasted clipboard".into();
             }
-            return;
+            PlusTarget::Imagine => {
+                self.imagine_prompt = append_composer(&self.imagine_prompt, clip);
+                self.status = "Pasted clipboard".into();
+            }
         }
-        self.status = plus_empty_status().into();
     }
 
     fn apply_path(&mut self, target: PlusTarget, path: &Path) {
@@ -2303,7 +2326,7 @@ impl Cabin {
                 self.apply_path(target, &p);
             } else if paste {
                 self.file_pick = None;
-                self.apply_clipboard(target);
+                self.run_plus_act(target, PlusAct::Paste);
             } else if cancel {
                 self.file_pick = None;
             }
@@ -11993,6 +12016,17 @@ mod tests {
         assert!(
             spawn < pick && upload.contains("pick_rx") && !upload.contains("apply_path"),
             "zenity/kdialog must not freeze the cabin on plus-upload: {upload}"
+        );
+        let paste = src
+            .split("PlusAct::Paste =>")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_pick(").next())
+            .expect("Paste");
+        let paste_spawn = paste.find("thread::spawn").expect("clipboard worker");
+        let clip = paste.find("clipboard_image()").expect("clipboard image");
+        assert!(
+            paste_spawn < clip && paste.contains("clipboard_once") && !paste.contains("apply_path"),
+            "xclip/wl-paste must not freeze the cabin on plus-paste: {paste}"
         );
         let poll = src
             .split("fn poll_pick(")
