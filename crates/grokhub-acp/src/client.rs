@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Default cap on `initialize` / `authenticate` / `session/new` so a silent
 /// `grok` cannot freeze the cabin UI thread.
@@ -84,12 +84,22 @@ pub fn explain_handshake_error(raw: &str, cwd: &Path) -> String {
 
 /// Create `path` and probe a write so session/new does not start on a missing or read-only tree.
 pub fn ensure_session_cwd(path: &Path) -> Result<PathBuf, String> {
+    if let Ok(held) = cwd_probe_cache().lock() {
+        if let Some((p, at)) = held.as_ref() {
+            if p == path && at.elapsed() < Duration::from_secs(5) {
+                return Ok(path.to_path_buf());
+            }
+        }
+    }
     std::fs::create_dir_all(path)
         .map_err(|e| format!("ACP cwd {}: {e}", path.display()))?;
     let probe = path.join(".grokhub-cwd-ok");
     match std::fs::write(&probe, b"ok") {
         Ok(()) => {
             let _ = std::fs::remove_file(&probe);
+            if let Ok(mut held) = cwd_probe_cache().lock() {
+                *held = Some((path.to_path_buf(), Instant::now()));
+            }
             Ok(path.to_path_buf())
         }
         Err(e) => {
@@ -97,6 +107,11 @@ pub fn ensure_session_cwd(path: &Path) -> Result<PathBuf, String> {
             Err(format!("ACP cwd {}: {e}", path.display()))
         }
     }
+}
+
+fn cwd_probe_cache() -> &'static Mutex<Option<(PathBuf, Instant)>> {
+    static C: OnceLock<Mutex<Option<(PathBuf, Instant)>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(None))
 }
 
 enum Cmd {
@@ -1190,6 +1205,16 @@ mod tests {
         assert!(dir.is_dir());
         assert!(!dir.join(".grokhub-cwd-ok").exists());
         let _ = std::fs::remove_dir_all(&dir);
+        let src = include_str!("client.rs");
+        let probe = src
+            .split("pub fn ensure_session_cwd(")
+            .nth(1)
+            .and_then(|s| s.split("fn cwd_probe_cache(").next())
+            .expect("ensure_session_cwd");
+        assert!(
+            probe.contains("cwd_probe_cache") && probe.contains("from_secs(5)"),
+            "ACP cwd probe must not write .grokhub-cwd-ok on every send: {probe}"
+        );
     }
 
     #[test]

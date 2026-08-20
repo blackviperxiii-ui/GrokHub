@@ -188,6 +188,57 @@ pub fn refresh_grok_login() -> Option<String> {
     None
 }
 
+struct CabinOauthRefresh {
+    fail_at: Option<Instant>,
+    inflight: bool,
+    ready: Option<XaiOAuthTokens>,
+}
+
+fn cabin_oauth_refresh_state() -> &'static Mutex<CabinOauthRefresh> {
+    static C: OnceLock<Mutex<CabinOauthRefresh>> = OnceLock::new();
+    C.get_or_init(|| {
+        Mutex::new(CabinOauthRefresh {
+            fail_at: None,
+            inflight: false,
+            ready: None,
+        })
+    })
+}
+
+/// Refresh cabin OAuth off the UI thread. Returns a completed refresh if one is ready.
+pub fn refresh_cabin_oauth(tokens: &XaiOAuthTokens) -> Option<XaiOAuthTokens> {
+    let mut held = cabin_oauth_refresh_state().lock().ok()?;
+    if let Some(tok) = held.ready.take() {
+        return Some(tok);
+    }
+    if let Some(at) = held.fail_at {
+        if at.elapsed() < Duration::from_secs(30) {
+            return None;
+        }
+    }
+    if held.inflight {
+        return None;
+    }
+    held.inflight = true;
+    let snap = tokens.clone();
+    drop(held);
+    std::thread::spawn(move || {
+        let out = ensure_access(&snap)
+            .ok()
+            .and_then(|(_, next, refreshed)| if refreshed { Some(next) } else { None });
+        if let Ok(mut held) = cabin_oauth_refresh_state().lock() {
+            held.inflight = false;
+            if out.is_some() {
+                held.ready = out;
+                held.fail_at = None;
+            } else {
+                held.fail_at = Some(Instant::now());
+            }
+        }
+    });
+    None
+}
+
 fn refresh_grok_login_now() -> Option<String> {
     let path = grokhub_acp::grok_auth_path()?;
     let mut raw = String::new();
@@ -517,6 +568,19 @@ mod tests {
         assert!(
             now.contains("TEXT_FILE_CAP") && now.contains(".take(") && !now.contains("read_to_string(&path)"),
             "grok login refresh must not slurp a huge auth.json: {now}"
+        );
+        let cabin = src
+            .split("pub fn refresh_cabin_oauth(")
+            .nth(1)
+            .and_then(|s| s.split("fn refresh_grok_login_now(").next())
+            .expect("refresh_cabin_oauth");
+        assert!(
+            cabin.contains("thread::spawn") && cabin.contains("ensure_access"),
+            "cabin OAuth refresh HTTP must leave the UI thread: {cabin}"
+        );
+        assert!(
+            cabin.contains("from_secs(30)"),
+            "a failed cabin OAuth refresh must not retry every chip/Imagine paint: {cabin}"
         );
     }
 }

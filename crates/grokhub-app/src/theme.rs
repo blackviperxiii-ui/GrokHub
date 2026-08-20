@@ -141,7 +141,7 @@ pub fn desktop_prefers_dark() -> bool {
     }
     if let Ok(mut g) = OS_DARK.lock() {
         if let Some(c) = g.as_ref() {
-            if c.at.elapsed().as_secs() < 2 {
+            if c.at.elapsed().as_secs() < 30 {
                 return c.dark;
             }
         }
@@ -533,6 +533,15 @@ mod tests {
         assert!(
             !cmd.contains(".output()"),
             "os dark probe must not block paint: {cmd}"
+        );
+        let dark = src
+            .split("pub fn desktop_prefers_dark(")
+            .nth(1)
+            .and_then(|s| s.split("fn probe_os_dark(").next())
+            .expect("desktop_prefers_dark");
+        assert!(
+            dark.contains("as_secs()") && dark.contains("30"),
+            "os dark must not spawn gsettings on every paint: {dark}"
         );
     }
 }
