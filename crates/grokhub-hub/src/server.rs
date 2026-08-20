@@ -11,9 +11,7 @@ const MAX_BODY: usize = 8 * 1024 * 1024;
 
 pub fn serve(state: Arc<Mutex<HubState>>, port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = Server::http(("0.0.0.0", port))?;
-    for req in server.incoming_requests() {
-        let _ = handle(&state, req);
-    }
+    accept_loop(state, server);
     Ok(())
 }
 
@@ -31,11 +29,18 @@ fn serve_bind(state: Arc<Mutex<HubState>>, host: &str, port: u16) -> Result<u16,
     let server = Server::http((host, port)).map_err(|e| e.to_string())?;
     let bound = server.server_addr().to_ip().map(|a| a.port()).unwrap_or(port);
     std::thread::spawn(move || {
-        for req in server.incoming_requests() {
-            let _ = handle(&state, req);
-        }
+        accept_loop(state, server);
     });
     Ok(bound)
+}
+
+fn accept_loop(state: Arc<Mutex<HubState>>, server: Server) {
+    for req in server.incoming_requests() {
+        let state = state.clone();
+        std::thread::spawn(move || {
+            let _ = handle(&state, req);
+        });
+    }
 }
 
 fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
@@ -891,6 +896,26 @@ mod tests {
         assert!(
             drop_at < send_at,
             "unknown route must not send while holding the hub lock: {unknown}"
+        );
+        let accept = src
+            .split("fn accept_loop(")
+            .nth(1)
+            .and_then(|s| s.split("fn handle(").next())
+            .expect("accept_loop");
+        let spawn = accept.find("thread::spawn").expect("per-request spawn");
+        let handle_at = accept.find("handle(").expect("handle");
+        assert!(
+            spawn < handle_at,
+            "voice mint must not stall pair/inbox on the accept thread: {accept}"
+        );
+        let serve = src
+            .split("pub fn serve(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn serve_background(").next())
+            .expect("serve");
+        assert!(
+            serve.contains("accept_loop") && !serve.contains("handle("),
+            "LAN serve must not handle on the accept thread: {serve}"
         );
     }
 }

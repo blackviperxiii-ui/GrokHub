@@ -1777,8 +1777,7 @@ impl Cabin {
         let home = std::env::var("HOME").ok();
         let work = self.work_root();
         let picked = resolve_acp_cwd(&self.cfg.project_dir, home.as_deref(), &work);
-        let path = std::path::PathBuf::from(picked);
-        grokhub_acp::ensure_session_cwd(&path).unwrap_or(path)
+        std::path::PathBuf::from(picked)
     }
 
     fn reload_grok_sessions(&mut self) {
@@ -1955,26 +1954,27 @@ impl Cabin {
             .map(|p| p.display().to_string())
             .filter(|s| !s.is_empty());
         t.accessed_ms = now_ms();
-        if let Some(path) = sess.as_ref().and_then(|s| s.path.as_ref()) {
-            let text = config::read_file_capped(path, config::MEMORY_FILE_CAP);
-            if !text.is_empty() {
-                t.messages = grokhub_acp::parse_session_markdown(&text);
-            }
-        }
         if t.messages.is_empty() {
-            if let Some(bin) = grokhub_acp::find_grok() {
-                let cwd = sess
-                    .as_ref()
-                    .and_then(|s| s.cwd.clone())
-                    .unwrap_or_else(|| self.grok_cwd());
-                let sid = id.to_string();
-                let (tx, rx) = mpsc::channel();
-                self.session_show_rx = Some((sid.clone(), rx));
-                std::thread::spawn(move || {
-                    let text = grokhub_acp::show_session(&bin, &cwd, &sid).unwrap_or_default();
-                    let _ = tx.send(text);
-                });
-            }
+            let path = sess.as_ref().and_then(|s| s.path.clone());
+            let cwd = sess
+                .as_ref()
+                .and_then(|s| s.cwd.clone())
+                .unwrap_or_else(|| self.grok_cwd());
+            let sid = id.to_string();
+            let (tx, rx) = mpsc::channel();
+            self.session_show_rx = Some((sid.clone(), rx));
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                if let Some(path) = path {
+                    text = config::read_file_capped(&path, config::MEMORY_FILE_CAP);
+                }
+                if text.trim().is_empty() {
+                    if let Some(bin) = grokhub_acp::find_grok() {
+                        text = grokhub_acp::show_session(&bin, &cwd, &sid).unwrap_or_default();
+                    }
+                }
+                let _ = tx.send(text);
+            });
         }
         self.threads.push(t);
         self.switch_thread(self.threads.len() - 1);
@@ -11855,6 +11855,10 @@ mod tests {
             !cwd.contains("current_dir"),
             "unbound ACP must not inherit the overlay or cargo tree cwd: {cwd}"
         );
+        assert!(
+            !cwd.contains("ensure_session_cwd"),
+            "ACP cwd lookup must not probe disk on the UI thread: {cwd}"
+        );
         let inspect = src
             .split("Slash::Inspect =>")
             .nth(1)
@@ -11940,7 +11944,7 @@ mod tests {
             .and_then(|s| s.split("fn ensure_acp(").next())
             .expect("open_grok_session");
         assert!(
-            open.contains("show_session") && open.contains("parse_session_markdown"),
+            open.contains("show_session") && open.contains("read_file_capped"),
             "opening a grok session must load the transcript: {open}"
         );
         assert!(
@@ -11953,8 +11957,10 @@ mod tests {
         );
         let open_spawn = open.find("thread::spawn").expect("show_session must leave the UI thread");
         let open_show = open.find("show_session").expect("show_session");
+        let open_read = open.find("read_file_capped").expect("read_file_capped");
+        let open_find = open.find("find_grok").expect("find_grok");
         assert!(
-            open_spawn < open_show,
+            open_spawn < open_show && open_spawn < open_read && open_spawn < open_find,
             "opening a grok session must not block on grok sessions show: {open}"
         );
         let reload = src
@@ -12023,7 +12029,7 @@ mod tests {
             .and_then(|s| s.split("fn poll_acp_spawn(").next())
             .expect("poll_session_show");
         assert!(
-            show.contains("persist_bg"),
+            show.contains("persist_bg") && show.contains("parse_session_markdown"),
             "History show must persist the transcript, not wait for the next idle tick: {show}"
         );
     }
