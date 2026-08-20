@@ -286,8 +286,11 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let frame = grokhub_core::store_frame(&url, grokhub_core::now_ms());
         let mut st = state.lock().map_err(|_| ())?;
-        st.store_frame(&url);
+        if let Some(f) = frame {
+            st.install_frame(f);
+        }
         drop(st);
         return send_json(req, 200, json!({ "ok": true }));
     }
@@ -808,6 +811,12 @@ mod tests {
         assert!(
             drop_at < read_at,
             "POST frame must not read a JPEG while holding the hub lock: {post_frame}"
+        );
+        let parse = post_frame.find("store_frame").expect("POST parses the JPEG");
+        let relock = post_frame.rfind("state.lock()").expect("POST re-locks to install");
+        assert!(
+            read_at < parse && parse < relock && post_frame.contains("install_frame"),
+            "POST frame must not decode a 400KB JPEG under hub.lock(): {post_frame}"
         );
         let post_task = src
             .split("Method::Post && path == \"/v1/task\"")
