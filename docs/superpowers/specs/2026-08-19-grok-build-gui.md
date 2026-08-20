@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.6.34
+**Version:** 2.6.35
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI over ACP) is the agent, the host shell, and computer-use (eyes and hands).
 

@@ -9,7 +9,7 @@ pub fn apply_tray_window(ctx: &egui::Context, w: crate::tray::TrayWindow) {
 }
 
 pub fn titlebar_chrome_size() -> egui::Vec2 {
-    egui::vec2(crate::theme::HIT.max(36.0), crate::theme::TITLEBAR_H)
+    egui::vec2(36.0, crate::theme::TITLEBAR_H)
 }
 
 /// egui ignores a click held longer than 0.8s (`max_click_duration`). The

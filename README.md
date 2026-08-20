@@ -2,11 +2,11 @@
 
 Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 
-**v2.6.34** — Native Grok Build GUI. Overlay pulls GitHub.
+**v2.6.35** — Native Grok Build GUI. Overlay pulls GitHub.
 
 | Platform | Repository | Latest |
 |----------|------------|--------|
-| **Linux** (this) | [GrokHub](https://github.com/blackviperxiii-ui/GrokHub) | **v2.6.34** |
+| **Linux** (this) | [GrokHub](https://github.com/blackviperxiii-ui/GrokHub) | **v2.6.35** |
 | **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | sibling — same `grokhub-core` |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
