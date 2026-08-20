@@ -30,9 +30,17 @@ pub fn inhabit_bundle_usable(b: &InhabitBundle) -> bool {
 }
 
 /// Phones may stage a handoff; they must not consume the dest bundle.
+/// Match device tokens, not substrings — "saxophone" is a cabin, not a phone.
 pub fn inhabit_claim_allowed(peer_name: &str) -> bool {
     let n = peer_name.to_ascii_lowercase();
-    !n.contains("phone") && !n.contains("android")
+    !name_has_device_token(&n, "phone")
+        && !name_has_device_token(&n, "android")
+        && !name_has_device_token(&n, "iphone")
+}
+
+fn name_has_device_token(name: &str, token: &str) -> bool {
+    name.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|part| part == token)
 }
 
 #[cfg(test)]
@@ -70,6 +78,15 @@ mod tests {
         }));
         assert!(!inhabit_claim_allowed("Pixel phone"));
         assert!(!inhabit_claim_allowed("Android"));
+        assert!(!inhabit_claim_allowed("iPhone"));
         assert!(inhabit_claim_allowed("cabin-2"));
+        assert!(
+            inhabit_claim_allowed("saxophone"),
+            "substring phone must not block a cabin named saxophone"
+        );
+        assert!(
+            inhabit_claim_allowed("headphones"),
+            "headphones is not the phone device"
+        );
     }
 }

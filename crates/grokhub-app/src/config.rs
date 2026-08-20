@@ -93,7 +93,7 @@ pub struct AppConfig {
 }
 
 fn default_yolo() -> bool {
-    true
+    false
 }
 
 fn default_autonomy() -> u8 {
@@ -484,7 +484,10 @@ mod tests {
             "stale hostOn false must not brick /sh after the toggle was removed"
         );
         assert_eq!(loaded.autonomy, 4);
-        assert!(loaded.yolo);
+        assert!(
+            !loaded.yolo,
+            "Ask is the default — leftover yolo true disables the bound-tree jail"
+        );
         assert!(loaded.imagine_wall);
         assert_eq!(loaded.theme, "dark");
         let mut placed = AppConfig::default();

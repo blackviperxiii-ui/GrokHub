@@ -522,6 +522,10 @@ mod tests {
         assert_eq!(parse_slash("/project /tmp/cabin"), Some(Slash::ProjectBind(Some("/tmp/cabin".into()))));
         assert_eq!(parse_slash("/project typo"), None);
         assert_eq!(parse_slash("/project bind"), None);
+        assert_eq!(
+            parse_slash("/project bind ."),
+            Some(Slash::ProjectBind(Some(".".into())))
+        );
         assert_eq!(parse_slash("/project new Night watch"), Some(Slash::ProjectNew("Night watch".into())));
         assert_eq!(parse_slash("/project folder Cabin"), Some(Slash::ProjectFolder("Cabin".into())));
         assert_eq!(parse_slash("/project rename Dawn"), Some(Slash::ProjectRename("Dawn".into())));

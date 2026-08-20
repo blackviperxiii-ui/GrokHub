@@ -63,6 +63,47 @@ fn main() {
                     result(&id, json!({ "sessionId": "sess-test" }));
                 }
             }
+            "session/load" => {
+                if std::env::var("FAKE_ACP_LOAD_FAIL").ok().as_deref() == Some("1") {
+                    if let Some(id) = id {
+                        write_json(&json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": { "code": -32000, "message": "session not found" }
+                        }));
+                    }
+                    continue;
+                }
+                let sid = msg
+                    .get("params")
+                    .and_then(|p| p.get("sessionId").or_else(|| p.get("session_id")))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("sess-test")
+                    .to_string();
+                notify(
+                    "session/update",
+                    json!({
+                        "sessionId": sid,
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": { "text": "LOAD_REPLAY_SHOULD_NOT_PAINT" }
+                        }
+                    }),
+                );
+                if let Some(id) = id {
+                    result(&id, json!({ "sessionId": sid }));
+                }
+                notify(
+                    "session/update",
+                    json!({
+                        "sessionId": sid,
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": { "text": "LOAD_REPLAY_SHOULD_NOT_PAINT" }
+                        }
+                    }),
+                );
+            }
             "session/cancel" => {
                 if let Some(id) = id {
                     result(&id, json!({ "stopReason": "cancelled" }));

@@ -12,21 +12,29 @@ const PATTERNS: &[(&str, &str)] = &[
 pub fn redact_secrets(input: &str) -> String {
     let mut s = input.to_string();
     for (needle, _) in PATTERNS {
+        let mut out = String::new();
+        let mut rest = s.as_str();
         loop {
-            let Some(idx) = s.find(needle) else {
+            let Some(idx) = rest.find(needle) else {
+                out.push_str(rest);
                 break;
             };
-            let rest = &s[idx + needle.len()..];
-            let n = rest
+            out.push_str(&rest[..idx]);
+            let after = &rest[idx + needle.len()..];
+            let n = after
                 .chars()
                 .take_while(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.' | '~' | '+' | '/' | '='))
                 .count();
             if n < 12 {
-                break;
+                out.push_str(needle);
+                rest = after;
+                continue;
             }
-            let end = idx + needle.len() + rest.chars().take(n).map(|c| c.len_utf8()).sum::<usize>();
-            s.replace_range(idx..end, "[redacted]");
+            out.push_str("[redacted]");
+            let bytes: usize = after.chars().take(n).map(|c| c.len_utf8()).sum();
+            rest = &after[bytes..];
         }
+        s = out;
     }
     s
 }
@@ -85,5 +93,11 @@ mod tests {
         let two = redact_secrets("sk-abcdefghijklmnopqrstuv and sk-zyxwvutsrqponmlkjih");
         assert!(!two.contains("sk-"), "{two}");
         assert_eq!(two.matches("[redacted]").count(), 2);
+        let mixed = redact_secrets("sk-short sk-abcdefghijklmnopqrstuv");
+        assert!(
+            !mixed.contains("sk-abcdefghijklmnopqrstuv"),
+            "a short sk- prefix must not hide the real key: {mixed}"
+        );
+        assert!(mixed.contains("sk-short"), "{mixed}");
     }
 }
