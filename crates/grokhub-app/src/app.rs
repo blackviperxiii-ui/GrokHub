@@ -4288,9 +4288,12 @@ impl Cabin {
                         t.grok_cwd = None;
                         t.grok_session = None;
                     }
+                    self.persist();
+                } else {
+                    self.flush_projects();
+                    self.persist_cfg();
                 }
                 self.grok_sessions_loaded = false;
-                self.persist();
                 self.status = format!("Bound {p}");
             }
             Slash::ProjectClear => {
@@ -4371,8 +4374,11 @@ impl Cabin {
                         t.grok_cwd = None;
                         t.grok_session = None;
                     }
+                    self.persist();
+                } else {
+                    self.flush_projects();
+                    self.persist_cfg();
                 }
-                self.persist();
                 self.status = format!("Room {} → {p}", plan.slug);
                 self.queue_sh(plan.host_script);
             }
@@ -13126,6 +13132,13 @@ mod tests {
             bind.contains("grok_cwd = None") && bind.contains("grok_session = None"),
             "/project bind must forget the thread worktree or the next send stays in a History tree: {bind}"
         );
+        assert!(
+            bind.contains("self.persist_cfg()")
+                && bind.contains("self.flush_projects()")
+                && bind.contains("self.persist()")
+                && bind.contains("tree_changed"),
+            "/project bind to the current tree must not clone every thread: {bind}"
+        );
         let clear = src
             .split("Slash::ProjectClear =>")
             .nth(1)
@@ -13188,6 +13201,13 @@ mod tests {
         assert!(
             room.contains("grok_cwd = None") && room.contains("grok_session = None"),
             "/room must forget the thread worktree or the next send stays in a History tree: {room}"
+        );
+        assert!(
+            room.contains("self.persist_cfg()")
+                && room.contains("self.flush_projects()")
+                && room.contains("self.persist()")
+                && room.contains("tree_changed"),
+            "/room to the current tree must not clone every thread: {room}"
         );
         let ext = src
             .split("fn run_grok_extension(")
