@@ -19,9 +19,17 @@ pub struct ChatView {
 }
 
 pub fn visible_turn_count(messages: &[(String, String)]) -> usize {
+    visible_turn_count_from(messages.iter().map(|(r, c)| (r.as_str(), c.as_str())))
+}
+
+/// Same count without cloning an 8MB transcript onto the UI thread.
+pub fn visible_turn_count_from<'a, I>(messages: I) -> usize
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
     messages
-        .iter()
-        .filter(|(role, content)| role == "user" && !is_workload_user(content))
+        .into_iter()
+        .filter(|(role, content)| *role == "user" && !is_workload_user(content))
         .count()
 }
 
