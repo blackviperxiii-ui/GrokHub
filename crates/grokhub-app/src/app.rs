@@ -1872,8 +1872,7 @@ impl Cabin {
             .as_ref()
             .and_then(|s| s.cwd.as_ref())
             .map(|p| p.display().to_string())
-            .filter(|s| !s.is_empty())
-            .or_else(|| Some(self.grok_cwd().display().to_string()));
+            .filter(|s| !s.is_empty());
         t.accessed_ms = now_ms();
         if let Some(path) = sess.as_ref().and_then(|s| s.path.as_ref()) {
             let text = config::read_file_capped(path, config::MEMORY_FILE_CAP);
@@ -1949,6 +1948,11 @@ impl Cabin {
             .and_then(|t| t.grok_cwd.as_ref())
             .map(|p| std::path::PathBuf::from(p) != bound)
             .unwrap_or(false);
+        let unknown_cwd = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.grok_cwd.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true))
+            .unwrap_or(true);
         let (tx, rx) = mpsc::channel();
         self.acp_spawn_rx = Some(rx);
         std::thread::spawn(move || {
@@ -1967,7 +1971,7 @@ impl Cabin {
                 Err(e) => {
                     if resume.is_none() {
                         Err(grokhub_acp::explain_handshake_error(&e, &cwd))
-                    } else if foreign || grokhub_acp::is_session_cwd_error(&e) {
+                    } else if foreign || unknown_cwd || grokhub_acp::is_session_cwd_error(&e) {
                         Err(grokhub_acp::explain_handshake_error(&e, &cwd))
                     } else {
                         spawn(None).map_err(|e2| grokhub_acp::explain_handshake_error(&e2, &cwd))
@@ -11361,6 +11365,10 @@ mod tests {
         assert!(
             ensure.contains("is_session_cwd_error") && ensure.contains("t.grok_cwd"),
             "session/load in a foreign worktree must fail closed, not spawn(None) into the bound tree: {ensure}"
+        );
+        assert!(
+            ensure.contains("unknown_cwd"),
+            "a History file-only session must not spawn(None) into the bound tree: {ensure}"
         );
         let ensure_spawn = ensure.find("thread::spawn").expect("handshake must leave the UI thread");
         let ensure_sess = ensure.find("spawn_session").expect("spawn_session");
