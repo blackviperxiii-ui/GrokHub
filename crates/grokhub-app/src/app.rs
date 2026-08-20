@@ -116,7 +116,7 @@ use grokhub_core::{
     history_row_visible, leftover_empty_thread, mark_slash_result, reuse_empty_thread_idx,
     unknown_cabin_slash, ThreadReuseView,
     should_name_thread,
-    skill_follow_block, skill_use_in_chat_prompt, slash_help, summarize_write, surgical_memory_edit,
+    skill_follow_block, skill_use_in_chat_prompt, slash_help, summarize_write, surgical_memory_edit, MemoryEdit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
     unified_diff_cite, usage_line,
@@ -1081,6 +1081,8 @@ pub struct Cabin {
     mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
     recall_rx: Option<mpsc::Receiver<String>>,
     sync_rx: Option<mpsc::Receiver<()>>,
+    inhabit_rx: Option<mpsc::Receiver<InhabitBundle>>,
+    reflect_rx: Option<mpsc::Receiver<(MemoryEdit, Option<MemoryEdit>)>>,
     session_show_rx: Option<(String, mpsc::Receiver<String>)>,
     import_rx: Option<mpsc::Receiver<ImportOpenclawOut>>,
     inspect_text: String,
@@ -1443,6 +1445,8 @@ impl Cabin {
             mem_restore_rx: None,
             recall_rx: None,
             sync_rx: None,
+            inhabit_rx: None,
+            reflect_rx: None,
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -3873,20 +3877,23 @@ impl Cabin {
                                 let _ = config::write_memory(&name, &body);
                             }
                         });
-                        let current = if self.mem_name == "MEMORY.md" {
-                            self.mem_body.clone()
-                        } else {
-                            config::read_memory("MEMORY.md")
-                        };
-                        let next = forget_topic(&current, &q);
-                        let written = next.clone();
-                        std::thread::spawn(move || {
-                            let _ = config::write_memory("MEMORY.md", &written);
-                        });
                         if self.mem_name == "MEMORY.md" {
+                            let next = forget_topic(&self.mem_body, &q);
+                            let written = next.clone();
+                            std::thread::spawn(move || {
+                                let _ = config::write_memory("MEMORY.md", &written);
+                            });
                             self.mem_body = next;
+                            self.status = format!("Forgot {q}");
+                        } else {
+                            let topic = q.clone();
+                            std::thread::spawn(move || {
+                                let current = config::read_memory("MEMORY.md");
+                                let next = forget_topic(&current, &topic);
+                                let _ = config::write_memory("MEMORY.md", &next);
+                            });
+                            self.status = format!("Forgot {q}");
                         }
-                        self.status = format!("Forgot {q}");
                     }
                 }
             }
@@ -4568,6 +4575,10 @@ impl Cabin {
             self.status = "will not inhabit onto the phone".into();
             return;
         }
+        if self.inhabit_rx.is_some() {
+            self.status = "Inhabiting…".into();
+            return;
+        }
         let target = self.hub.lock().ok().and_then(|st| {
             st.peers
                 .iter()
@@ -4601,28 +4612,59 @@ impl Cabin {
                 }
             });
         }
-        let soul = if self.mem_name == "SOUL.md" {
-            self.mem_body.clone()
-        } else {
-            config::read_memory("SOUL.md")
+        let mem_name = self.mem_name.clone();
+        let mem_body = self.mem_body.clone();
+        let skill_ids = self.skill_list.iter().map(|s| s.name.clone()).collect();
+        let goal = self.board.first().map(|c| c.title.clone());
+        let from_name = Some(self.cfg.device_name.clone());
+        let to_id = Some(target.id.clone());
+        let to_name = Some(target.name.clone());
+        let at = Some(grokhub_core::now_ms());
+        let peer_name = target.name.clone();
+        let (tx, rx) = mpsc::channel();
+        self.inhabit_rx = Some(rx);
+        self.status = format!("Inhabit staging for {peer_name}");
+        std::thread::spawn(move || {
+            let soul = if mem_name == "SOUL.md" {
+                mem_body
+            } else {
+                config::read_memory("SOUL.md")
+            };
+            let _ = tx.send(InhabitBundle {
+                soul,
+                skill_ids,
+                goal,
+                project_snapshot_id: None,
+                from_id: None,
+                from_name,
+                to_id,
+                to_name,
+                at,
+            });
+        });
+    }
+
+    fn poll_inhabit(&mut self) {
+        let Some(rx) = self.inhabit_rx.take() else {
+            return;
         };
-        let bundle = InhabitBundle {
-            soul,
-            skill_ids: self.skill_list.iter().map(|s| s.name.clone()).collect(),
-            goal: self.board.first().map(|c| c.title.clone()),
-            project_snapshot_id: None,
-            from_id: None,
-            from_name: Some(self.cfg.device_name.clone()),
-            to_id: Some(target.id.clone()),
-            to_name: Some(target.name.clone()),
-            at: Some(grokhub_core::now_ms()),
-        };
-        if let Ok(mut st) = self.hub.lock() {
-            st.inhabit = Some(bundle);
+        match rx.try_recv() {
+            Ok(bundle) => {
+                let name = bundle.to_name.clone().unwrap_or_default();
+                if let Ok(mut st) = self.hub.lock() {
+                    st.inhabit = Some(bundle);
+                }
+                self.persist();
+                self.status = format!("Inhabit staged for {name}");
+                self.nav = Nav::Devices;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.inhabit_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Inhabit failed".into();
+            }
         }
-        self.persist();
-        self.status = format!("Inhabit staged for {}", target.name);
-        self.nav = Nav::Devices;
     }
 
     fn rewind_project(&mut self) {
@@ -7392,6 +7434,10 @@ impl Cabin {
             self.status = "Scratch — no reflect".into();
             return;
         }
+        if self.reflect_rx.is_some() {
+            self.status = "Reflecting…".into();
+            return;
+        }
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.as_deref();
         let facts = if job.is_none() || job == Some(vis.as_str()) {
@@ -7410,6 +7456,7 @@ impl Cabin {
         if self.policy().learns() {
             extract_insights(&mut self.learning, &facts);
         }
+        self.persist();
         let name = self.mem_name.clone();
         let body = self.mem_body.clone();
         std::thread::spawn(move || {
@@ -7420,54 +7467,84 @@ impl Cabin {
                 let _ = config::write_memory(&name, &body);
             }
         });
-        let current = if self.mem_name == "MEMORY.md" {
-            self.mem_body.clone()
-        } else {
-            config::read_memory("MEMORY.md")
-        };
-        let edit = surgical_memory_edit(&current, &facts);
-        let mut wrote = false;
-        if !edit.diff.is_empty() {
-            let next = edit.next.clone();
-            std::thread::spawn(move || {
+        let mem_name = self.mem_name.clone();
+        let mem_body = self.mem_body.clone();
+        let writes_user = self.policy().writes_user_md();
+        let (tx, rx) = mpsc::channel();
+        self.reflect_rx = Some(rx);
+        self.status = "Reflecting…".into();
+        std::thread::spawn(move || {
+            let current = if mem_name == "MEMORY.md" {
+                mem_body.clone()
+            } else {
+                config::read_memory("MEMORY.md")
+            };
+            let edit = surgical_memory_edit(&current, &facts);
+            if !edit.diff.is_empty() {
+                let next = edit.next.clone();
                 let _ = config::write_memory("MEMORY.md", &next);
-            });
-            self.reflect_diff = edit.diff;
-            if self.mem_name == "MEMORY.md" {
-                self.mem_body = edit.next;
             }
-            wrote = true;
-        }
-        if self.policy().writes_user_md() {
-            let prefs = user_pref_facts(&facts);
-            if !prefs.is_empty() {
-                let user = if self.mem_name == "USER.md" {
-                    self.mem_body.clone()
+            let user_edit = if writes_user {
+                let prefs = user_pref_facts(&facts);
+                if prefs.is_empty() {
+                    None
                 } else {
-                    config::read_memory("USER.md")
-                };
-                let user_edit = surgical_memory_edit(&user, &prefs);
-                if !user_edit.diff.is_empty() {
-                    let next = user_edit.next.clone();
-                    std::thread::spawn(move || {
+                    let user = if mem_name == "USER.md" {
+                        mem_body
+                    } else {
+                        config::read_memory("USER.md")
+                    };
+                    let ue = surgical_memory_edit(&user, &prefs);
+                    if ue.diff.is_empty() {
+                        None
+                    } else {
+                        let next = ue.next.clone();
                         let _ = config::write_memory("USER.md", &next);
-                    });
-                    if self.mem_name == "USER.md" {
-                        self.mem_body = user_edit.next;
+                        Some(ue)
                     }
+                }
+            } else {
+                None
+            };
+            let _ = tx.send((edit, user_edit));
+        });
+    }
+
+    fn poll_reflect(&mut self) {
+        let Some(rx) = self.reflect_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((edit, user_edit)) => {
+                let mut wrote = !edit.diff.is_empty();
+                if wrote {
+                    self.reflect_diff = edit.diff;
+                    if self.mem_name == "MEMORY.md" {
+                        self.mem_body = edit.next;
+                    }
+                }
+                if let Some(ue) = user_edit {
                     if self.reflect_diff.is_empty() {
-                        self.reflect_diff = user_edit.diff;
+                        self.reflect_diff = ue.diff;
+                    }
+                    if self.mem_name == "USER.md" {
+                        self.mem_body = ue.next;
                     }
                     wrote = true;
                 }
+                self.status = if wrote {
+                    "Reflected MEMORY.md".into()
+                } else {
+                    "Reflect: nothing new".into()
+                };
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.reflect_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Reflect failed".into();
             }
         }
-        self.status = if wrote {
-            "Reflected MEMORY.md".into()
-        } else {
-            "Reflect: nothing new".into()
-        };
-        self.persist();
     }
 
     fn run_skill_verify(&mut self) {
@@ -8123,6 +8200,8 @@ impl eframe::App for Cabin {
         self.poll_mem_restore();
         self.poll_recall();
         self.poll_sync();
+        self.poll_inhabit();
+        self.poll_reflect();
         self.poll_session_show();
         self.poll_import_openclaw();
         self.poll_acp_spawn();
@@ -8232,6 +8311,8 @@ impl eframe::App for Cabin {
                 || self.mem_restore_rx.is_some()
                 || self.recall_rx.is_some()
                 || self.sync_rx.is_some()
+                || self.inhabit_rx.is_some()
+                || self.reflect_rx.is_some()
                 || self.session_show_rx.is_some()
                 || self.import_rx.is_some()
                 || self.acp_spawn_rx.is_some()
@@ -12322,6 +12403,8 @@ mod tests {
                 && live.contains("mem_restore_rx")
                 && live.contains("recall_rx")
                 && live.contains("sync_rx")
+                && live.contains("inhabit_rx")
+                && live.contains("reflect_rx")
                 && live.contains("session_show_rx")
                 && live.contains("import_rx")
                 && live.contains("acp_spawn_rx")
@@ -13681,6 +13764,14 @@ mod tests {
             reflect[..mem].contains("write_memory") && reflect[..mem].contains("mem_body"),
             "/learn reflect must flush the Memory editor before surgical edit: {reflect}"
         );
+        let mem_spawn = reflect[..mem]
+            .rfind("thread::spawn")
+            .expect("reflect memory must leave the UI thread");
+        let flush = reflect[..mem].find("write_memory").expect("reflect flush");
+        assert!(
+            mem_spawn > flush && reflect.contains("reflect_rx"),
+            "idle reflect must not freeze the cabin slurping MEMORY.md: {reflect}"
+        );
         let insights = reflect.find("extract_insights").expect("reflect insights");
         let saved = reflect[insights..].find("self.persist()").expect("reflect persist");
         assert!(
@@ -14294,6 +14385,13 @@ mod tests {
             topic[..read].contains("write_memory") && topic[..read].contains("mem_body"),
             "/forget topic must flush the Memory editor before editing disk: {topic}"
         );
+        let forget_spawn = topic[..read]
+            .rfind("thread::spawn")
+            .expect("forget slurp must leave the UI thread");
+        assert!(
+            forget_spawn < read,
+            "/forget topic must not freeze the cabin slurping MEMORY.md: {topic}"
+        );
         let memory_ui = src
             .split("fn ui_memory")
             .nth(1)
@@ -14567,6 +14665,14 @@ mod tests {
         assert!(
             inhabit[..soul].contains("write_memory") && inhabit[..soul].contains("mem_body"),
             "/inhabit must flush the Memory editor before packing SOUL.md: {inhabit}"
+        );
+        let soul_spawn = inhabit[..soul]
+            .rfind("thread::spawn")
+            .expect("inhabit soul must leave the UI thread");
+        let flush = inhabit[..soul].find("write_memory").expect("inhabit flush");
+        assert!(
+            soul_spawn > flush && inhabit.contains("inhabit_rx"),
+            "/inhabit must not freeze the cabin packing a 1MB SOUL.md: {inhabit}"
         );
         let greet = src
             .split("fn refresh_greeting")
