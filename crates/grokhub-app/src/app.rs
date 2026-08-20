@@ -7998,7 +7998,7 @@ impl Cabin {
                 self.pending_hub_task = None;
             }
         }
-        self.persist();
+        self.persist_hub();
     }
 
     fn hide_to_tray(&mut self, ctx: &egui::Context) {
@@ -14960,10 +14960,10 @@ mod tests {
             "do not drop pending_hub_task before the hub mutex is held"
         );
         let complete_at = finish.find("complete_task").expect("complete_task");
-        let persist_at = finish.find("self.persist()").expect("persist hub complete");
+        let persist_at = finish.find("self.persist_hub()").expect("persist hub complete");
         assert!(
-            complete_at < persist_at,
-            "phone task completion must hit disk so a restart does not requeue the claimed row: {finish}"
+            complete_at < persist_at && !finish.contains("persist_snap"),
+            "phone task completion must hit hub-state.json without cloning every thread: {finish}"
         );
         let host_done = src
             .split("Ok(JobOut::HostDone(block))")
