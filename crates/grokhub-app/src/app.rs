@@ -2621,7 +2621,10 @@ impl Cabin {
         let tree_changed = !path.trim().is_empty() && self.cfg.project_dir != path;
         if !path.trim().is_empty() {
             if !std::path::Path::new(&path).is_dir() {
-                let _ = std::fs::create_dir_all(&path);
+                let p = path.clone();
+                std::thread::spawn(move || {
+                    let _ = std::fs::create_dir_all(&p);
+                });
             }
             self.cfg.project_dir = path.clone();
         }
@@ -2652,7 +2655,10 @@ impl Cabin {
             Ok(i) => {
                 let path = self.projects[i].path.clone();
                 if !std::path::Path::new(&path).is_dir() {
-                    let _ = std::fs::create_dir_all(&path);
+                    let p = path.clone();
+                    std::thread::spawn(move || {
+                        let _ = std::fs::create_dir_all(&p);
+                    });
                 }
                 self.touch_projects();
                 self.bind_project_id(&id);
@@ -2800,7 +2806,10 @@ impl Cabin {
                     if let Ok(path) = settle_project_path(&mut self.projects, &id, &root) {
                         if !path.is_empty() {
                             if !std::path::Path::new(&path).is_dir() {
-                                let _ = std::fs::create_dir_all(&path);
+                                let p = path.clone();
+                                std::thread::spawn(move || {
+                                    let _ = std::fs::create_dir_all(&p);
+                                });
                             }
                             self.bind_project_id(&id);
                             bound = true;
@@ -4105,7 +4114,10 @@ impl Cabin {
                 );
                 let tree_changed = self.cfg.project_dir != p;
                 self.cfg.project_dir = p.clone();
-                let _ = std::fs::create_dir_all(&p);
+                let dir = p.clone();
+                std::thread::spawn(move || {
+                    let _ = std::fs::create_dir_all(&dir);
+                });
                 self.project_sel = upsert_bound(&mut self.projects, &p);
                 self.touch_projects();
                 if self.running {
@@ -4183,7 +4195,10 @@ impl Cabin {
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
                 let plan = plan_room(&name, &home);
                 let p = format!("{home}/{}", plan.project_rel);
-                let _ = std::fs::create_dir_all(&p);
+                let dir = p.clone();
+                std::thread::spawn(move || {
+                    let _ = std::fs::create_dir_all(&dir);
+                });
                 let tree_changed = self.cfg.project_dir != p;
                 self.cfg.project_dir = p.clone();
                 self.project_sel = upsert_bound(&mut self.projects, &p);
@@ -4212,10 +4227,11 @@ impl Cabin {
                     } else {
                         std::path::PathBuf::from(expand_home(&self.cfg.project_dir)).join("export.md")
                     };
-                    match std::fs::write(&dest, md) {
-                        Ok(()) => self.status = format!("Wrote {}", dest.display()),
-                        Err(e) => self.status = e.to_string(),
-                    }
+                    let status_path = dest.display().to_string();
+                    std::thread::spawn(move || {
+                        let _ = std::fs::write(&dest, md);
+                    });
+                    self.status = format!("Wrote {status_path}");
                 }
             }
             Slash::Recall(q) => {
@@ -9778,7 +9794,10 @@ impl Cabin {
             .unwrap_or(false);
         self.cfg.project_dir = p.clone();
         if !p.trim().is_empty() {
-            let _ = std::fs::create_dir_all(&p);
+            let dir = p.clone();
+            std::thread::spawn(move || {
+                let _ = std::fs::create_dir_all(&dir);
+            });
         }
         self.project_sel = upsert_bound(&mut self.projects, &p);
         self.touch_projects();
@@ -12605,6 +12624,12 @@ mod tests {
             sidebar.contains("grok_cwd = None") && sidebar.contains("grok_session = None"),
             "sidebar bind must forget the thread worktree or the next send stays in a History tree: {sidebar}"
         );
+        let bind_spawn = sidebar.find("thread::spawn").expect("bind mkdir must leave the UI thread");
+        let bind_mkdir = sidebar.find("create_dir_all").expect("create_dir_all");
+        assert!(
+            bind_spawn < bind_mkdir,
+            "sidebar bind must not freeze the cabin creating the project folder: {sidebar}"
+        );
         let room = src
             .split("Slash::Room(name)")
             .nth(1)
@@ -14111,6 +14136,12 @@ mod tests {
             settings_save.contains("upsert_bound") && settings_save.contains("touch_projects"),
             "Settings Save must keep the sidebar selection on the bound path: {settings_save}"
         );
+        let settings_spawn = settings_save.find("thread::spawn").expect("settings mkdir must leave the UI thread");
+        let settings_mkdir = settings_save.find("create_dir_all").expect("create_dir_all");
+        assert!(
+            settings_spawn < settings_mkdir,
+            "Settings Save must not freeze the cabin creating the bound folder: {settings_save}"
+        );
         let hub_name = settings_save.find("device_name").expect("hub device name");
         let saved = settings_save.find("self.persist()").expect("settings persist");
         assert!(
@@ -14140,6 +14171,12 @@ mod tests {
         assert!(
             export.contains("expand_home"),
             "/export must expand ~ in the bound project or it writes a literal tilde folder: {export}"
+        );
+        let export_spawn = export.find("thread::spawn").expect("export write must leave the UI thread");
+        let export_write = export.find("fs::write").expect("export.md");
+        assert!(
+            export_spawn < export_write,
+            "/export must not freeze the cabin writing export.md: {export}"
         );
         let recall = src
             .split("Slash::Recall(q)")
