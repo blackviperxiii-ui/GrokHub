@@ -3961,7 +3961,7 @@ impl Cabin {
             Slash::Remember(note) => self.run_slash(Slash::MemoryNote(note)),
             Slash::Mode(mode) => {
                 self.cfg.mode = mode.clone();
-                let _ = config::save(&self.cfg);
+                self.persist();
                 self.status = mode_status_line(&mode, &self.cfg.model);
             }
             Slash::Dream => self.run_dream(),
@@ -4026,7 +4026,7 @@ impl Cabin {
                     "low" | "fast" => "fast".into(),
                     _ => "balanced".into(),
                 };
-                let _ = config::save(&self.cfg);
+                self.persist();
                 self.status = format!("Effort {level}");
             }
             Slash::Sessions => {
@@ -4289,15 +4289,19 @@ impl Cabin {
         } else {
             proposed
         };
-        match skills::save_skill(&to_save) {
-            Ok(_) => {
-                self.skill_list = skills::list_skills();
-                self.skill_name = to_save.name.clone();
-                self.skill_body = grokhub_core::render_skill_md(&to_save);
-                self.status = format!("Wrote skill {}", to_save.name);
-            }
-            Err(e) => self.status = e,
+        let written = to_save.clone();
+        std::thread::spawn(move || {
+            let _ = skills::save_skill(&written);
+        });
+        if let Some(existing) = self.skill_list.iter_mut().find(|s| s.name == to_save.name) {
+            *existing = to_save.clone();
+        } else {
+            self.skill_list.push(to_save.clone());
+            self.skill_list.sort_by(|a, b| a.name.cmp(&b.name));
         }
+        self.skill_name = to_save.name.clone();
+        self.skill_body = grokhub_core::render_skill_md(&to_save);
+        self.status = format!("Wrote skill {}", to_save.name);
     }
 
     fn apply_review_skill_patches(&mut self, raw: &str) {
@@ -4325,14 +4329,21 @@ impl Cabin {
                 runs: existing.runs,
             };
             let patched = patch_skill(&existing, &proposed);
-            let _ = skills::save_skill(&patched);
+            if let Some(s) = self.skill_list.iter_mut().find(|s| s.name == patched.name) {
+                *s = patched.clone();
+            }
+            let written = patched;
+            std::thread::spawn(move || {
+                let _ = skills::save_skill(&written);
+            });
         }
-        self.skill_list = skills::list_skills();
     }
 
     fn append_host_trajectory(&self, ok: bool, block: &str) {
         let line = trajectory_jsonl_line(now_ms(), &self.last_host, ok, block);
-        let _ = crate::store::append_trajectory(&line);
+        std::thread::spawn(move || {
+            let _ = crate::store::append_trajectory(&line);
+        });
     }
 
     fn trim_job_result_dumps(&mut self) {
@@ -9642,13 +9653,8 @@ impl Cabin {
                 t.grok_session = None;
             }
         }
-        let _ = secrets::save(&self.secrets);
-        match config::save(&self.cfg) {
-            Ok(()) => self.status = "Saved".into(),
-            Err(e) => self.status = e,
-        }
+        self.status = "Saved".into();
         self.sync_hub_voice();
-        self.flush_projects();
         self.persist();
     }
 
@@ -12244,6 +12250,10 @@ mod tests {
             settings_save.contains("api_key.clear"),
             "Settings Save must not keep a leftover console key on cfg: {settings_save}"
         );
+        assert!(
+            settings_save.contains("self.persist()") && !settings_save.contains("secrets::save"),
+            "Settings Save must not freeze the cabin writing secrets.json: {settings_save}"
+        );
         let bg = src
             .split("fn persist_bg(")
             .nth(1)
@@ -14257,6 +14267,28 @@ mod tests {
         assert!(
             host_done.contains("append_host_trajectory") && host_done.contains("trim_job_result_dumps"),
             "HostDone must record a trajectory line and trim old tool dumps: {host_done}"
+        );
+        let traj = src
+            .split("fn append_host_trajectory(")
+            .nth(1)
+            .and_then(|s| s.split("fn trim_job_result_dumps").next())
+            .expect("append_host_trajectory");
+        let traj_spawn = traj.find("thread::spawn").expect("trajectory must leave the UI thread");
+        let traj_write = traj.find("append_trajectory").expect("append_trajectory");
+        assert!(
+            traj_spawn < traj_write,
+            "HostDone must not freeze the cabin rewriting a 2MB trajectory.jsonl: {traj}"
+        );
+        let commit = src
+            .split("fn commit_proposed_skill(")
+            .nth(1)
+            .and_then(|s| s.split("fn apply_review_skill_patches").next())
+            .expect("commit_proposed_skill");
+        let commit_spawn = commit.find("thread::spawn").expect("skill write must leave the UI thread");
+        let commit_save = commit.find("save_skill").expect("save_skill");
+        assert!(
+            commit_spawn < commit_save && !commit.contains("list_skills"),
+            "HostDone must not freeze the cabin writing SKILL.md: {commit}"
         );
         let run_cmds = src
             .split("fn run_cmds")
