@@ -426,7 +426,7 @@ const PALETTE_LIST_H: f32 = 280.0;
 struct OauthPhotoOut {
     tokens: Option<grokhub_core::XaiOAuthTokens>,
     url: String,
-    bytes: Option<Vec<u8>>,
+    image: Option<ColorImage>,
 }
 
 fn oauth_photo_image(bytes: &[u8]) -> Option<ColorImage> {
@@ -1483,9 +1483,15 @@ impl Cabin {
         ) {
             crate::window::GeomFlush::Skip => {}
             crate::window::GeomFlush::Now => {
-                if config::save(&self.cfg).is_ok() {
-                    self.geom_dirty = false;
-                }
+                self.geom_dirty = false;
+                let io = self.persist_io.clone();
+                let mut cfg = self.cfg.clone();
+                cfg.api_key.clear();
+                std::thread::spawn(move || {
+                    if let Ok(_g) = io.lock() {
+                        let _ = config::save(&cfg);
+                    }
+                });
             }
             crate::window::GeomFlush::AfterMs(ms) => {
                 ctx.request_repaint_after(Duration::from_millis(ms));
@@ -3080,29 +3086,30 @@ impl Cabin {
             .rename_idx
             .and_then(|i| self.threads.get(i))
             .is_some_and(|r| r.id == tid);
-        let Some(t) = self.threads.iter_mut().find(|t| t.id == tid) else {
-            return;
-        };
-        if t.scratch {
-            return;
-        }
-        t.goal = blend_thread_goal(&t.goal, &topics, GOAL_DROP_AFTER);
-        if !t.goal.label.is_empty() {
-            let mut tab = ThreadTab {
-                title: t.title.clone(),
-                pinned: t.pinned,
-                title_locked: t.title_locked,
+        {
+            let Some(t) = self.threads.iter_mut().find(|t| t.id == tid) else {
+                return;
             };
-            if apply_auto_title_in(&mut tab, &t.goal.label, renaming) {
-                t.title = tab.title;
-                t.accessed_ms = now_ms();
+            if t.scratch {
+                return;
             }
-            if tid == current {
-                self.cfg.goal_pin = t.goal.label.clone();
+            t.goal = blend_thread_goal(&t.goal, &topics, GOAL_DROP_AFTER);
+            if !t.goal.label.is_empty() {
+                let mut tab = ThreadTab {
+                    title: t.title.clone(),
+                    pinned: t.pinned,
+                    title_locked: t.title_locked,
+                };
+                if apply_auto_title_in(&mut tab, &t.goal.label, renaming) {
+                    t.title = tab.title;
+                    t.accessed_ms = now_ms();
+                }
+                if tid == current {
+                    self.cfg.goal_pin = t.goal.label.clone();
+                }
             }
         }
-        let _ = threads::save(&self.threads);
-        let _ = config::save(&self.cfg);
+        self.persist();
     }
 
     fn spawn_thread_goal(&mut self) {
@@ -5597,7 +5604,13 @@ impl Cabin {
                     grokhub_core::PollStatus::Ready => {
                         if let Some(t) = r.tokens {
                             self.secrets.oauth = Some(t);
-                            let _ = secrets::save(&self.secrets);
+                            let io = self.persist_io.clone();
+                            let secrets = self.secrets.clone();
+                            std::thread::spawn(move || {
+                                if let Ok(_g) = io.lock() {
+                                    let _ = secrets::save(&secrets);
+                                }
+                            });
                             self.oauth_pending = None;
                             self.oauth_profile_tried = false;
                             self.oauth_photo = None;
@@ -5656,7 +5669,13 @@ impl Cabin {
         self.oauth_start_rx = None;
         self.oauth_poll_rx = None;
         self.clear_oauth_photo();
-        let _ = secrets::save(&self.secrets);
+        let io = self.persist_io.clone();
+        let secrets = self.secrets.clone();
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                let _ = secrets::save(&secrets);
+            }
+        });
         self.status = "Signed out".into();
     }
 
@@ -5670,14 +5689,18 @@ impl Cabin {
                         let changed = self.secrets.oauth.as_ref() != Some(&tokens);
                         self.secrets.oauth = Some(tokens);
                         if changed {
-                            let _ = secrets::save(&self.secrets);
+                            let io = self.persist_io.clone();
+                            let secrets = self.secrets.clone();
+                            std::thread::spawn(move || {
+                                if let Ok(_g) = io.lock() {
+                                    let _ = secrets::save(&secrets);
+                                }
+                            });
                         }
                     }
                     self.oauth_photo_key = out.url;
-                    self.oauth_photo = out.bytes.as_ref().and_then(|b| {
-                        oauth_photo_image(b).map(|img| {
-                            ctx.load_texture("oauth-avatar", img, TextureOptions::LINEAR)
-                        })
+                    self.oauth_photo = out.image.map(|img| {
+                        ctx.load_texture("oauth-avatar", img, TextureOptions::LINEAR)
                     });
                 }
                 Err(mpsc::TryRecvError::Empty) => {
@@ -5730,10 +5753,11 @@ impl Cabin {
             } else {
                 crate::oauth::fetch_profile_photo(&url, &tokens.access_token).ok()
             };
+            let image = bytes.as_ref().and_then(|b| oauth_photo_image(b));
             let _ = tx.send(OauthPhotoOut {
                 tokens: Some(tokens),
                 url,
-                bytes,
+                image,
             });
         });
     }
@@ -12537,6 +12561,17 @@ mod tests {
             paint.contains("persist_bg(") && !paint.contains("self.persist()"),
             "2s paint persist must not block the cabin: {paint}"
         );
+        let flush = src
+            .split("fn flush_window(")
+            .nth(1)
+            .and_then(|s| s.split("fn persist(").next())
+            .expect("flush_window");
+        let flush_spawn = flush.find("thread::spawn").expect("geom flush must leave the UI thread");
+        let flush_save = flush.find("config::save").expect("geom flush writes app.json");
+        assert!(
+            flush_spawn < flush_save && flush.contains("persist_io"),
+            "window geom must not freeze the cabin writing app.json: {flush}"
+        );
         let bg = src
             .split("fn persist_bg(")
             .nth(1)
@@ -12978,6 +13013,10 @@ mod tests {
         assert!(
             goal.contains("accessed_ms"),
             "auto-title must bump accessed_ms or /sync LWW can drop the new name: {goal}"
+        );
+        assert!(
+            goal.contains("self.persist()") && !goal.contains("threads::save"),
+            "auto-title must not freeze the cabin writing threads.json: {goal}"
         );
         let spawn_goal = src
             .split("fn spawn_thread_goal_on(")
@@ -13470,6 +13509,10 @@ mod tests {
             sign_out.contains("oauth_start_rx") && sign_out.contains("oauth_poll_rx"),
             "Sign out must drop in-flight OAuth HTTP: {sign_out}"
         );
+        assert!(
+            sign_out.contains("persist_io") && sign_out.contains("secrets::save"),
+            "Sign out must not freeze the cabin writing secrets.json: {sign_out}"
+        );
         let start_o = src
             .split("fn start_oauth(")
             .nth(1)
@@ -13491,6 +13534,30 @@ mod tests {
         assert!(
             poll_spawn < poll_dev,
             "OAuth poll must not freeze the cabin on token HTTP: {poll_o}"
+        );
+        assert!(
+            poll_o.contains("persist_io") && poll_o.contains("secrets::save"),
+            "OAuth Ready must not freeze the cabin writing secrets.json: {poll_o}"
+        );
+        let photo = src
+            .split("fn kick_oauth_photo(")
+            .nth(1)
+            .and_then(|s| s.split("fn kick_model(").next())
+            .expect("kick_oauth_photo");
+        let photo_spawn = photo.find("thread::spawn").expect("avatar fetch must leave the UI thread");
+        let photo_decode = photo.find("oauth_photo_image").expect("avatar JPEG decode");
+        assert!(
+            photo_spawn < photo_decode,
+            "OAuth avatar JPEG must not decode on the UI thread: {photo}"
+        );
+        let photo_poll = src
+            .split("fn poll_oauth_photo(")
+            .nth(1)
+            .and_then(|s| s.split("fn kick_oauth_photo(").next())
+            .expect("poll_oauth_photo");
+        assert!(
+            photo_poll.contains("persist_io") && photo_poll.contains("secrets::save"),
+            "OAuth profile enrich must not freeze the cabin writing secrets.json: {photo_poll}"
         );
         let kick = src
             .split("fn kick_model(")
