@@ -243,6 +243,7 @@ struct CdpCache {
     at: Instant,
     up: bool,
     n: usize,
+    inflight: bool,
 }
 
 static CDP_CACHE: Mutex<Option<CdpCache>> = Mutex::new(None);
@@ -250,11 +251,20 @@ static CDP_CACHE: Mutex<Option<CdpCache>> = Mutex::new(None);
 fn cached_cdp_status() -> (bool, usize) {
     if let Ok(g) = CDP_CACHE.lock() {
         if let Some(c) = g.as_ref() {
-            if c.at.elapsed() < Duration::from_secs(2) {
-                return (c.up, c.n);
+            let hit = (c.up, c.n);
+            let fresh = c.at.elapsed() < Duration::from_secs(2);
+            let busy = c.inflight;
+            drop(g);
+            if !fresh && !busy {
+                kick_cdp_status();
             }
+            return hit;
         }
     }
+    cdp_status_now()
+}
+
+fn cdp_status_now() -> (bool, usize) {
     let hit = probe_cdp();
     let (up, n) = match &hit {
         Some((_, tabs)) => (true, tabs.len()),
@@ -265,9 +275,24 @@ fn cached_cdp_status() -> (bool, usize) {
             at: Instant::now(),
             up,
             n,
+            inflight: false,
         });
     }
     (up, n)
+}
+
+fn kick_cdp_status() {
+    if let Ok(mut g) = CDP_CACHE.lock() {
+        if let Some(c) = g.as_mut() {
+            if c.inflight {
+                return;
+            }
+            c.inflight = true;
+        }
+    }
+    std::thread::spawn(|| {
+        let _ = cdp_status_now();
+    });
 }
 
 fn invalidate_cdp_cache() {
@@ -2395,6 +2420,15 @@ mod tests {
         assert!(
             cdp.contains("TEXT_FILE_CAP") || cdp.contains("IMAGE_FILE_CAP"),
             "CDP HTTP must stop at a cabin cap: {cdp}"
+        );
+        let status = include_str!("desktop.rs")
+            .split("fn cached_cdp_status()")
+            .nth(1)
+            .and_then(|s| s.split("fn probe_cdp(").next())
+            .expect("cached_cdp_status");
+        assert!(
+            status.contains("thread::spawn") && status.contains("inflight"),
+            "stale CDP windshield probe must refresh off the UI thread: {status}"
         );
     }
 }
