@@ -107,7 +107,7 @@ use grokhub_core::{
     chip_scan,
     build_review_digest, dedupe_suggestions, merge_suggestion_store, parse_suggest_lines,
     parse_suggest_skill_patches, parse_trajectory_jsonl, summarize_trajectory, trajectory_jsonl_line,
-    trim_result_bodies, yesterday_ms, RESULT_TRIM_KEEP_HOPS,
+    trim_result_bodies_in_place, yesterday_ms, RESULT_TRIM_KEEP_HOPS,
     partition_suggestions, prune_live_suggestions, review_due,
     review_status_line, review_system_prompt, digest_line_from, DigestLine, ReviewDigest, SuggestionStore,
     CABIN_GITHUB_TOOLS, REVIEW_NIGHT_HOUR,
@@ -4540,29 +4540,19 @@ impl Cabin {
         if !should_trim_result_bodies(tokens, CONTEXT_BUDGET_TOKENS) {
             return;
         }
-        let trimmed = if here {
-            let pairs: Vec<(String, String)> = self
-                .messages
-                .iter()
-                .map(|m| (m.role.clone(), m.content.clone()))
-                .collect();
-            trim_result_bodies(&pairs, RESULT_TRIM_KEEP_HOPS)
-        } else if let Some(t) = self.threads.iter().find(|t| t.id == origin) {
-            trim_result_bodies(&t.messages, RESULT_TRIM_KEEP_HOPS)
-        } else {
-            return;
-        };
         if here {
-            self.messages = trimmed
-                .iter()
-                .map(|(role, content)| Msg {
-                    role: role.clone(),
-                    content: content.clone(),
-                })
-                .collect();
+            trim_result_bodies_in_place(
+                self.messages
+                    .iter_mut()
+                    .map(|m| (m.role.as_str(), &mut m.content)),
+                RESULT_TRIM_KEEP_HOPS,
+            );
         }
         if let Some(t) = self.threads.iter_mut().find(|t| t.id == origin) {
-            t.messages = trimmed;
+            trim_result_bodies_in_place(
+                t.messages.iter_mut().map(|(r, c)| (r.as_str(), c)),
+                RESULT_TRIM_KEEP_HOPS,
+            );
         }
     }
 
@@ -14921,10 +14911,13 @@ mod tests {
             .and_then(|s| s.split("fn queue_sh(").next())
             .expect("trim_job_result_dumps");
         let est = trim.find("should_trim_result_bodies").expect("estimate before clone");
-        let clone = trim.find("content.clone()");
         assert!(
-            clone.is_none_or(|c| est < c),
-            "result trim must estimate borrowed tokens before cloning an 8MB pane: {trim}"
+            trim.contains("trim_result_bodies_in_place") && !trim.contains("content.clone()"),
+            "result trim must rewrite old dumps in place, not clone an 8MB pane: {trim}"
+        );
+        assert!(
+            trim[est..].contains("trim_result_bodies_in_place"),
+            "result trim must estimate borrowed tokens before touching dumps: {trim}"
         );
         let commit = src
             .split("fn commit_proposed_skill(")

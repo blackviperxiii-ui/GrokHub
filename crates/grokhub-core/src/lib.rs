@@ -202,7 +202,7 @@ pub use connector::{
 pub use consult::{format_consult_reply, parse_consult};
 pub use context::{
     context_percent, estimate_messages, estimate_messages_from, estimate_tokens, is_result_turn, should_auto_compact,
-    should_auto_compact_now, should_trim_result_bodies, trim_result_bodies, CONTEXT_BUDGET_TOKENS,
+    should_auto_compact_now, should_trim_result_bodies, trim_result_bodies, trim_result_bodies_in_place, CONTEXT_BUDGET_TOKENS,
     RECENT_MIN_MESSAGES, RESULT_TRIM_KEEP_HOPS, RESULT_TRIM_THRESHOLD,
 };
 pub use trajectory::{
