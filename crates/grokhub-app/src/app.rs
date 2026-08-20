@@ -1477,7 +1477,7 @@ impl Cabin {
             return;
         }
         let key = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.threads.len(),
             self.thread_idx,
             self.messages.len(),
@@ -1489,6 +1489,14 @@ impl Cabin {
             self.usage.day,
             self.usage.messages,
             self.cfg.current_thread,
+            self.threads
+                .get(self.thread_idx)
+                .and_then(|t| t.grok_session.as_deref())
+                .unwrap_or(""),
+            self.threads
+                .get(self.thread_idx)
+                .and_then(|t| t.grok_cwd.as_deref())
+                .unwrap_or(""),
         );
         if !self.geom_dirty && !self.projects_dirty && self.persist_idle_key == key {
             self.last_persist = Instant::now();
@@ -1807,6 +1815,7 @@ impl Cabin {
                         .map(|(role, content)| Msg { role, content })
                         .collect();
                 }
+                self.persist_bg();
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.session_show_rx = Some((id, rx));
@@ -1824,12 +1833,18 @@ impl Cabin {
                 let sid = h.session_id.clone();
                 let cwd = h.cwd.display().to_string();
                 if !sid.trim().is_empty() {
-                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                    let job = self.chat_job_thread.clone();
+                    let idx = job
+                        .as_deref()
+                        .and_then(|id| self.threads.iter().position(|t| t.id == id))
+                        .unwrap_or(self.thread_idx);
+                    if let Some(t) = self.threads.get_mut(idx) {
                         t.grok_session = Some(sid);
                         t.grok_cwd = Some(cwd);
                     }
                 }
                 self.acp = Some(h);
+                self.persist();
             }
             Ok(Err(e)) => {
                 self.running = false;
@@ -3140,12 +3155,17 @@ impl Cabin {
     fn bearer(&mut self) -> String {
         if let Some(k) = grokhub_acp::grok_cli_key() {
             if !k.trim().is_empty() {
-                let stale = grokhub_core::jwt_exp_ms(&k)
+                let exp = grokhub_core::jwt_exp_ms(&k);
+                let stale = exp
                     .map(|exp| exp.saturating_sub(grokhub_core::TOKEN_REFRESH_SKEW_MS) < now_ms())
                     .unwrap_or(false);
                 if stale {
                     if let Some(fresh) = crate::oauth::refresh_grok_login() {
                         return fresh;
+                    }
+                    let hard_expired = exp.map(|e| e < now_ms()).unwrap_or(false);
+                    if !hard_expired {
+                        return k;
                     }
                 } else {
                     return k;
@@ -10666,14 +10686,14 @@ struct LanHostCache {
 }
 
 static LAN_HOST: Mutex<Option<LanHostCache>> = Mutex::new(None);
-const CLOCK_TTL: Duration = Duration::from_millis(1000);
+const CLOCK_TTL: Duration = Duration::from_secs(15);
 static LAST_CLOCK: Mutex<Option<(Instant, LocalClock)>> = Mutex::new(None);
 static LAST_DAY: Mutex<Option<(Instant, String)>> = Mutex::new(None);
 
 fn hostname_i() -> String {
     if let Ok(g) = LAN_HOST.lock() {
         if let Some(c) = g.as_ref() {
-            if c.at.elapsed().as_secs() < 5 {
+            if c.at.elapsed().as_secs() < 30 {
                 return c.out.clone();
             }
         }
@@ -11448,6 +11468,10 @@ mod tests {
             "a dead grok login JWT must fall through to console key, not keep the expired token: {bearer}"
         );
         assert!(
+            bearer.contains("hard_expired"),
+            "skew-stale grok login must still be used while refresh is off the UI thread: {bearer}"
+        );
+        assert!(
             bearer.contains("console_key()"),
             "Imagine/ACP console-key fallback must read secrets.json: {bearer}"
         );
@@ -11489,6 +11513,10 @@ mod tests {
         assert!(
             !bg.contains("secrets.api_key.len"),
             "idle persist must not race a just-saved console key: {bg}"
+        );
+        assert!(
+            bg.contains("grok_session") && bg.contains("grok_cwd"),
+            "idle persist must notice a handshake session stamp: {bg}"
         );
         let snap = src
             .split("fn persist_snap(")
@@ -11655,6 +11683,33 @@ mod tests {
         assert!(
             poll.contains("chat_job_thread"),
             "ACP Ready must stamp the job thread, not whichever tab is visible: {poll}"
+        );
+        let spawn_poll = src
+            .split("fn poll_acp_spawn(")
+            .nth(1)
+            .and_then(|s| s.split("fn open_grok_session(").next())
+            .expect("poll_acp_spawn");
+        let spawn_ok = spawn_poll
+            .split("Ok(Ok(h))")
+            .nth(1)
+            .and_then(|s| s.split("Ok(Err(e))").next())
+            .expect("spawn ok");
+        assert!(
+            spawn_ok.contains("grok_session") && spawn_ok.contains("self.persist()"),
+            "handshake must persist the session id before the first turn: {spawn_ok}"
+        );
+        assert!(
+            spawn_ok.contains("chat_job_thread"),
+            "handshake stamp must follow the job thread, not whichever tab is visible: {spawn_ok}"
+        );
+        let show = src
+            .split("fn poll_session_show(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_acp_spawn(").next())
+            .expect("poll_session_show");
+        assert!(
+            show.contains("persist_bg"),
+            "History show must persist the transcript, not wait for the next idle tick: {show}"
         );
     }
 

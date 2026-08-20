@@ -141,28 +141,51 @@ pub fn refresh_tokens(refresh_token: &str) -> Result<XaiOAuthTokens, String> {
 }
 
 /// Refresh a `grok login` JWT (CLI client id, not cabin OAuth) and write it back.
-fn grok_login_refresh_fail_at() -> &'static Mutex<Option<Instant>> {
-    static C: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(None))
+struct GrokLoginRefresh {
+    fail_at: Option<Instant>,
+    inflight: bool,
+    ready: Option<String>,
+}
+
+fn grok_login_refresh_state() -> &'static Mutex<GrokLoginRefresh> {
+    static C: OnceLock<Mutex<GrokLoginRefresh>> = OnceLock::new();
+    C.get_or_init(|| {
+        Mutex::new(GrokLoginRefresh {
+            fail_at: None,
+            inflight: false,
+            ready: None,
+        })
+    })
 }
 
 pub fn refresh_grok_login() -> Option<String> {
-    if let Ok(held) = grok_login_refresh_fail_at().lock() {
-        if let Some(at) = *held {
-            if at.elapsed() < Duration::from_secs(30) {
-                return None;
-            }
+    let mut held = grok_login_refresh_state().lock().ok()?;
+    if let Some(tok) = held.ready.take() {
+        return Some(tok);
+    }
+    if let Some(at) = held.fail_at {
+        if at.elapsed() < Duration::from_secs(30) {
+            return None;
         }
     }
-    let out = refresh_grok_login_now();
-    if let Ok(mut held) = grok_login_refresh_fail_at().lock() {
-        *held = if out.is_none() {
-            Some(Instant::now())
-        } else {
-            None
-        };
+    if held.inflight {
+        return None;
     }
-    out
+    held.inflight = true;
+    drop(held);
+    std::thread::spawn(|| {
+        let out = refresh_grok_login_now();
+        if let Ok(mut held) = grok_login_refresh_state().lock() {
+            held.inflight = false;
+            if out.is_some() {
+                held.ready = out;
+                held.fail_at = None;
+            } else {
+                held.fail_at = Some(Instant::now());
+            }
+        }
+    });
+    None
 }
 
 fn refresh_grok_login_now() -> Option<String> {
@@ -481,6 +504,10 @@ mod tests {
         assert!(
             wrap.contains("elapsed") && wrap.contains("from_secs(30)"),
             "a failed grok login refresh must not retry every chip/Imagine paint: {wrap}"
+        );
+        assert!(
+            wrap.contains("thread::spawn") && wrap.contains("refresh_grok_login_now"),
+            "grok login refresh HTTP must leave the UI thread: {wrap}"
         );
         let now = src
             .split("fn refresh_grok_login_now(")
