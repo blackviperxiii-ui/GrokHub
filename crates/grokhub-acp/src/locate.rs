@@ -241,24 +241,17 @@ pub fn grok_stdout_timeout(bin: &Path, cwd: &Path, args: &[&str], secs: u64) -> 
 }
 
 pub fn agent_args(always_approve: bool) -> Vec<String> {
-    agent_args_resume(always_approve, None)
-}
-
-pub fn agent_args_resume(always_approve: bool, resume: Option<&str>) -> Vec<String> {
-    let mut a = vec!["--no-auto-update".into()];
-    if let Some(id) = resume {
-        let id = id.trim();
-        if !id.is_empty() {
-            a.push("--resume".into());
-            a.push(id.to_string());
-        }
-    }
-    a.push("agent".into());
+    let mut a = vec!["--no-auto-update".into(), "agent".into()];
     if always_approve {
         a.push("--always-approve".into());
     }
     a.push("stdio".into());
     a
+}
+
+pub fn agent_args_resume(always_approve: bool, resume: Option<&str>) -> Vec<String> {
+    let _ = resume;
+    agent_args(always_approve)
 }
 
 #[cfg(test)]
@@ -336,7 +329,13 @@ mod tests {
         );
         assert_eq!(
             agent_args_resume(false, Some("abc-123")),
-            vec!["--no-auto-update", "--resume", "abc-123", "agent", "stdio"]
+            vec!["--no-auto-update", "agent", "stdio"]
+        );
+        assert!(
+            !agent_args_resume(true, Some("abc-123"))
+                .iter()
+                .any(|a| a == "--resume"),
+            "CLI --resume plus session/new mixed sessions"
         );
     }
 
