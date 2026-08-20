@@ -280,11 +280,6 @@ pub fn parse_tool_card(update: &Value) -> ToolCard {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let title = update
-        .get("title")
-        .and_then(|v| v.as_str())
-        .unwrap_or("tool")
-        .to_string();
     let kind = update
         .get("kind")
         .and_then(|v| v.as_str())
@@ -295,15 +290,19 @@ pub fn parse_tool_card(update: &Value) -> ToolCard {
         .and_then(|v| v.as_str())
         .unwrap_or("pending")
         .to_string();
+    let raw_title = update
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let loc = path_from_raw(update.get("rawInput").unwrap_or(&Value::Null));
+    let title = pretty_tool_title(&raw_title, &kind, &loc);
     let mut images = Vec::new();
     if let Some(c) = update.get("content") {
         walk_images(c, &mut images);
     }
-    let detail = update
-        .get("rawInput")
-        .or_else(|| update.get("rawOutput"))
-        .map(|v| v.to_string())
-        .unwrap_or_default();
+    let detail = tool_detail(update);
     let diff = update
         .get("content")
         .and_then(|c| c.as_array())
@@ -326,6 +325,182 @@ pub fn parse_tool_card(update: &Value) -> ToolCard {
         diff,
         image_data_url: images.pop(),
     }
+}
+
+pub fn merge_tool_card(old: ToolCard, new: ToolCard) -> ToolCard {
+    let title = if is_generic_tool_title(&new.title) {
+        old.title
+    } else {
+        new.title
+    };
+    let kind = if new.kind.is_empty() { old.kind } else { new.kind };
+    let status = if new.status.is_empty() {
+        old.status
+    } else {
+        new.status
+    };
+    let detail = if looks_json_blob(&new.detail) {
+        if looks_json_blob(&old.detail) {
+            String::new()
+        } else {
+            old.detail
+        }
+    } else if new.detail.is_empty() {
+        old.detail
+    } else {
+        new.detail
+    };
+    let diff = if new.diff.is_empty() { old.diff } else { new.diff };
+    ToolCard {
+        id: if new.id.is_empty() { old.id } else { new.id },
+        title,
+        kind,
+        status,
+        detail,
+        diff,
+        image_data_url: new.image_data_url.or(old.image_data_url),
+    }
+}
+
+fn looks_json_blob(s: &str) -> bool {
+    let t = s.trim();
+    (t.starts_with('{') && t.ends_with('}')) || (t.starts_with('[') && t.ends_with(']'))
+}
+
+fn is_generic_tool_title(s: &str) -> bool {
+    let t = s.trim();
+    t.is_empty() || t.eq_ignore_ascii_case("tool")
+}
+
+fn pretty_tool_title(title: &str, kind: &str, loc: &str) -> String {
+    let t = title.trim();
+    if !t.is_empty() && !is_generic_tool_title(t) {
+        return shorten_tool_path(t);
+    }
+    let verb = match kind.to_ascii_lowercase().as_str() {
+        "read" | "read_file" => "Read",
+        "edit" | "edit_file" | "write" => "Edit",
+        "delete" => "Delete",
+        "execute" | "bash" | "terminal" | "shell" => "Run",
+        "search" | "grep" => "Search",
+        _ => "",
+    };
+    if !verb.is_empty() && !loc.is_empty() {
+        return format!("{verb} `{loc}`");
+    }
+    if !loc.is_empty() {
+        return loc.to_string();
+    }
+    if !verb.is_empty() {
+        return verb.to_string();
+    }
+    "Tool".into()
+}
+
+fn path_from_raw(v: &Value) -> String {
+    for key in [
+        "target_file",
+        "path",
+        "file",
+        "filePath",
+        "file_path",
+        "command",
+        "cmd",
+        "query",
+    ] {
+        if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
+            let s = s.trim();
+            if !s.is_empty() {
+                return basename_or_tail(s);
+            }
+        }
+    }
+    String::new()
+}
+
+fn basename_or_tail(s: &str) -> String {
+    let t = s.trim().trim_matches('`');
+    let name = t.rsplit(['/', '\\']).next().unwrap_or(t);
+    if name.chars().count() <= 42 {
+        name.to_string()
+    } else {
+        format!("{}…", name.chars().take(41).collect::<String>())
+    }
+}
+
+fn shorten_tool_path(title: &str) -> String {
+    if let Some(start) = title.find('`') {
+        if let Some(end) = title[start + 1..].find('`') {
+            let path = &title[start + 1..start + 1 + end];
+            let name = basename_or_tail(path);
+            let rest = &title[start + 1 + end + 1..];
+            return format!("{}`{name}`{rest}", &title[..start]);
+        }
+    }
+    if title.len() <= 72 {
+        return title.to_string();
+    }
+    format!("{}…", title.chars().take(71).collect::<String>())
+}
+
+fn tool_detail(update: &Value) -> String {
+    if let Some(c) = update.get("content") {
+        let text = tool_text_from_content(c);
+        if !text.is_empty() && !looks_json_blob(&text) {
+            return clip_tool_detail(&text);
+        }
+    }
+    let loc = path_from_raw(update.get("rawInput").unwrap_or(&Value::Null));
+    if !loc.is_empty() {
+        return loc;
+    }
+    String::new()
+}
+
+fn tool_text_from_content(content: &Value) -> String {
+    if let Some(s) = content.as_str() {
+        return s.trim().to_string();
+    }
+    let Some(arr) = content.as_array() else {
+        return String::new();
+    };
+    let mut out = String::new();
+    for p in arr {
+        let ty = p.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if ty == "diff" || ty == "image" {
+            continue;
+        }
+        if let Some(t) = p.get("text").and_then(|x| x.as_str()) {
+            push_tool_text(&mut out, t);
+        }
+        if let Some(inner) = p.get("content") {
+            if let Some(t) = inner.get("text").and_then(|x| x.as_str()) {
+                push_tool_text(&mut out, t);
+            } else if let Some(t) = inner.as_str() {
+                push_tool_text(&mut out, t);
+            }
+        }
+    }
+    out.trim().to_string()
+}
+
+fn push_tool_text(out: &mut String, t: &str) {
+    let t = t.trim();
+    if t.is_empty() || looks_json_blob(t) {
+        return;
+    }
+    if !out.is_empty() {
+        out.push(' ');
+    }
+    out.push_str(t);
+}
+
+fn clip_tool_detail(s: &str) -> String {
+    let line = s.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    if line.chars().count() <= 96 {
+        return line.to_string();
+    }
+    format!("{}…", line.chars().take(95).collect::<String>())
 }
 
 pub fn parse_session_update(params: &Value) -> Option<AcpEvent> {
@@ -466,6 +641,37 @@ mod tests {
             card.image_data_url.as_deref(),
             Some("data:image/jpeg;base64,AAAA")
         );
+    }
+
+    #[test]
+    fn tool_card_hides_raw_json() {
+        let pending = json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "t1",
+            "title": "Read `/home/viper/.grok/installed-plugins/superpowers/SKILL.md`",
+            "kind": "read",
+            "status": "pending",
+            "rawInput": { "target_file": "/home/viper/.grok/installed-plugins/superpowers/SKILL.md", "variant": "ReadFile" }
+        });
+        let card = parse_tool_card(&pending);
+        assert!(card.title.contains("SKILL.md"), "{}", card.title);
+        assert!(!card.title.contains("/home/viper"), "{}", card.title);
+        assert!(!card.detail.contains('{'), "raw JSON leaked: {}", card.detail);
+        assert!(!card.detail.contains("target_file"), "{}", card.detail);
+
+        let done = json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t1",
+            "status": "completed",
+            "rawOutput": { "content": { "absolute_root_path": "/home/viper" } },
+            "content": [{ "type": "content", "content": { "type": "text", "text": "# Skill\nUse this workflow." } }]
+        });
+        let next = parse_tool_card(&done);
+        let merged = merge_tool_card(card, next);
+        assert!(merged.title.contains("SKILL.md"), "{}", merged.title);
+        assert_eq!(merged.status, "completed");
+        assert!(!merged.detail.contains('{'), "{}", merged.detail);
+        assert!(merged.detail.to_ascii_lowercase().contains("skill"), "{}", merged.detail);
     }
 
     #[test]

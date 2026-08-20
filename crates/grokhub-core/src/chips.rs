@@ -1468,6 +1468,15 @@ fn is_stale_connect_chip(c: &QuickChip) -> bool {
         || (c.value == "__nav:settings" && c.label.to_ascii_lowercase().contains("connect"))
 }
 
+fn is_desk_takeover_chip(c: &QuickChip) -> bool {
+    let hay = format!("{} {} {}", c.id, c.label, c.value).to_ascii_lowercase();
+    hay.contains("take over")
+        || hay.contains("this desktop")
+        || hay.contains("turn host on")
+        || hay.contains("/host on")
+        || c.id == "ctx-host"
+}
+
 fn uniq_by_value(chips: Vec<QuickChip>) -> Vec<QuickChip> {
     let mut seen = std::collections::HashSet::new();
     let mut out = vec![];
@@ -1504,16 +1513,6 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             ChipKind::Nav,
             120.0,
             "You're not connected — this is the best next step",
-        ));
-    }
-    if !input.host_on {
-        chips.push(chip(
-            "ctx-host",
-            "Turn host on",
-            "/host on",
-            ChipKind::Chat,
-            110.0,
-            "Host tools need the desktop bridge",
         ));
     }
     chips.extend(draft_prediction_chips(input.draft));
@@ -1598,7 +1597,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         ));
     }
     chips.extend(stage_chips(stage, input.mode));
-    if ctx.host || input.host_on {
+    if ctx.host {
         chips.extend(host_chips());
     }
     if ctx.imagine {
@@ -1649,7 +1648,10 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
     chips.retain(|c| {
         let id = c.id.to_ascii_lowercase();
         let val = c.value.trim().to_ascii_lowercase();
-        !dismissed.contains(&id) && !dismissed.contains(&val) && is_plain_text(&c.value)
+        !dismissed.contains(&id)
+            && !dismissed.contains(&val)
+            && is_plain_text(&c.value)
+            && !is_desk_takeover_chip(c)
     });
     if input.grok_connected {
         chips.retain(|c| !is_stale_connect_chip(c));
@@ -2320,6 +2322,31 @@ mod tests {
             CHIP_VISIBLE_MAX,
             "after dismissing the first row {:?}",
             labels(&after)
+        );
+    }
+
+    #[test]
+    fn chips_drop_desk_takeover() {
+        let mem = ChipMemory::default();
+        let llm = [QuickChip {
+            id: "llm-desk".into(),
+            label: "Take over this desktop".into(),
+            value: "Take over this desktop and drive it.".into(),
+            kind: ChipKind::Chat,
+            score: 200.0,
+            hint: "Suggested".into(),
+            primary: true,
+        }];
+        let chips = build_quick_chips(input(&[], "", &mem, &[], &llm));
+        assert!(
+            chips.iter().all(|c| !c.label.to_ascii_lowercase().contains("take over")),
+            "desk takeover chips must not sit on the composer: {:?}",
+            labels(&chips)
+        );
+        assert!(
+            chips.iter().all(|c| c.id != "ctx-host"),
+            "Turn host on is gone: {:?}",
+            labels(&chips)
         );
     }
 

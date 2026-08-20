@@ -22,7 +22,7 @@ use crate::xai::{
     grok_tts, http_status_of,
 };
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
-use grokhub_acp::{AcpEvent, PermissionMode, SessionMode, ToolCard};
+use grokhub_acp::{merge_tool_card, AcpEvent, PermissionMode, SessionMode, ToolCard};
 use grokhub_core::{
     append_composer, anticipate_consumes_slot, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
     cabin_system_prompt,
@@ -596,11 +596,19 @@ fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, thought_op
     match block.kind {
         ChatKind::User => {
             let resp = paint_speech_bubble(ui, &block.body, true, false);
-            paint_msg_acts(ui, true, &block.body, avail, resp.rect.width())
+            if resp.hovered() {
+                paint_msg_acts(ui, true, &block.body, avail, resp.rect.width())
+            } else {
+                ChatBlockAct::None
+            }
         }
         ChatKind::Assistant => {
             let resp = paint_speech_bubble(ui, &block.body, false, true);
-            paint_msg_acts(ui, false, &block.body, avail, resp.rect.width())
+            if resp.hovered() {
+                paint_msg_acts(ui, false, &block.body, avail, resp.rect.width())
+            } else {
+                ChatBlockAct::None
+            }
         }
         ChatKind::Thought => {
             let open = thought_open;
@@ -616,7 +624,7 @@ fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, thought_op
                             .size(crate::theme::FONT_META)
                             .color(crate::theme::muted()),
                     );
-                    if open || !block.body.is_empty() {
+                    if open {
                         ui.add_space(4.0);
                         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                         ui.add(
@@ -5020,7 +5028,7 @@ impl Cabin {
                         }
                     }
                     if let Some(old) = self.tool_cards.iter_mut().find(|c| c.id == card.id) {
-                        *old = card;
+                        *old = merge_tool_card(old.clone(), card);
                     } else {
                         self.tool_cards.push(card);
                     }
@@ -7906,10 +7914,13 @@ impl Cabin {
                                 .monospace()
                                 .color(crate::theme::muted()),
                         );
-                    } else if !card.detail.is_empty() {
+                    } else if !card.detail.is_empty()
+                        && !card.detail.trim().starts_with('{')
+                        && !card.detail.trim().starts_with('[')
+                    {
                         ui.add_space(4.0);
                         ui.label(
-                            RichText::new(card.detail.chars().take(280).collect::<String>())
+                            RichText::new(card.detail.chars().take(120).collect::<String>())
                                 .size(12.0)
                                 .color(crate::theme::muted()),
                         );
@@ -8140,6 +8151,23 @@ impl Cabin {
                 |ui| {
                     ui.set_width(cap);
                     ui.set_max_width(cap);
+                    let session_now = self.session_mode.as_str().to_string();
+                    let perm_now = self.permission_mode.as_str().to_string();
+                    let row = crate::cards::session_row(ui, &session_now, &perm_now);
+                    if let Some(mode) = row.mode {
+                        if let Some(m) = SessionMode::parse(&mode) {
+                            self.session_mode = m;
+                            self.acp = None;
+                            self.status = format!("Session {}", m.as_str());
+                        }
+                    }
+                    if let Some(perm) = row.perm {
+                        if let Some(p) = PermissionMode::parse(&perm) {
+                            self.permission_mode = p;
+                            self.acp = None;
+                            self.status = format!("Permission {}", p.as_str());
+                        }
+                    }
             egui::Frame::none()
                 .fill(crate::theme::elevated())
                 .rounding(crate::theme::QUERY_RADIUS)
@@ -8190,7 +8218,7 @@ impl Cabin {
                                         .desired_width(text_w)
                                         .desired_rows(rows)
                                         .frame(false)
-                                        .hint_text("What do you want to know?")
+                                        .hint_text("Ask Grok")
                                         .return_key(Some(egui::KeyboardShortcut::new(
                                             egui::Modifiers::COMMAND,
                                             egui::Key::Enter,
@@ -8202,22 +8230,6 @@ impl Cabin {
                                     edit.has_focus(),
                                 ) {
                                     self.send_chat(t);
-                                }
-                                let session_now = self.session_mode.as_str().to_string();
-                                if let Some(mode) = crate::cards::mode_pill(ui, &session_now) {
-                                    if let Some(m) = SessionMode::parse(&mode) {
-                                        self.session_mode = m;
-                                        self.acp = None;
-                                        self.status = format!("Session {}", m.as_str());
-                                    }
-                                }
-                                let perm_now = self.permission_mode.as_str().to_string();
-                                if let Some(perm) = crate::cards::perm_pill(ui, &perm_now) {
-                                    if let Some(p) = PermissionMode::parse(&perm) {
-                                        self.permission_mode = p;
-                                        self.acp = None;
-                                        self.status = format!("Permission {}", p.as_str());
-                                    }
                                 }
                                 if crate::icons::paint_bar_icon(
                                     ui,

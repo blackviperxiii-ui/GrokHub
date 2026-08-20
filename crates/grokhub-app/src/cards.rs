@@ -301,9 +301,9 @@ pub fn imagine_send_cluster_w() -> f32 {
 /// Mode pill width inside the composer (replaces ComboBox `.width(84)`).
 pub const MODE_PILL_W: f32 = 84.0;
 
-/// Session + permission pills + mic + Send/Stop.
+/// Mic + Send/Stop. Session and permission sit above the bar.
 pub fn composer_go_cluster_w() -> f32 {
-    MODE_PILL_W * 2.0 + 22.0 + 28.0 + 8.0 * 4.0 + 64.0
+    22.0 + 28.0 + 8.0 * 3.0 + 12.0
 }
 
 /// Filled Send/Stop disc. Always reserve this, even when Idle is a 22px arrow.
@@ -833,6 +833,79 @@ pub fn perm_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
         permission_modes(),
         perm_label(current),
     )
+}
+
+pub struct SessionRowOut {
+    pub mode: Option<String>,
+    pub perm: Option<String>,
+}
+
+/// Chat / Plan / Ask and Ask / Auto / Always as a row above the composer.
+pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str) -> SessionRowOut {
+    let mut out = SessionRowOut {
+        mode: None,
+        perm: None,
+    };
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (id, label) in composer_modes() {
+            let on = *id == mode;
+            let hit = crate::theme::pointing(ui.add(
+                egui::Button::new(
+                    RichText::new(*label)
+                        .size(crate::theme::FONT_CHROME)
+                        .color(if on {
+                            crate::theme::fg()
+                        } else {
+                            crate::theme::muted()
+                        }),
+                )
+                .fill(if on {
+                    crate::theme::nav_active()
+                } else {
+                    Color32::TRANSPARENT
+                })
+                .rounding(14.0)
+                .min_size(egui::vec2(52.0, 28.0)),
+            ));
+            if hit.clicked() && !on {
+                out.mode = Some((*id).to_string());
+            }
+        }
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new("|")
+                .size(crate::theme::FONT_META)
+                .color(crate::theme::border()),
+        );
+        ui.add_space(6.0);
+        for (id, label) in permission_modes() {
+            let on = *id == perm;
+            let hit = crate::theme::pointing(ui.add(
+                egui::Button::new(
+                    RichText::new(*label)
+                        .size(crate::theme::FONT_CHROME)
+                        .color(if on {
+                            crate::theme::fg()
+                        } else {
+                            crate::theme::muted()
+                        }),
+                )
+                .fill(if on {
+                    crate::theme::nav_active()
+                } else {
+                    Color32::TRANSPARENT
+                })
+                .rounding(14.0)
+                .min_size(egui::vec2(52.0, 28.0)),
+            ));
+            if hit.clicked() && !on {
+                out.perm = Some((*id).to_string());
+            }
+        }
+    });
+    ui.add_space(8.0);
+    out
 }
 
 pub fn clip_status(text: &str, max_chars: usize) -> String {
@@ -1762,7 +1835,7 @@ mod tests {
         assert_eq!(MODE_PILL_W, 84.0);
         assert_eq!(
             composer_go_cluster_w(),
-            MODE_PILL_W * 2.0 + 22.0 + 28.0 + 8.0 * 4.0 + 64.0
+            22.0 + 28.0 + 8.0 * 3.0 + 12.0
         );
         assert_eq!(mode_label("plan"), "Plan");
         assert_eq!(mode_label("code"), "Chat");
@@ -1964,9 +2037,8 @@ mod tests {
             crate::theme::IMAGINE_HIT * 2.0 + 12.0
         );
         assert!(
-            composer_go_cluster_w()
-                >= 84.0 + 22.0 + 28.0 + 8.0 * 3.0 + 64.0,
-            "Fast combo + mic + Stop disc; 180px clipped Stop off a 900-wide cabin"
+            composer_go_cluster_w() >= 22.0 + 28.0,
+            "mic + Stop disc stay inside the bar after session pills moved above"
         );
         assert_eq!(
             composer_pill_w(900.0),
