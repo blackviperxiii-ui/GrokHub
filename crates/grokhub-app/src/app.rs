@@ -186,10 +186,54 @@ enum SettingsGroup {
 }
 
 enum PlusPick {
-    Native(Option<PathBuf>),
-    ClipImage(PathBuf),
-    ClipText(String),
+    NativeMiss,
     ClipEmpty,
+    ClipText(String),
+    Ready(PlusReady),
+    Err(String),
+}
+
+struct PlusReady {
+    kind: AttachKind,
+    name: String,
+    raw: String,
+    image_url: Option<String>,
+    text: Option<String>,
+}
+
+fn plus_from_path(target: PlusTarget, path: PathBuf) -> PlusPick {
+    let raw = path.display().to_string();
+    let kind = attach_kind(&raw);
+    let name = attach_name(&raw);
+    match kind {
+        AttachKind::Image if target == PlusTarget::Chat => match load_image_data_url(&path) {
+            Ok(url) => PlusPick::Ready(PlusReady {
+                kind,
+                name,
+                raw,
+                image_url: Some(url),
+                text: None,
+            }),
+            Err(e) => PlusPick::Err(e),
+        },
+        AttachKind::Text => match read_text_capped(&path) {
+            Ok(t) => PlusPick::Ready(PlusReady {
+                kind,
+                name,
+                raw,
+                image_url: None,
+                text: Some(t),
+            }),
+            Err(e) => PlusPick::Err(e),
+        },
+        _ => PlusPick::Ready(PlusReady {
+            kind,
+            name,
+            raw,
+            image_url: None,
+            text: None,
+        }),
+    }
 }
 
 fn settings_group_home(group: SettingsGroup) -> SettingsSec {
@@ -2029,7 +2073,11 @@ impl Cabin {
                 self.pick_rx = Some(rx);
                 self.status = "Choose a file…".into();
                 std::thread::spawn(move || {
-                    let _ = tx.send((target, PlusPick::Native(pick_file())));
+                    let out = match pick_file() {
+                        Some(p) => plus_from_path(target, p),
+                        None => PlusPick::NativeMiss,
+                    };
+                    let _ = tx.send((target, out));
                 });
             }
             PlusAct::Paste => {
@@ -2042,7 +2090,7 @@ impl Cabin {
                 self.status = "Reading clipboard…".into();
                 std::thread::spawn(move || {
                     let out = if let Some(p) = clipboard_image() {
-                        PlusPick::ClipImage(p)
+                        plus_from_path(target, p)
                     } else if let Some(t) = crate::desktop::clipboard_once() {
                         PlusPick::ClipText(t)
                     } else {
@@ -2059,10 +2107,10 @@ impl Cabin {
             return;
         };
         match rx.try_recv() {
-            Ok((target, PlusPick::Native(Some(p)))) | Ok((target, PlusPick::ClipImage(p))) => {
-                self.apply_path(target, &p);
+            Ok((target, PlusPick::Ready(ready))) => {
+                self.apply_plus_ready(target, ready);
             }
-            Ok((target, PlusPick::Native(None))) => {
+            Ok((target, PlusPick::NativeMiss)) => {
                 self.file_pick = Some(target);
                 if self.status == "Choose a file…" {
                     self.status.clear();
@@ -2074,11 +2122,17 @@ impl Cabin {
             Ok((_, PlusPick::ClipEmpty)) => {
                 self.status = plus_empty_status().into();
             }
+            Ok((_, PlusPick::Err(e))) => {
+                self.status = e;
+            }
             Err(mpsc::TryRecvError::Empty) => {
                 self.pick_rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                if self.status == "Choose a file…" || self.status == "Reading clipboard…" {
+                if self.status == "Choose a file…"
+                    || self.status == "Reading clipboard…"
+                    || self.status == "Reading file…"
+                {
                     self.status.clear();
                 }
             }
@@ -2098,53 +2152,60 @@ impl Cabin {
         }
     }
 
-    fn apply_path(&mut self, target: PlusTarget, path: &Path) {
-        let raw = path.display().to_string();
-        let kind = attach_kind(&raw);
-        let name = attach_name(&raw);
+    fn apply_plus_ready(&mut self, target: PlusTarget, ready: PlusReady) {
         match target {
-            PlusTarget::Chat => match kind {
-                AttachKind::Image => match load_image_data_url(path) {
-                    Ok(url) => {
+            PlusTarget::Chat => match ready.kind {
+                AttachKind::Image => {
+                    if let Some(url) = ready.image_url {
                         self.attach_url = Some(url);
-                        self.attach_name = Some(name.clone());
-                        self.status = chat_attach_status(kind, &name);
+                        self.attach_name = Some(ready.name.clone());
+                        self.status = chat_attach_status(ready.kind, &ready.name);
                     }
-                    Err(e) => self.status = e,
-                },
-                AttachKind::Text => match read_text_capped(path) {
-                    Ok(t) => {
+                }
+                AttachKind::Text => {
+                    if let Some(t) = ready.text {
                         self.composer = append_composer(&self.composer, &t);
-                        self.status = chat_attach_status(kind, &name);
+                        self.status = chat_attach_status(ready.kind, &ready.name);
                     }
-                    Err(e) => self.status = e,
-                },
+                }
                 AttachKind::Other => {
-                    self.composer = append_composer(&self.composer, &raw);
-                    self.status = chat_attach_status(kind, &name);
+                    self.composer = append_composer(&self.composer, &ready.raw);
+                    self.status = chat_attach_status(ready.kind, &ready.name);
                 }
             },
-            PlusTarget::Imagine => match kind {
+            PlusTarget::Imagine => match ready.kind {
                 AttachKind::Image => {
-                    self.imagine_ref = Some(name.clone());
-                    let hint = attach_prompt_line(kind, &name);
+                    self.imagine_ref = Some(ready.name.clone());
+                    let hint = attach_prompt_line(ready.kind, &ready.name);
                     self.imagine_prompt = append_composer(&self.imagine_prompt, &hint);
-                    self.status = imagine_ref_status(&name);
+                    self.status = imagine_ref_status(&ready.name);
                 }
-                AttachKind::Text => match read_text_capped(path) {
-                    Ok(t) => {
+                AttachKind::Text => {
+                    if let Some(t) = ready.text {
                         self.imagine_prompt = append_composer(&self.imagine_prompt, &t);
-                        self.status = chat_attach_status(kind, &name);
+                        self.status = chat_attach_status(ready.kind, &ready.name);
                     }
-                    Err(e) => self.status = e,
-                },
+                }
                 AttachKind::Other => {
-                    self.imagine_prompt = append_composer(&self.imagine_prompt, &raw);
-                    self.status = chat_attach_status(kind, &name);
+                    self.imagine_prompt = append_composer(&self.imagine_prompt, &ready.raw);
+                    self.status = chat_attach_status(ready.kind, &ready.name);
                 }
             },
         }
         self.file_pick = None;
+    }
+
+    fn start_plus_path(&mut self, target: PlusTarget, path: PathBuf) {
+        if self.pick_rx.is_some() {
+            self.status = "Reading file…".into();
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.pick_rx = Some(rx);
+        self.status = "Reading file…".into();
+        std::thread::spawn(move || {
+            let _ = tx.send((target, plus_from_path(target, path)));
+        });
     }
 
     fn clear_chat_attach(&mut self) {
@@ -2323,7 +2384,7 @@ impl Cabin {
                 }
             }
             if let Some(p) = picked {
-                self.apply_path(target, &p);
+                self.start_plus_path(target, p);
             } else if paste {
                 self.file_pick = None;
                 self.run_plus_act(target, PlusAct::Paste);
@@ -12091,9 +12152,10 @@ mod tests {
             .expect("Upload");
         let spawn = upload.find("thread::spawn").expect("picker worker");
         let pick = upload.find("pick_file()").expect("native picker");
+        let load = upload.find("plus_from_path").expect("decode off-thread");
         assert!(
-            spawn < pick && upload.contains("pick_rx") && !upload.contains("apply_path"),
-            "zenity/kdialog must not freeze the cabin on plus-upload: {upload}"
+            spawn < pick && pick < load && upload.contains("pick_rx") && !upload.contains("apply_path"),
+            "zenity/kdialog and JPEG decode must not freeze the cabin on plus-upload: {upload}"
         );
         let paste = src
             .split("PlusAct::Paste =>")
@@ -12103,8 +12165,11 @@ mod tests {
         let paste_spawn = paste.find("thread::spawn").expect("clipboard worker");
         let clip = paste.find("clipboard_image()").expect("clipboard image");
         assert!(
-            paste_spawn < clip && paste.contains("clipboard_once") && !paste.contains("apply_path"),
-            "xclip/wl-paste must not freeze the cabin on plus-paste: {paste}"
+            paste_spawn < clip
+                && paste.contains("clipboard_once")
+                && paste.contains("plus_from_path")
+                && !paste.contains("apply_path"),
+            "xclip/wl-paste and JPEG decode must not freeze the cabin on plus-paste: {paste}"
         );
         let poll = src
             .split("fn poll_pick(")
@@ -12112,12 +12177,18 @@ mod tests {
             .and_then(|s| s.split("fn apply_clipboard(").next())
             .expect("poll_pick");
         assert!(
-            poll.contains("apply_path") && poll.contains("file_pick"),
+            poll.contains("apply_plus_ready")
+                && poll.contains("file_pick")
+                && !poll.contains("load_image_data_url"),
             "plus-upload worker must land the still or fall back to the in-app picker: {poll}"
         );
         assert!(
             src.contains("self.poll_pick()"),
             "plus-upload worker must be polled each frame"
+        );
+        assert!(
+            overlay.contains("start_plus_path") && !overlay.contains("apply_path"),
+            "in-app Upload clicks must decode off the UI thread: {overlay}"
         );
     }
 
