@@ -7556,8 +7556,14 @@ impl Cabin {
         };
         if self.policy().learns() {
             extract_insights(&mut self.learning, &facts);
+            let learning = self.learning.clone();
+            let io = self.persist_io.clone();
+            std::thread::spawn(move || {
+                if let Ok(_g) = io.lock() {
+                    let _ = crate::store::save_learning(&learning);
+                }
+            });
         }
-        self.persist();
         let name = self.mem_name.clone();
         let body = self.mem_body.clone();
         std::thread::spawn(move || {
@@ -14025,10 +14031,12 @@ mod tests {
             "idle reflect must not freeze the cabin slurping MEMORY.md: {reflect}"
         );
         let insights = reflect.find("extract_insights").expect("reflect insights");
-        let saved = reflect[insights..].find("self.persist()").expect("reflect persist");
         assert!(
-            saved > 0,
-            "/learn reflect must persist insights or a restart drops them: {reflect}"
+            reflect[insights..].contains("save_learning")
+                && reflect[insights..].contains("persist_io")
+                && !reflect[insights..].contains("persist_snap")
+                && !reflect[insights..].contains("self.persist()"),
+            "/learn reflect must persist insights without cloning every thread: {reflect}"
         );
         let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
         assert!(
