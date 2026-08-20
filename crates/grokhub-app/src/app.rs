@@ -1075,6 +1075,7 @@ pub struct Cabin {
     grok_sessions_loaded: bool,
     grok_sessions_rx: Option<mpsc::Receiver<Vec<grokhub_acp::GrokSession>>>,
     inspect_rx: Option<mpsc::Receiver<String>>,
+    history_rx: Option<mpsc::Receiver<Vec<String>>>,
     session_show_rx: Option<(String, mpsc::Receiver<String>)>,
     import_rx: Option<mpsc::Receiver<ImportOpenclawOut>>,
     inspect_text: String,
@@ -1432,6 +1433,7 @@ impl Cabin {
             grok_sessions_loaded: false,
             grok_sessions_rx: None,
             inspect_rx: None,
+            history_rx: None,
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -1879,6 +1881,22 @@ impl Cabin {
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.inspect_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    fn poll_history_search(&mut self) {
+        let Some(rx) = self.history_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(hits) => {
+                self.history_hits = hits;
+                self.status = format!("{} hits", self.history_hits.len());
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.history_rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {}
         }
@@ -7953,6 +7971,7 @@ impl eframe::App for Cabin {
         self.poll_persist();
         self.poll_grok_sessions();
         self.poll_inspect();
+        self.poll_history_search();
         self.poll_session_show();
         self.poll_import_openclaw();
         self.poll_acp_spawn();
@@ -8057,6 +8076,7 @@ impl eframe::App for Cabin {
                 || self.grok_sessions_rx.is_some()
                 || self.persist_rx.is_some()
                 || self.inspect_rx.is_some()
+                || self.history_rx.is_some()
                 || self.session_show_rx.is_some()
                 || self.import_rx.is_some()
                 || self.acp_spawn_rx.is_some()
@@ -10328,6 +10348,9 @@ impl Cabin {
             ui.horizontal(|ui| {
                 crate::cards::search_bar(ui, &mut self.history_q, "Search chats and memory", 320.0);
                 if crate::cards::white_pill(ui, "Search") {
+                    if self.history_rx.is_some() {
+                        self.status = "Searching…".into();
+                    } else {
                     if !self.scratch() {
                         let name = self.mem_name.clone();
                         let body = self.mem_body.clone();
@@ -10344,38 +10367,42 @@ impl Cabin {
                             .map(|m| (m.role.clone(), m.content.clone()))
                             .collect();
                     }
-                    let mut rows: Vec<(String, String)> = vec![
-                        (
-                            "SOUL.md".into(),
-                            if self.mem_name == "SOUL.md" {
-                                self.mem_body.clone()
-                            } else {
-                                config::read_memory("SOUL.md")
-                            },
-                        ),
-                        (
-                            "USER.md".into(),
-                            if self.mem_name == "USER.md" {
-                                self.mem_body.clone()
-                            } else {
-                                config::read_memory("USER.md")
-                            },
-                        ),
-                        (
-                            "MEMORY.md".into(),
-                            if self.mem_name == "MEMORY.md" {
-                                self.mem_body.clone()
-                            } else {
-                                config::read_memory("MEMORY.md")
-                            },
-                        ),
-                    ];
+                    let q = self.history_q.clone();
+                    let mem_name = self.mem_name.clone();
+                    let mem_body = self.mem_body.clone();
+                    let mut thread_rows = Vec::new();
                     for t in &self.threads {
                         let body = search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()));
-                        rows.push((t.title.clone(), body));
+                        thread_rows.push((t.title.clone(), body));
                     }
-                    self.history_hits = search_corpus(&self.history_q, &rows);
-                    self.status = format!("{} hits", self.history_hits.len());
+                    let (tx, rx) = mpsc::channel();
+                    self.history_rx = Some(rx);
+                    self.status = "Searching…".into();
+                    std::thread::spawn(move || {
+                        let soul = if mem_name == "SOUL.md" {
+                            mem_body.clone()
+                        } else {
+                            config::read_memory("SOUL.md")
+                        };
+                        let user = if mem_name == "USER.md" {
+                            mem_body.clone()
+                        } else {
+                            config::read_memory("USER.md")
+                        };
+                        let memory = if mem_name == "MEMORY.md" {
+                            mem_body.clone()
+                        } else {
+                            config::read_memory("MEMORY.md")
+                        };
+                        let mut rows = vec![
+                            ("SOUL.md".into(), soul),
+                            ("USER.md".into(), user),
+                            ("MEMORY.md".into(), memory),
+                        ];
+                        rows.extend(thread_rows);
+                        let _ = tx.send(search_corpus(&q, &rows));
+                    });
+                    }
                 }
             });
             if self.history_hits.is_empty() && !self.history_q.is_empty() {
@@ -12125,6 +12152,7 @@ mod tests {
             live.contains("grok_sessions_rx")
                 && live.contains("persist_rx")
                 && live.contains("inspect_rx")
+                && live.contains("history_rx")
                 && live.contains("session_show_rx")
                 && live.contains("import_rx")
                 && live.contains("acp_spawn_rx")
@@ -15056,6 +15084,11 @@ mod tests {
         assert!(
             search.contains("thread_idx") && search.contains("get_mut"),
             "History Search must include the live pane, not only persisted thread copies: {search}"
+        );
+        let soul = search.find("read_memory(\"SOUL.md\")").expect("history soul");
+        assert!(
+            search[..soul].contains("thread::spawn") && search.contains("history_rx"),
+            "History Search must slurp SOUL/USER/MEMORY off the UI thread: {search}"
         );
         let night = src
             .split("fn ui_night(")
