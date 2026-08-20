@@ -82,12 +82,23 @@ pub fn explain_handshake_error(raw: &str, cwd: &Path) -> String {
 /// Create `path` and probe a write so session/new does not start on a missing or read-only tree.
 pub fn ensure_session_cwd(path: &Path) -> Result<PathBuf, String> {
     if let Ok(held) = cwd_probe_cache().lock() {
-        if let Some((p, at)) = held.as_ref() {
-            if p == path && at.elapsed() < Duration::from_secs(5) {
-                return Ok(path.to_path_buf());
+        if let Some((p, at, inflight)) = held.as_ref() {
+            if p == path {
+                let hit = path.to_path_buf();
+                let fresh = at.elapsed() < Duration::from_secs(5);
+                let busy = *inflight;
+                drop(held);
+                if !fresh && !busy {
+                    kick_session_cwd(path.to_path_buf());
+                }
+                return Ok(hit);
             }
         }
     }
+    ensure_session_cwd_now(path)
+}
+
+fn ensure_session_cwd_now(path: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(path)
         .map_err(|e| format!("ACP cwd {}: {e}", path.display()))?;
     let probe = path.join(".grokhub-cwd-ok");
@@ -95,19 +106,42 @@ pub fn ensure_session_cwd(path: &Path) -> Result<PathBuf, String> {
         Ok(()) => {
             let _ = std::fs::remove_file(&probe);
             if let Ok(mut held) = cwd_probe_cache().lock() {
-                *held = Some((path.to_path_buf(), Instant::now()));
+                *held = Some((path.to_path_buf(), Instant::now(), false));
             }
             Ok(path.to_path_buf())
         }
         Err(e) => {
             let _ = std::fs::remove_file(&probe);
+            if let Ok(mut held) = cwd_probe_cache().lock() {
+                if let Some(slot) = held.as_mut() {
+                    if slot.0 == path {
+                        slot.2 = false;
+                    }
+                }
+            }
             Err(format!("ACP cwd {}: {e}", path.display()))
         }
     }
 }
 
-fn cwd_probe_cache() -> &'static Mutex<Option<(PathBuf, Instant)>> {
-    static C: OnceLock<Mutex<Option<(PathBuf, Instant)>>> = OnceLock::new();
+fn kick_session_cwd(path: PathBuf) {
+    if let Ok(mut held) = cwd_probe_cache().lock() {
+        if let Some(slot) = held.as_mut() {
+            if slot.0 == path {
+                if slot.2 {
+                    return;
+                }
+                slot.2 = true;
+            }
+        }
+    }
+    thread::spawn(move || {
+        let _ = ensure_session_cwd_now(&path);
+    });
+}
+
+fn cwd_probe_cache() -> &'static Mutex<Option<(PathBuf, Instant, bool)>> {
+    static C: OnceLock<Mutex<Option<(PathBuf, Instant, bool)>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(None))
 }
 
@@ -1282,6 +1316,10 @@ mod tests {
         assert!(
             probe.contains("cwd_probe_cache") && probe.contains("from_secs(5)"),
             "ACP cwd probe must not write .grokhub-cwd-ok on every send: {probe}"
+        );
+        assert!(
+            probe.contains("thread::spawn") && probe.contains("inflight"),
+            "stale ACP cwd probe must refresh off the caller: {probe}"
         );
     }
 
