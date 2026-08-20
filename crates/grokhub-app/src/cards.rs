@@ -924,9 +924,9 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                 };
                 let ir = egui::Frame::none()
                     .fill(fill)
-                    .rounding(14.0)
+                    .rounding(18.0)
                     .stroke(Stroke::new(1.0_f32, stroke))
-                    .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+                    .inner_margin(egui::Margin::symmetric(12.0, 6.0))
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
                         ui.horizontal(|ui| {

@@ -628,7 +628,7 @@ fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, thought_op
                 .show(ui, |ui| {
                     ui.set_max_width(bubble_w);
                     let title = if block.title.is_empty() {
-                        "Hands"
+                        "Tool"
                     } else {
                         block.title.as_str()
                     };
@@ -7958,30 +7958,29 @@ impl Cabin {
         let greet_on = should_paint_greeting(self.messages.is_empty(), self.scratch())
             && !self.greeting.is_empty();
         let greet_h = if greet_on {
-            crate::theme::GREETING_SIZE + 28.0
+            crate::theme::FONT_HEADING + 48.0
         } else {
             28.0
         };
-        let block = crate::theme::WORDMARK + greet_h + crate::theme::QUERY_MIN_H;
-        let lift = ((ui.available_height() - block) * 0.5).clamp(24.0, 320.0);
+        let block = crate::theme::FONT_HEADING + greet_h + crate::theme::QUERY_MIN_H;
+        let lift = ((ui.available_height() - block) * 0.5).clamp(24.0, 280.0);
         ui.add_space(lift);
         let pane_w = crate::cards::composer_pill_w(ui.ctx().screen_rect().width());
         ui.vertical_centered_justified(|ui| {
             ui.set_max_width(pane_w);
-            ui.label(
-                RichText::new("GrokHub")
-                    .font(crate::theme::title_font(crate::theme::WORDMARK))
-                    .color(crate::theme::fg()),
-            );
             if greet_on {
-                ui.add_space(10.0);
                 ui.label(
                     RichText::new(&self.greeting)
-                        .size(crate::theme::GREETING_SIZE)
-                        .italics()
+                        .size(crate::theme::FONT_HEADING)
                         .color(crate::theme::whisper()),
                 );
-                ui.add_space(18.0);
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("Native Grok Build cabin")
+                        .size(crate::theme::FONT_META)
+                        .color(crate::theme::subtle()),
+                );
+                ui.add_space(28.0);
             } else {
                 ui.add_space(28.0);
             }
@@ -12208,24 +12207,32 @@ mod tests {
     fn empty_home_paints_faint_greeting() {
         let src = include_str!("app.rs");
         let home = src.find("fn ui_empty_home").expect("empty home");
-        let slice = &src[home..home + 1600];
+        let slice = &src[home..home + 1800];
         assert!(
             slice.contains("self.greeting"),
             "new chats paint a greeting blurb: {slice}"
         );
-        let mark = slice.find("GrokHub").expect("wordmark");
-        let greet = slice[mark..]
-            .find("self.greeting")
-            .map(|i| mark + i)
-            .expect("greeting under wordmark");
+        assert!(
+            slice.contains("FONT_HEADING"),
+            "greeting is the empty-home heading, not a 56px wordmark: {slice}"
+        );
+        assert!(
+            !slice.contains("italics"),
+            "greeting is regular weight: {slice}"
+        );
+        let greet = slice.find("self.greeting").expect("greeting");
         let composer = slice.find("ui_composer_stack").expect("composer");
         assert!(
-            mark < greet && greet < composer,
-            "greeting sits under the wordmark, above the chat box"
+            greet < composer,
+            "greeting sits above the chat box"
         );
         assert!(
             slice.contains("whisper"),
             "greeting uses the faint paint color"
+        );
+        assert!(
+            slice.contains("Native Grok Build cabin"),
+            "quiet product line under the greeting"
         );
     }
 
@@ -12475,10 +12482,10 @@ mod tests {
         let home = src.find("fn ui_empty_home").expect("empty home");
         let home = &src[home..home + 1400];
         let cap = home.find("composer_pill_w").expect("pane cap");
-        let mark = home.find("GrokHub").expect("wordmark");
+        let after = &home[cap..];
         assert!(
-            cap < mark,
-            "cap pane width before the wordmark shrink-wraps the column"
+            after.contains("self.greeting"),
+            "greeting paints inside the capped column"
         );
         assert!(
             home.contains("vertical_centered_justified"),
