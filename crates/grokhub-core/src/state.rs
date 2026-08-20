@@ -300,6 +300,11 @@ impl HubState {
         }
     }
 
+    /// JPEG already parsed off the hub lock — just the Arc bump.
+    pub fn install_frame(&mut self, frame: PresenceFrame) {
+        self.last_frame = Some(Arc::new(frame));
+    }
+
     pub fn put_snapshot(&mut self, snap: Value) -> Result<(), String> {
         let merged = merge_put_snapshot(self.snapshot.as_deref(), snap)?;
         self.snapshot = Some(Arc::new(merged));
@@ -555,6 +560,15 @@ mod tests {
         assert!(
             merge.contains("from_value") && merge.contains("merge_hub_snapshots"),
             "PUT merge must LWW peer threads off the hub lock: {merge}"
+        );
+        let install = src
+            .split("pub fn install_frame")
+            .nth(1)
+            .and_then(|s| s.split("pub fn put_snapshot").next())
+            .expect("install_frame");
+        assert!(
+            install.contains("Arc::new") && !install.contains("store_frame("),
+            "install_frame must not re-decode the JPEG under hub.lock(): {install}"
         );
     }
 
