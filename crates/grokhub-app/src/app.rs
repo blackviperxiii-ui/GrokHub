@@ -5274,7 +5274,7 @@ impl Cabin {
         if daily_units_blocked(self.usage.automation, self.cfg.daily_auto_cap) {
             return;
         }
-        if !anticipate_consumes_slot(self.llm_ready()) {
+        if !anticipate_consumes_slot(self.can_agent()) {
             return;
         }
         self.last_anticipate_ms = now_ms();
@@ -5380,6 +5380,11 @@ impl Cabin {
         let replay = replay_automation_target(&a.instructions).map(|id| self.replay_saved_recipe(id));
         if !night_counts_run(replay) {
             self.mark_auto_skipped(&a.id, now_ms);
+            return;
+        }
+        if replay.is_none() && !self.can_agent() {
+            self.mark_auto_skipped(&a.id, now_ms);
+            self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
             return;
         }
         self.mark_auto_ran(&a.id, now_ms);
@@ -8033,7 +8038,7 @@ impl Cabin {
         if !self.hub_on
             || self.running
             || self.pending_hub_task.is_some()
-            || !inbox_claim_ready(self.llm_ready())
+            || !inbox_claim_ready(self.can_agent())
         {
             return;
         }
@@ -13825,6 +13830,10 @@ mod tests {
             "a claimed phone task must not land on Scratch: {inbox}"
         );
         assert!(
+            inbox.contains("self.can_agent()") && !inbox.contains("self.llm_ready()"),
+            "OAuth-only must not claim a phone task — send_chat needs Grok Build: {inbox}"
+        );
+        assert!(
             src.contains("night_counts_run"),
             "a night replay that did not start must not consume the slot"
         );
@@ -13852,6 +13861,11 @@ mod tests {
         assert!(
             fire_night.contains("land_on_real_chat"),
             "a night chat job must not land on Scratch: {fire_night}"
+        );
+        let agent = fire_night.find("self.can_agent()").expect("night chat needs Grok Build");
+        assert!(
+            agent < bump && fire_night.contains("replay.is_none()"),
+            "OAuth-only must not burn a night chat slot — send_chat needs Grok Build: {fire_night}"
         );
         let night_check = src
             .split("fn poll_night_check")
@@ -14648,6 +14662,10 @@ mod tests {
         assert!(
             anticipate.contains("scratch()"),
             "anticipate must not burn a slot on Scratch: {anticipate}"
+        );
+        assert!(
+            anticipate.contains("self.can_agent()") && !anticipate.contains("self.llm_ready()"),
+            "OAuth-only must not burn an anticipate slot — send_chat needs Grok Build: {anticipate}"
         );
         let start_hub = src
             .split("fn start_hub")
