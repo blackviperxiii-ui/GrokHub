@@ -2602,10 +2602,14 @@ impl Cabin {
         if !self.projects_dirty {
             return;
         }
-        match crate::store::save_projects(&self.projects) {
-            Ok(()) => self.projects_dirty = false,
-            Err(e) => self.status = format!("Projects not saved: {e}"),
-        }
+        self.projects_dirty = false;
+        let nodes = self.projects.clone();
+        let io = self.persist_io.clone();
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                let _ = crate::store::save_projects(&nodes);
+            }
+        });
     }
 
     fn bind_project_id(&mut self, id: &str) {
@@ -4279,6 +4283,15 @@ impl Cabin {
             .unwrap_or_default()
     }
 
+    fn remember_skill(&mut self, skill: SkillMd) {
+        if let Some(existing) = self.skill_list.iter_mut().find(|s| s.name == skill.name) {
+            *existing = skill;
+        } else {
+            self.skill_list.push(skill);
+            self.skill_list.sort_by(|a, b| a.name.cmp(&b.name));
+        }
+    }
+
     fn commit_proposed_skill(&mut self, proposed: SkillMd) {
         let to_save = if let Some(name) = prefer_patch(&self.skill_list, &proposed) {
             if let Some(existing) = self.skill_list.iter().find(|s| s.name == name) {
@@ -4293,12 +4306,7 @@ impl Cabin {
         std::thread::spawn(move || {
             let _ = skills::save_skill(&written);
         });
-        if let Some(existing) = self.skill_list.iter_mut().find(|s| s.name == to_save.name) {
-            *existing = to_save.clone();
-        } else {
-            self.skill_list.push(to_save.clone());
-            self.skill_list.sort_by(|a, b| a.name.cmp(&b.name));
-        }
+        self.remember_skill(to_save.clone());
         self.skill_name = to_save.name.clone();
         self.skill_body = grokhub_core::render_skill_md(&to_save);
         self.status = format!("Wrote skill {}", to_save.name);
@@ -4498,7 +4506,10 @@ impl Cabin {
         );
         self.rewind_rows = keep_last_rewinds(&self.rewind_rows, 5);
         self.last_rewind_id = Some(id);
-        let _ = crate::night::save_rewinds(&self.rewind_rows);
+        let rows = self.rewind_rows.clone();
+        std::thread::spawn(move || {
+            let _ = crate::night::save_rewinds(&rows);
+        });
         Some(cmd)
     }
 
@@ -7055,7 +7066,7 @@ impl Cabin {
         };
         self.cfg.source_dir = src.display().to_string();
         remember_source(&src);
-        let _ = config::save(&self.cfg);
+        self.persist();
         match update_cmds(&src) {
             Ok(cmds) if !update_wipes_config(&cmds) => {
                 self.start_overlay_update(cmds);
@@ -10053,7 +10064,10 @@ impl Cabin {
         if let Some(mut a) = parse_nl_automation(seed) {
             a.id = uid("auto");
             self.automations.push(a);
-            let _ = crate::night::save(&self.automations);
+            let list = self.automations.clone();
+            std::thread::spawn(move || {
+                let _ = crate::night::save(&list);
+            });
             self.status = "Automation added".into();
         } else {
             self.status = "Need “every weekday at 9…” or “heartbeat every 15 min…”".into();
@@ -10130,7 +10144,10 @@ impl Cabin {
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 if ui.checkbox(&mut self.automations[i].enabled, "").changed() {
-                                    let _ = crate::night::save(&self.automations);
+                                    let list = self.automations.clone();
+                                    std::thread::spawn(move || {
+                                        let _ = crate::night::save(&list);
+                                    });
                                 }
                                 ui.vertical(|ui| {
                                     ui.label(
@@ -10181,7 +10198,10 @@ impl Cabin {
             if let Some(i) = drop {
                 if i < self.automations.len() {
                     self.automations.remove(i);
-                    let _ = crate::night::save(&self.automations);
+                    let list = self.automations.clone();
+                    std::thread::spawn(move || {
+                        let _ = crate::night::save(&list);
+                    });
                 } else {
                     let idx = usize::MAX - i;
                     if let Some(a) = self.automations.get(idx) {
@@ -10985,18 +11005,22 @@ impl Cabin {
                 self.skills_tab_connectors = false;
                 if !self.skill_body.is_empty() {
                     let parsed = grokhub_core::parse_skill_md(&self.skill_body);
-                    if skills::save_skill(&parsed).is_ok() {
-                        self.skill_list = skills::list_skills();
-                    }
+                    let written = parsed.clone();
+                    std::thread::spawn(move || {
+                        let _ = skills::save_skill(&written);
+                    });
+                    self.remember_skill(parsed);
                 }
                 let existing: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
                 let stub = crate::cards::starter_skill(&next_starter_skill_name(&existing));
-                if skills::save_skill(&stub).is_ok() {
-                    self.skill_list = skills::list_skills();
-                    self.skill_name = stub.name.clone();
-                    self.skill_body = grokhub_core::render_skill_md(&stub);
-                    self.status = format!("Wrote skill {}", stub.name);
-                }
+                let written = stub.clone();
+                std::thread::spawn(move || {
+                    let _ = skills::save_skill(&written);
+                });
+                self.remember_skill(stub.clone());
+                self.skill_name = stub.name.clone();
+                self.skill_body = grokhub_core::render_skill_md(&stub);
+                self.status = format!("Wrote skill {}", stub.name);
             }
             if !self.verify_chip.is_empty() {
                 ui.label(RichText::new(&self.verify_chip).strong());
@@ -11094,17 +11118,21 @@ impl Cabin {
                 ) {
                     if !self.skill_body.is_empty() {
                         let parsed = grokhub_core::parse_skill_md(&self.skill_body);
-                        if skills::save_skill(&parsed).is_ok() {
-                            self.skill_list = skills::list_skills();
-                        }
+                        let written = parsed.clone();
+                        std::thread::spawn(move || {
+                            let _ = skills::save_skill(&written);
+                        });
+                        self.remember_skill(parsed);
                     }
                     let sk = crate::cards::skill_from_learned(s);
-                    if skills::save_skill(&sk).is_ok() {
-                        self.skill_list = skills::list_skills();
-                        self.skill_name = sk.name.clone();
-                        self.skill_body = grokhub_core::render_skill_md(&sk);
-                        self.status = format!("Wrote skill {}", sk.name);
-                    }
+                    let written = sk.clone();
+                    std::thread::spawn(move || {
+                        let _ = skills::save_skill(&written);
+                    });
+                    self.remember_skill(sk.clone());
+                    self.skill_name = sk.name.clone();
+                    self.skill_body = grokhub_core::render_skill_md(&sk);
+                    self.status = format!("Wrote skill {}", sk.name);
                 }
             });
             ui.add_space(20.0);
@@ -11143,9 +11171,11 @@ impl Cabin {
                 if let Some(name) = pick {
                     if name != self.skill_name && !self.skill_body.is_empty() {
                         let parsed = grokhub_core::parse_skill_md(&self.skill_body);
-                        if skills::save_skill(&parsed).is_ok() {
-                            self.skill_list = skills::list_skills();
-                        }
+                        let written = parsed.clone();
+                        std::thread::spawn(move || {
+                            let _ = skills::save_skill(&written);
+                        });
+                        self.remember_skill(parsed);
                     }
                     if let Some(s) = self.skill_list.iter().find(|s| s.name == name).cloned() {
                         self.skill_name = s.name.clone();
@@ -11172,20 +11202,21 @@ impl Cabin {
                 ui.horizontal(|ui| {
                     if crate::cards::white_pill(ui, "Save SKILL.md") {
                         let parsed = grokhub_core::parse_skill_md(&self.skill_body);
-                        match skills::save_skill(&parsed) {
-                            Ok(p) => {
-                                self.skill_list = skills::list_skills();
-                                self.status = format!("Wrote {}", p.display());
-                            }
-                            Err(e) => self.status = e,
-                        }
+                        let written = parsed.clone();
+                        std::thread::spawn(move || {
+                            let _ = skills::save_skill(&written);
+                        });
+                        self.remember_skill(parsed.clone());
+                        self.status = format!("Wrote skill {}", parsed.name);
                     }
                     if crate::cards::ghost_pill(ui, "Use in chat") && !self.skill_name.is_empty() {
                         if !self.skill_body.is_empty() {
                             let parsed = grokhub_core::parse_skill_md(&self.skill_body);
-                            if skills::save_skill(&parsed).is_ok() {
-                                self.skill_list = skills::list_skills();
-                            }
+                            let written = parsed.clone();
+                            std::thread::spawn(move || {
+                                let _ = skills::save_skill(&written);
+                            });
+                            self.remember_skill(parsed);
                         }
                         let name = self.skill_name.clone();
                         let slash = self
@@ -11205,9 +11236,11 @@ impl Cabin {
                     if crate::cards::ghost_pill(ui, "Run verify") && !self.skill_name.is_empty() {
                         if !self.skill_body.is_empty() {
                             let parsed = grokhub_core::parse_skill_md(&self.skill_body);
-                            if skills::save_skill(&parsed).is_ok() {
-                                self.skill_list = skills::list_skills();
-                            }
+                            let written = parsed.clone();
+                            std::thread::spawn(move || {
+                                let _ = skills::save_skill(&written);
+                            });
+                            self.remember_skill(parsed);
                         }
                         self.run_skill_verify();
                         if self.verify_ok_turn {
@@ -13099,6 +13132,26 @@ mod tests {
             fail.contains("accessed_ms") || fail.contains("stamp_current_access"),
             "a job error on the origin thread must bump accessed_ms or /sync LWW can drop it: {fail}"
         );
+        let queued = src
+            .split("fn queue_update(")
+            .nth(1)
+            .and_then(|s| s.split("fn restart_after_update").next())
+            .expect("queue_update");
+        assert!(
+            queued.contains("self.persist()") && !queued.contains("config::save"),
+            "Update must not freeze the cabin writing app.json: {queued}"
+        );
+        let flush_p = src
+            .split("fn flush_projects(")
+            .nth(1)
+            .and_then(|s| s.split("fn bind_project_id").next())
+            .expect("flush_projects");
+        let flush_spawn = flush_p.find("thread::spawn").expect("folder click must leave the UI thread");
+        let flush_save = flush_p.find("save_projects").expect("save_projects");
+        assert!(
+            flush_spawn < flush_save && flush_p.contains("persist_io"),
+            "folder click must not freeze the cabin writing projects.json: {flush_p}"
+        );
         let renamed = src
             .split("fn rename_thread")
             .nth(1)
@@ -13523,6 +13576,12 @@ mod tests {
         assert!(
             new_skill[..stub].contains("skill_body") && new_skill[..stub].contains("save_skill"),
             "New Skill must flush the leaving editor before the stub: {new_skill}"
+        );
+        let new_spawn = new_skill.find("thread::spawn").expect("new skill write must leave the UI thread");
+        let new_save = new_skill.find("save_skill").expect("new skill save");
+        assert!(
+            new_spawn < new_save && !skills_ui.contains("list_skills"),
+            "Skills tab must not freeze the cabin writing SKILL.md or rescanning skills/: {new_skill}"
         );
         let skill_slash = src
             .split("Slash::Skill(name)")
@@ -14280,6 +14339,12 @@ mod tests {
             snap.contains("expand_home"),
             "snapshot must expand ~ before quoting the bound tree: {snap}"
         );
+        let snap_spawn = snap.find("thread::spawn").expect("rewind index must leave the UI thread");
+        let snap_write = snap.find("save_rewinds").expect("save_rewinds");
+        assert!(
+            snap_spawn < snap_write,
+            "snapshot must not freeze the cabin writing rewind.json: {snap}"
+        );
         assert!(
             src.contains("is_rewind_copy_cmd"),
             "host jobs must prepend a snapshot instead of nesting run_cmds"
@@ -14849,6 +14914,21 @@ mod tests {
         assert!(
             enable.contains(".changed()") && enable.contains("night::save"),
             "toggling an automation must persist enabled before restart: {enable}"
+        );
+        assert!(
+            enable.contains("thread::spawn"),
+            "toggling an automation must persist off the UI thread: {enable}"
+        );
+        let added = src
+            .split("fn add_automation_seed(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_night(").next())
+            .expect("add_automation_seed");
+        let added_spawn = added.find("thread::spawn").expect("night add must leave the UI thread");
+        let added_save = added.find("night::save").expect("night::save");
+        assert!(
+            added_spawn < added_save,
+            "Add automation must not freeze the cabin writing automations.json: {added}"
         );
         assert!(
             night.contains("land_on_real_chat"),
