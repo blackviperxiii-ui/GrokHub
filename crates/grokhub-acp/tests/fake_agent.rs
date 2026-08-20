@@ -185,3 +185,29 @@ fn session_load_swallows_replay_and_keeps_id() {
         "load replay must not paint as a live turn: {text}"
     );
 }
+
+#[test]
+fn session_load_permission_before_result_does_not_hang() {
+    let mut opts = fake_opts();
+    opts.resume = Some("sess-abc-load".into());
+    opts.handshake_timeout = Some(Duration::from_secs(3));
+    opts.extra_env = vec![("FAKE_ACP_LOAD_PERM_FIRST".into(), "1".into())];
+    let t = Instant::now();
+    let h = connect(opts).expect("session/load with early permission");
+    assert!(
+        t.elapsed() < Duration::from_secs(2),
+        "handshake must skip load-replay permission, not wait out the timeout: {:?}",
+        t.elapsed()
+    );
+    assert_eq!(h.session_id, "sess-abc-load");
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(250) {
+        match h.try_recv() {
+            Ok(AcpEvent::Permission(_)) => {
+                panic!("early load-replay permission must not paint as a live ask")
+            }
+            Ok(_) => {}
+            Err(_) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+}

@@ -80,6 +80,17 @@ fn main() {
                     .and_then(|v| v.as_str())
                     .unwrap_or("sess-test")
                     .to_string();
+                if std::env::var("FAKE_ACP_LOAD_PERM_FIRST").ok().as_deref() == Some("1") {
+                    write_json(&json!({
+                        "jsonrpc": "2.0",
+                        "id": 9001,
+                        "method": "session/request_permission",
+                        "params": {
+                            "sessionId": sid,
+                            "toolCall": { "toolCallId": "load-perm-first", "title": "LOAD_REPLAY_SHOULD_NOT_PAINT" }
+                        }
+                    }));
+                }
                 notify(
                     "session/update",
                     json!({

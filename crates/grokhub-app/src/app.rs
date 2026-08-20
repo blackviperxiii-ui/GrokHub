@@ -1476,12 +1476,19 @@ impl Cabin {
         let mut snap = self.persist_snap();
         self.flush_projects();
         self.sync_hub_voice();
-        if let Ok(_g) = self.persist_io.lock() {
-            snap.secrets = Some(self.secrets.clone());
-            write_persist_disk(&snap);
-        }
+        snap.secrets = Some(self.secrets.clone());
         self.last_persist = Instant::now();
         self.geom_dirty = false;
+        if let Ok(_g) = self.persist_io.try_lock() {
+            write_persist_disk(&snap);
+            return;
+        }
+        let io = self.persist_io.clone();
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                write_persist_disk(&snap);
+            }
+        });
     }
 
     fn persist_snap(&mut self) -> PersistSnap {
@@ -1623,6 +1630,7 @@ impl Cabin {
         self.host_halt.store(true, Ordering::SeqCst);
         if let Some(h) = &self.acp {
             let _ = h.cancel();
+            while h.try_recv().is_ok() {}
         }
         self.rx = None;
         self.running = false;
@@ -1645,6 +1653,7 @@ impl Cabin {
         self.speak_next = false;
         self.stream_buf.clear();
         self.thought_buf.clear();
+        self.perm_ask = None;
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.clone();
         let mut visible: Vec<(String, String)> = self
@@ -1976,17 +1985,22 @@ impl Cabin {
     }
 
     fn ensure_acp(&mut self) -> Result<(), String> {
+        let idx = self
+            .chat_job_thread
+            .as_deref()
+            .and_then(|id| self.threads.iter().position(|t| t.id == id))
+            .unwrap_or(self.thread_idx);
         let bound = self.grok_cwd();
         let cwd = self
             .threads
-            .get(self.thread_idx)
+            .get(idx)
             .and_then(|t| t.grok_cwd.clone())
             .filter(|s| !s.trim().is_empty())
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| bound.clone());
         let resume = self
             .threads
-            .get(self.thread_idx)
+            .get(idx)
             .and_then(|t| t.grok_session.clone())
             .filter(|s| !s.trim().is_empty());
         if let Some(h) = &self.acp {
@@ -2016,18 +2030,25 @@ impl Cabin {
         let mode = self.session_mode;
         let foreign = self
             .threads
-            .get(self.thread_idx)
+            .get(idx)
             .and_then(|t| t.grok_cwd.as_ref())
             .map(|p| std::path::PathBuf::from(p) != bound)
             .unwrap_or(false);
         let unknown_cwd = self
             .threads
-            .get(self.thread_idx)
+            .get(idx)
             .map(|t| t.grok_cwd.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true))
             .unwrap_or(true);
         let (tx, rx) = mpsc::channel();
         self.acp_spawn_rx = Some(rx);
         std::thread::spawn(move || {
+            if unknown_cwd && resume.as_ref().is_some() {
+                let _ = tx.send(Err(grokhub_acp::explain_handshake_error(
+                    "session/load refused: History session has no worktree",
+                    &cwd,
+                )));
+                return;
+            }
             let spawn = |resume: Option<String>| {
                 build_agent::spawn_session(
                     cwd.clone(),
@@ -5659,6 +5680,9 @@ impl Cabin {
                     }
                 }
                 AcpEvent::Thought(t) => {
+                    if !self.running {
+                        continue;
+                    }
                     let changed = push_stream_capped(&mut self.thought_buf, &t, IMAGE_FILE_CAP);
                     if chat_stream_is_visible(
                         self.chat_job_thread.as_deref(),
@@ -5671,6 +5695,9 @@ impl Cabin {
                     }
                 }
                 AcpEvent::Text(t) => {
+                    if !self.running {
+                        continue;
+                    }
                     let changed = push_stream_capped(&mut self.stream_buf, &t, IMAGE_FILE_CAP);
                     if chat_stream_is_visible(
                         self.chat_job_thread.as_deref(),
@@ -5700,6 +5727,12 @@ impl Cabin {
                     self.status = format!("Plan · {t}");
                 }
                 AcpEvent::Permission(p) => {
+                    if !self.running {
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_permission(p.rpc_id, false);
+                        }
+                        continue;
+                    }
                     if self.permission_mode == PermissionMode::AlwaysApprove {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission_always(p.rpc_id);
@@ -5718,7 +5751,10 @@ impl Cabin {
                         self.status = "Grok wants permission".into();
                     }
                 }
-                AcpEvent::Done { .. } => {
+                AcpEvent::Done { stop_reason } => {
+                    if stop_reason.eq_ignore_ascii_case("cancelled") || !self.running {
+                        continue;
+                    }
                     let text = if self.thought_buf.is_empty() {
                         self.stream_buf.clone()
                     } else {
@@ -6586,23 +6622,23 @@ impl Cabin {
         if !should_capture_before_chat(self.eyes_attach || self.hands_attach) {
             return CabinFrame::Skip;
         }
-        let rows = collect_rows();
-        self.last_window_title = rows
-            .iter()
-            .map(|r| r.name.as_str())
-            .find(|n| !n.is_empty() && *n != "cursor")
-            .unwrap_or("")
-            .to_string();
-        let lock = lock_titles();
-        if lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
-            || !should_send_screenshot(&self.last_window_title, "")
-        {
-            self.status = "eyes: skipped lock/password frame".into();
-            return CabinFrame::Skip;
-        }
         let (tx, rx) = mpsc::channel();
         self.kick_cap_rx = Some(rx);
         std::thread::spawn(move || {
+            let rows = collect_rows();
+            let title = rows
+                .iter()
+                .map(|r| r.name.as_str())
+                .find(|n| !n.is_empty() && *n != "cursor")
+                .unwrap_or("")
+                .to_string();
+            let lock = lock_titles();
+            if lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+                || !should_send_screenshot(&title, "")
+            {
+                let _ = tx.send(Err("skipped lock/password frame".into()));
+                return;
+            }
             let _ = tx.send(capture_data_url());
         });
         CabinFrame::Pending
@@ -7529,7 +7565,8 @@ impl eframe::App for Cabin {
                 || self.oauth_start_rx.is_some()
                 || self.oauth_poll_rx.is_some()
                 || self.night_check_rx.is_some()
-                || self.eyes_cap_rx.is_some(),
+                || self.eyes_cap_rx.is_some()
+                || grokhub_acp::doctor_line_busy(),
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -11424,8 +11461,9 @@ mod tests {
                 && live.contains("oauth_poll_rx")
                 && live.contains("greeting_busy")
                 && live.contains("night_check_rx")
-                && live.contains("eyes_cap_rx"),
-            "History listing / inspect / greeting / night check / Eyes capture / plus-upload must not wait on the 15s heartbeat: {live}"
+                && live.contains("eyes_cap_rx")
+                && live.contains("doctor_line_busy"),
+            "History listing / inspect / greeting / night check / Eyes capture / plus-upload / Settings doctor must not wait on the 15s heartbeat: {live}"
         );
     }
 
@@ -11656,6 +11694,14 @@ mod tests {
             ensure.contains("unknown_cwd"),
             "a History file-only session must not spawn(None) into the bound tree: {ensure}"
         );
+        assert!(
+            ensure.contains("session/load refused") && ensure.contains("no worktree"),
+            "a History file-only session must not session/load into the bound tree: {ensure}"
+        );
+        assert!(
+            ensure.contains("chat_job_thread"),
+            "ACP handshake must bind the job thread, not whichever tab is visible: {ensure}"
+        );
         let ensure_spawn = ensure.find("thread::spawn").expect("handshake must leave the UI thread");
         let ensure_sess = ensure.find("spawn_session").expect("spawn_session");
         assert!(
@@ -11759,6 +11805,10 @@ mod tests {
         assert!(
             persist.contains("snap.secrets = Some") && persist.contains("persist_io"),
             "foreground persist must write secrets under persist_io: {persist}"
+        );
+        assert!(
+            persist.contains("try_lock") && persist.contains("thread::spawn"),
+            "foreground persist must not freeze the cabin waiting on idle persist_bg: {persist}"
         );
         assert!(
             bearer.contains("persist_io.lock") && bearer.contains("secrets::save"),
@@ -11942,6 +11992,10 @@ mod tests {
             "ACP Ready must stamp the grok session id: {poll}"
         );
         assert!(
+            poll.contains("cancelled") && poll.contains("!self.running"),
+            "session/cancel Done must not finish a live or redirected turn: {poll}"
+        );
+        assert!(
             poll.contains("chat_job_thread"),
             "ACP Ready must stamp the job thread, not whichever tab is visible: {poll}"
         );
@@ -12101,8 +12155,9 @@ mod tests {
             .find("thread::spawn")
             .expect("chat grim must leave the UI thread");
         let shot = cap.find("capture_data_url").expect("screen capture");
+        let rows = cap.find("collect_rows").expect("desk scan");
         assert!(
-            spawn < shot,
+            spawn < rows && rows < shot,
             "send/HostDone capture must not block the cabin: {cap}"
         );
         let kick = src
@@ -12733,6 +12788,14 @@ mod tests {
         assert!(
             halt_flight.contains("speak_next = false"),
             "Stop must cancel a pending voice speak: {halt_flight}"
+        );
+        assert!(
+            halt_flight.contains("perm_ask = None"),
+            "Stop must drop the permission bar or Allow continues the cancelled turn: {halt_flight}"
+        );
+        assert!(
+            halt_flight.contains("try_recv"),
+            "Stop must drain leftover ACP tokens so they do not paint on the next prompt: {halt_flight}"
         );
         let halt_persist = halt_flight.find("self.persist()").expect("halt persist");
         assert!(
