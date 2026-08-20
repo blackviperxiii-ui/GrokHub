@@ -6740,6 +6740,7 @@ impl Cabin {
                         std::thread::spawn(move || {
                             let _ = crate::night::save(&list);
                         });
+                        self.persist_idle_key = self.persist_idle_now();
                         if here {
                             self.status = format!("Night saved: {} {}", a.schedule, a.time);
                         }
@@ -10630,6 +10631,7 @@ impl Cabin {
             std::thread::spawn(move || {
                 let _ = crate::night::save(&list);
             });
+            self.persist_idle_key = self.persist_idle_now();
             self.status = "Automation added".into();
         } else {
             self.status = "Need “every weekday at 9…” or “heartbeat every 15 min…”".into();
@@ -10764,6 +10766,7 @@ impl Cabin {
                     std::thread::spawn(move || {
                         let _ = crate::night::save(&list);
                     });
+                    self.persist_idle_key = self.persist_idle_now();
                 } else {
                     let idx = usize::MAX - i;
                     if let Some(a) = self.automations.get(idx) {
@@ -12762,6 +12765,10 @@ mod tests {
             "ordinary replies that mention every day at / heartbeat every must not become live night jobs"
         );
         let _ = night_save;
+        assert!(
+            night_save.contains("persist_idle_key") && !night_save.contains("self.persist()"),
+            "chat night save must not clone every thread 2s later — bump the idle key so persist_bg skips: {night_save}"
+        );
         assert!(
             src.contains("ignore_close_while_hidden"),
             "sticky close_requested must not hide the cabin after a taskbar raise"
@@ -16065,6 +16072,10 @@ mod tests {
             enable.contains("thread::spawn"),
             "toggling an automation must persist off the UI thread: {enable}"
         );
+        assert!(
+            night.contains("persist_idle_key") && !night.contains("self.persist()"),
+            "removing an automation must not clone every thread 2s later — bump the idle key so persist_bg skips: {night}"
+        );
         let added = src
             .split("fn add_automation_seed(")
             .nth(1)
@@ -16075,6 +16086,10 @@ mod tests {
         assert!(
             added_spawn < added_save,
             "Add automation must not freeze the cabin writing automations.json: {added}"
+        );
+        assert!(
+            added.contains("persist_idle_key") && !added.contains("self.persist()"),
+            "Add automation must not clone every thread 2s later — bump the idle key so persist_bg skips: {added}"
         );
         assert!(
             night.contains("land_on_real_chat"),
