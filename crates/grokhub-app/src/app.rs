@@ -3290,6 +3290,7 @@ impl Cabin {
             }
             if let Some(t) = self.threads.get_mut(self.thread_idx) {
                 t.grok_session = None;
+                t.grok_cwd = None;
             }
             self.stamp_current_access();
             self.persist();
@@ -3643,6 +3644,7 @@ impl Cabin {
                 self.active_skill_follow = None;
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
                     t.grok_session = None;
+                    t.grok_cwd = None;
                     t.messages.clear();
                 }
                 self.stamp_current_access();
@@ -12217,6 +12219,10 @@ mod tests {
             "New chat must forget the last ACP session id so the next send is session/new: {created}"
         );
         assert!(
+            created.contains("grok_cwd = None"),
+            "New chat must forget the last worktree or the next send session/new stays in a History tree: {created}"
+        );
+        assert!(
             created.contains("self.persist()"),
             "forgetting the ACP session on New chat must hit disk or restart reloads Chat 1: {created}"
         );
@@ -12793,6 +12799,10 @@ mod tests {
         assert!(
             clear.contains("drop_leaving_thread_chrome") && clear.contains("grok_session = None"),
             "/clear must drop ACP and forget the session id or the next send loads Chat 1: {clear}"
+        );
+        assert!(
+            clear.contains("grok_cwd = None"),
+            "/clear must forget the worktree or the next send session/new stays in a History tree: {clear}"
         );
         let help = src
             .split("Slash::Help =>")

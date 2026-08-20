@@ -93,6 +93,15 @@ fn main() {
                 if let Some(id) = id {
                     result(&id, json!({ "sessionId": sid }));
                 }
+                write_json(&json!({
+                    "jsonrpc": "2.0",
+                    "id": 9002,
+                    "method": "session/request_permission",
+                    "params": {
+                        "sessionId": sid,
+                        "toolCall": { "toolCallId": "load-perm", "title": "LOAD_REPLAY_SHOULD_NOT_PAINT" }
+                    }
+                }));
                 notify(
                     "session/update",
                     json!({
