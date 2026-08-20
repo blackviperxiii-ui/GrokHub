@@ -3174,18 +3174,20 @@ impl Cabin {
         }
         let mut oauth_usable = false;
         if let Some(tok) = self.secrets.oauth.clone() {
-            if let Ok((access, next, refreshed)) = crate::oauth::ensure_access(&tok) {
-                if refreshed {
+            let mut tok = tok;
+            if grokhub_core::token_needs_refresh(&tok, now_ms()) {
+                if let Some(next) = crate::oauth::refresh_cabin_oauth(&tok) {
                     self.secrets.oauth = Some(next.clone());
                     if let Ok(_g) = self.persist_io.lock() {
                         let _ = secrets::save(&self.secrets);
                     }
+                    tok = next;
                 }
-                if oauth_access_live(&next, now_ms()) {
-                    oauth_usable = true;
-                    if self.console_key().trim().is_empty() {
-                        return access;
-                    }
+            }
+            if oauth_access_live(&tok, now_ms()) {
+                oauth_usable = true;
+                if self.console_key().trim().is_empty() {
+                    return tok.access_token;
                 }
             }
         }
@@ -11470,6 +11472,10 @@ mod tests {
         assert!(
             bearer.contains("hard_expired"),
             "skew-stale grok login must still be used while refresh is off the UI thread: {bearer}"
+        );
+        assert!(
+            bearer.contains("refresh_cabin_oauth") && !bearer.contains("ensure_access"),
+            "cabin OAuth refresh HTTP must leave the UI thread: {bearer}"
         );
         assert!(
             bearer.contains("console_key()"),
