@@ -460,7 +460,7 @@ pub fn slash_help() -> String {
         "/models — Grok catalog",
         "/palette — command palette",
         "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs.",
-        "Mode pill: Code / Plan / Ask. Permission: Ask / Auto / Always-approve. Grok Build runs the agent.",
+        "Mode pill: Chat / Plan / Ask. Permission: Ask / Auto / Always-approve. Grok Build runs the agent.",
         "Appearance: Dark, Light, System. Chat streams Grok Build ACP tokens on the thread that started them.",
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
         "install.sh installs the Grok Build CLI (grok) from https://x.ai/cli. Settings shows grok --version. Cabin overlay updates the GUI and installs grok if missing; grok update updates the agent.",
@@ -564,7 +564,7 @@ mod tests {
         assert!(slash_help().contains("Pulse every 15s"));
         assert!(slash_help().contains("Grok Build computer-use"));
         assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
-        assert!(slash_help().contains("Mode pill: Code / Plan / Ask"));
+        assert!(slash_help().contains("Mode pill: Chat / Plan / Ask"));
         assert!(slash_help().contains("centered over the composer"));
         assert!(slash_help().contains("Hidden idle waits for the pulse"));
         assert!(slash_help().contains("Chat rail opens the last-accessed thread"));

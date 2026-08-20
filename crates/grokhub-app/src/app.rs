@@ -290,6 +290,18 @@ fn night_host_check_blocks_ui() -> bool {
     false
 }
 
+fn cabin_fast_llm(key: String, prompt: String) -> String {
+    if !key.trim().is_empty() {
+        let model = model_for_mode(GREETING_LLM_MODE).to_string();
+        return grok_chat(&key, &model, &[("user".into(), prompt)], None, None).unwrap_or_default();
+    }
+    let Some(bin) = grokhub_acp::find_grok() else {
+        return String::new();
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    grokhub_acp::grok_stdout(&bin, &cwd, &["--no-auto-update", "-p", &prompt]).unwrap_or_default()
+}
+
 fn mode_status_line(mode: &str, pinned_model: &str) -> String {
     if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
         return "Mode auto — routes Fast / Balance / Think / Max".into();
@@ -1259,7 +1271,7 @@ impl Cabin {
             tool_cards: Vec::new(),
             desk_frame: None,
             perm_ask: None,
-            session_mode: SessionMode::Code,
+            session_mode: SessionMode::Chat,
             permission_mode: PermissionMode::AlwaysApprove,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -1592,6 +1604,10 @@ impl Cabin {
 
     fn can_agent(&self) -> bool {
         build_agent::can_agent(self.has_key())
+    }
+
+    fn llm_ready(&self) -> bool {
+        self.has_key() || grokhub_acp::find_grok().is_some()
     }
 
     fn grok_cwd(&self) -> std::path::PathBuf {
@@ -2371,7 +2387,8 @@ impl Cabin {
             .oauth
             .as_ref()
             .and_then(|t| t.name.clone())
-            .unwrap_or_default();
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| self.cfg.device_name.clone());
         let hour = Self::chip_hour();
         let last_night = self.last_night_hint();
         let input = GreetingInput {
@@ -2393,7 +2410,7 @@ impl Cabin {
             &fp,
             self.greeting_llm_at,
             now_ms(),
-            self.has_key(),
+            self.llm_ready(),
             self.greeting_busy,
         ) {
             self.greeting_llm_fp = fp;
@@ -2422,7 +2439,7 @@ impl Cabin {
             return;
         }
         let key = self.bearer();
-        if key.trim().is_empty() {
+        if key.trim().is_empty() && grokhub_acp::find_grok().is_none() {
             return;
         }
         let input = GreetingInput {
@@ -2434,13 +2451,11 @@ impl Cabin {
             last_night,
         };
         let prompt = greeting_prompt(&input);
-        let model = model_for_mode(GREETING_LLM_MODE).to_string();
         let (tx, rx) = mpsc::channel();
         self.greeting_rx = Some(rx);
         self.greeting_busy = true;
         std::thread::spawn(move || {
-            let raw = grok_chat(&key, &model, &[("user".into(), prompt)], None, None)
-                .unwrap_or_default();
+            let raw = cabin_fast_llm(key, prompt);
             let _ = tx.send(raw);
         });
     }
@@ -2602,7 +2617,7 @@ impl Cabin {
         let draft_head: String = self.composer.chars().take(16).collect();
         let draft_tail: String = self.composer.chars().rev().take(16).collect();
         let key = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.thread_idx,
             n,
             last,
@@ -2615,6 +2630,7 @@ impl Cabin {
             self.chip_dismissed.len(),
             self.llm_chips.len(),
             self.has_key(),
+            self.llm_ready(),
             self.usage.messages
         );
         if self.chip_paint_key == key && !self.visible_chips.is_empty() {
@@ -2626,8 +2642,8 @@ impl Cabin {
         let input = ChipInput {
             chat: &chat,
             draft: &self.composer,
-            grok_connected: self.has_key(),
-            host_on: true,
+            grok_connected: self.llm_ready(),
+            host_on: false,
             mode: if self.cfg.mode.trim().is_empty() {
                 "auto"
             } else {
@@ -2662,7 +2678,7 @@ impl Cabin {
             &fp,
             self.chip_llm_at,
             now_ms(),
-            self.has_key(),
+            self.llm_ready(),
             self.chip_busy,
         ) {
             self.chip_fp = fp;
@@ -2676,7 +2692,7 @@ impl Cabin {
             return;
         }
         let key = self.bearer();
-        if key.trim().is_empty() {
+        if key.trim().is_empty() && grokhub_acp::find_grok().is_none() {
             return;
         }
         let chat = self.chip_chat_pairs();
@@ -2695,14 +2711,11 @@ impl Cabin {
             &self.chip_dismissed,
             &others,
         );
-        let model = model_for_mode(CHIP_LLM_MODE).to_string();
         let (tx, rx) = mpsc::channel();
         self.chip_rx = Some(rx);
         self.chip_busy = true;
         std::thread::spawn(move || {
-            let chips = grok_chat(&key, &model, &[("user".into(), prompt)], None, None)
-                .map(|t| parse_llm_chips(&t))
-                .unwrap_or_default();
+            let chips = parse_llm_chips(&cabin_fast_llm(key, prompt));
             let _ = tx.send(chips);
         });
     }
@@ -8637,7 +8650,7 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Console key", "Voice and Imagine only. Agent auth is grok login (cached token). Never in markdown.", &mut self.cfg.api_key, true);
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
                                                             crate::cards::settings_field(ui, "Chat model", "Unused by Grok Build. Session model is /model in grok. Keep empty.", &mut self.cfg.model, false);
-                                                            crate::cards::settings_note(ui, "Session mode is Code / Plan / Ask on the composer. /effort sets reasoning. The leftover ladder pin below is unused by Grok Build.");
+                                                            crate::cards::settings_note(ui, "Session mode is Chat / Plan / Ask on the composer. /effort sets reasoning. The leftover ladder pin below is unused by Grok Build.");
                                                             crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
                                                             crate::cards::settings_field(ui, "Imagine override", "Must contain “image” or the cabin keeps grok-imagine-image-2.0. Retired grok-2-image names are rewritten.", &mut self.cfg.imagine_model, false);
                                                             crate::cards::settings_note(ui, &format!("Live voice model: {voice_live}."));
@@ -10719,6 +10732,38 @@ mod tests {
     }
 
     #[test]
+    fn greeting_and_chips_use_grok_cli() {
+        let src = include_str!("app.rs");
+        let greet = src
+            .split("fn spawn_greeting_llm(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_goals(").next())
+            .expect("spawn_greeting_llm");
+        assert!(
+            greet.contains("cabin_fast_llm") && greet.contains("find_grok"),
+            "greeting Fast must run through grok -p when cabin OAuth is empty: {greet}"
+        );
+        let chips = src
+            .split("fn spawn_chip_llm(")
+            .nth(1)
+            .and_then(|s| s.split("fn apply_chip(").next())
+            .expect("spawn_chip_llm");
+        assert!(
+            chips.contains("cabin_fast_llm") && chips.contains("find_grok"),
+            "chips Fast must run through grok -p when cabin OAuth is empty: {chips}"
+        );
+        let ready = src
+            .split("fn llm_ready(")
+            .nth(1)
+            .and_then(|s| s.split("fn grok_cwd(").next())
+            .expect("llm_ready");
+        assert!(
+            ready.contains("find_grok"),
+            "llm_ready must count the Grok Build CLI: {ready}"
+        );
+    }
+
+    #[test]
     fn refresh_chips_does_not_rebuild_every_frame() {
         let src = include_str!("app.rs");
         let chips = src
@@ -10738,6 +10783,14 @@ mod tests {
         assert!(
             chips.contains("chip_chat_pairs") || chips.contains("chip_scan"),
             "chip rebuild must not clone an 8MB complete into chat_pairs: {chips}"
+        );
+        assert!(
+            chips.contains("host_on: false"),
+            "empty chips must not inject HOST_CMD host_chips: {chips}"
+        );
+        assert!(
+            chips.contains("llm_ready"),
+            "chips must treat grok CLI as connected, not only cabin OAuth: {chips}"
         );
     }
 
