@@ -12,21 +12,28 @@ pub fn find_grok() -> Option<PathBuf> {
         std::env::var_os("PATH")
     );
     if let Ok(held) = grok_bin_cache().lock() {
-        if let Some((k, at, path)) = held.as_ref() {
-            if *k == key && at.elapsed() < Duration::from_secs(2) {
-                return path.clone();
+        if let Some((k, at, path, inflight)) = held.as_ref() {
+            if *k == key {
+                let hit = path.clone();
+                let fresh = at.elapsed() < Duration::from_secs(2);
+                let busy = *inflight;
+                drop(held);
+                if !fresh && !busy {
+                    kick_find_grok(key);
+                }
+                return hit;
             }
         }
     }
     let path = find_grok_scan();
     if let Ok(mut held) = grok_bin_cache().lock() {
-        *held = Some((key, Instant::now(), path.clone()));
+        *held = Some((key, Instant::now(), path.clone(), false));
     }
     path
 }
 
-fn grok_bin_cache() -> &'static Mutex<Option<(String, Instant, Option<PathBuf>)>> {
-    static C: OnceLock<Mutex<Option<(String, Instant, Option<PathBuf>)>>> = OnceLock::new();
+fn grok_bin_cache() -> &'static Mutex<Option<(String, Instant, Option<PathBuf>, bool)>> {
+    static C: OnceLock<Mutex<Option<(String, Instant, Option<PathBuf>, bool)>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(None))
 }
 
@@ -48,6 +55,25 @@ fn find_grok_scan() -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn kick_find_grok(key: String) {
+    if let Ok(mut held) = grok_bin_cache().lock() {
+        if let Some(slot) = held.as_mut() {
+            if slot.0 == key {
+                if slot.3 {
+                    return;
+                }
+                slot.3 = true;
+            }
+        }
+    }
+    thread::spawn(move || {
+        let path = find_grok_scan();
+        if let Ok(mut held) = grok_bin_cache().lock() {
+            *held = Some((key, Instant::now(), path, false));
+        }
+    });
 }
 
 pub fn which(name: &str) -> Option<PathBuf> {
@@ -73,14 +99,14 @@ pub fn grok_auth_path() -> Option<PathBuf> {
 /// Cached `grok login` bearer from `~/.grok/auth.json`. Never logs the secret.
 pub fn grok_cli_key() -> Option<String> {
     let path = grok_auth_path()?;
-    let modified = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
     if let Ok(held) = grok_key_cache().lock() {
-        if let Some((p, m, at, key)) = held.as_ref() {
-            if *p == path && *m == modified && at.elapsed() < Duration::from_secs(2) {
+        if let Some((p, _, at, key)) = held.as_ref() {
+            if *p == path && at.elapsed() < Duration::from_secs(2) {
                 return key.clone();
             }
         }
     }
+    let modified = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
     let raw = read_file_capped(&path, 64 * 1024);
     let key = parse_grok_auth_key(&raw);
     if let Ok(mut held) = grok_key_cache().lock() {
@@ -331,6 +357,10 @@ mod tests {
         assert!(
             find.contains("elapsed"),
             "the composer must not walk PATH every frame: {find}"
+        );
+        assert!(
+            find.contains("thread::spawn") && find.contains("inflight"),
+            "a stale grok PATH cache must refresh off the UI thread: {find}"
         );
         let key = src
             .split("pub fn grok_cli_key(")
