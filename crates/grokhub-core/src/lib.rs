@@ -250,7 +250,7 @@ pub use hub_sync::{build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, Hub
 pub use hygiene::{lockish, should_send_screenshot};
 pub use organs::{
     clipboard_context_block, daily_units_blocked, greet_from_last_job, last_user_scan, last_user_text,
-    thread_host_receipts,
+    thread_host_receipts, thread_host_receipts_from,
     on_wheel_grab, parse_local_clock, passenger_label, plan_room, presence_orb_state,
     presence_should_stream, quiet_hours_active, redirect_prompt, replay_frame_delay,
     should_keep_frame, LocalClock, MidThoughtGreet, RoomPlan, PRESENCE_RING_MS, PRESENCE_WIPE_MS,
