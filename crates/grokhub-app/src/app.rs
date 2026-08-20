@@ -1077,6 +1077,7 @@ pub struct Cabin {
     inspect_rx: Option<mpsc::Receiver<String>>,
     history_rx: Option<mpsc::Receiver<Vec<String>>>,
     mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
+    recall_rx: Option<mpsc::Receiver<String>>,
     session_show_rx: Option<(String, mpsc::Receiver<String>)>,
     import_rx: Option<mpsc::Receiver<ImportOpenclawOut>>,
     inspect_text: String,
@@ -1436,6 +1437,7 @@ impl Cabin {
             inspect_rx: None,
             history_rx: None,
             mem_restore_rx: None,
+            recall_rx: None,
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -1918,6 +1920,26 @@ impl Cabin {
             Ok((_, Err(e))) => self.status = e,
             Err(mpsc::TryRecvError::Empty) => {
                 self.mem_restore_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    fn poll_recall(&mut self) {
+        let Some(rx) = self.recall_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(body) => {
+                self.messages.push(Msg {
+                    role: "assistant".into(),
+                    content: mark_slash_result(&body),
+                });
+                self.stamp_current_access();
+                self.persist();
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.recall_rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {}
         }
@@ -4274,6 +4296,10 @@ impl Cabin {
                 }
             }
             Slash::Recall(q) => {
+                if self.recall_rx.is_some() {
+                    self.status = "Recalling…".into();
+                    return;
+                }
                 if !self.scratch() {
                     let name = self.mem_name.clone();
                     let body = self.mem_body.clone();
@@ -4283,50 +4309,56 @@ impl Cabin {
                         }
                     });
                 }
-                let soul = if self.mem_name == "SOUL.md" {
-                    self.mem_body.clone()
-                } else {
-                    config::read_memory("SOUL.md")
-                };
-                let user = if self.mem_name == "USER.md" {
-                    self.mem_body.clone()
-                } else {
-                    config::read_memory("USER.md")
-                };
-                let memory = if self.mem_name == "MEMORY.md" {
-                    self.mem_body.clone()
-                } else {
-                    config::read_memory("MEMORY.md")
-                };
-                let corpus = [
-                    ("SOUL.md", soul),
-                    ("USER.md", user),
-                    ("MEMORY.md", memory),
-                ];
-                let refs: Vec<(&str, &str)> = corpus.iter().map(|(n, b)| (*n, b.as_str())).collect();
-                let mut hits = recall_hits(&q, &refs);
-                let mut rows: Vec<(String, String)> = corpus
-                    .iter()
-                    .map(|(n, b)| ((*n).to_string(), b.clone()))
-                    .collect();
+                let q_owned = q.clone();
+                let mem_name = self.mem_name.clone();
+                let mem_body = self.mem_body.clone();
+                let mut thread_rows = Vec::new();
                 for t in &self.threads {
                     let body = search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()));
-                    rows.push((t.title.clone(), body));
+                    thread_rows.push((t.title.clone(), body));
                 }
-                hits.extend(search_corpus(&q, &rows));
-                hits.sort();
-                hits.dedup();
-                let body = if hits.is_empty() {
-                    format!("No recall for {q}")
-                } else {
-                    hits.join("\n")
-                };
-                self.messages.push(Msg {
-                    role: "assistant".into(),
-                    content: mark_slash_result(&body),
+                let (tx, rx) = mpsc::channel();
+                self.recall_rx = Some(rx);
+                self.status = "Recalling…".into();
+                std::thread::spawn(move || {
+                    let soul = if mem_name == "SOUL.md" {
+                        mem_body.clone()
+                    } else {
+                        config::read_memory("SOUL.md")
+                    };
+                    let user = if mem_name == "USER.md" {
+                        mem_body.clone()
+                    } else {
+                        config::read_memory("USER.md")
+                    };
+                    let memory = if mem_name == "MEMORY.md" {
+                        mem_body.clone()
+                    } else {
+                        config::read_memory("MEMORY.md")
+                    };
+                    let corpus = [
+                        ("SOUL.md", soul),
+                        ("USER.md", user),
+                        ("MEMORY.md", memory),
+                    ];
+                    let refs: Vec<(&str, &str)> =
+                        corpus.iter().map(|(n, b)| (*n, b.as_str())).collect();
+                    let mut hits = recall_hits(&q_owned, &refs);
+                    let mut rows: Vec<(String, String)> = corpus
+                        .iter()
+                        .map(|(n, b)| ((*n).to_string(), b.clone()))
+                        .collect();
+                    rows.extend(thread_rows);
+                    hits.extend(search_corpus(&q_owned, &rows));
+                    hits.sort();
+                    hits.dedup();
+                    let body = if hits.is_empty() {
+                        format!("No recall for {q_owned}")
+                    } else {
+                        hits.join("\n")
+                    };
+                    let _ = tx.send(body);
                 });
-                self.stamp_current_access();
-                self.persist();
             }
         }
     }
@@ -7997,6 +8029,7 @@ impl eframe::App for Cabin {
         self.poll_inspect();
         self.poll_history_search();
         self.poll_mem_restore();
+        self.poll_recall();
         self.poll_session_show();
         self.poll_import_openclaw();
         self.poll_acp_spawn();
@@ -8103,6 +8136,7 @@ impl eframe::App for Cabin {
                 || self.inspect_rx.is_some()
                 || self.history_rx.is_some()
                 || self.mem_restore_rx.is_some()
+                || self.recall_rx.is_some()
                 || self.session_show_rx.is_some()
                 || self.import_rx.is_some()
                 || self.acp_spawn_rx.is_some()
@@ -12182,6 +12216,7 @@ mod tests {
                 && live.contains("inspect_rx")
                 && live.contains("history_rx")
                 && live.contains("mem_restore_rx")
+                && live.contains("recall_rx")
                 && live.contains("session_show_rx")
                 && live.contains("import_rx")
                 && live.contains("acp_spawn_rx")
@@ -14259,12 +14294,21 @@ mod tests {
             "/recall must flush the Memory editor before searching disk: {recall}"
         );
         assert!(
-            recall.contains("stamp_current_access") || recall.contains("accessed_ms"),
-            "/recall must bump accessed_ms or /sync LWW can drop the recall turn: {recall}"
+            recall[..mem].contains("thread::spawn"),
+            "/recall must slurp SOUL/USER/MEMORY off the UI thread: {recall}"
+        );
+        let recall_poll = src
+            .split("fn poll_recall(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_session_show").next())
+            .expect("poll_recall");
+        assert!(
+            recall_poll.contains("stamp_current_access") || recall_poll.contains("accessed_ms"),
+            "/recall must bump accessed_ms or /sync LWW can drop the recall turn: {recall_poll}"
         );
         assert!(
-            recall.contains("mark_slash_result") || recall.contains("SLASH_RESULT"),
-            "/recall must not become the next model turn: {recall}"
+            recall_poll.contains("mark_slash_result") || recall_poll.contains("SLASH_RESULT"),
+            "/recall must not become the next model turn: {recall_poll}"
         );
         let sync = src
             .split("fn sync_hub(&mut self)")
