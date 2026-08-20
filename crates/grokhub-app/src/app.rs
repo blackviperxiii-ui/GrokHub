@@ -3506,6 +3506,16 @@ impl Cabin {
         });
     }
 
+    fn flush_board(&self) {
+        let board = self.board.clone();
+        let io = self.persist_io.clone();
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                let _ = config::save_board(&board);
+            }
+        });
+    }
+
     fn nav_from_id(id: &str) -> Nav {
         match id {
             "settings" => Nav::Settings,
@@ -10976,7 +10986,7 @@ impl Cabin {
                                     "",
                                 ));
                                 self.board_compose = false;
-                                self.persist();
+                                self.flush_board();
                             }
                             if crate::cards::ghost_pill(ui, "Cancel") {
                                 self.board_compose = false;
@@ -11033,7 +11043,7 @@ impl Cabin {
                 if let Some(c) = self.board.get_mut(i) {
                     c.status = st;
                 }
-                self.persist();
+                self.flush_board();
             }
         });
     }
@@ -15777,6 +15787,17 @@ mod tests {
         assert!(
             search[..soul].contains("thread::spawn") && search.contains("history_rx"),
             "History Search must slurp SOUL/USER/MEMORY off the UI thread: {search}"
+        );
+        let board = src
+            .split("fn ui_board(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_imagine(").next())
+            .expect("ui_board");
+        assert!(
+            board.contains("self.flush_board()")
+                && !board.contains("self.persist()")
+                && !board.contains("persist_snap"),
+            "Workboard add/status must not clone every thread just to write board.json: {board}"
         );
         let night = src
             .split("fn ui_night(")
