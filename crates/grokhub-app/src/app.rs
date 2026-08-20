@@ -973,6 +973,7 @@ pub struct Cabin {
     plus_anchor: egui::Pos2,
     plus_ignore_close: bool,
     file_pick: Option<PlusTarget>,
+    pick_rx: Option<mpsc::Receiver<(PlusTarget, Option<PathBuf>)>>,
     pick_dir: String,
     pick_cache: Option<(String, Vec<(String, bool)>)>,
     projects: Vec<ProjectNode>,
@@ -1324,6 +1325,7 @@ impl Cabin {
             plus_anchor: egui::Pos2::ZERO,
             plus_ignore_close: false,
             file_pick: None,
+            pick_rx: None,
             pick_dir: std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()),
             pick_cache: None,
             projects,
@@ -2012,13 +2014,43 @@ impl Cabin {
     fn run_plus_act(&mut self, target: PlusTarget, act: PlusAct) {
         match act {
             PlusAct::Upload => {
-                if let Some(p) = pick_file() {
-                    self.apply_path(target, &p);
-                } else {
-                    self.file_pick = Some(target);
+                if self.pick_rx.is_some() {
+                    self.status = "Choose a file…".into();
+                    return;
                 }
+                let (tx, rx) = mpsc::channel();
+                self.pick_rx = Some(rx);
+                self.status = "Choose a file…".into();
+                std::thread::spawn(move || {
+                    let _ = tx.send((target, pick_file()));
+                });
             }
             PlusAct::Paste => self.apply_clipboard(target),
+        }
+    }
+
+    fn poll_pick(&mut self) {
+        let Some(rx) = self.pick_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((target, Some(p))) => {
+                self.apply_path(target, &p);
+            }
+            Ok((target, None)) => {
+                self.file_pick = Some(target);
+                if self.status == "Choose a file…" {
+                    self.status.clear();
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.pick_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                if self.status == "Choose a file…" {
+                    self.status.clear();
+                }
+            }
         }
     }
 
@@ -3749,6 +3781,7 @@ impl Cabin {
             Slash::Plan => {
                 self.session_mode = SessionMode::Plan;
                 self.acp = None;
+                self.acp_spawn_rx = None;
                 self.status = "Plan mode — Grok Build will plan first".into();
             }
             Slash::AlwaysApprove => {
@@ -5450,10 +5483,7 @@ impl Cabin {
         self.tool_cards.clear();
         self.perm_ask = None;
         let image = if consume_attach {
-            let url = next_chat_image(self.attach_url.as_deref(), cabin.as_deref()).map(|s| s.to_string());
-            self.attach_url = None;
-            self.attach_name = None;
-            url
+            next_chat_image(self.attach_url.as_deref(), cabin.as_deref()).map(|s| s.to_string())
         } else {
             None
         };
@@ -5462,7 +5492,12 @@ impl Cabin {
             .as_ref()
             .map(|h| h.prompt_with_image(&last_user, image.as_deref()))
         {
-            Some(Ok(())) => {}
+            Some(Ok(())) => {
+                if consume_attach {
+                    self.attach_url = None;
+                    self.attach_name = None;
+                }
+            }
             Some(Err(e)) => {
                 self.running = false;
                 self.chat_job_thread = None;
@@ -7275,6 +7310,7 @@ impl eframe::App for Cabin {
         self.poll_inspect();
         self.poll_session_show();
         self.poll_acp_spawn();
+        self.poll_pick();
         self.poll_eyes_cap();
         self.poll_recipe_cap();
         self.poll_verify();
@@ -7373,6 +7409,7 @@ impl eframe::App for Cabin {
                 || self.inspect_rx.is_some()
                 || self.session_show_rx.is_some()
                 || self.acp_spawn_rx.is_some()
+                || self.pick_rx.is_some()
                 || self.oauth_start_rx.is_some()
                 || self.oauth_poll_rx.is_some()
                 || self.night_check_rx.is_some()
@@ -11190,6 +11227,15 @@ mod tests {
             auto.contains("acp_spawn_rx = None"),
             "/auto during handshake must drop the in-flight Ask agent: {auto}"
         );
+        let plan = src
+            .split("Slash::Plan =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::AlwaysApprove =>").next())
+            .expect("Plan");
+        assert!(
+            plan.contains("acp_spawn_rx = None"),
+            "/plan during handshake must drop the in-flight Ask agent: {plan}"
+        );
         let row = src
             .split("let row = crate::cards::session_row")
             .nth(1)
@@ -11242,12 +11288,13 @@ mod tests {
                 && live.contains("inspect_rx")
                 && live.contains("session_show_rx")
                 && live.contains("acp_spawn_rx")
+                && live.contains("pick_rx")
                 && live.contains("oauth_start_rx")
                 && live.contains("oauth_poll_rx")
                 && live.contains("greeting_busy")
                 && live.contains("night_check_rx")
                 && live.contains("eyes_cap_rx"),
-            "History listing / inspect / greeting / night check / Eyes capture must not wait on the 15s heartbeat: {live}"
+            "History listing / inspect / greeting / night check / Eyes capture / plus-upload must not wait on the 15s heartbeat: {live}"
         );
     }
 
@@ -11599,6 +11646,12 @@ mod tests {
             kick.contains("consume_attach") && kick.contains("attach_url"),
             "follow-up kicks must leave the attached image for the next send: {kick}"
         );
+        let prompt = kick.find("prompt_with_image").expect("prompt_with_image");
+        let consume = kick.find("self.attach_url = None").expect("consume attach");
+        assert!(
+            prompt < consume && kick.contains("Some(Ok(()))"),
+            "a plus-button still must survive a failed ACP prompt: {kick}"
+        );
         let send_attach = src
             .split("fn send_chat(")
             .nth(1)
@@ -11929,6 +11982,30 @@ mod tests {
         assert!(
             cache.contains("pick_cache") && cache.contains("pick_entries("),
             "folder listing must reuse the last scan until pick_dir changes: {cache}"
+        );
+        let upload = src
+            .split("PlusAct::Upload =>")
+            .nth(1)
+            .and_then(|s| s.split("PlusAct::Paste =>").next())
+            .expect("Upload");
+        let spawn = upload.find("thread::spawn").expect("picker worker");
+        let pick = upload.find("pick_file()").expect("native picker");
+        assert!(
+            spawn < pick && upload.contains("pick_rx") && !upload.contains("apply_path"),
+            "zenity/kdialog must not freeze the cabin on plus-upload: {upload}"
+        );
+        let poll = src
+            .split("fn poll_pick(")
+            .nth(1)
+            .and_then(|s| s.split("fn apply_clipboard(").next())
+            .expect("poll_pick");
+        assert!(
+            poll.contains("apply_path") && poll.contains("file_pick"),
+            "plus-upload worker must land the still or fall back to the in-app picker: {poll}"
+        );
+        assert!(
+            src.contains("self.poll_pick()"),
+            "plus-upload worker must be polled each frame"
         );
     }
 
