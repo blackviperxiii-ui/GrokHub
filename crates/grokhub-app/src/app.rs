@@ -4731,22 +4731,48 @@ impl Cabin {
 
     fn local_day() -> String {
         if let Ok(g) = LAST_DAY.lock() {
-            if let Some((at, day)) = g.as_ref() {
-                if at.elapsed() < CLOCK_TTL {
-                    return day.clone();
+            if let Some((at, day, inflight)) = g.as_ref() {
+                let hit = day.clone();
+                let fresh = at.elapsed() < CLOCK_TTL;
+                let busy = *inflight;
+                drop(g);
+                if !fresh && !busy {
+                    Self::kick_local_day();
                 }
+                return hit;
             }
         }
+        let day = Self::day_now();
+        if let Ok(mut g) = LAST_DAY.lock() {
+            *g = Some((Instant::now(), day.clone(), false));
+        }
+        day
+    }
+
+    fn day_now() -> String {
         let out = Self::date_out("+%F");
-        let day = if out.is_empty() {
+        if out.is_empty() {
             "1970-01-01".into()
         } else {
             out
-        };
-        if let Ok(mut g) = LAST_DAY.lock() {
-            *g = Some((Instant::now(), day.clone()));
         }
-        day
+    }
+
+    fn kick_local_day() {
+        if let Ok(mut g) = LAST_DAY.lock() {
+            if let Some(slot) = g.as_mut() {
+                if slot.2 {
+                    return;
+                }
+                slot.2 = true;
+            }
+        }
+        std::thread::spawn(|| {
+            let day = Cabin::day_now();
+            if let Ok(mut g) = LAST_DAY.lock() {
+                *g = Some((Instant::now(), day, false));
+            }
+        });
     }
 
     fn tick_heartbeat(&mut self) {
@@ -7915,8 +7941,8 @@ impl Cabin {
     }
 
     fn roll_today(&mut self) {
-        let today = Self::date_out("+%F");
-        if !today.is_empty() {
+        let today = Self::local_day();
+        if !today.is_empty() && today != "1970-01-01" {
             roll_usage_day(&mut self.usage, &today);
         }
     }
@@ -11202,7 +11228,7 @@ struct LanHostCache {
 static LAN_HOST: Mutex<Option<LanHostCache>> = Mutex::new(None);
 const CLOCK_TTL: Duration = Duration::from_secs(15);
 static LAST_CLOCK: Mutex<Option<(Instant, LocalClock, bool)>> = Mutex::new(None);
-static LAST_DAY: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+static LAST_DAY: Mutex<Option<(Instant, String, bool)>> = Mutex::new(None);
 
 fn hostname_i() -> String {
     if let Ok(g) = LAN_HOST.lock() {
@@ -11952,14 +11978,18 @@ mod tests {
             day.contains("date_out(") && !day.contains(".output()"),
             "local_day must use the timed date helper: {day}"
         );
+        assert!(
+            day.contains("thread::spawn") && day.contains("inflight"),
+            "stale local_day must refresh off the UI thread: {day}"
+        );
         let roll = src
             .split("fn roll_today(")
             .nth(1)
             .and_then(|s| s.split("\n    fn ui_settings_menu").next())
             .expect("roll_today");
         assert!(
-            roll.contains("date_out(") && !roll.contains(".output()"),
-            "roll_today must use the timed date helper: {roll}"
+            roll.contains("local_day(") && !roll.contains(".output()"),
+            "roll_today must reuse the cached day, not spawn date on the UI thread: {roll}"
         );
     }
 
