@@ -6909,7 +6909,6 @@ impl Cabin {
                     }
                 }
                 self.plan_pending = retain_held_plan(self.plan_pending.take(), &self.last_host);
-                self.persist();
                 self.run_skill_verify();
                 bump_usage(&mut self.usage, "host");
                 let mut defer_kick = false;
@@ -14317,6 +14316,11 @@ mod tests {
         assert!(
             pushed < saved && saved < recipe,
             "HOST_RESULT must hit disk before recipe/skill side effects: {host_done}"
+        );
+        assert_eq!(
+            host_done.matches("self.persist()").count(),
+            1,
+            "HostDone must not clone every thread twice: {host_done}"
         );
         assert!(
             host_done.contains("lock_titles"),
