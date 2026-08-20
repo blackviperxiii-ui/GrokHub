@@ -301,27 +301,7 @@ impl HubState {
     }
 
     pub fn put_snapshot(&mut self, snap: Value) -> Result<(), String> {
-        let kind = snap.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-        if kind != HUB_KIND {
-            return Err("Not a GrokHub hub snapshot.".into());
-        }
-        let merged = match (
-            self.snapshot.as_deref(),
-            crate::hub_sync::is_hub_snapshot(&snap),
-        ) {
-            (Some(local_v), true) => {
-                if let (Ok(local), Ok(remote)) = (
-                    serde_json::from_value::<crate::hub_sync::HubSnapshot>(local_v.clone()),
-                    serde_json::from_value::<crate::hub_sync::HubSnapshot>(snap.clone()),
-                ) {
-                    serde_json::to_value(crate::hub_sync::merge_hub_snapshots(&local, &remote))
-                        .unwrap_or(snap)
-                } else {
-                    snap
-                }
-            }
-            _ => snap,
-        };
+        let merged = merge_put_snapshot(self.snapshot.as_deref(), snap)?;
         self.snapshot = Some(Arc::new(merged));
         self.last_incoming_at = now_ms();
         Ok(())
@@ -352,6 +332,28 @@ pub fn clear_pending_after_complete(err: Option<CompleteError>) -> bool {
         Some(CompleteError::NotFound) => true,
         Some(CompleteError::Forbidden) => false,
     }
+}
+
+/// Merge a peer PUT without holding hub.lock() across from_value of 8MB JSON.
+pub fn merge_put_snapshot(local: Option<&Value>, snap: Value) -> Result<Value, String> {
+    let kind = snap.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    if kind != HUB_KIND {
+        return Err("Not a GrokHub hub snapshot.".into());
+    }
+    Ok(match (local, crate::hub_sync::is_hub_snapshot(&snap)) {
+        (Some(local_v), true) => {
+            if let (Ok(local), Ok(remote)) = (
+                serde_json::from_value::<crate::hub_sync::HubSnapshot>(local_v.clone()),
+                serde_json::from_value::<crate::hub_sync::HubSnapshot>(snap.clone()),
+            ) {
+                serde_json::to_value(crate::hub_sync::merge_hub_snapshots(&local, &remote))
+                    .unwrap_or(snap)
+            } else {
+                snap
+            }
+        }
+        _ => snap,
+    })
 }
 
 /// serde has no `rc` feature here — wrap Value in Arc without changing hub-state.json.
@@ -542,8 +544,17 @@ mod tests {
             .and_then(|s| s.split("pub fn state_for_disk").next())
             .expect("put_snapshot");
         assert!(
-            put.contains("Arc::new") && put.contains("as_deref()"),
+            put.contains("Arc::new") && put.contains("merge_put_snapshot"),
             "put_snapshot must store Arc so persist/GET do not deep-clone under the lock: {put}"
+        );
+        let merge = src
+            .split("pub fn merge_put_snapshot")
+            .nth(1)
+            .and_then(|s| s.split("fn ser_arc_value").next())
+            .expect("merge_put_snapshot");
+        assert!(
+            merge.contains("from_value") && merge.contains("merge_hub_snapshots"),
+            "PUT merge must LWW peer threads off the hub lock: {merge}"
         );
     }
 
