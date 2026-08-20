@@ -1175,9 +1175,7 @@ impl Cabin {
         if threads.is_empty() {
             threads.push(ChatThread::new("Chat", false));
         }
-        if threads.len() != before {
-            let _ = threads::save(&threads);
-        }
+        let dropped_leftover = threads.len() != before;
         let thread_idx = threads
             .iter()
             .position(|t| keep_id.as_deref() == Some(t.id.as_str()))
@@ -1466,6 +1464,9 @@ impl Cabin {
                 c.hotkey_halt = halt_id;
                 c.hotkeys = Some(mgr);
             }
+        }
+        if dropped_leftover {
+            c.persist_bg();
         }
         c
     }
@@ -14145,6 +14146,14 @@ mod tests {
         assert!(
             boot.contains("leftover_empty_thread"),
             "boot must drop leftover empty Chat tabs: {boot}"
+        );
+        assert!(
+            !boot.contains("threads::save"),
+            "boot leftover drop must not freeze the cabin writing threads.json: {boot}"
+        );
+        assert!(
+            boot.contains("persist_bg"),
+            "boot leftover drop must persist off-thread or restart restores empty Chat tabs: {boot}"
         );
         assert!(
             src.contains("history_row_visible"),
