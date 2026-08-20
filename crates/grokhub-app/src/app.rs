@@ -1599,14 +1599,13 @@ impl Cabin {
             return;
         }
         let key = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.threads.len(),
             self.thread_idx,
             self.messages.len(),
             self.messages.last().map(|m| m.content.len()).unwrap_or(0),
             self.board.len(),
             self.automations.len(),
-            self.projects_dirty,
             self.usage.day,
             self.usage.messages,
             self.cfg.current_thread,
@@ -13292,6 +13291,15 @@ mod tests {
         assert!(
             !bg[..snap].contains("geom_dirty"),
             "window drag must not clone every thread — flush_window owns geom: {bg}"
+        );
+        let idle_key = bg
+            .split("let key = format!")
+            .nth(1)
+            .and_then(|s| s.split("if !self.projects_dirty").next())
+            .expect("persist idle key");
+        assert!(
+            !idle_key.contains("projects_dirty"),
+            "folder click must not clone every thread twice — persist_idle_key must ignore the dirty flag: {idle_key}"
         );
     }
 
