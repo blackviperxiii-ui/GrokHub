@@ -32,7 +32,7 @@ use grokhub_core::{
     build_quick_chips, build_windshield, bump_skill_run, bump_usage,
     inhabit_claim_allowed, inhabit_ready, hub_pair_url, devices_shows_pair_code, pair_code_is_live, parse_hostname_i, pick_lan_ipv4,
     start_hub_rotates_pair,
-    catalog_line, chip_suggest_prompt, compact_keep_pin, compose_imagine_prompt,
+    catalog_line, chip_suggest_prompt, compact_keep_pin, compact_keep_start_from, compose_imagine_prompt,
     context_fingerprint,
     context_percent,
     dedicated_imagine_model, dedicated_video_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
@@ -3926,10 +3926,11 @@ impl Cabin {
                     self.mem_body = next;
                     self.status = "Wrote MEMORY.md".into();
                 } else {
-                    match config::append_memory("MEMORY.md", &note) {
-                        Ok(()) => self.status = "Wrote MEMORY.md".into(),
-                        Err(e) => self.status = e,
-                    }
+                    let note = note.clone();
+                    std::thread::spawn(move || {
+                        let _ = config::append_memory("MEMORY.md", &note);
+                    });
+                    self.status = "Wrote MEMORY.md".into();
                 }
             }
             Slash::Board => {
@@ -3948,15 +3949,29 @@ impl Cabin {
                 } else {
                     Some(self.cfg.goal_pin.as_str())
                 };
-                let msgs: Vec<(String, String)> = self
-                    .messages
-                    .iter()
-                    .map(|m| (m.role.clone(), m.content.clone()))
-                    .collect();
-                self.messages = compact_keep_pin(&msgs, 8, pin)
-                    .into_iter()
-                    .map(|(role, content)| Msg { role, content })
-                    .collect();
+                let start = compact_keep_start_from(
+                    self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+                    8,
+                );
+                if start > 0 {
+                    self.messages.drain(..start);
+                }
+                if let Some(pin) = pin.map(str::trim).filter(|s| !s.is_empty()) {
+                    let marked = format!("GOAL PIN: {pin}");
+                    if !self
+                        .messages
+                        .iter()
+                        .any(|m| m.content == marked || m.content.starts_with(&format!("{marked}\n")))
+                    {
+                        self.messages.insert(
+                            0,
+                            Msg {
+                                role: "system".into(),
+                                content: marked,
+                            },
+                        );
+                    }
+                }
                 self.stamp_current_access();
                 self.persist();
                 self.status = "Compacted".into();
@@ -13433,6 +13448,10 @@ mod tests {
             compact.contains("stamp_current_access") || compact.contains("accessed_ms"),
             "/compact must bump accessed_ms or /sync LWW can restore the dropped turns: {compact}"
         );
+        assert!(
+            compact.contains("compact_keep_start_from") && !compact.contains("content.clone()"),
+            "/compact must drain dropped turns without cloning an 8MB pane: {compact}"
+        );
         let pushed = send.find("messages.push").expect("user turn");
         let saved = send.find("self.persist()").expect("send persist");
         assert!(
@@ -14260,6 +14279,11 @@ mod tests {
         assert!(
             note[..append].contains("write_memory") && note[..append].contains("mem_body"),
             "/remember must flush the Memory editor before appending to disk: {note}"
+        );
+        let append_spawn = note.find("thread::spawn").expect("remember append must leave the UI thread");
+        assert!(
+            append_spawn < append,
+            "/remember must not freeze the cabin appending MEMORY.md: {note}"
         );
         let topic = forget
             .split("Some(q)")
