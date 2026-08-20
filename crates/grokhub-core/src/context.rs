@@ -85,29 +85,37 @@ pub fn trim_result_bodies(
     messages: &[(String, String)],
     keep_recent_hops: usize,
 ) -> Vec<(String, String)> {
+    let mut out = messages.to_vec();
+    trim_result_bodies_in_place(out.iter_mut().map(|(r, c)| (r.as_str(), c)), keep_recent_hops);
+    out
+}
+
+/// Rewrite old dumps in place so HostDone does not clone an 8MB pane.
+pub fn trim_result_bodies_in_place<'a, I>(messages: I, keep_recent_hops: usize)
+where
+    I: IntoIterator<Item = (&'a str, &'a mut String)>,
+{
+    let mut items: Vec<(&'a str, &'a mut String)> = messages.into_iter().collect();
     let keep = keep_recent_hops.max(1);
-    let result_idx: Vec<usize> = messages
+    let result_idx: Vec<usize> = items
         .iter()
         .enumerate()
         .filter(|(_, (role, content))| is_result_turn(role, content))
         .map(|(i, _)| i)
         .collect();
     let keep_from = result_idx.len().saturating_sub(keep);
-    let keep_set: Vec<usize> = result_idx[keep_from..].to_vec();
-    messages
-        .iter()
-        .enumerate()
-        .map(|(i, (role, content))| {
-            if role == "system" && content.trim_start().starts_with("GOAL PIN:") {
-                return (role.clone(), content.clone());
+    let keep_set = &result_idx[keep_from..];
+    for (i, (role, content)) in items.iter_mut().enumerate() {
+        if *role == "system" && content.trim_start().starts_with("GOAL PIN:") {
+            continue;
+        }
+        if is_result_turn(role, content) && !keep_set.contains(&i) {
+            let trimmed = trim_result_body(content);
+            if trimmed.len() != content.len() || trimmed != **content {
+                **content = trimmed;
             }
-            if is_result_turn(role, content) && !keep_set.contains(&i) {
-                (role.clone(), trim_result_body(content))
-            } else {
-                (role.clone(), content.clone())
-            }
-        })
-        .collect()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -160,5 +168,12 @@ mod tests {
         assert!(dumps[0].1.contains("tail fact"), "{}", dumps[0].1);
         assert!(!dumps[5].1.contains("…"), "{}", dumps[5].1);
         assert!(dumps[5].1.contains("dump line 5-10"), "{}", dumps[5].1);
+
+        let mut in_place = msgs.clone();
+        trim_result_bodies_in_place(
+            in_place.iter_mut().map(|(r, c)| (r.as_str(), c)),
+            RESULT_TRIM_KEEP_HOPS,
+        );
+        assert_eq!(in_place, out);
     }
 }
