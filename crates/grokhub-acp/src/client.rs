@@ -52,9 +52,6 @@ pub fn is_session_cwd_error(err: &str) -> bool {
         || l.contains("cannot write")
         || l.contains("os error 30")
         || l.contains("read-only")
-        || l.contains("os error 2")
-        || l.contains("no such file")
-        || l.contains("not a directory")
 }
 
 pub fn explain_handshake_error(raw: &str, cwd: &Path) -> String {
@@ -255,7 +252,7 @@ fn with_stderr(msg: String, tail: &Arc<Mutex<String>>) -> String {
 fn read_until_result(
     reader: &mut BufReader<impl Read>,
     want: u64,
-    _early: &mut Vec<AcpEvent>,
+    pending_perm: &mut Vec<Value>,
 ) -> Result<Value, String> {
     let mut buf = String::new();
     loop {
@@ -274,6 +271,15 @@ fn read_until_result(
                 // Consume load replay. Do not treat it as a live turn.
                 continue;
             }
+            if method == "session/request_permission" {
+                if let Some(id) = msg.id {
+                    pending_perm.push(id);
+                }
+                continue;
+            }
+            if msg.result.is_none() && msg.error.is_none() {
+                continue;
+            }
         }
         if msg.id.as_ref().and_then(|v| v.as_u64()) == Some(want) {
             if let Some(err) = msg.error {
@@ -289,7 +295,7 @@ struct HandshakeOk {
     reader: BufReader<std::process::ChildStdout>,
     session_id: String,
     next_id: u64,
-    early: Vec<AcpEvent>,
+    pending_perm: Vec<Value>,
 }
 
 fn handshake(
@@ -304,9 +310,9 @@ fn handshake(
 ) -> Result<HandshakeOk, String> {
     let mut reader = BufReader::new(stdout);
     let mut next_id = 1u64;
-    let mut early = Vec::new();
+    let mut pending_perm = Vec::new();
     write_msg(&mut stdin, &request(next_id, "initialize", initialize_params()))?;
-    let init = read_until_result(&mut reader, next_id, &mut early)?;
+    let init = read_until_result(&mut reader, next_id, &mut pending_perm)?;
     next_id += 1;
     let methods = init.get("authMethods").cloned().unwrap_or(json!([]));
     if let Some(method_id) = pick_auth_method(&methods, api_key) {
@@ -318,7 +324,7 @@ fn handshake(
                 json!({ "methodId": method_id, "_meta": { "headless": true } }),
             ),
         )?;
-        let _ = read_until_result(&mut reader, next_id, &mut early)?;
+        let _ = read_until_result(&mut reader, next_id, &mut pending_perm)?;
         next_id += 1;
     }
     let resume_id = resume.and_then(|s| {
@@ -338,7 +344,7 @@ fn handshake(
                 session_load_params(cwd, &id, always_approve, auto, session_mode),
             ),
         )?;
-        match read_until_result(&mut reader, next_id, &mut early) {
+        match read_until_result(&mut reader, next_id, &mut pending_perm) {
             Ok(v) => {
                 next_id += 1;
                 v
@@ -356,7 +362,7 @@ fn handshake(
                 session_new_params(cwd, always_approve, auto, session_mode),
             ),
         )?;
-        let v = read_until_result(&mut reader, next_id, &mut early)?;
+        let v = read_until_result(&mut reader, next_id, &mut pending_perm)?;
         next_id += 1;
         v
     };
@@ -373,7 +379,7 @@ fn handshake(
         reader,
         session_id,
         next_id,
-        early,
+        pending_perm,
     })
 }
 
@@ -427,7 +433,9 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
         Ok(Ok(hs)) => hs,
         Ok(Err(e)) => {
             let _ = child.kill();
-            let _ = child.wait();
+            thread::spawn(move || {
+                let _ = child.wait();
+            });
             let e = match &stderr_tail {
                 Some(t) => with_stderr(e, t),
                 None => e,
@@ -436,7 +444,9 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
         }
         Err(_) => {
             let _ = child.kill();
-            let _ = child.wait();
+            thread::spawn(move || {
+                let _ = child.wait();
+            });
             let msg = "ACP handshake timed out — grok never answered initialize".to_string();
             return Err(match &stderr_tail {
                 Some(t) => with_stderr(msg, t),
@@ -449,7 +459,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
         mut reader,
         session_id,
         next_id,
-        early,
+        pending_perm,
     } = hs;
 
     let stdin = Arc::new(Mutex::new(stdin));
@@ -459,9 +469,9 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
             .as_ref()
             .is_some_and(|s| !s.trim().is_empty()),
     ));
+    let prompt_rpc = Arc::new(Mutex::new(None::<u64>));
     let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
     let (evt_tx, evt_rx) = mpsc::channel();
-    let _ = early;
     let _ = evt_tx.send(AcpEvent::Ready {
         session_id: session_id.clone(),
     });
@@ -470,6 +480,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
     let stdin_w = stdin.clone();
     let ids = id_gen.clone();
     let swallow_w = swallow_load.clone();
+    let prompt_w = prompt_rpc.clone();
     thread::spawn(move || {
         let swallow_load = swallow_w;
         for cmd in cmd_rx {
@@ -480,6 +491,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
             match cmd {
                 Cmd::Shutdown => return,
                 Cmd::Cancel => {
+                    swallow_load.store(true, Ordering::SeqCst);
                     let id = {
                         let mut n = ids.lock().unwrap();
                         let id = *n;
@@ -499,6 +511,9 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                         *n += 1;
                         id
                     };
+                    if let Ok(mut held) = prompt_w.lock() {
+                        *held = Some(id);
+                    }
                     let _ = write_msg(
                         &mut *stdin,
                         &request(
@@ -524,6 +539,16 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
         }
     });
 
+    for id in pending_perm {
+        let _ = cmd_tx.send(Cmd::Permission {
+            id,
+            allow: false,
+            always: false,
+        });
+    }
+
+    let cmd_tx_r = cmd_tx.clone();
+    let prompt_r = prompt_rpc.clone();
     thread::spawn(move || {
         let mut buf = String::new();
         loop {
@@ -559,6 +584,13 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                         }
                         if method == "session/request_permission" {
                             if swallow_load.load(Ordering::SeqCst) {
+                                if let Some(id) = msg.id {
+                                    let _ = cmd_tx_r.send(Cmd::Permission {
+                                        id,
+                                        allow: false,
+                                        always: false,
+                                    });
+                                }
                                 continue;
                             }
                             if let Some(id) = msg.id {
@@ -568,6 +600,25 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                                 )));
                             }
                             continue;
+                        }
+                    }
+                    if msg.result.is_some() || msg.error.is_some() {
+                        let rpc = msg
+                            .id
+                            .as_ref()
+                            .and_then(|v| v.as_u64())
+                            .or_else(|| {
+                                msg.id
+                                    .as_ref()
+                                    .and_then(|v| v.as_i64())
+                                    .and_then(|n| u64::try_from(n).ok())
+                            });
+                        let prompt = prompt_r.lock().ok().and_then(|g| *g);
+                        if rpc.is_none() || rpc != prompt {
+                            continue;
+                        }
+                        if let Ok(mut held) = prompt_r.lock() {
+                            *held = None;
                         }
                     }
                     if msg.result.is_some() {
@@ -1173,6 +1224,10 @@ mod tests {
         assert!(is_session_cwd_error(&disk));
         assert!(is_session_cwd_error(&perm));
         assert!(!is_session_cwd_error("ACP handshake timed out"));
+        assert!(
+            !is_session_cwd_error("session not found: no such file"),
+            "a dead session file must retry session/new in the bound tree"
+        );
         let load = explain_handshake_error("session/load failed: session not found", &cwd);
         assert!(load.contains("session/load"), "{load}");
         assert!(!load.contains("session/new"), "{load}");
@@ -1191,6 +1246,16 @@ mod tests {
         assert!(
             spawn < wait && !drop.contains("self.child.wait()"),
             "tab switch must not freeze on grok agent teardown: {drop}"
+        );
+        let connect = src
+            .split("pub fn connect(")
+            .nth(1)
+            .and_then(|s| s.split("impl AcpHandle").next())
+            .expect("connect");
+        let timeout_kill = connect.find("handshake timed out").expect("timeout");
+        assert!(
+            connect[timeout_kill.saturating_sub(200)..timeout_kill].contains("thread::spawn"),
+            "handshake timeout must not block the spawn worker on child.wait: {connect}"
         );
     }
 
@@ -1241,6 +1306,45 @@ mod tests {
             !opts.args.iter().any(|a| a == "--resume"),
             "CLI --resume plus session/new mixed sessions: {:?}",
             opts.args
+        );
+        let src = include_str!("client.rs");
+        let handshake = src
+            .split("fn read_until_result(")
+            .nth(1)
+            .and_then(|s| s.split("struct HandshakeOk").next())
+            .expect("read_until_result");
+        assert!(
+            handshake.contains("session/request_permission") && handshake.contains("pending_perm"),
+            "session/load must collect replay permission ids, not drop them unanswered: {handshake}"
+        );
+        let load = src
+            .split("if method == \"session/request_permission\"")
+            .nth(2)
+            .and_then(|s| s.split("if msg.result.is_some()").next())
+            .expect("live request_permission");
+        assert!(
+            load.contains("swallow_load")
+                && load.contains("Cmd::Permission")
+                && load.contains("allow: false"),
+            "load-replay permission must be denied so the agent is not stuck: {load}"
+        );
+        let cancel = src
+            .split("Cmd::Cancel =>")
+            .nth(1)
+            .and_then(|s| s.split("Cmd::Prompt").next())
+            .expect("Cancel");
+        assert!(
+            cancel.contains("swallow_load.store(true"),
+            "session/cancel must ignore leftover stream until the next prompt: {cancel}"
+        );
+        let done = src
+            .split("if msg.result.is_some() || msg.error.is_some()")
+            .nth(1)
+            .and_then(|s| s.split("if msg.result.is_some()").next())
+            .expect("prompt rpc gate");
+        assert!(
+            done.contains("prompt_r") && done.contains("rpc != prompt"),
+            "session/cancel result must not finish the live turn: {done}"
         );
     }
 }

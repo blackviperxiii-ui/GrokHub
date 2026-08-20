@@ -30,7 +30,12 @@ pub fn host_working_dir(project_dir: &str) -> Option<String> {
     if root.is_empty() {
         return None;
     }
-    Path::new(&root).is_dir().then_some(root)
+    let path = Path::new(&root);
+    if path.is_dir() {
+        return Some(root);
+    }
+    std::fs::create_dir_all(path).ok()?;
+    path.is_dir().then_some(root)
 }
 
 pub fn resolve_host_cite_path(project_dir: &str, cited: &str) -> String {
@@ -218,11 +223,13 @@ mod tests {
         assert_eq!(host_working_dir(""), None);
         assert_eq!(host_working_dir("   "), None);
         assert_eq!(host_working_dir(&path), Some(path.clone()));
+        let missing = format!("{path}/missing-bound");
         assert_eq!(
-            host_working_dir(&format!("{path}/missing-bound")),
-            None,
-            "a missing bound tree must not become Command cwd"
+            host_working_dir(&missing),
+            Some(missing.clone()),
+            "a missing bound tree must be created, not inherit the cabin process cwd"
         );
+        assert!(Path::new(&missing).is_dir());
         let rest = path.trim_start_matches(&format!("{home}/"));
         assert_eq!(
             host_working_dir(&format!("~/{rest}")),
