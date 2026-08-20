@@ -217,7 +217,7 @@ pub fn local_greeting(input: &GreetingInput) -> String {
 pub fn greeting_prompt(input: &GreetingInput) -> String {
     let name = greeting_name(input.user_md, input.display_name);
     let mut lines = vec![
-        "Write one quiet greeting line for an empty GrokHub chat.".into(),
+        "Write one quiet greeting line for an empty cabin chat.".into(),
         format!(
             "One sentence, at most {GREETING_MAX_CHARS} characters. No markdown, no emoji, no quotes, no secrets."
         ),
@@ -296,8 +296,19 @@ fn is_product_greeting(s: &str) -> bool {
     let t = s.trim().to_ascii_lowercase();
     t == "grokhub"
         || t == "grokhub."
+        || t == "grok"
+        || t == "grok."
         || t.starts_with("welcome to grokhub")
         || t == "native grok build cabin"
+        || t.contains(", grok.")
+        || t.contains(", grok ")
+        || t.contains(", grokhub")
+        || t.contains("hello, grok")
+        || t.contains("hi, grok")
+        || t.contains("morning, grok")
+        || t.contains("afternoon, grok")
+        || t.contains("evening, grok")
+        || t.contains("night, grok")
 }
 
 pub fn pick_greeting(local: &str, llm: Option<&str>) -> String {
@@ -402,6 +413,7 @@ mod tests {
         assert_eq!(greeting_name("Name: CachyOS\n", "Viper"), "Viper");
         assert_eq!(greeting_name("", "CachyOS"), "");
         assert!(parse_llm_greeting("Hello, CachyOS.").is_none());
+        assert!(parse_llm_greeting("Hello, Grok.").is_none());
         assert!(parse_llm_greeting("Evening, Viper. The cabin is ready.").is_some());
     }
 

@@ -139,6 +139,80 @@ pub fn refresh_tokens(refresh_token: &str) -> Result<XaiOAuthTokens, String> {
     parse_token_json(&v, grokhub_core::now_ms())
 }
 
+/// Refresh a `grok login` JWT (CLI client id, not cabin OAuth) and write it back.
+pub fn refresh_grok_login() -> Option<String> {
+    let path = grokhub_acp::grok_auth_path()?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let mut v: Value = serde_json::from_str(&raw).ok()?;
+    let obj = v.as_object_mut()?;
+    let mut slot: Option<String> = None;
+    let mut refresh = String::new();
+    let mut client_id = String::new();
+    let mut best_exp = String::new();
+    for (k, rec) in obj.iter() {
+        let rt = rec
+            .get("refresh_token")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim();
+        if rt.is_empty() {
+            continue;
+        }
+        let exp = rec
+            .get("expires_at")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let take = slot.is_none() || exp > best_exp;
+        if take {
+            best_exp = exp;
+            refresh = rt.to_string();
+            client_id = rec
+                .get("oidc_client_id")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            if client_id.is_empty() {
+                if let Some((_, id)) = k.rsplit_once("::") {
+                    client_id = id.to_string();
+                }
+            }
+            slot = Some(k.clone());
+        }
+    }
+    let slot = slot?;
+    if client_id.is_empty() || refresh.is_empty() {
+        return None;
+    }
+    let d = discovery().ok()?;
+    let body = form(&[
+        ("grant_type", "refresh_token"),
+        ("client_id", &client_id),
+        ("refresh_token", &refresh),
+    ]);
+    let (ok, tok) = post_form(&d.token, &body).ok()?;
+    if !ok {
+        return None;
+    }
+    let access = tok.get("access_token")?.as_str()?.trim().to_string();
+    if access.is_empty() {
+        return None;
+    }
+    if let Some(rec) = v.get_mut(&slot).and_then(|x| x.as_object_mut()) {
+        rec.insert("key".into(), Value::String(access.clone()));
+        if let Some(rt) = tok.get("refresh_token").and_then(|x| x.as_str()) {
+            if !rt.trim().is_empty() {
+                rec.insert("refresh_token".into(), Value::String(rt.to_string()));
+            }
+        }
+    }
+    let out = serde_json::to_string_pretty(&v).ok()?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, out).ok()?;
+    std::fs::rename(&tmp, &path).ok()?;
+    Some(access)
+}
+
 pub fn ensure_access(tokens: &XaiOAuthTokens) -> Result<(String, XaiOAuthTokens, bool), String> {
     if tokens.access_token.trim().is_empty() {
         return Err("No OAuth access token — Connect Grok OAuth in Settings".into());

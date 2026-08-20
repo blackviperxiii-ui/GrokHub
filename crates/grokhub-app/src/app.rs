@@ -89,7 +89,7 @@ use grokhub_core::{
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
     remember_chip_outcome, remember_typed_prompt, roll_usage_day,
-    greeting_fingerprint, greeting_prompt, local_greeting, pick_greeting,
+    greeting_fingerprint, greeting_name, greeting_prompt, local_greeting, pick_greeting,
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
@@ -1329,7 +1329,7 @@ impl Cabin {
             desk_frame: None,
             perm_ask: None,
             session_mode: SessionMode::Chat,
-            permission_mode: PermissionMode::AlwaysApprove,
+            permission_mode: PermissionMode::Ask,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
             inspect_text: String::new(),
@@ -1738,12 +1738,10 @@ impl Cabin {
             .filter(|s| !s.trim().is_empty());
         if let Some(h) = &self.acp {
             if h.cwd == cwd {
-                let same = match resume.as_deref() {
-                    None => true,
-                    Some(id) => h.session_id.contains(id),
-                };
-                if same {
-                    return Ok(());
+                if let Some(id) = resume.as_deref() {
+                    if h.session_id == id {
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -1881,6 +1879,9 @@ impl Cabin {
         self.hands_attach = false;
         self.eyes_attach = false;
         self.last_receipt_ok = None;
+        self.acp = None;
+        self.tool_cards.clear();
+        self.perm_ask = None;
     }
 
     fn pick_entries(dir: &Path) -> Vec<(String, bool)> {
@@ -2706,7 +2707,7 @@ impl Cabin {
             self.goal_stale = false;
             return;
         }
-        if !self.has_key() {
+        if !self.llm_ready() {
             self.goal_stale = false;
             return;
         }
@@ -2910,15 +2911,30 @@ impl Cabin {
             "history" => Nav::History,
             "workboard" => Nav::Workboard,
             "skills" => Nav::Skills,
-            "night" => Nav::Night,
-            "command" => Nav::Command,
-            "agents" => Nav::Agents,
+            "night" | "automations" => Nav::Night,
+            "agents" | "queue" => Nav::Agents,
+            "devices" => Nav::Devices,
+            "memory" => Nav::Memory,
+            "connectors" => Nav::Connectors,
             "chat" => Nav::Chat,
             _ => Nav::Chat,
         }
     }
 
     fn bearer(&mut self) -> String {
+        if let Some(k) = grokhub_acp::grok_cli_key() {
+            if !k.trim().is_empty() {
+                let stale = grokhub_core::jwt_exp_ms(&k)
+                    .map(|exp| exp.saturating_sub(grokhub_core::TOKEN_REFRESH_SKEW_MS) < now_ms())
+                    .unwrap_or(false);
+                if stale {
+                    if let Some(fresh) = crate::oauth::refresh_grok_login() {
+                        return fresh;
+                    }
+                }
+                return k;
+            }
+        }
         let mut oauth_usable = false;
         if let Some(tok) = self.secrets.oauth.clone() {
             if let Ok((access, next, refreshed)) = crate::oauth::ensure_access(&tok) {
@@ -3923,7 +3939,7 @@ impl Cabin {
     }
 
     fn doctor_text(&self) -> String {
-        let mut lines = grokhub_core::doctor_lines(self.has_key(), true, HUB_KIND);
+        let mut lines = grokhub_core::doctor_lines(self.llm_ready(), true, HUB_KIND);
         lines.extend(grokhub_core::doctor_extras(
             self.last_receipt_ok,
             self.skill_list.len(),
@@ -3965,8 +3981,8 @@ impl Cabin {
     }
 
     fn run_dream(&mut self) {
-        if !self.has_key() {
-            self.status = "Connect Grok OAuth in Settings".into();
+        if !self.llm_ready() {
+            self.status = "Run grok login, or Connect Grok in Settings.".into();
             return;
         }
         if self.running {
@@ -4207,7 +4223,7 @@ impl Cabin {
         if daily_units_blocked(self.usage.automation, self.cfg.daily_auto_cap) {
             return;
         }
-        if !anticipate_consumes_slot(self.has_key()) {
+        if !anticipate_consumes_slot(self.llm_ready()) {
             return;
         }
         self.last_anticipate_ms = now_ms();
@@ -4305,7 +4321,7 @@ impl Cabin {
             self.status = format!("Night skipped {} (quiet/policy)", a.name);
             return;
         }
-        if night_unauth_should_skip(self.has_key()) {
+        if night_unauth_should_skip(self.llm_ready()) {
             self.mark_auto_skipped(&a.id, now_ms);
             self.status = "Connect Grok OAuth in Settings".into();
             return;
@@ -4340,7 +4356,7 @@ impl Cabin {
         ) {
             return;
         }
-        if !self.has_key() {
+        if !self.llm_ready() {
             return;
         }
         self.spawn_review();
@@ -4541,7 +4557,7 @@ impl Cabin {
         let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
         if !wall_can_paint(
-            self.has_key(),
+            self.llm_ready(),
             self.cfg.imagine_wall,
             self.wall_busy,
             self.running,
@@ -4648,8 +4664,8 @@ impl Cabin {
     }
 
     fn run_consult(&mut self, q: String) {
-        if !self.has_key() {
-            self.status = "Connect Grok OAuth in Settings".into();
+        if !self.llm_ready() {
+            self.status = "Run grok login, or Connect Grok in Settings.".into();
             return;
         }
         if self.running {
@@ -4691,7 +4707,10 @@ impl Cabin {
             "nav:history" => self.nav = Nav::History,
             "nav:devices" => self.nav = Nav::Devices,
             "nav:connectors" => self.nav = Nav::Connectors,
-            "nav:command" => self.nav = Nav::Command,
+            "nav:command" => {
+                self.open_recent_chat();
+                self.nav = Nav::Chat;
+            },
             "nav:agents" => self.nav = Nav::Agents,
             "nav:eyes" => {
                 self.open_recent_chat();
@@ -5896,18 +5915,7 @@ impl Cabin {
         let kind = self.imagine_kind;
         let key = self.bearer();
         if key.trim().is_empty() {
-            if grokhub_acp::find_grok().is_some() {
-                let noun = match kind {
-                    ImagineKind::Video => "short video",
-                    _ => "still image",
-                };
-                self.nav = Nav::Chat;
-                self.send_chat(format!(
-                    "Generate a {noun} of: {prompt}. Save the file in the bound project and reply with the path."
-                ));
-                return;
-            }
-            self.status = "Connect Grok or run grok login.".into();
+            self.status = "Run grok login — Imagine uses that token.".into();
             return;
         }
         let aspect = imagine_aspect_label(self.imagine_aspect).to_string();
@@ -6575,7 +6583,7 @@ impl Cabin {
         if !self.hub_on
             || self.running
             || self.pending_hub_task.is_some()
-            || !inbox_claim_ready(self.has_key())
+            || !inbox_claim_ready(self.llm_ready())
         {
             return;
         }
@@ -7645,13 +7653,27 @@ impl Cabin {
             .oauth
             .as_ref()
             .and_then(|t| t.name.clone().or(t.email.clone()))
-            .unwrap_or_else(|| "Cabin".into());
+            .filter(|s| !greeting_name("", s).is_empty())
+            .unwrap_or_else(|| {
+                let n = greeting_name(&self.greeting_user_md, "");
+                if n.is_empty() {
+                    "Grok".into()
+                } else {
+                    n
+                }
+            });
         let email = self
             .secrets
             .oauth
             .as_ref()
             .and_then(|t| t.email.clone())
-            .unwrap_or_else(|| "Connect Grok".into());
+            .unwrap_or_else(|| {
+                if grokhub_acp::grok_cli_key().is_some() {
+                    "grok login".into()
+                } else {
+                    "Run grok login".into()
+                }
+            });
         egui::SidePanel::left("rail")
             .exact_width(crate::theme::SIDEBAR_W)
             .resizable(false)
@@ -7895,7 +7917,8 @@ impl Cabin {
                             });
                         }
                         if !self.grok_sessions_loaded {
-                            self.reload_grok_sessions();
+                            // History page loads grok sessions off the first rail paint
+                            // so a hung `grok sessions list` cannot freeze the cabin.
                         }
                         let owned: Vec<(String, String)> = self
                             .threads
@@ -8090,7 +8113,7 @@ impl Cabin {
                             },
                         );
                     });
-                    if !card.diff.is_empty() {
+                    if !card.diff.is_empty() && !card.diff.trim().starts_with('{') && !card.diff.trim().starts_with('[') {
                         ui.add_space(4.0);
                         ui.label(
                             RichText::new(card.diff.chars().take(800).collect::<String>())
@@ -8153,7 +8176,7 @@ impl Cabin {
                     if crate::cards::ghost_pill(ui, "Always") {
                         self.permission_mode = PermissionMode::AlwaysApprove;
                         if let Some(h) = &self.acp {
-                            let _ = h.answer_permission(p.rpc_id.clone(), true);
+                            let _ = h.answer_permission_always(p.rpc_id.clone());
                         }
                         self.perm_ask = None;
                         self.status = "Permission always-approve".into();
@@ -8182,12 +8205,6 @@ impl Cabin {
                         .font(crate::theme::title_font(crate::theme::GREET_HERO))
                         .color(crate::theme::muted()),
                 );
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new("Native Grok Build cabin")
-                        .size(crate::theme::FONT_META)
-                        .color(crate::theme::subtle()),
-                );
                 ui.add_space(28.0);
             } else {
                 ui.add_space(28.0);
@@ -8205,7 +8222,8 @@ impl Cabin {
                 match slot {
                     ComposerStackSlot::AuthBanner => {
                         let grok_missing = grokhub_acp::find_grok().is_none();
-                        if grok_missing || paint_connect_banner(self.has_key(), self.messages.len())
+                        let need_login = grokhub_acp::grok_cli_key().is_none() && !self.has_key();
+                        if grok_missing || need_login
                         {
                             ui.horizontal(|ui| {
                                 crate::cards::settings_note(
@@ -8213,7 +8231,7 @@ impl Cabin {
                                     if grok_missing {
                                         "Install Grok Build (x.ai/cli), then grok login."
                                     } else {
-                                        "Connect Grok for Voice and Imagine. Chat uses grok login."
+                                        "Run grok login. Chat, Imagine, and Fast chips use that token."
                                     },
                                 );
                                 if crate::cards::ghost_pill(ui, "Settings") {
@@ -10989,8 +11007,25 @@ mod tests {
             "new ACP sessions must bind onto the cabin thread: {ensure}"
         );
         assert!(
+            ensure.contains("h.session_id == id"),
+            "ACP reuse is exact session id, never substring and never a blank new chat: {ensure}"
+        );
+        assert!(
             ensure.contains("explain_handshake_error") && ensure.contains("spawn(None)"),
             "a dead grok session id must retry session/new without resume: {ensure}"
+        );
+        let bearer = src
+            .split("fn bearer(")
+            .nth(1)
+            .and_then(|s| s.split("fn switch_thread(").next())
+            .expect("bearer");
+        assert!(
+            bearer.contains("grok_cli_key") && bearer.find("grok_cli_key").unwrap() < bearer.find("oauth_usable").unwrap_or(usize::MAX),
+            "Imagine/ACP bearer prefers grok login over cabin OAuth: {bearer}"
+        );
+        assert!(
+            bearer.contains("refresh_grok_login"),
+            "grok login JWT must refresh before Imagine 401s: {bearer}"
         );
         let cwd = src
             .split("fn grok_cwd(")
@@ -11561,6 +11596,10 @@ mod tests {
         assert!(
             chrome.contains("hands_attach = false") && chrome.contains("eyes_attach = false"),
             "leaving a tab must not leave windshield/hands armed for the next tab: {chrome}"
+        );
+        assert!(
+            chrome.contains("self.acp = None") && chrome.contains("tool_cards.clear()"),
+            "leaving a tab must drop the ACP handle so New chat does not reuse the last session: {chrome}"
         );
         assert!(
             chrome.contains("last_receipt_ok = None"),
@@ -12374,7 +12413,7 @@ mod tests {
             dream.contains("visible_host_receipts") && dream.contains("dream_rewind_id"),
             "/dream must use this tab's host receipts, not cabin-global last_receipts: {dream}"
         );
-        let key = dream.find("has_key").expect("dream auth");
+        let key = dream.find("llm_ready").expect("dream auth");
         let push = dream.find("messages.push").expect("dream push");
         assert!(
             key < push && dream.contains("self.running"),
@@ -12618,8 +12657,8 @@ mod tests {
             "greeting uses secondary paint, not a washed-out whisper"
         );
         assert!(
-            slice.contains("Native Grok Build cabin"),
-            "quiet product line under the greeting"
+            !slice.contains("Native Grok Build cabin"),
+            "empty home is the greeting, not a product tagline: {slice}"
         );
         assert!(
             !slice.contains("RichText::new(\"GrokHub\")"),

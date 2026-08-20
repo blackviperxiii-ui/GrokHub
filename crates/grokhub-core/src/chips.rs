@@ -804,14 +804,14 @@ fn draft_prediction_chips(draft_raw: &str) -> Vec<QuickChip> {
         )];
     }
     let templates: &[(&str, &str, fn(&str) -> (String, ChipKind), f32)] = &[
-        ("fix", "Debug with host evidence", |d| {
-            (format!("{d}. Investigate with HOST_CMD for real evidence. Root cause, fix, verify."), ChipKind::Chat)
+        ("fix", "Debug with evidence", |d| {
+            (format!("{d}. Investigate with Grok Build tools for real evidence. Root cause, fix, verify."), ChipKind::Chat)
         }, 125.0),
-        ("debug", "Debug with host evidence", |d| {
-            (format!("{d}. Investigate with HOST_CMD for real evidence. Root cause, fix, verify."), ChipKind::Chat)
+        ("debug", "Debug with evidence", |d| {
+            (format!("{d}. Investigate with Grok Build tools for real evidence. Root cause, fix, verify."), ChipKind::Chat)
         }, 125.0),
         ("add", "Implement this now", |d| {
-            (format!("{d}. Ship a minimal solid slice. Inspect files with HOST_CMD if needed, then apply."), ChipKind::Chat)
+            (format!("{d}. Ship a minimal solid slice. Inspect files if needed, then apply."), ChipKind::Chat)
         }, 124.0),
         ("implement", "Implement this now", |d| {
             (format!("{d}. Ship a minimal solid slice."), ChipKind::Chat)
@@ -825,8 +825,8 @@ fn draft_prediction_chips(draft_raw: &str) -> Vec<QuickChip> {
         ("how", "Explain simply", |d| {
             (format!("{d}. Plain language, one example, one practical takeaway."), ChipKind::Chat)
         }, 120.0),
-        ("check", "Check with HOST_CMD", |d| {
-            (format!("{d}. Use bounded HOST_CMD. Summarize results clearly."), ChipKind::Chat)
+        ("check", "Check it", |d| {
+            (format!("{d}. Inspect the tree and summarize results clearly."), ChipKind::Chat)
         }, 123.0),
         ("continue", "Continue until done", |d| {
             (format!("{d}. Complete the goal fully. Act now — no planning-only replies."), ChipKind::Chat)
@@ -854,7 +854,7 @@ fn draft_prediction_chips(draft_raw: &str) -> Vec<QuickChip> {
         ("fix the", "Fix the bug we hit", "Diagnose and fix the latest bug. Root cause, exact fix, verify steps."),
         ("fix o", "Fix OAuth / session", "Fix Grok OAuth or session issues. Check tokens, refresh, and reconnect path."),
         ("add ", "Add a feature", "Implement the feature I'm describing as a minimal solid slice."),
-        ("check c", "Check CPU / processes", "Run HOST_CMD for top CPU/memory processes and summarize what's hot."),
+        ("check c", "Check CPU / processes", "Read top CPU and memory processes and summarize what's hot."),
         ("how d", "How does this work?", "Explain how this works simply with one example."),
         ("contin", "Continue the task", "Continue until the current goal is fully done. Use tools when needed."),
         ("summar", "Summarize the thread", "Summarize this thread: goals, decisions, open questions, next steps."),
@@ -881,7 +881,7 @@ fn draft_prediction_chips(draft_raw: &str) -> Vec<QuickChip> {
         out.push(chip(
             "pred-expand-draft",
             "Expand & send",
-            &format!("{draft}. Be concrete and complete the goal. Use HOST_CMD if you need machine data."),
+            &format!("{draft}. Be concrete and complete the goal. Use Grok Build tools if you need machine data."),
             ChipKind::Chat,
             100.0,
             "Predicted expansion of your draft",
@@ -1354,16 +1354,16 @@ fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
         ChipStage::Tools => vec![
             chip(
                 "tools-sum",
-                "Summarize host results",
-                "Summarize the latest host results in plain language. Call out failures or timeouts.",
+                "Summarize tool results",
+                "Summarize the latest tool results in plain language. Call out failures or timeouts.",
                 ChipKind::Chat,
                 88.0,
-                "After host",
+                "After tools",
             ),
             chip(
                 "tools-next",
-                "Next host step",
-                "Given the HOST_RESULT, take the next safe step. Emit HOST_CMD if needed.",
+                "Next step",
+                "Given the last tool result, take the next safe step with Grok Build tools.",
                 ChipKind::Chat,
                 84.0,
                 "Continue tools",
@@ -1488,6 +1488,10 @@ fn retired_host_copy(id: &str, label: &str, value: &str) -> bool {
         || hay.contains("what's on my desk")
         || hay.contains("whats on my desk")
         || hay.contains("check the machine")
+        || hay.contains("host_cmd")
+        || hay.contains("host_result")
+        || label.eq_ignore_ascii_case("voice")
+        || label.eq_ignore_ascii_case("hey grok")
         || id == "ctx-host"
         || id == "empty-host"
         || id.starts_with("host-")
@@ -1857,7 +1861,8 @@ pub fn chip_suggest_prompt(
         "- Prefer habits if they fit the current context".into(),
         "- No markdown fences, no commentary outside JSON".into(),
         "- Cabin-real only: no SuperGrok, subscription, Outlook, Gmail, Drive, or Office".into(),
-        "- Never suggest Turn host on, Take over this desktop, Scan the desk, or Check the machine. Grok Build already has computer-use from chat.".into(),
+        "- Never suggest Turn host on, Take over this desktop, Scan the desk, Check the machine, Voice, or Hey Grok. Voice is the mic. Grok Build already has computer-use from chat.".into(),
+        "- Never emit HOST_CMD or HOST_RESULT. Grok Build runs bash itself.".into(),
         "- Imagine stills use grok-imagine-image-2.0; Video kind uses grok-imagine-video-1.5".into(),
         String::new(),
         format!("Stage: {}", stage.as_str()),
@@ -2183,7 +2188,7 @@ mod tests {
         ];
         let chips = build_quick_chips(input(&[], "", &mem, &[], &llm));
         let voices = chips.iter().filter(|c| c.label == "Voice").count();
-        assert_eq!(voices, 1, "{:?}", labels(&chips));
+        assert_eq!(voices, 0, "Voice is the mic, not a chip: {:?}", labels(&chips));
     }
 
     #[test]
