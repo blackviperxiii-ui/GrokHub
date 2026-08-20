@@ -9,7 +9,7 @@ fn fake_opts() -> SpawnOpts {
         api_key: None,
         always_approve: true,
         auto: false,
-        session_mode: SessionMode::Code,
+        session_mode: SessionMode::Chat,
         extra_env: vec![],
         handshake_timeout: None,
     }
@@ -88,7 +88,7 @@ fn handshake_times_out_on_a_silent_child() {
         api_key: None,
         always_approve: true,
         auto: false,
-        session_mode: SessionMode::Code,
+        session_mode: SessionMode::Chat,
         extra_env: vec![],
         handshake_timeout: Some(Duration::from_secs(2)),
     };
@@ -120,7 +120,7 @@ fn handshake_does_not_deadlock_when_stderr_floods() {
         api_key: None,
         always_approve: true,
         auto: false,
-        session_mode: SessionMode::Code,
+        session_mode: SessionMode::Chat,
         extra_env: vec![],
         handshake_timeout: Some(Duration::from_secs(2)),
     };

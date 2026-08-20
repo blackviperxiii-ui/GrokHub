@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.6.36
+**Version:** 2.6.37
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI over ACP) is the agent, the host shell, and computer-use (eyes and hands).
 
@@ -16,7 +16,7 @@ Transport: spawn installed `grok --no-auto-update agent stdio`. Do not vendor gr
 
 `send_chat` opens or reuses an ACP session whose cwd is the bound project. Stream thought and text into existing bubbles. Stop / Halt / tray Halt is `session/cancel`.
 
-Composer pills: Code / Plan / Ask and Ask / Auto / Always-approve. Tool cards, diffs, and computer-use frames render in the chat pane. Permission prompts Allow / Deny / Always.
+Composer pills: Chat / Plan / Ask and Ask / Auto / Always-approve. Tool cards, diffs, and computer-use frames render in the chat pane. Permission prompts Allow / Deny / Always.
 
 ## Desktop
 

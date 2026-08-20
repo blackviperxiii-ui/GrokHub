@@ -563,7 +563,7 @@ mod tests {
             None,
             false,
             false,
-            SessionMode::Code,
+            SessionMode::Chat,
         )
         .unwrap_err();
         if let Some(p) = prev {
