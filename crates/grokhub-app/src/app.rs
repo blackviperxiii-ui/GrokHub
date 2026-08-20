@@ -3102,16 +3102,6 @@ impl Cabin {
                 });
             }
         }
-        let user_md = if self.mem_name == "USER.md" {
-            self.mem_body.clone()
-        } else {
-            self.greeting_user_md.clone()
-        };
-        let memory_md = if self.mem_name == "MEMORY.md" {
-            self.mem_body.clone()
-        } else {
-            self.greeting_memory_md.clone()
-        };
         let insights: Vec<String> = self
             .learning
             .insights
@@ -3128,50 +3118,53 @@ impl Cabin {
             .unwrap_or_default();
         let hour = Self::chip_hour();
         let last_night = self.last_night_hint();
-        let input = GreetingInput {
-            user_md: &user_md,
-            memory_md: &memory_md,
-            insights: &insights,
-            display_name: &display_name,
-            hour,
-            last_night: &last_night,
+        let (local, fp, llm_prompt) = {
+            let user_md = if self.mem_name == "USER.md" {
+                self.mem_body.as_str()
+            } else {
+                self.greeting_user_md.as_str()
+            };
+            let memory_md = if self.mem_name == "MEMORY.md" {
+                self.mem_body.as_str()
+            } else {
+                self.greeting_memory_md.as_str()
+            };
+            let input = GreetingInput {
+                user_md,
+                memory_md,
+                insights: &insights,
+                display_name: &display_name,
+                hour,
+                last_night: &last_night,
+            };
+            let fp = greeting_fingerprint(&input);
+            let local = local_greeting(&input);
+            let llm_prompt = if should_refresh_greeting(
+                &self.greeting_llm_fp,
+                &fp,
+                self.greeting_llm_at,
+                now_ms(),
+                self.llm_ready(),
+                self.greeting_busy,
+            ) {
+                Some(greeting_prompt(&input))
+            } else {
+                None
+            };
+            (local, fp, llm_prompt)
         };
-        let local = local_greeting(&input);
-        let fp = greeting_fingerprint(&input);
         if self.greeting_fp != fp {
             self.greeting = local;
             self.greeting_fp = fp.clone();
         }
-        if should_refresh_greeting(
-            &self.greeting_llm_fp,
-            &fp,
-            self.greeting_llm_at,
-            now_ms(),
-            self.llm_ready(),
-            self.greeting_busy,
-        ) {
+        if let Some(prompt) = llm_prompt {
             self.greeting_llm_fp = fp;
             self.greeting_llm_at = now_ms();
-            self.spawn_greeting_llm(
-                &user_md,
-                &memory_md,
-                &insights,
-                &display_name,
-                hour,
-                &last_night,
-            );
+            self.spawn_greeting_llm(prompt);
         }
     }
 
-    fn spawn_greeting_llm(
-        &mut self,
-        user_md: &str,
-        memory_md: &str,
-        insights: &[String],
-        display_name: &str,
-        hour: u8,
-        last_night: &str,
-    ) {
+    fn spawn_greeting_llm(&mut self, prompt: String) {
         if self.greeting_busy {
             return;
         }
@@ -3179,15 +3172,6 @@ impl Cabin {
         if key.trim().is_empty() && grokhub_acp::find_grok().is_none() {
             return;
         }
-        let input = GreetingInput {
-            user_md,
-            memory_md,
-            insights,
-            display_name,
-            hour,
-            last_night,
-        };
-        let prompt = greeting_prompt(&input);
         let (tx, rx) = mpsc::channel();
         self.greeting_rx = Some(rx);
         self.greeting_busy = true;
@@ -3473,7 +3457,7 @@ impl Cabin {
             mode,
         );
         remember_chip_click(&mut self.chip_memory, &chip, Some(&tag), now_ms(), hour);
-        let _ = crate::store::save_chips(&self.chip_memory);
+        self.flush_chips();
         match chip.kind {
             ChipKind::Nav => {
                 if let Some(id) = nav_from_chip_value(&chip.value) {
@@ -3507,7 +3491,17 @@ impl Cabin {
         remember_chip_dismiss(&mut self.chip_memory, &chip, now_ms(), Self::chip_hour());
         self.chip_dismissed.push(chip.id);
         self.chip_dismissed.push(chip.value);
-        let _ = crate::store::save_chips(&self.chip_memory);
+        self.flush_chips();
+    }
+
+    fn flush_chips(&self) {
+        let chips = self.chip_memory.clone();
+        let io = self.persist_io.clone();
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                let _ = crate::store::save_chips(&chips);
+            }
+        });
     }
 
     fn nav_from_id(id: &str) -> Nav {
@@ -4907,7 +4901,6 @@ impl Cabin {
             self.status = "Syncing…".into();
             return;
         }
-        self.persist();
         if !self.scratch() {
             let name = self.mem_name.clone();
             let body = self.mem_body.clone();
@@ -4923,18 +4916,14 @@ impl Cabin {
             .collect::<Vec<_>>();
         let mem_name = self.mem_name.clone();
         let mem_body = self.mem_body.clone();
-        let threads = self
-            .threads
-            .iter()
-            .map(|t| {
-                (
-                    t.id.clone(),
-                    t.title.clone(),
-                    t.accessed_ms,
-                    t.messages.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut snap = self.persist_snap();
+        if snap.projects.is_some() {
+            self.projects_dirty = false;
+        }
+        self.sync_hub_voice();
+        snap.secrets = Some(self.secrets.clone());
+        self.last_persist = Instant::now();
+        self.geom_dirty = false;
         let skills = self
             .skill_list
             .iter()
@@ -4955,10 +4944,14 @@ impl Cabin {
         let device_name = self.cfg.device_name.clone();
         let exported_at = now_ms();
         let hub = self.hub.clone();
+        let io = self.persist_io.clone();
         let (tx, rx) = mpsc::channel();
         self.sync_rx = Some(rx);
         self.status = "Syncing…".into();
         std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                write_persist_disk(&snap);
+            }
             let mem = mem
                 .into_iter()
                 .map(|(n, at)| HubMemoryFile {
@@ -4971,14 +4964,15 @@ impl Cabin {
                     updated_at: at,
                 })
                 .collect();
-            let threads = threads
-                .into_iter()
-                .map(|(id, title, updated, messages)| {
+            let threads = snap
+                .threads
+                .iter()
+                .map(|t| {
                     serde_json::json!({
-                        "id": id,
-                        "title": title,
-                        "updatedAt": updated,
-                        "messages": messages.iter().map(|(r,c)| serde_json::json!({"role": r, "content": c})).collect::<Vec<_>>(),
+                        "id": t.id,
+                        "title": t.title,
+                        "updatedAt": t.accessed_ms,
+                        "messages": t.messages.iter().map(|(r,c)| serde_json::json!({"role": r, "content": c})).collect::<Vec<_>>(),
                     })
                 })
                 .collect();
@@ -5546,7 +5540,13 @@ impl Cabin {
                     .saturating_sub(WALL_GIF_EVERY_MS)
                     .saturating_add(15 * 60 * 1000);
                 self.status = format!("Wall cover held — {e}");
-                let _ = crate::store::save_wall(&self.wall);
+                let wall = self.wall.clone();
+                let io = self.persist_io.clone();
+                std::thread::spawn(move || {
+                    if let Ok(_g) = io.lock() {
+                        let _ = crate::store::save_wall(&wall);
+                    }
+                });
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.wall_rx = Some(rx);
@@ -12729,6 +12729,17 @@ mod tests {
             ready.contains("find_grok"),
             "llm_ready must count the Grok Build CLI: {ready}"
         );
+        let chip = src
+            .split("fn apply_chip(")
+            .nth(1)
+            .and_then(|s| s.split("fn nav_from_id").next())
+            .expect("apply_chip");
+        let chip_spawn = chip.find("thread::spawn").expect("chip save must leave the UI thread");
+        let chip_save = chip.find("save_chips").expect("save_chips");
+        assert!(
+            chip_spawn < chip_save && chip.contains("persist_io"),
+            "chip click must not freeze the cabin writing chips.json: {chip}"
+        );
     }
 
     #[test]
@@ -14656,7 +14667,7 @@ mod tests {
             sync.contains("merge_hub_snapshots"),
             "/sync must merge the hub snapshot, not replace peer threads: {sync}"
         );
-        let flushed = sync.find("self.persist()").expect("sync persist");
+        let flushed = sync.find("persist_snap").expect("sync persist");
         let built = sync.find("build_hub_snapshot").expect("build snapshot");
         assert!(
             flushed < built,
@@ -14681,13 +14692,17 @@ mod tests {
             "/sync must slurp SOUL/USER/MEMORY off the UI thread: {sync}"
         );
         let thread_rows = sync
-            .split("let threads = self")
+            .split("let threads = snap")
             .nth(1)
-            .and_then(|s| s.split("let skills = self").next())
+            .and_then(|s| s.split("let skills = skills").next())
             .expect("sync threads");
         assert!(
             thread_rows.contains("accessed_ms") && !thread_rows.contains("now_ms()"),
             "/sync must not stamp every thread now or local stale data wins LWW: {thread_rows}"
+        );
+        assert!(
+            !sync.contains("t.messages.clone()") && sync.contains("write_persist_disk"),
+            "/sync must reuse the persist snap instead of cloning every thread twice: {sync}"
         );
         let push = src
             .split("fn push_bound_msg")
@@ -14722,7 +14737,7 @@ mod tests {
         let mem_rows = sync
             .split("let mem = ")
             .nth(1)
-            .and_then(|s| s.split("let threads = self").next())
+            .and_then(|s| s.split("let mut snap = self.persist_snap").next())
             .expect("sync mem");
         assert!(
             mem_rows.contains("memory_updated_at") && !mem_rows.contains("now_ms()"),
@@ -14826,6 +14841,16 @@ mod tests {
         assert!(
             !greet.contains("device_name"),
             "hostname must not paint as the empty-home greeting: {greet}"
+        );
+        assert!(
+            greet.contains("as_str()")
+                && !greet.contains("greeting_user_md.clone()")
+                && !greet.contains("greeting_memory_md.clone()"),
+            "empty-chat greeting must not clone USER/MEMORY every paint: {greet}"
+        );
+        assert!(
+            greet.contains("greeting_prompt"),
+            "greeting Fast prompt must be built from borrowed USER/MEMORY: {greet}"
         );
         let dream = src
             .split("fn run_dream")
@@ -15526,6 +15551,20 @@ mod tests {
         assert!(
             apply.contains("prune_live_suggestions"),
             "a successful review must drop wired GitHub tiles already sitting in the store: {apply}"
+        );
+        let wall = src
+            .split("fn poll_wall(")
+            .nth(1)
+            .and_then(|s| s.split("fn tick_wall(").next())
+            .expect("poll_wall");
+        let held_wall = wall.split("Ok(Err(e))").nth(1).expect("wall held");
+        let wall_spawn = held_wall
+            .find("thread::spawn")
+            .expect("wall save must leave the UI thread");
+        let wall_save = held_wall.find("save_wall").expect("save_wall");
+        assert!(
+            wall_spawn < wall_save && held_wall.contains("persist_io"),
+            "a held wall cover must not freeze the cabin writing imagine-wall.json: {wall}"
         );
         assert!(
             apply.contains("apply_review_skill_patches"),
