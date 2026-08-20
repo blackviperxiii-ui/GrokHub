@@ -8169,6 +8169,8 @@ impl Cabin {
                             if matches!(kind, StreamTokenKind::Replace) && voice_log_role(&ev).is_some()
                             {
                                 self.persist();
+                            } else {
+                                self.persist_idle_key = self.persist_idle_now();
                             }
                         }
                     }
@@ -12349,6 +12351,10 @@ mod tests {
         assert!(
             voice.contains("fold_stream_fields") && !voice.contains("content.clone()"),
             "a voice token must not clone an 8MB transcript to append a delta: {voice}"
+        );
+        assert!(
+            voice.contains("persist_idle_key") && voice.contains("self.persist()"),
+            "a live voice delta must not clone every thread 2s later — bump the idle key so persist_bg skips: {voice}"
         );
     }
 
