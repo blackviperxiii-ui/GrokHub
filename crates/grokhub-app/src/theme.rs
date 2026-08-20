@@ -175,7 +175,7 @@ fn cmd_stdout(bin: &str, args: &[&str]) -> String {
 }
 
 pub const SIDEBAR_W: f32 = 260.0;
-pub const TITLEBAR_H: f32 = 28.0;
+pub const TITLEBAR_H: f32 = 36.0;
 /// `.query-bar` measured max-width
 pub const QUERY_MAX_W: f32 = 800.0;
 /// `[data-testid=chat-input]` `min-h-[60px]`
@@ -254,46 +254,33 @@ pub fn stage_subtitle(id: &str) -> &'static str {
 
 fn install_inter(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
-    if let Ok(regular) = std::fs::read("/usr/share/fonts/truetype/macos/Inter-Regular.ttf") {
-        fonts
-            .font_data
-            .insert("inter".into(), FontData::from_owned(regular));
-        if let Some(fam) = fonts.families.get_mut(&FontFamily::Proportional) {
-            fam.insert(0, "inter".into());
-        }
+    fonts.font_data.insert(
+        "inter".into(),
+        FontData::from_static(include_bytes!("../assets/fonts/Inter-Regular.ttf")),
+    );
+    fonts.font_data.insert(
+        "inter-medium".into(),
+        FontData::from_static(include_bytes!("../assets/fonts/Inter-Medium.ttf")),
+    );
+    fonts.font_data.insert(
+        "inter-bold".into(),
+        FontData::from_static(include_bytes!("../assets/fonts/Inter-SemiBold.ttf")),
+    );
+    if let Some(fam) = fonts.families.get_mut(&FontFamily::Proportional) {
+        fam.insert(0, "inter-medium".into());
+        fam.insert(0, "inter".into());
     }
-    if let Ok(medium) = std::fs::read("/usr/share/fonts/truetype/macos/Inter-Medium.ttf") {
-        fonts
-            .font_data
-            .insert("inter-medium".into(), FontData::from_owned(medium));
-        if let Some(fam) = fonts.families.get_mut(&FontFamily::Proportional) {
-            fam.insert(0, "inter-medium".into());
-        }
-    }
-    let mut bold_stack = Vec::new();
-    if let Ok(bold) = std::fs::read("/usr/share/fonts/truetype/macos/Inter-Bold.ttf") {
-        fonts
-            .font_data
-            .insert("inter-bold".into(), FontData::from_owned(bold));
-        bold_stack.push("inter-bold".into());
-    }
-    if fonts.font_data.contains_key("inter") {
-        bold_stack.push("inter".into());
-    }
-    if let Some(prop) = fonts.families.get(&FontFamily::Proportional) {
-        for name in prop {
-            if !bold_stack.contains(name) {
-                bold_stack.push(name.clone());
-            }
-        }
-    }
-    if !bold_stack.is_empty() {
-        fonts
-            .families
-            .insert(FontFamily::Name("inter-bold".into()), bold_stack);
-    }
-    let mono = std::fs::read("/usr/share/fonts/truetype/macos/JetBrainsMono-Regular.ttf")
-        .or_else(|_| std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"));
+    fonts.families.insert(
+        FontFamily::Name("inter-bold".into()),
+        vec![
+            "inter-bold".into(),
+            "inter-medium".into(),
+            "inter".into(),
+        ],
+    );
+    let mono = std::fs::read("/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf")
+        .or_else(|_| std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"))
+        .or_else(|_| std::fs::read("/usr/share/fonts/truetype/macos/JetBrainsMono-Regular.ttf"));
     if let Ok(mono) = mono {
         fonts
             .font_data
@@ -368,12 +355,19 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     visuals.widgets.open.bg_fill = elevated();
     visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, fg());
     visuals.window_stroke = Stroke::new(1.0_f32, border());
-    visuals.window_rounding = 8.0.into();
-    visuals.menu_rounding = 8.0.into();
-    visuals.widgets.noninteractive.rounding = 8.0.into();
-    visuals.widgets.inactive.rounding = 8.0.into();
-    visuals.widgets.hovered.rounding = 8.0.into();
-    visuals.widgets.active.rounding = 8.0.into();
+    visuals.window_rounding = 12.0.into();
+    visuals.menu_rounding = 12.0.into();
+    visuals.window_shadow = egui::Shadow::NONE;
+    visuals.popup_shadow = egui::Shadow {
+        offset: egui::vec2(0.0, 8.0),
+        blur: 16.0,
+        spread: 0.0,
+        color: Color32::from_black_alpha(80),
+    };
+    visuals.widgets.noninteractive.rounding = 10.0.into();
+    visuals.widgets.inactive.rounding = 10.0.into();
+    visuals.widgets.hovered.rounding = 10.0.into();
+    visuals.widgets.active.rounding = 10.0.into();
     ctx.set_visuals(visuals);
 
     let mut style = (*ctx.style()).clone();
@@ -382,8 +376,8 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     style.text_styles.insert(TextStyle::Button, FontId::new(FONT_CHROME, FontFamily::Proportional));
     style.text_styles.insert(TextStyle::Heading, FontId::new(FONT_HEADING, FontFamily::Proportional));
     style.text_styles.insert(TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace));
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(10.0, 6.0);
+    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+    style.spacing.button_padding = egui::vec2(12.0, 7.0);
     style.spacing.scroll.bar_width = 8.0;
     style.spacing.scroll.handle_min_length = 24.0;
     style.visuals = ctx.style().visuals.clone();
@@ -467,6 +461,14 @@ mod tests {
         assert_eq!(FONT_UI, 15.0);
         assert_eq!(FONT_CHROME, 14.0);
         assert_eq!(FONT_HEADING, 22.0);
+        assert_eq!(WORDMARK, 56.0);
+        assert_eq!(TITLEBAR_H, 36.0);
+        assert!(TITLEBAR_H >= HIT - 4.0, "titlebar must fit chrome hits");
+        assert!(include_bytes!("../assets/fonts/Inter-Regular.ttf").len() > 1000);
+        assert_eq!(
+            &include_bytes!("../assets/fonts/Inter-Regular.ttf")[..4],
+            &[0x00, 0x01, 0x00, 0x00]
+        );
         assert!(FONT_HEADING > FONT_UI);
         assert_eq!(IMAGINE_TITLE, 22.0);
         assert_eq!(IMAGINE_GAP, 32.0);
