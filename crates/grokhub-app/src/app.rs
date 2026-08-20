@@ -4137,7 +4137,7 @@ impl Cabin {
             Slash::Remember(note) => self.run_slash(Slash::MemoryNote(note)),
             Slash::Mode(mode) => {
                 self.cfg.mode = mode.clone();
-                self.persist();
+                self.persist_cfg();
                 self.status = mode_status_line(&mode, &self.cfg.model);
             }
             Slash::Dream => self.run_dream(),
@@ -4202,7 +4202,7 @@ impl Cabin {
                     "low" | "fast" => "fast".into(),
                     _ => "balanced".into(),
                 };
-                self.persist();
+                self.persist_cfg();
                 self.status = format!("Effort {level}");
             }
             Slash::Sessions => {
@@ -5018,6 +5018,17 @@ impl Cabin {
                 if let Some(disk) = disk {
                     let _ = save_hub_state(&config::hub_state_path(), &disk);
                 }
+            }
+        });
+    }
+
+    fn persist_cfg(&self) {
+        let io = self.persist_io.clone();
+        let mut cfg = self.cfg.clone();
+        cfg.api_key.clear();
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                let _ = config::save(&cfg);
             }
         });
     }
@@ -12441,6 +12452,28 @@ mod tests {
         assert!(
             auto.contains("grok_session = None"),
             "/auto must session/new or permission mode does not take: {auto}"
+        );
+        let mode = src
+            .split("Slash::Mode(mode)")
+            .nth(1)
+            .and_then(|s| s.split("Slash::Dream").next())
+            .expect("Mode");
+        assert!(
+            mode.contains("self.persist_cfg()")
+                && !mode.contains("self.persist()")
+                && !mode.contains("persist_snap"),
+            "/mode must not clone every thread just to write app.json: {mode}"
+        );
+        let effort = src
+            .split("Slash::Effort(level)")
+            .nth(1)
+            .and_then(|s| s.split("Slash::Sessions").next())
+            .expect("Effort");
+        assert!(
+            effort.contains("self.persist_cfg()")
+                && !effort.contains("self.persist()")
+                && !effort.contains("persist_snap"),
+            "/effort must not clone every thread just to write app.json: {effort}"
         );
         let plan = src
             .split("Slash::Plan =>")
