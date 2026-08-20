@@ -21,6 +21,8 @@ pub struct ChatThread {
     pub title_locked: bool,
     #[serde(default)]
     pub accessed_ms: u64,
+    #[serde(default)]
+    pub grok_session: Option<String>,
 }
 
 impl ChatThread {
@@ -34,6 +36,7 @@ impl ChatThread {
             pinned: false,
             title_locked: false,
             accessed_ms: 0,
+            grok_session: None,
         }
     }
 }
@@ -111,6 +114,14 @@ mod tests {
         assert!(!loaded[0].title_locked);
         assert_eq!(loaded[0].accessed_ms, 0);
         assert!(export_markdown(&loaded[0]).contains("hi"));
+        let mut grok = ChatThread::new("Grok session", false);
+        grok.grok_session = Some("01a01b0f-7e06-74b1-8f22-5236c9d57d45".into());
+        save(&[grok]).expect("save grok");
+        let loaded = load();
+        assert_eq!(
+            loaded[0].grok_session.as_deref(),
+            Some("01a01b0f-7e06-74b1-8f22-5236c9d57d45")
+        );
         let old: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
         assert_eq!(old.accessed_ms, 0);
         let _ = fs::remove_dir_all(&root);

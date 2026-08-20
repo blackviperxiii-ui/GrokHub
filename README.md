@@ -2,11 +2,11 @@
 
 Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 
-**v2.6.38** — Native Grok Build GUI. Overlay pulls GitHub.
+**v2.6.39** — Grok 4.1 Fast chips/greeting, grok-login history, Imagine via `grok login`.
 
 | Platform | Repository | Latest |
 |----------|------------|--------|
-| **Linux** (this) | [GrokHub](https://github.com/blackviperxiii-ui/GrokHub) | **v2.6.38** |
+| **Linux** (this) | [GrokHub](https://github.com/blackviperxiii-ui/GrokHub) | **v2.6.39** |
 | **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | sibling — same `grokhub-core` |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
@@ -39,15 +39,17 @@ The tray icon is there from launch. Close / titlebar × hides the cabin — the 
 
 Slash: `/help` · `/new` · `/scratch` · `/clear` · `/undo` · `/retry` · `/stop` · `/sh` · `/host` · `/plan` · `/always-approve` · `/sessions` · `/inspect` · `/project` · `/memory` · `/recall` · `/forget` · `/board` · `/imagine` · `/skill` · `/compact` · `/learn reflect` · `/update` · `/send` · `/sync` · `/hub` · `/inhabit` · `/rewind` · `/room` · `/export` · `/rename` · `/pin` · `/delete` · `/effort` · `/dream` · `/palette`. Type `/help` in the cabin for the rest. `/skill <name>` runs that skill. `/compact` keeps the last 8 visible turns. `/context` counts visible turns. `/scratch` blocks `/forget` and Memory Save. `/rewind` restores the bound project root (or Grok conversation rewind when mapped). `/sync` merges chats and memory with paired computers. `/project` also takes `bind`, `new`, `folder`, `rename`, `move`, `delete`, `clear`. Right-click a sidebar project to rename or remove it — Delete drops the row, not the files.
 
-Composer session pills: **Code** / **Plan** / **Ask**. Permission: **Ask** / **Auto** / **Always**. `/effort low|medium|high|xhigh` maps leftover Fast / Balance / Think / Max pins. Grok Build chooses models.
+Composer session pills: **Chat** / **Plan** / **Ask**. Permission: **Ask** / **Auto** / **Always**. `/effort low|medium|high|xhigh` maps leftover Fast / Balance / Think / Max pins. Grok Build chooses models. Empty-home greeting and quick chips use **Grok 4.1 Fast** (`grok-4-1-fast-non-reasoning`) through `grok login`.
 
 Projects sit in the left rail. `+` makes a project (`~/GrokHub-Work/<slug>`) or a one-level folder. Double-click or right-click to rename (display name only — the path stays). Right-click a project to add it to a folder or remove it. Folders are sidebar only; they do not move files. Click a project to bind it. Click the bound project again to open the Workboard. Bound tree is the world.
 
 History tabs pin, rename, and delete (right-click, or `/pin` `/rename` `/delete`). A manual rename is locked. After each turn Fast names the tab from the first topic (max 16 characters) unless that lock is set. Scratch stays unnamed. The Chat rail opens the last-accessed thread (scratch is skipped when another thread exists). Each thread stores `accessed_ms`; sitting on Chat stamps it.
 
-Imagine stills use dedicated **`grok-imagine-image-2.0`**. Video kind calls **`grok-imagine-video-1.5`**. Hey Grok: console API key for duplex Voice; OAuth is PTT STT + TTS. Desktop control is **Grok Build computer-use** — the cabin renders tool cards, diffs, and computer-use frames in chat. No Desk / Take over menu. Halt / Stop / tray Halt / Ctrl+Shift+Esc cancel the ACP turn (`session/cancel`). Stream buffers clip at `IMAGE_FILE_CAP` / `TEXT_FILE_CAP`. Desk frames drop above `FRAME_CAP`. Titlebar × unmaps to tray.
+History lists cabin chats plus `grok sessions` (and `~/.grok/sessions`). Click a Grok session to resume it. Each cabin thread stores the ACP session id so history survives the grok CLI backend.
 
-Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is cabin sign-in for Voice/Imagine. Agent auth is `grok login` (or `XAI_API_KEY`). Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600), never in markdown. Settings → Appearance is **Dark**, **Light**, or **System**.
+Imagine stills use dedicated **`grok-imagine-image-2.0`** (falls back to `grok-imagine-image` on timeout). Video kind calls **`grok-imagine-video-1.5`**. Auth is `grok login` first, then a console key / cabin OAuth. Hey Grok: console API key for duplex Voice; OAuth is PTT STT + TTS. Desktop control is **Grok Build computer-use** — the cabin renders tool cards, diffs, and computer-use frames in chat. No Desk / Take over menu. Halt / Stop / tray Halt / Ctrl+Shift+Esc cancel the ACP turn (`session/cancel`). Stream buffers clip at `IMAGE_FILE_CAP` / `TEXT_FILE_CAP`. Desk frames drop above `FRAME_CAP`. Titlebar × unmaps to tray.
+
+Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is cabin sign-in for Voice. Agent auth and Imagine use `grok login` (or `XAI_API_KEY`). Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600), never in markdown. Settings → Appearance is **Dark**, **Light**, or **System**.
 
 Settings → **Update** (or `grokhub --update` / `/update`) retargets a leftover Origin clone to GitHub (`https://github.com/blackviperxiii-ui/GrokHub.git`), then `git pull --ff-only origin main` and `./scripts/install.sh --user`. Overlay updates the GUI and installs Grok Build CLI (`grok`) if it is missing. `grok update` updates the agent. Progress stays on Settings. After a clean overlay, **Restart** reloads hub, drops the cabin pid lock, starts a new overlay `grokhub`, and exits this process.
 

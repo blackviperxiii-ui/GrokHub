@@ -112,7 +112,7 @@ pub fn imagine_video_fallback_model(model: &str) -> Option<&'static str> {
     }
 }
 
-/// Retry the cheaper Imagine alias when 2.0 / 1.5 is not on this credential.
+/// Retry the cheaper Imagine alias when 2.0 / 1.5 is missing, slow, or times out.
 pub fn imagine_should_retry_model(err: &str) -> bool {
     let e = err.to_ascii_lowercase();
     if e.contains("bad credentials")
@@ -121,13 +121,20 @@ pub fn imagine_should_retry_model(err: &str) -> bool {
     {
         return false;
     }
-    let modelish = e.contains("model")
+    e.contains("timeout")
+        || e.contains("timed out")
+        || e.contains("timedout")
+        || e.contains("model")
         || e.contains("not found")
         || e.contains("does not exist")
         || e.contains("unknown")
-        || e.contains("invalid_argument");
-    let code = e.contains("http 404") || e.contains("http 400") || e.contains("http 403");
-    modelish && (code || e.contains("model"))
+        || e.contains("invalid_argument")
+        || e.contains("empty imagine")
+        || e.contains("http 404")
+        || e.contains("http 400")
+        || e.contains("http 403")
+        || e.contains("http 429")
+        || e.contains("http 5")
 }
 
 pub fn imagine_image_resolution(quality: bool) -> &'static str {
@@ -856,6 +863,8 @@ mod tests {
         assert!(imagine_should_retry_model(
             "HTTP 404: model grok-imagine-image-2.0 not found"
         ));
+        assert!(imagine_should_retry_model("timed out waiting for 2.0"));
+        assert!(imagine_should_retry_model("empty Imagine reply"));
         assert_eq!(
             imagine_image_fallback_model(DEFAULT_IMAGINE_MODEL),
             Some(FALLBACK_IMAGINE_MODEL)

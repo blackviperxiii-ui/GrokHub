@@ -83,7 +83,7 @@ pub use chat::{
     needs_auth_banner, paint_connect_banner, parse_chat_content, parse_chat_reasoning, parse_model_reasoning, parse_model_text,
     parse_responses_reasoning, parse_responses_text, reasoning_effort_for_mode, resolve_chat_model,
     responses_request_body, responses_url, route_auto_mode, settings_pin_blocks_auto,
-    should_failover_status, DEFAULT_MODEL, XAI_BASE,
+    should_failover_status, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, XAI_BASE,
 };
 pub use chat_view::{
     assistant_prose, is_workload_user, merge_thinking, merge_thinking_capped, quote_for_reply, scrub_thought, strip_thinking,
