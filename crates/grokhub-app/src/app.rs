@@ -6897,6 +6897,7 @@ impl Cabin {
                     &stored_scratch,
                 );
                 self.push_bound_msg("user", format!("{prefix}\n{block}"));
+                bump_usage(&mut self.usage, "host");
                 self.persist();
                 if any_hands {
                     self.hands_attach = true;
@@ -6923,7 +6924,6 @@ impl Cabin {
                 }
                 self.plan_pending = retain_held_plan(self.plan_pending.take(), &self.last_host);
                 self.run_skill_verify();
-                bump_usage(&mut self.usage, "host");
                 let mut defer_kick = false;
                 if let Some(cite) = summarize_write(
                     self.last_host.last().map(|s| s.as_str()).unwrap_or(""),
@@ -14390,6 +14390,11 @@ mod tests {
         assert!(
             pushed < saved && saved < recipe,
             "HOST_RESULT must hit disk before recipe/skill side effects: {host_done}"
+        );
+        let bump = host_done.find("bump_usage").expect("host usage persist");
+        assert!(
+            bump < saved,
+            "HostDone must persist host usage or persist_bg skips the bump: {host_done}"
         );
         assert_eq!(
             host_done.matches("self.persist()").count(),
