@@ -2072,6 +2072,7 @@ impl Cabin {
                 self.pending_kick = None;
                 self.status = self.apply_job_fail("Grok Build session missing");
                 self.chat_job_thread = None;
+                self.persist();
             }
         }
     }
@@ -13390,6 +13391,15 @@ mod tests {
         assert!(
             spawn_ok.contains("chat_job_thread"),
             "handshake stamp must follow the job thread, not whichever tab is visible: {spawn_ok}"
+        );
+        let spawn_drop = spawn_poll
+            .split("TryRecvError::Disconnected")
+            .nth(1)
+            .and_then(|s| s.split("fn open_grok_session").next())
+            .expect("spawn disconnected");
+        assert!(
+            spawn_drop.contains("apply_job_fail") && spawn_drop.contains("self.persist()"),
+            "a dropped handshake must persist the fail turn or persist_bg waits 2s: {spawn_drop}"
         );
         let show = src
             .split("fn poll_session_show(")
