@@ -1,10 +1,10 @@
 use crate::protocol::{
     encode_line, initialize_params, parse_permission, parse_session_update, permission_allow,
-    permission_deny, pick_auth_method, prompt_params, request, session_new_params, AcpEvent,
-    JsonRpc,
+    permission_allow_always, permission_deny, pick_auth_method, prompt_params, request,
+    session_load_params, session_new_params, AcpEvent, JsonRpc,
 };
 use crate::protocol::SessionMode;
-use crate::{agent_args_resume, find_grok, grok_home, grok_stdout_timeout};
+use crate::{agent_args, find_grok, grok_home, grok_stdout_timeout};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -99,7 +99,7 @@ pub fn ensure_session_cwd(path: &Path) -> Result<PathBuf, String> {
 enum Cmd {
     Prompt(String),
     Cancel,
-    Permission { id: Value, allow: bool },
+    Permission { id: Value, allow: bool, always: bool },
     Shutdown,
 }
 
@@ -138,7 +138,7 @@ impl SpawnOpts {
             "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
         })?;
         Ok(Self {
-            args: agent_args_resume(always_approve, None),
+            args: agent_args(always_approve),
             program,
             cwd,
             api_key,
@@ -160,8 +160,10 @@ impl SpawnOpts {
                 Some(t)
             }
         });
-        self.resume = id.clone();
-        self.args = agent_args_resume(self.always_approve, id.as_deref());
+        self.resume = id;
+        // ACP session/load is the resume path. CLI --resume plus a later
+        // session/new on the same child mixed sessions.
+        self.args = agent_args(self.always_approve);
         self
     }
 }
@@ -220,7 +222,7 @@ fn with_stderr(msg: String, tail: &Arc<Mutex<String>>) -> String {
 fn read_until_result(
     reader: &mut BufReader<impl Read>,
     want: u64,
-    early: &mut Vec<AcpEvent>,
+    _early: &mut Vec<AcpEvent>,
 ) -> Result<Value, String> {
     let mut buf = String::new();
     loop {
@@ -236,9 +238,7 @@ fn read_until_result(
         let msg: JsonRpc = serde_json::from_str(line).map_err(|e| format!("acp json: {e}"))?;
         if let Some(method) = &msg.method {
             if method == "session/update" {
-                if let Some(ev) = parse_session_update(msg.params.as_ref().unwrap_or(&json!({}))) {
-                    early.push(ev);
-                }
+                // Consume load replay. Do not treat it as a live turn.
                 continue;
             }
         }
@@ -276,7 +276,7 @@ fn handshake(
     let init = read_until_result(&mut reader, next_id, &mut early)?;
     next_id += 1;
     let methods = init.get("authMethods").cloned().unwrap_or(json!([]));
-    if let Some(method_id) = pick_auth_method(&methods, !api_key.is_empty()) {
+    if let Some(method_id) = pick_auth_method(&methods, api_key) {
         write_msg(
             &mut stdin,
             &request(
@@ -302,7 +302,7 @@ fn handshake(
             &request(
                 next_id,
                 "session/load",
-                json!({ "sessionId": id, "session_id": id }),
+                session_load_params(cwd, &id, always_approve, auto, session_mode),
             ),
         )?;
         match read_until_result(&mut reader, next_id, &mut early) {
@@ -310,19 +310,8 @@ fn handshake(
                 next_id += 1;
                 v
             }
-            Err(_) => {
-                next_id += 1;
-                write_msg(
-                    &mut stdin,
-                    &request(
-                        next_id,
-                        "session/new",
-                        session_new_params(cwd, always_approve, auto, session_mode),
-                    ),
-                )?;
-                let v = read_until_result(&mut reader, next_id, &mut early)?;
-                next_id += 1;
-                v
+            Err(e) => {
+                return Err(format!("session/load failed: {e}"));
             }
         }
     } else {
@@ -358,7 +347,8 @@ fn handshake(
 /// Spawn and handshake. Puts `XAI_API_KEY` on the child when provided.
 pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
     let timeout = opts.handshake_timeout.unwrap_or(HANDSHAKE_TIMEOUT);
-    let cwd_path = ensure_session_cwd(&opts.cwd).unwrap_or_else(|_| opts.cwd.clone());
+    let cwd_path = ensure_session_cwd(&opts.cwd)
+        .map_err(|e| explain_handshake_error(&e, &opts.cwd))?;
     let mut cmd = Command::new(&opts.program);
     cmd.args(&opts.args)
         .current_dir(&cwd_path)
@@ -433,9 +423,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
     let id_gen = Arc::new(Mutex::new(next_id));
     let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
     let (evt_tx, evt_rx) = mpsc::channel();
-    for ev in early {
-        let _ = evt_tx.send(ev);
-    }
+    let _ = early;
     let _ = evt_tx.send(AcpEvent::Ready {
         session_id: session_id.clone(),
     });
@@ -475,9 +463,13 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                         &request(id, "session/prompt", prompt_params(&sid, &text)),
                     );
                 }
-                Cmd::Permission { id, allow } => {
+                Cmd::Permission { id, allow, always } => {
                     let msg = if allow {
-                        permission_allow(id)
+                        if always {
+                            permission_allow_always(id)
+                        } else {
+                            permission_allow(id)
+                        }
                     } else {
                         permission_deny(id)
                     };
@@ -573,7 +565,21 @@ impl AcpHandle {
 
     pub fn answer_permission(&self, id: Value, allow: bool) -> Result<(), String> {
         self.cmd
-            .send(Cmd::Permission { id, allow })
+            .send(Cmd::Permission {
+                id,
+                allow,
+                always: false,
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn answer_permission_always(&self, id: Value) -> Result<(), String> {
+        self.cmd
+            .send(Cmd::Permission {
+                id,
+                allow: true,
+                always: true,
+            })
             .map_err(|e| e.to_string())
     }
 
@@ -591,8 +597,19 @@ impl Drop for AcpHandle {
 }
 
 fn looks_like_session_id(id: &str) -> bool {
+    if id.len() < 8 {
+        return false;
+    }
     let dashes = id.bytes().filter(|b| *b == b'-').count();
-    dashes >= 2 && id.len() >= 16 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+    if dashes >= 2 && id.len() >= 16 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+        return true;
+    }
+    if id.starts_with("sess_") {
+        return id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    }
+    false
 }
 
 fn session_summary_after_meta(rest: &str) -> String {
@@ -684,10 +701,14 @@ fn session_rows_from_json(v: &Value) -> Option<Vec<String>> {
 
 /// List Grok sessions via `grok sessions list` in `cwd` (sessions are per worktree).
 pub fn list_sessions(bin: &Path, cwd: &Path) -> Result<Vec<String>, String> {
-    let text = grok_stdout_timeout(bin, cwd, &["sessions", "list", "-n", "50"], 8).or_else(|_| {
-        grok_stdout_timeout(bin, cwd, &["sessions", "list", "--json", "-n", "50"], 8)
-    })?;
-    Ok(parse_session_list(&text))
+    let text = grok_stdout_timeout(bin, cwd, &["sessions", "list", "-n", "50"], 8).unwrap_or_default();
+    let rows = parse_session_list(&text);
+    if !rows.is_empty() {
+        return Ok(rows);
+    }
+    let json = grok_stdout_timeout(bin, cwd, &["sessions", "list", "--json", "-n", "50"], 8)
+        .unwrap_or_default();
+    Ok(parse_session_list(&json))
 }
 
 /// Dump one Grok session transcript (`grok sessions show <id>`).
@@ -891,15 +912,10 @@ pub fn merge_grok_sessions(listed: &[String], files: Vec<GrokSession>) -> Vec<Gr
 }
 
 pub fn inspect_json(bin: &Path, cwd: &Path) -> Result<Value, String> {
-    let out = Command::new(bin)
-        .args(["inspect", "--json"])
-        .current_dir(cwd)
-        .output()
-        .map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&out.stdout);
+    let text = grok_stdout_timeout(bin, cwd, &["inspect", "--json"], 12)?;
     serde_json::from_str(text.trim()).map_err(|e| {
         if text.trim().is_empty() {
-            String::from_utf8_lossy(&out.stderr).trim().to_string()
+            e.to_string()
         } else {
             e.to_string()
         }

@@ -262,7 +262,7 @@ pub use rewind::{
 pub use oauth::{
     apply_profile, auth_bearer, chat_bearer, has_auth, merge_refreshed, next_oauth_poll_secs, parse_device_start, parse_poll_result,
     parse_token_json, parse_userinfo_profile, oauth_access_live, realtime_bearer, token_needs_refresh, trusted_profile_photo_url,
-    trusted_xai_url, DeviceCodeStart, OAuthProfile, PollResult, PollStatus, XaiOAuthTokens,
+    trusted_xai_url, jwt_exp_ms, DeviceCodeStart, OAuthProfile, PollResult, PollStatus, XaiOAuthTokens,
     TOKEN_REFRESH_SKEW_MS, XAI_DEVICE_CODE_GRANT, XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY,
     XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE, XAI_OAUTH_USERINFO,
 };

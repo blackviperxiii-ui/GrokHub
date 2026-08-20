@@ -61,8 +61,14 @@ fn snippet(body: &str, needle: &str) -> String {
     let body = search_text(body);
     let lower = body.to_ascii_lowercase();
     let idx = lower.find(needle).unwrap_or(0);
-    let start = idx.saturating_sub(40);
-    let end = (idx + needle.len() + 60).min(body.len());
+    let mut start = idx.saturating_sub(40);
+    let mut end = (idx + needle.len() + 60).min(body.len());
+    while start > 0 && !body.is_char_boundary(start) {
+        start -= 1;
+    }
+    while end < body.len() && !body.is_char_boundary(end) {
+        end += 1;
+    }
     let mut s = body[start..end].replace('\n', " ");
     if start > 0 {
         s = format!("…{s}");
@@ -87,6 +93,10 @@ mod tests {
         let mem = search_corpus("nvim", &rows);
         assert!(mem[0].contains("MEMORY.md"));
         assert!(search_corpus("", &rows).is_empty());
+        let uni = [("café".into(), "éclair matching pi here".into())];
+        let hit = search_corpus("pi", &uni);
+        assert_eq!(hit.len(), 1);
+        assert!(hit[0].contains("éclair") || hit[0].contains("matching"), "{hit:?}");
     }
 
     #[test]

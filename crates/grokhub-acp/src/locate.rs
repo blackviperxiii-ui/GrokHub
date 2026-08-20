@@ -54,20 +54,19 @@ pub fn grok_cli_key() -> Option<String> {
 
 pub fn parse_grok_auth_key(raw: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    if let Some(key) = grok_key_from_value(&v) {
+        return Some(key);
+    }
     let obj = v.as_object()?;
     let mut best: Option<(String, String)> = None;
     for rec in obj.values() {
-        let key = rec
-            .get("key")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .trim();
-        if key.is_empty() {
+        let Some(key) = grok_key_from_value(rec) else {
             continue;
-        }
+        };
         let exp = rec
             .get("expires_at")
             .and_then(|x| x.as_str())
+            .or_else(|| rec.get("expiresAt").and_then(|x| x.as_str()))
             .unwrap_or("")
             .to_string();
         let take = match &best {
@@ -75,10 +74,21 @@ pub fn parse_grok_auth_key(raw: &str) -> Option<String> {
             Some((prev, _)) => exp > *prev,
         };
         if take {
-            best = Some((exp, key.to_string()));
+            best = Some((exp, key));
         }
     }
     best.map(|(_, k)| k)
+}
+
+fn grok_key_from_value(v: &serde_json::Value) -> Option<String> {
+    for field in ["key", "access_token", "accessToken", "token"] {
+        if let Some(k) = v.get(field).and_then(|x| x.as_str()).map(str::trim) {
+            if !k.is_empty() {
+                return Some(k.to_string());
+            }
+        }
+    }
+    None
 }
 
 pub fn grok_version(bin: &Path) -> Result<String, String> {
@@ -115,21 +125,33 @@ pub fn grok_stdout_timeout(bin: &Path, cwd: &Path, args: &[&str], secs: u64) -> 
     let bin = bin.to_path_buf();
     let cwd = cwd.to_path_buf();
     let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let child = Command::new(&bin)
+        .args(&owned)
+        .current_dir(&cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let args: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
-        let out = Command::new(&bin)
-            .args(&args)
-            .current_dir(&cwd)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output();
+        let mut child = child;
+        let out = child.wait_with_output();
         let _ = tx.send(out);
     });
     let out = match rx.recv_timeout(Duration::from_secs(secs.max(1))) {
         Ok(Ok(o)) => o,
         Ok(Err(e)) => return Err(e.to_string()),
-        Err(_) => return Err(format!("grok {} timed out", args.join(" "))),
+        Err(_) => {
+            let _ = Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+            thread::sleep(Duration::from_millis(80));
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+            return Err(format!("grok {} timed out", args.join(" ")));
+        }
     };
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -227,5 +249,9 @@ mod tests {
         assert_eq!(parse_grok_auth_key(raw).as_deref(), Some("fresh-token"));
         assert!(parse_grok_auth_key("{}").is_none());
         assert!(parse_grok_auth_key("not-json").is_none());
+        assert_eq!(
+            parse_grok_auth_key(r#"{"access_token":"top-level"}"#).as_deref(),
+            Some("top-level")
+        );
     }
 }
