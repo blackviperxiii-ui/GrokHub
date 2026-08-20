@@ -6241,7 +6241,6 @@ impl Cabin {
             ImagineKind::Video => "Imagining video…".into(),
             ImagineKind::Agent => "Imagining agent still…".into(),
         };
-        let key = self.bearer();
         let image_model = dedicated_imagine_model(&self.cfg.imagine_model);
         let video_model = dedicated_video_model("");
         let (tx, rx) = mpsc::channel();
@@ -6318,11 +6317,10 @@ impl Cabin {
         self.running = true;
         self.chat_job_thread = None;
         self.status = "Listening… STT".into();
-        let key = self.bearer();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let _ = tx.send(JobOut::Voice(listen_turn(&key)));
+            let _ = tx.send(JobOut::Voice(listen_turn(&speech)));
         });
     }
 
@@ -11585,6 +11583,11 @@ mod tests {
         assert!(
             kick.contains("bearer()") && !kick.contains("has_key()"),
             "Imagine must use grok login, not cabin OAuth only: {kick}"
+        );
+        assert_eq!(
+            kick.matches("bearer()").count(),
+            1,
+            "Imagine must not refresh grok login twice on the UI thread: {kick}"
         );
         let poll = src
             .split("fn poll_acp(")
