@@ -2474,6 +2474,9 @@ impl Cabin {
             self.nav = Nav::Workboard;
         }
         self.status = format!("Bound {name}");
+        if self.running && self.acp.is_some() {
+            self.halt_in_flight();
+        }
         self.acp = None;
         self.acp_spawn_rx = None;
         self.persist();
@@ -2506,6 +2509,9 @@ impl Cabin {
         }
         if out.unbound {
             self.cfg.project_dir.clear();
+            if self.running && self.acp.is_some() {
+                self.halt_in_flight();
+            }
             self.acp = None;
             self.acp_spawn_rx = None;
         }
@@ -3806,6 +3812,9 @@ impl Cabin {
             }
             Slash::Palette => self.open_palette(),
             Slash::Plan => {
+                if self.running && self.acp.is_some() {
+                    self.halt_in_flight();
+                }
                 self.session_mode = SessionMode::Plan;
                 self.acp = None;
                 self.acp_spawn_rx = None;
@@ -3817,12 +3826,18 @@ impl Cabin {
                 } else {
                     PermissionMode::AlwaysApprove
                 };
+                if self.running && self.acp.is_some() {
+                    self.halt_in_flight();
+                }
                 self.acp = None;
                 self.acp_spawn_rx = None;
                 self.status = format!("Permission {}", self.permission_mode.as_str());
             }
             Slash::AutoPerm => {
                 self.permission_mode = PermissionMode::Auto;
+                if self.running && self.acp.is_some() {
+                    self.halt_in_flight();
+                }
                 self.acp = None;
                 self.acp_spawn_rx = None;
                 self.status = "Permission auto".into();
@@ -3883,6 +3898,9 @@ impl Cabin {
                 let _ = std::fs::create_dir_all(&p);
                 self.project_sel = upsert_bound(&mut self.projects, &p);
                 self.touch_projects();
+                if self.running && self.acp.is_some() {
+                    self.halt_in_flight();
+                }
                 self.acp = None;
                 self.acp_spawn_rx = None;
                 self.grok_sessions_loaded = false;
@@ -3892,6 +3910,9 @@ impl Cabin {
             Slash::ProjectClear => {
                 self.cfg.project_dir.clear();
                 self.project_sel = None;
+                if self.running && self.acp.is_some() {
+                    self.halt_in_flight();
+                }
                 self.acp = None;
                 self.acp_spawn_rx = None;
                 self.grok_sessions_loaded = false;
@@ -3946,6 +3967,9 @@ impl Cabin {
                 self.cfg.project_dir = p.clone();
                 self.project_sel = upsert_bound(&mut self.projects, &p);
                 self.touch_projects();
+                if self.running && self.acp.is_some() {
+                    self.halt_in_flight();
+                }
                 self.acp = None;
                 self.acp_spawn_rx = None;
                 self.persist();
@@ -8810,6 +8834,9 @@ impl Cabin {
             let row = crate::cards::session_row(ui, &session_now, &perm_now);
             if let Some(mode) = row.mode {
                 if let Some(m) = SessionMode::parse(&mode) {
+                    if self.running && self.acp.is_some() {
+                        self.halt_in_flight();
+                    }
                     self.session_mode = m;
                     self.acp = None;
                     self.acp_spawn_rx = None;
@@ -8818,6 +8845,9 @@ impl Cabin {
             }
             if let Some(perm) = row.perm {
                 if let Some(p) = PermissionMode::parse(&perm) {
+                    if self.running && self.acp.is_some() {
+                        self.halt_in_flight();
+                    }
                     self.permission_mode = p;
                     self.acp = None;
                     self.acp_spawn_rx = None;
@@ -9151,6 +9181,9 @@ impl Cabin {
         }
         self.project_sel = upsert_bound(&mut self.projects, &p);
         self.touch_projects();
+        if self.running && self.acp.is_some() {
+            self.halt_in_flight();
+        }
         self.acp = None;
         self.acp_spawn_rx = None;
         let _ = secrets::save(&self.secrets);
@@ -11268,6 +11301,10 @@ mod tests {
         assert!(
             plan.contains("acp_spawn_rx = None"),
             "/plan during handshake must drop the in-flight Ask agent: {plan}"
+        );
+        assert!(
+            plan.contains("halt_in_flight") && plan.contains("self.acp.is_some()"),
+            "/plan mid-turn must halt or Thinking sticks after the agent is dropped: {plan}"
         );
         let row = src
             .split("let row = crate::cards::session_row")
