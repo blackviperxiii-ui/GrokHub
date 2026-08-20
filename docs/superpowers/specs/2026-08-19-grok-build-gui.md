@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.6.40
+**Version:** 2.6.41
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI over ACP) is the agent, the host shell, and computer-use (eyes and hands).
 
@@ -14,7 +14,7 @@ Transport: spawn installed `grok --no-auto-update agent stdio`. Do not vendor gr
 
 ## Chat
 
-`send_chat` opens or reuses an ACP session whose cwd is the bound project. Stream thought and text into existing bubbles. Stop / Halt / tray Halt is `session/cancel`.
+`send_chat` opens or reuses an ACP session whose cwd is the bound project, or `~/GrokHub-Work` when unbound — never the cabin process cwd. Stream thought and text into existing bubbles. Stop / Halt / tray Halt is `session/cancel`. A dead stored session id retries `session/new` without resume. Disk-full / permission-denied handshake errors land in the chat with the cwd named.
 
 Composer pills: Chat / Plan / Ask and Ask / Auto / Always-approve. Tool cards, diffs, and computer-use frames render in the chat pane. Permission prompts Allow / Deny / Always.
 

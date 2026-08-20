@@ -18,6 +18,84 @@ use std::time::Duration;
 /// `grok` cannot freeze the cabin UI thread.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(12);
 
+/// Pull the human message out of a JSON-RPC error object or string.
+pub fn jsonrpc_error_text(err: &Value) -> String {
+    if let Some(s) = err.as_str() {
+        let t = s.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    if let Some(msg) = err.get("message").and_then(|v| v.as_str()) {
+        let t = msg.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    if let Some(data) = err.get("data").and_then(|v| v.as_str()) {
+        let t = data.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    err.to_string()
+}
+
+pub fn is_session_cwd_error(err: &str) -> bool {
+    let l = err.to_ascii_lowercase();
+    l.contains("os error 28")
+        || l.contains("no space left")
+        || l.contains("disk is full")
+        || l.contains("os error 13")
+        || l.contains("permission denied")
+        || l.contains("cannot write")
+        || l.contains("os error 30")
+        || l.contains("read-only")
+        || l.contains("os error 2")
+        || l.contains("no such file")
+        || l.contains("not a directory")
+}
+
+pub fn explain_handshake_error(raw: &str, cwd: &Path) -> String {
+    let raw = raw.trim();
+    let loc = cwd.display();
+    if raw.is_empty() {
+        return format!("ACP session/new failed in {loc}");
+    }
+    let l = raw.to_ascii_lowercase();
+    if l.contains("no space left") || l.contains("os error 28") {
+        return format!(
+            "ACP session/new failed: disk is full while starting Grok Build in {loc}. Free space (check ~/.grok and {loc}), then send again."
+        );
+    }
+    if l.contains("permission denied") || l.contains("os error 13") || l.contains("read-only") {
+        return format!(
+            "ACP session/new failed: Grok Build cannot write in {loc}. Bind a folder you own (sidebar) or /project bind ~/GrokHub-Work, then send again."
+        );
+    }
+    if raw.starts_with("ACP ") {
+        return raw.to_string();
+    }
+    format!("ACP session/new failed: {raw}")
+}
+
+/// Create `path` and probe a write so session/new does not start on a missing or read-only tree.
+pub fn ensure_session_cwd(path: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(path)
+        .map_err(|e| format!("ACP cwd {}: {e}", path.display()))?;
+    let probe = path.join(".grokhub-cwd-ok");
+    match std::fs::write(&probe, b"ok") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            Ok(path.to_path_buf())
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&probe);
+            Err(format!("ACP cwd {}: {e}", path.display()))
+        }
+    }
+}
+
 enum Cmd {
     Prompt(String),
     Cancel,
@@ -166,7 +244,7 @@ fn read_until_result(
         }
         if msg.id.as_ref().and_then(|v| v.as_u64()) == Some(want) {
             if let Some(err) = msg.error {
-                return Err(err.to_string());
+                return Err(jsonrpc_error_text(&err));
             }
             return Ok(msg.result.unwrap_or(json!({})));
         }
@@ -280,9 +358,10 @@ fn handshake(
 /// Spawn and handshake. Puts `XAI_API_KEY` on the child when provided.
 pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
     let timeout = opts.handshake_timeout.unwrap_or(HANDSHAKE_TIMEOUT);
+    let cwd_path = ensure_session_cwd(&opts.cwd).unwrap_or_else(|_| opts.cwd.clone());
     let mut cmd = Command::new(&opts.program);
     cmd.args(&opts.args)
-        .current_dir(&opts.cwd)
+        .current_dir(&cwd_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -302,7 +381,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
     let stdout = child.stdout.take().ok_or("agent stdout")?;
     let stderr_tail = child.stderr.take().map(drain_stderr);
     let api_key = opts.api_key.clone().unwrap_or_default();
-    let cwd = opts.cwd.display().to_string();
+    let cwd = cwd_path.display().to_string();
     let always_approve = opts.always_approve;
     let auto = opts.auto;
     let session_mode = opts.session_mode;
@@ -326,10 +405,11 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
         Ok(Err(e)) => {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(match &stderr_tail {
+            let e = match &stderr_tail {
                 Some(t) => with_stderr(e, t),
                 None => e,
-            });
+            };
+            return Err(explain_handshake_error(&e, &cwd_path));
         }
         Err(_) => {
             let _ = child.kill();
@@ -460,7 +540,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                         });
                     }
                     if let Some(err) = msg.error {
-                        let _ = evt_tx.send(AcpEvent::Err(err.to_string()));
+                        let _ = evt_tx.send(AcpEvent::Err(jsonrpc_error_text(&err)));
                     }
                 }
                 Err(e) => {
@@ -476,7 +556,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
         cmd: cmd_tx,
         events: evt_rx,
         session_id,
-        cwd: opts.cwd,
+        cwd: cwd_path,
     })
 }
 
@@ -936,5 +1016,56 @@ mod tests {
         );
         assert_eq!(merged.len(), 1);
         assert!(merged[0].path.is_some());
+    }
+
+    #[test]
+    fn jsonrpc_error_extracts_message() {
+        let obj = serde_json::json!({
+            "code": -32603,
+            "message": "ACP session/new failed: Failed to initialize session: Permission denied (os error 13)"
+        });
+        let text = jsonrpc_error_text(&obj);
+        assert!(text.contains("Permission denied"), "{text}");
+        assert!(!text.contains("\"code\""), "{text}");
+        assert_eq!(
+            jsonrpc_error_text(&serde_json::json!("no space left on device")),
+            "no space left on device"
+        );
+    }
+
+    #[test]
+    fn handshake_error_names_the_cwd() {
+        let cwd = PathBuf::from("/home/j/secret-tree");
+        let disk = explain_handshake_error(
+            "Failed to initialize session: No space left on device (os error 28)",
+            &cwd,
+        );
+        assert!(disk.contains("disk is full"), "{disk}");
+        assert!(disk.contains("/home/j/secret-tree"), "{disk}");
+        let perm = explain_handshake_error(
+            "ACP session/new failed: Failed to initialize session: Permission denied (os error 13)",
+            &cwd,
+        );
+        assert!(perm.contains("cannot write"), "{perm}");
+        assert!(perm.contains("GrokHub-Work"), "{perm}");
+        assert!(is_session_cwd_error(&disk));
+        assert!(is_session_cwd_error(&perm));
+        assert!(!is_session_cwd_error("ACP handshake timed out"));
+    }
+
+    #[test]
+    fn session_cwd_probe_creates_and_cleans() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-cwd-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let got = ensure_session_cwd(&dir).expect("writable temp");
+        assert_eq!(got, dir);
+        assert!(dir.is_dir());
+        assert!(!dir.join(".grokhub-cwd-ok").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
