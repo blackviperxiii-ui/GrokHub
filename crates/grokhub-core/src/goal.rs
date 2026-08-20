@@ -284,20 +284,10 @@ pub fn compact_keep_pin(
     keep: usize,
     pin: Option<&str>,
 ) -> Vec<(String, String)> {
-    let keep = keep.max(1);
-    let visible_users: Vec<usize> = messages
-        .iter()
-        .enumerate()
-        .filter(|(_, (role, content))| role == "user" && !is_workload_user(content))
-        .map(|(i, _)| i)
-        .collect();
-    let start = if visible_users.len() > keep {
-        visible_users[visible_users.len() - keep]
-    } else if visible_users.is_empty() && messages.len() > keep {
-        messages.len() - keep
-    } else {
-        0
-    };
+    let start = compact_keep_start_from(
+        messages.iter().map(|(r, c)| (r.as_str(), c.as_str())),
+        keep,
+    );
     let mut out = messages[start..].to_vec();
     let Some(pin) = pin.map(str::trim).filter(|s| !s.is_empty()) else {
         return out;
@@ -307,6 +297,29 @@ pub fn compact_keep_pin(
         out.insert(0, ("system".into(), marked));
     }
     out
+}
+
+/// Index of the first kept turn. Scan borrowed role/content so /compact
+/// can drain the dropped prefix without cloning an 8MB HOST_RESULT.
+pub fn compact_keep_start_from<'a, I>(messages: I, keep: usize) -> usize
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
+    let keep = keep.max(1);
+    let items: Vec<(&str, &str)> = messages.into_iter().collect();
+    let visible_users: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, (role, content))| *role == "user" && !is_workload_user(content))
+        .map(|(i, _)| i)
+        .collect();
+    if visible_users.len() > keep {
+        visible_users[visible_users.len() - keep]
+    } else if visible_users.is_empty() && items.len() > keep {
+        items.len() - keep
+    } else {
+        0
+    }
 }
 
 pub const GOAL_MAX_STEPS: u32 = 6;
