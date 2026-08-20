@@ -30,7 +30,7 @@ use grokhub_core::{
     blend_thread_goal, flush_visible_goal,
     build_hub_snapshot, merge_hub_snapshots,
     build_quick_chips, build_windshield, bump_skill_run, bump_usage,
-    inhabit_ready, hub_pair_url, devices_shows_pair_code, pair_code_is_live, parse_hostname_i, pick_lan_ipv4,
+    inhabit_claim_allowed, inhabit_ready, hub_pair_url, devices_shows_pair_code, pair_code_is_live, parse_hostname_i, pick_lan_ipv4,
     start_hub_rotates_pair,
     catalog_line, chip_suggest_prompt, compact_keep_pin, compose_imagine_prompt,
     context_fingerprint,
@@ -760,6 +760,7 @@ struct PersistSnap {
     cfg: AppConfig,
     hub: Option<HubState>,
     projects: Option<Vec<ProjectNode>>,
+    secrets: Option<crate::secrets::Secrets>,
 }
 
 fn write_persist_disk(snap: &PersistSnap) {
@@ -777,6 +778,9 @@ fn write_persist_disk(snap: &PersistSnap) {
         let _ = crate::store::save_projects(p);
     }
     let _ = config::save(&snap.cfg);
+    if let Some(s) = &snap.secrets {
+        let _ = secrets::save(s);
+    }
     if let Some(st) = &snap.hub {
         let _ = save_hub_state(&config::hub_state_path(), st);
     }
@@ -995,6 +999,7 @@ pub struct Cabin {
     permission_mode: PermissionMode,
     grok_sessions: Vec<grokhub_acp::GrokSession>,
     grok_sessions_loaded: bool,
+    grok_sessions_rx: Option<mpsc::Receiver<Vec<grokhub_acp::GrokSession>>>,
     inspect_text: String,
 }
 
@@ -1119,7 +1124,8 @@ impl Cabin {
             .find(|n| n.kind == ProjectKind::Project && expand_home(&n.path) == cfg.project_dir)
             .or_else(|| projects.iter().find(|n| n.kind == ProjectKind::Project))
             .map(|n| n.id.clone());
-        let secrets = secrets::load();
+        let mut secrets = secrets::load();
+        secrets::migrate_console_key(&mut cfg, &mut secrets);
         let win_max = cfg.window.maximized;
         let approve_risky_only = cfg.approve_risky_only;
         let goal_step = threads.get(thread_idx).map(|t| t.goal.step).unwrap_or(0);
@@ -1339,6 +1345,7 @@ impl Cabin {
             permission_mode: PermissionMode::Ask,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
+            grok_sessions_rx: None,
             inspect_text: String::new(),
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
@@ -1403,10 +1410,11 @@ impl Cabin {
     }
 
     fn persist(&mut self) {
-        let snap = self.persist_snap();
+        let mut snap = self.persist_snap();
         self.flush_projects();
         self.sync_hub_voice();
         if let Ok(_g) = self.persist_io.lock() {
+            snap.secrets = Some(self.secrets.clone());
             write_persist_disk(&snap);
         }
         self.last_persist = Instant::now();
@@ -1439,9 +1447,15 @@ impl Cabin {
             usage: self.usage.clone(),
             chip_memory: self.chip_memory.clone(),
             wall: self.wall.clone(),
-            cfg: self.cfg.clone(),
+            cfg: {
+                let mut cfg = self.cfg.clone();
+                cfg.api_key.clear();
+                cfg
+            },
             hub: self.hub.lock().ok().map(|st| state_for_disk(&st)),
             projects,
+            // Idle persist must not write secrets.json from a stale snap.
+            secrets: None,
         }
     }
 
@@ -1464,7 +1478,7 @@ impl Cabin {
             self.projects_dirty,
             self.usage.day,
             self.usage.messages,
-            self.cfg.current_thread
+            self.cfg.current_thread,
         );
         if !self.geom_dirty && !self.projects_dirty && self.persist_idle_key == key {
             self.last_persist = Instant::now();
@@ -1503,7 +1517,7 @@ impl Cabin {
 
     fn sync_hub_voice(&self) {
         if let Ok(mut st) = self.hub.lock() {
-            st.console_api_key = self.cfg.api_key.clone();
+            st.console_api_key = self.console_key().to_string();
             if st.mint_realtime.is_none() {
                 st.mint_realtime = Some(MintRealtimeFn(Arc::new(|key| {
                     crate::xai::grok_realtime_secret(key)
@@ -1663,7 +1677,11 @@ impl Cabin {
     }
 
     fn has_key(&self) -> bool {
-        has_auth(&self.cfg.api_key, &secrets::access_token(&self.secrets))
+        has_auth(self.console_key(), &secrets::access_token(&self.secrets))
+    }
+
+    fn console_key(&self) -> &str {
+        secrets::console_key(&self.secrets, &self.cfg.api_key)
     }
 
     fn can_agent(&self) -> bool {
@@ -1683,14 +1701,43 @@ impl Cabin {
     }
 
     fn reload_grok_sessions(&mut self) {
-        let listed = if let Some(bin) = grokhub_acp::find_grok() {
-            grokhub_acp::list_sessions(&bin, &self.grok_cwd()).unwrap_or_default()
-        } else {
-            Vec::new()
+        if self.grok_sessions_rx.is_some() {
+            return;
+        }
+        let bin = grokhub_acp::find_grok();
+        let cwd = self.grok_cwd();
+        let (tx, rx) = mpsc::channel();
+        self.grok_sessions_rx = Some(rx);
+        std::thread::spawn(move || {
+            let listed = if let Some(bin) = bin {
+                grokhub_acp::list_sessions(&bin, &cwd).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let files = grokhub_acp::discover_session_files();
+            let _ = tx.send(grokhub_acp::merge_grok_sessions(&listed, files));
+        });
+    }
+
+    fn poll_grok_sessions(&mut self) {
+        let Some(rx) = self.grok_sessions_rx.take() else {
+            return;
         };
-        let files = grokhub_acp::discover_session_files();
-        self.grok_sessions = grokhub_acp::merge_grok_sessions(&listed, files);
-        self.grok_sessions_loaded = true;
+        match rx.try_recv() {
+            Ok(rows) => {
+                self.grok_sessions = rows;
+                self.grok_sessions_loaded = true;
+                if self.nav == Nav::History {
+                    self.status = format!("{} Grok sessions", self.grok_sessions.len());
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.grok_sessions_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.grok_sessions_loaded = true;
+            }
+        }
     }
 
     fn open_grok_session(&mut self, id: &str) {
@@ -1717,7 +1764,8 @@ impl Cabin {
         t.grok_session = Some(id.to_string());
         t.accessed_ms = now_ms();
         if let Some(path) = sess.as_ref().and_then(|s| s.path.as_ref()) {
-            if let Ok(text) = std::fs::read_to_string(path) {
+            let text = config::read_file_capped(path, config::MEMORY_FILE_CAP);
+            if !text.is_empty() {
                 t.messages = grokhub_acp::parse_session_markdown(&text);
             }
         }
@@ -1753,12 +1801,27 @@ impl Cabin {
             }
         }
         self.acp = None;
-        let key = self.bearer();
-        let key = if key.is_empty() { None } else { Some(key) };
+        let console = self.console_key().trim();
+        let xai_env = if !console.is_empty() && !grokhub_acp::protocol::is_jwt_api_key(console) {
+            Some(console.to_string())
+        } else {
+            None
+        };
+        let grok_login = grokhub_acp::grok_cli_key()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let auth_key = grok_login.or_else(|| xai_env.clone());
         let perm = self.permission_mode;
         let mode = self.session_mode;
         let spawn = |resume: Option<String>| {
-            build_agent::spawn_session(cwd.clone(), key.clone(), perm, mode, resume)
+            build_agent::spawn_session(
+                cwd.clone(),
+                auth_key.clone(),
+                xai_env.clone(),
+                perm,
+                mode,
+                resume,
+            )
         };
         let h = match spawn(resume.clone()) {
             Ok(h) => h,
@@ -2951,18 +3014,20 @@ impl Cabin {
             if let Ok((access, next, refreshed)) = crate::oauth::ensure_access(&tok) {
                 if refreshed {
                     self.secrets.oauth = Some(next.clone());
-                    let _ = secrets::save(&self.secrets);
+                    if let Ok(_g) = self.persist_io.lock() {
+                        let _ = secrets::save(&self.secrets);
+                    }
                 }
                 if oauth_access_live(&next, now_ms()) {
                     oauth_usable = true;
-                    if self.cfg.api_key.trim().is_empty() {
+                    if self.console_key().trim().is_empty() {
                         return access;
                     }
                 }
             }
         }
         chat_bearer(
-            &self.cfg.api_key,
+            self.console_key(),
             &secrets::access_token(&self.secrets),
             oauth_usable,
         )
@@ -3255,6 +3320,11 @@ impl Cabin {
             self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
             return;
         }
+        if let Some(name) = self.attach_name.as_deref() {
+            if !name.trim().is_empty() {
+                text = append_composer(&text, &attach_prompt_line(AttachKind::Image, name));
+            }
+        }
         self.verify_ok_turn = verify_ok_after_user_turn(self.verify_ok_turn, true);
         self.active_skill_follow = None;
         if let Some(sk) = match_skill(&text, &self.skill_list) {
@@ -3402,9 +3472,14 @@ impl Cabin {
                     self.halt_in_flight();
                     self.finish_hub_dispatch("Cleared in-flight reply", false);
                 }
+                self.drop_leaving_thread_chrome();
                 self.messages.clear();
                 self.followup_step = 0;
                 self.active_skill_follow = None;
+                if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                    t.grok_session = None;
+                    t.messages.clear();
+                }
                 self.stamp_current_access();
                 self.persist();
                 self.status = "Cleared".into();
@@ -3535,12 +3610,13 @@ impl Cabin {
             }
             Slash::Sessions => {
                 self.nav = Nav::History;
+                self.grok_sessions_loaded = false;
                 self.reload_grok_sessions();
-                if grokhub_acp::find_grok().is_some() {
-                    self.status = format!("{} Grok sessions", self.grok_sessions.len());
+                self.status = if grokhub_acp::find_grok().is_some() {
+                    "Listing Grok sessions…".into()
                 } else {
-                    self.status = build_agent::grok_banner();
-                }
+                    build_agent::grok_banner()
+                };
             }
             Slash::Inspect => {
                 self.nav = Nav::Connectors;
@@ -3840,8 +3916,21 @@ impl Cabin {
     }
 
     fn queue_inhabit(&mut self, peer: String) {
-        let p = peer.to_ascii_lowercase();
-        if p.contains("phone") || p.contains("android") {
+        if !inhabit_claim_allowed(&peer) {
+            self.status = "will not inhabit onto the phone".into();
+            return;
+        }
+        let target = self.hub.lock().ok().and_then(|st| {
+            st.peers
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(&peer) || p.id.eq_ignore_ascii_case(&peer))
+                .cloned()
+        });
+        let Some(target) = target else {
+            self.status = format!("No paired peer named {peer}");
+            return;
+        };
+        if !inhabit_claim_allowed(&target.name) {
             self.status = "will not inhabit onto the phone".into();
             return;
         }
@@ -3865,13 +3954,15 @@ impl Cabin {
             project_snapshot_id: None,
             from_id: None,
             from_name: Some(self.cfg.device_name.clone()),
+            to_id: Some(target.id.clone()),
+            to_name: Some(target.name.clone()),
             at: Some(grokhub_core::now_ms()),
         };
         if let Ok(mut st) = self.hub.lock() {
             st.inhabit = Some(bundle);
         }
         self.persist();
-        self.status = format!("Inhabit staged for {peer}");
+        self.status = format!("Inhabit staged for {}", target.name);
         self.nav = Nav::Devices;
     }
 
@@ -5113,8 +5204,7 @@ impl Cabin {
             .find(|(role, content)| role == "user" && !is_workload_user(content))
             .map(|(_, content)| content.clone())
             .unwrap_or_default();
-        let _ = consume_attach;
-        self.kick_frame.take();
+        let cabin = self.kick_frame.take();
         self.kick_skip = false;
         self.eyes_attach = false;
         self.hands_attach = false;
@@ -5129,7 +5219,19 @@ impl Cabin {
             self.persist();
             return;
         }
-        match self.acp.as_ref().map(|h| h.prompt(&last_user)) {
+        let image = if consume_attach {
+            let url = next_chat_image(self.attach_url.as_deref(), cabin.as_deref()).map(|s| s.to_string());
+            self.attach_url = None;
+            self.attach_name = None;
+            url
+        } else {
+            None
+        };
+        match self
+            .acp
+            .as_ref()
+            .map(|h| h.prompt_with_image(&last_user, image.as_deref()))
+        {
             Some(Ok(())) => {}
             Some(Err(e)) => {
                 self.running = false;
@@ -5213,11 +5315,20 @@ impl Cabin {
                     self.status = format!("Plan · {t}");
                 }
                 AcpEvent::Permission(p) => {
-                    if auto_allow {
+                    if self.permission_mode == PermissionMode::AlwaysApprove {
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_permission_always(p.rpc_id);
+                        }
+                    } else if auto_allow {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission(p.rpc_id, true);
                         }
                     } else {
+                        if let Some(old) = self.perm_ask.take() {
+                            if let Some(h) = &self.acp {
+                                let _ = h.answer_permission(old.rpc_id, false);
+                            }
+                        }
                         self.perm_ask = Some(p);
                         self.status = "Grok wants permission".into();
                     }
@@ -5798,7 +5909,7 @@ impl Cabin {
             if !c.trim().starts_with("COMPUTER_CMD")
                 && !is_rewind_copy_cmd_in(c, &self.cfg.project_dir, std::env::var("HOME").ok().as_deref())
                 && host_cmd_leaves_project(c, &self.cfg.project_dir)
-                && !self.cfg.yolo
+                && self.permission_mode != PermissionMode::AlwaysApprove
             {
                 self.push_bound_msg(
                     "user",
@@ -6002,14 +6113,14 @@ impl Cabin {
         let speech = self.bearer();
         let has_local = first_bin(TRANSCRIBERS).is_some();
         let route = hey_grok_route(
-            realtime_can_connect(&self.cfg.api_key),
+            realtime_can_connect(self.console_key()),
             !speech.is_empty(),
             has_local,
         );
         if self.voice_sock.is_none() {
             match route {
                 HeyGrokRoute::Realtime => {
-                    if let Some(key) = realtime_bearer(&self.cfg.api_key, &oauth) {
+                    if let Some(key) = realtime_bearer(self.console_key(), &oauth) {
                         match crate::voice_ws::start(&key, &self.cfg.voice_model) {
                             Ok(sock) => {
                                 self.voice_sock = Some(sock);
@@ -6925,6 +7036,7 @@ impl eframe::App for Cabin {
         self.poll_night_check(now_ms());
         self.poll_wall();
         self.poll_persist();
+        self.poll_grok_sessions();
         self.poll_eyes_cap();
         self.poll_recipe_cap();
         self.poll_verify();
@@ -8236,6 +8348,7 @@ impl Cabin {
                 ui.add_space(28.0);
             }
             self.ui_composer_stack(ui);
+            self.paint_perm_ask(ui);
         });
     }
 
@@ -8706,6 +8819,7 @@ impl Cabin {
     }
 
     fn save_settings(&mut self) {
+        self.cfg.api_key.clear();
         if let Ok(mut st) = self.hub.lock() {
             if !self.cfg.device_name.trim().is_empty() {
                 st.device_name = self.cfg.device_name.clone();
@@ -8889,7 +9003,7 @@ impl Cabin {
                                                             if let Some(p) = &pending {
                                                                 crate::cards::settings_note(ui, p);
                                                             }
-                                                            crate::cards::settings_field(ui, "Console key", "Voice and Imagine only. Agent auth is grok login (cached token). Never in markdown.", &mut self.cfg.api_key, true);
+                                                            crate::cards::settings_field(ui, "Console key", "Voice and Imagine only. Agent auth is grok login (cached token). Lives in secrets.json, never markdown.", &mut self.secrets.api_key, true);
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
                                                             crate::cards::settings_field(ui, "Chat model", "Unused by Grok Build. Session model is /model in grok. Keep empty.", &mut self.cfg.model, false);
                                                             crate::cards::settings_note(ui, "Session mode is Chat / Plan / Ask on the composer. /effort sets reasoning. The leftover ladder pin below is unused by Grok Build.");
@@ -9233,6 +9347,13 @@ impl Cabin {
                     if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
                         let _ = config::write_memory(&self.mem_name, &self.mem_body);
                     }
+                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        t.messages = self
+                            .messages
+                            .iter()
+                            .map(|m| (m.role.clone(), m.content.clone()))
+                            .collect();
+                    }
                     let mut rows: Vec<(String, String)> = vec![
                         ("SOUL.md".into(), config::read_memory("SOUL.md")),
                         ("USER.md".into(), config::read_memory("USER.md")),
@@ -9269,18 +9390,25 @@ impl Cabin {
                         .color(crate::theme::subtle()),
                 );
                 if crate::cards::ghost_pill(ui, "Refresh") {
+                    self.grok_sessions_loaded = false;
                     self.reload_grok_sessions();
-                    if grokhub_acp::find_grok().is_some() {
-                        self.status = format!("{} Grok sessions", self.grok_sessions.len());
+                    self.status = if grokhub_acp::find_grok().is_some() {
+                        "Listing Grok sessions…".into()
                     } else {
-                        self.status = build_agent::grok_banner();
-                    }
+                        build_agent::grok_banner()
+                    };
                 }
             });
             if !self.grok_sessions_loaded {
                 self.reload_grok_sessions();
             }
-            if self.grok_sessions.is_empty() {
+            if self.grok_sessions_rx.is_some() {
+                ui.label(
+                    RichText::new("Listing Grok sessions…")
+                        .size(13.0)
+                        .color(crate::theme::muted()),
+                );
+            } else if self.grok_sessions.is_empty() {
                 ui.label(
                     RichText::new(if grokhub_acp::find_grok().is_some() {
                         "No grok sessions listed yet."
@@ -10789,6 +10917,10 @@ mod tests {
             poll.contains("auto_allows()"),
             "Auto permission must answer ACP prompts, not only Always: {poll}"
         );
+        assert!(
+            poll.contains("answer_permission_always"),
+            "Always must answer allow-always, not allow-once: {poll}"
+        );
     }
 
     #[test]
@@ -11040,6 +11172,14 @@ mod tests {
             ensure.contains("explain_handshake_error") && ensure.contains("spawn(None)"),
             "a dead grok session id must retry session/new without resume: {ensure}"
         );
+        assert!(
+            !ensure.contains("bearer()"),
+            "ACP spawn must not pass Imagine bearer (JWT) as XAI_API_KEY: {ensure}"
+        );
+        assert!(
+            ensure.contains("console_key") && ensure.contains("grok_cli_key") && ensure.contains("xai_env"),
+            "ACP auth is grok login; XAI_API_KEY is the secrets console key: {ensure}"
+        );
         let bearer = src
             .split("fn bearer(")
             .nth(1)
@@ -11056,6 +11196,93 @@ mod tests {
         assert!(
             bearer.contains("} else {") && bearer.contains("return k;"),
             "a dead grok login JWT must fall through to console key, not keep the expired token: {bearer}"
+        );
+        assert!(
+            bearer.contains("console_key()"),
+            "Imagine/ACP console-key fallback must read secrets.json: {bearer}"
+        );
+        let disk = src
+            .split("fn write_persist_disk(")
+            .nth(1)
+            .and_then(|s| s.split("pub struct Cabin").next())
+            .expect("write_persist_disk");
+        assert!(
+            disk.contains("secrets::save"),
+            "persist must write the console key to secrets.json: {disk}"
+        );
+        assert!(
+            disk.contains("if let Some(s) = &snap.secrets") || disk.contains("snap.secrets"),
+            "idle persist must not write secrets.json from a stale snap: {disk}"
+        );
+        assert!(
+            src.contains("migrate_console_key"),
+            "boot must move a leftover app.json console key into secrets.json"
+        );
+        assert!(
+            src.contains("&mut self.secrets.api_key"),
+            "Settings Console key must edit secrets.json, not app.json"
+        );
+        let settings_save = src
+            .split("fn save_settings")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_settings").next())
+            .expect("save_settings");
+        assert!(
+            settings_save.contains("api_key.clear"),
+            "Settings Save must not keep a leftover console key on cfg: {settings_save}"
+        );
+        let bg = src
+            .split("fn persist_bg(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn poll_persist").next())
+            .expect("persist_bg");
+        assert!(
+            !bg.contains("secrets.api_key.len"),
+            "idle persist must not race a just-saved console key: {bg}"
+        );
+        let snap = src
+            .split("fn persist_snap(")
+            .nth(1)
+            .and_then(|s| s.split("fn persist_bg(").next())
+            .expect("persist_snap");
+        assert!(
+            snap.contains("secrets: None"),
+            "idle persist_snap must omit secrets.json: {snap}"
+        );
+        let persist = src
+            .split("fn persist(&mut self)")
+            .nth(1)
+            .and_then(|s| s.split("fn persist_snap(").next())
+            .expect("persist");
+        assert!(
+            persist.contains("snap.secrets = Some") && persist.contains("persist_io"),
+            "foreground persist must write secrets under persist_io: {persist}"
+        );
+        assert!(
+            bearer.contains("persist_io.lock") && bearer.contains("secrets::save"),
+            "OAuth refresh must take persist_io before writing secrets.json: {bearer}"
+        );
+        let kick = src
+            .split("fn kick_model(")
+            .nth(1)
+            .and_then(|s| s.split("fn upsert_stream_assistant").next())
+            .expect("kick_model");
+        assert!(
+            kick.contains("prompt_with_image") && kick.contains("next_chat_image"),
+            "a plus-button still must ride the ACP prompt: {kick}"
+        );
+        assert!(
+            kick.contains("consume_attach") && kick.contains("attach_url"),
+            "follow-up kicks must leave the attached image for the next send: {kick}"
+        );
+        let send_attach = src
+            .split("fn send_chat(")
+            .nth(1)
+            .and_then(|s| s.split("fn send_followup_turn").next())
+            .expect("send_chat attach");
+        assert!(
+            send_attach.contains("attach_prompt_line") && send_attach.contains("attach_name"),
+            "the visible user turn must mention the attached still: {send_attach}"
         );
         let cwd = src
             .split("fn grok_cwd(")
@@ -11114,6 +11341,21 @@ mod tests {
         assert!(
             open.contains("show_session") && open.contains("parse_session_markdown"),
             "opening a grok session must load the transcript: {open}"
+        );
+        assert!(
+            open.contains("read_file_capped") && !open.contains("read_to_string"),
+            "opening a grok session must not slurp a huge markdown dump: {open}"
+        );
+        let reload = src
+            .split("fn reload_grok_sessions(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_grok_sessions(").next())
+            .expect("reload_grok_sessions");
+        let spawn = reload.find("thread::spawn").expect("reload must leave the UI thread");
+        let list = reload.find("list_sessions").expect("reload lists grok sessions");
+        assert!(
+            spawn < list,
+            "History must list grok sessions off the UI thread: {reload}"
         );
         let kick = src
             .split("fn kick_imagine(")
@@ -11276,7 +11518,7 @@ mod tests {
             .and_then(|s| s.split("fn upsert_stream_assistant").next())
             .expect("kick_model");
         assert!(
-            kick.contains("ensure_acp") && kick.contains("prompt("),
+            kick.contains("ensure_acp") && kick.contains("prompt_with_image"),
             "kick_model must prompt Grok Build over ACP: {kick}"
         );
         assert!(
@@ -12062,7 +12304,7 @@ mod tests {
             .and_then(|s| s.split("fn upsert_stream_assistant").next())
             .expect("kick_model");
         assert!(
-            kick.contains("ensure_acp") && kick.contains(".prompt("),
+            kick.contains("ensure_acp") && kick.contains("prompt_with_image"),
             "kick_model talks to Grok Build ACP, not cabin windshield: {kick}"
         );
         let cap_fn = src
@@ -12179,6 +12421,10 @@ mod tests {
         assert!(
             clear.contains("stamp_current_access") || clear.contains("accessed_ms"),
             "/clear must bump accessed_ms or /sync LWW can restore the cleared turns: {clear}"
+        );
+        assert!(
+            clear.contains("drop_leaving_thread_chrome") && clear.contains("grok_session = None"),
+            "/clear must drop ACP and forget the session id or the next send loads Chat 1: {clear}"
         );
         let help = src
             .split("Slash::Help =>")
@@ -12461,6 +12707,10 @@ mod tests {
             inhabit[staged..].contains("self.persist()"),
             "/inhabit must persist the staged bundle before leaving Devices: {inhabit}"
         );
+        assert!(
+            inhabit.contains("inhabit_claim_allowed") && inhabit.contains("to_id"),
+            "/inhabit must name a real peer and skip headphones-as-phone: {inhabit}"
+        );
         let soul = inhabit.find("read_memory(\"SOUL.md\")").expect("inhabit soul");
         assert!(
             inhabit[..soul].contains("write_memory") && inhabit[..soul].contains("mem_body"),
@@ -12683,6 +12933,10 @@ mod tests {
                 && run_cmds.contains("host_cmd_leaves_project"),
             "cabin rewind copies must run when YOLO is off: {run_cmds}"
         );
+        assert!(
+            run_cmds.contains("AlwaysApprove") && !run_cmds.contains("cfg.yolo"),
+            "bound-tree jail follows the Always pill, not leftover app.json yolo: {run_cmds}"
+        );
         let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
         assert!(
             !impl_src.contains("if let Some(plan) = plan_from_text"),
@@ -12727,6 +12981,10 @@ mod tests {
         assert!(
             !slice.contains("italics"),
             "greeting is regular/medium weight: {slice}"
+        );
+        assert!(
+            slice.contains("paint_perm_ask"),
+            "empty home must still show a live permission bar: {slice}"
         );
         let greet = slice.find("self.greeting").expect("greeting");
         let composer = slice.find("ui_composer_stack").expect("composer");
@@ -13118,6 +13376,10 @@ mod tests {
         assert!(
             search.contains("TEXT_FILE_CAP") || search.contains("search_thread_body"),
             "History Search must not join every 8MB thread on the UI thread: {search}"
+        );
+        assert!(
+            search.contains("thread_idx") && search.contains("get_mut"),
+            "History Search must include the live pane, not only persisted thread copies: {search}"
         );
         let night = src
             .split("fn ui_night(")
