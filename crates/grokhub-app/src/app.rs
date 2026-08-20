@@ -44,7 +44,7 @@ use grokhub_core::{
     estimate_messages_from,
     extract_connector_cmds, mark_automation_skipped, retain_held_plan, yolo_plan_split, chat_bearer,
     oauth_access_live,
-    drop_trailing_assistant, job_error_goes_to_chat, job_is_scratch, kick_messages_for_job,
+    drop_trailing_assistant, job_error_goes_to_chat, job_is_scratch,
     persist_user_turn, refund_host_reserved, daily_units_blocked,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
@@ -6030,24 +6030,36 @@ impl Cabin {
             self.chat_job_thread = Some(self.visible_thread_id());
         }
         let vis = self.visible_thread_id();
-        let visible_pairs: Vec<(String, String)> = self
-            .messages
-            .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
-            .collect();
-        let stored = self.job_stored_pairs(self.chat_job_thread.as_deref(), &vis);
-        let raw = kick_messages_for_job(
-            self.chat_job_thread.as_deref(),
-            &vis,
-            &visible_pairs,
-            &stored,
-        );
-        let last_user = raw
-            .iter()
-            .rev()
-            .find(|(role, content)| role == "user" && !is_workload_user(content))
-            .map(|(_, content)| content.clone())
-            .unwrap_or_default();
+        let last_user = {
+            let job = self.chat_job_thread.as_deref();
+            if job.is_none() || job == Some(vis.as_str()) {
+                self.messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == "user" && !is_workload_user(&m.content))
+                    .map(|m| m.content.clone())
+                    .unwrap_or_default()
+            } else {
+                self.threads
+                    .iter()
+                    .find(|t| Some(t.id.as_str()) == job)
+                    .and_then(|t| {
+                        t.messages
+                            .iter()
+                            .rev()
+                            .find(|(role, content)| role == "user" && !is_workload_user(content))
+                            .map(|(_, content)| content.clone())
+                    })
+                    .unwrap_or_else(|| {
+                        self.messages
+                            .iter()
+                            .rev()
+                            .find(|m| m.role == "user" && !is_workload_user(&m.content))
+                            .map(|m| m.content.clone())
+                            .unwrap_or_default()
+                    })
+            }
+        };
         if let Err(e) = self.ensure_acp() {
             self.running = false;
             self.status = self.apply_job_fail(&e);
@@ -13571,8 +13583,8 @@ mod tests {
             "kick_model must wait for off-thread verify before the follow-up turn: {kick}"
         );
         assert!(
-            !kick.contains("t.messages.clone()"),
-            "kick_model must not clone every thread to read the origin: {kick}"
+            !kick.contains("t.messages.clone()") && !kick.contains("kick_messages_for_job"),
+            "kick_model must not clone the transcript to read the last user turn: {kick}"
         );
         let reflect = src
             .split("fn run_reflect")
