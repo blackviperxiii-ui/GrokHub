@@ -997,6 +997,7 @@ pub struct Cabin {
     greeting_memory_at: u64,
     greeting_user_md: String,
     greeting_memory_md: String,
+    greeting_files_rx: Option<mpsc::Receiver<(u64, String, u64, String)>>,
     greeting_flush_name: String,
     greeting_flush_len: usize,
     greeting_llm_fp: String,
@@ -1357,6 +1358,7 @@ impl Cabin {
             greeting_memory_at: 0,
             greeting_user_md: String::new(),
             greeting_memory_md: String::new(),
+            greeting_files_rx: None,
             greeting_flush_name: String::new(),
             greeting_flush_len: usize::MAX,
             greeting_llm_fp: String::new(),
@@ -2971,6 +2973,20 @@ impl Cabin {
     }
 
     fn poll_greeting(&mut self) {
+        if let Some(rx) = self.greeting_files_rx.take() {
+            match rx.try_recv() {
+                Ok((user_at, user, memory_at, memory)) => {
+                    self.greeting_user_md = user;
+                    self.greeting_user_at = user_at;
+                    self.greeting_memory_md = memory;
+                    self.greeting_memory_at = memory_at;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.greeting_files_rx = Some(rx);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
         let Some(rx) = self.greeting_rx.take() else {
             return;
         };
@@ -3012,14 +3028,24 @@ impl Cabin {
             self.greeting_flush_len = self.mem_body.len();
         }
         let user_at = config::memory_updated_at("USER.md");
-        if self.greeting_user_at != user_at {
-            self.greeting_user_md = config::read_memory("USER.md");
-            self.greeting_user_at = user_at;
-        }
         let memory_at = config::memory_updated_at("MEMORY.md");
-        if self.greeting_memory_at != memory_at {
-            self.greeting_memory_md = config::read_memory("MEMORY.md");
-            self.greeting_memory_at = memory_at;
+        if self.greeting_user_at != user_at || self.greeting_memory_at != memory_at {
+            if self.greeting_user_at == 0 && self.greeting_memory_at == 0 {
+                self.greeting_user_md = config::read_memory("USER.md");
+                self.greeting_memory_md = config::read_memory("MEMORY.md");
+                self.greeting_user_at = user_at;
+                self.greeting_memory_at = memory_at;
+            } else if self.greeting_files_rx.is_none() {
+                let (tx, rx) = mpsc::channel();
+                self.greeting_files_rx = Some(rx);
+                std::thread::spawn(move || {
+                    let user = config::read_memory("USER.md");
+                    let memory = config::read_memory("MEMORY.md");
+                    let user_at = config::memory_updated_at("USER.md");
+                    let memory_at = config::memory_updated_at("MEMORY.md");
+                    let _ = tx.send((user_at, user, memory_at, memory));
+                });
+            }
         }
         let user_md = if self.mem_name == "USER.md" {
             self.mem_body.clone()
@@ -8110,6 +8136,7 @@ impl eframe::App for Cabin {
                 || self.oauth_photo_busy
                 || self.review_busy
                 || self.greeting_busy
+                || self.greeting_files_rx.is_some()
                 || self.pending_kick.is_some()
                 || self.kick_cap_rx.is_some()
                 || self.recipe_cap_rx.is_some()
@@ -12221,6 +12248,7 @@ mod tests {
                 && live.contains("oauth_start_rx")
                 && live.contains("oauth_poll_rx")
                 && live.contains("greeting_busy")
+                && live.contains("greeting_files_rx")
                 && live.contains("night_check_rx")
                 && live.contains("eyes_cap_rx")
                 && live.contains("doctor_line_busy"),
@@ -14456,6 +14484,10 @@ mod tests {
         assert!(
             greet[..user].contains("memory_updated_at"),
             "empty-chat greeting must not slurp USER/MEMORY on every paint: {greet}"
+        );
+        assert!(
+            greet.contains("greeting_files_rx") && greet.contains("greeting_user_at == 0"),
+            "mtime-changed USER/MEMORY must leave the UI thread after the first miss: {greet}"
         );
         let greet_spawn = greet.find("thread::spawn").expect("greeting flush must leave the UI thread");
         let greet_write = greet.find("write_memory").expect("greeting write_memory");
