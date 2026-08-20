@@ -3216,7 +3216,7 @@ impl Cabin {
             .unwrap_or(0);
         self.drop_leaving_thread_chrome();
         self.stamp_current_access();
-        self.persist();
+        self.persist_bg();
     }
 
     fn stamp_current_access(&mut self) {
@@ -12179,11 +12179,15 @@ mod tests {
         let switched = src
             .split("fn switch_thread")
             .nth(1)
-            .and_then(|s| s.split("fn stamp_current_access").next())
+            .and_then(|s| s.split("fn open_recent_chat").next())
             .expect("switch_thread");
         assert!(
             switched.contains("drop_leaving_thread_chrome"),
             "switching tabs must not send the previous tab's image or skill follow: {switched}"
+        );
+        assert!(
+            switched.contains("persist_bg") && !switched.contains("self.persist()"),
+            "tab switch must not freeze the cabin writing threads.json: {switched}"
         );
         let chrome = src
             .split("fn drop_leaving_thread_chrome")
