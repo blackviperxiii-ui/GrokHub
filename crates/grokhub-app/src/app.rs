@@ -833,6 +833,8 @@ pub struct Cabin {
     thread_idx: usize,
     oauth_pending: Option<DeviceCodeStart>,
     oauth_next_poll: Instant,
+    oauth_start_rx: Option<mpsc::Receiver<Result<DeviceCodeStart, String>>>,
+    oauth_poll_rx: Option<mpsc::Receiver<Result<grokhub_core::PollResult, String>>>,
     host_hour_count: u32,
     host_hour_at: Instant,
     host_reserved: u32,
@@ -1179,6 +1181,8 @@ impl Cabin {
             thread_idx,
             oauth_pending: None,
             oauth_next_poll: Instant::now(),
+            oauth_start_rx: None,
+            oauth_poll_rx: None,
             host_hour_count: 0,
             host_hour_at: Instant::now(),
             host_reserved: 0,
@@ -5157,57 +5161,92 @@ impl Cabin {
     }
 
     fn start_oauth(&mut self) {
-        match crate::oauth::start_device() {
-            Ok(start) => {
-                let uri = start
-                    .verification_uri_complete
-                    .clone()
-                    .unwrap_or_else(|| start.verification_uri.clone());
-                let _ = crate::oauth::open_browser(&uri);
-                self.status = format!("Grok OAuth code {} — approve in the browser", start.user_code);
-                let wait = start.interval.max(1);
-                self.oauth_pending = Some(start);
-                self.oauth_next_poll = Instant::now() + Duration::from_secs(wait);
-            }
-            Err(e) => self.status = e,
+        if self.oauth_start_rx.is_some() {
+            return;
         }
+        let (tx, rx) = mpsc::channel();
+        self.oauth_start_rx = Some(rx);
+        self.status = "Starting Grok OAuth…".into();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::oauth::start_device());
+        });
     }
 
     fn poll_oauth(&mut self) {
+        if let Some(rx) = self.oauth_start_rx.take() {
+            match rx.try_recv() {
+                Ok(Ok(start)) => {
+                    let uri = start
+                        .verification_uri_complete
+                        .clone()
+                        .unwrap_or_else(|| start.verification_uri.clone());
+                    let _ = crate::oauth::open_browser(&uri);
+                    self.status =
+                        format!("Grok OAuth code {} — approve in the browser", start.user_code);
+                    let wait = start.interval.max(1);
+                    self.oauth_pending = Some(start);
+                    self.oauth_next_poll = Instant::now() + Duration::from_secs(wait);
+                }
+                Ok(Err(e)) => self.status = e,
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.oauth_start_rx = Some(rx);
+                    return;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.status = "Grok OAuth failed to start".into();
+                    return;
+                }
+            }
+        }
+        if let Some(rx) = self.oauth_poll_rx.take() {
+            match rx.try_recv() {
+                Ok(Ok(r)) => match r.status {
+                    grokhub_core::PollStatus::Ready => {
+                        if let Some(t) = r.tokens {
+                            self.secrets.oauth = Some(t);
+                            let _ = secrets::save(&self.secrets);
+                            self.oauth_pending = None;
+                            self.oauth_profile_tried = false;
+                            self.oauth_photo = None;
+                            self.oauth_photo_key.clear();
+                            self.status = "Grok OAuth connected".into();
+                        }
+                    }
+                    grokhub_core::PollStatus::Expired | grokhub_core::PollStatus::Denied => {
+                        self.oauth_pending = None;
+                        self.status = r.error.unwrap_or_else(|| "OAuth failed".into());
+                    }
+                    status @ (grokhub_core::PollStatus::Pending | grokhub_core::PollStatus::SlowDown) => {
+                        if let Some(p) = self.oauth_pending.as_mut() {
+                            if let Some(wait) = grokhub_core::next_oauth_poll_secs(p.interval, status)
+                            {
+                                p.interval = wait;
+                                self.oauth_next_poll = Instant::now() + Duration::from_secs(wait);
+                            }
+                        }
+                    }
+                },
+                Ok(Err(e)) => self.status = e,
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.oauth_poll_rx = Some(rx);
+                    return;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return,
+            }
+            return;
+        }
         let Some(p) = self.oauth_pending.clone() else {
             return;
         };
         if Instant::now() < self.oauth_next_poll {
             return;
         }
-        match crate::oauth::poll_device(&p.device_code) {
-            Ok(r) => match r.status {
-                grokhub_core::PollStatus::Ready => {
-                    if let Some(t) = r.tokens {
-                        self.secrets.oauth = Some(t);
-                        let _ = secrets::save(&self.secrets);
-                        self.oauth_pending = None;
-                        self.oauth_profile_tried = false;
-                        self.oauth_photo = None;
-                        self.oauth_photo_key.clear();
-                        self.status = "Grok OAuth connected".into();
-                    }
-                }
-                grokhub_core::PollStatus::Expired | grokhub_core::PollStatus::Denied => {
-                    self.oauth_pending = None;
-                    self.status = r.error.unwrap_or_else(|| "OAuth failed".into());
-                }
-                status @ (grokhub_core::PollStatus::Pending | grokhub_core::PollStatus::SlowDown) => {
-                    if let Some(wait) = grokhub_core::next_oauth_poll_secs(p.interval, status) {
-                        if let Some(pending) = self.oauth_pending.as_mut() {
-                            pending.interval = wait;
-                        }
-                        self.oauth_next_poll = Instant::now() + Duration::from_secs(wait);
-                    }
-                }
-            },
-            Err(e) => self.status = e,
-        }
+        let code = p.device_code.clone();
+        let (tx, rx) = mpsc::channel();
+        self.oauth_poll_rx = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::oauth::poll_device(&code));
+        });
     }
 
     fn clear_oauth_photo(&mut self) {
@@ -5221,6 +5260,8 @@ impl Cabin {
     fn sign_out_oauth(&mut self) {
         self.secrets.oauth = None;
         self.oauth_pending = None;
+        self.oauth_start_rx = None;
+        self.oauth_poll_rx = None;
         self.clear_oauth_photo();
         let _ = secrets::save(&self.secrets);
         self.status = "Signed out".into();
@@ -7233,7 +7274,8 @@ impl eframe::App for Cabin {
                 self.geom_dirty = false;
             }
         }
-        if self.oauth_pending.is_some() {
+        if self.oauth_pending.is_some() || self.oauth_start_rx.is_some() || self.oauth_poll_rx.is_some()
+        {
             self.poll_oauth();
             let wait = self
                 .oauth_pending
@@ -7303,7 +7345,9 @@ impl eframe::App for Cabin {
                 || self.persist_rx.is_some()
                 || self.inspect_rx.is_some()
                 || self.session_show_rx.is_some()
-                || self.acp_spawn_rx.is_some(),
+                || self.acp_spawn_rx.is_some()
+                || self.oauth_start_rx.is_some()
+                || self.oauth_poll_rx.is_some(),
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -11138,8 +11182,10 @@ mod tests {
                 && live.contains("persist_rx")
                 && live.contains("inspect_rx")
                 && live.contains("session_show_rx")
-                && live.contains("acp_spawn_rx"),
-            "History listing / inspect / session show / ACP handshake must not wait on the 15s heartbeat: {live}"
+                && live.contains("acp_spawn_rx")
+                && live.contains("oauth_start_rx")
+                && live.contains("oauth_poll_rx"),
+            "History listing / inspect / session show / ACP handshake / OAuth HTTP must not wait on the 15s heartbeat: {live}"
         );
     }
 
@@ -12528,6 +12574,32 @@ mod tests {
         assert!(
             sign_out.contains("oauth_pending = None"),
             "Sign out during device-code poll must not reconnect when the browser finishes: {sign_out}"
+        );
+        assert!(
+            sign_out.contains("oauth_start_rx") && sign_out.contains("oauth_poll_rx"),
+            "Sign out must drop in-flight OAuth HTTP: {sign_out}"
+        );
+        let start_o = src
+            .split("fn start_oauth(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_oauth(").next())
+            .expect("start_oauth");
+        let start_spawn = start_o.find("thread::spawn").expect("start_oauth spawn");
+        let start_dev = start_o.find("start_device").expect("start_device");
+        assert!(
+            start_spawn < start_dev,
+            "Connect Grok OAuth must not freeze the cabin on device-code HTTP: {start_o}"
+        );
+        let poll_o = src
+            .split("fn poll_oauth(")
+            .nth(1)
+            .and_then(|s| s.split("fn clear_oauth_photo(").next())
+            .expect("poll_oauth");
+        let poll_spawn = poll_o.find("thread::spawn").expect("poll_oauth spawn");
+        let poll_dev = poll_o.find("poll_device").expect("poll_device");
+        assert!(
+            poll_spawn < poll_dev,
+            "OAuth poll must not freeze the cabin on token HTTP: {poll_o}"
         );
         let kick = src
             .split("fn kick_model(")
