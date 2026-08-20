@@ -44,7 +44,7 @@ use grokhub_core::{
     estimate_messages_from,
     extract_connector_cmds, mark_automation_skipped, retain_held_plan, yolo_plan_split, chat_bearer,
     oauth_access_live,
-    drop_trailing_assistant_on, job_error_goes_to_chat, job_is_scratch, kick_messages_for_job,
+    drop_trailing_assistant, job_error_goes_to_chat, job_is_scratch, kick_messages_for_job,
     persist_user_turn, refund_host_reserved, daily_units_blocked,
     night_check_command, night_check_exit_code, skip_night_check_receipt,
     extract_imagine_prompt, extract_work_pins, filter_palette, format_consult_reply,
@@ -63,7 +63,7 @@ use grokhub_core::{
     settle_project_path, should_seed_sidebar, stage_project, toggle_folder, upsert_bound,
     visible_tree, ProjectKind, ProjectMenuAct,
     ProjectNode,
-    is_plain_text, is_voice_error, keep_last_rewinds, last_user_scan, last_user_text, load_hub_state, mark_automation_ran,
+    is_plain_text, is_voice_error, keep_last_rewinds, last_user_scan, load_hub_state, mark_automation_ran,
     night_check_may_fire, night_counts_run, night_unauth_should_skip,
     match_skill, mode_from_chip_value, model_for_mode, nav_from_chip_value,
     cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
@@ -1702,30 +1702,16 @@ impl Cabin {
         self.perm_ask = None;
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.clone();
-        let mut visible: Vec<(String, String)> = self
-            .messages
-            .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
-            .collect();
-        let mut stored = self.job_stored_pairs(job.as_deref(), &vis);
-        drop_trailing_assistant_on(job.as_deref(), &vis, &mut visible, &mut stored);
-        self.messages = visible
-            .into_iter()
-            .map(|(role, content)| Msg { role, content })
-            .collect();
-        if let Some(job_id) = job.as_deref() {
-            if job_id != vis {
-                if let Some((_, msgs)) = stored.iter().find(|(id, _)| id == job_id) {
-                    if let Some(t) = self.threads.iter_mut().find(|t| t.id == job_id) {
-                        t.messages = msgs.clone();
-                        t.accessed_ms = now_ms();
-                    }
-                }
-            } else {
-                self.stamp_current_access();
+        if job.as_deref().is_none_or(|id| id == vis) {
+            if self.messages.last().is_some_and(|m| m.role == "assistant") {
+                self.messages.pop();
             }
-        } else {
             self.stamp_current_access();
+        } else if let Some(id) = job.as_deref() {
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
+                drop_trailing_assistant(&mut t.messages);
+                t.accessed_ms = now_ms();
+            }
         }
         self.chat_job_thread = None;
         self.persist();
@@ -6380,18 +6366,33 @@ impl Cabin {
                 self.stream_buf.clear();
                 let job = self.chat_job_thread.clone();
                 let vis = self.visible_thread_id();
-                let visible_pairs: Vec<(String, String)> = self
-                    .messages
-                    .iter()
-                    .map(|m| (m.role.clone(), m.content.clone()))
-                    .collect();
-                let stored = self.job_stored_pairs(job.as_deref(), &vis);
-                let job_pairs = kick_messages_for_job(
-                    job.as_deref(),
-                    &vis,
-                    &visible_pairs,
-                    &stored,
-                );
+                let last_user = self.last_user_on_job();
+                let facts = if job.as_deref().is_none_or(|id| id == vis) {
+                    fact_candidates_from(
+                        self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+                    )
+                } else {
+                    self.threads
+                        .iter()
+                        .find(|t| Some(t.id.as_str()) == job.as_deref())
+                        .map(|t| fact_candidates(&t.messages))
+                        .unwrap_or_else(|| {
+                            fact_candidates_from(
+                                self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+                            )
+                        })
+                };
+                let tokens = if job.as_deref().is_none_or(|id| id == vis) {
+                    estimate_messages_from(
+                        self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+                    )
+                } else {
+                    self.threads
+                        .iter()
+                        .find(|t| Some(t.id.as_str()) == job.as_deref())
+                        .map(|t| estimate_messages(&t.messages))
+                        .unwrap_or(0)
+                };
                 let stored_scratch: Vec<(String, bool)> = self
                     .threads
                     .iter()
@@ -6404,7 +6405,6 @@ impl Cabin {
                     &stored_scratch,
                 );
                 if self.policy().learns() && !job_scratch {
-                    let facts = fact_candidates(&job_pairs);
                     extract_insights(&mut self.learning, &facts);
                 }
                 let origin = self.chat_job_thread.take();
@@ -6438,7 +6438,6 @@ impl Cabin {
                     }
                     self.kick_imagine();
                 }
-                let last_user = last_user_text(&job_pairs).unwrap_or_default();
                 if user_asked_to_schedule(&last_user)
                     && chat_may_save_automation(&last_user, &scan)
                 {
@@ -6476,7 +6475,7 @@ impl Cabin {
                         &self.cfg.goal_pin,
                         &stored_pins,
                     ),
-                    &last_user_text(&job_pairs).unwrap_or_default(),
+                    &last_user,
                 );
                 let job_step = if job.as_deref() == Some(vis.as_str()) || job.is_none() {
                     self.goal_step
@@ -6535,7 +6534,6 @@ impl Cabin {
                 } else {
                     job_step
                 };
-                let tokens = estimate_messages(&job_pairs);
                 if should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, compact_step) {
                     if here {
                         self.run_slash(Slash::Compact);
@@ -6559,7 +6557,7 @@ impl Cabin {
                 if !self.running
                     && self.followup_step < FOLLOWUP_MAX_STEPS
                     && reply_needs_followup(
-                        &last_user_text(&job_pairs).unwrap_or_default(),
+                        &last_user,
                         &text,
                         truncated,
                     )
@@ -7179,18 +7177,19 @@ impl Cabin {
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.clone();
         if job.as_deref().map(|id| id == vis).unwrap_or(true) {
-            let mut msgs: Vec<(String, String)> = self
-                .messages
-                .iter()
-                .map(|m| (m.role.clone(), m.content.clone()))
-                .collect();
-            let status = apply_job_error(&mut msgs, err);
-            self.messages = msgs
-                .into_iter()
-                .map(|(role, content)| Msg { role, content })
-                .collect();
+            let text = format!("Error: {err}");
+            if self.messages.last().is_some_and(|m| m.role == "assistant") {
+                if let Some(last) = self.messages.last_mut() {
+                    last.content = text;
+                }
+            } else {
+                self.messages.push(Msg {
+                    role: "assistant".into(),
+                    content: text,
+                });
+            }
             self.stamp_current_access();
-            return status;
+            return err.to_string();
         }
         if let Some(id) = job {
             if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
@@ -13353,6 +13352,10 @@ mod tests {
             fail.contains("accessed_ms") || fail.contains("stamp_current_access"),
             "a job error on the origin thread must bump accessed_ms or /sync LWW can drop it: {fail}"
         );
+        assert!(
+            fail.contains("apply_job_error") && !fail.contains("content.clone()"),
+            "a job error must not clone an 8MB pane to replace the last assistant: {fail}"
+        );
         let queued = src
             .split("fn queue_update(")
             .nth(1)
@@ -13681,8 +13684,8 @@ mod tests {
             "halt must stamp the origin thread when it is not the visible tab: {halt_flight}"
         );
         assert!(
-            !halt_flight.contains("t.messages.clone()"),
-            "Stop must not clone every thread to drop one trailing assistant: {halt_flight}"
+            !halt_flight.contains("t.messages.clone()") && !halt_flight.contains("content.clone()"),
+            "Stop must not clone an 8MB transcript to drop one trailing assistant: {halt_flight}"
         );
         let host_done_facts = src
             .split("Ok(JobOut::HostDone(block))")
@@ -15352,12 +15355,13 @@ mod tests {
             "auto-continue must remember the origin thread and mark the queue row running: {queued}"
         );
         assert!(
-            chat.contains("estimate_messages(&job_pairs)"),
+            chat.contains("estimate_messages")
+                && (chat.contains("chat_job_thread") || chat.contains("job.as_deref()")),
             "auto-compact must use the origin thread, not only the visible tab: {chat}"
         );
         assert!(
-            !chat.contains("t.messages.clone()"),
-            "Chat complete must not clone every thread to learn from one reply: {chat}"
+            !chat.contains("t.messages.clone()") && !chat.contains("content.clone()"),
+            "Chat complete must not clone an 8MB transcript to estimate/compact: {chat}"
         );
         assert!(
             chat.contains("should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, compact_step)"),
