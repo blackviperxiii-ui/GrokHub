@@ -3758,11 +3758,13 @@ impl Cabin {
                     PermissionMode::AlwaysApprove
                 };
                 self.acp = None;
+                self.acp_spawn_rx = None;
                 self.status = format!("Permission {}", self.permission_mode.as_str());
             }
             Slash::AutoPerm => {
                 self.permission_mode = PermissionMode::Auto;
                 self.acp = None;
+                self.acp_spawn_rx = None;
                 self.status = "Permission auto".into();
             }
             Slash::Effort(level) => {
@@ -8739,6 +8741,7 @@ impl Cabin {
                 if let Some(m) = SessionMode::parse(&mode) {
                     self.session_mode = m;
                     self.acp = None;
+                    self.acp_spawn_rx = None;
                     self.status = format!("Session {}", m.as_str());
                 }
             }
@@ -8746,6 +8749,7 @@ impl Cabin {
                 if let Some(p) = PermissionMode::parse(&perm) {
                     self.permission_mode = p;
                     self.acp = None;
+                    self.acp_spawn_rx = None;
                     self.status = format!("Permission {}", p.as_str());
                 }
             }
@@ -11164,6 +11168,34 @@ mod tests {
         assert!(
             poll.contains("answer_permission_always"),
             "Always must answer allow-always, not allow-once: {poll}"
+        );
+        let always = src
+            .split("Slash::AlwaysApprove =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::AutoPerm =>").next())
+            .expect("AlwaysApprove");
+        assert!(
+            always.contains("acp_spawn_rx = None"),
+            "/always during handshake must drop the in-flight Ask agent: {always}"
+        );
+        let auto = src
+            .split("Slash::AutoPerm =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::Effort(").next())
+            .expect("AutoPerm");
+        assert!(
+            auto.contains("acp_spawn_rx = None"),
+            "/auto during handshake must drop the in-flight Ask agent: {auto}"
+        );
+        let row = src
+            .split("let row = crate::cards::session_row")
+            .nth(1)
+            .and_then(|s| s.split("ui.allocate_ui_with_layout").next())
+            .expect("session_row");
+        assert_eq!(
+            row.matches("acp_spawn_rx = None").count(),
+            2,
+            "session/permission row must drop an in-flight handshake: {row}"
         );
     }
 
