@@ -23,10 +23,15 @@ pub fn estimate_tokens(text: &str) -> u32 {
 }
 
 pub fn estimate_messages(messages: &[(String, String)]) -> u32 {
-    messages
-        .iter()
-        .map(|(_, c)| 4 + estimate_tokens(c))
-        .sum()
+    estimate_messages_from(messages.iter().map(|(r, c)| (r.as_str(), c.as_str())))
+}
+
+/// Same estimate without cloning an 8MB transcript onto the UI thread.
+pub fn estimate_messages_from<'a, I>(messages: I) -> u32
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
+    messages.into_iter().map(|(_, c)| 4 + estimate_tokens(c)).sum()
 }
 
 pub fn context_percent(tokens: u32, budget: u32) -> u32 {
