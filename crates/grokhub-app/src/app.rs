@@ -1163,7 +1163,7 @@ impl Cabin {
         let mut threads = threads::load();
         if threads.is_empty() {
             let mut t = ChatThread::new("Chat", false);
-            t.messages = config::load_chat();
+            t.messages = Arc::new(config::load_chat());
             threads.push(t);
         }
         let keep_id = threads
@@ -1556,11 +1556,11 @@ impl Cabin {
 
     fn persist_snap(&mut self) -> PersistSnap {
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.messages.clear();
-            t.messages.extend(
+            t.messages = Arc::new(
                 self.messages
                     .iter()
-                    .map(|m| (m.role.clone(), m.content.clone())),
+                    .map(|m| (m.role.clone(), m.content.clone()))
+                    .collect(),
             );
             self.cfg.current_thread = t.id.clone();
         }
@@ -1738,7 +1738,7 @@ impl Cabin {
             self.stamp_current_access();
         } else if let Some(id) = job.as_deref() {
             if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
-                drop_trailing_assistant(&mut t.messages);
+                drop_trailing_assistant(t.messages_mut());
                 t.accessed_ms = now_ms();
             }
         }
@@ -1776,7 +1776,7 @@ impl Cabin {
             }
         } else if let Some(job_id) = job {
             if let Some(t) = self.threads.iter_mut().find(|t| t.id == job_id) {
-                upsert_assistant_turn(&mut t.messages, &content);
+                upsert_assistant_turn(t.messages_mut(), &content);
             }
         }
         let target = self
@@ -1804,7 +1804,7 @@ impl Cabin {
         }
         if let Some(job_id) = job {
             if let Some(t) = self.threads.iter_mut().find(|t| t.id == job_id) {
-                t.messages.push((role.to_string(), content));
+                t.messages_mut().push((role.to_string(), content));
                 t.accessed_ms = now_ms();
             }
         }
@@ -2017,7 +2017,7 @@ impl Cabin {
                 };
                 if let Some(t) = self.threads.get_mut(i) {
                     if t.messages.is_empty() {
-                        t.messages = msgs.clone();
+                        t.messages = Arc::new(msgs.clone());
                     }
                 }
                 if i == self.thread_idx && self.messages.is_empty() {
@@ -3608,8 +3608,9 @@ impl Cabin {
         let idx = idx.min(self.threads.len().saturating_sub(1));
         if idx != self.thread_idx {
             if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                t.messages.clear();
-                t.messages.extend(self.messages.drain(..).map(|m| (m.role, m.content)));
+                t.messages = Arc::new(
+                    self.messages.drain(..).map(|m| (m.role, m.content)).collect(),
+                );
                 flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
             }
             self.thread_idx = idx;
@@ -3711,8 +3712,9 @@ impl Cabin {
             return;
         }
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.messages.clear();
-            t.messages.extend(self.messages.drain(..).map(|m| (m.role, m.content)));
+            t.messages = Arc::new(
+                self.messages.drain(..).map(|m| (m.role, m.content)).collect(),
+            );
             flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
         }
         let title = if scratch { "Scratch" } else { "Chat" };
@@ -4093,7 +4095,7 @@ impl Cabin {
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
                     t.grok_session = None;
                     t.grok_cwd = None;
-                    t.messages.clear();
+                    t.messages_mut().clear();
                 }
                 self.stamp_current_access();
                 self.persist();
@@ -4512,7 +4514,7 @@ impl Cabin {
         self.threads
             .iter()
             .find(|t| t.id == id)
-            .map(|t| vec![(t.id.clone(), t.messages.clone())])
+            .map(|t| vec![(t.id.clone(), t.messages.as_ref().clone())])
             .unwrap_or_default()
     }
 
@@ -4641,7 +4643,7 @@ impl Cabin {
         }
         if let Some(t) = self.threads.iter_mut().find(|t| t.id == origin) {
             trim_result_bodies_in_place(
-                t.messages.iter_mut().map(|(r, c)| (r.as_str(), c)),
+                t.messages_mut().iter_mut().map(|(r, c)| (r.as_str(), c)),
                 RESULT_TRIM_KEEP_HOPS,
             );
         }
@@ -6856,7 +6858,7 @@ impl Cabin {
                                 8,
                             );
                             if start > 0 {
-                                t.messages.drain(..start);
+                                t.messages_mut().drain(..start);
                             }
                             let pin = pin.trim();
                             if !pin.is_empty() {
@@ -6864,7 +6866,7 @@ impl Cabin {
                                 if !t.messages.iter().any(|(_, c)| {
                                     c == &marked || c.starts_with(&format!("{marked}\n"))
                                 }) {
-                                    t.messages.insert(0, ("system".into(), marked));
+                                    t.messages_mut().insert(0, ("system".into(), marked));
                                 }
                             }
                             t.accessed_ms = now_ms();
@@ -7508,7 +7510,7 @@ impl Cabin {
         }
         if let Some(id) = job {
             if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
-                let status = apply_job_error(&mut t.messages, err);
+                let status = apply_job_error(t.messages_mut(), err);
                 t.accessed_ms = now_ms();
                 return status;
             }
@@ -13162,6 +13164,10 @@ mod tests {
             "persist_snap must copy the live pane into the thread once, not again into PersistSnap.msgs: {snap}"
         );
         assert!(
+            snap.contains("Arc::new") && snap.contains("self.threads.clone()"),
+            "persist must clone the live pane into a new Arc, then bump other threads: {snap}"
+        );
+        assert!(
             snap.contains("self.hub.clone()") && !snap.contains("state_for_disk"),
             "persist_snap must not clone hub last_frame/snapshot on the UI thread: {snap}"
         );
@@ -14180,7 +14186,7 @@ mod tests {
             "/new reuse must not clone every thread twice — switch without persist_bg, then persist once: {created}"
         );
         assert!(
-            created.contains("messages.drain") && created.contains("extend"),
+            created.contains("messages.drain") && created.contains("Arc::new"),
             "/new must move the leaving pane, not clone an 8MB HOST_RESULT: {created}"
         );
         let boot = src
@@ -14218,7 +14224,7 @@ mod tests {
             "tab switch persist_bg must share the pane swap with /new reuse: {switched}"
         );
         assert!(
-            switched.contains("messages.drain") && switched.contains("extend"),
+            switched.contains("messages.drain") && switched.contains("Arc::new"),
             "tab switch must move the leaving pane, not clone an 8MB HOST_RESULT: {switched}"
         );
         let chrome = src
@@ -15865,15 +15871,15 @@ mod tests {
     fn other_chip_threads_skip_current_and_scratch() {
         let mut current = crate::threads::ChatThread::new("Now", false);
         current.id = "cur".into();
-        current.messages.push(("user".into(), "this chat".into()));
+        current.messages_mut().push(("user".into(), "this chat".into()));
         let mut prev = crate::threads::ChatThread::new("Night cabin", false);
         prev.id = "prev".into();
-        prev.messages.push(("user".into(), "paint the wall".into()));
-        prev.messages
+        prev.messages_mut().push(("user".into(), "paint the wall".into()));
+        prev.messages_mut()
             .push(("assistant".into(), "I can sketch the first coat.".into()));
         let mut scratch = crate::threads::ChatThread::new("Scratch", true);
         scratch.id = "scr".into();
-        scratch.messages.push(("user".into(), "ignore me".into()));
+        scratch.messages_mut().push(("user".into(), "ignore me".into()));
         let others = super::collect_other_chip_threads(&[current, prev, scratch], "cur");
         assert_eq!(others.len(), 1);
         assert_eq!(others[0].title, "Night cabin");

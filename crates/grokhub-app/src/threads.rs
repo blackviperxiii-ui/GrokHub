@@ -1,6 +1,7 @@
 use grokhub_core::{uid, ThreadGoal};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::sync::Arc;
 
 use crate::config;
 
@@ -12,7 +13,7 @@ pub struct ChatThread {
     #[serde(default)]
     pub scratch: bool,
     #[serde(default)]
-    pub messages: Vec<(String, String)>,
+    pub messages: Arc<Vec<(String, String)>>,
     #[serde(default)]
     pub goal: ThreadGoal,
     #[serde(default)]
@@ -34,7 +35,7 @@ impl ChatThread {
             id: uid("thr"),
             title: title.to_string(),
             scratch,
-            messages: vec![],
+            messages: Arc::new(Vec::new()),
             goal: ThreadGoal::default(),
             pinned: false,
             title_locked: false,
@@ -42,6 +43,11 @@ impl ChatThread {
             grok_session: None,
             grok_cwd: None,
         }
+    }
+
+    /// Copy-on-write. persist() clones every ChatThread; other tabs keep this Arc.
+    pub fn messages_mut(&mut self) -> &mut Vec<(String, String)> {
+        Arc::make_mut(&mut self.messages)
     }
 }
 
@@ -90,7 +96,7 @@ pub fn save(threads: &[ChatThread]) -> Result<(), String> {
 
 pub fn export_markdown(t: &ChatThread) -> String {
     let mut out = format!("# {}\n\n", t.title);
-    for (role, content) in &t.messages {
+    for (role, content) in t.messages.iter() {
         out.push_str(&format!("## {role}\n\n{content}\n\n"));
     }
     out
@@ -108,7 +114,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let mut t = ChatThread::new("night", true);
-        t.messages.push(("user".into(), "hi".into()));
+        t.messages_mut().push(("user".into(), "hi".into()));
         save(&[t.clone()]).expect("save");
         let loaded = load();
         assert_eq!(loaded[0].title, "night");
@@ -163,5 +169,21 @@ mod tests {
             load.contains("read_file_capped") && !load.contains("read_to_string"),
             "boot must not slurp a huge threads.json: {load}"
         );
+    }
+
+    #[test]
+    fn clone_shares_message_bodies() {
+        let mut t = ChatThread::new("a", false);
+        t.messages_mut()
+            .push(("user".into(), "x".repeat(64)));
+        let mut u = t.clone();
+        assert!(
+            Arc::ptr_eq(&t.messages, &u.messages),
+            "persist must not clone an 8MB HOST_RESULT when cloning ChatThread"
+        );
+        u.messages_mut().push(("assistant".into(), "y".into()));
+        assert!(!Arc::ptr_eq(&t.messages, &u.messages));
+        assert_eq!(t.messages.len(), 1);
+        assert_eq!(u.messages.len(), 2);
     }
 }
