@@ -60,7 +60,7 @@ impl SpawnOpts {
             "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
         })?;
         Ok(Self {
-            args: crate::agent_args_resume(always_approve, None),
+            args: agent_args_resume(always_approve, None),
             program,
             cwd,
             api_key,
@@ -83,7 +83,7 @@ impl SpawnOpts {
             }
         });
         self.resume = id.clone();
-        self.args = crate::agent_args_resume(self.always_approve, id.as_deref());
+        self.args = agent_args_resume(self.always_approve, id.as_deref());
         self
     }
 }

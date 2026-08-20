@@ -237,9 +237,9 @@ fn composer_stack_order() -> &'static [ComposerStackSlot] {
     &[
         ComposerStackSlot::AuthBanner,
         ComposerStackSlot::SlashPalette,
-        ComposerStackSlot::Chips,
         ComposerStackSlot::Attach,
         ComposerStackSlot::Pill,
+        ComposerStackSlot::Chips,
     ]
 }
 
@@ -2508,7 +2508,7 @@ impl Cabin {
             .as_ref()
             .and_then(|t| t.name.clone())
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| self.cfg.device_name.clone());
+            .unwrap_or_default();
         let hour = Self::chip_hour();
         let last_night = self.last_night_hint();
         let input = GreetingInput {
@@ -7488,6 +7488,12 @@ impl Cabin {
             .frame(egui::Frame::none().fill(crate::theme::bg()))
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
+                    ui.add_space(12.0);
+                    ui.label(
+                        RichText::new("GrokHub")
+                            .size(crate::theme::FONT_CHROME)
+                            .color(crate::theme::muted()),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if titlebar_chrome_hit(&titlebar_chrome_btn(ui, "×")) {
                             let hide = crate::tray::should_hide_on_close(
@@ -7522,6 +7528,12 @@ impl Cabin {
                         }
                     });
                 });
+                let hair = ui.max_rect();
+                ui.painter().hline(
+                    hair.x_range(),
+                    hair.bottom() - 0.5,
+                    egui::Stroke::new(1.0_f32, crate::theme::border()),
+                );
             });
     }
 
@@ -8140,12 +8152,12 @@ impl Cabin {
         let greet_on = should_paint_greeting(self.messages.is_empty(), self.scratch())
             && !self.greeting.is_empty();
         let greet_h = if greet_on {
-            crate::theme::FONT_HEADING + 48.0
+            crate::theme::GREET_HERO + 40.0
         } else {
-            28.0
+            16.0
         };
-        let block = crate::theme::FONT_HEADING + greet_h + crate::theme::QUERY_MIN_H;
-        let lift = ((ui.available_height() - block) * 0.5).clamp(24.0, 280.0);
+        let block = greet_h + crate::theme::QUERY_MIN_H + 96.0;
+        let lift = ((ui.available_height() - block) * 0.38).clamp(36.0, 220.0);
         ui.add_space(lift);
         let pane_w = crate::cards::composer_pill_w(ui.ctx().screen_rect().width());
         ui.vertical_centered_justified(|ui| {
@@ -8153,8 +8165,8 @@ impl Cabin {
             if greet_on {
                 ui.label(
                     RichText::new(&self.greeting)
-                        .size(crate::theme::FONT_HEADING)
-                        .color(crate::theme::whisper()),
+                        .font(crate::theme::title_font(crate::theme::GREET_HERO))
+                        .color(crate::theme::muted()),
                 );
                 ui.add_space(8.0);
                 ui.label(
@@ -8303,29 +8315,31 @@ impl Cabin {
                     ComposerStackSlot::Pill => {
             let pill_w = crate::cards::composer_pill_w(ui.ctx().screen_rect().width());
             let cap = pill_w.min(ui.available_width()).max(360.0);
+            ui.set_width(cap);
+            ui.set_max_width(cap);
+            let session_now = self.session_mode.as_str().to_string();
+            let perm_now = self.permission_mode.as_str().to_string();
+            let row = crate::cards::session_row(ui, &session_now, &perm_now);
+            if let Some(mode) = row.mode {
+                if let Some(m) = SessionMode::parse(&mode) {
+                    self.session_mode = m;
+                    self.acp = None;
+                    self.status = format!("Session {}", m.as_str());
+                }
+            }
+            if let Some(perm) = row.perm {
+                if let Some(p) = PermissionMode::parse(&perm) {
+                    self.permission_mode = p;
+                    self.acp = None;
+                    self.status = format!("Permission {}", p.as_str());
+                }
+            }
             ui.allocate_ui_with_layout(
                 egui::vec2(cap, crate::theme::QUERY_MIN_H),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     ui.set_width(cap);
                     ui.set_max_width(cap);
-                    let session_now = self.session_mode.as_str().to_string();
-                    let perm_now = self.permission_mode.as_str().to_string();
-                    let row = crate::cards::session_row(ui, &session_now, &perm_now);
-                    if let Some(mode) = row.mode {
-                        if let Some(m) = SessionMode::parse(&mode) {
-                            self.session_mode = m;
-                            self.acp = None;
-                            self.status = format!("Session {}", m.as_str());
-                        }
-                    }
-                    if let Some(perm) = row.perm {
-                        if let Some(p) = PermissionMode::parse(&perm) {
-                            self.permission_mode = p;
-                            self.acp = None;
-                            self.status = format!("Permission {}", p.as_str());
-                        }
-                    }
             egui::Frame::none()
                 .fill(crate::theme::elevated())
                 .rounding(crate::theme::QUERY_RADIUS)
@@ -8376,7 +8390,7 @@ impl Cabin {
                                         .desired_width(text_w)
                                         .desired_rows(rows)
                                         .frame(false)
-                                        .hint_text("Ask Grok")
+                                        .hint_text("Ask anything")
                                         .return_key(Some(egui::KeyboardShortcut::new(
                                             egui::Modifiers::COMMAND,
                                             egui::Key::Enter,
@@ -8823,12 +8837,6 @@ impl Cabin {
                                                             crate::cards::settings_note(ui, "Session mode is Chat / Plan / Ask on the composer. /effort sets reasoning. The leftover ladder pin below is unused by Grok Build.");
                                                             crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
                                                             crate::cards::settings_field(ui, "Imagine override", "Must contain “image” or the cabin keeps grok-imagine-image-2.0. Retired grok-2-image names are rewritten.", &mut self.cfg.imagine_model, false);
-                                                            crate::cards::settings_note(ui, &format!("Live voice model: {voice_live}."));
-                                                            crate::cards::settings_note(
-                                                                ui,
-                                                                "OAuth runs Hey Grok STT and TTS. Duplex (wss://api.x.ai/v1/realtime) needs a console API key.",
-                                                            );
-                                                            crate::cards::settings_field(ui, "Voice override", "Must contain “voice” or “realtime”. Empty keeps grok-voice-think-fast-2.0.", &mut self.cfg.voice_model, false);
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(
@@ -12318,6 +12326,10 @@ mod tests {
             greet[..user].contains("memory_updated_at"),
             "empty-chat greeting must not slurp USER/MEMORY on every paint: {greet}"
         );
+        assert!(
+            !greet.contains("device_name"),
+            "hostname must not paint as the empty-home greeting: {greet}"
+        );
         let dream = src
             .split("fn run_dream")
             .nth(1)
@@ -12553,12 +12565,12 @@ mod tests {
             "new chats paint a greeting blurb: {slice}"
         );
         assert!(
-            slice.contains("FONT_HEADING"),
-            "greeting is the empty-home heading, not a 56px wordmark: {slice}"
+            slice.contains("GREET_HERO") && slice.contains("title_font"),
+            "greeting is the empty-home hero, not a 56px wordmark: {slice}"
         );
         assert!(
             !slice.contains("italics"),
-            "greeting is regular weight: {slice}"
+            "greeting is regular/medium weight: {slice}"
         );
         let greet = slice.find("self.greeting").expect("greeting");
         let composer = slice.find("ui_composer_stack").expect("composer");
@@ -12567,12 +12579,20 @@ mod tests {
             "greeting sits above the chat box"
         );
         assert!(
-            slice.contains("whisper"),
-            "greeting uses the faint paint color"
+            slice.contains("muted()"),
+            "greeting uses secondary paint, not a washed-out whisper"
         );
         assert!(
             slice.contains("Native Grok Build cabin"),
             "quiet product line under the greeting"
+        );
+        assert!(
+            !slice.contains("RichText::new(\"GrokHub\")"),
+            "empty home must not paint a GrokHub wordmark: {slice}"
+        );
+        assert!(
+            !slice.contains("device_name") && !slice.contains("WORDMARK"),
+            "empty home must not paint the hostname: {slice}"
         );
     }
 
@@ -12748,15 +12768,15 @@ mod tests {
             &[
                 super::ComposerStackSlot::AuthBanner,
                 super::ComposerStackSlot::SlashPalette,
-                super::ComposerStackSlot::Chips,
                 super::ComposerStackSlot::Attach,
                 super::ComposerStackSlot::Pill,
+                super::ComposerStackSlot::Chips,
             ]
         );
     }
 
     #[test]
-    fn chips_sit_above_the_composer_pill() {
+    fn chips_sit_below_the_composer_pill() {
         let order = super::composer_stack_order();
         let chips = order
             .iter()
@@ -12765,8 +12785,8 @@ mod tests {
             .iter()
             .position(|s| *s == super::ComposerStackSlot::Pill)
             .expect("pill");
-        assert!(chips.is_some(), "chips belong above the composer pill");
-        assert!(chips.unwrap() < pill);
+        assert!(chips.is_some(), "chips belong below the composer pill");
+        assert!(chips.unwrap() > pill);
     }
 
     #[test]
