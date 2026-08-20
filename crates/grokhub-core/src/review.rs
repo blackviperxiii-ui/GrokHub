@@ -5,6 +5,7 @@
 //! user still has to click Add. Static catalog seeds stay as fallback.
 
 use crate::automation::parse_nl_automation;
+use crate::chat_view::is_workload_user;
 use crate::organs::LocalClock;
 use crate::redact::{is_plain_text, redact_secrets};
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,9 @@ pub const SUGGEST_CAP: usize = 6;
 
 /// Digest character budget (threads + memory + receipts).
 pub const DIGEST_CHAR_CAP: usize = 6_000;
+
+/// Per chat line so the UI thread never clones an 8MB HOST_RESULT into the digest.
+pub const DIGEST_LINE_CAP: usize = 280;
 
 /// GitHub tools we already ship. A suggestion is a tile that runs one of these
 /// or sends the user to Settings for a PAT — not a fake app.
@@ -108,6 +112,20 @@ pub fn review_status_line(last_day: Option<&str>, today: &str) -> &'static str {
 pub struct DigestLine {
     pub role: String,
     pub text: String,
+}
+
+/// Borrowed scan: skip host dumps and cap the line so an 8MB complete stays off the digest.
+pub fn digest_line_from(role: &str, content: &str) -> Option<DigestLine> {
+    if role != "user" && role != "assistant" {
+        return None;
+    }
+    if role == "user" && is_workload_user(content) {
+        return None;
+    }
+    Some(DigestLine {
+        role: role.to_string(),
+        text: content.chars().take(DIGEST_LINE_CAP).collect(),
+    })
 }
 
 /// Inputs for the compact nightly digest. All fields are already local.
@@ -727,6 +745,17 @@ SUGGEST_AUTO: Night wrap | Close the day | every day at 21, say good night
         assert!(digest.contains("[redacted]"));
         assert!(digest.contains("user: please run HOST_CMD"));
         assert!(digest.contains("GitHub PAT: present"));
+    }
+
+    #[test]
+    fn digest_line_from_skips_host_dumps_and_caps() {
+        assert!(digest_line_from("user", "HOST_RESULT (facts only):\nhuge").is_none());
+        assert!(digest_line_from("user", "HOST_DIFF:\n- a").is_none());
+        assert!(digest_line_from("tool", "ok").is_none());
+        let line = digest_line_from("user", &"please run HOST_CMD ".repeat(80)).unwrap();
+        assert_eq!(line.role, "user");
+        assert!(line.text.chars().count() <= DIGEST_LINE_CAP);
+        assert!(digest_line_from("assistant", "ok").is_some());
     }
 
     #[test]
