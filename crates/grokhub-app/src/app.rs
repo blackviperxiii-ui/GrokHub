@@ -876,6 +876,8 @@ pub struct Cabin {
     task_prompt: String,
     mem_name: String,
     mem_body: String,
+    mem_cache_at: [u64; 3],
+    mem_cache_body: [String; 3],
     last_persist: Instant,
     persist_idle_key: String,
     persist_rx: Option<mpsc::Receiver<()>>,
@@ -1086,6 +1088,7 @@ pub struct Cabin {
     inspect_rx: Option<mpsc::Receiver<String>>,
     history_rx: Option<mpsc::Receiver<Vec<String>>>,
     mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
+    mem_file_rx: Option<(String, mpsc::Receiver<(u64, String)>)>,
     recall_rx: Option<mpsc::Receiver<String>>,
     sync_rx: Option<mpsc::Receiver<()>>,
     inhabit_rx: Option<mpsc::Receiver<InhabitBundle>>,
@@ -1152,6 +1155,8 @@ impl Cabin {
         }
         let mem_name = "SOUL.md".to_string();
         let mem_body = config::read_memory(&mem_name);
+        let mem_cache_at = [config::memory_updated_at("SOUL.md"), 0, 0];
+        let mem_cache_body = [mem_body.clone(), String::new(), String::new()];
         let mut threads = threads::load();
         if threads.is_empty() {
             let mut t = ChatThread::new("Chat", false);
@@ -1237,6 +1242,8 @@ impl Cabin {
             task_prompt: String::new(),
             mem_name,
             mem_body,
+            mem_cache_at,
+            mem_cache_body,
             last_persist: Instant::now(),
             persist_idle_key: String::new(),
             persist_rx: None,
@@ -1450,6 +1457,7 @@ impl Cabin {
             inspect_rx: None,
             history_rx: None,
             mem_restore_rx: None,
+            mem_file_rx: None,
             recall_rx: None,
             sync_rx: None,
             inhabit_rx: None,
@@ -1914,6 +1922,10 @@ impl Cabin {
         };
         match rx.try_recv() {
             Ok((name, Ok(body))) => {
+                if let Some(i) = Self::mem_file_idx(&name) {
+                    self.mem_cache_at[i] = config::memory_updated_at(&name);
+                    self.mem_cache_body[i] = body.clone();
+                }
                 if self.mem_name == name {
                     self.mem_body = body;
                 }
@@ -1922,6 +1934,36 @@ impl Cabin {
             Ok((_, Err(e))) => self.status = e,
             Err(mpsc::TryRecvError::Empty) => {
                 self.mem_restore_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    fn mem_file_idx(name: &str) -> Option<usize> {
+        match name {
+            "SOUL.md" => Some(0),
+            "USER.md" => Some(1),
+            "MEMORY.md" => Some(2),
+            _ => None,
+        }
+    }
+
+    fn poll_mem_file(&mut self) {
+        let Some((name, rx)) = self.mem_file_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((at, body)) => {
+                if let Some(i) = Self::mem_file_idx(&name) {
+                    self.mem_cache_at[i] = at;
+                    self.mem_cache_body[i] = body.clone();
+                }
+                if self.mem_name == name {
+                    self.mem_body = body;
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.mem_file_rx = Some((name, rx));
             }
             Err(mpsc::TryRecvError::Disconnected) => {}
         }
@@ -8206,6 +8248,7 @@ impl eframe::App for Cabin {
         self.poll_inspect();
         self.poll_history_search();
         self.poll_mem_restore();
+        self.poll_mem_file();
         self.poll_recall();
         self.poll_sync();
         self.poll_inhabit();
@@ -8317,6 +8360,7 @@ impl eframe::App for Cabin {
                 || self.inspect_rx.is_some()
                 || self.history_rx.is_some()
                 || self.mem_restore_rx.is_some()
+                || self.mem_file_rx.is_some()
                 || self.recall_rx.is_some()
                 || self.sync_rx.is_some()
                 || self.inhabit_rx.is_some()
@@ -9976,6 +10020,10 @@ impl Cabin {
                         {
                             let leaving = self.mem_name.clone();
                             let body = self.mem_body.clone();
+                            if let Some(i) = Self::mem_file_idx(&leaving) {
+                                self.mem_cache_body[i] = body.clone();
+                                self.mem_cache_at[i] = config::memory_updated_at(&leaving);
+                            }
                             std::thread::spawn(move || {
                                 if config::read_memory(&leaving) != body {
                                     let _ = config::write_memory(&leaving, &body);
@@ -9983,7 +10031,28 @@ impl Cabin {
                             });
                         }
                         self.mem_name = name.into();
-                        self.mem_body = config::read_memory(name);
+                        let at = config::memory_updated_at(name);
+                        if let Some(i) = Self::mem_file_idx(name) {
+                            if self.mem_cache_at[i] == 0 {
+                                self.mem_body = config::read_memory(name);
+                                self.mem_cache_body[i] = self.mem_body.clone();
+                                self.mem_cache_at[i] = at;
+                            } else {
+                                self.mem_body = self.mem_cache_body[i].clone();
+                                if self.mem_cache_at[i] != at && self.mem_file_rx.is_none() {
+                                    let n = name.to_string();
+                                    let (tx, rx) = mpsc::channel();
+                                    self.mem_file_rx = Some((n.clone(), rx));
+                                    std::thread::spawn(move || {
+                                        let body = config::read_memory(&n);
+                                        let at = config::memory_updated_at(&n);
+                                        let _ = tx.send((at, body));
+                                    });
+                                }
+                            }
+                        } else {
+                            self.mem_body = config::read_memory(name);
+                        }
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -12409,6 +12478,7 @@ mod tests {
                 && live.contains("inspect_rx")
                 && live.contains("history_rx")
                 && live.contains("mem_restore_rx")
+                && live.contains("mem_file_rx")
                 && live.contains("recall_rx")
                 && live.contains("sync_rx")
                 && live.contains("inhabit_rx")
@@ -14446,6 +14516,16 @@ mod tests {
         assert!(
             tabs.contains("thread::spawn"),
             "Memory tab switch must flush off the UI thread: {tabs}"
+        );
+        assert!(
+            tabs.contains("memory_updated_at")
+                && tabs.contains("mem_file_rx")
+                && tabs.contains("mem_cache_at"),
+            "Memory tab switch must not slurp SOUL.md on every click after the first miss: {tabs}"
+        );
+        assert!(
+            tabs.contains("read_memory(name)") && tabs.contains("mem_cache_at[i] == 0"),
+            "first Memory tab miss must still read on-thread so tests stay deterministic: {tabs}"
         );
         let save = memory_ui
             .split("white_pill(ui, \"Save\")")
