@@ -7450,7 +7450,7 @@ impl Cabin {
         };
         self.cfg.source_dir = src.display().to_string();
         remember_source(&src);
-        self.persist();
+        self.persist_cfg();
         match update_cmds(&src) {
             Ok(cmds) if !update_wipes_config(&cmds) => {
                 self.start_overlay_update(cmds);
@@ -13757,8 +13757,10 @@ mod tests {
             .and_then(|s| s.split("fn restart_after_update").next())
             .expect("queue_update");
         assert!(
-            queued.contains("self.persist()") && !queued.contains("config::save"),
-            "Update must not freeze the cabin writing app.json: {queued}"
+            queued.contains("self.persist_cfg()")
+                && !queued.contains("config::save")
+                && !queued.contains("persist_snap"),
+            "Update must not clone every thread just to stamp the source path: {queued}"
         );
         let flush_p = src
             .split("fn flush_projects(")
