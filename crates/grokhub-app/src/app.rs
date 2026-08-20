@@ -4360,7 +4360,7 @@ impl Cabin {
             Slash::Export => {
                 self.persist();
                 if let Some(t) = self.threads.get(self.thread_idx) {
-                    let md = threads::export_markdown(t);
+                    let t = t.clone();
                     let dest = if self.cfg.project_dir.trim().is_empty() {
                         config::config_dir().join("export.md")
                     } else {
@@ -4368,6 +4368,7 @@ impl Cabin {
                     };
                     let status_path = dest.display().to_string();
                     std::thread::spawn(move || {
+                        let md = threads::export_markdown(&t);
                         let _ = std::fs::write(&dest, md);
                     });
                     self.status = format!("Wrote {status_path}");
@@ -4390,9 +4391,14 @@ impl Cabin {
                 let q_owned = q.clone();
                 let mem_name = self.mem_name.clone();
                 let mem_body = self.mem_body.clone();
+                let vis = self.thread_idx;
                 let mut thread_rows = Vec::new();
-                for t in &self.threads {
-                    let body = search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()));
+                for (i, t) in self.threads.iter().enumerate() {
+                    let body = if i == vis {
+                        search_thread_body(self.messages.iter().map(|m| m.content.as_str()))
+                    } else {
+                        search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()))
+                    };
                     thread_rows.push((t.title.clone(), body));
                 }
                 let (tx, rx) = mpsc::channel();
@@ -10675,19 +10681,17 @@ impl Cabin {
                             }
                         });
                     }
-                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                        t.messages = self
-                            .messages
-                            .iter()
-                            .map(|m| (m.role.clone(), m.content.clone()))
-                            .collect();
-                    }
                     let q = self.history_q.clone();
                     let mem_name = self.mem_name.clone();
                     let mem_body = self.mem_body.clone();
+                    let vis = self.thread_idx;
                     let mut thread_rows = Vec::new();
-                    for t in &self.threads {
-                        let body = search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()));
+                    for (i, t) in self.threads.iter().enumerate() {
+                        let body = if i == vis {
+                            search_thread_body(self.messages.iter().map(|m| m.content.as_str()))
+                        } else {
+                            search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()))
+                        };
                         thread_rows.push((t.title.clone(), body));
                     }
                     let (tx, rx) = mpsc::channel();
@@ -14592,8 +14596,8 @@ mod tests {
         let export_spawn = export.find("thread::spawn").expect("export write must leave the UI thread");
         let export_write = export.find("fs::write").expect("export.md");
         assert!(
-            export_spawn < export_write,
-            "/export must not freeze the cabin writing export.md: {export}"
+            export_spawn < export_write && export_spawn < wrote,
+            "/export must not freeze the cabin formatting an 8MB thread into markdown: {export}"
         );
         let recall = src
             .split("Slash::Recall(q)")
@@ -15534,8 +15538,12 @@ mod tests {
             "History Search must not join every 8MB thread on the UI thread: {search}"
         );
         assert!(
-            search.contains("thread_idx") && search.contains("get_mut"),
+            search.contains("thread_idx") && search.contains("self.messages"),
             "History Search must include the live pane, not only persisted thread copies: {search}"
+        );
+        assert!(
+            !search.contains("content.clone()"),
+            "History Search must not clone an 8MB pane to include the live tab: {search}"
         );
         let soul = search.find("read_memory(\"SOUL.md\")").expect("history soul");
         assert!(
