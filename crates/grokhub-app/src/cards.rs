@@ -1446,16 +1446,58 @@ fn imagine_still_tex(ctx: &egui::Context, key: &str) -> (TextureHandle, [usize; 
     if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
         return hit;
     }
-    let rgba = imagine_still_rgba(still_jpeg(key));
-    let size = [rgba.width() as usize, rgba.height() as usize];
-    let tex = ctx.load_texture(
-        format!("imagine-still-{key}"),
-        ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
-        TextureOptions::LINEAR,
-    );
-    let hit = (tex, size);
-    ctx.data_mut(|d| d.insert_temp(id, hit.clone()));
-    hit
+    if let Some(rgba) = take_still_rgba(key) {
+        let size = [rgba.width() as usize, rgba.height() as usize];
+        let tex = ctx.load_texture(
+            format!("imagine-still-{key}"),
+            ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+            TextureOptions::LINEAR,
+        );
+        let hit = (tex, size);
+        ctx.data_mut(|d| d.insert_temp(id, hit.clone()));
+        return hit;
+    }
+    kick_still_tex(ctx.clone(), key.to_string());
+    imagine_disk_pending_tex(ctx)
+}
+
+fn take_still_rgba(key: &str) -> Option<image::RgbaImage> {
+    let mut g = still_tex_gate().lock().ok()?;
+    g.ready.remove(key)
+}
+
+fn kick_still_tex(ctx: egui::Context, key: String) {
+    {
+        let Ok(mut g) = still_tex_gate().lock() else {
+            return;
+        };
+        if g.ready.contains_key(&key) || !g.inflight.insert(key.clone()) {
+            return;
+        }
+    }
+    std::thread::spawn(move || {
+        let rgba = imagine_still_rgba(still_jpeg(&key));
+        if let Ok(mut g) = still_tex_gate().lock() {
+            g.inflight.remove(&key);
+            g.ready.insert(key, rgba);
+        }
+        ctx.request_repaint();
+    });
+}
+
+struct StillTexGate {
+    inflight: HashSet<String>,
+    ready: HashMap<String, image::RgbaImage>,
+}
+
+fn still_tex_gate() -> &'static Mutex<StillTexGate> {
+    static G: OnceLock<Mutex<StillTexGate>> = OnceLock::new();
+    G.get_or_init(|| {
+        Mutex::new(StillTexGate {
+            inflight: HashSet::new(),
+            ready: HashMap::new(),
+        })
+    })
 }
 
 fn cover_uv(iw: f32, ih: f32, dw: f32, dh: f32) -> egui::Rect {
@@ -2206,6 +2248,22 @@ mod tests {
         assert!(github_api_path("list_issues", "repo:owner/name").is_ok());
         assert!(github_api_path("search_code", "query:foo").is_ok());
         assert!(github_api_path("search_issues", "query:foo").is_ok());
+    }
+
+    #[test]
+    fn imagine_still_tex_decodes_off_the_ui_thread() {
+        let src = include_str!("cards.rs");
+        let tex = src
+            .split("fn imagine_still_tex(")
+            .nth(1)
+            .and_then(|s| s.split("fn cover_uv(").next())
+            .expect("imagine_still_tex");
+        let spawn = tex.find("thread::spawn").expect("decode must leave the UI thread");
+        let decode = tex.find("imagine_still_rgba").expect("bundled JPEG decode");
+        assert!(
+            spawn < decode && tex.contains("inflight"),
+            "stock Imagine stills must not JPEG-decode on the first paint: {tex}"
+        );
     }
 
     #[test]
