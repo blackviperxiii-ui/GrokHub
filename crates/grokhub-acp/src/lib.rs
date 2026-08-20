@@ -11,5 +11,6 @@ pub use locate::{
     agent_args, doctor_grok_line, find_grok, grok_stdout, grok_version, which,
 };
 pub use protocol::{
-    AcpEvent, PermissionAsk, PermissionMode, SessionMode, ToolCard, PROTOCOL_VERSION,
+    merge_tool_card, AcpEvent, PermissionAsk, PermissionMode, SessionMode, ToolCard,
+    PROTOCOL_VERSION,
 };

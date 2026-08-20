@@ -2,11 +2,11 @@
 
 Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 
-**v2.6.37** — Native Grok Build GUI. Overlay pulls GitHub.
+**v2.6.38** — Native Grok Build GUI. Overlay pulls GitHub.
 
 | Platform | Repository | Latest |
 |----------|------------|--------|
-| **Linux** (this) | [GrokHub](https://github.com/blackviperxiii-ui/GrokHub) | **v2.6.37** |
+| **Linux** (this) | [GrokHub](https://github.com/blackviperxiii-ui/GrokHub) | **v2.6.38** |
 | **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | sibling — same `grokhub-core` |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
@@ -73,7 +73,7 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `suggestion
 
 Tokens stay in `secrets.json`. Never in markdown.
 
-Composer is a pill: **What do you want to know?** Five quick chips sit centered over the bar. Plus opens Upload / Paste. Session pills are Chat / Plan / Ask; permission is Ask / Auto / Always. Mic is Hey Grok. Enter sends; Ctrl+Enter is a newline. Send becomes Stop while a reply runs. Chat streams ACP tokens onto the thread that started the job. Tool cards, diffs, permission prompts, and desk frames render in the pane. Leftover pages (Desk, Devices, Memory, History, Night, Workboard, Command) use the same catalog chrome. Command is a user `/sh` field, not the agent. `/v1/frame.jpg` serves the last ACP computer-use image when one exists.
+Composer is a pill: **Ask Grok**. Five quick chips sit centered over the bar. Plus opens Upload / Paste. Session pills are Chat / Plan / Ask; permission is Ask / Auto / Always. Mic is Hey Grok. Enter sends; Ctrl+Enter is a newline. Send becomes Stop while a reply runs. Chat streams ACP tokens onto the thread that started the job. Tool cards, diffs, permission prompts, and desk frames render in the pane. Leftover pages (Desk, Devices, Memory, History, Night, Workboard, Command) use the same catalog chrome. Command is a user `/sh` field, not the agent. `/v1/frame.jpg` serves the last ACP computer-use image when one exists.
 
 ## Always-on hub
 
