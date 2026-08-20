@@ -50,10 +50,18 @@ pub fn surgical_memory_edit(current: &str, additions: &[String]) -> MemoryEdit {
 }
 
 pub fn fact_candidates(messages: &[(String, String)]) -> Vec<String> {
+    fact_candidates_from(messages.iter().map(|(r, c)| (r.as_str(), c.as_str())))
+}
+
+/// Same harvest without cloning an 8MB transcript onto the UI thread.
+pub fn fact_candidates_from<'a, I>(messages: I) -> Vec<String>
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
     messages
-        .iter()
+        .into_iter()
         .filter(|(role, c)| {
-            if role != "user" {
+            if *role != "user" {
                 return false;
             }
             let c = c.trim();

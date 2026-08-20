@@ -220,27 +220,46 @@ pub fn fold_stream_token(
     text: &str,
     kind: StreamTokenKind,
 ) {
-    if text.is_empty() {
-        return;
+    let push = {
+        let last = messages.last_mut().map(|(r, c)| (r.as_str(), c));
+        fold_stream_fields(last, role, text, kind)
+    };
+    if let Some(pair) = push {
+        messages.push(pair);
     }
-    let same = messages.last().is_some_and(|(r, _)| r == role);
+}
+
+/// Fold a stream token onto the live pane without cloning prior turns.
+/// Returns a new row to push, or `None` when the last row was mutated.
+pub fn fold_stream_fields(
+    last: Option<(&str, &mut String)>,
+    role: &str,
+    text: &str,
+    kind: StreamTokenKind,
+) -> Option<(String, String)> {
+    if text.is_empty() {
+        return None;
+    }
+    let same = last.as_ref().is_some_and(|(r, _)| *r == role);
     match kind {
         StreamTokenKind::Delta => {
             if same {
-                if let Some(last) = messages.last_mut() {
-                    last.1.push_str(text);
+                if let Some((_, body)) = last {
+                    body.push_str(text);
                 }
+                None
             } else {
-                messages.push((role.to_string(), text.to_string()));
+                Some((role.to_string(), text.to_string()))
             }
         }
         StreamTokenKind::Replace => {
             if same {
-                if let Some(last) = messages.last_mut() {
-                    last.1 = text.to_string();
+                if let Some((_, body)) = last {
+                    *body = text.to_string();
                 }
+                None
             } else {
-                messages.push((role.to_string(), text.to_string()));
+                Some((role.to_string(), text.to_string()))
             }
         }
     }
