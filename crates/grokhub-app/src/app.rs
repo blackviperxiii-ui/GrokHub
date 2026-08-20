@@ -32,7 +32,7 @@ use grokhub_core::{
     build_quick_chips, build_windshield, bump_skill_run, bump_usage,
     inhabit_claim_allowed, inhabit_ready, hub_pair_url, devices_shows_pair_code, pair_code_is_live, parse_hostname_i, pick_lan_ipv4,
     start_hub_rotates_pair,
-    catalog_line, chip_suggest_prompt, compact_keep_pin, compact_keep_start_from, compose_imagine_prompt,
+    catalog_line, chip_suggest_prompt, compact_keep_start_from, compose_imagine_prompt,
     context_fingerprint,
     context_percent,
     dedicated_imagine_model, dedicated_video_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
@@ -832,7 +832,14 @@ struct PersistSnap {
 
 fn write_persist_disk(snap: &PersistSnap) {
     let _ = threads::save(&snap.threads);
-    let _ = config::save_chat(&snap.msgs);
+    let msgs = snap
+        .threads
+        .iter()
+        .find(|t| t.id == snap.cfg.current_thread)
+        .or_else(|| snap.threads.first())
+        .map(|t| t.messages.as_slice())
+        .unwrap_or(snap.msgs.as_slice());
+    let _ = config::save_chat(msgs);
     let _ = config::save_board(&snap.board);
     let _ = crate::night::save(&snap.automations);
     let _ = crate::night::save_rewinds(&snap.rewind_rows);
@@ -1536,13 +1543,13 @@ impl Cabin {
     }
 
     fn persist_snap(&mut self) -> PersistSnap {
-        let msgs: Vec<(String, String)> = self
-            .messages
-            .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
-            .collect();
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.messages = msgs.clone();
+            t.messages.clear();
+            t.messages.extend(
+                self.messages
+                    .iter()
+                    .map(|m| (m.role.clone(), m.content.clone())),
+            );
             self.cfg.current_thread = t.id.clone();
         }
         let projects = if self.projects_dirty {
@@ -1552,7 +1559,7 @@ impl Cabin {
         };
         PersistSnap {
             threads: self.threads.clone(),
-            msgs,
+            msgs: Vec::new(),
             board: self.board.clone(),
             automations: self.automations.clone(),
             rewind_rows: self.rewind_rows.clone(),
@@ -6682,12 +6689,23 @@ impl Cabin {
                         );
                     } else if let Some(id) = job.as_deref() {
                         if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
-                            let pin = if t.goal.label.trim().is_empty() {
-                                None
-                            } else {
-                                Some(t.goal.label.as_str())
-                            };
-                            t.messages = compact_keep_pin(&t.messages, 8, pin);
+                            let pin = t.goal.label.clone();
+                            let start = compact_keep_start_from(
+                                t.messages.iter().map(|(r, c)| (r.as_str(), c.as_str())),
+                                8,
+                            );
+                            if start > 0 {
+                                t.messages.drain(..start);
+                            }
+                            let pin = pin.trim();
+                            if !pin.is_empty() {
+                                let marked = format!("GOAL PIN: {pin}");
+                                if !t.messages.iter().any(|(_, c)| {
+                                    c == &marked || c.starts_with(&format!("{marked}\n"))
+                                }) {
+                                    t.messages.insert(0, ("system".into(), marked));
+                                }
+                            }
                             t.accessed_ms = now_ms();
                         }
                         self.persist();
@@ -12755,6 +12773,14 @@ mod tests {
             snap.contains("secrets: None"),
             "idle persist_snap must omit secrets.json: {snap}"
         );
+        assert!(
+            !snap.contains("msgs.clone()"),
+            "persist_snap must copy the live pane into the thread once, not again into PersistSnap.msgs: {snap}"
+        );
+        assert!(
+            disk.contains("current_thread") && disk.contains("save_chat"),
+            "persist must write chat.json from the snapped thread, not a second 8MB clone: {disk}"
+        );
         let persist = src
             .split("fn persist(&mut self)")
             .nth(1)
@@ -15598,12 +15624,12 @@ mod tests {
             "auto-compact must use the post-outcome goal step, not the pre-outcome job_step: {chat}"
         );
         let bg_compact = chat
-            .split("compact_keep_pin")
+            .split("compact_keep_start_from")
             .nth(1)
             .expect("background compact");
         assert!(
-            bg_compact.contains("accessed_ms"),
-            "background auto-compact must bump accessed_ms or /sync LWW can restore the dropped turns: {bg_compact}"
+            bg_compact.contains("accessed_ms") && !chat.contains("compact_keep_pin(&t.messages"),
+            "background auto-compact must drain dropped turns without cloning an 8MB pane: {bg_compact}"
         );
         let pins = chat.find("extract_work_pins").expect("work pins");
         assert!(
