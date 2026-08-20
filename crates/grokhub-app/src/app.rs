@@ -2128,7 +2128,7 @@ impl Cabin {
             });
         }
         self.threads.push(t);
-        self.switch_thread(self.threads.len() - 1);
+        self.apply_switch_thread(self.threads.len() - 1);
         self.acp = None;
         self.nav = Nav::Chat;
         self.status = format!("Opened {title}");
@@ -3600,6 +3600,11 @@ impl Cabin {
     }
 
     fn switch_thread(&mut self, idx: usize) {
+        self.apply_switch_thread(idx);
+        self.persist_bg();
+    }
+
+    fn apply_switch_thread(&mut self, idx: usize) {
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
             t.messages = self
                 .messages
@@ -3637,7 +3642,6 @@ impl Cabin {
             .unwrap_or(0);
         self.drop_leaving_thread_chrome();
         self.stamp_current_access();
-        self.persist_bg();
     }
 
     fn stamp_current_access(&mut self) {
@@ -3683,7 +3687,7 @@ impl Cabin {
         };
         if let Some(idx) = reuse {
             if idx != self.thread_idx {
-                self.switch_thread(idx);
+                self.apply_switch_thread(idx);
             } else {
                 self.drop_leaving_thread_chrome();
             }
@@ -13374,6 +13378,10 @@ mod tests {
             open_spawn < open_show && open_spawn < open_read && open_spawn < open_find,
             "opening a grok session must not block on grok sessions show: {open}"
         );
+        assert!(
+            open.contains("apply_switch_thread") && open.contains("self.persist()"),
+            "opening a grok session must not clone every thread twice: {open}"
+        );
         let reload = src
             .split("fn reload_grok_sessions(")
             .nth(1)
@@ -14140,6 +14148,10 @@ mod tests {
             created.contains("self.persist()"),
             "forgetting the ACP session on New chat must hit disk or restart reloads Chat 1: {created}"
         );
+        assert!(
+            created.contains("apply_switch_thread") && !created.contains("self.switch_thread("),
+            "/new reuse must not clone every thread twice — switch without persist_bg, then persist once: {created}"
+        );
         let boot = src
             .split("pub fn new(hidden: bool)")
             .nth(1)
@@ -14169,6 +14181,10 @@ mod tests {
         assert!(
             switched.contains("persist_bg") && !switched.contains("self.persist()"),
             "tab switch must not freeze the cabin writing threads.json: {switched}"
+        );
+        assert!(
+            switched.contains("apply_switch_thread"),
+            "tab switch persist_bg must share the pane swap with /new reuse: {switched}"
         );
         let chrome = src
             .split("fn drop_leaving_thread_chrome")
