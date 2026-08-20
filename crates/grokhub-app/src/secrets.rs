@@ -46,6 +46,29 @@ pub fn access_token(s: &Secrets) -> String {
         .unwrap_or_default()
 }
 
+/// Console key lives in secrets.json. `cfg_key` is only a leftover app.json value.
+pub fn console_key<'a>(secrets: &'a Secrets, cfg_key: &'a str) -> &'a str {
+    if !secrets.api_key.trim().is_empty() {
+        secrets.api_key.as_str()
+    } else {
+        cfg_key
+    }
+}
+
+/// Move a leftover app.json console key into secrets.json and wipe it from config.
+pub fn migrate_console_key(cfg: &mut crate::config::AppConfig, secrets: &mut Secrets) {
+    if cfg.api_key.trim().is_empty() {
+        return;
+    }
+    if secrets.api_key.trim().is_empty() {
+        secrets.api_key = std::mem::take(&mut cfg.api_key);
+        let _ = save(secrets);
+    } else {
+        cfg.api_key.clear();
+    }
+    let _ = crate::config::save(cfg);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,6 +95,31 @@ mod tests {
         let parsed: Secrets = serde_json::from_str(old).unwrap();
         assert_eq!(access_token(&parsed), "legacy");
         assert!(parsed.oauth.unwrap().picture.is_none());
+        let mut cfg = crate::config::AppConfig::default();
+        cfg.api_key = "xai-from-app".into();
+        let mut migrated = Secrets::default();
+        migrate_console_key(&mut cfg, &mut migrated);
+        assert_eq!(migrated.api_key, "xai-from-app");
+        assert!(cfg.api_key.is_empty());
+        assert_eq!(console_key(&migrated, ""), "xai-from-app");
+        let disk = load();
+        assert_eq!(disk.api_key, "xai-from-app");
+        let app = crate::config::load();
+        assert!(
+            app.api_key.is_empty(),
+            "migrate must wipe the leftover app.json key: {}",
+            app.api_key
+        );
+        let mut keep = Secrets {
+            api_key: "xai-secrets".into(),
+            ..Default::default()
+        };
+        let mut leftover = crate::config::AppConfig::default();
+        leftover.api_key = "xai-stale".into();
+        migrate_console_key(&mut leftover, &mut keep);
+        assert_eq!(keep.api_key, "xai-secrets");
+        assert!(leftover.api_key.is_empty());
+        assert_eq!(console_key(&keep, "xai-stale"), "xai-secrets");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

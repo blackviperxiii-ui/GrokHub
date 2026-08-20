@@ -278,8 +278,19 @@ impl HubState {
         self.inhabit = Some(bundle);
     }
 
-    pub fn claim_inhabit(&mut self) -> Option<InhabitBundle> {
-        self.inhabit.take()
+    pub fn claim_inhabit(&mut self, peer: &Peer) -> Option<InhabitBundle> {
+        let hit = self.inhabit.as_ref()?;
+        let dest_ok = match (&hit.to_id, &hit.to_name) {
+            (None, None) => true,
+            (Some(id), _) if id == &peer.id => true,
+            (_, Some(name)) if name.eq_ignore_ascii_case(&peer.name) => true,
+            _ => false,
+        };
+        if dest_ok {
+            self.inhabit.take()
+        } else {
+            None
+        }
     }
 
     pub fn store_frame(&mut self, data_url: &str) {
@@ -465,6 +476,32 @@ mod tests {
             assert_eq!(mode, 0o600, "hub-state.json holds pair tokens");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inhabit_claim_matches_named_peer() {
+        let mut st = HubState::empty();
+        let a_code = st.rotate_pair().code;
+        let a = st.pair_with(&a_code, "a", "cabin-a").unwrap();
+        let b_code = st.rotate_pair().code;
+        let b = st.pair_with(&b_code, "b", "cabin-b").unwrap();
+        st.store_inhabit(
+            InhabitBundle {
+                soul: "stay".into(),
+                to_id: Some(b.id.clone()),
+                to_name: Some(b.name.clone()),
+                ..Default::default()
+            },
+            &a,
+        );
+        assert!(
+            st.claim_inhabit(&a).is_none(),
+            "the source cabin must not consume a bundle aimed at someone else"
+        );
+        assert!(st.inhabit.is_some());
+        let got = st.claim_inhabit(&b).expect("dest");
+        assert_eq!(got.to_id.as_deref(), Some(b.id.as_str()));
+        assert!(st.inhabit.is_none());
     }
 
     #[test]
