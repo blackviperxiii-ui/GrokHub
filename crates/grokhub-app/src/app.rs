@@ -4694,7 +4694,7 @@ impl Cabin {
                 if let Ok(mut st) = self.hub.lock() {
                     st.inhabit = Some(bundle);
                 }
-                self.persist();
+                self.persist_hub();
                 self.status = format!("Inhabit staged for {name}");
                 self.nav = Nav::Devices;
             }
@@ -4888,7 +4888,7 @@ impl Cabin {
                     return;
                 }
             }
-            self.persist();
+            self.persist_hub();
             self.status = "Task queued on hub".into();
             self.nav = Nav::Devices;
             return;
@@ -8150,7 +8150,7 @@ impl Cabin {
                 self.hub_port = p;
                 self.hub_on = true;
                 self.status = format!("Hub live on :{p} ({HUB_KIND})");
-                self.persist();
+                self.persist_hub();
             }
             Err(e) => {
                 if let Ok(mut st) = self.hub.lock() {
@@ -9968,7 +9968,7 @@ impl Cabin {
                 (String::new(), false, None)
             };
             if rotated {
-                self.persist();
+                self.persist_hub();
             }
             let body = if sharing {
                 format!("Sharing on port {}", self.hub_port)
@@ -10005,7 +10005,7 @@ impl Cabin {
                     if let Ok(mut s) = self.hub.lock() {
                         s.rotate_pair();
                     }
-                    self.persist();
+                    self.persist_hub();
                 }
             } else if crate::cards::empty_prompt_tile(
                 ui,
@@ -14386,6 +14386,10 @@ mod tests {
             start_err.contains("sharing = false"),
             "Start share must not leave sharing on when serve_lan fails: {start_hub}"
         );
+        assert!(
+            start_hub.contains("self.persist_hub()") && !start_hub.contains("persist_snap"),
+            "Start share must not clone every thread just to stamp sharing: {start_hub}"
+        );
         let eyes = src
             .split("fn refresh_eyes")
             .nth(1)
@@ -14432,7 +14436,7 @@ mod tests {
             .expect("new code");
         let rotated = new_code.find("rotate_pair").expect("rotate");
         assert!(
-            new_code[rotated..].contains("self.persist()"),
+            new_code[rotated..].contains("self.persist_hub()"),
             "New code must persist the rotated pair before a restart: {new_code}"
         );
         let expired = devices
@@ -14441,7 +14445,7 @@ mod tests {
             .and_then(|s| s.split("New code").next())
             .expect("expired rotate");
         assert!(
-            expired.contains("self.persist()"),
+            expired.contains("self.persist_hub()"),
             "an expired pair rotate must persist or restart shows the dead code: {expired}"
         );
         let clear = src
@@ -14831,8 +14835,8 @@ mod tests {
             .expect("dispatch_send");
         let queued = send.find("enqueue_local").expect("enqueue");
         assert!(
-            send[queued..].contains("self.persist()"),
-            "/send must persist a queued hub task before leaving Devices: {send}"
+            send[queued..].contains("self.persist_hub()") && !send[queued..].contains("persist_snap"),
+            "/send must persist a queued hub task without cloning every thread: {send}"
         );
         let inhabit = src
             .split("fn queue_inhabit")
@@ -14841,8 +14845,8 @@ mod tests {
             .expect("queue_inhabit");
         let staged = inhabit.find("inhabit = Some").expect("stage inhabit");
         assert!(
-            inhabit[staged..].contains("self.persist()"),
-            "/inhabit must persist the staged bundle before leaving Devices: {inhabit}"
+            inhabit[staged..].contains("self.persist_hub()") && !inhabit.contains("persist_snap"),
+            "/inhabit must persist the staged bundle without cloning every thread: {inhabit}"
         );
         assert!(
             inhabit.contains("inhabit_claim_allowed") && inhabit.contains("to_id"),
