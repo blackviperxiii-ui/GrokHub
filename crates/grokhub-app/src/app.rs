@@ -5008,13 +5008,26 @@ impl Cabin {
         });
     }
 
+    fn persist_hub(&self) {
+        let hub = self.hub.clone();
+        let io = self.persist_io.clone();
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                let disk = hub.lock().ok().map(|st| state_for_disk(&st));
+                if let Some(disk) = disk {
+                    let _ = save_hub_state(&config::hub_state_path(), &disk);
+                }
+            }
+        });
+    }
+
     fn poll_sync(&mut self) {
         let Some(rx) = self.sync_rx.take() else {
             return;
         };
         match rx.try_recv() {
             Ok((from, files)) => {
-                self.persist();
+                self.persist_hub();
                 self.status = "Hub snapshot written — peers pull /v1/snapshot".into();
                 self.apply_inbound_snapshot(from, files);
                 self.nav = Nav::Devices;
@@ -14698,8 +14711,17 @@ mod tests {
         );
         let merged = sync.find("st.snapshot =").expect("store merge");
         assert!(
-            sync[merged..].contains("self.persist()"),
+            sync[merged..].contains("self.persist_hub()"),
             "/sync must persist the merged snapshot or a restart drops peer LWW: {sync}"
+        );
+        let poll = src
+            .split("fn poll_sync(")
+            .nth(1)
+            .and_then(|s| s.split("fn date_out").next())
+            .expect("poll_sync");
+        assert!(
+            poll.contains("persist_hub") && !poll.contains("persist_snap"),
+            "/sync inbound must not clone every thread just to flush hub-state.json: {poll}"
         );
         let mem_write = sync.find("write_memory").expect("sync memory flush");
         assert!(
