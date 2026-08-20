@@ -225,7 +225,6 @@ pub const CABIN_MENU: &[(&str, &str)] = &[
     ("workboard", "Workboard"),
     ("memory", "Memory"),
     ("devices", "Devices"),
-    ("command", "Command"),
     ("queue", "Queue"),
 ];
 
@@ -484,6 +483,7 @@ mod tests {
         assert_eq!(GROK_NAV[1], ("imagine", "Imagine"));
         assert!(GROK_NAV.iter().all(|(id, _)| *id != "settings"));
         assert_eq!(CABIN_MENU[0], ("settings", "Settings"));
+        assert!(CABIN_MENU.iter().all(|(id, _)| *id != "command"));
         assert!(TOOLS.iter().all(|(id, _)| *id != "connectors"));
         assert_eq!(stage_subtitle("history"), "Past chats");
         assert_eq!(stage_subtitle("chat"), "Recent chat");
