@@ -100,25 +100,55 @@ pub fn grok_auth_path() -> Option<PathBuf> {
 pub fn grok_cli_key() -> Option<String> {
     let path = grok_auth_path()?;
     if let Ok(held) = grok_key_cache().lock() {
-        if let Some((p, _, at, key)) = held.as_ref() {
-            if *p == path && at.elapsed() < Duration::from_secs(2) {
-                return key.clone();
+        if let Some((p, _, at, key, inflight)) = held.as_ref() {
+            if *p == path {
+                let hit = key.clone();
+                let fresh = at.elapsed() < Duration::from_secs(2);
+                let busy = *inflight;
+                drop(held);
+                if !fresh && !busy {
+                    kick_grok_cli_key(path);
+                }
+                return hit;
             }
         }
     }
-    let modified = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
-    let raw = read_file_capped(&path, 64 * 1024);
-    let key = parse_grok_auth_key(&raw);
+    let (modified, key) = grok_cli_key_now(&path);
     if let Ok(mut held) = grok_key_cache().lock() {
-        *held = Some((path, modified, Instant::now(), key.clone()));
+        *held = Some((path, modified, Instant::now(), key.clone(), false));
     }
     key
 }
 
-fn grok_key_cache() -> &'static Mutex<Option<(PathBuf, Option<std::time::SystemTime>, Instant, Option<String>)>> {
-    static C: OnceLock<Mutex<Option<(PathBuf, Option<std::time::SystemTime>, Instant, Option<String>)>>> =
+fn grok_key_cache() -> &'static Mutex<Option<(PathBuf, Option<std::time::SystemTime>, Instant, Option<String>, bool)>> {
+    static C: OnceLock<Mutex<Option<(PathBuf, Option<std::time::SystemTime>, Instant, Option<String>, bool)>>> =
         OnceLock::new();
     C.get_or_init(|| Mutex::new(None))
+}
+
+fn grok_cli_key_now(path: &Path) -> (Option<std::time::SystemTime>, Option<String>) {
+    let modified = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+    let raw = read_file_capped(path, 64 * 1024);
+    (modified, parse_grok_auth_key(&raw))
+}
+
+fn kick_grok_cli_key(path: PathBuf) {
+    if let Ok(mut held) = grok_key_cache().lock() {
+        if let Some(slot) = held.as_mut() {
+            if slot.0 == path {
+                if slot.4 {
+                    return;
+                }
+                slot.4 = true;
+            }
+        }
+    }
+    thread::spawn(move || {
+        let (modified, key) = grok_cli_key_now(&path);
+        if let Ok(mut held) = grok_key_cache().lock() {
+            *held = Some((path, modified, Instant::now(), key, false));
+        }
+    });
 }
 
 fn read_file_capped(path: &Path, cap: usize) -> String {
@@ -370,6 +400,10 @@ mod tests {
         assert!(
             key.contains("read_file_capped") && key.contains("elapsed") && !key.contains("read_to_string"),
             "grok login must not slurp auth.json every paint: {key}"
+        );
+        assert!(
+            key.contains("thread::spawn") && key.contains("inflight"),
+            "stale grok login must refresh auth.json off the UI thread: {key}"
         );
     }
 
