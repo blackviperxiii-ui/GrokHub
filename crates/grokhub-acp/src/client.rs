@@ -4,7 +4,7 @@ use crate::protocol::{
     JsonRpc,
 };
 use crate::protocol::SessionMode;
-use crate::{agent_args, find_grok, grok_stdout};
+use crate::{agent_args_resume, find_grok, grok_home, grok_stdout_timeout};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -45,6 +45,7 @@ pub struct SpawnOpts {
     pub session_mode: SessionMode,
     pub extra_env: Vec<(String, String)>,
     pub handshake_timeout: Option<Duration>,
+    pub resume: Option<String>,
 }
 
 impl SpawnOpts {
@@ -59,7 +60,7 @@ impl SpawnOpts {
             "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
         })?;
         Ok(Self {
-            args: agent_args(always_approve),
+            args: crate::agent_args_resume(always_approve, None),
             program,
             cwd,
             api_key,
@@ -68,7 +69,22 @@ impl SpawnOpts {
             session_mode,
             extra_env: Vec::new(),
             handshake_timeout: None,
+            resume: None,
         })
+    }
+
+    pub fn with_resume(mut self, id: Option<String>) -> Self {
+        let id = id.and_then(|s| {
+            let t = s.trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        });
+        self.resume = id.clone();
+        self.args = crate::agent_args_resume(self.always_approve, id.as_deref());
+        self
     }
 }
 
@@ -173,6 +189,7 @@ fn handshake(
     always_approve: bool,
     auto: bool,
     session_mode: SessionMode,
+    resume: Option<String>,
 ) -> Result<HandshakeOk, String> {
     let mut reader = BufReader::new(stdout);
     let mut next_id = 1u64;
@@ -193,22 +210,64 @@ fn handshake(
         let _ = read_until_result(&mut reader, next_id, &mut early)?;
         next_id += 1;
     }
-    write_msg(
-        &mut stdin,
-        &request(
-            next_id,
-            "session/new",
-            session_new_params(cwd, always_approve, auto, session_mode),
-        ),
-    )?;
-    let created = read_until_result(&mut reader, next_id, &mut early)?;
-    next_id += 1;
+    let resume_id = resume.and_then(|s| {
+        let t = s.trim().to_string();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t)
+        }
+    });
+    let created = if let Some(id) = resume_id.clone() {
+        write_msg(
+            &mut stdin,
+            &request(
+                next_id,
+                "session/load",
+                json!({ "sessionId": id, "session_id": id }),
+            ),
+        )?;
+        match read_until_result(&mut reader, next_id, &mut early) {
+            Ok(v) => {
+                next_id += 1;
+                v
+            }
+            Err(_) => {
+                next_id += 1;
+                write_msg(
+                    &mut stdin,
+                    &request(
+                        next_id,
+                        "session/new",
+                        session_new_params(cwd, always_approve, auto, session_mode),
+                    ),
+                )?;
+                let v = read_until_result(&mut reader, next_id, &mut early)?;
+                next_id += 1;
+                v
+            }
+        }
+    } else {
+        write_msg(
+            &mut stdin,
+            &request(
+                next_id,
+                "session/new",
+                session_new_params(cwd, always_approve, auto, session_mode),
+            ),
+        )?;
+        let v = read_until_result(&mut reader, next_id, &mut early)?;
+        next_id += 1;
+        v
+    };
     let session_id = created
         .get("sessionId")
         .or_else(|| created.get("session_id"))
         .and_then(|v| v.as_str())
-        .ok_or("session/new missing sessionId")?
-        .to_string();
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+        .or(resume_id)
+        .ok_or("session/new missing sessionId")?;
     Ok(HandshakeOk {
         stdin,
         reader,
@@ -247,6 +306,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
     let always_approve = opts.always_approve;
     let auto = opts.auto;
     let session_mode = opts.session_mode;
+    let resume = opts.resume.clone();
 
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -258,6 +318,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
             always_approve,
             auto,
             session_mode,
+            resume,
         ));
     });
     let hs = match rx.recv_timeout(timeout) {
@@ -472,16 +533,8 @@ pub fn parse_session_list(text: &str) -> Vec<String> {
         return Vec::new();
     }
     if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
-        if let Some(arr) = v.as_array() {
-            return arr
-                .iter()
-                .filter_map(|x| {
-                    x.get("id")
-                        .or_else(|| x.get("title"))
-                        .and_then(|s| s.as_str())
-                        .map(|s| s.to_string())
-                })
-                .collect();
+        if let Some(rows) = session_rows_from_json(&v) {
+            return rows;
         }
     }
     let mut out = Vec::new();
@@ -510,10 +563,251 @@ pub fn parse_session_list(text: &str) -> Vec<String> {
     out
 }
 
+fn session_rows_from_json(v: &Value) -> Option<Vec<String>> {
+    let arr = v
+        .as_array()
+        .or_else(|| v.get("sessions").and_then(|x| x.as_array()))
+        .or_else(|| v.get("data").and_then(|x| x.as_array()))?;
+    let mut out = Vec::new();
+    for x in arr {
+        if let Some(s) = x.as_str() {
+            if !s.is_empty() {
+                out.push(s.to_string());
+            }
+            continue;
+        }
+        let Some(id) = x
+            .get("id")
+            .or_else(|| x.get("sessionId"))
+            .or_else(|| x.get("session_id"))
+            .and_then(|s| s.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        let title = x
+            .get("title")
+            .or_else(|| x.get("summary"))
+            .or_else(|| x.get("name"))
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .trim();
+        if title.is_empty() {
+            out.push(id.to_string());
+        } else {
+            out.push(format!("{id}  {title}"));
+        }
+    }
+    Some(out)
+}
+
 /// List Grok sessions via `grok sessions list` in `cwd` (sessions are per worktree).
 pub fn list_sessions(bin: &Path, cwd: &Path) -> Result<Vec<String>, String> {
-    let text = grok_stdout(bin, cwd, &["sessions", "list", "-n", "50"])?;
+    let text = grok_stdout_timeout(bin, cwd, &["sessions", "list", "-n", "50"], 8).or_else(|_| {
+        grok_stdout_timeout(bin, cwd, &["sessions", "list", "--json", "-n", "50"], 8)
+    })?;
     Ok(parse_session_list(&text))
+}
+
+/// Dump one Grok session transcript (`grok sessions show <id>`).
+pub fn show_session(bin: &Path, cwd: &Path, id: &str) -> Result<String, String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("empty session id".into());
+    }
+    grok_stdout_timeout(bin, cwd, &["sessions", "show", id], 12).or_else(|_| {
+        grok_stdout_timeout(bin, cwd, &["session", "show", id], 12)
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrokSession {
+    pub id: String,
+    pub title: String,
+    pub path: Option<PathBuf>,
+}
+
+pub fn split_session_row(row: &str) -> GrokSession {
+    let row = row.trim();
+    let (id, rest) = row
+        .split_once(char::is_whitespace)
+        .map(|(a, b)| (a.to_string(), b.trim().to_string()))
+        .unwrap_or_else(|| (row.to_string(), String::new()));
+    GrokSession {
+        title: if rest.is_empty() {
+            id.clone()
+        } else {
+            rest
+        },
+        id,
+        path: None,
+    }
+}
+
+/// Transcript turns from a Grok session markdown dump.
+pub fn parse_session_markdown(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut role = String::new();
+    let mut body = String::new();
+    let flush = |role: &mut String, body: &mut String, out: &mut Vec<(String, String)>| {
+        let t = body.trim();
+        if !role.is_empty() && !t.is_empty() {
+            out.push((role.clone(), t.to_string()));
+        }
+        role.clear();
+        body.clear();
+    };
+    for line in text.lines() {
+        let t = line.trim();
+        let lower = t.to_ascii_lowercase();
+        let heading = t.trim_start_matches('#').trim();
+        let heading_l = heading.to_ascii_lowercase();
+        let next = if heading_l == "user" || heading_l == "human" || lower.starts_with("user:") || lower.starts_with("**user**")
+        {
+            Some("user")
+        } else if heading_l == "assistant"
+            || heading_l == "grok"
+            || lower.starts_with("assistant:")
+            || lower.starts_with("grok:")
+            || lower.starts_with("**assistant**")
+            || lower.starts_with("**grok**")
+        {
+            Some("assistant")
+        } else {
+            None
+        };
+        if let Some(r) = next {
+            flush(&mut role, &mut body, &mut out);
+            role = r.into();
+            if let Some((_, rest)) = t.split_once(':') {
+                let rest = rest.trim().trim_matches('*').trim();
+                if !rest.is_empty() && !rest.eq_ignore_ascii_case("user") && !rest.eq_ignore_ascii_case("assistant") {
+                    body.push_str(rest);
+                    body.push('\n');
+                }
+            }
+            continue;
+        }
+        if t.starts_with('#') {
+            continue;
+        }
+        if !role.is_empty() {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    flush(&mut role, &mut body, &mut out);
+    out
+}
+
+fn session_title_from_markdown(text: &str, fallback: &str) -> String {
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("# ") {
+            let name = rest.trim();
+            if !name.is_empty()
+                && !name.eq_ignore_ascii_case("user")
+                && !name.eq_ignore_ascii_case("assistant")
+                && !name.eq_ignore_ascii_case("session")
+            {
+                return name.chars().take(80).collect();
+            }
+        }
+    }
+    fallback.to_string()
+}
+
+/// On-disk Grok Build sessions (`~/.grok/sessions/<id>/`, `~/.grok/memory/*/sessions/*.md`).
+pub fn discover_session_files() -> Vec<GrokSession> {
+    let Some(home) = grok_home() else {
+        return Vec::new();
+    };
+    discover_session_files_in(&home)
+}
+
+pub fn discover_session_files_in(home: &Path) -> Vec<GrokSession> {
+    let mut out = Vec::new();
+    let roots = [
+        home.join("memory"),
+        home.join("sessions"),
+        home.join("worktrees"),
+    ];
+    for root in roots {
+        walk_session_md(&root, 0, &mut out);
+    }
+    out
+}
+
+fn walk_session_md(dir: &Path, depth: u8, out: &mut Vec<GrokSession>) {
+    if depth > 6 || out.len() >= 80 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.is_dir() {
+            walk_session_md(&path, depth + 1, out);
+            continue;
+        }
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        if stem.eq_ignore_ascii_case("readme")
+            || stem.eq_ignore_ascii_case("skill")
+            || stem.is_empty()
+        {
+            continue;
+        }
+        let id = if looks_like_session_id(&stem) {
+            stem.clone()
+        } else if let Some(parent) = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+        {
+            if looks_like_session_id(parent) {
+                parent.to_string()
+            } else {
+                continue;
+            }
+        } else {
+            continue;
+        };
+        if out.iter().any(|s| s.id == id && s.path.is_some()) {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        out.push(GrokSession {
+            id: id.clone(),
+            title: session_title_from_markdown(&text, &id),
+            path: Some(path),
+        });
+    }
+}
+
+pub fn merge_grok_sessions(listed: &[String], files: Vec<GrokSession>) -> Vec<GrokSession> {
+    let mut out: Vec<GrokSession> = listed.iter().map(|r| split_session_row(r)).collect();
+    for f in files {
+        if let Some(hit) = out.iter_mut().find(|s| s.id == f.id || s.title == f.title) {
+            if hit.path.is_none() {
+                hit.path = f.path;
+            }
+            if hit.title == hit.id && f.title != f.id {
+                hit.title = f.title;
+            }
+        } else {
+            out.push(f);
+        }
+    }
+    out
 }
 
 pub fn inspect_json(bin: &Path, cwd: &Path) -> Result<Value, String> {
@@ -587,6 +881,60 @@ mod tests {
         assert!(rows[0].contains("01a01b0f-7e06-74b1-8f22-5236c9d57d45"), "{rows:?}");
         assert!(rows[0].contains("Ping Test"), "{rows:?}");
         let json = r#"[{"id":"abc-def-ghi-jkl-mnop","title":"Hi"}]"#;
-        assert_eq!(parse_session_list(json), vec!["abc-def-ghi-jkl-mnop".to_string()]);
+        assert_eq!(
+            parse_session_list(json),
+            vec!["abc-def-ghi-jkl-mnop  Hi".to_string()]
+        );
+        let wrapped = r#"{"sessions":[{"sessionId":"01a01b0f-7e06-74b1-8f22-5236c9d57d45","summary":"Night"}]}"#;
+        let rows = parse_session_list(wrapped);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].contains("01a01b0f-7e06-74b1-8f22-5236c9d57d45"), "{rows:?}");
+        assert!(rows[0].contains("Night"), "{rows:?}");
+    }
+
+    #[test]
+    fn session_files_use_uuid_parent_not_plan_stem() {
+        let root = std::env::temp_dir().join(format!(
+            "grokhub-sess-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let id = "01a01b0f-7e06-74b1-8f22-5236c9d57d45";
+        let dir = root.join("sessions").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("plan.md"),
+            "# Night cabin\n\n## User\nHi\n\n## Assistant\nHello.\n",
+        )
+        .unwrap();
+        let found = discover_session_files_in(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].id, id);
+        assert_eq!(found[0].title, "Night cabin");
+    }
+
+    #[test]
+    fn session_markdown_turns() {
+        let md = "# Night cabin\n\n## User\nLook at the pane.\n\n## Assistant\nOn it.\n";
+        let turns = parse_session_markdown(md);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0], ("user".into(), "Look at the pane.".into()));
+        assert_eq!(turns[1], ("assistant".into(), "On it.".into()));
+        let row = split_session_row("01a01b0f-7e06-74b1-8f22-5236c9d57d45  Night cabin");
+        assert_eq!(row.id, "01a01b0f-7e06-74b1-8f22-5236c9d57d45");
+        assert_eq!(row.title, "Night cabin");
+        let merged = merge_grok_sessions(
+            &["abc  Hello".into()],
+            vec![GrokSession {
+                id: "abc".into(),
+                title: "Hello".into(),
+                path: Some(std::path::PathBuf::from("/tmp/x.md")),
+            }],
+        );
+        assert_eq!(merged.len(), 1);
+        assert!(merged[0].path.is_some());
     }
 }

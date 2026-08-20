@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn greeting_llm_is_fast_mode() {
         assert_eq!(GREETING_LLM_MODE, "fast");
-        assert_eq!(crate::model_for_mode(GREETING_LLM_MODE), "grok-3-mini-fast");
+        assert_eq!(crate::CABIN_FAST_MODEL, "grok-4-1-fast-non-reasoning");
     }
 
     #[test]

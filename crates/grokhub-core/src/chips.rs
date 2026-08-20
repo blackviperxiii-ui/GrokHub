@@ -2494,7 +2494,7 @@ mod tests {
     #[test]
     fn chip_llm_is_fast_mode() {
         assert_eq!(CHIP_LLM_MODE, "fast");
-        assert_eq!(crate::model_for_mode(CHIP_LLM_MODE), "grok-3-mini-fast");
+        assert_eq!(crate::CABIN_FAST_MODEL, "grok-4-1-fast-non-reasoning");
     }
 
     #[test]

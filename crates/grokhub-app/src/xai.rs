@@ -228,23 +228,23 @@ pub fn grok_imagine_opts(
         Some("2k") => Some("medium"),
         _ => None,
     };
-    let try_model = |m: &str| -> Result<String, String> {
+    let try_model = |m: &str, timeout_secs: u64| -> Result<String, String> {
         let body = imagine_image_shaped(prompt, m, aspect, resolution, quality);
         let v = grok_json(
             &format!("{XAI_BASE}/images/generations"),
             key,
             body,
-            180,
+            timeout_secs,
         )?;
         let url = parse_imagine_url(&v).ok_or_else(|| "empty Imagine reply".to_string())?;
         save_media(&url, prompt, "png", key)
     };
-    match try_model(&primary) {
+    match try_model(&primary, 45) {
         Ok(path) => Ok(path),
         Err(e) => {
             if let Some(fb) = imagine_image_fallback_model(&primary) {
                 if imagine_should_retry_model(&e) {
-                    return try_model(fb);
+                    return try_model(fb, 120);
                 }
             }
             Err(e)
@@ -331,23 +331,29 @@ fn save_media(url: &str, prompt: &str, ext: &str, key: &str) -> Result<String, S
             .ok_or_else(|| "bad imagine data url".to_string())?
             .1
     } else {
-        let resp = ureq::get(url)
-            .set("authorization", &format!("Bearer {key}"))
-            .timeout(std::time::Duration::from_secs(120))
-            .call()
-            .map_err(http_err)?;
-        let mut buf = Vec::new();
-        resp.into_reader()
-            .take(MEDIA_FILE_CAP + 1)
-            .read_to_end(&mut buf)
-            .map_err(|e| e.to_string())?;
-        if buf.len() as u64 > MEDIA_FILE_CAP {
-            return Err("media too large".into());
+        let fetch = |auth: bool| -> Result<Vec<u8>, String> {
+            let mut req = ureq::get(url).timeout(std::time::Duration::from_secs(120));
+            if auth && !key.trim().is_empty() {
+                req = req.set("authorization", &format!("Bearer {key}"));
+            }
+            let resp = req.call().map_err(http_err)?;
+            let mut buf = Vec::new();
+            resp.into_reader()
+                .take(MEDIA_FILE_CAP + 1)
+                .read_to_end(&mut buf)
+                .map_err(|e| e.to_string())?;
+            if buf.len() as u64 > MEDIA_FILE_CAP {
+                return Err("media too large".into());
+            }
+            if buf.len() < 32 {
+                return Err("empty media download".into());
+            }
+            Ok(buf)
+        };
+        match fetch(true) {
+            Ok(buf) => buf,
+            Err(_) => fetch(false)?,
         }
-        if buf.len() < 32 {
-            return Err("empty media download".into());
-        }
-        buf
     };
     let ext = media_ext_from_bytes(&buf, ext);
     let path = crate::desktop::imagine_save_path_ext(&imagine_slug(prompt), ext);
