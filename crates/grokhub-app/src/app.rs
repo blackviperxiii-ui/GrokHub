@@ -7363,6 +7363,7 @@ impl eframe::App for Cabin {
                 || self.goal_busy
                 || self.oauth_photo_busy
                 || self.review_busy
+                || self.greeting_busy
                 || self.pending_kick.is_some()
                 || self.kick_cap_rx.is_some()
                 || self.recipe_cap_rx.is_some()
@@ -7373,7 +7374,9 @@ impl eframe::App for Cabin {
                 || self.session_show_rx.is_some()
                 || self.acp_spawn_rx.is_some()
                 || self.oauth_start_rx.is_some()
-                || self.oauth_poll_rx.is_some(),
+                || self.oauth_poll_rx.is_some()
+                || self.night_check_rx.is_some()
+                || self.eyes_cap_rx.is_some(),
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -11240,8 +11243,11 @@ mod tests {
                 && live.contains("session_show_rx")
                 && live.contains("acp_spawn_rx")
                 && live.contains("oauth_start_rx")
-                && live.contains("oauth_poll_rx"),
-            "History listing / inspect / session show / ACP handshake / OAuth HTTP must not wait on the 15s heartbeat: {live}"
+                && live.contains("oauth_poll_rx")
+                && live.contains("greeting_busy")
+                && live.contains("night_check_rx")
+                && live.contains("eyes_cap_rx"),
+            "History listing / inspect / greeting / night check / Eyes capture must not wait on the 15s heartbeat: {live}"
         );
     }
 
