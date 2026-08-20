@@ -992,6 +992,7 @@ pub struct Cabin {
     oauth_photo_busy: bool,
     oauth_profile_tried: bool,
     acp: Option<grokhub_acp::AcpHandle>,
+    acp_spawn_rx: Option<mpsc::Receiver<Result<grokhub_acp::AcpHandle, String>>>,
     tool_cards: Vec<ToolCard>,
     desk_frame: Option<String>,
     perm_ask: Option<grokhub_acp::PermissionAsk>,
@@ -1340,6 +1341,7 @@ impl Cabin {
             oauth_photo_busy: false,
             oauth_profile_tried: false,
             acp: None,
+            acp_spawn_rx: None,
             tool_cards: Vec::new(),
             desk_frame: None,
             perm_ask: None,
@@ -1568,6 +1570,7 @@ impl Cabin {
         self.kick_cap_rx = None;
         self.kick_frame = None;
         self.kick_skip = false;
+        self.acp_spawn_rx = None;
         self.recipe_cap_rx = None;
         self.verify_rx = None;
         self.plan_pending = None;
@@ -1808,6 +1811,41 @@ impl Cabin {
         }
     }
 
+    fn poll_acp_spawn(&mut self) {
+        let Some(rx) = self.acp_spawn_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(h)) => {
+                let sid = h.session_id.clone();
+                let cwd = h.cwd.display().to_string();
+                if !sid.trim().is_empty() {
+                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        t.grok_session = Some(sid);
+                        t.grok_cwd = Some(cwd);
+                    }
+                }
+                self.acp = Some(h);
+            }
+            Ok(Err(e)) => {
+                self.running = false;
+                self.pending_kick = None;
+                self.status = self.apply_job_fail(&e);
+                self.chat_job_thread = None;
+                self.persist();
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.acp_spawn_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.running = false;
+                self.pending_kick = None;
+                self.status = self.apply_job_fail("Grok Build session missing");
+                self.chat_job_thread = None;
+            }
+        }
+    }
+
     fn open_grok_session(&mut self, id: &str) {
         if let Some(i) = self
             .threads
@@ -1889,6 +1927,9 @@ impl Cabin {
                 }
             }
         }
+        if self.acp_spawn_rx.is_some() {
+            return Ok(());
+        }
         self.acp = None;
         let console = self.console_key().trim();
         let xai_env = if !console.is_empty() && !grokhub_acp::protocol::is_jwt_api_key(console) {
@@ -1902,45 +1943,39 @@ impl Cabin {
         let auth_key = grok_login.or_else(|| xai_env.clone());
         let perm = self.permission_mode;
         let mode = self.session_mode;
-        let spawn = |resume: Option<String>| {
-            build_agent::spawn_session(
-                cwd.clone(),
-                auth_key.clone(),
-                xai_env.clone(),
-                perm,
-                mode,
-                resume,
-            )
-        };
-        let h = match spawn(resume.clone()) {
-            Ok(h) => h,
-            Err(e) => {
-                if resume.is_none() {
-                    return Err(grokhub_acp::explain_handshake_error(&e, &cwd));
+        let foreign = self
+            .threads
+            .get(self.thread_idx)
+            .and_then(|t| t.grok_cwd.as_ref())
+            .map(|p| std::path::PathBuf::from(p) != bound)
+            .unwrap_or(false);
+        let (tx, rx) = mpsc::channel();
+        self.acp_spawn_rx = Some(rx);
+        std::thread::spawn(move || {
+            let spawn = |resume: Option<String>| {
+                build_agent::spawn_session(
+                    cwd.clone(),
+                    auth_key.clone(),
+                    xai_env.clone(),
+                    perm,
+                    mode,
+                    resume,
+                )
+            };
+            let out = match spawn(resume.clone()) {
+                Ok(h) => Ok(h),
+                Err(e) => {
+                    if resume.is_none() {
+                        Err(grokhub_acp::explain_handshake_error(&e, &cwd))
+                    } else if foreign || grokhub_acp::is_session_cwd_error(&e) {
+                        Err(grokhub_acp::explain_handshake_error(&e, &cwd))
+                    } else {
+                        spawn(None).map_err(|e2| grokhub_acp::explain_handshake_error(&e2, &cwd))
+                    }
                 }
-                let foreign = self
-                    .threads
-                    .get(self.thread_idx)
-                    .and_then(|t| t.grok_cwd.as_ref())
-                    .map(|p| std::path::PathBuf::from(p) != bound)
-                    .unwrap_or(false);
-                if foreign || grokhub_acp::is_session_cwd_error(&e) {
-                    return Err(grokhub_acp::explain_handshake_error(&e, &cwd));
-                }
-                if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                    t.grok_session = None;
-                }
-                spawn(None).map_err(|e2| grokhub_acp::explain_handshake_error(&e2, &cwd))?
-            }
-        };
-        let sid = h.session_id.clone();
-        if !sid.trim().is_empty() {
-            if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                t.grok_session = Some(sid);
-                t.grok_cwd = Some(cwd.display().to_string());
-            }
-        }
-        self.acp = Some(h);
+            };
+            let _ = tx.send(out);
+        });
         Ok(())
     }
 
@@ -2052,6 +2087,7 @@ impl Cabin {
         self.eyes_attach = false;
         self.last_receipt_ok = None;
         self.acp = None;
+        self.acp_spawn_rx = None;
         self.tool_cards.clear();
         self.perm_ask = None;
     }
@@ -5323,6 +5359,17 @@ impl Cabin {
             .find(|(role, content)| role == "user" && !is_workload_user(content))
             .map(|(_, content)| content.clone())
             .unwrap_or_default();
+        if let Err(e) = self.ensure_acp() {
+            self.running = false;
+            self.status = self.apply_job_fail(&e);
+            self.chat_job_thread = None;
+            self.persist();
+            return;
+        }
+        if self.acp_spawn_rx.is_some() {
+            self.pending_kick = Some(consume_attach);
+            return;
+        }
         let cabin = self.kick_frame.take();
         self.kick_skip = false;
         self.eyes_attach = false;
@@ -5331,13 +5378,6 @@ impl Cabin {
         self.thought_buf.clear();
         self.tool_cards.clear();
         self.perm_ask = None;
-        if let Err(e) = self.ensure_acp() {
-            self.running = false;
-            self.status = self.apply_job_fail(&e);
-            self.chat_job_thread = None;
-            self.persist();
-            return;
-        }
         let image = if consume_attach {
             let url = next_chat_image(self.attach_url.as_deref(), cabin.as_deref()).map(|s| s.to_string());
             self.attach_url = None;
@@ -6352,6 +6392,9 @@ impl Cabin {
         let Some(consume) = self.pending_kick else {
             return;
         };
+        if self.acp_spawn_rx.is_some() {
+            return;
+        }
         if self.kick_frame.is_some()
             || (self.kick_cap_rx.is_none()
                 && !should_capture_before_chat(self.eyes_attach || self.hands_attach))
@@ -7162,6 +7205,7 @@ impl eframe::App for Cabin {
         self.poll_grok_sessions();
         self.poll_inspect();
         self.poll_session_show();
+        self.poll_acp_spawn();
         self.poll_eyes_cap();
         self.poll_recipe_cap();
         self.poll_verify();
@@ -7256,7 +7300,8 @@ impl eframe::App for Cabin {
                 || self.grok_sessions_rx.is_some()
                 || self.persist_rx.is_some()
                 || self.inspect_rx.is_some()
-                || self.session_show_rx.is_some(),
+                || self.session_show_rx.is_some()
+                || self.acp_spawn_rx.is_some(),
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -11090,8 +11135,9 @@ mod tests {
             live.contains("grok_sessions_rx")
                 && live.contains("persist_rx")
                 && live.contains("inspect_rx")
-                && live.contains("session_show_rx"),
-            "History listing / inspect / session show must not wait on the 15s heartbeat: {live}"
+                && live.contains("session_show_rx")
+                && live.contains("acp_spawn_rx"),
+            "History listing / inspect / session show / ACP handshake must not wait on the 15s heartbeat: {live}"
         );
     }
 
@@ -11317,6 +11363,12 @@ mod tests {
         assert!(
             ensure.contains("is_session_cwd_error") && ensure.contains("t.grok_cwd"),
             "session/load in a foreign worktree must fail closed, not spawn(None) into the bound tree: {ensure}"
+        );
+        let ensure_spawn = ensure.find("thread::spawn").expect("handshake must leave the UI thread");
+        let ensure_sess = ensure.find("spawn_session").expect("spawn_session");
+        assert!(
+            ensure_spawn < ensure_sess,
+            "ACP handshake must not freeze the cabin: {ensure}"
         );
         assert!(
             !ensure.contains("bearer()"),
@@ -11694,8 +11746,8 @@ mod tests {
             "session/new failure must land in the chat, not only the 72-char status clip: {kick}"
         );
         assert!(
-            kick.contains("pending_kick") && kick.contains("kick_cap_rx"),
-            "kick_model must wait for the off-thread frame instead of blocking: {kick}"
+            kick.contains("pending_kick") && kick.contains("kick_cap_rx") && kick.contains("acp_spawn_rx"),
+            "kick_model must wait for the off-thread frame and ACP handshake instead of blocking: {kick}"
         );
     }
 
