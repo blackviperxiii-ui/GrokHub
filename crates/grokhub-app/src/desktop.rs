@@ -1492,7 +1492,7 @@ impl Drop for PcmSink {
 
 /// Long-running raw PCM capture for duplex Voice. Kill on drop.
 pub struct LivePcm {
-    child: Child,
+    child: Option<Child>,
 }
 
 impl LivePcm {
@@ -1505,11 +1505,11 @@ impl LivePcm {
             .stderr(Stdio::null())
             .spawn()
             .ok()?;
-        Some(Self { child })
+        Some(Self { child: Some(child) })
     }
 
     pub fn read_frame(&mut self) -> Option<Vec<u8>> {
-        let stdout = self.child.stdout.as_mut()?;
+        let stdout = self.child.as_mut()?.stdout.as_mut()?;
         let mut buf = vec![0u8; live_pcm_frame_bytes()];
         stdout.read_exact(&mut buf).ok()?;
         Some(buf)
@@ -1518,8 +1518,12 @@ impl LivePcm {
 
 impl Drop for LivePcm {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
     }
 }
 

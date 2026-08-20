@@ -6,6 +6,31 @@ use std::time::{Duration, Instant};
 
 /// Resolve the Grok Build CLI. `GROKHUB_GROK` wins, then PATH, then common install dirs.
 pub fn find_grok() -> Option<PathBuf> {
+    let key = format!(
+        "{:?}|{:?}",
+        std::env::var_os("GROKHUB_GROK"),
+        std::env::var_os("PATH")
+    );
+    if let Ok(held) = grok_bin_cache().lock() {
+        if let Some((k, at, path)) = held.as_ref() {
+            if *k == key && at.elapsed() < Duration::from_secs(2) {
+                return path.clone();
+            }
+        }
+    }
+    let path = find_grok_scan();
+    if let Ok(mut held) = grok_bin_cache().lock() {
+        *held = Some((key, Instant::now(), path.clone()));
+    }
+    path
+}
+
+fn grok_bin_cache() -> &'static Mutex<Option<(String, Instant, Option<PathBuf>)>> {
+    static C: OnceLock<Mutex<Option<(String, Instant, Option<PathBuf>)>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(None))
+}
+
+fn find_grok_scan() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("GROKHUB_GROK") {
         let p = PathBuf::from(p);
         if p.is_file() {
@@ -48,8 +73,39 @@ pub fn grok_auth_path() -> Option<PathBuf> {
 /// Cached `grok login` bearer from `~/.grok/auth.json`. Never logs the secret.
 pub fn grok_cli_key() -> Option<String> {
     let path = grok_auth_path()?;
-    let raw = std::fs::read_to_string(path).ok()?;
-    parse_grok_auth_key(&raw)
+    let modified = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+    if let Ok(held) = grok_key_cache().lock() {
+        if let Some((p, m, at, key)) = held.as_ref() {
+            if *p == path && *m == modified && at.elapsed() < Duration::from_secs(2) {
+                return key.clone();
+            }
+        }
+    }
+    let raw = read_file_capped(&path, 64 * 1024);
+    let key = parse_grok_auth_key(&raw);
+    if let Ok(mut held) = grok_key_cache().lock() {
+        *held = Some((path, modified, Instant::now(), key.clone()));
+    }
+    key
+}
+
+fn grok_key_cache() -> &'static Mutex<Option<(PathBuf, Option<std::time::SystemTime>, Instant, Option<String>)>> {
+    static C: OnceLock<Mutex<Option<(PathBuf, Option<std::time::SystemTime>, Instant, Option<String>)>>> =
+        OnceLock::new();
+    C.get_or_init(|| Mutex::new(None))
+}
+
+fn read_file_capped(path: &Path, cap: usize) -> String {
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return String::new(),
+    };
+    let mut buf = vec![0u8; cap];
+    let n = match std::io::Read::read(&mut f, &mut buf) {
+        Ok(n) => n,
+        Err(_) => return String::new(),
+    };
+    String::from_utf8_lossy(&buf[..n]).into_owned()
 }
 
 pub fn parse_grok_auth_key(raw: &str) -> Option<String> {
@@ -247,6 +303,24 @@ mod tests {
         assert!(
             doc.contains("elapsed"),
             "Settings must not spawn grok --version every frame: {doc}"
+        );
+        let find = src
+            .split("pub fn find_grok(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn which(").next())
+            .expect("find_grok");
+        assert!(
+            find.contains("elapsed"),
+            "the composer must not walk PATH every frame: {find}"
+        );
+        let key = src
+            .split("pub fn grok_cli_key(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn parse_grok_auth_key(").next())
+            .expect("grok_cli_key");
+        assert!(
+            key.contains("read_file_capped") && key.contains("elapsed") && !key.contains("read_to_string"),
+            "grok login must not slurp auth.json every paint: {key}"
         );
     }
 
