@@ -1163,7 +1163,7 @@ pub fn settings_nav(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
         } else {
             Color32::TRANSPARENT
         })
-        .rounding(8.0)
+        .rounding(10.0)
         .min_size(egui::vec2(188.0, 36.0)),
     ))
     .clicked()
