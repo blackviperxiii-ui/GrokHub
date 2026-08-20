@@ -2944,9 +2944,13 @@ impl Cabin {
             && (self.greeting_flush_name != self.mem_name
                 || self.greeting_flush_len != self.mem_body.len())
         {
-            if config::read_memory(&self.mem_name) != self.mem_body {
-                let _ = config::write_memory(&self.mem_name, &self.mem_body);
-            }
+            let name = self.mem_name.clone();
+            let body = self.mem_body.clone();
+            std::thread::spawn(move || {
+                if config::read_memory(&name) != body {
+                    let _ = config::write_memory(&name, &body);
+                }
+            });
             self.greeting_flush_name = self.mem_name.clone();
             self.greeting_flush_len = self.mem_body.len();
         }
@@ -3767,29 +3771,37 @@ impl Cabin {
                     return;
                 }
                 match topic {
-                    None => match config::write_memory("MEMORY.md", "") {
-                        Ok(()) => {
-                            if self.mem_name == "MEMORY.md" {
-                                self.mem_body.clear();
-                            }
-                            self.status = "Forgot MEMORY.md".into();
+                    None => {
+                        std::thread::spawn(|| {
+                            let _ = config::write_memory("MEMORY.md", "");
+                        });
+                        if self.mem_name == "MEMORY.md" {
+                            self.mem_body.clear();
                         }
-                        Err(e) => self.status = e,
-                    },
+                        self.status = "Forgot MEMORY.md".into();
+                    }
                     Some(q) => {
-                        if config::read_memory(&self.mem_name) != self.mem_body {
-                            let _ = config::write_memory(&self.mem_name, &self.mem_body);
-                        }
-                        let next = forget_topic(&config::read_memory("MEMORY.md"), &q);
-                        match config::write_memory("MEMORY.md", &next) {
-                            Ok(()) => {
-                                if self.mem_name == "MEMORY.md" {
-                                    self.mem_body = next;
-                                }
-                                self.status = format!("Forgot {q}");
+                        let name = self.mem_name.clone();
+                        let body = self.mem_body.clone();
+                        std::thread::spawn(move || {
+                            if name != "MEMORY.md" && config::read_memory(&name) != body {
+                                let _ = config::write_memory(&name, &body);
                             }
-                            Err(e) => self.status = e,
+                        });
+                        let current = if self.mem_name == "MEMORY.md" {
+                            self.mem_body.clone()
+                        } else {
+                            config::read_memory("MEMORY.md")
+                        };
+                        let next = forget_topic(&current, &q);
+                        let written = next.clone();
+                        std::thread::spawn(move || {
+                            let _ = config::write_memory("MEMORY.md", &written);
+                        });
+                        if self.mem_name == "MEMORY.md" {
+                            self.mem_body = next;
                         }
+                        self.status = format!("Forgot {q}");
                     }
                 }
             }
@@ -3806,17 +3818,33 @@ impl Cabin {
                     self.status = "Secrets never in markdown".into();
                     return;
                 }
-                if config::read_memory(&self.mem_name) != self.mem_body {
-                    let _ = config::write_memory(&self.mem_name, &self.mem_body);
-                }
-                match config::append_memory("MEMORY.md", &note) {
-                    Ok(()) => {
-                        if self.mem_name == "MEMORY.md" {
-                            self.mem_body = config::read_memory("MEMORY.md");
+                let name = self.mem_name.clone();
+                let body = self.mem_body.clone();
+                if name != "MEMORY.md" {
+                    std::thread::spawn(move || {
+                        if config::read_memory(&name) != body {
+                            let _ = config::write_memory(&name, &body);
                         }
-                        self.status = "Wrote MEMORY.md".into();
+                    });
+                }
+                if self.mem_name == "MEMORY.md" {
+                    let mut next = self.mem_body.clone();
+                    if !next.is_empty() && !next.ends_with('\n') {
+                        next.push('\n');
                     }
-                    Err(e) => self.status = e,
+                    next.push_str(note.trim());
+                    next.push('\n');
+                    let written = next.clone();
+                    std::thread::spawn(move || {
+                        let _ = config::write_memory("MEMORY.md", &written);
+                    });
+                    self.mem_body = next;
+                    self.status = "Wrote MEMORY.md".into();
+                } else {
+                    match config::append_memory("MEMORY.md", &note) {
+                        Ok(()) => self.status = "Wrote MEMORY.md".into(),
+                        Err(e) => self.status = e,
+                    }
                 }
             }
             Slash::Board => {
@@ -4191,13 +4219,34 @@ impl Cabin {
                 }
             }
             Slash::Recall(q) => {
-                if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
-                    let _ = config::write_memory(&self.mem_name, &self.mem_body);
+                if !self.scratch() {
+                    let name = self.mem_name.clone();
+                    let body = self.mem_body.clone();
+                    std::thread::spawn(move || {
+                        if config::read_memory(&name) != body {
+                            let _ = config::write_memory(&name, &body);
+                        }
+                    });
                 }
+                let soul = if self.mem_name == "SOUL.md" {
+                    self.mem_body.clone()
+                } else {
+                    config::read_memory("SOUL.md")
+                };
+                let user = if self.mem_name == "USER.md" {
+                    self.mem_body.clone()
+                } else {
+                    config::read_memory("USER.md")
+                };
+                let memory = if self.mem_name == "MEMORY.md" {
+                    self.mem_body.clone()
+                } else {
+                    config::read_memory("MEMORY.md")
+                };
                 let corpus = [
-                    ("SOUL.md", config::read_memory("SOUL.md")),
-                    ("USER.md", config::read_memory("USER.md")),
-                    ("MEMORY.md", config::read_memory("MEMORY.md")),
+                    ("SOUL.md", soul),
+                    ("USER.md", user),
+                    ("MEMORY.md", memory),
                 ];
                 let refs: Vec<(&str, &str)> = corpus.iter().map(|(n, b)| (*n, b.as_str())).collect();
                 let mut hits = recall_hits(&q, &refs);
@@ -4424,11 +4473,22 @@ impl Cabin {
             self.status = "Inhabit needs a paired idle box".into();
             return;
         }
-        if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
-            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+        if !self.scratch() {
+            let name = self.mem_name.clone();
+            let body = self.mem_body.clone();
+            std::thread::spawn(move || {
+                if config::read_memory(&name) != body {
+                    let _ = config::write_memory(&name, &body);
+                }
+            });
         }
+        let soul = if self.mem_name == "SOUL.md" {
+            self.mem_body.clone()
+        } else {
+            config::read_memory("SOUL.md")
+        };
         let bundle = InhabitBundle {
-            soul: config::read_memory("SOUL.md"),
+            soul,
             skill_ids: self.skill_list.iter().map(|s| s.name.clone()).collect(),
             goal: self.board.first().map(|c| c.title.clone()),
             project_snapshot_id: None,
@@ -4644,14 +4704,24 @@ impl Cabin {
 
     fn sync_hub(&mut self) {
         self.persist();
-        if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
-            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+        if !self.scratch() {
+            let name = self.mem_name.clone();
+            let body = self.mem_body.clone();
+            std::thread::spawn(move || {
+                if config::read_memory(&name) != body {
+                    let _ = config::write_memory(&name, &body);
+                }
+            });
         }
         let mem = ["SOUL.md", "USER.md", "MEMORY.md"]
             .into_iter()
             .map(|n| HubMemoryFile {
                 name: n.into(),
-                content: config::read_memory(n),
+                content: if self.mem_name == n {
+                    self.mem_body.clone()
+                } else {
+                    config::read_memory(n)
+                },
                 updated_at: config::memory_updated_at(n),
             })
             .collect();
@@ -7158,50 +7228,55 @@ impl Cabin {
         if self.policy().learns() {
             extract_insights(&mut self.learning, &facts);
         }
-        if config::read_memory(&self.mem_name) != self.mem_body {
-            let _ = config::write_memory(&self.mem_name, &self.mem_body);
-        }
-        let current = config::read_memory("MEMORY.md");
+        let name = self.mem_name.clone();
+        let body = self.mem_body.clone();
+        std::thread::spawn(move || {
+            if name != "MEMORY.md"
+                && name != "USER.md"
+                && config::read_memory(&name) != body
+            {
+                let _ = config::write_memory(&name, &body);
+            }
+        });
+        let current = if self.mem_name == "MEMORY.md" {
+            self.mem_body.clone()
+        } else {
+            config::read_memory("MEMORY.md")
+        };
         let edit = surgical_memory_edit(&current, &facts);
         let mut wrote = false;
         if !edit.diff.is_empty() {
-            match config::write_memory("MEMORY.md", &edit.next) {
-                Ok(()) => {
-                    self.reflect_diff = edit.diff;
-                    if self.mem_name == "MEMORY.md" {
-                        self.mem_body = edit.next;
-                    }
-                    wrote = true;
-                }
-                Err(e) => {
-                    self.status = e;
-                    self.persist();
-                    return;
-                }
+            let next = edit.next.clone();
+            std::thread::spawn(move || {
+                let _ = config::write_memory("MEMORY.md", &next);
+            });
+            self.reflect_diff = edit.diff;
+            if self.mem_name == "MEMORY.md" {
+                self.mem_body = edit.next;
             }
+            wrote = true;
         }
         if self.policy().writes_user_md() {
             let prefs = user_pref_facts(&facts);
             if !prefs.is_empty() {
-                let user = config::read_memory("USER.md");
+                let user = if self.mem_name == "USER.md" {
+                    self.mem_body.clone()
+                } else {
+                    config::read_memory("USER.md")
+                };
                 let user_edit = surgical_memory_edit(&user, &prefs);
                 if !user_edit.diff.is_empty() {
-                    match config::write_memory("USER.md", &user_edit.next) {
-                        Ok(()) => {
-                            if self.mem_name == "USER.md" {
-                                self.mem_body = user_edit.next;
-                            }
-                            if self.reflect_diff.is_empty() {
-                                self.reflect_diff = user_edit.diff;
-                            }
-                            wrote = true;
-                        }
-                        Err(e) => {
-                            self.status = e;
-                            self.persist();
-                            return;
-                        }
+                    let next = user_edit.next.clone();
+                    std::thread::spawn(move || {
+                        let _ = config::write_memory("USER.md", &next);
+                    });
+                    if self.mem_name == "USER.md" {
+                        self.mem_body = user_edit.next;
                     }
+                    if self.reflect_diff.is_empty() {
+                        self.reflect_diff = user_edit.diff;
+                    }
+                    wrote = true;
                 }
             }
         }
@@ -9618,9 +9693,14 @@ impl Cabin {
                     if crate::cards::tab_pill(ui, name, self.mem_name == name) {
                         if !self.scratch()
                             && self.mem_name != name
-                            && config::read_memory(&self.mem_name) != self.mem_body
                         {
-                            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+                            let leaving = self.mem_name.clone();
+                            let body = self.mem_body.clone();
+                            std::thread::spawn(move || {
+                                if config::read_memory(&leaving) != body {
+                                    let _ = config::write_memory(&leaving, &body);
+                                }
+                            });
                         }
                         self.mem_name = name.into();
                         self.mem_body = config::read_memory(name);
@@ -9646,12 +9726,14 @@ impl Cabin {
                     if crate::cards::white_pill(ui, "Save") {
                         if self.scratch() {
                             self.status = "Scratch — no memory writes".into();
-                        } else if config::read_memory(&self.mem_name) != self.mem_body {
-                            match config::write_memory(&self.mem_name, &self.mem_body) {
-                                Ok(()) => self.status = format!("Wrote {}", self.mem_name),
-                                Err(e) => self.status = e,
-                            }
                         } else {
+                            let name = self.mem_name.clone();
+                            let body = self.mem_body.clone();
+                            std::thread::spawn(move || {
+                                if config::read_memory(&name) != body {
+                                    let _ = config::write_memory(&name, &body);
+                                }
+                            });
                             self.status = format!("Wrote {}", self.mem_name);
                         }
                     }
@@ -10227,8 +10309,14 @@ impl Cabin {
             ui.horizontal(|ui| {
                 crate::cards::search_bar(ui, &mut self.history_q, "Search chats and memory", 320.0);
                 if crate::cards::white_pill(ui, "Search") {
-                    if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
-                        let _ = config::write_memory(&self.mem_name, &self.mem_body);
+                    if !self.scratch() {
+                        let name = self.mem_name.clone();
+                        let body = self.mem_body.clone();
+                        std::thread::spawn(move || {
+                            if config::read_memory(&name) != body {
+                                let _ = config::write_memory(&name, &body);
+                            }
+                        });
                     }
                     if let Some(t) = self.threads.get_mut(self.thread_idx) {
                         t.messages = self
@@ -10238,9 +10326,30 @@ impl Cabin {
                             .collect();
                     }
                     let mut rows: Vec<(String, String)> = vec![
-                        ("SOUL.md".into(), config::read_memory("SOUL.md")),
-                        ("USER.md".into(), config::read_memory("USER.md")),
-                        ("MEMORY.md".into(), config::read_memory("MEMORY.md")),
+                        (
+                            "SOUL.md".into(),
+                            if self.mem_name == "SOUL.md" {
+                                self.mem_body.clone()
+                            } else {
+                                config::read_memory("SOUL.md")
+                            },
+                        ),
+                        (
+                            "USER.md".into(),
+                            if self.mem_name == "USER.md" {
+                                self.mem_body.clone()
+                            } else {
+                                config::read_memory("USER.md")
+                            },
+                        ),
+                        (
+                            "MEMORY.md".into(),
+                            if self.mem_name == "MEMORY.md" {
+                                self.mem_body.clone()
+                            } else {
+                                config::read_memory("MEMORY.md")
+                            },
+                        ),
                     ];
                     for t in &self.threads {
                         let body = search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()));
@@ -13972,6 +14081,10 @@ mod tests {
             tabs[..flush].contains("read_memory"),
             "Memory tab switch must not rotate .prev when the leaving file is unchanged: {tabs}"
         );
+        assert!(
+            tabs.contains("thread::spawn"),
+            "Memory tab switch must flush off the UI thread: {tabs}"
+        );
         let save = memory_ui
             .split("white_pill(ui, \"Save\")")
             .nth(1)
@@ -13980,6 +14093,10 @@ mod tests {
         assert!(
             save[..write].contains("read_memory") && save[..write].contains("mem_body"),
             "Memory Save must not rotate .prev when the file is unchanged: {save}"
+        );
+        assert!(
+            save.contains("thread::spawn"),
+            "Memory Save must not freeze the cabin writing MEMORY.md: {save}"
         );
         let settings_save = src
             .split("fn save_settings")
@@ -14186,6 +14303,12 @@ mod tests {
         assert!(
             greet[..user].contains("memory_updated_at"),
             "empty-chat greeting must not slurp USER/MEMORY on every paint: {greet}"
+        );
+        let greet_spawn = greet.find("thread::spawn").expect("greeting flush must leave the UI thread");
+        let greet_write = greet.find("write_memory").expect("greeting write_memory");
+        assert!(
+            greet_spawn < greet_write,
+            "empty-chat greeting must not freeze the cabin writing MEMORY.md: {greet}"
         );
         assert!(
             !greet.contains("device_name"),
@@ -14884,6 +15007,10 @@ mod tests {
                 && search.contains("mem_body")
                 && search.contains("scratch()"),
             "History Search must flush the Memory editor before reading disk: {search}"
+        );
+        assert!(
+            search.contains("thread::spawn"),
+            "History Search must flush MEMORY.md off the UI thread: {search}"
         );
         assert!(
             search.contains("TEXT_FILE_CAP") || search.contains("search_thread_body"),
