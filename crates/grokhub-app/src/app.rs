@@ -2755,8 +2755,10 @@ impl Cabin {
                 t.grok_cwd = None;
                 t.grok_session = None;
             }
+            self.persist();
+        } else {
+            self.persist_cfg();
         }
-        self.persist();
     }
 
     fn make_project(&mut self, name: &str, parent: Option<&str>) {
@@ -13163,6 +13165,12 @@ mod tests {
         assert!(
             bind_spawn < bind_mkdir,
             "sidebar bind must not freeze the cabin creating the project folder: {sidebar}"
+        );
+        assert!(
+            sidebar.contains("self.persist_cfg()")
+                && sidebar.contains("self.persist()")
+                && sidebar.contains("tree_changed"),
+            "re-clicking a bound project must not clone every thread just to write app.json: {sidebar}"
         );
         let room = src
             .split("Slash::Room(name)")
