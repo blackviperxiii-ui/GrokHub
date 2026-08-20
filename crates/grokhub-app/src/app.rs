@@ -41,6 +41,7 @@ use grokhub_core::{
     imagine_shows_result_above, imagine_toolbox_dock, imagine_toolbox_shows_title,
     imagine_toolbox_top, imagine_wall_bounds,
     doctor_hands_line, due_automations, ensure_automation_schedule, estimate_messages,
+    estimate_messages_from,
     extract_connector_cmds, mark_automation_skipped, retain_held_plan, yolo_plan_split, chat_bearer,
     oauth_access_live,
     drop_trailing_assistant_on, job_error_goes_to_chat, job_is_scratch, kick_messages_for_job,
@@ -69,7 +70,7 @@ use grokhub_core::{
     kick_consumes_attach, next_chat_image, next_goal_prompt, paint_connect_banner,
     this_turn_cabin_frame,
     is_workload_user, merge_thinking_capped, prefer_complete_reply, quote_for_reply, strip_thinking,
-    refresh_last_stretch, visible_chat_refs, visible_turn_count, ChatKind, ChatView,
+    refresh_last_stretch, visible_chat_refs, visible_turn_count, visible_turn_count_from, ChatKind, ChatView,
     apply_job_error, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     upsert_assistant_turn,
     worker_gone_status, ChatSendKind,
@@ -4024,19 +4025,11 @@ impl Cabin {
             Slash::Pin => self.pin_thread(self.thread_idx),
             Slash::Delete => self.delete_thread_at(self.thread_idx),
             Slash::Context => {
-                let n = visible_turn_count(
-                    &self
-                        .messages
-                        .iter()
-                        .map(|m| (m.role.clone(), m.content.clone()))
-                        .collect::<Vec<_>>(),
+                let n = visible_turn_count_from(
+                    self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
                 );
-                let tokens = estimate_messages(
-                    &self
-                        .messages
-                        .iter()
-                        .map(|m| (m.role.clone(), m.content.clone()))
-                        .collect::<Vec<_>>(),
+                let tokens = estimate_messages_from(
+                    self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
                 );
                 self.status = format!(
                     "{n} turns · {} tokens · {}% · pin {}",
@@ -14501,8 +14494,10 @@ mod tests {
             .and_then(|s| s.split("Slash::Health =>").next())
             .expect("Context");
         assert!(
-            context.contains("visible_turn_count"),
-            "/context must not count HOST_RESULT rows as turns: {context}"
+            context.contains("visible_turn_count")
+                && context.contains("estimate_messages")
+                && !context.contains("content.clone()"),
+            "/context must count real turns without cloning an 8MB transcript: {context}"
         );
         let finish = src
             .split("fn finish_hub_dispatch")
