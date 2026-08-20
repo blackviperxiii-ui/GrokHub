@@ -157,35 +157,57 @@ pub fn grok_version(bin: &Path) -> Result<String, String> {
     Ok(line.to_string())
 }
 
-fn doctor_line_cache() -> &'static Mutex<Option<(Option<PathBuf>, Instant, bool, String)>> {
-    static C: OnceLock<Mutex<Option<(Option<PathBuf>, Instant, bool, String)>>> = OnceLock::new();
+fn doctor_line_cache() -> &'static Mutex<Option<(Option<PathBuf>, Instant, bool, String, bool)>> {
+    static C: OnceLock<Mutex<Option<(Option<PathBuf>, Instant, bool, String, bool)>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(None))
 }
 
+/// True while a background `grok --version` is in flight.
+pub fn doctor_line_busy() -> bool {
+    doctor_line_cache()
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|c| c.4))
+        .unwrap_or(false)
+}
+
 pub fn doctor_grok_line(bin: Option<&Path>) -> (bool, String) {
+    if bin.is_none() {
+        return (false, "Grok Build CLI missing — install from x.ai/cli".into());
+    }
     if let Ok(held) = doctor_line_cache().lock() {
-        if let Some((path, at, ok, text)) = held.as_ref() {
-            if at.elapsed() < Duration::from_secs(8) && path.as_deref() == bin {
-                return (*ok, text.clone());
+        if let Some((path, at, ok, text, inflight)) = held.as_ref() {
+            if path.as_deref() == bin {
+                if *inflight || at.elapsed() < Duration::from_secs(8) {
+                    return (*ok, text.clone());
+                }
             }
         }
     }
-    let (ok, text) = match bin {
-        None => (false, "Grok Build CLI missing — install from x.ai/cli".into()),
-        Some(p) => match grok_version(p) {
-            Ok(v) => (true, format!("Grok Build {v}")),
-            Err(e) => (false, format!("Grok Build present but unreadable: {e}")),
-        },
+    let path = bin.map(|p| p.to_path_buf());
+    let last = if let Ok(mut held) = doctor_line_cache().lock() {
+        let last = match held.as_ref() {
+            Some((p, _, ok, text, _)) if p == &path => (*ok, text.clone()),
+            _ => (true, "Grok Build CLI".into()),
+        };
+        *held = Some((path.clone(), Instant::now(), last.0, last.1.clone(), true));
+        last
+    } else {
+        (true, "Grok Build CLI".into())
     };
-    if let Ok(mut held) = doctor_line_cache().lock() {
-        *held = Some((
-            bin.map(|p| p.to_path_buf()),
-            Instant::now(),
-            ok,
-            text.clone(),
-        ));
-    }
-    (ok, text)
+    thread::spawn(move || {
+        let (ok, text) = match &path {
+            None => (false, "Grok Build CLI missing — install from x.ai/cli".into()),
+            Some(p) => match grok_version(p) {
+                Ok(v) => (true, format!("Grok Build {v}")),
+                Err(e) => (false, format!("Grok Build present but unreadable: {e}")),
+            },
+        };
+        if let Ok(mut held) = doctor_line_cache().lock() {
+            *held = Some((path, Instant::now(), ok, text, false));
+        }
+    });
+    last
 }
 
 pub fn grok_stdout(bin: &Path, cwd: &Path, args: &[&str]) -> Result<String, String> {
@@ -296,6 +318,10 @@ mod tests {
         assert!(
             doc.contains("elapsed"),
             "Settings must not spawn grok --version every frame: {doc}"
+        );
+        assert!(
+            doc.contains("thread::spawn") && doc.contains("inflight"),
+            "Settings must not freeze on grok --version: {doc}"
         );
         let find = src
             .split("pub fn find_grok(")

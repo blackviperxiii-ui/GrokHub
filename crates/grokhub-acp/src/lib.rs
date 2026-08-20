@@ -11,8 +11,9 @@ pub use client::{
     wait_event, AcpHandle, GrokSession, SpawnOpts,
 };
 pub use locate::{
-    agent_args, agent_args_resume, doctor_grok_line, find_grok, grok_auth_path, grok_cli_key,
-    grok_home, grok_stdout, grok_stdout_timeout, grok_version, parse_grok_auth_key, which,
+    agent_args, agent_args_resume, doctor_grok_line, doctor_line_busy, find_grok, grok_auth_path,
+    grok_cli_key, grok_home, grok_stdout, grok_stdout_timeout, grok_version, parse_grok_auth_key,
+    which,
 };
 pub use protocol::{
     merge_tool_card, AcpEvent, PermissionAsk, PermissionMode, SessionMode, ToolCard,
