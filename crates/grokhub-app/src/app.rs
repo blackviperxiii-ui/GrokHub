@@ -8604,7 +8604,12 @@ impl Cabin {
     fn roll_today(&mut self) {
         let today = Self::local_day();
         if !today.is_empty() && today != "1970-01-01" {
+            let before = self.usage.day.clone();
             roll_usage_day(&mut self.usage, &today);
+            if self.usage.day != before {
+                self.persist_usage();
+                self.persist_idle_key = self.persist_idle_now();
+            }
         }
     }
 
@@ -12848,6 +12853,12 @@ mod tests {
         assert!(
             roll.contains("local_day(") && !roll.contains(".output()"),
             "roll_today must reuse the cached day, not spawn date on the UI thread: {roll}"
+        );
+        assert!(
+            roll.contains("persist_usage")
+                && roll.contains("persist_idle_key")
+                && !roll.contains("self.persist()"),
+            "day rollover must not clone every thread just to write usage.json: {roll}"
         );
     }
 
