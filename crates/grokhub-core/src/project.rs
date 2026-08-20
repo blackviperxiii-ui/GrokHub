@@ -285,6 +285,30 @@ pub fn resolve_acp_cwd(project_dir: &str, home: Option<&str>, work_root: &str) -
     }
 }
 
+/// `/project bind .` is the bound tree or work root — never the cabin process cwd.
+pub fn resolve_bind_path(raw: &str, bound: &str, work_root: &str, home: Option<&str>) -> String {
+    let raw = raw.trim();
+    let bound_abs = expand_project_root(bound, home);
+    let work_abs = resolve_acp_cwd("", home, work_root);
+    let base = if !bound_abs.trim().is_empty() {
+        bound_abs
+    } else {
+        work_abs
+    };
+    if raw.is_empty() || raw == "." || raw == "./" {
+        return normalize_host_path(&base);
+    }
+    let expanded = expand_project_root(raw, home);
+    if expanded.starts_with('/') {
+        return normalize_host_path(&expanded);
+    }
+    let rest = raw.strip_prefix("./").unwrap_or(raw);
+    if base.is_empty() {
+        return normalize_host_path(rest);
+    }
+    normalize_host_path(&format!("{}/{}", base.trim_end_matches('/'), rest))
+}
+
 pub fn create_folder(
     nodes: &mut Vec<ProjectNode>,
     id: &str,
@@ -1003,6 +1027,31 @@ mod tests {
             resolve_acp_cwd("", Some("/home/j"), "/home/j/GrokHub-Work"),
             "/home/j",
             "unbound ACP must not sit in $HOME"
+        );
+        assert_eq!(
+            resolve_bind_path(".", "", "/home/j/GrokHub-Work", Some("/home/j")),
+            "/home/j/GrokHub-Work"
+        );
+        assert_eq!(
+            resolve_bind_path(".", "/home/j/Dawn", "/home/j/GrokHub-Work", Some("/home/j")),
+            "/home/j/Dawn"
+        );
+        assert_eq!(
+            resolve_bind_path("/tmp/cabin", "", "/home/j/GrokHub-Work", Some("/home/j")),
+            "/tmp/cabin"
+        );
+        assert_eq!(
+            resolve_bind_path("~/Dawn", "", "/home/j/GrokHub-Work", Some("/home/j")),
+            "/home/j/Dawn"
+        );
+        assert_eq!(
+            resolve_bind_path("src", "/home/j/Dawn", "/home/j/GrokHub-Work", Some("/home/j")),
+            "/home/j/Dawn/src"
+        );
+        assert_ne!(
+            resolve_bind_path(".", "", "/home/j/GrokHub-Work", Some("/home/j")),
+            ".",
+            "/project bind . must not inherit the cabin process cwd"
         );
     }
 }
