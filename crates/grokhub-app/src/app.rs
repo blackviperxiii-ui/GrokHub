@@ -5807,13 +5807,16 @@ impl Cabin {
         for f in remote.memory_files {
             if import_memory_file(&f.name, &f.content).is_some() {
                 let name = f.name.clone();
-                let content = f.content.clone();
+                if let Some(i) = Self::mem_file_idx(&name) {
+                    self.mem_cache_at[i] = config::memory_updated_at(&name);
+                    self.mem_cache_body[i] = f.content.clone();
+                }
                 if self.mem_name == f.name {
-                    self.mem_body = f.content;
+                    self.mem_body = f.content.clone();
                 }
                 std::thread::spawn(move || {
-                    if config::read_memory(&name) != content {
-                        let _ = config::write_memory(&name, &content);
+                    if config::read_memory(&name) != f.content {
+                        let _ = config::write_memory(&name, &f.content);
                     }
                 });
             }
@@ -7575,7 +7578,15 @@ impl Cabin {
                 let mut wrote = !edit.diff.is_empty();
                 if wrote {
                     self.reflect_diff = edit.diff;
-                    if self.mem_name == "MEMORY.md" {
+                    if let Some(i) = Self::mem_file_idx("MEMORY.md") {
+                        self.mem_cache_at[i] = config::memory_updated_at("MEMORY.md");
+                        if self.mem_name == "MEMORY.md" {
+                            self.mem_cache_body[i] = edit.next.clone();
+                            self.mem_body = edit.next;
+                        } else {
+                            self.mem_cache_body[i] = edit.next;
+                        }
+                    } else if self.mem_name == "MEMORY.md" {
                         self.mem_body = edit.next;
                     }
                 }
@@ -7583,7 +7594,15 @@ impl Cabin {
                     if self.reflect_diff.is_empty() {
                         self.reflect_diff = ue.diff;
                     }
-                    if self.mem_name == "USER.md" {
+                    if let Some(i) = Self::mem_file_idx("USER.md") {
+                        self.mem_cache_at[i] = config::memory_updated_at("USER.md");
+                        if self.mem_name == "USER.md" {
+                            self.mem_cache_body[i] = ue.next.clone();
+                            self.mem_body = ue.next;
+                        } else {
+                            self.mem_cache_body[i] = ue.next;
+                        }
+                    } else if self.mem_name == "USER.md" {
                         self.mem_body = ue.next;
                     }
                     wrote = true;
@@ -14726,6 +14745,10 @@ mod tests {
         assert!(
             inbound.contains("mem_body") && inbound.contains("mem_name"),
             "inbound MEMORY.md must refresh the open Memory editor: {inbound}"
+        );
+        assert!(
+            inbound.contains("mem_cache_body") && inbound.contains("mem_file_idx"),
+            "inbound MEMORY.md must refresh the Memory tab cache or a later click shows a stale slurp: {inbound}"
         );
         let wrote = inbound.find("write_memory").expect("inbound write");
         assert!(
