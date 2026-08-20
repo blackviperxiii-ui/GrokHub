@@ -5154,13 +5154,19 @@ impl Cabin {
                     self.suggestions = merge_suggestion_store(&self.suggestions, incoming);
                 }
                 prune_live_suggestions(&mut self.suggestions, &live_tools);
-                let _ = crate::store::save_suggestions(&self.suggestions);
+                let suggestions = self.suggestions.clone();
+                std::thread::spawn(move || {
+                    let _ = crate::store::save_suggestions(&suggestions);
+                });
             }
             Err(e) => {
                 self.status = format!("Nightly review held — {e}");
                 self.suggestions.last_review_day = Some(Self::local_day());
                 self.suggestions.last_review_ms = now_ms();
-                let _ = crate::store::save_suggestions(&self.suggestions);
+                let suggestions = self.suggestions.clone();
+                std::thread::spawn(move || {
+                    let _ = crate::store::save_suggestions(&suggestions);
+                });
             }
         }
     }
@@ -5566,7 +5572,10 @@ impl Cabin {
         if let Some(a) = self.automations.iter_mut().find(|x| x.id == id) {
             *a = mark_automation_ran(a.clone(), now);
         }
-        let _ = crate::night::save(&self.automations);
+        let list = self.automations.clone();
+        std::thread::spawn(move || {
+            let _ = crate::night::save(&list);
+        });
     }
 
     fn mark_auto_skipped(&mut self, id: &str, now: u64) {
@@ -5574,7 +5583,10 @@ impl Cabin {
         if let Some(a) = self.automations.iter_mut().find(|x| x.id == id) {
             *a = mark_automation_skipped(a.clone(), now, clock);
         }
-        let _ = crate::night::save(&self.automations);
+        let list = self.automations.clone();
+        std::thread::spawn(move || {
+            let _ = crate::night::save(&list);
+        });
     }
 
     fn start_oauth(&mut self) {
@@ -6249,7 +6261,10 @@ impl Cabin {
                             a.id = uid("auto");
                         }
                         self.automations.push(a.clone());
-                        let _ = crate::night::save(&self.automations);
+                        let list = self.automations.clone();
+                        std::thread::spawn(move || {
+                            let _ = crate::night::save(&list);
+                        });
                         if here {
                             self.status = format!("Night saved: {} {}", a.schedule, a.time);
                         }
@@ -7197,7 +7212,9 @@ impl Cabin {
             if let Some(s) = self.skill_list.iter_mut().find(|s| s.name == self.skill_name) {
                 s.runs = bump_skill_run(s.runs);
                 let bumped = s.clone();
-                let _ = skills::save_skill(&bumped);
+                std::thread::spawn(move || {
+                    let _ = skills::save_skill(&bumped);
+                });
             }
         }
     }
@@ -14290,6 +14307,28 @@ mod tests {
             commit_spawn < commit_save && !commit.contains("list_skills"),
             "HostDone must not freeze the cabin writing SKILL.md: {commit}"
         );
+        let verify = src
+            .split("fn apply_verify_result(")
+            .nth(1)
+            .and_then(|s| s.split("fn replay_saved_recipe(").next())
+            .expect("apply_verify_result");
+        let verify_spawn = verify.find("thread::spawn").expect("verify skill write must leave the UI thread");
+        let verify_save = verify.find("save_skill").expect("save_skill");
+        assert!(
+            verify_spawn < verify_save,
+            "verify pass must not freeze the cabin writing SKILL.md: {verify}"
+        );
+        let ran = src
+            .split("fn mark_auto_ran(")
+            .nth(1)
+            .and_then(|s| s.split("fn mark_auto_skipped(").next())
+            .expect("mark_auto_ran");
+        let ran_spawn = ran.find("thread::spawn").expect("night save must leave the UI thread");
+        let ran_save = ran.find("night::save").expect("night::save");
+        assert!(
+            ran_spawn < ran_save,
+            "night run stamp must not freeze the cabin writing automations.json: {ran}"
+        );
         let run_cmds = src
             .split("fn run_cmds")
             .nth(1)
@@ -14707,6 +14746,10 @@ mod tests {
         assert!(
             held.contains("last_review_day") && held.contains("save_suggestions"),
             "a held nightly review must not retry every heartbeat: {apply}"
+        );
+        assert!(
+            apply.contains("thread::spawn") && apply.contains("save_suggestions"),
+            "nightly review must not freeze the cabin writing suggestions.json: {apply}"
         );
         assert!(
             apply.contains("merge_suggestion_store"),
