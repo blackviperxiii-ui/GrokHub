@@ -1000,6 +1000,8 @@ pub struct Cabin {
     grok_sessions: Vec<grokhub_acp::GrokSession>,
     grok_sessions_loaded: bool,
     grok_sessions_rx: Option<mpsc::Receiver<Vec<grokhub_acp::GrokSession>>>,
+    inspect_rx: Option<mpsc::Receiver<String>>,
+    session_show_rx: Option<(String, mpsc::Receiver<String>)>,
     inspect_text: String,
 }
 
@@ -1346,6 +1348,8 @@ impl Cabin {
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
             grok_sessions_rx: None,
+            inspect_rx: None,
+            session_show_rx: None,
             inspect_text: String::new(),
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
@@ -1715,7 +1719,17 @@ impl Cabin {
                 Vec::new()
             };
             let files = grokhub_acp::discover_session_files();
-            let _ = tx.send(grokhub_acp::merge_grok_sessions(&listed, files));
+            let listed_ids: Vec<String> = listed
+                .iter()
+                .map(|r| grokhub_acp::split_session_row(r).id)
+                .collect();
+            let mut rows = grokhub_acp::merge_grok_sessions(&listed, files);
+            for s in &mut rows {
+                if listed_ids.iter().any(|id| id == &s.id) {
+                    s.cwd = Some(cwd.clone());
+                }
+            }
+            let _ = tx.send(rows);
         });
     }
 
@@ -1737,6 +1751,60 @@ impl Cabin {
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.grok_sessions_loaded = true;
             }
+        }
+    }
+
+    fn poll_inspect(&mut self) {
+        let Some(rx) = self.inspect_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(text) => {
+                self.inspect_text = text;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.inspect_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    fn poll_session_show(&mut self) {
+        let Some((id, rx)) = self.session_show_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(text) => {
+                if text.trim().is_empty() {
+                    return;
+                }
+                let msgs = grokhub_acp::parse_session_markdown(&text);
+                if msgs.is_empty() {
+                    return;
+                }
+                let Some(i) = self
+                    .threads
+                    .iter()
+                    .position(|t| t.grok_session.as_deref() == Some(id.as_str()))
+                else {
+                    return;
+                };
+                if let Some(t) = self.threads.get_mut(i) {
+                    if t.messages.is_empty() {
+                        t.messages = msgs.clone();
+                    }
+                }
+                if i == self.thread_idx && self.messages.is_empty() {
+                    self.messages = msgs
+                        .into_iter()
+                        .map(|(role, content)| Msg { role, content })
+                        .collect();
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.session_show_rx = Some((id, rx));
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
         }
     }
 
@@ -1762,6 +1830,12 @@ impl Cabin {
             .unwrap_or_else(|| id.chars().take(24).collect());
         let mut t = ChatThread::new(&title, false);
         t.grok_session = Some(id.to_string());
+        t.grok_cwd = sess
+            .as_ref()
+            .and_then(|s| s.cwd.as_ref())
+            .map(|p| p.display().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| Some(self.grok_cwd().display().to_string()));
         t.accessed_ms = now_ms();
         if let Some(path) = sess.as_ref().and_then(|s| s.path.as_ref()) {
             let text = config::read_file_capped(path, config::MEMORY_FILE_CAP);
@@ -1771,9 +1845,17 @@ impl Cabin {
         }
         if t.messages.is_empty() {
             if let Some(bin) = grokhub_acp::find_grok() {
-                if let Ok(text) = grokhub_acp::show_session(&bin, &self.grok_cwd(), id) {
-                    t.messages = grokhub_acp::parse_session_markdown(&text);
-                }
+                let cwd = sess
+                    .as_ref()
+                    .and_then(|s| s.cwd.clone())
+                    .unwrap_or_else(|| self.grok_cwd());
+                let sid = id.to_string();
+                let (tx, rx) = mpsc::channel();
+                self.session_show_rx = Some((sid.clone(), rx));
+                std::thread::spawn(move || {
+                    let text = grokhub_acp::show_session(&bin, &cwd, &sid).unwrap_or_default();
+                    let _ = tx.send(text);
+                });
             }
         }
         self.threads.push(t);
@@ -1785,7 +1867,14 @@ impl Cabin {
     }
 
     fn ensure_acp(&mut self) -> Result<(), String> {
-        let cwd = self.grok_cwd();
+        let bound = self.grok_cwd();
+        let cwd = self
+            .threads
+            .get(self.thread_idx)
+            .and_then(|t| t.grok_cwd.clone())
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| bound.clone());
         let resume = self
             .threads
             .get(self.thread_idx)
@@ -1829,6 +1918,15 @@ impl Cabin {
                 if resume.is_none() {
                     return Err(grokhub_acp::explain_handshake_error(&e, &cwd));
                 }
+                let foreign = self
+                    .threads
+                    .get(self.thread_idx)
+                    .and_then(|t| t.grok_cwd.as_ref())
+                    .map(|p| std::path::PathBuf::from(p) != bound)
+                    .unwrap_or(false);
+                if foreign || grokhub_acp::is_session_cwd_error(&e) {
+                    return Err(grokhub_acp::explain_handshake_error(&e, &cwd));
+                }
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
                     t.grok_session = None;
                 }
@@ -1839,6 +1937,7 @@ impl Cabin {
         if !sid.trim().is_empty() {
             if let Some(t) = self.threads.get_mut(self.thread_idx) {
                 t.grok_session = Some(sid);
+                t.grok_cwd = Some(cwd.display().to_string());
             }
         }
         self.acp = Some(h);
@@ -3622,11 +3721,20 @@ impl Cabin {
                 self.nav = Nav::Connectors;
                 if let Some(bin) = grokhub_acp::find_grok() {
                     let cwd = self.grok_cwd();
-                    self.inspect_text = match grokhub_acp::inspect_json(&bin, &cwd) {
-                        Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string()),
-                        Err(e) => e,
-                    };
-                    self.status = "Grok inspect".into();
+                    if self.inspect_rx.is_none() {
+                        let (tx, rx) = mpsc::channel();
+                        self.inspect_rx = Some(rx);
+                        self.inspect_text = "Inspecting…".into();
+                        self.status = "Grok inspect".into();
+                        std::thread::spawn(move || {
+                            let text = match grokhub_acp::inspect_json(&bin, &cwd) {
+                                Ok(v) => serde_json::to_string_pretty(&v)
+                                    .unwrap_or_else(|_| v.to_string()),
+                                Err(e) => e,
+                            };
+                            let _ = tx.send(text);
+                        });
+                    }
                 } else {
                     self.inspect_text = build_agent::grok_banner();
                     self.status = self.inspect_text.clone();
@@ -4036,18 +4144,29 @@ impl Cabin {
             self.status = self.inspect_text.clone();
             return;
         };
+        if self.inspect_rx.is_some() {
+            return;
+        }
         let cwd = self.grok_cwd();
-        self.inspect_text = match grokhub_acp::grok_stdout(&bin, &cwd, args) {
-            Ok(t) => {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
-                    serde_json::to_string_pretty(&v).unwrap_or(t)
-                } else {
-                    t
+        let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let (tx, rx) = mpsc::channel();
+        self.inspect_rx = Some(rx);
+        self.inspect_text = "Inspecting…".into();
+        self.status = format!("grok {}", owned.join(" "));
+        std::thread::spawn(move || {
+            let arg_refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+            let text = match grokhub_acp::grok_stdout(&bin, &cwd, &arg_refs) {
+                Ok(t) => {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
+                        serde_json::to_string_pretty(&v).unwrap_or(t)
+                    } else {
+                        t
+                    }
                 }
-            }
-            Err(e) => e,
-        };
-        self.status = format!("grok {}", args.join(" "));
+                Err(e) => e,
+            };
+            let _ = tx.send(text);
+        });
     }
 
     fn doctor_text(&self) -> String {
@@ -5268,8 +5387,12 @@ impl Cabin {
                             .as_deref()
                             .and_then(|id| self.threads.iter().position(|t| t.id == id))
                             .unwrap_or(self.thread_idx);
+                        let acp_cwd = self.acp.as_ref().map(|h| h.cwd.display().to_string());
                         if let Some(t) = self.threads.get_mut(idx) {
                             t.grok_session = Some(session_id);
+                            if let Some(cwd) = acp_cwd {
+                                t.grok_cwd = Some(cwd);
+                            }
                         }
                     }
                 }
@@ -7037,6 +7160,8 @@ impl eframe::App for Cabin {
         self.poll_wall();
         self.poll_persist();
         self.poll_grok_sessions();
+        self.poll_inspect();
+        self.poll_session_show();
         self.poll_eyes_cap();
         self.poll_recipe_cap();
         self.poll_verify();
@@ -7127,7 +7252,11 @@ impl eframe::App for Cabin {
                 || self.pending_kick.is_some()
                 || self.kick_cap_rx.is_some()
                 || self.recipe_cap_rx.is_some()
-                || self.verify_rx.is_some(),
+                || self.verify_rx.is_some()
+                || self.grok_sessions_rx.is_some()
+                || self.persist_rx.is_some()
+                || self.inspect_rx.is_some()
+                || self.session_show_rx.is_some(),
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -10951,6 +11080,19 @@ mod tests {
             grokhub_core::heartbeat_repaint_ms(true, true, grokhub_core::HEARTBEAT_MS, super::HIDDEN_HEARTBEAT_MS),
             80
         );
+        let src = include_str!("app.rs");
+        let live = src
+            .split("let live = wants_live_repaint(")
+            .nth(1)
+            .and_then(|s| s.split("ctx.request_repaint_after").next())
+            .expect("wants_live_repaint call");
+        assert!(
+            live.contains("grok_sessions_rx")
+                && live.contains("persist_rx")
+                && live.contains("inspect_rx")
+                && live.contains("session_show_rx"),
+            "History listing / inspect / session show must not wait on the 15s heartbeat: {live}"
+        );
     }
 
     #[test]
@@ -11173,6 +11315,10 @@ mod tests {
             "a dead grok session id must retry session/new without resume: {ensure}"
         );
         assert!(
+            ensure.contains("is_session_cwd_error") && ensure.contains("t.grok_cwd"),
+            "session/load in a foreign worktree must fail closed, not spawn(None) into the bound tree: {ensure}"
+        );
+        assert!(
             !ensure.contains("bearer()"),
             "ACP spawn must not pass Imagine bearer (JWT) as XAI_API_KEY: {ensure}"
         );
@@ -11306,6 +11452,12 @@ mod tests {
             inspect.contains("grok_cwd") && !inspect.contains("current_dir"),
             "/inspect must use the bound tree or work root, not the cabin process cwd: {inspect}"
         );
+        let inspect_spawn = inspect.find("thread::spawn").expect("inspect must leave the UI thread");
+        let inspect_json = inspect.find("inspect_json").expect("inspect_json");
+        assert!(
+            inspect_spawn < inspect_json,
+            "/inspect must not block the cabin on grok inspect: {inspect}"
+        );
         let bind = src
             .split("Slash::ProjectBind(path)")
             .nth(1)
@@ -11323,6 +11475,12 @@ mod tests {
         assert!(
             ext.contains("grok_cwd") && !ext.contains("current_dir"),
             "Connectors inspect must use grok_cwd, not `.`: {ext}"
+        );
+        let ext_spawn = ext.find("thread::spawn").expect("extension must leave the UI thread");
+        let ext_out = ext.find("grok_stdout").expect("grok_stdout");
+        assert!(
+            ext_spawn < ext_out,
+            "Connectors inspect/mcp/plugin must not freeze the cabin: {ext}"
         );
         let fast = src
             .split("fn cabin_fast_llm(")
@@ -11345,6 +11503,16 @@ mod tests {
         assert!(
             open.contains("read_file_capped") && !open.contains("read_to_string"),
             "opening a grok session must not slurp a huge markdown dump: {open}"
+        );
+        assert!(
+            open.contains("grok_cwd"),
+            "History open must remember the session worktree: {open}"
+        );
+        let open_spawn = open.find("thread::spawn").expect("show_session must leave the UI thread");
+        let open_show = open.find("show_session").expect("show_session");
+        assert!(
+            open_spawn < open_show,
+            "opening a grok session must not block on grok sessions show: {open}"
         );
         let reload = src
             .split("fn reload_grok_sessions(")

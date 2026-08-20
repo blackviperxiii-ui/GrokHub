@@ -767,6 +767,8 @@ pub struct GrokSession {
     pub id: String,
     pub title: String,
     pub path: Option<PathBuf>,
+    /// Worktree `grok sessions list` used when this row came from the CLI.
+    pub cwd: Option<PathBuf>,
 }
 
 pub fn split_session_row(row: &str) -> GrokSession {
@@ -783,6 +785,7 @@ pub fn split_session_row(row: &str) -> GrokSession {
         },
         id,
         path: None,
+        cwd: None,
     }
 }
 
@@ -930,6 +933,7 @@ fn walk_session_md(dir: &Path, depth: u8, out: &mut Vec<GrokSession>) {
             id: id.clone(),
             title: session_title_from_markdown(&text, &id),
             path: Some(path),
+            cwd: None,
         });
     }
 }
@@ -1093,6 +1097,7 @@ mod tests {
                 id: "abc".into(),
                 title: "Hello".into(),
                 path: Some(std::path::PathBuf::from("/tmp/x.md")),
+                cwd: None,
             }],
         );
         assert_eq!(merged.len(), 1);
@@ -1103,6 +1108,7 @@ mod tests {
                 id: "bbb".into(),
                 title: "Chat".into(),
                 path: Some(std::path::PathBuf::from("/tmp/bbb.md")),
+                cwd: None,
             }],
         );
         assert_eq!(mixed.len(), 2, "same title must not attach the wrong transcript");

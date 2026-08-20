@@ -23,6 +23,9 @@ pub struct ChatThread {
     pub accessed_ms: u64,
     #[serde(default)]
     pub grok_session: Option<String>,
+    /// Worktree this Grok session was created in. Resume must load here, not the currently bound tree.
+    #[serde(default)]
+    pub grok_cwd: Option<String>,
 }
 
 impl ChatThread {
@@ -37,6 +40,7 @@ impl ChatThread {
             title_locked: false,
             accessed_ms: 0,
             grok_session: None,
+            grok_cwd: None,
         }
     }
 }
@@ -124,6 +128,7 @@ mod tests {
         );
         let old: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
         assert_eq!(old.accessed_ms, 0);
+        assert!(old.grok_cwd.is_none());
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
