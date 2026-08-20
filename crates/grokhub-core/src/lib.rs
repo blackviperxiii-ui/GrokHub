@@ -103,7 +103,7 @@ pub use chat_job::{
 pub use chips::{
     build_quick_chips, chip_memory_key, chip_scan, chip_suggest_prompt, chip_thread_from_messages,
     context_fingerprint, detect_chip_context, detect_chip_stage, empty_chip_memory,
-    mode_from_chip_value, nav_from_chip_value, parse_llm_chips, predict_intents, remember_chip_click,
+    mode_from_chip_value, nav_from_chip_value, parse_llm_chips, predict_intents, prune_retired_chip_memory, remember_chip_click,
     remember_chip_dismiss, remember_chip_outcome, remember_typed_prompt, should_refresh_llm,
     top_habit_labels, ChipInput, ChipKind, ChipMemory, ChipStage, ChipThread, PredictedIntent,
     QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,

@@ -1,5 +1,5 @@
 use grokhub_core::{
-    empty_chip_memory, prune_ephemeral_insights, rotate_trajectory, ChipMemory, ImagineWall,
+    empty_chip_memory, prune_ephemeral_insights, prune_retired_chip_memory, rotate_trajectory, ChipMemory, ImagineWall,
     LearningState, ProjectNode, SuggestionStore, UsageDay, TRAJECTORY_MAX_BYTES,
 };
 use std::fs;
@@ -44,7 +44,11 @@ pub fn chips_path() -> std::path::PathBuf {
 
 pub fn load_chips() -> ChipMemory {
     let raw = config::read_file_capped(&chips_path(), config::MEMORY_FILE_CAP);
-    serde_json::from_str(&raw).unwrap_or_else(|_| empty_chip_memory())
+    let mut mem = serde_json::from_str(&raw).unwrap_or_else(|_| empty_chip_memory());
+    if prune_retired_chip_memory(&mut mem) {
+        let _ = save_chips(&mem);
+    }
+    mem
 }
 
 pub fn wall_path() -> std::path::PathBuf {
