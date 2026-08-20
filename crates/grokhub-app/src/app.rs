@@ -10422,7 +10422,8 @@ impl Cabin {
                                                                             pick_theme(current, *choice)
                                                                         {
                                                                             self.cfg.theme = theme_id(next).into();
-                                                                            save = true;
+                                                                            self.persist_cfg();
+                                                                            self.status = "Saved".into();
                                                                         }
                                                                     }
                                                                     ui.add_space(10.0);
@@ -10431,7 +10432,8 @@ impl Cabin {
                                                         }
                                                         SettingsSec::Behavior => {
                                                             if crate::cards::settings_toggle(ui, "Close to tray", "The cabin keeps working in the background.", &mut self.cfg.close_to_tray) {
-                                                                save = true;
+                                                                self.persist_cfg();
+                                                                self.status = "Saved".into();
                                                             }
                                                             if crate::cards::settings_toggle(
                                                                 ui,
@@ -10439,7 +10441,8 @@ impl Cabin {
                                                                 "Every few hours the cabin paints a new cover. Twenty live. Oldest leaves first.",
                                                                 &mut self.cfg.imagine_wall,
                                                             ) {
-                                                                save = true;
+                                                                self.persist_cfg();
+                                                                self.status = "Saved".into();
                                                             }
                                                             crate::cards::settings_note(ui, "Night always runs. Quiet hours and daily caps do not hold work.");
                                                         }
@@ -10455,7 +10458,8 @@ impl Cabin {
                                                                 "Every few hours the cabin paints a new cover. Twenty live. Oldest leaves first. Random seat.",
                                                                 &mut self.cfg.imagine_wall,
                                                             ) {
-                                                                save = true;
+                                                                self.persist_cfg();
+                                                                self.status = "Saved".into();
                                                             }
                                                             crate::cards::settings_note(
                                                                 ui,
@@ -12499,6 +12503,42 @@ mod tests {
                 && !effort.contains("self.persist()")
                 && !effort.contains("persist_snap"),
             "/effort must not clone every thread just to write app.json: {effort}"
+        );
+        let appearance = src
+            .split("SettingsSec::Appearance => {")
+            .nth(1)
+            .and_then(|s| s.split("SettingsSec::Behavior => {").next())
+            .expect("Appearance");
+        assert!(
+            appearance.contains("self.persist_cfg()")
+                && !appearance.contains("save = true")
+                && !appearance.contains("self.persist()")
+                && !appearance.contains("persist_snap"),
+            "Appearance must not clone every thread just to write app.json: {appearance}"
+        );
+        let behavior = src
+            .split("SettingsSec::Behavior => {")
+            .nth(1)
+            .and_then(|s| s.split("SettingsSec::Host => {").next())
+            .expect("Behavior");
+        assert!(
+            behavior.contains("self.persist_cfg()")
+                && !behavior.contains("save = true")
+                && !behavior.contains("self.persist()")
+                && !behavior.contains("persist_snap"),
+            "Close to tray must not clone every thread just to write app.json: {behavior}"
+        );
+        let imagine_sec = src
+            .split("SettingsSec::Imagine => {")
+            .nth(1)
+            .and_then(|s| s.split("SettingsSec::Voice => {").next())
+            .expect("Imagine settings");
+        assert!(
+            imagine_sec.contains("self.persist_cfg()")
+                && !imagine_sec.contains("save = true")
+                && !imagine_sec.contains("self.persist()")
+                && !imagine_sec.contains("persist_snap"),
+            "Living wall must not clone every thread just to write app.json: {imagine_sec}"
         );
         let plan = src
             .split("Slash::Plan =>")
