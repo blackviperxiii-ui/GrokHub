@@ -10,6 +10,7 @@ pub fn can_agent(_has_auth: bool) -> bool {
 pub fn spawn_session(
     cwd: PathBuf,
     api_key: Option<String>,
+    xai_api_key: Option<String>,
     perm: PermissionMode,
     mode: SessionMode,
     resume: Option<String>,
@@ -17,7 +18,7 @@ pub fn spawn_session(
     let yolo = perm == PermissionMode::AlwaysApprove;
     let auto = perm == PermissionMode::Auto;
     let mut opts = SpawnOpts::grok(cwd, api_key, yolo, auto, mode)?;
-    opts = opts.with_resume(resume);
+    opts = opts.with_xai_api_key(xai_api_key).with_resume(resume);
     let name = opts
         .program
         .file_name()

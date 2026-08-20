@@ -251,7 +251,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
                 json!({ "ok": false, "error": "inhabit is not for the phone" }),
             );
         }
-        let bundle = st.claim_inhabit();
+        let bundle = st.claim_inhabit(&peer);
         drop(st);
         return send_json(req, 200, json!({ "ok": true, "bundle": bundle }));
     }

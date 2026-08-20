@@ -40,7 +40,7 @@ fn restrict_private(_path: &Path) {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
     #[serde(default)]
     pub device_name: String,
@@ -203,6 +203,8 @@ pub fn load() -> AppConfig {
     let raw = read_file_capped(&path, MEMORY_FILE_CAP);
     let mut cfg: AppConfig = serde_json::from_str(&raw).unwrap_or_default();
     cfg.host_on = true;
+    // Leftover `"yolo": true` from older cabins must not disable the bound-tree jail.
+    cfg.yolo = false;
     if cfg.device_name.trim().is_empty() {
         cfg.device_name = default_device_name();
     }
@@ -229,7 +231,10 @@ pub fn ensure_memory_seeds() {
 }
 
 pub fn save(cfg: &AppConfig) -> Result<(), String> {
-    let s = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    let mut cfg = cfg.clone();
+    // Console key lives in secrets.json. Never rewrite a leftover into app.json.
+    cfg.api_key.clear();
+    let s = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     atomic_write(&config_dir().join("app.json"), s.as_bytes())
 }
 
@@ -370,9 +375,27 @@ mod tests {
         cfg.source_dir = "/tmp/Grok-Hub".into();
         save(&cfg).expect("save");
         let loaded = load();
-        assert_eq!(loaded.api_key, "xai-test");
+        assert!(
+            loaded.api_key.is_empty(),
+            "console key must not land in app.json"
+        );
         assert_eq!(loaded.device_name, "cabin");
         assert_eq!(loaded.source_dir, "/tmp/Grok-Hub");
+        let body = fs::read_to_string(config_dir().join("app.json")).expect("app.json");
+        assert!(
+            !body.contains("xai-test") && !body.to_ascii_lowercase().contains("apikey"),
+            "app.json must omit the leftover console-key field: {body}"
+        );
+        fs::write(
+            config_dir().join("app.json"),
+            r#"{"apiKey":"xai-legacy","deviceName":"cabin"}"#,
+        )
+        .expect("legacy");
+        let leftover = load();
+        assert_eq!(
+            leftover.api_key, "xai-legacy",
+            "boot must still read a leftover app.json key so Cabin can migrate it"
+        );
         ensure_memory_seeds();
         assert!(read_memory("SOUL.md").contains("Who this cabin is"));
         assert!(read_memory("USER.md").contains("Who you are"));
@@ -407,7 +430,7 @@ mod tests {
                 .permissions()
                 .mode()
                 & 0o777;
-            assert_eq!(mode, 0o600, "app.json holds the console key");
+            assert_eq!(mode, 0o600, "app.json is private config");
         }
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
@@ -478,10 +501,14 @@ mod tests {
         assert!(loaded.close_to_tray);
         assert!(loaded.host_on);
         fs::create_dir_all(config_dir()).unwrap();
-        fs::write(config_dir().join("app.json"), r#"{"hostOn":false}"#).unwrap();
+        fs::write(config_dir().join("app.json"), r#"{"hostOn":false,"yolo":true}"#).unwrap();
         assert!(
             load().host_on,
             "stale hostOn false must not brick /sh after the toggle was removed"
+        );
+        assert!(
+            !load().yolo,
+            "leftover yolo true must not disable the bound-tree jail"
         );
         assert_eq!(loaded.autonomy, 4);
         assert!(

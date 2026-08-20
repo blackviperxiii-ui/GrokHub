@@ -210,10 +210,46 @@ pub fn session_load_params(cwd: &str, session_id: &str, yolo: bool, auto: bool, 
 }
 
 pub fn prompt_params(session_id: &str, text: &str) -> Value {
+    prompt_params_with_image(session_id, text, None)
+}
+
+/// Plus-button stills ride as ACP image blocks. `data_url` is `data:image/jpeg;base64,…`.
+pub fn prompt_params_with_image(session_id: &str, text: &str, data_url: Option<&str>) -> Value {
+    let mut prompt = vec![json!({ "type": "text", "text": text })];
+    if let Some((mime, data)) = data_url.and_then(split_image_data_url) {
+        prompt.push(json!({
+            "type": "image",
+            "mimeType": mime,
+            "data": data,
+        }));
+    }
     json!({
         "sessionId": session_id,
-        "prompt": [{ "type": "text", "text": text }]
+        "prompt": prompt
     })
+}
+
+/// ACP image blocks want raw base64, not a data URL. Reject non-images and huge bodies.
+pub fn split_image_data_url(url: &str) -> Option<(&str, &str)> {
+    const IMAGE_B64_CAP: usize = 8 * 1024 * 1024;
+    let rest = url.trim().strip_prefix("data:")?;
+    let (meta, data) = rest.split_once(',')?;
+    if data.is_empty() || data.len() > IMAGE_B64_CAP {
+        return None;
+    }
+    if !meta.to_ascii_lowercase().contains("base64") {
+        return None;
+    }
+    let mime = meta.split(';').next()?.trim();
+    if !mime.starts_with("image/") || mime.len() > 64 {
+        return None;
+    }
+    Some((mime, data))
+}
+
+/// grok login JWTs look like `header.payload.sig`. Console keys do not.
+pub fn is_jwt_api_key(key: &str) -> bool {
+    key.trim().bytes().filter(|b| *b == b'.').count() >= 2
 }
 
 pub fn pick_auth_method(auth_methods: &Value, api_key: &str) -> Option<String> {
@@ -226,7 +262,7 @@ pub fn pick_auth_method(auth_methods: &Value, api_key: &str) -> Option<String> {
         })
         .unwrap_or_default();
     let has_api_key = !api_key.trim().is_empty();
-    let jwt = api_key.bytes().filter(|b| *b == b'.').count() >= 2;
+    let jwt = is_jwt_api_key(api_key);
     // grok login JWTs belong on cached_token. A console key uses xai.api_key.
     if has_api_key && !jwt && ids.iter().any(|i| i == "xai.api_key") {
         return Some("xai.api_key".into());
@@ -636,6 +672,23 @@ mod tests {
             Some("cached_token"),
             "grok login JWT must not steal xai.api_key"
         );
+    }
+
+    #[test]
+    fn prompt_sends_plus_button_image() {
+        let text = prompt_params("s1", "hi");
+        assert_eq!(text["prompt"].as_array().map(|a| a.len()), Some(1));
+        assert_eq!(text["prompt"][0]["type"], "text");
+        let url = "data:image/jpeg;base64,QQ==";
+        let with = prompt_params_with_image("s1", "look", Some(url));
+        assert_eq!(with["prompt"].as_array().map(|a| a.len()), Some(2));
+        assert_eq!(with["prompt"][1]["type"], "image");
+        assert_eq!(with["prompt"][1]["mimeType"], "image/jpeg");
+        assert_eq!(with["prompt"][1]["data"], "QQ==");
+        assert!(split_image_data_url("data:text/plain;base64,QQ==").is_none());
+        assert!(split_image_data_url("not-a-data-url").is_none());
+        assert!(is_jwt_api_key("aaa.bbb.ccc"));
+        assert!(!is_jwt_api_key("xai-console-key"));
     }
 
     #[test]

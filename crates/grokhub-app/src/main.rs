@@ -104,7 +104,10 @@ fn run_doctor() {
     let cfg = config::load();
     let sec = secrets::load();
     let mem_ok = std::fs::create_dir_all(config::memory_dir()).is_ok();
-    let authed = grokhub_core::has_auth(&cfg.api_key, &secrets::access_token(&sec));
+    let authed = grokhub_core::has_auth(
+        secrets::console_key(&sec, &cfg.api_key),
+        &secrets::access_token(&sec),
+    );
     let mut lines = doctor_lines(authed, mem_ok, HUB_KIND);
     lines.extend(grokhub_core::doctor_extras(None, crate::skills::list_skills().len()));
     for l in &lines {

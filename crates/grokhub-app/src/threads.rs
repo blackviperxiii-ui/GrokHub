@@ -75,7 +75,7 @@ pub fn threads_path() -> std::path::PathBuf {
 }
 
 pub fn load() -> Vec<ChatThread> {
-    let raw = fs::read_to_string(threads_path()).unwrap_or_default();
+    let raw = config::read_file_capped(&threads_path(), config::MEMORY_FILE_CAP);
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
@@ -144,5 +144,19 @@ mod tests {
         assert!(continue_thread_hint(&only_scratch).is_empty());
         let untitled = vec![ChatThread::new("Chat", false)];
         assert!(continue_thread_hint(&untitled).is_empty());
+    }
+
+    #[test]
+    fn load_does_not_slurp_a_huge_file() {
+        let src = include_str!("threads.rs");
+        let load = src
+            .split("pub fn load(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn save(").next())
+            .expect("threads load");
+        assert!(
+            load.contains("read_file_capped") && !load.contains("read_to_string"),
+            "boot must not slurp a huge threads.json: {load}"
+        );
     }
 }

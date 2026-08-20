@@ -1,6 +1,6 @@
 use crate::protocol::{
     encode_line, initialize_params, parse_permission, parse_session_update, permission_allow,
-    permission_allow_always, permission_deny, pick_auth_method, prompt_params, request,
+    permission_allow_always, permission_deny, pick_auth_method, prompt_params_with_image, request,
     session_load_params, session_new_params, AcpEvent, JsonRpc,
 };
 use crate::protocol::SessionMode;
@@ -100,7 +100,7 @@ pub fn ensure_session_cwd(path: &Path) -> Result<PathBuf, String> {
 }
 
 enum Cmd {
-    Prompt(String),
+    Prompt { text: String, image: Option<String> },
     Cancel,
     Permission { id: Value, allow: bool, always: bool },
     Shutdown,
@@ -121,6 +121,8 @@ pub struct SpawnOpts {
     pub args: Vec<String>,
     pub cwd: PathBuf,
     pub api_key: Option<String>,
+    /// Console key for `XAI_API_KEY`. Never a grok-login JWT.
+    pub xai_api_key: Option<String>,
     pub always_approve: bool,
     pub auto: bool,
     pub session_mode: SessionMode,
@@ -145,6 +147,7 @@ impl SpawnOpts {
             program,
             cwd,
             api_key,
+            xai_api_key: None,
             always_approve,
             auto,
             session_mode,
@@ -167,6 +170,18 @@ impl SpawnOpts {
         // ACP session/load is the resume path. CLI --resume plus a later
         // session/new on the same child mixed sessions.
         self.args = agent_args(self.always_approve);
+        self
+    }
+
+    pub fn with_xai_api_key(mut self, key: Option<String>) -> Self {
+        self.xai_api_key = key.and_then(|s| {
+            let t = s.trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        });
         self
     }
 }
@@ -359,7 +374,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("GROK_NO_AUTO_UPDATE", "1");
-    if let Some(key) = &opts.api_key {
+    if let Some(key) = &opts.xai_api_key {
         if !key.is_empty() {
             cmd.env("XAI_API_KEY", key);
         }
@@ -461,7 +476,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                         &request(id, "session/cancel", json!({ "sessionId": sid })),
                     );
                 }
-                Cmd::Prompt(text) => {
+                Cmd::Prompt { text, image } => {
                     swallow_load.store(false, Ordering::SeqCst);
                     let id = {
                         let mut n = ids.lock().unwrap();
@@ -471,7 +486,11 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                     };
                     let _ = write_msg(
                         &mut *stdin,
-                        &request(id, "session/prompt", prompt_params(&sid, &text)),
+                        &request(
+                            id,
+                            "session/prompt",
+                            prompt_params_with_image(&sid, &text, image.as_deref()),
+                        ),
                     );
                 }
                 Cmd::Permission { id, allow, always } => {
@@ -568,8 +587,15 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
 
 impl AcpHandle {
     pub fn prompt(&self, text: &str) -> Result<(), String> {
+        self.prompt_with_image(text, None)
+    }
+
+    pub fn prompt_with_image(&self, text: &str, image: Option<&str>) -> Result<(), String> {
         self.cmd
-            .send(Cmd::Prompt(text.to_string()))
+            .send(Cmd::Prompt {
+                text: text.to_string(),
+                image: image.filter(|s| !s.trim().is_empty()).map(|s| s.to_string()),
+            })
             .map_err(|e| e.to_string())
     }
 
@@ -899,7 +925,7 @@ fn walk_session_md(dir: &Path, depth: u8, out: &mut Vec<GrokSession>) {
         if out.iter().any(|s| s.id == id && s.path.is_some()) {
             continue;
         }
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let text = read_file_capped(&path, SESSION_MD_CAP);
         out.push(GrokSession {
             id: id.clone(),
             title: session_title_from_markdown(&text, &id),
@@ -908,10 +934,25 @@ fn walk_session_md(dir: &Path, depth: u8, out: &mut Vec<GrokSession>) {
     }
 }
 
+const SESSION_MD_CAP: usize = 8 * 1024;
+
+fn read_file_capped(path: &Path, cap: usize) -> String {
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return String::new(),
+    };
+    let mut buf = vec![0u8; cap];
+    let n = match f.read(&mut buf) {
+        Ok(n) => n,
+        Err(_) => return String::new(),
+    };
+    String::from_utf8_lossy(&buf[..n]).into_owned()
+}
+
 pub fn merge_grok_sessions(listed: &[String], files: Vec<GrokSession>) -> Vec<GrokSession> {
     let mut out: Vec<GrokSession> = listed.iter().map(|r| split_session_row(r)).collect();
     for f in files {
-        if let Some(hit) = out.iter_mut().find(|s| s.id == f.id || s.title == f.title) {
+        if let Some(hit) = out.iter_mut().find(|s| s.id == f.id) {
             if hit.path.is_none() {
                 hit.path = f.path;
             }
@@ -1024,6 +1065,16 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].id, id);
         assert_eq!(found[0].title, "Night cabin");
+        let src = include_str!("client.rs");
+        let walk = src
+            .split("fn walk_session_md(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn merge_grok_sessions(").next())
+            .expect("walk_session_md");
+        assert!(
+            walk.contains("read_file_capped") && !walk.contains("read_to_string"),
+            "session title scan must not slurp huge markdown: {walk}"
+        );
     }
 
     #[test]
@@ -1046,6 +1097,19 @@ mod tests {
         );
         assert_eq!(merged.len(), 1);
         assert!(merged[0].path.is_some());
+        let mixed = merge_grok_sessions(
+            &["aaa  Chat".into(), "bbb  Chat".into()],
+            vec![GrokSession {
+                id: "bbb".into(),
+                title: "Chat".into(),
+                path: Some(std::path::PathBuf::from("/tmp/bbb.md")),
+            }],
+        );
+        assert_eq!(mixed.len(), 2, "same title must not attach the wrong transcript");
+        assert_eq!(mixed[0].id, "aaa");
+        assert!(mixed[0].path.is_none());
+        assert_eq!(mixed[1].id, "bbb");
+        assert!(mixed[1].path.is_some());
     }
 
     #[test]
@@ -1109,6 +1173,7 @@ mod tests {
             args: agent_args(false),
             cwd: PathBuf::from("/tmp"),
             api_key: None,
+            xai_api_key: None,
             always_approve: false,
             auto: false,
             session_mode: SessionMode::Chat,

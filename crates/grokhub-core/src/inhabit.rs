@@ -10,6 +10,10 @@ pub struct InhabitBundle {
     pub project_snapshot_id: Option<String>,
     pub from_id: Option<String>,
     pub from_name: Option<String>,
+    #[serde(default)]
+    pub to_id: Option<String>,
+    #[serde(default)]
+    pub to_name: Option<String>,
     pub at: Option<u64>,
 }
 
@@ -56,6 +60,8 @@ mod tests {
             project_snapshot_id: None,
             from_id: Some("a".into()),
             from_name: Some("cabin".into()),
+            to_id: None,
+            to_name: None,
             at: Some(1),
         })
         .unwrap();
