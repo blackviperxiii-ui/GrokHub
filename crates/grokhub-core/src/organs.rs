@@ -51,10 +51,18 @@ pub fn greet_from_last_job(
 
 /// Host/computer receipt bodies from this thread, oldest first.
 pub fn thread_host_receipts(messages: &[(String, String)]) -> Vec<String> {
+    thread_host_receipts_from(messages.iter().map(|(r, c)| (r.as_str(), c.as_str())))
+}
+
+/// Same scan without cloning an 8MB transcript onto the UI thread.
+pub fn thread_host_receipts_from<'a, I>(messages: I) -> Vec<String>
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
     messages
-        .iter()
+        .into_iter()
         .filter(|(role, content)| {
-            role == "user"
+            *role == "user"
                 && (content.trim_start().starts_with("HOST_RESULT")
                     || content.trim_start().starts_with("COMPUTER_RESULT"))
         })

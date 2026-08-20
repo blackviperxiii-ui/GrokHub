@@ -53,7 +53,7 @@ use grokhub_core::{
     extract_insights, extract_work_updates, fact_candidates, failover_model, filter_slash_commands,
     frame_bytes, PresenceFrame,
     forget_topic, greet_from_last_job, has_auth, has_verify_ok, hey_grok_on_press,
-    thread_host_receipts,
+    thread_host_receipts, thread_host_receipts_from,
     hey_grok_route, hey_grok_starts_ptt, import_memory_file, merge_imported_memory, insight_pin, is_openclaw_workspace,
     add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
     host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
@@ -4707,19 +4707,13 @@ impl Cabin {
     }
 
     fn visible_host_receipts(&self) -> Vec<(String, bool)> {
-        thread_host_receipts(
-            &self
-                .messages
-                .iter()
-                .map(|m| (m.role.clone(), m.content.clone()))
-                .collect::<Vec<_>>(),
-        )
-        .into_iter()
-        .map(|body| {
-            let ok = !crate::update::host_receipt_failed(&body);
-            (body, ok)
-        })
-        .collect()
+        thread_host_receipts_from(self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())))
+            .into_iter()
+            .map(|body| {
+                let ok = !crate::update::host_receipt_failed(&body);
+                (body, ok)
+            })
+            .collect()
     }
 
     fn dream_rewind_id(&self) -> Option<&str> {
@@ -5238,12 +5232,8 @@ impl Cabin {
             }
         }
         thread_lines.reverse();
-        let mut host_receipts = thread_host_receipts(
-            &self
-                .messages
-                .iter()
-                .map(|m| (m.role.clone(), m.content.clone()))
-                .collect::<Vec<_>>(),
+        let mut host_receipts = thread_host_receipts_from(
+            self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
         );
         for t in self.threads.iter().rev() {
             if t.id == current {
@@ -14495,6 +14485,15 @@ mod tests {
         assert!(
             night.contains("visible_host_receipts") && !night.contains("last_receipts"),
             "greeting last-night must not mix another tab's receipts: {night}"
+        );
+        let vis = src
+            .split("fn visible_host_receipts(")
+            .nth(1)
+            .and_then(|s| s.split("fn dream_rewind_id").next())
+            .expect("visible_host_receipts");
+        assert!(
+            vis.contains("thread_host_receipts_from") && !vis.contains("content.clone()"),
+            "empty-chat greeting must not clone an 8MB transcript to read host receipts: {vis}"
         );
         let context = src
             .split("Slash::Context =>")
