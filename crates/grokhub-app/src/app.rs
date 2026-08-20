@@ -3931,6 +3931,9 @@ impl Cabin {
                 self.session_mode = SessionMode::Plan;
                 self.acp = None;
                 self.acp_spawn_rx = None;
+                if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                    t.grok_session = None;
+                }
                 self.status = "Plan mode — Grok Build will plan first".into();
             }
             Slash::AlwaysApprove => {
@@ -3944,6 +3947,9 @@ impl Cabin {
                 }
                 self.acp = None;
                 self.acp_spawn_rx = None;
+                if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                    t.grok_session = None;
+                }
                 self.status = format!("Permission {}", self.permission_mode.as_str());
             }
             Slash::AutoPerm => {
@@ -3953,6 +3959,9 @@ impl Cabin {
                 }
                 self.acp = None;
                 self.acp_spawn_rx = None;
+                if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                    t.grok_session = None;
+                }
                 self.status = "Permission auto".into();
             }
             Slash::Effort(level) => {
@@ -9044,6 +9053,9 @@ impl Cabin {
                     self.session_mode = m;
                     self.acp = None;
                     self.acp_spawn_rx = None;
+                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        t.grok_session = None;
+                    }
                     self.status = format!("Session {}", m.as_str());
                 }
             }
@@ -9055,6 +9067,9 @@ impl Cabin {
                     self.permission_mode = p;
                     self.acp = None;
                     self.acp_spawn_rx = None;
+                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        t.grok_session = None;
+                    }
                     self.status = format!("Permission {}", p.as_str());
                 }
             }
@@ -11546,6 +11561,10 @@ mod tests {
             always.contains("acp_spawn_rx = None"),
             "/always during handshake must drop the in-flight Ask agent: {always}"
         );
+        assert!(
+            always.contains("grok_session = None"),
+            "/always must session/new or Ask vs Always does not take: {always}"
+        );
         let auto = src
             .split("Slash::AutoPerm =>")
             .nth(1)
@@ -11555,6 +11574,10 @@ mod tests {
             auto.contains("acp_spawn_rx = None"),
             "/auto during handshake must drop the in-flight Ask agent: {auto}"
         );
+        assert!(
+            auto.contains("grok_session = None"),
+            "/auto must session/new or permission mode does not take: {auto}"
+        );
         let plan = src
             .split("Slash::Plan =>")
             .nth(1)
@@ -11563,6 +11586,10 @@ mod tests {
         assert!(
             plan.contains("acp_spawn_rx = None"),
             "/plan during handshake must drop the in-flight Ask agent: {plan}"
+        );
+        assert!(
+            plan.contains("grok_session = None"),
+            "/plan must session/new or Chat vs Plan does not take: {plan}"
         );
         assert!(
             plan.contains("halt_in_flight"),
@@ -11577,6 +11604,11 @@ mod tests {
             row.matches("acp_spawn_rx = None").count(),
             2,
             "session/permission row must drop an in-flight handshake: {row}"
+        );
+        assert_eq!(
+            row.matches("grok_session = None").count(),
+            2,
+            "session/permission row must session/new so mode takes: {row}"
         );
     }
 
