@@ -1080,6 +1080,7 @@ pub struct Cabin {
     history_rx: Option<mpsc::Receiver<Vec<String>>>,
     mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
     recall_rx: Option<mpsc::Receiver<String>>,
+    sync_rx: Option<mpsc::Receiver<()>>,
     session_show_rx: Option<(String, mpsc::Receiver<String>)>,
     import_rx: Option<mpsc::Receiver<ImportOpenclawOut>>,
     inspect_text: String,
@@ -1441,6 +1442,7 @@ impl Cabin {
             history_rx: None,
             mem_restore_rx: None,
             recall_rx: None,
+            sync_rx: None,
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -4799,6 +4801,10 @@ impl Cabin {
     }
 
     fn sync_hub(&mut self) {
+        if self.sync_rx.is_some() {
+            self.status = "Syncing…".into();
+            return;
+        }
         self.persist();
         if !self.scratch() {
             let name = self.mem_name.clone();
@@ -4811,68 +4817,116 @@ impl Cabin {
         }
         let mem = ["SOUL.md", "USER.md", "MEMORY.md"]
             .into_iter()
-            .map(|n| HubMemoryFile {
-                name: n.into(),
-                content: if self.mem_name == n {
-                    self.mem_body.clone()
-                } else {
-                    config::read_memory(n)
-                },
-                updated_at: config::memory_updated_at(n),
-            })
-            .collect();
+            .map(|n| (n, config::memory_updated_at(n)))
+            .collect::<Vec<_>>();
+        let mem_name = self.mem_name.clone();
+        let mem_body = self.mem_body.clone();
         let threads = self
             .threads
             .iter()
             .map(|t| {
-                serde_json::json!({
-                    "id": t.id,
-                    "title": t.title,
-                    "updatedAt": t.accessed_ms,
-                    "messages": t.messages.iter().map(|(r,c)| serde_json::json!({"role": r, "content": c})).collect::<Vec<_>>(),
-                })
+                (
+                    t.id.clone(),
+                    t.title.clone(),
+                    t.accessed_ms,
+                    t.messages.clone(),
+                )
             })
-            .collect();
+            .collect::<Vec<_>>();
         let skills = self
             .skill_list
             .iter()
-            .map(|s| serde_json::json!({"id": s.name, "name": s.name, "updatedAt": skills::skill_updated_at(&s.name)}))
-            .collect();
+            .map(|s| (s.name.clone(), skills::skill_updated_at(&s.name)))
+            .collect::<Vec<_>>();
         let autos = self
             .automations
             .iter()
             .filter_map(|a| serde_json::to_value(a).ok())
-            .collect();
-        let snap = build_hub_snapshot(
-            &self
-                .hub
-                .lock()
-                .ok()
-                .map(|s| s.device_id.clone())
-                .unwrap_or_default(),
-            &self.cfg.device_name,
-            now_ms(),
-            threads,
-            serde_json::json!({"items": self.board}),
-            skills,
-            autos,
-            mem,
-        );
-        if let Ok(mut st) = self.hub.lock() {
-            let snap = match st
-                .snapshot
-                .as_ref()
-                .and_then(|v| serde_json::from_value::<HubSnapshot>(v.clone()).ok())
-            {
-                Some(remote) => merge_hub_snapshots(&snap, &remote),
-                None => snap,
-            };
-            st.snapshot = serde_json::to_value(&snap).ok();
+            .collect::<Vec<_>>();
+        let board = serde_json::json!({"items": self.board});
+        let device_id = self
+            .hub
+            .lock()
+            .ok()
+            .map(|s| s.device_id.clone())
+            .unwrap_or_default();
+        let device_name = self.cfg.device_name.clone();
+        let exported_at = now_ms();
+        let hub = self.hub.clone();
+        let (tx, rx) = mpsc::channel();
+        self.sync_rx = Some(rx);
+        self.status = "Syncing…".into();
+        std::thread::spawn(move || {
+            let mem = mem
+                .into_iter()
+                .map(|(n, at)| HubMemoryFile {
+                    name: n.into(),
+                    content: if mem_name == n {
+                        mem_body.clone()
+                    } else {
+                        config::read_memory(n)
+                    },
+                    updated_at: at,
+                })
+                .collect();
+            let threads = threads
+                .into_iter()
+                .map(|(id, title, updated, messages)| {
+                    serde_json::json!({
+                        "id": id,
+                        "title": title,
+                        "updatedAt": updated,
+                        "messages": messages.iter().map(|(r,c)| serde_json::json!({"role": r, "content": c})).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            let skills = skills
+                .into_iter()
+                .map(|(name, at)| serde_json::json!({"id": name, "name": name, "updatedAt": at}))
+                .collect();
+            let snap = build_hub_snapshot(
+                &device_id,
+                &device_name,
+                exported_at,
+                threads,
+                board,
+                skills,
+                autos,
+                mem,
+            );
+            if let Ok(mut st) = hub.lock() {
+                let snap = match st
+                    .snapshot
+                    .as_ref()
+                    .and_then(|v| serde_json::from_value::<HubSnapshot>(v.clone()).ok())
+                {
+                    Some(remote) => merge_hub_snapshots(&snap, &remote),
+                    None => snap,
+                };
+                st.snapshot = serde_json::to_value(&snap).ok();
+            }
+            let _ = tx.send(());
+        });
+    }
+
+    fn poll_sync(&mut self) {
+        let Some(rx) = self.sync_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(()) => {
+                self.persist();
+                self.status = "Hub snapshot written — peers pull /v1/snapshot".into();
+                self.apply_inbound_snapshot();
+                self.nav = Nav::Devices;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.sync_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Hub sync failed".into();
+            }
         }
-        self.persist();
-        self.status = "Hub snapshot written — peers pull /v1/snapshot".into();
-        self.apply_inbound_snapshot();
-        self.nav = Nav::Devices;
     }
 
     fn date_out(fmt: &str) -> String {
@@ -8053,6 +8107,7 @@ impl eframe::App for Cabin {
         self.poll_history_search();
         self.poll_mem_restore();
         self.poll_recall();
+        self.poll_sync();
         self.poll_session_show();
         self.poll_import_openclaw();
         self.poll_acp_spawn();
@@ -8161,6 +8216,7 @@ impl eframe::App for Cabin {
                 || self.history_rx.is_some()
                 || self.mem_restore_rx.is_some()
                 || self.recall_rx.is_some()
+                || self.sync_rx.is_some()
                 || self.session_show_rx.is_some()
                 || self.import_rx.is_some()
                 || self.acp_spawn_rx.is_some()
@@ -12250,6 +12306,7 @@ mod tests {
                 && live.contains("history_rx")
                 && live.contains("mem_restore_rx")
                 && live.contains("recall_rx")
+                && live.contains("sync_rx")
                 && live.contains("session_show_rx")
                 && live.contains("import_rx")
                 && live.contains("acp_spawn_rx")
@@ -14375,6 +14432,12 @@ mod tests {
                 && sync.contains("mem_body")
                 && sync.contains("scratch()"),
             "/sync must flush the Memory editor before publishing files: {sync}"
+        );
+        let sync_spawn = sync.find("thread::spawn").expect("sync worker");
+        let sync_read = sync.find("read_memory(n)").expect("sync memory slurp");
+        assert!(
+            sync_spawn < sync_read,
+            "/sync must slurp SOUL/USER/MEMORY off the UI thread: {sync}"
         );
         let thread_rows = sync
             .split("let threads = self")
