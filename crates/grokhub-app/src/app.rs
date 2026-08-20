@@ -528,6 +528,12 @@ struct ImportOpenclawOut {
     open_memory: bool,
 }
 
+struct ReplayDeskOut {
+    text: String,
+    cmds: Vec<String>,
+    frame: Option<Result<String, String>>,
+}
+
 fn listen_turn(api_key: &str) -> String {
     let wav = match record_once() {
         Ok(p) => p,
@@ -961,6 +967,7 @@ pub struct Cabin {
     kick_frame: Option<String>,
     kick_skip: bool,
     recipe_cap_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    recipe_desk_rx: Option<mpsc::Receiver<ReplayDeskOut>>,
     verify_rx: Option<mpsc::Receiver<Option<VerifyResult>>>,
     #[allow(dead_code)]
     hotkeys: Option<GlobalHotKeyManager>,
@@ -1315,6 +1322,7 @@ impl Cabin {
             kick_frame: None,
             kick_skip: false,
             recipe_cap_rx: None,
+            recipe_desk_rx: None,
             verify_rx: None,
             hotkeys: None,
             hotkey_hey: 0,
@@ -1661,6 +1669,7 @@ impl Cabin {
         self.kick_skip = false;
         self.acp_spawn_rx = None;
         self.recipe_cap_rx = None;
+        self.recipe_desk_rx = None;
         self.verify_rx = None;
         self.plan_pending = None;
         self.agents.clear();
@@ -7044,6 +7053,10 @@ impl Cabin {
             self.status = "Busy — wait, then replay".into();
             return false;
         }
+        if self.recipe_desk_rx.is_some() || self.recipe_cap_rx.is_some() {
+            self.status = "Recipe replay…".into();
+            return true;
+        }
         if self.last_recipe.is_none() {
             self.last_recipe = crate::recipes::load_last();
         }
@@ -7051,42 +7064,83 @@ impl Cabin {
             self.status = "No recipe".into();
             return false;
         };
-        let rows = collect_rows();
-        let current = screen_from_rows(&rows);
-        let ops = replay_ops(&recipe, current);
-        let mut t = String::new();
-        let mut cmds = Vec::new();
-        if let Some(c) = current {
-            t.push_str(&format!("screen {}x{}\n", c.w, c.h));
-        }
-        for op in ops {
-            match op {
-                ReplayOp::Reshoot => {
-                    t.push_str("reshoot: screen changed, skip coordinate clicks\n");
-                    let titles: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-                    let lock = lock_titles();
-                    if !lock_blocks_hands(&titles)
-                        && !lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
-                        && self.recipe_cap_rx.is_none()
-                    {
-                        let (tx, rx) = mpsc::channel();
-                        self.recipe_cap_rx = Some(rx);
-                        std::thread::spawn(move || {
-                            let _ = tx.send(capture_data_url());
-                        });
-                        t.push_str("frame: capturing…\n");
+        let (tx, rx) = mpsc::channel();
+        self.recipe_desk_rx = Some(rx);
+        self.status = "Recipe replay…".into();
+        std::thread::spawn(move || {
+            let rows = collect_rows();
+            let current = screen_from_rows(&rows);
+            let ops = replay_ops(&recipe, current);
+            let mut t = String::new();
+            let mut cmds = Vec::new();
+            let mut frame = None;
+            if let Some(c) = current {
+                t.push_str(&format!("screen {}x{}\n", c.w, c.h));
+            }
+            for op in ops {
+                match op {
+                    ReplayOp::Reshoot => {
+                        t.push_str("reshoot: screen changed, skip coordinate clicks\n");
+                        let titles: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+                        let lock = lock_titles();
+                        if !lock_blocks_hands(&titles)
+                            && !lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+                        {
+                            t.push_str("frame: capturing…\n");
+                            frame = Some(capture_data_url());
+                        }
+                    }
+                    ReplayOp::Op(op) => cmds.push(computer_cmd_line(&op)),
+                }
+            }
+            let _ = tx.send(ReplayDeskOut {
+                text: t,
+                cmds,
+                frame,
+            });
+        });
+        true
+    }
+
+    fn poll_replay_desk(&mut self) {
+        let Some(rx) = self.recipe_desk_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(out) => {
+                self.eyes_text = out.text;
+                if let Some(cap) = out.frame {
+                    match &cap {
+                        Ok(url) => {
+                            if let Ok(mut st) = self.hub.lock() {
+                                st.store_frame(url);
+                            }
+                            self.remember_last_frame(url);
+                            self.eyes_text = self.eyes_text.replace(
+                                "frame: capturing…\n",
+                                "frame: captured\n",
+                            );
+                        }
+                        Err(e) => {
+                            self.eyes_text = self
+                                .eyes_text
+                                .replace("frame: capturing…\n", &format!("frame: {e}\n"));
+                        }
                     }
                 }
-                ReplayOp::Op(op) => cmds.push(computer_cmd_line(&op)),
+                if out.cmds.is_empty() {
+                    self.status = "Recipe replay".into();
+                } else {
+                    self.run_cmds(out.cmds);
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.recipe_desk_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Recipe replay failed".into();
             }
         }
-        self.eyes_text = t;
-        if cmds.is_empty() {
-            self.status = "Recipe replay".into();
-            return false;
-        }
-        self.run_cmds(cmds);
-        self.running
     }
 
     fn speak_reply(&mut self, text: &str) {
@@ -7579,6 +7633,7 @@ impl eframe::App for Cabin {
         self.poll_pick();
         self.poll_eyes_cap();
         self.poll_recipe_cap();
+        self.poll_replay_desk();
         self.poll_verify();
         self.poll_pending_kick();
         self.live_room();
@@ -7669,6 +7724,7 @@ impl eframe::App for Cabin {
                 || self.pending_kick.is_some()
                 || self.kick_cap_rx.is_some()
                 || self.recipe_cap_rx.is_some()
+                || self.recipe_desk_rx.is_some()
                 || self.verify_rx.is_some()
                 || self.grok_sessions_rx.is_some()
                 || self.persist_rx.is_some()
@@ -12498,21 +12554,18 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn speak_reply").next())
             .expect("replay_recipe");
-        let reshoot = replay
-            .split("ReplayOp::Reshoot")
-            .nth(1)
-            .expect("reshoot");
-        let spawn = reshoot
+        let spawn = replay
             .find("thread::spawn")
-            .expect("recipe reshoot grim must leave the UI thread");
-        let shot = reshoot.find("capture_data_url").expect("screen capture");
+            .expect("recipe replay must leave the UI thread");
+        let rows = replay.find("collect_rows").expect("desk scan");
+        let shot = replay.find("capture_data_url").expect("screen capture");
         assert!(
-            spawn < shot,
-            "recipe reshoot must not block the cabin: {reshoot}"
+            spawn < rows && spawn < shot,
+            "recipe replay must not block the cabin: {replay}"
         );
         assert!(
-            reshoot.contains("lock_titles") && reshoot.contains("lock_blocks_hands"),
-            "recipe reshoot lock gates stay on the UI thread: {reshoot}"
+            replay.contains("lock_titles") && replay.contains("lock_blocks_hands"),
+            "recipe reshoot must still gate on lock windows: {replay}"
         );
     }
 
