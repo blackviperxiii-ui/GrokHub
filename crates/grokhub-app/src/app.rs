@@ -8545,20 +8545,6 @@ impl Cabin {
                                                     }
                                                 }
                                                 ui.add_space(10.0);
-                                                if crate::cards::section_label(ui, "Cabin") {
-                                                    next_sec = Some(settings_group_home(SettingsGroup::Cabin));
-                                                }
-                                                for (s, label) in [
-                                                    (SettingsSec::Host, "Host"),
-                                                    (SettingsSec::Imagine, "Imagine"),
-                                                    (SettingsSec::Voice, "Voice"),
-                                                    (SettingsSec::Night, "Night"),
-                                                ] {
-                                                    if crate::cards::settings_nav(ui, label, sec == s) {
-                                                        next_sec = Some(s);
-                                                    }
-                                                }
-                                                ui.add_space(10.0);
                                                 if crate::cards::section_label(ui, "Data") {
                                                     next_sec = Some(settings_group_home(SettingsGroup::Data));
                                                 }
@@ -8652,6 +8638,14 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
                                                             crate::cards::settings_field(ui, "Chat model", "Unused by Grok Build. Session model is /model in grok. Keep empty.", &mut self.cfg.model, false);
                                                             crate::cards::settings_note(ui, "Session mode is Code / Plan / Ask on the composer. /effort sets reasoning. The leftover ladder pin below is unused by Grok Build.");
+                                                            crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
+                                                            crate::cards::settings_field(ui, "Imagine override", "Must contain “image” or the cabin keeps grok-imagine-image-2.0. Retired grok-2-image names are rewritten.", &mut self.cfg.imagine_model, false);
+                                                            crate::cards::settings_note(ui, &format!("Live voice model: {voice_live}."));
+                                                            crate::cards::settings_note(
+                                                                ui,
+                                                                "OAuth runs Hey Grok STT and TTS. Duplex (wss://api.x.ai/v1/realtime) needs a console API key.",
+                                                            );
+                                                            crate::cards::settings_field(ui, "Voice override", "Must contain “voice” or “realtime”. Empty keeps grok-voice-think-fast-2.0.", &mut self.cfg.voice_model, false);
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(
@@ -8690,9 +8684,15 @@ impl Cabin {
                                                             if crate::cards::settings_toggle(ui, "Close to tray", "The cabin keeps working in the background.", &mut self.cfg.close_to_tray) {
                                                                 save = true;
                                                             }
-                                                            if crate::cards::settings_toggle(ui, "Cabin eyes", "Unused. Desk frames come from Grok Build computer-use.", &mut self.cfg.cabin_eyes) {
+                                                            if crate::cards::settings_toggle(
+                                                                ui,
+                                                                "Living wall",
+                                                                "Every few hours the cabin paints a new cover. Twenty live. Oldest leaves first.",
+                                                                &mut self.cfg.imagine_wall,
+                                                            ) {
                                                                 save = true;
                                                             }
+                                                            crate::cards::settings_note(ui, "Night always runs. Quiet hours and daily caps do not hold work.");
                                                         }
                                                         SettingsSec::Host => {
                                                             crate::cards::settings_note(ui, &format!("{}\nInstall: curl -fsSL https://x.ai/cli/install.sh | bash\nThen grok login --device-auth. Halt cancels the ACP turn.", build_agent::grok_banner()));
@@ -8760,13 +8760,23 @@ impl Cabin {
                                                             }
                                                         }
                                                         SettingsSec::About => {
+                                                            ui.label(
+                                                                RichText::new(format!(
+                                                                    "GrokHub {}",
+                                                                    env!("CARGO_PKG_VERSION")
+                                                                ))
+                                                                .size(crate::theme::FONT_HEADING)
+                                                                .color(crate::theme::fg()),
+                                                            );
+                                                            ui.add_space(6.0);
+                                                            crate::cards::settings_note(ui, "Native Grok Build cabin.");
+                                                            crate::cards::settings_note(ui, &build_agent::grok_banner());
                                                             crate::cards::settings_note(ui, &usage);
                                                             crate::cards::settings_note(ui, &catalog);
                                                             crate::cards::settings_note(ui, &doctor);
                                                             if crate::cards::settings_action(ui, "Diagnostics", "Copy a redacted bundle. No secrets.", "Copy") {
                                                                 copy_diag = true;
                                                             }
-                                                            crate::cards::settings_note(ui, "GrokHub cabin.");
                                                         }
                                                     }
                                                 });
@@ -10408,6 +10418,47 @@ mod tests {
         assert_eq!(super::health_settings_sec(), super::SettingsSec::About);
     }
 
+    #[test]
+    fn about_paints_the_version() {
+        let src = include_str!("app.rs");
+        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let about = impl_src
+            .split("SettingsSec::About => {")
+            .nth(1)
+            .expect("about body");
+        let about = about.split("if let Some(s) = next_sec").next().unwrap_or(about);
+        assert!(
+            about.contains("CARGO_PKG_VERSION"),
+            "About must show grokhub --version: {about}"
+        );
+        assert!(
+            about.contains("FONT_HEADING"),
+            "version is a heading, not a muted note: {about}"
+        );
+    }
+
+    #[test]
+    fn settings_drops_cabin_tabs() {
+        let src = include_str!("app.rs");
+        let settings = src
+            .split("fn ui_settings(")
+            .nth(1)
+            .and_then(|s| s.split("fn add_automation_seed(").next())
+            .expect("ui_settings");
+        assert!(
+            !settings.contains("section_label(ui, \"Cabin\")"),
+            "Cabin group is gone from Settings: {settings}"
+        );
+        assert!(
+            !settings.contains("Cabin eyes"),
+            "Cabin eyes toggle is gone: {settings}"
+        );
+        assert!(
+            !settings.contains("(SettingsSec::Host, \"Host\")"),
+            "Host is not a Settings tab: {settings}"
+        );
+    }
+
     fn about_section_opens_update() {
         assert_eq!(
             super::settings_group_home(super::SettingsGroup::About),
@@ -11264,6 +11315,10 @@ mod tests {
         assert!(
             !crate::theme::CABIN_MENU.iter().any(|(id, _)| *id == "eyes"),
             "Desk must not sit in the cabin menu"
+        );
+        assert!(
+            !crate::theme::CABIN_MENU.iter().any(|(id, _)| *id == "command"),
+            "Command is not a cabin menu row"
         );
         let replay = src
             .split("fn replay_recipe(")

@@ -49,7 +49,7 @@ mod tests {
     }
 
     #[test]
-    fn cabin_reports_2_6_35() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "2.6.35");
+    fn cabin_reports_2_6_36() {
+        assert_eq!(env!("CARGO_PKG_VERSION"), "2.6.36");
     }
 }
