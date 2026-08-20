@@ -5062,6 +5062,16 @@ impl Cabin {
         });
     }
 
+    fn persist_secrets(&self) {
+        let io = self.persist_io.clone();
+        let secrets = self.secrets.clone();
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                let _ = secrets::save(&secrets);
+            }
+        });
+    }
+
     fn poll_sync(&mut self) {
         let Some(rx) = self.sync_rx.take() else {
             return;
@@ -10238,6 +10248,7 @@ impl Cabin {
             self.flush_projects();
             self.persist_cfg();
             self.persist_hub();
+            self.persist_secrets();
         }
     }
 
@@ -12996,8 +13007,24 @@ mod tests {
             settings_save.contains("self.persist_cfg()")
                 && settings_save.contains("self.flush_projects()")
                 && settings_save.contains("self.persist_hub()")
+                && settings_save.contains("self.persist_secrets()")
                 && settings_save.contains("tree_changed"),
             "Settings Save must not clone every thread when the worktree did not change: {settings_save}"
+        );
+        let persist_secrets = src
+            .split("fn persist_secrets(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_sync").next())
+            .expect("persist_secrets");
+        let secrets_spawn = persist_secrets
+            .find("thread::spawn")
+            .expect("secrets write must leave the UI thread");
+        let secrets_save = persist_secrets.find("secrets::save").expect("secrets::save");
+        assert!(
+            secrets_spawn < secrets_save
+                && persist_secrets.contains("persist_io")
+                && !persist_secrets.contains("self.persist()"),
+            "Settings Save must not freeze the cabin writing secrets.json: {persist_secrets}"
         );
         let bg = src
             .split("fn persist_idle_now(")
