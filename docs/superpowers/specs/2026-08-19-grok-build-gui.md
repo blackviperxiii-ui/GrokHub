@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.6.38
+**Version:** 2.6.39
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI over ACP) is the agent, the host shell, and computer-use (eyes and hands).
 
@@ -28,7 +28,7 @@ History lists `grok sessions` plus cabin chats. The Connectors tab runs `grok in
 
 ## Auth
 
-Agent: `grok login` cached token or `XAI_API_KEY`. Voice and Imagine still use cabin `secrets.json`.
+Agent: `grok login` cached token or `XAI_API_KEY`. Imagine uses the same token (console key optional). Voice still prefers cabin `secrets.json` / console key.
 
 ## Overlay vs agent updates
 

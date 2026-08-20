@@ -12,6 +12,7 @@ fn fake_opts() -> SpawnOpts {
         session_mode: SessionMode::Chat,
         extra_env: vec![],
         handshake_timeout: None,
+        resume: None,
     }
 }
 
@@ -91,6 +92,7 @@ fn handshake_times_out_on_a_silent_child() {
         session_mode: SessionMode::Chat,
         extra_env: vec![],
         handshake_timeout: Some(Duration::from_secs(2)),
+        resume: None,
     };
     let t = Instant::now();
     let err = match connect(opts) {
@@ -123,6 +125,7 @@ fn handshake_does_not_deadlock_when_stderr_floods() {
         session_mode: SessionMode::Chat,
         extra_env: vec![],
         handshake_timeout: Some(Duration::from_secs(2)),
+        resume: None,
     };
     let t = Instant::now();
     let err = match connect(opts) {

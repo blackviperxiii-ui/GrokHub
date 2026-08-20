@@ -3,6 +3,11 @@ use serde_json::{json, Value};
 
 pub const XAI_BASE: &str = "https://api.x.ai/v1";
 pub const DEFAULT_MODEL: &str = "grok-3-mini-fast";
+/// Greeting, chips, and other cabin Fast-path calls. Not the composer ladder.
+/// Product name: Grok 4.1 Fast. Live API id still accepted after retirement.
+pub const CABIN_FAST_MODEL: &str = "grok-4-1-fast-non-reasoning";
+/// Used only if 4.1 Fast returns empty (retired alias). Fast non-reasoning successor.
+pub const CABIN_FAST_FALLBACK: &str = "grok-4.20-0309-non-reasoning";
 
 pub fn needs_auth_banner(has_key: bool) -> bool {
     !has_key
