@@ -3605,29 +3605,31 @@ impl Cabin {
     }
 
     fn apply_switch_thread(&mut self, idx: usize) {
-        if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.messages = self
-                .messages
-                .iter()
-                .map(|m| (m.role.clone(), m.content.clone()))
-                .collect();
+        let idx = idx.min(self.threads.len().saturating_sub(1));
+        if idx != self.thread_idx {
+            if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                t.messages.clear();
+                t.messages.extend(self.messages.drain(..).map(|m| (m.role, m.content)));
+                flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
+            }
+            self.thread_idx = idx;
+            self.messages = self
+                .threads
+                .get(self.thread_idx)
+                .map(|t| {
+                    t.messages
+                        .iter()
+                        .map(|(role, content)| Msg {
+                            role: role.clone(),
+                            content: content.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+        } else if let Some(t) = self.threads.get_mut(self.thread_idx) {
             flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
         }
-        self.thread_idx = idx.min(self.threads.len().saturating_sub(1));
         self.rename_idx = None;
-        self.messages = self
-            .threads
-            .get(self.thread_idx)
-            .map(|t| {
-                t.messages
-                    .iter()
-                    .map(|(role, content)| Msg {
-                        role: role.clone(),
-                        content: content.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
         self.imagine_last =
             last_imagine_receipt(self.messages.iter().map(|m| m.content.as_str())).unwrap_or_default();
         self.cfg.goal_pin = self
@@ -3709,11 +3711,8 @@ impl Cabin {
             return;
         }
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.messages = self
-                .messages
-                .iter()
-                .map(|m| (m.role.clone(), m.content.clone()))
-                .collect();
+            t.messages.clear();
+            t.messages.extend(self.messages.drain(..).map(|m| (m.role, m.content)));
             flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
         }
         let title = if scratch { "Scratch" } else { "Chat" };
@@ -5072,6 +5071,15 @@ impl Cabin {
                 let _ = config::save(&cfg);
             }
         });
+    }
+
+    /// Hide/quit must not clone every thread when idle persist already wrote.
+    fn persist_if_dirty(&mut self) {
+        if !self.projects_dirty && self.persist_idle_key == self.persist_idle_now() {
+            self.persist_cfg();
+        } else {
+            self.persist();
+        }
     }
 
     fn persist_secrets(&self) {
@@ -8114,7 +8122,7 @@ impl Cabin {
 
     fn unmap_to_tray(&mut self, ctx: &egui::Context) {
         self.capture_window(ctx);
-        self.persist();
+        self.persist_if_dirty();
         self.geom_dirty = false;
         self.window_visible = false;
         self.tray_saw_unfocused = false;
@@ -8406,7 +8414,7 @@ impl eframe::App for Cabin {
                 just_hid = true;
             } else {
                 self.capture_window(ctx);
-                self.persist();
+                self.persist_if_dirty();
                 self.geom_dirty = false;
             }
         }
@@ -12760,6 +12768,10 @@ mod tests {
             hide.contains("tray_saw_unfocused = false"),
             "× must clear the focus-raise latch so the next focused frame does not map the cabin: {hide}"
         );
+        assert!(
+            hide.contains("persist_if_dirty") && !hide.contains("self.persist()"),
+            "hide to tray must not clone every thread when idle persist already wrote: {hide}"
+        );
         let tick = src
             .split("hidden_window_tick(")
             .nth(1)
@@ -13081,6 +13093,17 @@ mod tests {
                 && settings_save.contains("self.persist_secrets()")
                 && settings_save.contains("tree_changed"),
             "Settings Save must not clone every thread when the worktree did not change: {settings_save}"
+        );
+        let persist_if = src
+            .split("fn persist_if_dirty")
+            .nth(1)
+            .and_then(|s| s.split("fn persist_secrets").next())
+            .expect("persist_if_dirty");
+        assert!(
+            persist_if.contains("persist_idle_key")
+                && persist_if.contains("persist_cfg")
+                && persist_if.contains("self.persist()"),
+            "hide/quit must skip the thread clone when idle persist already wrote: {persist_if}"
         );
         let persist_secrets = src
             .split("fn persist_secrets(")
@@ -14156,6 +14179,10 @@ mod tests {
             created.contains("apply_switch_thread") && !created.contains("self.switch_thread("),
             "/new reuse must not clone every thread twice — switch without persist_bg, then persist once: {created}"
         );
+        assert!(
+            created.contains("messages.drain") && created.contains("extend"),
+            "/new must move the leaving pane, not clone an 8MB HOST_RESULT: {created}"
+        );
         let boot = src
             .split("pub fn new(hidden: bool)")
             .nth(1)
@@ -14189,6 +14216,10 @@ mod tests {
         assert!(
             switched.contains("apply_switch_thread"),
             "tab switch persist_bg must share the pane swap with /new reuse: {switched}"
+        );
+        assert!(
+            switched.contains("messages.drain") && switched.contains("extend"),
+            "tab switch must move the leaving pane, not clone an 8MB HOST_RESULT: {switched}"
         );
         let chrome = src
             .split("fn drop_leaving_thread_chrome")
