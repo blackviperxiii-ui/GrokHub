@@ -5010,6 +5010,27 @@ impl Cabin {
     }
 
     fn review_digest(&self) -> String {
+        let (thread_lines, host_receipts) = self.review_chat_digest();
+        let input = ReviewDigest {
+            insight_pin: insight_pin(&self.learning),
+            user_md: config::read_memory("USER.md"),
+            memory_md: config::read_memory("MEMORY.md"),
+            skill_names: self.skill_list.iter().map(|s| s.name.clone()).collect(),
+            automation_names: self.automations.iter().map(|a| a.name.clone()).collect(),
+            github_pat: !self.secrets.github_token.trim().is_empty(),
+            host_receipts,
+            chip_habits: top_habit_labels(&self.chip_memory, 6),
+            thread_lines,
+            trajectory: summarize_trajectory(
+                &parse_trajectory_jsonl(&crate::store::read_trajectory()),
+                yesterday_ms(now_ms()),
+                12,
+            ),
+        };
+        build_review_digest(&input)
+    }
+
+    fn review_chat_digest(&self) -> (Vec<DigestLine>, Vec<String>) {
         let current = self
             .threads
             .get(self.thread_idx)
@@ -5065,23 +5086,7 @@ impl Cabin {
         if host_receipts.len() > 6 {
             host_receipts = host_receipts.split_off(host_receipts.len() - 6);
         }
-        let input = ReviewDigest {
-            insight_pin: insight_pin(&self.learning),
-            user_md: config::read_memory("USER.md"),
-            memory_md: config::read_memory("MEMORY.md"),
-            skill_names: self.skill_list.iter().map(|s| s.name.clone()).collect(),
-            automation_names: self.automations.iter().map(|a| a.name.clone()).collect(),
-            github_pat: !self.secrets.github_token.trim().is_empty(),
-            host_receipts,
-            chip_habits: top_habit_labels(&self.chip_memory, 6),
-            thread_lines,
-            trajectory: summarize_trajectory(
-                &parse_trajectory_jsonl(&crate::store::read_trajectory()),
-                yesterday_ms(now_ms()),
-                12,
-            ),
-        };
-        build_review_digest(&input)
+        (thread_lines, host_receipts)
     }
 
     fn spawn_review(&mut self) {
@@ -5092,16 +5097,41 @@ impl Cabin {
         if key.trim().is_empty() {
             return;
         }
-        if config::read_memory(&self.mem_name) != self.mem_body {
-            let _ = config::write_memory(&self.mem_name, &self.mem_body);
-        }
-        let digest = self.review_digest();
+        let mem_name = self.mem_name.clone();
+        let mem_body = self.mem_body.clone();
+        let (thread_lines, host_receipts) = self.review_chat_digest();
+        let insight = insight_pin(&self.learning);
+        let skill_names: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
+        let automation_names: Vec<String> =
+            self.automations.iter().map(|a| a.name.clone()).collect();
+        let github_pat = !self.secrets.github_token.trim().is_empty();
+        let chip_habits = top_habit_labels(&self.chip_memory, 6);
+        let now = now_ms();
         let model = model_for_mode("balanced").to_string();
         let prompt = review_system_prompt().to_string();
         let (tx, rx) = mpsc::channel();
         self.review_rx = Some(rx);
         self.review_busy = true;
         std::thread::spawn(move || {
+            if config::read_memory(&mem_name) != mem_body {
+                let _ = config::write_memory(&mem_name, &mem_body);
+            }
+            let digest = build_review_digest(&ReviewDigest {
+                insight_pin: insight,
+                user_md: config::read_memory("USER.md"),
+                memory_md: config::read_memory("MEMORY.md"),
+                skill_names,
+                automation_names,
+                github_pat,
+                host_receipts,
+                chip_habits,
+                thread_lines,
+                trajectory: summarize_trajectory(
+                    &parse_trajectory_jsonl(&crate::store::read_trajectory()),
+                    yesterday_ms(now),
+                    12,
+                ),
+            });
             let messages = [("system".into(), prompt), ("user".into(), digest)];
             let out = grok_chat(&key, &model, &messages, None, None);
             let _ = tx.send(out);
@@ -14713,13 +14743,15 @@ mod tests {
             spawn.contains("model_for_mode(\"balanced\")"),
             "nightly review forces Balance: {spawn}"
         );
-        let digest = spawn.find("review_digest").expect("review digest");
+        let spawn_at = spawn.find("thread::spawn").expect("review HTTP must leave the UI thread");
+        let write = spawn.find("write_memory").expect("flush memory");
+        let traj = spawn.find("read_trajectory").expect("trajectory digest");
         assert!(
-            spawn[..digest].contains("write_memory") && spawn[..digest].contains("mem_body"),
-            "nightly review must flush the Memory editor before the digest: {spawn}"
+            spawn_at < write && spawn_at < traj && spawn.contains("mem_body"),
+            "nightly review must flush Memory and slurp trajectory off the UI thread: {spawn}"
         );
         assert!(
-            !spawn[..digest].contains("scratch()"),
+            !spawn[..spawn_at].contains("scratch()"),
             "Scratch is a chat tab — unsaved Memory editor edits must still reach the nightly digest: {spawn}"
         );
         let digest_fn = src
