@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// SOUL/USER/MEMORY on the UI thread. Bigger files freeze kick_model and the editor.
 pub const MEMORY_FILE_CAP: usize = 1024 * 1024;
@@ -187,15 +188,40 @@ pub fn default_device_name() -> String {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| {
-            std::process::Command::new("hostname")
-                .output()
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        })
+        .or_else(|| hostname_cmd())
         .unwrap_or_else(|| "This computer".into())
+}
+
+fn hostname_cmd() -> Option<String> {
+    let mut child = std::process::Command::new("hostname")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(st)) if st.success() => {
+                let mut out = String::new();
+                if let Some(mut stdout) = child.stdout.take() {
+                    let _ = stdout.take(256).read_to_string(&mut out);
+                }
+                let name = out.trim().to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                return Some(name);
+            }
+            Ok(Some(_)) => return None,
+            Ok(None) if start.elapsed() > Duration::from_millis(400) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(15)),
+            Err(_) => return None,
+        }
+    }
 }
 
 pub fn load() -> AppConfig {
@@ -449,6 +475,20 @@ mod tests {
         assert_eq!(loaded.device_name, default_device_name());
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn default_device_name_must_not_block_boot() {
+        let src = include_str!("config.rs");
+        let host = src
+            .split("fn hostname_cmd()")
+            .nth(1)
+            .and_then(|s| s.split("pub fn load(").next())
+            .expect("hostname_cmd");
+        assert!(
+            host.contains("try_wait") && !host.contains(".output()"),
+            "boot hostname must time out: {host}"
+        );
     }
 
     #[test]
