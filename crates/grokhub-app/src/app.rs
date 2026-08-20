@@ -1474,15 +1474,13 @@ impl Cabin {
 
     fn persist(&mut self) {
         let mut snap = self.persist_snap();
-        self.flush_projects();
+        if snap.projects.is_some() {
+            self.projects_dirty = false;
+        }
         self.sync_hub_voice();
         snap.secrets = Some(self.secrets.clone());
         self.last_persist = Instant::now();
         self.geom_dirty = false;
-        if let Ok(_g) = self.persist_io.try_lock() {
-            write_persist_disk(&snap);
-            return;
-        }
         let io = self.persist_io.clone();
         std::thread::spawn(move || {
             if let Ok(_g) = io.lock() {
@@ -2544,6 +2542,7 @@ impl Cabin {
         };
         let path = expand_home(&n.path);
         let name = n.name.clone();
+        let tree_changed = !path.trim().is_empty() && self.cfg.project_dir != path;
         if !path.trim().is_empty() {
             if !std::path::Path::new(&path).is_dir() {
                 let _ = std::fs::create_dir_all(&path);
@@ -2556,11 +2555,17 @@ impl Cabin {
             self.nav = Nav::Workboard;
         }
         self.status = format!("Bound {name}");
-        if self.running && self.acp.is_some() {
+        if self.running {
             self.halt_in_flight();
         }
         self.acp = None;
         self.acp_spawn_rx = None;
+        if tree_changed {
+            if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                t.grok_cwd = None;
+                t.grok_session = None;
+            }
+        }
         self.persist();
     }
 
@@ -2591,11 +2596,15 @@ impl Cabin {
         }
         if out.unbound {
             self.cfg.project_dir.clear();
-            if self.running && self.acp.is_some() {
+            if self.running {
                 self.halt_in_flight();
             }
             self.acp = None;
             self.acp_spawn_rx = None;
+            if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                t.grok_cwd = None;
+                t.grok_session = None;
+            }
         }
         if selected {
             self.project_sel = None;
@@ -3894,7 +3903,7 @@ impl Cabin {
             }
             Slash::Palette => self.open_palette(),
             Slash::Plan => {
-                if self.running && self.acp.is_some() {
+                if self.running {
                     self.halt_in_flight();
                 }
                 self.session_mode = SessionMode::Plan;
@@ -3908,7 +3917,7 @@ impl Cabin {
                 } else {
                     PermissionMode::AlwaysApprove
                 };
-                if self.running && self.acp.is_some() {
+                if self.running {
                     self.halt_in_flight();
                 }
                 self.acp = None;
@@ -3917,7 +3926,7 @@ impl Cabin {
             }
             Slash::AutoPerm => {
                 self.permission_mode = PermissionMode::Auto;
-                if self.running && self.acp.is_some() {
+                if self.running {
                     self.halt_in_flight();
                 }
                 self.acp = None;
@@ -3976,15 +3985,22 @@ impl Cabin {
                     &self.work_root(),
                     home.as_deref(),
                 );
+                let tree_changed = self.cfg.project_dir != p;
                 self.cfg.project_dir = p.clone();
                 let _ = std::fs::create_dir_all(&p);
                 self.project_sel = upsert_bound(&mut self.projects, &p);
                 self.touch_projects();
-                if self.running && self.acp.is_some() {
+                if self.running {
                     self.halt_in_flight();
                 }
                 self.acp = None;
                 self.acp_spawn_rx = None;
+                if tree_changed {
+                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        t.grok_cwd = None;
+                        t.grok_session = None;
+                    }
+                }
                 self.grok_sessions_loaded = false;
                 self.persist();
                 self.status = format!("Bound {p}");
@@ -3992,11 +4008,15 @@ impl Cabin {
             Slash::ProjectClear => {
                 self.cfg.project_dir.clear();
                 self.project_sel = None;
-                if self.running && self.acp.is_some() {
+                if self.running {
                     self.halt_in_flight();
                 }
                 self.acp = None;
                 self.acp_spawn_rx = None;
+                if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                    t.grok_cwd = None;
+                    t.grok_session = None;
+                }
                 self.grok_sessions_loaded = false;
                 self.touch_projects();
                 self.persist();
@@ -4046,14 +4066,21 @@ impl Cabin {
                 let plan = plan_room(&name, &home);
                 let p = format!("{home}/{}", plan.project_rel);
                 let _ = std::fs::create_dir_all(&p);
+                let tree_changed = self.cfg.project_dir != p;
                 self.cfg.project_dir = p.clone();
                 self.project_sel = upsert_bound(&mut self.projects, &p);
                 self.touch_projects();
-                if self.running && self.acp.is_some() {
+                if self.running {
                     self.halt_in_flight();
                 }
                 self.acp = None;
                 self.acp_spawn_rx = None;
+                if tree_changed {
+                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        t.grok_cwd = None;
+                        t.grok_session = None;
+                    }
+                }
                 self.persist();
                 self.status = format!("Room {} → {p}", plan.slug);
                 self.queue_sh(plan.host_script);
@@ -8932,7 +8959,7 @@ impl Cabin {
             let row = crate::cards::session_row(ui, &session_now, &perm_now);
             if let Some(mode) = row.mode {
                 if let Some(m) = SessionMode::parse(&mode) {
-                    if self.running && self.acp.is_some() {
+                    if self.running {
                         self.halt_in_flight();
                     }
                     self.session_mode = m;
@@ -8943,7 +8970,7 @@ impl Cabin {
             }
             if let Some(perm) = row.perm {
                 if let Some(p) = PermissionMode::parse(&perm) {
-                    if self.running && self.acp.is_some() {
+                    if self.running {
                         self.halt_in_flight();
                     }
                     self.permission_mode = p;
@@ -9273,17 +9300,29 @@ impl Cabin {
             }
         }
         let p = expand_home(&self.cfg.project_dir);
+        let tree_changed = self
+            .threads
+            .get(self.thread_idx)
+            .and_then(|t| t.grok_cwd.as_deref())
+            .map(|cwd| cwd != p)
+            .unwrap_or(false);
         self.cfg.project_dir = p.clone();
         if !p.trim().is_empty() {
             let _ = std::fs::create_dir_all(&p);
         }
         self.project_sel = upsert_bound(&mut self.projects, &p);
         self.touch_projects();
-        if self.running && self.acp.is_some() {
+        if self.running {
             self.halt_in_flight();
         }
         self.acp = None;
         self.acp_spawn_rx = None;
+        if tree_changed {
+            if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                t.grok_cwd = None;
+                t.grok_session = None;
+            }
+        }
         let _ = secrets::save(&self.secrets);
         match config::save(&self.cfg) {
             Ok(()) => self.status = "Saved".into(),
@@ -11401,7 +11440,7 @@ mod tests {
             "/plan during handshake must drop the in-flight Ask agent: {plan}"
         );
         assert!(
-            plan.contains("halt_in_flight") && plan.contains("self.acp.is_some()"),
+            plan.contains("halt_in_flight"),
             "/plan mid-turn must halt or Thinking sticks after the agent is dropped: {plan}"
         );
         let row = src
@@ -11806,9 +11845,11 @@ mod tests {
             persist.contains("snap.secrets = Some") && persist.contains("persist_io"),
             "foreground persist must write secrets under persist_io: {persist}"
         );
+        let persist_spawn = persist.find("thread::spawn").expect("persist must leave the UI thread");
+        let persist_write = persist.find("write_persist_disk").expect("persist writes");
         assert!(
-            persist.contains("try_lock") && persist.contains("thread::spawn"),
-            "foreground persist must not freeze the cabin waiting on idle persist_bg: {persist}"
+            persist_spawn < persist_write && persist.contains("io.lock()"),
+            "foreground persist must not freeze the cabin writing threads.json: {persist}"
         );
         assert!(
             bearer.contains("persist_io.lock") && bearer.contains("secrets::save"),
@@ -11887,6 +11928,14 @@ mod tests {
             bind.contains("acp_spawn_rx = None"),
             "/project bind during handshake must drop the in-flight agent: {bind}"
         );
+        assert!(
+            bind.contains("halt_in_flight") && !bind.contains("self.acp.is_some()"),
+            "/project bind during handshake must halt, not only drop a live ACP handle: {bind}"
+        );
+        assert!(
+            bind.contains("grok_cwd = None") && bind.contains("grok_session = None"),
+            "/project bind must forget the thread worktree or the next send stays in a History tree: {bind}"
+        );
         let clear = src
             .split("Slash::ProjectClear =>")
             .nth(1)
@@ -11895,6 +11944,14 @@ mod tests {
         assert!(
             clear.contains("acp_spawn_rx = None"),
             "/project clear during handshake must drop the in-flight agent: {clear}"
+        );
+        assert!(
+            clear.contains("halt_in_flight") && !clear.contains("self.acp.is_some()"),
+            "/project clear during handshake must halt, not only drop a live ACP handle: {clear}"
+        );
+        assert!(
+            clear.contains("grok_cwd = None") && clear.contains("grok_session = None"),
+            "/project clear must forget the thread worktree or the next send stays in a History tree: {clear}"
         );
         let sidebar = src
             .split("fn bind_project_id(")
@@ -11905,6 +11962,14 @@ mod tests {
             sidebar.contains("acp_spawn_rx = None") && sidebar.contains("self.acp = None"),
             "sidebar bind during handshake must drop the in-flight agent: {sidebar}"
         );
+        assert!(
+            sidebar.contains("halt_in_flight") && !sidebar.contains("self.acp.is_some()"),
+            "sidebar bind during handshake must halt, not only drop a live ACP handle: {sidebar}"
+        );
+        assert!(
+            sidebar.contains("grok_cwd = None") && sidebar.contains("grok_session = None"),
+            "sidebar bind must forget the thread worktree or the next send stays in a History tree: {sidebar}"
+        );
         let room = src
             .split("Slash::Room(name)")
             .nth(1)
@@ -11913,6 +11978,14 @@ mod tests {
         assert!(
             room.contains("acp_spawn_rx = None"),
             "/room during handshake must drop the in-flight agent: {room}"
+        );
+        assert!(
+            room.contains("halt_in_flight") && !room.contains("self.acp.is_some()"),
+            "/room during handshake must halt, not only drop a live ACP handle: {room}"
+        );
+        assert!(
+            room.contains("grok_cwd = None") && room.contains("grok_session = None"),
+            "/room must forget the thread worktree or the next send stays in a History tree: {room}"
         );
         let ext = src
             .split("fn run_grok_extension(")
