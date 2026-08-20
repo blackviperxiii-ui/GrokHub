@@ -451,11 +451,6 @@ fn settings_sec_title(sec: SettingsSec) -> &'static str {
     }
 }
 
-struct Msg {
-    role: String,
-    content: String,
-}
-
 #[derive(Default)]
 struct ImagineBarOut {
     generate: bool,
@@ -867,7 +862,7 @@ pub struct Cabin {
     nav: Nav,
     cfg: AppConfig,
     composer: String,
-    messages: Vec<Msg>,
+    messages: Arc<Vec<(String, String)>>,
     status: String,
     running: bool,
     host_halt: Arc<AtomicBool>,
@@ -1188,20 +1183,12 @@ impl Cabin {
             .position(|t| keep_id.as_deref() == Some(t.id.as_str()))
             .or_else(|| threads.iter().position(|t| t.id == cfg.current_thread))
             .unwrap_or(0);
-        let messages: Vec<Msg> = threads
+        let messages = threads
             .get(thread_idx)
-            .map(|t| {
-                t.messages
-                    .iter()
-                    .map(|(role, content)| Msg {
-                        role: role.clone(),
-                        content: content.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let imagine_last = last_imagine_receipt(messages.iter().map(|m| m.content.as_str()))
-            .unwrap_or_default();
+            .map(|t| t.messages.clone())
+            .unwrap_or_else(|| Arc::new(Vec::new()));
+        let imagine_last =
+            last_imagine_receipt(messages.iter().map(|(_, c)| c.as_str())).unwrap_or_default();
         let mut cfg = cfg;
         if cfg.source_dir.trim().is_empty() {
             if let Some(src) = resolve_source("") {
@@ -1556,18 +1543,7 @@ impl Cabin {
 
     fn persist_snap(&mut self) -> PersistSnap {
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            let parked = t.messages.len();
-            let parked_last = t.messages.last().map(|(_, c)| c.len()).unwrap_or(0);
-            let live = self.messages.len();
-            let live_last = self.messages.last().map(|m| m.content.len()).unwrap_or(0);
-            if parked != live || parked_last != live_last {
-                t.messages = Arc::new(
-                    self.messages
-                        .iter()
-                        .map(|m| (m.role.clone(), m.content.clone()))
-                        .collect(),
-                );
-            }
+            t.messages = self.messages.clone();
             self.cfg.current_thread = t.id.clone();
         }
         let projects = if self.projects_dirty {
@@ -1604,7 +1580,7 @@ impl Cabin {
             self.threads.len(),
             self.thread_idx,
             self.messages.len(),
-            self.messages.last().map(|m| m.content.len()).unwrap_or(0),
+            self.messages.last().map(|(_, c)| c.len()).unwrap_or(0),
             self.board.len(),
             self.automations.len(),
             self.usage.day,
@@ -1738,8 +1714,8 @@ impl Cabin {
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.clone();
         if job.as_deref().is_none_or(|id| id == vis) {
-            if self.messages.last().is_some_and(|m| m.role == "assistant") {
-                self.messages.pop();
+            if self.messages.last().is_some_and(|m| m.0 == "assistant") {
+                self.live_mut().pop();
             }
             self.stamp_current_access();
         } else if let Some(id) = job.as_deref() {
@@ -1765,20 +1741,15 @@ impl Cabin {
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.as_deref();
         if job.is_none() || job == Some(vis.as_str()) {
-            if let Some(m) = self.messages.last_mut() {
-                if m.role == "assistant" {
-                    m.content = content;
+            let msgs = self.live_mut();
+            if let Some(m) = msgs.last_mut() {
+                if m.0 == "assistant" {
+                    m.1 = content;
                 } else {
-                    self.messages.push(Msg {
-                        role: "assistant".into(),
-                        content,
-                    });
+                    msgs.push(("assistant".into(), content));
                 }
             } else {
-                self.messages.push(Msg {
-                    role: "assistant".into(),
-                    content,
-                });
+                msgs.push(("assistant".into(), content));
             }
         } else if let Some(job_id) = job {
             if let Some(t) = self.threads.iter_mut().find(|t| t.id == job_id) {
@@ -1799,10 +1770,7 @@ impl Cabin {
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.as_deref();
         if job.is_none() || job == Some(vis.as_str()) {
-            self.messages.push(Msg {
-                role: role.to_string(),
-                content,
-            });
+            self.live_mut().push((role.to_string(), content));
             if let Some(t) = self.threads.iter_mut().find(|t| t.id == vis) {
                 t.accessed_ms = now_ms();
             }
@@ -1987,10 +1955,7 @@ impl Cabin {
         };
         match rx.try_recv() {
             Ok(body) => {
-                self.messages.push(Msg {
-                    role: "assistant".into(),
-                    content: mark_slash_result(&body),
-                });
+                self.live_mut().push(("assistant".into(), mark_slash_result(&body)));
                 self.stamp_current_access();
                 self.persist();
             }
@@ -2021,16 +1986,14 @@ impl Cabin {
                 else {
                     return;
                 };
+                let filled = Arc::new(msgs);
                 if let Some(t) = self.threads.get_mut(i) {
                     if t.messages.is_empty() {
-                        t.messages = Arc::new(msgs.clone());
+                        t.messages = filled.clone();
                     }
                 }
                 if i == self.thread_idx && self.messages.is_empty() {
-                    self.messages = msgs
-                        .into_iter()
-                        .map(|(role, content)| Msg { role, content })
-                        .collect();
+                    self.messages = filled;
                 }
                 self.persist_bg();
             }
@@ -3000,7 +2963,7 @@ impl Cabin {
     fn chat_pairs(&self) -> Vec<(String, String)> {
         self.messages
             .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
+            .map(|m| (m.0.clone(), m.1.clone()))
             .collect()
     }
 
@@ -3009,7 +2972,7 @@ impl Cabin {
     fn chip_chat_pairs(&self) -> Vec<(String, String)> {
         self.messages
             .iter()
-            .map(|m| (m.role.clone(), chip_scan(&m.content).to_string()))
+            .map(|m| (m.0.clone(), chip_scan(&m.1).to_string()))
             .collect()
     }
 
@@ -3349,7 +3312,7 @@ impl Cabin {
         }
         let hour = Self::chip_hour();
         let n = self.messages.len();
-        let last = self.messages.last().map(|m| m.content.len()).unwrap_or(0);
+        let last = self.messages.last().map(|m| m.1.len()).unwrap_or(0);
         let title = self
             .threads
             .get(self.thread_idx)
@@ -3610,35 +3573,29 @@ impl Cabin {
         self.persist_bg();
     }
 
+    fn live_mut(&mut self) -> &mut Vec<(String, String)> {
+        Arc::make_mut(&mut self.messages)
+    }
+
     fn apply_switch_thread(&mut self, idx: usize) {
         let idx = idx.min(self.threads.len().saturating_sub(1));
         if idx != self.thread_idx {
             if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                t.messages = Arc::new(
-                    self.messages.drain(..).map(|m| (m.role, m.content)).collect(),
-                );
+                t.messages = self.messages.clone();
                 flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
             }
             self.thread_idx = idx;
             self.messages = self
                 .threads
                 .get(self.thread_idx)
-                .map(|t| {
-                    t.messages
-                        .iter()
-                        .map(|(role, content)| Msg {
-                            role: role.clone(),
-                            content: content.clone(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+                .map(|t| t.messages.clone())
+                .unwrap_or_else(|| Arc::new(Vec::new()));
         } else if let Some(t) = self.threads.get_mut(self.thread_idx) {
             flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
         }
         self.rename_idx = None;
         self.imagine_last =
-            last_imagine_receipt(self.messages.iter().map(|m| m.content.as_str())).unwrap_or_default();
+            last_imagine_receipt(self.messages.iter().map(|(_, c)| c.as_str())).unwrap_or_default();
         self.cfg.goal_pin = self
             .threads
             .get(self.thread_idx)
@@ -3718,15 +3675,13 @@ impl Cabin {
             return;
         }
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.messages = Arc::new(
-                self.messages.drain(..).map(|m| (m.role, m.content)).collect(),
-            );
+            t.messages = self.messages.clone();
             flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
         }
         let title = if scratch { "Scratch" } else { "Chat" };
         self.threads.push(ChatThread::new(title, scratch));
         self.thread_idx = self.threads.len() - 1;
-        self.messages.clear();
+        self.messages = Arc::new(Vec::new());
         self.imagine_last.clear();
         self.cfg.goal_pin.clear();
         self.goal_step = 0;
@@ -3799,7 +3754,7 @@ impl Cabin {
                 self.threads.clear();
                 self.threads.push(ChatThread::new("Chat", false));
                 self.thread_idx = 0;
-                self.messages.clear();
+                self.messages = self.threads[0].messages.clone();
                 self.imagine_last.clear();
                 self.cfg.goal_pin.clear();
                 self.goal_step = 0;
@@ -3818,18 +3773,10 @@ impl Cabin {
                     self.messages = self
                         .threads
                         .get(next)
-                        .map(|t| {
-                            t.messages
-                                .iter()
-                                .map(|(role, content)| Msg {
-                                    role: role.clone(),
-                                    content: content.clone(),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                        .map(|t| t.messages.clone())
+                        .unwrap_or_else(|| Arc::new(Vec::new()));
                     self.imagine_last = last_imagine_receipt(
-                        self.messages.iter().map(|m| m.content.as_str()),
+                        self.messages.iter().map(|m| m.1.as_str()),
                     )
                     .unwrap_or_default();
                     self.cfg.goal_pin = self
@@ -3873,7 +3820,7 @@ impl Cabin {
                 let prev = last_user_scan(
                     self.messages
                         .iter()
-                        .map(|m| (m.role.as_str(), m.content.as_str())),
+                        .map(|m| (m.0.as_str(), m.1.as_str())),
                 )
                 .unwrap_or_default();
                 self.halt_work("Redirected");
@@ -3914,10 +3861,7 @@ impl Cabin {
                 self.active_skill_follow = Some(skill_follow_block(sk));
             }
         }
-        self.messages.push(Msg {
-            role: "user".into(),
-            content: text.clone(),
-        });
+        self.live_mut().push(("user".into(), text.clone()));
         self.eyes_attach = false;
         self.hands_attach = false;
         self.followup_step = 0;
@@ -4035,31 +3979,24 @@ impl Cabin {
                 self.kick_imagine();
             }
             Slash::Compact => {
-                let pin = if self.cfg.goal_pin.trim().is_empty() {
-                    None
-                } else {
-                    Some(self.cfg.goal_pin.as_str())
-                };
+                let pin = self.cfg.goal_pin.trim().to_string();
                 let start = compact_keep_start_from(
-                    self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+                    self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
                     8,
                 );
                 if start > 0 {
-                    self.messages.drain(..start);
+                    self.live_mut().drain(..start);
                 }
-                if let Some(pin) = pin.map(str::trim).filter(|s| !s.is_empty()) {
+                if !pin.is_empty() {
                     let marked = format!("GOAL PIN: {pin}");
                     if !self
                         .messages
                         .iter()
-                        .any(|m| m.content == marked || m.content.starts_with(&format!("{marked}\n")))
+                        .any(|m| m.1 == marked || m.1.starts_with(&format!("{marked}\n")))
                     {
-                        self.messages.insert(
+                        self.live_mut().insert(
                             0,
-                            Msg {
-                                role: "system".into(),
-                                content: marked,
-                            },
+                            ("system".into(), marked),
                         );
                     }
                 }
@@ -4078,10 +4015,7 @@ impl Cabin {
             Slash::LearnReflect => self.run_reflect(),
             Slash::Update => self.queue_update(),
             Slash::Help => {
-                self.messages.push(Msg {
-                    role: "assistant".into(),
-                    content: mark_slash_result(&slash_help()),
-                });
+                self.live_mut().push(("assistant".into(), mark_slash_result(&slash_help())));
                 self.stamp_current_access();
                 self.persist();
             }
@@ -4095,13 +4029,13 @@ impl Cabin {
                     self.finish_hub_dispatch("Cleared in-flight reply", false);
                 }
                 self.drop_leaving_thread_chrome();
-                self.messages.clear();
+                self.messages = Arc::new(Vec::new());
                 self.followup_step = 0;
                 self.active_skill_follow = None;
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
                     t.grok_session = None;
                     t.grok_cwd = None;
-                    t.messages_mut().clear();
+                    t.messages = self.messages.clone();
                 }
                 self.stamp_current_access();
                 self.persist();
@@ -4112,8 +4046,8 @@ impl Cabin {
                     self.halt_in_flight();
                     self.finish_hub_dispatch("Undid in-flight reply", false);
                     self.status = "Undid in-flight reply".into();
-                } else if let Some(i) = self.messages.iter().rposition(|m| m.role == "assistant") {
-                    self.messages.remove(i);
+                } else if let Some(i) = self.messages.iter().rposition(|m| m.0 == "assistant") {
+                    self.live_mut().remove(i);
                     self.followup_step = 0;
                     self.active_skill_follow = None;
                     self.stamp_current_access();
@@ -4128,9 +4062,9 @@ impl Cabin {
                     .messages
                     .iter()
                     .rev()
-                    .find(|m| m.role == "user" && !is_workload_user(&m.content))
+                    .find(|m| m.0 == "user" && !is_workload_user(&m.1))
                 {
-                    let t = m.content.clone();
+                    let t = m.1.clone();
                     self.kick_model_retry(t);
                 } else {
                     self.status = "Nothing to retry".into();
@@ -4146,10 +4080,10 @@ impl Cabin {
             Slash::Delete => self.delete_thread_at(self.thread_idx),
             Slash::Context => {
                 let n = visible_turn_count_from(
-                    self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+                    self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
                 );
                 let tokens = estimate_messages_from(
-                    self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+                    self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
                 );
                 self.status = format!(
                     "{n} turns · {} tokens · {}% · pin {}",
@@ -4186,10 +4120,7 @@ impl Cabin {
                 self.status = usage_line(&self.usage);
             }
             Slash::Models => {
-                self.messages.push(Msg {
-                    role: "assistant".into(),
-                    content: mark_slash_result(&catalog_line()),
-                });
+                self.live_mut().push(("assistant".into(), mark_slash_result(&catalog_line())));
                 self.stamp_current_access();
                 self.persist();
             }
@@ -4439,7 +4370,7 @@ impl Cabin {
                 let mut thread_rows = Vec::new();
                 for (i, t) in self.threads.iter().enumerate() {
                     let body = if i == vis {
-                        search_thread_body(self.messages.iter().map(|m| m.content.as_str()))
+                        search_thread_body(self.messages.iter().map(|m| m.1.as_str()))
                     } else {
                         search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()))
                     };
@@ -4531,7 +4462,7 @@ impl Cabin {
             last_user_scan(
                 self.messages
                     .iter()
-                    .map(|m| (m.role.as_str(), m.content.as_str())),
+                    .map(|m| (m.0.as_str(), m.1.as_str())),
             )
         };
         if job.is_none() || job == Some(vis.as_str()) {
@@ -4627,7 +4558,7 @@ impl Cabin {
         let here = self.chat_job_thread.as_deref().is_none_or(|id| id == vis);
         let tokens = if here {
             estimate_messages_from(
-                self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+                self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
             )
         } else {
             self.threads
@@ -4641,13 +4572,15 @@ impl Cabin {
         }
         if here {
             trim_result_bodies_in_place(
-                self.messages
+                self.live_mut()
                     .iter_mut()
-                    .map(|m| (m.role.as_str(), &mut m.content)),
+                    .map(|m| (m.0.as_str(), &mut m.1)),
                 RESULT_TRIM_KEEP_HOPS,
             );
-        }
-        if let Some(t) = self.threads.iter_mut().find(|t| t.id == origin) {
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == origin) {
+                t.messages = self.messages.clone();
+            }
+        } else if let Some(t) = self.threads.iter_mut().find(|t| t.id == origin) {
             trim_result_bodies_in_place(
                 t.messages_mut().iter_mut().map(|(r, c)| (r.as_str(), c)),
                 RESULT_TRIM_KEEP_HOPS,
@@ -4870,7 +4803,7 @@ impl Cabin {
     }
 
     fn visible_host_receipts(&self) -> Vec<(String, bool)> {
-        thread_host_receipts_from(self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())))
+        thread_host_receipts_from(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
             .into_iter()
             .map(|body| {
                 let ok = !crate::update::host_receipt_failed(&body);
@@ -4916,14 +4849,14 @@ impl Cabin {
             .goal
             .clone()
             .unwrap_or_else(|| "Dream of last night".into());
-        self.messages.push(Msg {
-            role: "assistant".into(),
-            content: format!(
+        self.live_mut().push((
+            "assistant".into(),
+            format!(
                 "{}\n\n{}",
                 g.goal.unwrap_or_else(|| "Last night".into()),
                 g.dream_prompt
             ),
-        });
+        ));
         self.stamp_current_access();
         self.persist();
         self.kick_imagine();
@@ -5476,7 +5409,7 @@ impl Cabin {
             .unwrap_or("");
         let mut thread_lines = Vec::new();
         for m in self.messages.iter().rev() {
-            if let Some(line) = digest_line_from(&m.role, &m.content) {
+            if let Some(line) = digest_line_from(&m.0, &m.1) {
                 thread_lines.push(line);
                 if thread_lines.len() >= 24 {
                     break;
@@ -5501,7 +5434,7 @@ impl Cabin {
         }
         thread_lines.reverse();
         let mut host_receipts = thread_host_receipts_from(
-            self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+            self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
         );
         for t in self.threads.iter().rev() {
             if t.id == current {
@@ -6314,8 +6247,8 @@ impl Cabin {
                 self.messages
                     .iter()
                     .rev()
-                    .find(|m| m.role == "user" && !is_workload_user(&m.content))
-                    .map(|m| m.content.clone())
+                    .find(|m| m.0 == "user" && !is_workload_user(&m.1))
+                    .map(|m| m.1.clone())
                     .unwrap_or_default()
             } else {
                 self.threads
@@ -6332,8 +6265,8 @@ impl Cabin {
                         self.messages
                             .iter()
                             .rev()
-                            .find(|m| m.role == "user" && !is_workload_user(&m.content))
-                            .map(|m| m.content.clone())
+                            .find(|m| m.0 == "user" && !is_workload_user(&m.1))
+                            .map(|m| m.1.clone())
                             .unwrap_or_default()
                     })
             }
@@ -6683,7 +6616,7 @@ impl Cabin {
                 let last_user = self.last_user_on_job();
                 let facts = if job.as_deref().is_none_or(|id| id == vis) {
                     fact_candidates_from(
-                        self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+                        self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
                     )
                 } else {
                     self.threads
@@ -6692,13 +6625,13 @@ impl Cabin {
                         .map(|t| fact_candidates(&t.messages))
                         .unwrap_or_else(|| {
                             fact_candidates_from(
-                                self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+                                self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
                             )
                         })
                 };
                 let tokens = if job.as_deref().is_none_or(|id| id == vis) {
                     estimate_messages_from(
-                        self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+                        self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
                     )
                 } else {
                     self.threads
@@ -7501,15 +7434,15 @@ impl Cabin {
         let job = self.chat_job_thread.clone();
         if job.as_deref().map(|id| id == vis).unwrap_or(true) {
             let text = format!("Error: {err}");
-            if self.messages.last().is_some_and(|m| m.role == "assistant") {
-                if let Some(last) = self.messages.last_mut() {
-                    last.content = text;
+            {
+                let msgs = self.live_mut();
+                if msgs.last().is_some_and(|m| m.0 == "assistant") {
+                    if let Some(last) = msgs.last_mut() {
+                        last.1 = text;
+                    }
+                } else {
+                    msgs.push(("assistant".into(), text));
                 }
-            } else {
-                self.messages.push(Msg {
-                    role: "assistant".into(),
-                    content: text,
-                });
             }
             self.stamp_current_access();
             return err.to_string();
@@ -7615,7 +7548,7 @@ impl Cabin {
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.as_deref();
         let facts = if job.is_none() || job == Some(vis.as_str()) {
-            fact_candidates_from(self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())))
+            fact_candidates_from(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
         } else {
             self.threads
                 .iter()
@@ -7623,7 +7556,7 @@ impl Cabin {
                 .map(|t| fact_candidates(&t.messages))
                 .unwrap_or_else(|| {
                     fact_candidates_from(
-                        self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+                        self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
                     )
                 })
         };
@@ -7933,8 +7866,8 @@ impl Cabin {
             .messages
             .iter()
             .rev()
-            .find(|m| m.role == "user")
-            .map(|m| m.content.as_str());
+            .find(|m| m.0 == "user")
+            .map(|m| m.1.as_str());
         let mut frame_note = None;
         let captured_ok = if self.cfg.cabin_eyes {
             self.last_window_title = rows
@@ -8182,13 +8115,13 @@ impl Cabin {
                         } else {
                             let push = {
                                 let last = self
-                                    .messages
+                                    .live_mut()
                                     .last_mut()
-                                    .map(|m| (m.role.as_str(), &mut m.content));
+                                    .map(|m| (m.0.as_str(), &mut m.1));
                                 fold_stream_fields(last, role, text, kind)
                             };
                             if let Some((role, content)) = push {
-                                self.messages.push(Msg { role, content });
+                                self.live_mut().push((role, content));
                             }
                             if matches!(kind, StreamTokenKind::Replace) && voice_log_role(&ev).is_some()
                             {
@@ -9508,14 +9441,14 @@ impl Cabin {
     fn cached_chat_views(&mut self) -> &[ChatView] {
         let tid = self.visible_thread_id();
         let n = self.messages.len();
-        let last = self.messages.last().map(|m| m.content.len()).unwrap_or(0);
+        let last = self.messages.last().map(|m| m.1.len()).unwrap_or(0);
         if self.chat_view_tid == tid && self.chat_view_n == n && self.chat_view_last == last {
             return &self.chat_views;
         }
         let refs: Vec<(&str, &str)> = self
             .messages
             .iter()
-            .map(|m| (m.role.as_str(), m.content.as_str()))
+            .map(|m| (m.0.as_str(), m.1.as_str()))
             .collect();
         if self.chat_view_tid == tid && self.chat_view_n == n && !self.chat_views.is_empty() {
             refresh_last_stretch(&mut self.chat_views, &refs);
@@ -10842,7 +10775,7 @@ impl Cabin {
                     let mut thread_rows = Vec::new();
                     for (i, t) in self.threads.iter().enumerate() {
                         let body = if i == vis {
-                            search_thread_body(self.messages.iter().map(|m| m.content.as_str()))
+                            search_thread_body(self.messages.iter().map(|m| m.1.as_str()))
                         } else {
                             search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()))
                         };
@@ -12360,7 +12293,7 @@ mod tests {
             .and_then(|s| s.split("fn ui_chat(").next())
             .expect("cached_chat_views");
         assert!(
-            !cache.contains("m.content.clone()") && !cache.contains("role.clone()"),
+            !cache.contains("m.1.clone()") && !cache.contains("role.clone()"),
             "a stream delta must not clone every message to rebuild chat views: {cache}"
         );
         assert!(
@@ -13170,12 +13103,13 @@ mod tests {
             "persist_snap must copy the live pane into the thread once, not again into PersistSnap.msgs: {snap}"
         );
         assert!(
-            snap.contains("Arc::new") && snap.contains("self.threads.clone()"),
-            "persist must clone the live pane into a new Arc, then bump other threads: {snap}"
+            snap.contains("t.messages = self.messages.clone()")
+                && snap.contains("self.threads.clone()"),
+            "persist must share the live pane Arc, then bump other threads: {snap}"
         );
         assert!(
-            snap.contains("parked_last") && snap.contains("live_last"),
-            "persist_snap must not clone the live pane when pin/title left it parked: {snap}"
+            !snap.contains("parked_last") && !snap.contains("live_last"),
+            "persist_snap must not recopy bodies when the live pane already is the parked Arc: {snap}"
         );
         assert!(
             snap.contains("self.hub.clone()") && !snap.contains("state_for_disk"),
@@ -14020,7 +13954,7 @@ mod tests {
             compact.contains("compact_keep_start_from") && !compact.contains("content.clone()"),
             "/compact must drain dropped turns without cloning an 8MB pane: {compact}"
         );
-        let pushed = send.find("messages.push").expect("user turn");
+        let pushed = send.find("live_mut().push").expect("user turn");
         let saved = send.find("self.persist()").expect("send persist");
         assert!(
             send[pushed..saved].contains("stamp_current_access")
@@ -14196,8 +14130,8 @@ mod tests {
             "/new reuse must not clone every thread twice — switch without persist_bg, then persist once: {created}"
         );
         assert!(
-            created.contains("messages.drain") && created.contains("Arc::new"),
-            "/new must move the leaving pane, not clone an 8MB HOST_RESULT: {created}"
+            created.contains("self.messages.clone()") && created.contains("Arc::new"),
+            "/new must share the leaving pane Arc, not clone an 8MB HOST_RESULT: {created}"
         );
         let boot = src
             .split("pub fn new(hidden: bool)")
@@ -14234,8 +14168,10 @@ mod tests {
             "tab switch persist_bg must share the pane swap with /new reuse: {switched}"
         );
         assert!(
-            switched.contains("messages.drain") && switched.contains("Arc::new"),
-            "tab switch must move the leaving pane, not clone an 8MB HOST_RESULT: {switched}"
+            switched.contains("self.messages.clone()")
+                && switched.contains("live_mut")
+                && switched.contains("Arc::make_mut"),
+            "tab switch must share the parked pane Arc; first mutation copy-on-writes: {switched}"
         );
         let chrome = src
             .split("fn drop_leaving_thread_chrome")
@@ -15333,7 +15269,7 @@ mod tests {
             "/dream must use this tab's host receipts, not cabin-global last_receipts: {dream}"
         );
         let key = dream.find("llm_ready").expect("dream auth");
-        let push = dream.find("messages.push").expect("dream push");
+        let push = dream.find("live_mut().push").expect("dream push");
         assert!(
             key < push && dream.contains("self.running"),
             "/dream must not persist a turn when Imagine cannot start: {dream}"
