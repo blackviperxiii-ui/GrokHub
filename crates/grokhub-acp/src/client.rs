@@ -558,6 +558,9 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                             continue;
                         }
                         if method == "session/request_permission" {
+                            if swallow_load.load(Ordering::SeqCst) {
+                                continue;
+                            }
                             if let Some(id) = msg.id {
                                 let _ = evt_tx.send(AcpEvent::Permission(parse_permission(
                                     id,
