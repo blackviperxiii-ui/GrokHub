@@ -7,7 +7,8 @@ use grokhub_core::{
 };
 use serde_json::Value;
 use std::io::Read;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 const UA: &str = concat!("GrokHub/", env!("CARGO_PKG_VERSION"), " (xAI OAuth; Linux)");
 const PHOTO_MAX: u64 = 2 * 1024 * 1024;
@@ -140,9 +141,41 @@ pub fn refresh_tokens(refresh_token: &str) -> Result<XaiOAuthTokens, String> {
 }
 
 /// Refresh a `grok login` JWT (CLI client id, not cabin OAuth) and write it back.
+fn grok_login_refresh_fail_at() -> &'static Mutex<Option<Instant>> {
+    static C: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(None))
+}
+
 pub fn refresh_grok_login() -> Option<String> {
+    if let Ok(held) = grok_login_refresh_fail_at().lock() {
+        if let Some(at) = *held {
+            if at.elapsed() < Duration::from_secs(30) {
+                return None;
+            }
+        }
+    }
+    let out = refresh_grok_login_now();
+    if let Ok(mut held) = grok_login_refresh_fail_at().lock() {
+        *held = if out.is_none() {
+            Some(Instant::now())
+        } else {
+            None
+        };
+    }
+    out
+}
+
+fn refresh_grok_login_now() -> Option<String> {
     let path = grokhub_acp::grok_auth_path()?;
-    let raw = std::fs::read_to_string(&path).ok()?;
+    let mut raw = String::new();
+    std::fs::File::open(&path)
+        .ok()?
+        .take(TEXT_FILE_CAP as u64)
+        .read_to_string(&mut raw)
+        .ok()?;
+    if raw.is_empty() {
+        return None;
+    }
     let mut v: Value = serde_json::from_str(&raw).ok()?;
     let obj = v.as_object_mut()?;
     let mut slot: Option<String> = None;
@@ -434,6 +467,29 @@ mod tests {
         assert!(
             UA.contains(concat!("GrokHub/", env!("CARGO_PKG_VERSION"))),
             "oauth UA must track the cabin version, got {UA}"
+        );
+    }
+
+    #[test]
+    fn grok_login_refresh_does_not_hammer_the_ui_thread() {
+        let src = include_str!("oauth.rs");
+        let wrap = src
+            .split("pub fn refresh_grok_login(")
+            .nth(1)
+            .and_then(|s| s.split("fn refresh_grok_login_now(").next())
+            .expect("refresh_grok_login");
+        assert!(
+            wrap.contains("elapsed") && wrap.contains("from_secs(30)"),
+            "a failed grok login refresh must not retry every chip/Imagine paint: {wrap}"
+        );
+        let now = src
+            .split("fn refresh_grok_login_now(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn ensure_access(").next())
+            .expect("refresh_grok_login_now");
+        assert!(
+            now.contains("TEXT_FILE_CAP") && now.contains(".take(") && !now.contains("read_to_string(&path)"),
+            "grok login refresh must not slurp a huge auth.json: {now}"
         );
     }
 }
