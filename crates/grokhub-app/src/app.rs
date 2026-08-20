@@ -1041,6 +1041,7 @@ pub struct Cabin {
     plus_ignore_close: bool,
     file_pick: Option<PlusTarget>,
     pick_rx: Option<mpsc::Receiver<(PlusTarget, PlusPick)>>,
+    pick_list_rx: Option<mpsc::Receiver<(String, Vec<(String, bool)>)>>,
     pick_dir: String,
     pick_cache: Option<(String, Vec<(String, bool)>)>,
     projects: Vec<ProjectNode>,
@@ -1395,6 +1396,7 @@ impl Cabin {
             plus_ignore_close: false,
             file_pick: None,
             pick_rx: None,
+            pick_list_rx: None,
             pick_dir: std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()),
             pick_cache: None,
             projects,
@@ -2316,13 +2318,44 @@ impl Cabin {
             .as_ref()
             .map(|(cached, _)| cached != &dir)
             .unwrap_or(true);
-        if stale {
-            self.pick_cache = Some((dir.clone(), Self::pick_entries(Path::new(&dir))));
+        if stale && self.pick_list_rx.is_none() {
+            let (tx, rx) = mpsc::channel();
+            self.pick_list_rx = Some(rx);
+            std::thread::spawn(move || {
+                let entries = Self::pick_entries(Path::new(&dir));
+                let _ = tx.send((dir, entries));
+            });
         }
-        self.pick_cache
+        if self
+            .pick_cache
             .as_ref()
-            .map(|(_, entries)| entries.as_slice())
-            .unwrap_or(&[])
+            .map(|(cached, _)| cached == &self.pick_dir)
+            .unwrap_or(false)
+        {
+            return self
+                .pick_cache
+                .as_ref()
+                .map(|(_, entries)| entries.as_slice())
+                .unwrap_or(&[]);
+        }
+        &[]
+    }
+
+    fn poll_pick_list(&mut self) {
+        let Some(rx) = self.pick_list_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((dir, entries)) => {
+                if dir == self.pick_dir {
+                    self.pick_cache = Some((dir, entries));
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.pick_list_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
     }
 
     fn ui_plus_overlays(&mut self, ctx: &egui::Context) {
@@ -5884,6 +5917,11 @@ impl Cabin {
                     self.finish_acp_turn(text);
                 }
                 AcpEvent::Err(e) => {
+                    if let Some(p) = self.perm_ask.take() {
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_permission(p.rpc_id, false);
+                        }
+                    }
                     self.running = false;
                     let e = grokhub_acp::explain_handshake_error(&e, &self.grok_cwd());
                     self.status = self.apply_job_fail(&e);
@@ -7631,6 +7669,7 @@ impl eframe::App for Cabin {
         self.poll_import_openclaw();
         self.poll_acp_spawn();
         self.poll_pick();
+        self.poll_pick_list();
         self.poll_eyes_cap();
         self.poll_recipe_cap();
         self.poll_replay_desk();
@@ -7733,6 +7772,7 @@ impl eframe::App for Cabin {
                 || self.import_rx.is_some()
                 || self.acp_spawn_rx.is_some()
                 || self.pick_rx.is_some()
+                || self.pick_list_rx.is_some()
                 || self.oauth_start_rx.is_some()
                 || self.oauth_poll_rx.is_some()
                 || self.night_check_rx.is_some()
@@ -11710,6 +11750,7 @@ mod tests {
                 && live.contains("import_rx")
                 && live.contains("acp_spawn_rx")
                 && live.contains("pick_rx")
+                && live.contains("pick_list_rx")
                 && live.contains("oauth_start_rx")
                 && live.contains("oauth_poll_rx")
                 && live.contains("greeting_busy")
@@ -12295,6 +12336,10 @@ mod tests {
             "session/cancel Done must not finish a live or redirected turn: {poll}"
         );
         assert!(
+            poll.contains("answer_permission") && poll.contains("AcpEvent::Err"),
+            "ACP Err must deny leftover Ask or the next send hangs: {poll}"
+        );
+        assert!(
             poll.contains("chat_job_thread"),
             "ACP Ready must stamp the job thread, not whichever tab is visible: {poll}"
         );
@@ -12498,6 +12543,12 @@ mod tests {
         assert!(
             cache.contains("pick_cache") && cache.contains("pick_entries("),
             "folder listing must reuse the last scan until pick_dir changes: {cache}"
+        );
+        let cache_spawn = cache.find("thread::spawn").expect("listing must leave the UI thread");
+        let cache_walk = cache.find("pick_entries(").expect("pick_entries");
+        assert!(
+            cache_spawn < cache_walk,
+            "Upload folder listing must not read_dir on the UI thread: {cache}"
         );
         let upload = src
             .split("PlusAct::Upload =>")
