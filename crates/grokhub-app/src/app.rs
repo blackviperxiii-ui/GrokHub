@@ -2822,7 +2822,7 @@ impl Cabin {
                 if add_to_folder(&mut self.projects, &id, None).is_ok() {
                     self.status = "Moved to Projects".into();
                     self.touch_projects();
-                    self.persist();
+                    self.flush_projects();
                 }
             }
             ProjectMenuAct::NewHere => self.stage_new_project(Some(&id)),
@@ -2843,7 +2843,7 @@ impl Cabin {
                 self.proj_staged = Some(id);
                 self.status = "Name this project".into();
                 self.touch_projects();
-                self.persist();
+                self.flush_projects();
             }
             Err(e) => self.status = e.into(),
         }
@@ -2855,7 +2855,7 @@ impl Cabin {
             Ok(i) => {
                 self.status = format!("Folder {}", self.projects[i].name);
                 self.touch_projects();
-                self.persist();
+                self.flush_projects();
             }
             Err(e) => self.status = e.into(),
         }
@@ -2869,7 +2869,7 @@ impl Cabin {
                 self.proj_staged = Some(id);
                 self.status = "Name this folder".into();
                 self.touch_projects();
-                self.persist();
+                self.flush_projects();
             }
             Err(e) => self.status = e.into(),
         }
@@ -2891,7 +2891,7 @@ impl Cabin {
             if self.proj_staged.as_deref() == Some(id.as_str()) {
                 drop_node(&mut self.projects, &id);
                 self.touch_projects();
-                self.persist();
+                self.flush_projects();
             }
         }
         self.proj_staged = None;
@@ -2923,13 +2923,14 @@ impl Cabin {
                     }
                 }
                 if !bound {
-                    self.persist();
+                    self.flush_projects();
                 }
             }
             Err(e) => {
                 if staged {
                     drop_node(&mut self.projects, &id);
                     self.touch_projects();
+                    self.flush_projects();
                 }
                 self.status = e.into();
             }
@@ -2950,7 +2951,7 @@ impl Cabin {
                 Ok(()) => {
                     self.status = "Moved to Projects".into();
                     self.touch_projects();
-                    self.persist();
+                    self.flush_projects();
                 }
                 Err(e) => self.status = e.into(),
             }
@@ -2972,7 +2973,7 @@ impl Cabin {
                 }
                 self.status = format!("Added to {folder}");
                 self.touch_projects();
-                self.persist();
+                self.flush_projects();
             }
             Err(e) => self.status = e.into(),
         }
@@ -4304,7 +4305,7 @@ impl Cabin {
                     Ok(()) => {
                         self.status = format!("Renamed {name}");
                         self.touch_projects();
-                        self.persist();
+                        self.flush_projects();
                     }
                     Err(e) => self.status = e.into(),
                 }
@@ -8241,7 +8242,7 @@ impl Cabin {
                             self.status = "Moved to Projects".into();
                         }
                         self.touch_projects();
-                        self.persist();
+                        self.flush_projects();
                     }
                     Err(e) => self.status = e.into(),
                 }
@@ -13736,6 +13737,50 @@ mod tests {
         assert!(
             flush_spawn < flush_save && flush_p.contains("persist_io"),
             "folder click must not freeze the cabin writing projects.json: {flush_p}"
+        );
+        let folders = src
+            .split("fn stage_new_project(")
+            .nth(1)
+            .and_then(|s| s.split("fn chat_pairs").next())
+            .expect("stage_new_project");
+        assert!(
+            folders.contains("self.flush_projects()")
+                && !folders.contains("self.persist()")
+                && !folders.contains("persist_snap"),
+            "folder create/rename/move must not clone every thread just to write projects.json: {folders}"
+        );
+        let menu = src
+            .split("fn apply_project_menu(")
+            .nth(1)
+            .and_then(|s| s.split("fn stage_new_project(").next())
+            .expect("apply_project_menu");
+        assert!(
+            menu.contains("self.flush_projects()")
+                && !menu.contains("self.persist()")
+                && !menu.contains("persist_snap"),
+            "Remove from folder must not clone every thread just to write projects.json: {menu}"
+        );
+        let rename = src
+            .split("Slash::ProjectRename")
+            .nth(1)
+            .and_then(|s| s.split("Slash::ProjectMove").next())
+            .expect("ProjectRename");
+        assert!(
+            rename.contains("self.flush_projects()")
+                && !rename.contains("self.persist()")
+                && !rename.contains("persist_snap"),
+            "/project rename must not clone every thread just to write projects.json: {rename}"
+        );
+        let overlay = src
+            .split("fn ui_project_overlays(")
+            .nth(1)
+            .and_then(|s| s.split("impl eframe::App").next())
+            .expect("ui_project_overlays");
+        assert!(
+            overlay.contains("self.flush_projects()")
+                && !overlay.contains("self.persist()")
+                && !overlay.contains("persist_snap"),
+            "Add to folder must not clone every thread just to write projects.json: {overlay}"
         );
         let renamed = src
             .split("fn rename_thread")
