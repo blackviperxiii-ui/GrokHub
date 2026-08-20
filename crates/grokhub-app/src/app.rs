@@ -1543,6 +1543,7 @@ impl Cabin {
         }
         self.sync_hub_voice();
         snap.secrets = Some(self.secrets.clone());
+        self.persist_idle_key = self.persist_idle_now();
         self.last_persist = Instant::now();
         self.geom_dirty = false;
         let io = self.persist_io.clone();
@@ -13027,6 +13028,10 @@ mod tests {
         assert!(
             persist_spawn < persist_write && persist.contains("io.lock()"),
             "foreground persist must not freeze the cabin writing threads.json: {persist}"
+        );
+        assert!(
+            persist.contains("persist_idle_key") && persist.contains("persist_idle_now"),
+            "persist must bump the idle key or persist_bg clones every thread again 2s later: {persist}"
         );
         assert!(
             bearer.contains("persist_io") && bearer.contains("secrets::save"),
