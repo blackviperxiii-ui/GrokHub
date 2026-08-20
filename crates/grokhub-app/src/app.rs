@@ -968,6 +968,8 @@ pub struct Cabin {
     kick_skip: bool,
     recipe_cap_rx: Option<mpsc::Receiver<Result<String, String>>>,
     recipe_desk_rx: Option<mpsc::Receiver<ReplayDeskOut>>,
+    host_diff_rx: Option<mpsc::Receiver<Option<String>>>,
+    host_diff_kick: bool,
     verify_rx: Option<mpsc::Receiver<Option<VerifyResult>>>,
     #[allow(dead_code)]
     hotkeys: Option<GlobalHotKeyManager>,
@@ -1324,6 +1326,8 @@ impl Cabin {
             kick_skip: false,
             recipe_cap_rx: None,
             recipe_desk_rx: None,
+            host_diff_rx: None,
+            host_diff_kick: false,
             verify_rx: None,
             hotkeys: None,
             hotkey_hey: 0,
@@ -1678,6 +1682,8 @@ impl Cabin {
         self.acp_spawn_rx = None;
         self.recipe_cap_rx = None;
         self.recipe_desk_rx = None;
+        self.host_diff_rx = None;
+        self.host_diff_kick = false;
         self.verify_rx = None;
         self.plan_pending = None;
         self.agents.clear();
@@ -6063,6 +6069,41 @@ impl Cabin {
         let _ = origin;
     }
 
+    fn poll_host_diff(&mut self) {
+        let Some(rx) = self.host_diff_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Some(msg)) => {
+                self.push_bound_msg("user", msg);
+                self.persist();
+                self.finish_host_diff_kick();
+            }
+            Ok(None) => self.finish_host_diff_kick(),
+            Err(mpsc::TryRecvError::Empty) => {
+                self.host_diff_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => self.finish_host_diff_kick(),
+        }
+    }
+
+    fn finish_host_diff_kick(&mut self) {
+        if !self.host_diff_kick {
+            return;
+        }
+        self.host_diff_kick = false;
+        if !self.pending_connectors.is_empty() {
+            let origin = self.chat_job_thread.clone();
+            let (id, tool, args) = self.pending_connectors.remove(0);
+            self.run_connector(&id, &tool, &args);
+            if self.chat_job_thread.is_none() {
+                self.chat_job_thread = origin;
+            }
+        } else {
+            self.kick_model(false);
+        }
+    }
+
     fn poll_job(&mut self) {
         let Some(rx) = self.rx.take() else { return };
         match rx.try_recv() {
@@ -6409,17 +6450,25 @@ impl Cabin {
                 self.persist();
                 self.run_skill_verify();
                 bump_usage(&mut self.usage, "host");
+                let mut defer_kick = false;
                 if let Some(cite) = summarize_write(
                     self.last_host.last().map(|s| s.as_str()).unwrap_or(""),
                     &block,
                 ) {
                     if let Some(path) = cite.split_whitespace().last() {
                         let path = resolve_host_cite_path(&self.cfg.project_dir, path);
-                        if let Ok(after) = read_text_capped(std::path::Path::new(&path)) {
-                            let diff = unified_diff_cite(&path, "", &after);
-                            self.push_bound_msg("user", format!("HOST_DIFF:\n{diff}"));
-                            self.persist();
-                        }
+                        let (tx, rx) = mpsc::channel();
+                        self.host_diff_rx = Some(rx);
+                        defer_kick = true;
+                        std::thread::spawn(move || {
+                            let out = match read_text_capped(std::path::Path::new(&path)) {
+                                Ok(after) => {
+                                    Some(format!("HOST_DIFF:\n{}", unified_diff_cite(&path, "", &after)))
+                                }
+                                Err(_) => None,
+                            };
+                            let _ = tx.send(out);
+                        });
                     }
                 }
                 if !any_hands
@@ -6431,7 +6480,9 @@ impl Cabin {
                 }
                 self.append_host_trajectory(ok, &block);
                 self.trim_job_result_dumps();
-                if !self.pending_connectors.is_empty() {
+                if defer_kick {
+                    self.host_diff_kick = true;
+                } else if !self.pending_connectors.is_empty() {
                     let origin = self.chat_job_thread.clone();
                     let (id, tool, args) = self.pending_connectors.remove(0);
                     self.run_connector(&id, &tool, &args);
@@ -7725,6 +7776,7 @@ impl eframe::App for Cabin {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
+        self.poll_host_diff();
         self.poll_acp();
         self.poll_chips();
         self.poll_review();
@@ -7840,6 +7892,7 @@ impl eframe::App for Cabin {
                 || self.kick_cap_rx.is_some()
                 || self.recipe_cap_rx.is_some()
                 || self.recipe_desk_rx.is_some()
+                || self.host_diff_rx.is_some()
                 || self.verify_rx.is_some()
                 || self.grok_sessions_rx.is_some()
                 || self.persist_rx.is_some()
@@ -11861,6 +11914,8 @@ mod tests {
                 && live.contains("session_show_rx")
                 && live.contains("import_rx")
                 && live.contains("acp_spawn_rx")
+                && live.contains("recipe_desk_rx")
+                && live.contains("host_diff_rx")
                 && live.contains("pick_rx")
                 && live.contains("pick_list_rx")
                 && live.contains("oauth_start_rx")
@@ -13306,17 +13361,36 @@ mod tests {
             .find("HOST_DIFF:")
             .expect("HOST_DIFF push");
         assert!(
-            host_done_facts[diff..].contains("self.persist()"),
-            "HOST_DIFF must persist after the cite push: {host_done_facts}"
-        );
-        assert!(
             host_done_facts.contains("resolve_host_cite_path"),
             "HOST_DIFF must read the write from the bound tree, not the cabin cwd: {host_done_facts}"
         );
+        let after_cite = host_done_facts
+            .find("bump_usage")
+            .expect("host usage");
+        let diff_spawn = host_done_facts[after_cite..]
+            .find("thread::spawn")
+            .expect("HOST_DIFF worker")
+            + after_cite;
+        let diff_read = host_done_facts[after_cite..]
+            .find("read_text_capped")
+            .expect("HOST_DIFF read")
+            + after_cite;
         assert!(
-            host_done_facts.contains("read_text_capped")
-                && !host_done_facts.contains("read_to_string"),
+            diff_spawn < diff_read && !host_done_facts.contains("read_to_string"),
             "HOST_DIFF must not slurp a huge host write on the UI thread: {host_done_facts}"
+        );
+        let host_diff_poll = src
+            .split("fn poll_host_diff(")
+            .nth(1)
+            .and_then(|s| s.split("fn finish_host_diff_kick(").next())
+            .expect("poll_host_diff");
+        assert!(
+            host_diff_poll.contains("HOST_DIFF") || host_diff_poll.contains("push_bound_msg"),
+            "HOST_DIFF must land in the transcript: {host_diff_poll}"
+        );
+        assert!(
+            host_diff_poll.contains("self.persist()"),
+            "HOST_DIFF must persist after the cite push: {host_diff_poll}"
         );
         let deleted = src
             .split("fn delete_thread_at")
