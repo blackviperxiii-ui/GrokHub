@@ -5072,6 +5072,16 @@ impl Cabin {
         });
     }
 
+    fn persist_usage(&self) {
+        let io = self.persist_io.clone();
+        let usage = self.usage.clone();
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                let _ = crate::store::save_usage(&usage);
+            }
+        });
+    }
+
     fn poll_sync(&mut self) {
         let Some(rx) = self.sync_rx.take() else {
             return;
@@ -5376,6 +5386,7 @@ impl Cabin {
         bump_usage(&mut self.usage, "automation");
         self.daily_auto_used = self.usage.automation;
         self.daily_auto_day = self.usage.day.clone();
+        self.persist_usage();
         self.status = format!("Night: {}", a.name);
         if replay.is_some() {
             return;
@@ -13014,7 +13025,7 @@ mod tests {
         let persist_secrets = src
             .split("fn persist_secrets(")
             .nth(1)
-            .and_then(|s| s.split("fn poll_sync").next())
+            .and_then(|s| s.split("fn persist_usage").next())
             .expect("persist_secrets");
         let secrets_spawn = persist_secrets
             .find("thread::spawn")
@@ -13025,6 +13036,21 @@ mod tests {
                 && persist_secrets.contains("persist_io")
                 && !persist_secrets.contains("self.persist()"),
             "Settings Save must not freeze the cabin writing secrets.json: {persist_secrets}"
+        );
+        let persist_usage = src
+            .split("fn persist_usage(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_sync").next())
+            .expect("persist_usage");
+        let usage_spawn = persist_usage
+            .find("thread::spawn")
+            .expect("usage write must leave the UI thread");
+        let usage_save = persist_usage.find("save_usage").expect("save_usage");
+        assert!(
+            usage_spawn < usage_save
+                && persist_usage.contains("persist_io")
+                && !persist_usage.contains("self.persist()"),
+            "night usage must not freeze the cabin writing usage.json: {persist_usage}"
         );
         let bg = src
             .split("fn persist_idle_now(")
@@ -13816,6 +13842,12 @@ mod tests {
         assert!(
             fire_night[counts..].contains("mark_auto_skipped"),
             "a missing night recipe must skip the slot, not hammer every 5s: {fire_night}"
+        );
+        let bump = fire_night.find("bump_usage").expect("night usage");
+        let usage_save = fire_night.find("persist_usage").expect("night persist_usage");
+        assert!(
+            bump < usage_save && !fire_night.contains("self.persist()"),
+            "a night replay must stamp usage.json without cloning every thread: {fire_night}"
         );
         assert!(
             fire_night.contains("land_on_real_chat"),
