@@ -5543,12 +5543,18 @@ impl Cabin {
                 self.wall.gifs.push(gif.clone());
                 let (kept, evicted) = wall_evict(std::mem::take(&mut self.wall.gifs), WALL_GIF_MAX);
                 self.wall.gifs = kept;
-                for old in evicted {
-                    let _ = std::fs::remove_file(&old.path_a);
-                    let _ = std::fs::remove_file(&old.path_b);
-                }
                 self.status = format!("New cover on the wall — {}", gif.title);
-                self.persist();
+                let wall = self.wall.clone();
+                let io = self.persist_io.clone();
+                std::thread::spawn(move || {
+                    if let Ok(_g) = io.lock() {
+                        let _ = crate::store::save_wall(&wall);
+                    }
+                    for old in evicted {
+                        let _ = std::fs::remove_file(&old.path_a);
+                        let _ = std::fs::remove_file(&old.path_b);
+                    }
+                });
             }
             Ok(Err(e)) => {
                 self.wall_busy = false;
@@ -15621,6 +15627,22 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn tick_wall(").next())
             .expect("poll_wall");
+        let ok_wall = wall
+            .split("Ok(Ok(gif))")
+            .nth(1)
+            .and_then(|s| s.split("Ok(Err(e))").next())
+            .expect("wall ok");
+        let ok_spawn = ok_wall
+            .find("thread::spawn")
+            .expect("wall cover save must leave the UI thread");
+        let ok_save = ok_wall.find("save_wall").expect("ok save_wall");
+        assert!(
+            ok_spawn < ok_save
+                && ok_wall.contains("persist_io")
+                && !ok_wall.contains("persist_snap")
+                && !ok_wall.contains("self.persist()"),
+            "a new wall cover must not clone every thread just to write imagine-wall.json: {wall}"
+        );
         let held_wall = wall.split("Ok(Err(e))").nth(1).expect("wall held");
         let wall_spawn = held_wall
             .find("thread::spawn")
