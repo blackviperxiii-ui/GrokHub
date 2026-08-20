@@ -68,6 +68,7 @@ static LAST_PAINT: AtomicU8 = AtomicU8::new(255);
 struct OsDarkCache {
     at: Instant,
     dark: bool,
+    inflight: bool,
 }
 
 static OS_DARK: Mutex<Option<OsDarkCache>> = Mutex::new(None);
@@ -139,20 +140,48 @@ pub fn desktop_prefers_dark() -> bool {
     if let Ok(v) = std::env::var("GROKHUB_COLOR_SCHEME") {
         return os_prefers_dark(&v, "", "");
     }
-    if let Ok(mut g) = OS_DARK.lock() {
+    if let Ok(g) = OS_DARK.lock() {
         if let Some(c) = g.as_ref() {
-            if c.at.elapsed().as_secs() < 30 {
-                return c.dark;
+            let hit = c.dark;
+            let fresh = c.at.elapsed().as_secs() < 30;
+            let busy = c.inflight;
+            drop(g);
+            if !fresh && !busy {
+                kick_os_dark();
             }
+            return hit;
         }
-        let dark = probe_os_dark();
+    }
+    let dark = probe_os_dark();
+    if let Ok(mut g) = OS_DARK.lock() {
         *g = Some(OsDarkCache {
             at: Instant::now(),
             dark,
+            inflight: false,
         });
-        return dark;
     }
-    true
+    dark
+}
+
+fn kick_os_dark() {
+    if let Ok(mut g) = OS_DARK.lock() {
+        if let Some(c) = g.as_mut() {
+            if c.inflight {
+                return;
+            }
+            c.inflight = true;
+        }
+    }
+    std::thread::spawn(|| {
+        let dark = probe_os_dark();
+        if let Ok(mut g) = OS_DARK.lock() {
+            *g = Some(OsDarkCache {
+                at: Instant::now(),
+                dark,
+                inflight: false,
+            });
+        }
+    });
 }
 
 fn probe_os_dark() -> bool {
@@ -542,6 +571,10 @@ mod tests {
         assert!(
             dark.contains("as_secs()") && dark.contains("30"),
             "os dark must not spawn gsettings on every paint: {dark}"
+        );
+        assert!(
+            dark.contains("thread::spawn") && dark.contains("inflight"),
+            "stale gsettings must refresh off the UI thread: {dark}"
         );
     }
 }

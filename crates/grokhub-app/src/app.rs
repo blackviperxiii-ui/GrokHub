@@ -4684,23 +4684,49 @@ impl Cabin {
 
     fn local_clock() -> LocalClock {
         if let Ok(g) = LAST_CLOCK.lock() {
-            if let Some((at, clock)) = g.as_ref() {
-                if at.elapsed() < CLOCK_TTL {
-                    return *clock;
+            if let Some((at, clock, inflight)) = g.as_ref() {
+                let hit = *clock;
+                let fresh = at.elapsed() < CLOCK_TTL;
+                let busy = *inflight;
+                drop(g);
+                if !fresh && !busy {
+                    Self::kick_local_clock();
                 }
+                return hit;
             }
         }
+        let clock = Self::clock_now();
+        if let Ok(mut g) = LAST_CLOCK.lock() {
+            *g = Some((Instant::now(), clock, false));
+        }
+        clock
+    }
+
+    fn clock_now() -> LocalClock {
         let out = Self::date_out("+%w %H %M");
-        let clock = parse_local_clock(&out, now_ms()).unwrap_or(LocalClock {
+        parse_local_clock(&out, now_ms()).unwrap_or(LocalClock {
             now_ms: now_ms(),
             weekday: 1,
             hour: 12,
             minute: 0,
-        });
+        })
+    }
+
+    fn kick_local_clock() {
         if let Ok(mut g) = LAST_CLOCK.lock() {
-            *g = Some((Instant::now(), clock));
+            if let Some(slot) = g.as_mut() {
+                if slot.2 {
+                    return;
+                }
+                slot.2 = true;
+            }
         }
-        clock
+        std::thread::spawn(|| {
+            let clock = Cabin::clock_now();
+            if let Ok(mut g) = LAST_CLOCK.lock() {
+                *g = Some((Instant::now(), clock, false));
+            }
+        });
     }
 
     fn local_day() -> String {
@@ -11170,34 +11196,66 @@ fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {
 struct LanHostCache {
     at: Instant,
     out: String,
+    inflight: bool,
 }
 
 static LAN_HOST: Mutex<Option<LanHostCache>> = Mutex::new(None);
 const CLOCK_TTL: Duration = Duration::from_secs(15);
-static LAST_CLOCK: Mutex<Option<(Instant, LocalClock)>> = Mutex::new(None);
+static LAST_CLOCK: Mutex<Option<(Instant, LocalClock, bool)>> = Mutex::new(None);
 static LAST_DAY: Mutex<Option<(Instant, String)>> = Mutex::new(None);
 
 fn hostname_i() -> String {
     if let Ok(g) = LAN_HOST.lock() {
         if let Some(c) = g.as_ref() {
-            if c.at.elapsed().as_secs() < 30 {
-                return c.out.clone();
+            let hit = c.out.clone();
+            let fresh = c.at.elapsed().as_secs() < 30;
+            let busy = c.inflight;
+            drop(g);
+            if !fresh && !busy {
+                kick_hostname();
             }
+            return hit;
         }
     }
-    let mut cmd = std::process::Command::new("hostname");
-    cmd.arg("-I");
-    let out = run_limited(cmd, Duration::from_millis(400))
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default();
+    let out = hostname_i_now();
     if let Ok(mut g) = LAN_HOST.lock() {
         *g = Some(LanHostCache {
             at: Instant::now(),
             out: out.clone(),
+            inflight: false,
         });
     }
     out
+}
+
+fn hostname_i_now() -> String {
+    let mut cmd = std::process::Command::new("hostname");
+    cmd.arg("-I");
+    run_limited(cmd, Duration::from_millis(400))
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+fn kick_hostname() {
+    if let Ok(mut g) = LAN_HOST.lock() {
+        if let Some(c) = g.as_mut() {
+            if c.inflight {
+                return;
+            }
+            c.inflight = true;
+        }
+    }
+    std::thread::spawn(|| {
+        let out = hostname_i_now();
+        if let Ok(mut g) = LAN_HOST.lock() {
+            *g = Some(LanHostCache {
+                at: Instant::now(),
+                out,
+                inflight: false,
+            });
+        }
+    });
 }
 
 fn discover_hub_pair_url(port: u16) -> String {
@@ -11232,6 +11290,10 @@ mod tests {
         assert!(
             host.contains("run_limited("),
             "hostname -I on Devices paint must time out: {host}"
+        );
+        assert!(
+            host.contains("thread::spawn") && host.contains("inflight"),
+            "stale hostname -I must refresh off the UI thread: {host}"
         );
         assert!(
             !host.contains(".output()"),
@@ -11876,6 +11938,10 @@ mod tests {
         assert!(
             clock.contains("CLOCK_TTL"),
             "chips and greeting must not spawn date on every paint: {clock}"
+        );
+        assert!(
+            clock.contains("thread::spawn") && clock.contains("inflight"),
+            "stale date must refresh off the UI thread: {clock}"
         );
         let day = src
             .split("fn local_day()")
