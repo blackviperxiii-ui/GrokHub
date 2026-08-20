@@ -1596,14 +1596,13 @@ impl Cabin {
             return;
         }
         let key = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.threads.len(),
             self.thread_idx,
             self.messages.len(),
             self.messages.last().map(|m| m.content.len()).unwrap_or(0),
             self.board.len(),
             self.automations.len(),
-            self.geom_dirty,
             self.projects_dirty,
             self.usage.day,
             self.usage.messages,
@@ -1617,7 +1616,7 @@ impl Cabin {
                 .and_then(|t| t.grok_cwd.as_deref())
                 .unwrap_or(""),
         );
-        if !self.geom_dirty && !self.projects_dirty && self.persist_idle_key == key {
+        if !self.projects_dirty && self.persist_idle_key == key {
             self.last_persist = Instant::now();
             return;
         }
@@ -13273,6 +13272,10 @@ mod tests {
         assert!(
             bg[..snap].contains("self.running") && bg[..snap].contains("return"),
             "a growing stream must not clone every thread to persist an 8MB bubble: {bg}"
+        );
+        assert!(
+            !bg[..snap].contains("geom_dirty"),
+            "window drag must not clone every thread — flush_window owns geom: {bg}"
         );
     }
 
