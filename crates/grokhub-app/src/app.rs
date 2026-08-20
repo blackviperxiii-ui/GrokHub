@@ -825,7 +825,7 @@ struct PersistSnap {
     chip_memory: ChipMemory,
     wall: ImagineWall,
     cfg: AppConfig,
-    hub: Option<HubState>,
+    hub: Option<Arc<Mutex<HubState>>>,
     projects: Option<Vec<ProjectNode>>,
     secrets: Option<crate::secrets::Secrets>,
 }
@@ -855,8 +855,11 @@ fn write_persist_disk(snap: &PersistSnap) {
     if let Some(s) = &snap.secrets {
         let _ = secrets::save(s);
     }
-    if let Some(st) = &snap.hub {
-        let _ = save_hub_state(&config::hub_state_path(), st);
+    if let Some(hub) = &snap.hub {
+        let disk = hub.lock().ok().map(|st| state_for_disk(&st));
+        if let Some(disk) = disk {
+            let _ = save_hub_state(&config::hub_state_path(), &disk);
+        }
     }
 }
 
@@ -1581,7 +1584,7 @@ impl Cabin {
                 cfg.api_key.clear();
                 cfg
             },
-            hub: self.hub.lock().ok().map(|st| state_for_disk(&st)),
+            hub: Some(self.hub.clone()),
             projects,
             // Idle persist must not write secrets.json from a stale snap.
             secrets: None,
@@ -12676,12 +12679,23 @@ mod tests {
             .and_then(|s| s.split("\n    fn sync_hub_voice").next())
             .expect("persist");
         assert!(
-            persist.contains("state_for_disk"),
-            "persist must clone hub state before the disk write: {persist}"
+            persist.contains("self.hub.clone()") && !persist.contains("state_for_disk"),
+            "persist must not clone hub snapshot/last_frame on the UI thread: {persist}"
         );
         assert!(
             !persist.contains("if let Ok(st) = self.hub.lock()"),
             "persist must not hold hub.lock() across save_hub_state: {persist}"
+        );
+        let write = src
+            .split("fn write_persist_disk(")
+            .nth(1)
+            .and_then(|s| s.split("pub struct Cabin").next())
+            .expect("write_persist_disk");
+        let lock = write.find("hub.lock").expect("worker hub lock");
+        let save = write.find("save_hub_state").expect("save_hub_state");
+        assert!(
+            lock < save && write.contains("state_for_disk(&st)"),
+            "persist worker must clone hub state then drop the lock before hub-state.json: {write}"
         );
     }
 
@@ -12879,6 +12893,10 @@ mod tests {
         assert!(
             !snap.contains("msgs.clone()"),
             "persist_snap must copy the live pane into the thread once, not again into PersistSnap.msgs: {snap}"
+        );
+        assert!(
+            snap.contains("self.hub.clone()") && !snap.contains("state_for_disk"),
+            "persist_snap must not clone hub last_frame/snapshot on the UI thread: {snap}"
         );
         assert!(
             disk.contains("current_thread") && disk.contains("save_chat"),

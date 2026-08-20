@@ -350,11 +350,21 @@ pub fn clear_pending_after_complete(err: Option<CompleteError>) -> bool {
 }
 
 pub fn state_for_disk(st: &HubState) -> HubState {
-    let mut out = st.clone();
-    out.last_frame = None;
-    out.console_api_key.clear();
-    out.mint_realtime = None;
-    out
+    HubState {
+        device_id: st.device_id.clone(),
+        device_name: st.device_name.clone(),
+        sharing: st.sharing,
+        port: st.port,
+        pair: st.pair.clone(),
+        peers: st.peers.clone(),
+        inbox: st.inbox.clone(),
+        snapshot: st.snapshot.clone(),
+        last_incoming_at: st.last_incoming_at,
+        inhabit: st.inhabit.clone(),
+        last_frame: None,
+        console_api_key: String::new(),
+        mint_realtime: None,
+    }
 }
 
 pub fn save_hub_state(path: &std::path::Path, st: &HubState) -> Result<(), String> {
@@ -476,6 +486,24 @@ mod tests {
             assert_eq!(mode, 0o600, "hub-state.json holds pair tokens");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn state_for_disk_skips_the_live_frame_clone() {
+        let src = include_str!("state.rs");
+        let disk = src
+            .split("pub fn state_for_disk(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn save_hub_state(").next())
+            .expect("state_for_disk");
+        assert!(
+            !disk.contains("st.clone()") && disk.contains("last_frame: None"),
+            "persist must not clone a 400KB cabin frame then throw it away: {disk}"
+        );
+        assert!(
+            disk.contains("console_api_key: String::new()") && disk.contains("mint_realtime: None"),
+            "hub-state.json must not keep the console key: {disk}"
+        );
     }
 
     #[test]
