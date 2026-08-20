@@ -2802,7 +2802,11 @@ impl Cabin {
             self.project_sel = None;
         }
         self.touch_projects();
-        self.persist();
+        if out.unbound {
+            self.persist();
+        } else {
+            self.flush_projects();
+        }
         self.status = if out.unbound {
             format!("Removed {} · unbound", out.name)
         } else {
@@ -13793,6 +13797,17 @@ mod tests {
         assert!(
             flush_spawn < flush_save && flush_p.contains("persist_io"),
             "folder click must not freeze the cabin writing projects.json: {flush_p}"
+        );
+        let drop_proj = src
+            .split("fn remove_project_id(")
+            .nth(1)
+            .and_then(|s| s.split("fn apply_project_menu(").next())
+            .expect("remove_project_id");
+        assert!(
+            drop_proj.contains("self.flush_projects()")
+                && drop_proj.contains("self.persist()")
+                && drop_proj.contains("out.unbound"),
+            "deleting an unbound project must not clone every thread just to write projects.json: {drop_proj}"
         );
         let folders = src
             .split("fn stage_new_project(")
