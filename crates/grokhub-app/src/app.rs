@@ -10221,20 +10221,24 @@ impl Cabin {
         }
         self.project_sel = upsert_bound(&mut self.projects, &p);
         self.touch_projects();
-        if self.running {
-            self.halt_in_flight();
-        }
-        self.acp = None;
-        self.acp_spawn_rx = None;
+        self.status = "Saved".into();
+        self.sync_hub_voice();
         if tree_changed {
+            if self.running {
+                self.halt_in_flight();
+            }
+            self.acp = None;
+            self.acp_spawn_rx = None;
             if let Some(t) = self.threads.get_mut(self.thread_idx) {
                 t.grok_cwd = None;
                 t.grok_session = None;
             }
+            self.persist();
+        } else {
+            self.flush_projects();
+            self.persist_cfg();
+            self.persist_hub();
         }
-        self.status = "Saved".into();
-        self.sync_hub_voice();
-        self.persist();
     }
 
     fn ui_settings(&mut self, ctx: &egui::Context) {
@@ -12987,6 +12991,13 @@ mod tests {
         assert!(
             settings_save.contains("self.persist()") && !settings_save.contains("secrets::save"),
             "Settings Save must not freeze the cabin writing secrets.json: {settings_save}"
+        );
+        assert!(
+            settings_save.contains("self.persist_cfg()")
+                && settings_save.contains("self.flush_projects()")
+                && settings_save.contains("self.persist_hub()")
+                && settings_save.contains("tree_changed"),
+            "Settings Save must not clone every thread when the worktree did not change: {settings_save}"
         );
         let bg = src
             .split("fn persist_idle_now(")
