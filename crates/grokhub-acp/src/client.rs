@@ -108,7 +108,7 @@ enum Cmd {
 
 /// Long-lived `grok agent stdio` session.
 pub struct AcpHandle {
-    child: Child,
+    child: Option<Child>,
     cmd: Sender<Cmd>,
     pub events: Receiver<AcpEvent>,
     pub session_id: String,
@@ -577,7 +577,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
     });
 
     Ok(AcpHandle {
-        child,
+        child: Some(child),
         cmd: cmd_tx,
         events: evt_rx,
         session_id,
@@ -631,8 +631,12 @@ impl AcpHandle {
 impl Drop for AcpHandle {
     fn drop(&mut self) {
         let _ = self.cmd.send(Cmd::Shutdown);
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
     }
 }
 
@@ -1154,6 +1158,22 @@ mod tests {
         let load = explain_handshake_error("session/load failed: session not found", &cwd);
         assert!(load.contains("session/load"), "{load}");
         assert!(!load.contains("session/new"), "{load}");
+    }
+
+    #[test]
+    fn drop_waits_off_the_ui_thread() {
+        let src = include_str!("client.rs");
+        let drop = src
+            .split("impl Drop for AcpHandle")
+            .nth(1)
+            .and_then(|s| s.split("fn looks_like_session_id").next())
+            .expect("AcpHandle drop");
+        let spawn = drop.find("thread::spawn").expect("wait off thread");
+        let wait = drop.find(".wait()").expect("child wait");
+        assert!(
+            spawn < wait && !drop.contains("self.child.wait()"),
+            "tab switch must not freeze on grok agent teardown: {drop}"
+        );
     }
 
     #[test]
