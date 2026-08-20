@@ -141,9 +141,10 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -517,6 +518,14 @@ struct AgentJob {
     status: String,
     prompt: String,
     thread_id: String,
+}
+
+struct ImportOpenclawOut {
+    status: String,
+    mem_name: String,
+    mem_body: String,
+    skill_list: Vec<SkillMd>,
+    open_memory: bool,
 }
 
 fn listen_turn(api_key: &str) -> String {
@@ -1057,6 +1066,7 @@ pub struct Cabin {
     grok_sessions_rx: Option<mpsc::Receiver<Vec<grokhub_acp::GrokSession>>>,
     inspect_rx: Option<mpsc::Receiver<String>>,
     session_show_rx: Option<(String, mpsc::Receiver<String>)>,
+    import_rx: Option<mpsc::Receiver<ImportOpenclawOut>>,
     inspect_text: String,
 }
 
@@ -1409,6 +1419,7 @@ impl Cabin {
             grok_sessions_rx: None,
             inspect_rx: None,
             session_show_rx: None,
+            import_rx: None,
             inspect_text: String::new(),
         };
         if let Ok(mgr) = GlobalHotKeyManager::new() {
@@ -5095,70 +5106,115 @@ impl Cabin {
         });
     }
 
-    fn import_openclaw(&mut self) {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let mut root = None;
-        for p in default_openclaw_paths(&home) {
-            let names: Vec<String> = std::fs::read_dir(&p)
-                .ok()
-                .map(|rd| {
-                    rd.flatten()
-                        .map(|e| e.file_name().to_string_lossy().into_owned())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-            if is_openclaw_workspace(&refs) {
-                root = Some(p);
-                break;
-            }
-        }
-        let Some(root) = root else {
-            self.status = "No OpenClaw workspace (~/.openclaw/workspace)".into();
+    fn poll_import_openclaw(&mut self) {
+        let Some(rx) = self.import_rx.take() else {
             return;
         };
-        if !self.scratch() && config::read_memory(&self.mem_name) != self.mem_body {
-            let _ = config::write_memory(&self.mem_name, &self.mem_body);
+        match rx.try_recv() {
+            Ok(out) => {
+                self.status = out.status;
+                if out.open_memory {
+                    self.mem_name = out.mem_name;
+                    self.mem_body = out.mem_body;
+                    self.skill_list = out.skill_list;
+                    self.nav = Nav::Memory;
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.import_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "OpenClaw import failed".into();
+            }
         }
-        let mut imported = 0u32;
-        let mut memory = config::read_memory("MEMORY.md");
-        if let Ok(rd) = std::fs::read_dir(&root) {
-            for e in rd.flatten() {
-                let name = e.file_name().to_string_lossy().into_owned();
-                if let Ok(body) = read_text_capped(&e.path()) {
-                    if let Some((dest, content)) = import_memory_file(&name, &body) {
-                        if dest == "MEMORY.md" {
-                            memory = merge_imported_memory(&memory, &content, &name);
-                            imported += 1;
-                        } else if config::read_memory(&dest) != content
-                            && config::write_memory(&dest, &content).is_ok()
-                        {
+    }
+
+    fn import_openclaw(&mut self) {
+        if self.import_rx.is_some() {
+            self.status = "Importing OpenClaw…".into();
+            return;
+        }
+        let home = std::env::var("HOME").unwrap_or_default();
+        let mem_name = self.mem_name.clone();
+        let mem_body = self.mem_body.clone();
+        let scratch = self.scratch();
+        let (tx, rx) = mpsc::channel();
+        self.import_rx = Some(rx);
+        self.status = "Importing OpenClaw…".into();
+        std::thread::spawn(move || {
+            let mut root = None;
+            for p in default_openclaw_paths(&home) {
+                let names: Vec<String> = std::fs::read_dir(&p)
+                    .ok()
+                    .map(|rd| {
+                        rd.flatten()
+                            .map(|e| e.file_name().to_string_lossy().into_owned())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                if is_openclaw_workspace(&refs) {
+                    root = Some(p);
+                    break;
+                }
+            }
+            let Some(root) = root else {
+                let _ = tx.send(ImportOpenclawOut {
+                    status: "No OpenClaw workspace (~/.openclaw/workspace)".into(),
+                    mem_name,
+                    mem_body,
+                    skill_list: Vec::new(),
+                    open_memory: false,
+                });
+                return;
+            };
+            if !scratch && config::read_memory(&mem_name) != mem_body {
+                let _ = config::write_memory(&mem_name, &mem_body);
+            }
+            let mut imported = 0u32;
+            let mut memory = config::read_memory("MEMORY.md");
+            if let Ok(rd) = std::fs::read_dir(&root) {
+                for e in rd.flatten() {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    if let Ok(body) = read_text_capped(&e.path()) {
+                        if let Some((dest, content)) = import_memory_file(&name, &body) {
+                            if dest == "MEMORY.md" {
+                                memory = merge_imported_memory(&memory, &content, &name);
+                                imported += 1;
+                            } else if config::read_memory(&dest) != content
+                                && config::write_memory(&dest, &content).is_ok()
+                            {
+                                imported += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            if imported > 0 && config::read_memory("MEMORY.md") != memory {
+                let _ = config::write_memory("MEMORY.md", &memory);
+            }
+            let skills_dir = std::path::PathBuf::from(&root).join("skills");
+            if let Ok(rd) = std::fs::read_dir(skills_dir) {
+                for e in rd.flatten() {
+                    let md = e.path().join("SKILL.md");
+                    if let Ok(raw) = read_text_capped(&md) {
+                        let parsed = grokhub_core::parse_skill_md(&raw);
+                        if !parsed.name.is_empty() && skills::save_skill(&parsed).is_ok() {
                             imported += 1;
                         }
                     }
                 }
             }
-        }
-        if imported > 0 && config::read_memory("MEMORY.md") != memory {
-            let _ = config::write_memory("MEMORY.md", &memory);
-        }
-        let skills_dir = std::path::PathBuf::from(&root).join("skills");
-        if let Ok(rd) = std::fs::read_dir(skills_dir) {
-            for e in rd.flatten() {
-                let md = e.path().join("SKILL.md");
-                if let Ok(raw) = read_text_capped(&md) {
-                    let parsed = grokhub_core::parse_skill_md(&raw);
-                    if !parsed.name.is_empty() && skills::save_skill(&parsed).is_ok() {
-                        imported += 1;
-                    }
-                }
-            }
-        }
-        self.skill_list = skills::list_skills();
-        self.mem_name = "MEMORY.md".into();
-        self.mem_body = config::read_memory("MEMORY.md");
-        self.status = format!("Imported {imported} files from {root}");
-        self.nav = Nav::Memory;
+            let skill_list = skills::list_skills();
+            let mem_body = config::read_memory("MEMORY.md");
+            let _ = tx.send(ImportOpenclawOut {
+                status: format!("Imported {imported} files from {root}"),
+                mem_name: "MEMORY.md".into(),
+                mem_body,
+                skill_list,
+                open_memory: true,
+            });
+        });
     }
 
     fn run_consult(&mut self, q: String) {
@@ -7488,6 +7544,7 @@ impl eframe::App for Cabin {
         self.poll_grok_sessions();
         self.poll_inspect();
         self.poll_session_show();
+        self.poll_import_openclaw();
         self.poll_acp_spawn();
         self.poll_pick();
         self.poll_eyes_cap();
@@ -7587,6 +7644,7 @@ impl eframe::App for Cabin {
                 || self.persist_rx.is_some()
                 || self.inspect_rx.is_some()
                 || self.session_show_rx.is_some()
+                || self.import_rx.is_some()
                 || self.acp_spawn_rx.is_some()
                 || self.pick_rx.is_some()
                 || self.oauth_start_rx.is_some()
@@ -10869,31 +10927,77 @@ fn eyes_frame_tex(ctx: &egui::Context, url: &str) -> Option<(TextureHandle, [usi
         return None;
     }
     let key: String = url.chars().take(48).collect();
-    let id = egui::Id::new(("eyes-frame", url.len(), key));
+    let id = egui::Id::new(("eyes-frame", url.len(), key.as_str()));
     if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
         return Some(hit);
     }
-    let frame = PresenceFrame {
-        data_url: url.to_string(),
-        at: 0,
-    };
-    let (_, buf) = frame_bytes(&frame)?;
-    if (buf.len() as u64) > IMAGE_FILE_CAP {
-        return None;
+    let cache_key = format!("{}:{key}", url.len());
+    if let Some(img) = take_eyes_rgba(&cache_key) {
+        let size = [img.width() as usize, img.height() as usize];
+        let tex = ctx.load_texture(
+            "eyes-last-frame",
+            ColorImage::from_rgba_unmultiplied(size, img.as_raw()),
+            TextureOptions::LINEAR,
+        );
+        let hit = (tex, size);
+        ctx.data_mut(|d| d.insert_temp(id, hit.clone()));
+        return Some(hit);
     }
-    if !crate::desktop::image_pixels_ok_for_bytes(&buf) {
-        return None;
+    kick_eyes_tex(ctx.clone(), cache_key, url.to_string());
+    None
+}
+
+struct EyesTexGate {
+    inflight: HashSet<String>,
+    ready: HashMap<String, image::RgbaImage>,
+}
+
+fn eyes_tex_gate() -> &'static Mutex<EyesTexGate> {
+    static G: OnceLock<Mutex<EyesTexGate>> = OnceLock::new();
+    G.get_or_init(|| {
+        Mutex::new(EyesTexGate {
+            inflight: HashSet::new(),
+            ready: HashMap::new(),
+        })
+    })
+}
+
+fn take_eyes_rgba(key: &str) -> Option<image::RgbaImage> {
+    let mut g = eyes_tex_gate().lock().ok()?;
+    g.ready.remove(key)
+}
+
+fn kick_eyes_tex(ctx: egui::Context, key: String, url: String) {
+    {
+        let Ok(mut g) = eyes_tex_gate().lock() else {
+            return;
+        };
+        if g.ready.contains_key(&key) || !g.inflight.insert(key.clone()) {
+            return;
+        }
     }
-    let img = image::load_from_memory(&buf).ok()?.to_rgba8();
-    let size = [img.width() as usize, img.height() as usize];
-    let tex = ctx.load_texture(
-        "eyes-last-frame",
-        ColorImage::from_rgba_unmultiplied(size, img.as_raw()),
-        TextureOptions::LINEAR,
-    );
-    let hit = (tex, size);
-    ctx.data_mut(|d| d.insert_temp(id, hit.clone()));
-    Some(hit)
+    std::thread::spawn(move || {
+        let frame = PresenceFrame {
+            data_url: url,
+            at: 0,
+        };
+        let decoded = frame_bytes(&frame).and_then(|(_, buf)| {
+            if (buf.len() as u64) > IMAGE_FILE_CAP {
+                return None;
+            }
+            if !crate::desktop::image_pixels_ok_for_bytes(&buf) {
+                return None;
+            }
+            image::load_from_memory(&buf).ok().map(|img| img.to_rgba8())
+        });
+        if let Ok(mut g) = eyes_tex_gate().lock() {
+            g.inflight.remove(&key);
+            if let Some(img) = decoded {
+                g.ready.insert(key, img);
+            }
+        }
+        ctx.request_repaint();
+    });
 }
 
 fn project_row_active(selected: bool, is_project: bool, nav: Nav) -> bool {
@@ -11494,6 +11598,7 @@ mod tests {
                 && live.contains("persist_rx")
                 && live.contains("inspect_rx")
                 && live.contains("session_show_rx")
+                && live.contains("import_rx")
                 && live.contains("acp_spawn_rx")
                 && live.contains("pick_rx")
                 && live.contains("oauth_start_rx")
@@ -13077,6 +13182,12 @@ mod tests {
             import.contains("read_text_capped") && !import.contains("read_to_string"),
             "/import must not slurp huge OpenClaw files on the UI thread: {import}"
         );
+        let import_spawn = import.find("thread::spawn").expect("import must leave the UI thread");
+        let import_walk = import.find("read_dir").expect("import walks OpenClaw");
+        assert!(
+            import_spawn < import_walk,
+            "/import must not walk OpenClaw on the UI thread: {import}"
+        );
         let sign_out = src
             .split("fn sign_out_oauth")
             .nth(1)
@@ -13961,8 +14072,9 @@ mod tests {
             .expect("eyes_frame_tex");
         let cap = tex.find("IMAGE_FILE_CAP").expect("size check before decode");
         let decode = tex.find("load_from_memory").expect("decode");
+        let spawn = tex.find("thread::spawn").expect("decode must leave the UI thread");
         assert!(
-            cap < decode,
+            spawn < decode && cap < decode,
             "Eyes last-frame paint must not decode a huge JPEG on the UI thread: {tex}"
         );
         assert!(
