@@ -268,6 +268,23 @@ pub fn restore_bound_path(saved: &str, work_root: &str, sidebar_file_present: bo
     }
 }
 
+/// ACP session cwd. Bound project if set, else `work_root` (`~/GrokHub-Work`).
+/// Never the cabin process cwd — that is the overlay install or a cargo `target/` tree.
+pub fn resolve_acp_cwd(project_dir: &str, home: Option<&str>, work_root: &str) -> String {
+    let bound = expand_project_root(project_dir, home);
+    if !bound.trim().is_empty() {
+        return bound;
+    }
+    let work = expand_project_root(work_root, home);
+    if !work.trim().is_empty() {
+        return work;
+    }
+    match home.filter(|h| !h.is_empty()) {
+        Some(h) => format!("{}/GrokHub-Work", h.trim_end_matches('/')),
+        None => "GrokHub-Work".into(),
+    }
+}
+
 pub fn create_folder(
     nodes: &mut Vec<ProjectNode>,
     id: &str,
@@ -957,6 +974,35 @@ mod tests {
         assert_eq!(
             restore_bound_path("", "/home/j/GrokHub-Work", false),
             "/home/j/GrokHub-Work"
+        );
+    }
+
+    #[test]
+    fn acp_cwd_is_the_bound_tree_or_work_root() {
+        assert_eq!(
+            resolve_acp_cwd("/home/j/Dawn", Some("/home/j"), "/home/j/GrokHub-Work"),
+            "/home/j/Dawn"
+        );
+        assert_eq!(
+            resolve_acp_cwd("~/Dawn", Some("/home/j"), "/home/j/GrokHub-Work"),
+            "/home/j/Dawn"
+        );
+        assert_eq!(
+            resolve_acp_cwd("", Some("/home/j"), "/home/j/GrokHub-Work"),
+            "/home/j/GrokHub-Work"
+        );
+        assert_eq!(
+            resolve_acp_cwd("   ", Some("/home/j"), "~/GrokHub-Work"),
+            "/home/j/GrokHub-Work"
+        );
+        assert_eq!(
+            resolve_acp_cwd("", Some("/home/j"), ""),
+            "/home/j/GrokHub-Work"
+        );
+        assert_ne!(
+            resolve_acp_cwd("", Some("/home/j"), "/home/j/GrokHub-Work"),
+            "/home/j",
+            "unbound ACP must not sit in $HOME"
         );
     }
 }
