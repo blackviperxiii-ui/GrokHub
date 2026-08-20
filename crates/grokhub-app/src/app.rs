@@ -1591,14 +1591,8 @@ impl Cabin {
         }
     }
 
-    fn persist_bg(&mut self) {
-        if self.running {
-            return;
-        }
-        if self.persist_rx.is_some() {
-            return;
-        }
-        let key = format!(
+    fn persist_idle_now(&self) -> String {
+        format!(
             "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.threads.len(),
             self.thread_idx,
@@ -1617,7 +1611,17 @@ impl Cabin {
                 .get(self.thread_idx)
                 .and_then(|t| t.grok_cwd.as_deref())
                 .unwrap_or(""),
-        );
+        )
+    }
+
+    fn persist_bg(&mut self) {
+        if self.running {
+            return;
+        }
+        if self.persist_rx.is_some() {
+            return;
+        }
+        let key = self.persist_idle_now();
         if !self.projects_dirty && self.persist_idle_key == key {
             self.last_persist = Instant::now();
             return;
@@ -3506,9 +3510,11 @@ impl Cabin {
         });
     }
 
-    fn flush_board(&self) {
+    fn flush_board(&mut self) {
         let board = self.board.clone();
         let io = self.persist_io.clone();
+        self.persist_idle_key = self.persist_idle_now();
+        self.last_persist = Instant::now();
         std::thread::spawn(move || {
             if let Ok(_g) = io.lock() {
                 let _ = config::save_board(&board);
@@ -12930,7 +12936,7 @@ mod tests {
             "Settings Save must not freeze the cabin writing secrets.json: {settings_save}"
         );
         let bg = src
-            .split("fn persist_bg(")
+            .split("fn persist_idle_now(")
             .nth(1)
             .and_then(|s| s.split("\n    fn poll_persist").next())
             .expect("persist_bg");
@@ -13356,10 +13362,10 @@ mod tests {
             !bg[..snap].contains("geom_dirty"),
             "window drag must not clone every thread — flush_window owns geom: {bg}"
         );
-        let idle_key = bg
-            .split("let key = format!")
+        let idle_key = src
+            .split("fn persist_idle_now(")
             .nth(1)
-            .and_then(|s| s.split("if !self.projects_dirty").next())
+            .and_then(|s| s.split("fn persist_bg(").next())
             .expect("persist idle key");
         assert!(
             !idle_key.contains("projects_dirty"),
@@ -15810,6 +15816,15 @@ mod tests {
                 && !board.contains("self.persist()")
                 && !board.contains("persist_snap"),
             "Workboard add/status must not clone every thread just to write board.json: {board}"
+        );
+        let flush_b = src
+            .split("fn flush_board(")
+            .nth(1)
+            .and_then(|s| s.split("fn nav_from_id(").next())
+            .expect("flush_board");
+        assert!(
+            flush_b.contains("persist_idle_now") && flush_b.contains("save_board"),
+            "Workboard flush must bump the idle key or persist_bg clones every thread 2s later: {flush_b}"
         );
         let night = src
             .split("fn ui_night(")
