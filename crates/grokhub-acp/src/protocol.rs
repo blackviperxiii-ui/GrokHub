@@ -7,7 +7,7 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub enum SessionMode {
     Plan,
     Ask,
-    Code,
+    Chat,
 }
 
 impl SessionMode {
@@ -15,7 +15,16 @@ impl SessionMode {
         match self {
             SessionMode::Plan => "plan",
             SessionMode::Ask => "ask",
-            SessionMode::Code => "code",
+            SessionMode::Chat => "chat",
+        }
+    }
+
+    /// Grok Build ACP still names the default session `code`.
+    pub fn acp_id(&self) -> &'static str {
+        match self {
+            SessionMode::Plan => "plan",
+            SessionMode::Ask => "ask",
+            SessionMode::Chat => "code",
         }
     }
 
@@ -23,16 +32,16 @@ impl SessionMode {
         match s.trim().to_ascii_lowercase().as_str() {
             "plan" => Some(SessionMode::Plan),
             "ask" => Some(SessionMode::Ask),
-            "code" | "normal" | "build" => Some(SessionMode::Code),
+            "chat" | "code" | "normal" | "build" => Some(SessionMode::Chat),
             _ => None,
         }
     }
 
     pub fn cycle(self) -> Self {
         match self {
-            SessionMode::Code => SessionMode::Plan,
+            SessionMode::Chat => SessionMode::Plan,
             SessionMode::Plan => SessionMode::Ask,
-            SessionMode::Ask => SessionMode::Code,
+            SessionMode::Ask => SessionMode::Chat,
         }
     }
 }
@@ -178,7 +187,7 @@ pub fn initialize_params() -> Value {
 
 pub fn session_new_params(cwd: &str, yolo: bool, auto: bool, mode: SessionMode) -> Value {
     let mut meta = json!({
-        "sessionMode": mode.as_str(),
+        "sessionMode": mode.acp_id(),
     });
     if yolo {
         meta["yoloMode"] = json!(true);
@@ -461,7 +470,11 @@ mod tests {
 
     #[test]
     fn mode_cycle() {
-        assert_eq!(SessionMode::Code.cycle(), SessionMode::Plan);
+        assert_eq!(SessionMode::Chat.cycle(), SessionMode::Plan);
+        assert_eq!(SessionMode::parse("chat"), Some(SessionMode::Chat));
+        assert_eq!(SessionMode::parse("code"), Some(SessionMode::Chat));
+        assert_eq!(SessionMode::Chat.as_str(), "chat");
+        assert_eq!(SessionMode::Chat.acp_id(), "code");
         assert_eq!(SessionMode::parse("PLAN"), Some(SessionMode::Plan));
         assert_eq!(
             PermissionMode::parse("yolo"),

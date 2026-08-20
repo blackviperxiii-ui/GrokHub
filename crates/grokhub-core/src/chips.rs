@@ -1400,7 +1400,7 @@ fn default_chips(mode: &str) -> Vec<QuickChip> {
         chip(
             "def-brief",
             "Cabin brief",
-            "Give me a short cabin brief: what's open, host health, and the next useful step.",
+            "Give me a short cabin brief: bound project, recent chats, and the next useful step.",
             ChipKind::Chat,
             21.0,
             "Default",
@@ -1445,7 +1445,7 @@ fn host_chips() -> Vec<QuickChip> {
         chip(
             "host-diag",
             "System snapshot",
-            "Run a quick read-only system snapshot via HOST_CMD (uname, whoami, pwd, grokhub install paths). Summarize.",
+            "Run a quick read-only snapshot (uname, whoami, pwd, grokhub install paths). Summarize.",
             ChipKind::Chat,
             72.0,
             "Desktop host",
@@ -1799,7 +1799,7 @@ pub fn chip_suggest_prompt(
         .collect::<Vec<_>>()
         .join("\n");
     let mut lines = vec![
-        "You generate quick-action chips for a Grok desktop agent chat.".into(),
+        "You generate quick-action chips for a Grok Build cabin chat.".into(),
         "Return ONLY valid JSON array of up to 5 objects:".into(),
         r#"[{"label":"≤28 chars","value":"full prompt to send","kind":"chat","hint":"why useful"}]"#.into(),
         String::new(),

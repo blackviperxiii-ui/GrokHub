@@ -731,7 +731,7 @@ pub fn framed_preview(ui: &mut egui::Ui, tex: &TextureHandle, size: [usize; 2], 
 
 pub fn composer_modes() -> &'static [(&'static str, &'static str)] {
     &[
-        ("code", "Code"),
+        ("chat", "Chat"),
         ("plan", "Plan"),
         ("ask", "Ask"),
     ]
@@ -749,14 +749,14 @@ pub fn mode_label(id: &str) -> &'static str {
     match id {
         "plan" => "Plan",
         "ask" => "Ask",
-        "code" | "normal" | "build" => "Code",
+        "chat" | "code" | "normal" | "build" => "Chat",
         "max" | "deep" | "heavy" => "Max",
         "think" | "expert" => "Think",
         "balanced" | "balance" => "Balance",
         "fast" => "Fast",
         "always-approve" | "always" | "yolo" => "Always",
         "auto" => "Auto",
-        _ => "Code",
+        _ => "Chat",
     }
 }
 
@@ -813,7 +813,7 @@ fn catalog_pill(
     next
 }
 
-/// Compact session picker (Code / Plan / Ask).
+/// Compact session picker (Chat / Plan / Ask).
 pub fn mode_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
     catalog_pill(
         ui,
@@ -1765,8 +1765,9 @@ mod tests {
             MODE_PILL_W * 2.0 + 22.0 + 28.0 + 8.0 * 4.0 + 64.0
         );
         assert_eq!(mode_label("plan"), "Plan");
-        assert_eq!(mode_label("code"), "Code");
-        assert_eq!(mode_label("mystery"), "Code");
+        assert_eq!(mode_label("code"), "Chat");
+        assert_eq!(mode_label("chat"), "Chat");
+        assert_eq!(mode_label("mystery"), "Chat");
         assert_eq!(perm_label("always-approve"), "Always");
         assert_eq!(composer_modes().len(), 3);
         assert_eq!(permission_modes().len(), 3);
