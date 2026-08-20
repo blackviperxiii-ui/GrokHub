@@ -460,10 +460,10 @@ mod tests {
     #[test]
     fn disk_omits_frame() {
         let mut st = HubState::empty();
-        st.last_frame = Some(PresenceFrame {
+        st.last_frame = Some(std::sync::Arc::new(PresenceFrame {
             data_url: "data:image/jpeg;base64,AAAA".into(),
             at: 1,
-        });
+        }));
         st.console_api_key = "xai-should-not-persist".into();
         let disk = state_for_disk(&st);
         let s = serde_json::to_string(&disk).unwrap();

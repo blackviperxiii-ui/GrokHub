@@ -3,7 +3,7 @@ use crate::inhabit::InhabitBundle;
 use crate::pair::{make_pair_code, normalize_code, PAIR_TTL_MS};
 use crate::task::{HubTask, Receipt};
 use crate::{new_token, now_ms, uid};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::io::Read;
 use std::sync::Arc;
@@ -40,11 +40,12 @@ pub struct HubState {
     pub pair: Option<PairCode>,
     pub peers: Vec<Peer>,
     pub inbox: Vec<HubTask>,
-    pub snapshot: Option<Value>,
+    #[serde(default, serialize_with = "ser_arc_value", deserialize_with = "de_arc_value")]
+    pub snapshot: Option<Arc<Value>>,
     pub last_incoming_at: u64,
     pub inhabit: Option<InhabitBundle>,
     #[serde(skip)]
-    pub last_frame: Option<PresenceFrame>,
+    pub last_frame: Option<Arc<PresenceFrame>>,
     /// Console API key for duplex Voice minting. Never written to hub-state.json.
     #[serde(skip)]
     pub console_api_key: String,
@@ -295,7 +296,7 @@ impl HubState {
 
     pub fn store_frame(&mut self, data_url: &str) {
         if let Some(f) = store_frame(data_url, now_ms()) {
-            self.last_frame = Some(f);
+            self.last_frame = Some(Arc::new(f));
         }
     }
 
@@ -304,7 +305,10 @@ impl HubState {
         if kind != HUB_KIND {
             return Err("Not a GrokHub hub snapshot.".into());
         }
-        self.snapshot = Some(match (&self.snapshot, crate::hub_sync::is_hub_snapshot(&snap)) {
+        let merged = match (
+            self.snapshot.as_deref(),
+            crate::hub_sync::is_hub_snapshot(&snap),
+        ) {
             (Some(local_v), true) => {
                 if let (Ok(local), Ok(remote)) = (
                     serde_json::from_value::<crate::hub_sync::HubSnapshot>(local_v.clone()),
@@ -317,7 +321,8 @@ impl HubState {
                 }
             }
             _ => snap,
-        });
+        };
+        self.snapshot = Some(Arc::new(merged));
         self.last_incoming_at = now_ms();
         Ok(())
     }
@@ -347,6 +352,15 @@ pub fn clear_pending_after_complete(err: Option<CompleteError>) -> bool {
         Some(CompleteError::NotFound) => true,
         Some(CompleteError::Forbidden) => false,
     }
+}
+
+/// serde has no `rc` feature here — wrap Value in Arc without changing hub-state.json.
+fn ser_arc_value<S: Serializer>(v: &Option<Arc<Value>>, s: S) -> Result<S::Ok, S::Error> {
+    v.as_deref().serialize(s)
+}
+
+fn de_arc_value<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Arc<Value>>, D::Error> {
+    Option::<Value>::deserialize(d).map(|o| o.map(Arc::new))
 }
 
 pub fn state_for_disk(st: &HubState) -> HubState {
@@ -466,10 +480,10 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("hub-state.json");
         let mut st = HubState::empty();
-        st.last_frame = Some(crate::PresenceFrame {
+        st.last_frame = Some(Arc::new(crate::PresenceFrame {
             data_url: "data:image/jpeg;base64,SECRETFRAME".into(),
             at: 9,
-        });
+        }));
         st.console_api_key = "xai-should-not-persist".into();
         save_hub_state(&path, &st).expect("save");
         let raw = std::fs::read_to_string(&path).unwrap();
@@ -503,6 +517,33 @@ mod tests {
         assert!(
             disk.contains("console_api_key: String::new()") && disk.contains("mint_realtime: None"),
             "hub-state.json must not keep the console key: {disk}"
+        );
+    }
+
+    #[test]
+    fn hub_snapshot_and_frame_are_arc_so_get_clone_is_a_refcount() {
+        let src = include_str!("state.rs");
+        let hub = src
+            .split("pub struct HubState")
+            .nth(1)
+            .and_then(|s| s.split("impl HubState").next())
+            .expect("HubState");
+        assert!(
+            hub.contains("snapshot: Option<Arc<Value>>") && hub.contains("ser_arc_value"),
+            "GET /v1/snapshot must clone an Arc, not 8MB of JSON under hub.lock(): {hub}"
+        );
+        assert!(
+            hub.contains("last_frame: Option<Arc<PresenceFrame>>"),
+            "GET /v1/frame must clone an Arc, not a 400KB JPEG under hub.lock(): {hub}"
+        );
+        let put = src
+            .split("pub fn put_snapshot")
+            .nth(1)
+            .and_then(|s| s.split("pub fn state_for_disk").next())
+            .expect("put_snapshot");
+        assert!(
+            put.contains("Arc::new") && put.contains("as_deref()"),
+            "put_snapshot must store Arc so persist/GET do not deep-clone under the lock: {put}"
         );
     }
 

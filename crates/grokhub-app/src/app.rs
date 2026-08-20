@@ -4991,22 +4991,20 @@ impl Cabin {
                 autos,
                 mem,
             );
+            let remote = hub.lock().ok().and_then(|st| st.snapshot.clone());
+            let snap = match remote
+                .as_deref()
+                .and_then(|v| serde_json::from_value::<HubSnapshot>(v.clone()).ok())
+            {
+                Some(remote) => merge_hub_snapshots(&snap, &remote),
+                None => snap,
+            };
+            let from = snap.from_device_name.clone();
+            let files = snap.memory_files.clone();
             if let Ok(mut st) = hub.lock() {
-                let snap = match st
-                    .snapshot
-                    .as_ref()
-                    .and_then(|v| serde_json::from_value::<HubSnapshot>(v.clone()).ok())
-                {
-                    Some(remote) => merge_hub_snapshots(&snap, &remote),
-                    None => snap,
-                };
-                let from = snap.from_device_name.clone();
-                let files = snap.memory_files.clone();
-                st.snapshot = serde_json::to_value(&snap).ok();
-                let _ = tx.send((from, files));
-            } else {
-                let _ = tx.send((snap.from_device_name, snap.memory_files));
+                st.snapshot = serde_json::to_value(&snap).ok().map(Arc::new);
             }
+            let _ = tx.send((from, files));
         });
     }
 
