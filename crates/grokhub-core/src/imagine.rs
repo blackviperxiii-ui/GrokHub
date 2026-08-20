@@ -130,6 +130,7 @@ pub fn imagine_should_retry_model(err: &str) -> bool {
         || e.contains("unknown")
         || e.contains("invalid_argument")
         || e.contains("empty imagine")
+        || e.contains("empty video")
         || e.contains("http 404")
         || e.contains("http 400")
         || e.contains("http 403")
@@ -865,6 +866,7 @@ mod tests {
         ));
         assert!(imagine_should_retry_model("timed out waiting for 2.0"));
         assert!(imagine_should_retry_model("empty Imagine reply"));
+        assert!(imagine_should_retry_model("empty video request_id"));
         assert_eq!(
             imagine_image_fallback_model(DEFAULT_IMAGINE_MODEL),
             Some(FALLBACK_IMAGINE_MODEL)

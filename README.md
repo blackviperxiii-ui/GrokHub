@@ -2,11 +2,11 @@
 
 Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 
-**v2.6.41** — ACP session/new uses the bound project or `~/GrokHub-Work`, never the cabin process cwd. Disk-full and permission errors name the folder and land in chat.
+**v2.6.42** — New chat does not reuse the last ACP session. Imagine prefers `grok login`. History is in the avatar menu. Handshake no longer mixes load-replay into the live turn. Default permission is Ask.
 
 | Platform | Repository | Latest |
 |----------|------------|--------|
-| **Linux** (this) | [GrokHub](https://github.com/blackviperxiii-ui/GrokHub) | **v2.6.41** |
+| **Linux** (this) | [GrokHub](https://github.com/blackviperxiii-ui/GrokHub) | **v2.6.42** |
 | **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | sibling — same `grokhub-core` |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 

@@ -178,8 +178,8 @@ pub fn initialize_params() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
         "clientCapabilities": {
-            "fs": { "readTextFile": true, "writeTextFile": true },
-            "terminal": true
+            "fs": { "readTextFile": false, "writeTextFile": false },
+            "terminal": false
         },
         "clientInfo": { "name": "grokhub", "version": env!("CARGO_PKG_VERSION") }
     })
@@ -202,6 +202,13 @@ pub fn session_new_params(cwd: &str, yolo: bool, auto: bool, mode: SessionMode) 
     })
 }
 
+pub fn session_load_params(cwd: &str, session_id: &str, yolo: bool, auto: bool, mode: SessionMode) -> Value {
+    let mut body = session_new_params(cwd, yolo, auto, mode);
+    body["sessionId"] = json!(session_id);
+    body["session_id"] = json!(session_id);
+    body
+}
+
 pub fn prompt_params(session_id: &str, text: &str) -> Value {
     json!({
         "sessionId": session_id,
@@ -209,7 +216,7 @@ pub fn prompt_params(session_id: &str, text: &str) -> Value {
     })
 }
 
-pub fn pick_auth_method(auth_methods: &Value, has_api_key: bool) -> Option<String> {
+pub fn pick_auth_method(auth_methods: &Value, api_key: &str) -> Option<String> {
     let ids: Vec<String> = auth_methods
         .as_array()
         .map(|a| {
@@ -218,11 +225,17 @@ pub fn pick_auth_method(auth_methods: &Value, has_api_key: bool) -> Option<Strin
                 .collect()
         })
         .unwrap_or_default();
-    if has_api_key && ids.iter().any(|i| i == "xai.api_key") {
+    let has_api_key = !api_key.trim().is_empty();
+    let jwt = api_key.bytes().filter(|b| *b == b'.').count() >= 2;
+    // grok login JWTs belong on cached_token. A console key uses xai.api_key.
+    if has_api_key && !jwt && ids.iter().any(|i| i == "xai.api_key") {
         return Some("xai.api_key".into());
     }
     if ids.iter().any(|i| i == "cached_token") {
         return Some("cached_token".into());
+    }
+    if has_api_key && ids.iter().any(|i| i == "xai.api_key") {
+        return Some("xai.api_key".into());
     }
     ids.first().cloned()
 }
@@ -374,7 +387,9 @@ fn is_generic_tool_title(s: &str) -> bool {
 
 fn pretty_tool_title(title: &str, kind: &str, loc: &str) -> String {
     let t = title.trim();
-    if !t.is_empty() && !is_generic_tool_title(t) {
+    if looks_json_blob(t) {
+        // fall through to kind/path
+    } else if !t.is_empty() && !is_generic_tool_title(t) {
         return shorten_tool_path(t);
     }
     let verb = match kind.to_ascii_lowercase().as_str() {
@@ -583,6 +598,15 @@ pub fn permission_allow(id: Value) -> JsonRpc {
     )
 }
 
+pub fn permission_allow_always(id: Value) -> JsonRpc {
+    response(
+        id,
+        json!({
+            "outcome": { "outcome": "selected", "optionId": "allow-always" }
+        }),
+    )
+}
+
 pub fn permission_deny(id: Value) -> JsonRpc {
     response(
         id,
@@ -600,12 +624,17 @@ mod tests {
     fn auth_prefers_cached_without_key() {
         let methods = json!([{ "id": "xai.api_key" }, { "id": "cached_token" }]);
         assert_eq!(
-            pick_auth_method(&methods, false).as_deref(),
+            pick_auth_method(&methods, "").as_deref(),
             Some("cached_token")
         );
         assert_eq!(
-            pick_auth_method(&methods, true).as_deref(),
+            pick_auth_method(&methods, "xai-console-key").as_deref(),
             Some("xai.api_key")
+        );
+        assert_eq!(
+            pick_auth_method(&methods, "aaa.bbb.ccc").as_deref(),
+            Some("cached_token"),
+            "grok login JWT must not steal xai.api_key"
         );
     }
 
@@ -682,6 +711,13 @@ mod tests {
         assert_eq!(SessionMode::Chat.as_str(), "chat");
         assert_eq!(SessionMode::Chat.acp_id(), "code");
         assert_eq!(SessionMode::parse("PLAN"), Some(SessionMode::Plan));
+        let load = session_load_params("/home/j/GrokHub-Work", "sess-1", false, true, SessionMode::Chat);
+        assert_eq!(load["cwd"], "/home/j/GrokHub-Work");
+        assert_eq!(load["sessionId"], "sess-1");
+        assert_eq!(load["_meta"]["sessionMode"], "code");
+        let init = initialize_params();
+        assert_eq!(init["clientCapabilities"]["terminal"], false);
+        assert_eq!(init["clientCapabilities"]["fs"]["readTextFile"], false);
         assert_eq!(
             PermissionMode::parse("yolo"),
             Some(PermissionMode::AlwaysApprove)
