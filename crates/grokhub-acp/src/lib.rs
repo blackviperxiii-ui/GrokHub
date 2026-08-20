@@ -5,7 +5,8 @@ mod locate;
 pub mod protocol;
 
 pub use client::{
-    connect, discover_session_files, discover_session_files_in, inspect_json, list_sessions,
+    connect, discover_session_files, discover_session_files_in, ensure_session_cwd,
+    explain_handshake_error, inspect_json, is_session_cwd_error, jsonrpc_error_text, list_sessions,
     merge_grok_sessions, parse_session_list, parse_session_markdown, show_session, split_session_row,
     wait_event, AcpHandle, GrokSession, SpawnOpts,
 };

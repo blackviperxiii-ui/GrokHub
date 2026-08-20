@@ -58,7 +58,7 @@ use grokhub_core::{
     add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
     host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
     verify_ok_after_user_turn, VerifyResult,
-    project_menu_acts, project_menu_label, rename_node, restore_bound_path, seed_from_bound,
+    project_menu_acts, project_menu_label, rename_node, resolve_acp_cwd, restore_bound_path, seed_from_bound,
     settle_project_path, should_seed_sidebar, stage_project, toggle_folder, upsert_bound,
     visible_tree, ProjectKind, ProjectMenuAct,
     ProjectNode,
@@ -1668,12 +1668,11 @@ impl Cabin {
     }
 
     fn grok_cwd(&self) -> std::path::PathBuf {
-        let cwd = expand_home(&self.cfg.project_dir);
-        if cwd.trim().is_empty() {
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-        } else {
-            std::path::PathBuf::from(&cwd)
-        }
+        let home = std::env::var("HOME").ok();
+        let work = self.work_root();
+        let picked = resolve_acp_cwd(&self.cfg.project_dir, home.as_deref(), &work);
+        let path = std::path::PathBuf::from(picked);
+        grokhub_acp::ensure_session_cwd(&path).unwrap_or(path)
     }
 
     fn reload_grok_sessions(&mut self) {
@@ -1735,7 +1734,8 @@ impl Cabin {
         let resume = self
             .threads
             .get(self.thread_idx)
-            .and_then(|t| t.grok_session.clone());
+            .and_then(|t| t.grok_session.clone())
+            .filter(|s| !s.trim().is_empty());
         if let Some(h) = &self.acp {
             if h.cwd == cwd {
                 let same = match resume.as_deref() {
@@ -1749,13 +1749,24 @@ impl Cabin {
         }
         self.acp = None;
         let key = self.bearer();
-        let h = build_agent::spawn_session(
-            cwd,
-            if key.is_empty() { None } else { Some(key) },
-            self.permission_mode,
-            self.session_mode,
-            resume,
-        )?;
+        let key = if key.is_empty() { None } else { Some(key) };
+        let perm = self.permission_mode;
+        let mode = self.session_mode;
+        let spawn = |resume: Option<String>| {
+            build_agent::spawn_session(cwd.clone(), key.clone(), perm, mode, resume)
+        };
+        let h = match spawn(resume.clone()) {
+            Ok(h) => h,
+            Err(e) => {
+                if resume.is_none() {
+                    return Err(grokhub_acp::explain_handshake_error(&e, &cwd));
+                }
+                if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                    t.grok_session = None;
+                }
+                spawn(None).map_err(|e2| grokhub_acp::explain_handshake_error(&e2, &cwd))?
+            }
+        };
         let sid = h.session_id.clone();
         if !sid.trim().is_empty() {
             if let Some(t) = self.threads.get_mut(self.thread_idx) {
@@ -5073,8 +5084,9 @@ impl Cabin {
         self.perm_ask = None;
         if let Err(e) = self.ensure_acp() {
             self.running = false;
+            self.status = self.apply_job_fail(&e);
             self.chat_job_thread = None;
-            self.status = e;
+            self.persist();
             return;
         }
         match self.acp.as_ref().map(|h| h.prompt(&last_user)) {
@@ -5179,8 +5191,10 @@ impl Cabin {
                 }
                 AcpEvent::Err(e) => {
                     self.running = false;
+                    let e = grokhub_acp::explain_handshake_error(&e, &self.grok_cwd());
+                    self.status = self.apply_job_fail(&e);
                     self.chat_job_thread = None;
-                    self.status = e;
+                    self.persist();
                 }
             }
         }
@@ -10974,6 +10988,23 @@ mod tests {
             ensure.contains("grok_session") && ensure.contains("session_id"),
             "new ACP sessions must bind onto the cabin thread: {ensure}"
         );
+        assert!(
+            ensure.contains("explain_handshake_error") && ensure.contains("spawn(None)"),
+            "a dead grok session id must retry session/new without resume: {ensure}"
+        );
+        let cwd = src
+            .split("fn grok_cwd(")
+            .nth(1)
+            .and_then(|s| s.split("fn reload_grok_sessions(").next())
+            .expect("grok_cwd");
+        assert!(
+            cwd.contains("resolve_acp_cwd") && cwd.contains("work_root"),
+            "ACP cwd must be the bound project or ~/GrokHub-Work, not the cabin process cwd: {cwd}"
+        );
+        assert!(
+            !cwd.contains("current_dir"),
+            "unbound ACP must not inherit the overlay or cargo tree cwd: {cwd}"
+        );
         let open = src
             .split("fn open_grok_session(")
             .nth(1)
@@ -11142,6 +11173,10 @@ mod tests {
         assert!(
             kick.contains("ensure_acp") && kick.contains("prompt("),
             "kick_model must prompt Grok Build over ACP: {kick}"
+        );
+        assert!(
+            kick.contains("apply_job_fail"),
+            "session/new failure must land in the chat, not only the 72-char status clip: {kick}"
         );
         assert!(
             kick.contains("pending_kick") && kick.contains("kick_cap_rx"),
