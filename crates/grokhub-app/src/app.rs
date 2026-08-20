@@ -1638,8 +1638,15 @@ impl Cabin {
     fn halt_in_flight(&mut self) {
         self.host_halt.store(true, Ordering::SeqCst);
         if let Some(h) = &self.acp {
+            if let Some(p) = self.perm_ask.take() {
+                let _ = h.answer_permission(p.rpc_id, false);
+            }
             let _ = h.cancel();
-            while h.try_recv().is_ok() {}
+            while let Ok(ev) = h.try_recv() {
+                if let AcpEvent::Permission(p) = ev {
+                    let _ = h.answer_permission(p.rpc_id, false);
+                }
+            }
         }
         self.rx = None;
         self.running = false;
@@ -3345,9 +3352,13 @@ impl Cabin {
             if grokhub_core::token_needs_refresh(&tok, now_ms()) {
                 if let Some(next) = crate::oauth::refresh_cabin_oauth(&tok) {
                     self.secrets.oauth = Some(next.clone());
-                    if let Ok(_g) = self.persist_io.lock() {
-                        let _ = secrets::save(&self.secrets);
-                    }
+                    let io = self.persist_io.clone();
+                    let secrets = self.secrets.clone();
+                    std::thread::spawn(move || {
+                        if let Ok(_g) = io.lock() {
+                            let _ = secrets::save(&secrets);
+                        }
+                    });
                     tok = next;
                 }
             }
@@ -5701,6 +5712,11 @@ impl Cabin {
         self.stream_buf.clear();
         self.thought_buf.clear();
         self.tool_cards.clear();
+        if let Some(p) = self.perm_ask.take() {
+            if let Some(h) = &self.acp {
+                let _ = h.answer_permission(p.rpc_id, false);
+            }
+        }
         self.perm_ask = None;
         let image = if consume_attach {
             next_chat_image(self.attach_url.as_deref(), cabin.as_deref()).map(|s| s.to_string())
@@ -5862,6 +5878,12 @@ impl Cabin {
 
     fn finish_acp_turn(&mut self, text: String) {
         let text = take_ui_text(text, IMAGE_FILE_CAP);
+        if let Some(p) = self.perm_ask.take() {
+            if let Some(h) = &self.acp {
+                let _ = h.answer_permission(p.rpc_id, false);
+            }
+        }
+        self.perm_ask = None;
         let here = chat_stream_is_visible(
             self.chat_job_thread.as_deref(),
             &self.visible_thread_id(),
@@ -6231,20 +6253,19 @@ impl Cabin {
                 if any_hands {
                     self.hands_attach = true;
                     self.eyes_attach = true;
-                    let rows = collect_rows();
-                    let titles: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-                    let lock = lock_titles();
-                    if !lock_blocks_hands(&titles)
-                        && !lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
-                    {
-                        if let Some(url) = self.capture_cabin_frame_this_turn() {
-                            self.kick_frame = Some(url);
-                        }
+                    if let Some(url) = self.capture_cabin_frame_this_turn() {
+                        self.kick_frame = Some(url);
                     }
-                    if let Some(recipe) = recipe_from_cmds(&self.last_host, screen_from_rows(&rows)) {
-                        if crate::recipes::save_recipe("last", &recipe).is_ok() {
-                            self.last_recipe = Some(recipe);
+                    let cmds = self.last_host.clone();
+                    std::thread::spawn(move || {
+                        let rows = collect_rows();
+                        let _ = lock_titles();
+                        if let Some(recipe) = recipe_from_cmds(&cmds, screen_from_rows(&rows)) {
+                            let _ = crate::recipes::save_recipe("last", &recipe);
                         }
+                    });
+                    if let Some(recipe) = recipe_from_cmds(&self.last_host, None) {
+                        self.last_recipe = Some(recipe);
                     }
                     if !job_scratch {
                         let user = self.last_user_on_job();
@@ -11957,8 +11978,14 @@ mod tests {
             "foreground persist must not freeze the cabin writing threads.json: {persist}"
         );
         assert!(
-            bearer.contains("persist_io.lock") && bearer.contains("secrets::save"),
+            bearer.contains("persist_io") && bearer.contains("secrets::save"),
             "OAuth refresh must take persist_io before writing secrets.json: {bearer}"
+        );
+        let bearer_spawn = bearer.find("thread::spawn").expect("oauth persist must leave the UI thread");
+        let bearer_save = bearer.find("secrets::save").expect("oauth persist writes");
+        assert!(
+            bearer_spawn < bearer_save,
+            "OAuth refresh must not freeze the cabin writing secrets.json: {bearer}"
         );
         let kick = src
             .split("fn kick_model(")
@@ -12978,6 +13005,10 @@ mod tests {
             "Stop must drop the permission bar or Allow continues the cancelled turn: {halt_flight}"
         );
         assert!(
+            halt_flight.contains("answer_permission"),
+            "Stop must deny leftover Ask or the next send hangs on the unanswered RPC: {halt_flight}"
+        );
+        assert!(
             halt_flight.contains("try_recv"),
             "Stop must drain leftover ACP tokens so they do not paint on the next prompt: {halt_flight}"
         );
@@ -13141,6 +13172,12 @@ mod tests {
         assert!(
             host_done.contains("eyes_attach = true") && host_done.contains("hands_attach = true"),
             "after COMPUTER_CMD, HostDone must re-arm eyes and hands for the next shot: {host_done}"
+        );
+        let host_scan = host_done.find("collect_rows").expect("HostDone desk scan");
+        let host_spawn = host_done.find("thread::spawn").expect("HostDone desk scan worker");
+        assert!(
+            host_spawn < host_scan,
+            "HostDone AT-SPI must not freeze the cabin: {host_done}"
         );
         let import = src
             .split("fn import_openclaw")
