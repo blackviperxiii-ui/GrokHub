@@ -137,13 +137,20 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         drop(st);
         let body = read_json(&mut req);
         let snap = body.get("snapshot").cloned().unwrap_or(body);
-        let mut st = state.lock().map_err(|_| ())?;
-        let result = st.put_snapshot(snap);
-        drop(st);
-        return match result {
-            Ok(()) => send_json(req, 200, json!({ "ok": true })),
-            Err(e) => send_json(req, 400, json!({ "ok": false, "error": e })),
+        let local = {
+            let st = state.lock().map_err(|_| ())?;
+            st.snapshot.clone()
         };
+        match grokhub_core::merge_put_snapshot(local.as_deref(), snap) {
+            Ok(merged) => {
+                let mut st = state.lock().map_err(|_| ())?;
+                st.snapshot = Some(std::sync::Arc::new(merged));
+                st.last_incoming_at = grokhub_core::now_ms();
+                drop(st);
+                return send_json(req, 200, json!({ "ok": true }));
+            }
+            Err(e) => return send_json(req, 400, json!({ "ok": false, "error": e })),
+        }
     }
 
     if method == Method::Post && path == "/v1/task" {
@@ -762,6 +769,12 @@ mod tests {
         assert!(
             drop_at < read_at,
             "PUT snapshot must not read the body while holding the hub lock: {put_snap}"
+        );
+        let clone_at = put_snap.find("snapshot.clone()").expect("PUT clones the Arc");
+        let merge_at = put_snap.find("merge_put_snapshot").expect("PUT merges off lock");
+        assert!(
+            read_at < clone_at && clone_at < merge_at && !put_snap.contains(".put_snapshot("),
+            "PUT snapshot must not from_value 8MB under hub.lock(): {put_snap}"
         );
         let get_frame = src
             .split("Method::Get && path == \"/v1/frame\"")
