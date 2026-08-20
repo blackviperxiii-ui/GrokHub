@@ -1,6 +1,8 @@
 use crate::host_plan::{explain_host_risk, host_risk, HostPlanStep, HostRisk};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// Overlay update only. Never wipes `~/.config/GrokHub`.
 pub fn is_grokhub_source(dir: &Path) -> bool {
@@ -41,17 +43,42 @@ fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-fn git_head_branch(source: &Path) -> Result<String, String> {
-    let out = Command::new("git")
+fn git_stdout(source: &Path, args: &[&str]) -> Result<(bool, String), String> {
+    let mut child = Command::new("git")
         .arg("-C")
         .arg(source)
-        .args(["symbolic-ref", "-q", "--short", "HEAD"])
-        .output()
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .map_err(|e| format!("git: {e}"))?;
-    if !out.status.success() {
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(st)) => {
+                let mut out = String::new();
+                if let Some(stdout) = child.stdout.take() {
+                    let _ = stdout.take(4096).read_to_string(&mut out);
+                }
+                return Ok((st.success(), out));
+            }
+            Ok(None) if start.elapsed() > Duration::from_secs(2) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("git timed out — is the source clone reachable?".into());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(15)),
+            Err(e) => return Err(format!("git: {e}")),
+        }
+    }
+}
+
+fn git_head_branch(source: &Path) -> Result<String, String> {
+    let (ok, out) = git_stdout(source, &["symbolic-ref", "-q", "--short", "HEAD"])?;
+    if !ok {
         return Err("source clone is not on a branch — checkout main, then Update".into());
     }
-    let branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let branch = out.trim().to_string();
     if branch.is_empty() {
         return Err("source clone is not on a branch — checkout main, then Update".into());
     }
@@ -59,16 +86,11 @@ fn git_head_branch(source: &Path) -> Result<String, String> {
 }
 
 fn git_origin_url(source: &Path) -> Result<String, String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(source)
-        .args(["remote", "get-url", "origin"])
-        .output()
-        .map_err(|e| format!("git: {e}"))?;
-    if !out.status.success() {
+    let (ok, out) = git_stdout(source, &["remote", "get-url", "origin"])?;
+    if !ok {
         return Err("source clone has no origin — add origin, then Update".into());
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(out.trim().to_string())
 }
 
 /// Overlay pulls this GitHub remote until Cursor Origin is live.
@@ -319,6 +341,38 @@ mod tests {
         ]));
         assert!(update_cmds(Path::new("/tmp/not-grokhub")).is_err());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn git_probes_must_time_out() {
+        let src = include_str!("update.rs");
+        let git = src
+            .split("fn git_stdout(")
+            .nth(1)
+            .and_then(|s| s.split("fn git_head_branch(").next())
+            .expect("git_stdout");
+        assert!(
+            git.contains("try_wait") && !git.contains(".output()"),
+            "Settings Update git must not hang the cabin: {git}"
+        );
+        let head = src
+            .split("fn git_head_branch(")
+            .nth(1)
+            .and_then(|s| s.split("fn git_origin_url(").next())
+            .expect("git_head_branch");
+        assert!(
+            head.contains("git_stdout(") && !head.contains(".output()"),
+            "git HEAD probe must time out: {head}"
+        );
+        let origin = src
+            .split("fn git_origin_url(")
+            .nth(1)
+            .and_then(|s| s.split("pub const GITHUB_REMOTE_URL").next())
+            .expect("git_origin_url");
+        assert!(
+            origin.contains("git_stdout(") && !origin.contains(".output()"),
+            "git origin probe must time out: {origin}"
+        );
     }
 
     fn seed_git_source(root: &std::path::Path, branch: &str) {
