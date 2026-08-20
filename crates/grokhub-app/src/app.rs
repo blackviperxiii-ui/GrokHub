@@ -5828,6 +5828,16 @@ impl Cabin {
         self.last_frame_url = Some(url.to_string());
     }
 
+    /// Decode the JPEG off the hub lock so persist/drain are not frozen on a 400KB clone.
+    fn store_hub_frame(&self, url: &str) {
+        let Some(frame) = grokhub_core::store_frame(url, now_ms()) else {
+            return;
+        };
+        if let Ok(mut st) = self.hub.lock() {
+            st.install_frame(frame);
+        }
+    }
+
     fn push_presence(&mut self, url: String) {
         if url.len() > FRAME_CAP {
             return;
@@ -5867,9 +5877,7 @@ impl Cabin {
                 Ok(cap) => {
                     if let Some(url) = cap.url {
                         if should_send_screenshot(&self.last_window_title, "") {
-                            if let Ok(mut st) = self.hub.lock() {
-                                st.store_frame(&url);
-                            }
+                            self.store_hub_frame(&url);
                             self.remember_last_frame(&url);
                             self.push_presence(url);
                         }
@@ -6334,9 +6342,7 @@ impl Cabin {
                     if let Some(url) = &card.image_data_url {
                         self.desk_frame = Some(url.clone());
                         self.remember_last_frame(url);
-                        if let Ok(mut st) = self.hub.lock() {
-                            st.store_frame(url);
-                        }
+                        self.store_hub_frame(url);
                     }
                     if let Some(old) = self.tool_cards.iter_mut().find(|c| c.id == card.id) {
                         *old = merge_tool_card(old.clone(), card);
@@ -7295,9 +7301,7 @@ impl Cabin {
         if let Some(rx) = self.kick_cap_rx.take() {
             return match rx.try_recv() {
                 Ok(Ok(url)) => {
-                    if let Ok(mut st) = self.hub.lock() {
-                        st.store_frame(&url);
-                    }
+                    self.store_hub_frame(&url);
                     self.remember_last_frame(&url);
                     CabinFrame::Ready(url)
                 }
@@ -7752,9 +7756,7 @@ impl Cabin {
                 if let Some(cap) = out.frame {
                     match &cap {
                         Ok(url) => {
-                            if let Ok(mut st) = self.hub.lock() {
-                                st.store_frame(url);
-                            }
+                            self.store_hub_frame(url);
                             self.remember_last_frame(url);
                             self.eyes_text = self.eyes_text.replace(
                                 "frame: capturing…\n",
@@ -7888,9 +7890,7 @@ impl Cabin {
             Ok(cap) => {
                 if let Ok(url) = &cap {
                     if should_send_screenshot(&self.last_window_title, "") {
-                        if let Ok(mut st) = self.hub.lock() {
-                            st.store_frame(url);
-                        }
+                        self.store_hub_frame(url);
                         self.remember_last_frame(url);
                     }
                     self.eyes_text = self.eyes_text.replace(
@@ -7917,9 +7917,7 @@ impl Cabin {
         };
         match rx.try_recv() {
             Ok(Ok(url)) => {
-                if let Ok(mut st) = self.hub.lock() {
-                    st.store_frame(&url);
-                }
+                self.store_hub_frame(&url);
                 self.remember_last_frame(&url);
                 self.eyes_text = self.eyes_text.replace(
                     "frame: capturing…\n",
@@ -14380,7 +14378,7 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn halt_work").next())
             .expect("refresh_eyes");
-        let store = eyes.find("store_frame").expect("eyes store");
+        let store = eyes.find("store_hub_frame").expect("eyes store");
         assert!(
             eyes[..store].contains("should_send_screenshot")
                 || eyes[..store].contains("lock_blocks_hands"),
@@ -15350,6 +15348,17 @@ mod tests {
         assert!(
             assigns <= 1,
             "every last-frame write must go through remember_last_frame, found {assigns}"
+        );
+        let hub_frame = impl_src
+            .split("fn store_hub_frame(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ").next())
+            .expect("store_hub_frame");
+        let parse = hub_frame.find("store_frame").expect("parse jpeg");
+        let lock = hub_frame.find("hub.lock").expect("hub lock");
+        assert!(
+            parse < lock && hub_frame.contains("install_frame"),
+            "cabin must not decode a 400KB JPEG under hub.lock(): {hub_frame}"
         );
     }
 
