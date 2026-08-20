@@ -3662,7 +3662,11 @@ impl Cabin {
 
     fn land_on_real_chat(&mut self) {
         if self.scratch() {
-            self.open_recent_chat();
+            if let Some(idx) = threads::most_recently_accessed_index(&self.threads) {
+                if idx != self.thread_idx {
+                    self.apply_switch_thread(idx);
+                }
+            }
         }
         self.nav = Nav::Chat;
     }
@@ -16347,8 +16351,12 @@ mod tests {
             .and_then(|s| s.split("fn new_thread(").next())
             .expect("land_on_real_chat");
         assert!(
-            land.contains("scratch()") && land.contains("open_recent_chat"),
+            land.contains("scratch()") && land.contains("apply_switch_thread"),
             "background chat must leave Scratch for the last real thread: {land}"
+        );
+        assert!(
+            land.contains("most_recently_accessed_index") && !land.contains("self.persist()"),
+            "leaving Scratch for a night/inbox job must not clone every thread twice: {land}"
         );
         let house = src
             .split("HeartbeatAct::Housekeep =>")
