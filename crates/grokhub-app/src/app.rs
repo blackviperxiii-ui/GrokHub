@@ -4189,6 +4189,7 @@ impl Cabin {
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
                     t.grok_session = None;
                 }
+                self.persist_idle_key = self.persist_idle_now();
                 self.status = "Plan mode — Grok Build will plan first".into();
             }
             Slash::AlwaysApprove => {
@@ -4205,6 +4206,7 @@ impl Cabin {
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
                     t.grok_session = None;
                 }
+                self.persist_idle_key = self.persist_idle_now();
                 self.status = format!("Permission {}", self.permission_mode.as_str());
             }
             Slash::AutoPerm => {
@@ -4217,6 +4219,7 @@ impl Cabin {
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
                     t.grok_session = None;
                 }
+                self.persist_idle_key = self.persist_idle_now();
                 self.status = "Permission auto".into();
             }
             Slash::Effort(level) => {
@@ -9861,6 +9864,7 @@ impl Cabin {
                     if let Some(t) = self.threads.get_mut(self.thread_idx) {
                         t.grok_session = None;
                     }
+                    self.persist_idle_key = self.persist_idle_now();
                     self.status = format!("Session {}", m.as_str());
                 }
             }
@@ -9875,6 +9879,7 @@ impl Cabin {
                     if let Some(t) = self.threads.get_mut(self.thread_idx) {
                         t.grok_session = None;
                     }
+                    self.persist_idle_key = self.persist_idle_now();
                     self.status = format!("Permission {}", p.as_str());
                 }
             }
@@ -12510,6 +12515,10 @@ mod tests {
             always.contains("grok_session = None"),
             "/always must session/new or Ask vs Always does not take: {always}"
         );
+        assert!(
+            always.contains("persist_idle_key") && !always.contains("self.persist()"),
+            "/always must not clone every thread — bump the idle key so persist_bg skips: {always}"
+        );
         let auto = src
             .split("Slash::AutoPerm =>")
             .nth(1)
@@ -12522,6 +12531,10 @@ mod tests {
         assert!(
             auto.contains("grok_session = None"),
             "/auto must session/new or permission mode does not take: {auto}"
+        );
+        assert!(
+            auto.contains("persist_idle_key") && !auto.contains("self.persist()"),
+            "/auto must not clone every thread — bump the idle key so persist_bg skips: {auto}"
         );
         let mode = src
             .split("Slash::Mode(mode)")
@@ -12595,6 +12608,10 @@ mod tests {
             "/plan must session/new or Chat vs Plan does not take: {plan}"
         );
         assert!(
+            plan.contains("persist_idle_key") && !plan.contains("self.persist()"),
+            "/plan must not clone every thread — bump the idle key so persist_bg skips: {plan}"
+        );
+        assert!(
             plan.contains("halt_in_flight"),
             "/plan mid-turn must halt or Thinking sticks after the agent is dropped: {plan}"
         );
@@ -12612,6 +12629,11 @@ mod tests {
             row.matches("grok_session = None").count(),
             2,
             "session/permission row must session/new so mode takes: {row}"
+        );
+        assert_eq!(
+            row.matches("persist_idle_key").count(),
+            2,
+            "session/permission row must not clone every thread — bump the idle key so persist_bg skips: {row}"
         );
     }
 
