@@ -2,6 +2,7 @@ use grokhub_core::frame::{get_jpeg, FrameGet};
 use grokhub_core::inhabit::InhabitBundle;
 use grokhub_core::task::Receipt;
 use grokhub_core::{CompleteError, HubState, HUB_KIND};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -122,7 +123,15 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     if method == Method::Get && path == "/v1/snapshot" {
         let snapshot = st.snapshot.clone();
         drop(st);
-        return send_json(req, 200, json!({ "ok": true, "snapshot": snapshot }));
+        #[derive(Serialize)]
+        struct Body<'a> {
+            ok: bool,
+            snapshot: Option<&'a Value>,
+        }
+        return send_json(req, 200, Body {
+            ok: true,
+            snapshot: snapshot.as_deref(),
+        });
     }
     if method == Method::Put && path == "/v1/snapshot" {
         drop(st);
@@ -278,7 +287,15 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     if method == Method::Get && path == "/v1/frame" {
         let frame = st.last_frame.clone();
         drop(st);
-        return send_json(req, 200, json!({ "ok": true, "frame": frame }));
+        #[derive(Serialize)]
+        struct Body<'a> {
+            ok: bool,
+            frame: Option<&'a grokhub_core::PresenceFrame>,
+        }
+        return send_json(req, 200, Body {
+            ok: true,
+            frame: frame.as_deref(),
+        });
     }
     if method == Method::Get && path == "/v1/frame.jpg" {
         let since = query
@@ -288,7 +305,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             .unwrap_or(0);
         let frame = st.last_frame.clone();
         drop(st);
-        match get_jpeg(frame.as_ref(), since) {
+        match get_jpeg(frame.as_deref(), since) {
             FrameGet::Missing => {
                 return send_json(req, 404, json!({ "ok": false, "error": "no frame" }));
             }
@@ -390,7 +407,7 @@ fn cors_headers() -> Vec<Header> {
     ]
 }
 
-fn send_json(req: Request, status: u16, body: Value) -> Result<(), ()> {
+fn send_json(req: Request, status: u16, body: impl Serialize) -> Result<(), ()> {
     let s = serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec());
     send(req, status, "application/json; charset=utf-8", &s)
 }
@@ -731,6 +748,10 @@ mod tests {
             get_snap.contains("snapshot.clone()"),
             "GET snapshot must clone before drop: {get_snap}"
         );
+        assert!(
+            get_snap.contains("as_deref()"),
+            "GET snapshot must serialize the Arc after drop, not deep-clone Value under hub.lock(): {get_snap}"
+        );
         let put_snap = src
             .split("Method::Put && path == \"/v1/snapshot\"")
             .nth(1)
@@ -750,6 +771,10 @@ mod tests {
         assert!(
             get_frame.contains("drop(st)"),
             "GET frame must release the hub lock before send_json: {get_frame}"
+        );
+        assert!(
+            get_frame.contains("as_deref()"),
+            "GET frame must serialize the Arc after drop, not clone a 400KB JPEG under hub.lock(): {get_frame}"
         );
         let get_jpg = src
             .split("Method::Get && path == \"/v1/frame.jpg\"")
