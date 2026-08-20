@@ -6,6 +6,8 @@ use grokhub_core::{
     curate_wall, imagine_result_fit, wall_curate_seed, LearnedSuggestion, SkillMd, SuggestionKind,
     WallGif, WallSlot, IMAGE_FILE_CAP,
 };
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
 
 pub use grokhub_core::ImagineKind;
 
@@ -1665,28 +1667,87 @@ fn imagine_disk_tex(ctx: &egui::Context, path: &str) -> (TextureHandle, [usize; 
     if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
         return hit;
     }
-    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
-    let img = if len > IMAGE_FILE_CAP {
-        None
-    } else {
-        std::fs::read(path).ok().and_then(|b| {
-            if !crate::desktop::image_pixels_ok_for_bytes(&b) {
-                return None;
-            }
-            image::load_from_memory(&b).ok()
-        })
+    if let Some(rgba) = take_disk_rgba(path) {
+        let size = [rgba.width() as usize, rgba.height() as usize];
+        let tex = ctx.load_texture(
+            format!("imagine-disk-{path}"),
+            ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+            TextureOptions::LINEAR,
+        );
+        let hit = (tex, size);
+        ctx.data_mut(|d| d.insert_temp(id, hit.clone()));
+        return hit;
     }
-    .unwrap_or_else(|| image::DynamicImage::new_rgb8(8, 8));
-    let rgba = img.to_rgba8();
-    let size = [rgba.width() as usize, rgba.height() as usize];
+    kick_disk_tex(ctx.clone(), path.to_string());
+    imagine_disk_pending_tex(ctx)
+}
+
+fn imagine_disk_pending_tex(ctx: &egui::Context) -> (TextureHandle, [usize; 2]) {
+    let id = egui::Id::new("imagine-disk-pending");
+    if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
+        return hit;
+    }
+    let rgba = image::RgbaImage::new(8, 8);
+    let size = [8usize, 8];
     let tex = ctx.load_texture(
-        format!("imagine-disk-{path}"),
+        "imagine-disk-pending",
         ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
         TextureOptions::LINEAR,
     );
     let hit = (tex, size);
     ctx.data_mut(|d| d.insert_temp(id, hit.clone()));
     hit
+}
+
+struct DiskTexGate {
+    inflight: HashSet<String>,
+    ready: HashMap<String, image::RgbaImage>,
+}
+
+fn disk_tex_gate() -> &'static Mutex<DiskTexGate> {
+    static G: OnceLock<Mutex<DiskTexGate>> = OnceLock::new();
+    G.get_or_init(|| {
+        Mutex::new(DiskTexGate {
+            inflight: HashSet::new(),
+            ready: HashMap::new(),
+        })
+    })
+}
+
+fn take_disk_rgba(path: &str) -> Option<image::RgbaImage> {
+    let mut g = disk_tex_gate().lock().ok()?;
+    g.ready.remove(path)
+}
+
+fn kick_disk_tex(ctx: egui::Context, path: String) {
+    {
+        let Ok(mut g) = disk_tex_gate().lock() else {
+            return;
+        };
+        if g.ready.contains_key(&path) || !g.inflight.insert(path.clone()) {
+            return;
+        }
+    }
+    std::thread::spawn(move || {
+        let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(u64::MAX);
+        let img = if len > IMAGE_FILE_CAP {
+            None
+        } else {
+            std::fs::read(&path).ok().and_then(|b| {
+                if !crate::desktop::image_pixels_ok_for_bytes(&b) {
+                    return None;
+                }
+                image::load_from_memory(&b).ok()
+            })
+        }
+        .unwrap_or_else(|| image::DynamicImage::new_rgb8(8, 8));
+        let rgba = img.to_rgba8();
+        if let Ok(mut g) = disk_tex_gate().lock() {
+            g.inflight.remove(&path);
+            g.ready.insert(path, rgba);
+        }
+        ctx.request_repaint();
+    });
 }
 
 fn imagine_disk_tile(
@@ -2157,8 +2218,9 @@ mod tests {
             .expect("imagine_disk_tex");
         let meta = tex.find("metadata").expect("size check before decode");
         let read = tex.find("std::fs::read").expect("read image");
+        let spawn = tex.find("thread::spawn").expect("decode must leave the UI thread");
         assert!(
-            meta < read && tex.contains("IMAGE_FILE_CAP"),
+            spawn < read && meta < read && tex.contains("IMAGE_FILE_CAP"),
             "a huge wall still must not decode on the UI thread: {tex}"
         );
         assert!(
