@@ -945,7 +945,7 @@ pub fn chip_row_width_lock(avail: f32) -> f32 {
 }
 
 pub fn quick_chip_fill(_primary: bool) -> Color32 {
-    Color32::TRANSPARENT
+    crate::theme::elevated()
 }
 
 pub fn quick_chip_stroke(_primary: bool) -> Color32 {
@@ -953,7 +953,7 @@ pub fn quick_chip_stroke(_primary: bool) -> Color32 {
 }
 
 pub fn quick_chip_fg(_primary: bool) -> Color32 {
-    crate::theme::muted()
+    crate::theme::fg()
 }
 
 pub fn quick_chip_inner_button_framed() -> bool {
@@ -1006,7 +1006,7 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                             let hit = crate::theme::pointing(
                                 ui.add(
                                     egui::Button::new(
-                                        RichText::new(paint).size(12.0).color(color),
+                                        RichText::new(paint).size(13.0).color(color),
                                     )
                                     .fill(Color32::TRANSPARENT)
                                     .stroke(Stroke::NONE)
@@ -1851,10 +1851,10 @@ mod tests {
 
     #[test]
     fn first_quick_chip_is_inline_not_selected() {
-        assert_eq!(quick_chip_fill(true), Color32::TRANSPARENT);
+        assert_eq!(quick_chip_fill(true), crate::theme::elevated());
         assert_eq!(quick_chip_fill(true), quick_chip_fill(false));
         assert_eq!(quick_chip_stroke(true), quick_chip_stroke(false));
-        assert_eq!(quick_chip_fg(true), quick_chip_fg(false));
+        assert_eq!(quick_chip_fg(true), crate::theme::fg());
         let max_w = chip_row_width_lock(640.0);
         assert_eq!(max_w, crate::theme::QUERY_MAX_W.min(640.0_f32.max(120.0)));
         assert!(max_w <= crate::theme::QUERY_MAX_W);

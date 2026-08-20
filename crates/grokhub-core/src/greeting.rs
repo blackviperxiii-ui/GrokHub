@@ -65,9 +65,51 @@ fn split_name_line<'a>(lower: &str, raw: &'a str) -> Option<&'a str> {
         .map(|(_, rest)| rest)
 }
 
+fn is_product_name(s: &str) -> bool {
+    let t = s.trim().to_ascii_lowercase();
+    t.is_empty()
+        || t == "grok"
+        || t == "grokhub"
+        || t == "grok hub"
+        || t == "cabin"
+        || t == "this computer"
+        || t == "localhost"
+        || t.contains("grokhub")
+        || is_machine_name(&t)
+}
+
+/// Hostnames and distro names must not become "Hello, CachyOS."
+fn is_machine_name(s: &str) -> bool {
+    let t = s.trim().to_ascii_lowercase();
+    if t.is_empty() {
+        return false;
+    }
+    if t.contains("cachy")
+        || t.contains("x86")
+        || t.contains("x64")
+        || t == "arch"
+        || t == "archlinux"
+        || t == "ubuntu"
+        || t == "fedora"
+        || t == "debian"
+        || t == "manjaro"
+        || t == "nixos"
+        || t == "linux"
+        || t == "hostname"
+    {
+        return true;
+    }
+    t.contains('-') && t.chars().any(|c| c.is_ascii_digit())
+}
+
+fn greeting_uses_machine_name(s: &str) -> bool {
+    s.split(|c: char| !c.is_alphanumeric() && c != '-')
+        .any(|w| !w.is_empty() && (is_machine_name(w) || w.eq_ignore_ascii_case("grokhub")))
+}
+
 fn clean_name(s: &str) -> String {
     let s = s.trim().trim_matches('"').trim_matches('*').trim();
-    if s.is_empty() || !is_plain_text(s) {
+    if s.is_empty() || !is_plain_text(s) || is_product_name(s) {
         return String::new();
     }
     let first: String = s
@@ -77,7 +119,7 @@ fn clean_name(s: &str) -> String {
         .chars()
         .take(24)
         .collect();
-    if first.chars().count() < 2 {
+    if first.chars().count() < 2 || is_product_name(&first) {
         String::new()
     } else {
         first
@@ -243,11 +285,19 @@ pub fn parse_llm_greeting(raw: &str) -> Option<String> {
         return None;
     }
     let out = clip_greeting(line);
-    if out.chars().count() < 8 {
+    if out.chars().count() < 8 || is_product_name(&out) || is_product_greeting(&out) || greeting_uses_machine_name(&out) {
         None
     } else {
         Some(out)
     }
+}
+
+fn is_product_greeting(s: &str) -> bool {
+    let t = s.trim().to_ascii_lowercase();
+    t == "grokhub"
+        || t == "grokhub."
+        || t.starts_with("welcome to grokhub")
+        || t == "native grok build cabin"
 }
 
 pub fn pick_greeting(local: &str, llm: Option<&str>) -> String {
@@ -342,6 +392,17 @@ mod tests {
             "Jeremy",
             "nameplate-style lines must not steal the greeting"
         );
+        assert_eq!(
+            greeting_name("", "GrokHub"),
+            "",
+            "device / product names must not become the empty-home greeting"
+        );
+        assert_eq!(greeting_name("", "This computer"), "");
+        assert_eq!(greeting_name("", "cachyos-x8664"), "");
+        assert_eq!(greeting_name("Name: CachyOS\n", "Viper"), "Viper");
+        assert_eq!(greeting_name("", "CachyOS"), "");
+        assert!(parse_llm_greeting("Hello, CachyOS.").is_none());
+        assert!(parse_llm_greeting("Evening, Viper. The cabin is ready.").is_some());
     }
 
     #[test]
@@ -371,6 +432,23 @@ mod tests {
         assert!(g.to_ascii_lowercase().contains("morning"), "{g}");
         assert!(g.chars().count() <= GREETING_MAX_CHARS, "{g}");
         assert!(!g.contains("GrokHub"), "{g}");
+        let device = local_greeting(&input("", "", &[], "GrokHub", 21));
+        assert!(
+            !device.to_ascii_lowercase().contains("grokhub"),
+            "hostname GrokHub must not paint as the hero: {device}"
+        );
+        assert!(device.to_ascii_lowercase().contains("evening"), "{device}");
+        let host = local_greeting(&input("", "", &[], "cachyos-x8664", 21));
+        assert!(
+            !host.to_ascii_lowercase().contains("cachy"),
+            "hostname must not paint as the hero: {host}"
+        );
+        let distro = local_greeting(&input("Name: CachyOS\n", "", &[], "Viper", 8));
+        assert!(
+            distro.to_ascii_lowercase().contains("viper"),
+            "distro Name: must fall through: {distro}"
+        );
+        assert!(!distro.to_ascii_lowercase().contains("cachy"), "{distro}");
     }
 
     #[test]

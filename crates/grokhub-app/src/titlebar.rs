@@ -39,14 +39,36 @@ pub fn titlebar_chrome_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
     } else {
         crate::theme::muted()
     };
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        label,
-        egui::FontId::proportional(16.0),
-        color,
-    );
+    paint_chrome_glyph(ui, rect, label, color);
     resp
+}
+
+fn paint_chrome_glyph(ui: &egui::Ui, rect: egui::Rect, label: &str, color: egui::Color32) {
+    let painter = ui.painter();
+    let stroke = egui::Stroke::new(1.5_f32, color);
+    let r = rect.shrink(12.0);
+    match label {
+        "×" => {
+            painter.line_segment([r.left_top(), r.right_bottom()], stroke);
+            painter.line_segment([r.right_top(), r.left_bottom()], stroke);
+        }
+        "□" => {
+            painter.rect_stroke(r, 1.5, stroke);
+        }
+        "–" => {
+            let y = r.center().y;
+            painter.line_segment([egui::pos2(r.left(), y), egui::pos2(r.right(), y)], stroke);
+        }
+        _ => {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                label,
+                egui::FontId::proportional(16.0),
+                color,
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -74,5 +96,14 @@ mod tests {
     fn titlebar_body_starts_a_window_drag() {
         assert!(titlebar_should_start_drag(true));
         assert!(!titlebar_should_start_drag(false));
+    }
+
+    #[test]
+    fn titlebar_chrome_paints_strokes_not_glyphs() {
+        let src = include_str!("titlebar.rs");
+        assert!(
+            src.contains("paint_chrome_glyph") && src.contains("line_segment"),
+            "window chrome must be strokes, not 16px letterforms"
+        );
     }
 }

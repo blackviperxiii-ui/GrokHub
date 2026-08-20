@@ -1130,6 +1130,7 @@ fn learned_chips_from_memory(memory: &ChipMemory, now_ms: u64) -> Vec<QuickChip>
         .filter(|h| h.uses >= 1 && !h.value.trim().is_empty())
         .filter(|h| matches!(h.kind, ChipKind::Chat | ChipKind::Shell))
         .filter(|h| h.dismisses < 2)
+        .filter(|h| !retired_host_copy(&h.key, &h.label, &h.value))
         .map(|h| {
             let age_days = now_ms.saturating_sub(h.last_used_at) as f32 / 86_400_000.0;
             let score = 25.0
@@ -1292,29 +1293,44 @@ fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
     match stage {
         ChipStage::Empty => vec![
             chip(
-                "empty-help",
-                "What can you do?",
-                "In one short list: what can you help me with in GrokHub right now (chat, host tools, Imagine, GitHub if a PAT is set)?",
-                ChipKind::Chat,
-                70.0,
-                "New chat",
-            ),
-            routing_chip("empty-think", mode, 68.0),
-            chip(
                 "empty-imagine",
                 "Open Imagine",
                 "__nav:imagine",
                 ChipKind::Nav,
-                66.0,
+                70.0,
                 "Create images",
             ),
             chip(
-                "empty-host",
-                "Check the machine",
-                "Run a quick read-only system snapshot via HOST_CMD (uname, whoami, pwd). Summarize.",
+                "empty-brief",
+                "Cabin brief",
+                "Give me a short cabin brief: bound project, recent chats, and the next useful step.",
+                ChipKind::Chat,
+                68.0,
+                "New chat",
+            ),
+            chip(
+                "empty-history",
+                "Recent chats",
+                "__nav:history",
+                ChipKind::Nav,
+                66.0,
+                "History",
+            ),
+            chip(
+                "empty-night",
+                "Set a night job",
+                "Help me set a night automation. Ask one question, then propose a real schedule I can save.",
                 ChipKind::Chat,
                 64.0,
-                "Desktop host",
+                "New chat",
+            ),
+            chip(
+                "empty-next",
+                "What's next",
+                "What should we do next in this cabin? One concrete step.",
+                ChipKind::Chat,
+                62.0,
+                "New chat",
             ),
         ],
         ChipStage::Error => vec![
@@ -1437,26 +1453,13 @@ fn default_chips(mode: &str) -> Vec<QuickChip> {
             17.0,
             "Default",
         ),
-    ]
-}
-
-fn host_chips() -> Vec<QuickChip> {
-    vec![
         chip(
-            "host-diag",
-            "System snapshot",
-            "Run a quick read-only snapshot (uname, whoami, pwd, grokhub install paths). Summarize.",
-            ChipKind::Chat,
-            72.0,
-            "Desktop host",
-        ),
-        chip(
-            "host-status",
-            "Host status shell",
-            "$ uname -a && whoami && pwd",
-            ChipKind::Shell,
-            70.0,
-            "Runs on your machine",
+            "def-skills",
+            "Skills",
+            "__nav:skills",
+            ChipKind::Nav,
+            16.0,
+            "Default",
         ),
     ]
 }
@@ -1469,23 +1472,63 @@ fn is_stale_connect_chip(c: &QuickChip) -> bool {
 }
 
 fn is_desk_takeover_chip(c: &QuickChip) -> bool {
-    let hay = format!("{} {} {}", c.id, c.label, c.value).to_ascii_lowercase();
+    retired_host_copy(&c.id, &c.label, &c.value)
+}
+
+/// Old empty-home chips (Take over / Scan the desk / Check the machine) plus
+/// HOST_CMD habits stored in chips.json. Grok Build already has computer-use.
+fn retired_host_copy(id: &str, label: &str, value: &str) -> bool {
+    let hay = format!("{id} {label} {value}").to_ascii_lowercase();
     hay.contains("take over")
         || hay.contains("this desktop")
         || hay.contains("turn host on")
         || hay.contains("/host on")
-        || c.id == "ctx-host"
+        || hay.contains("scan the desk")
+        || hay.contains("on my desk")
+        || hay.contains("what's on my desk")
+        || hay.contains("whats on my desk")
+        || hay.contains("check the machine")
+        || id == "ctx-host"
+        || id == "empty-host"
+        || id.starts_with("host-")
+        || label.to_ascii_lowercase().contains("desk")
+}
+
+/// Drop leftover desk/host habits so chips.json cannot resurrect them.
+pub fn prune_retired_chip_memory(mem: &mut ChipMemory) -> bool {
+    let before = mem.hits.len();
+    mem.hits
+        .retain(|h| !retired_host_copy(&h.key, &h.label, &h.value));
+    let keys: std::collections::HashSet<String> = mem.hits.iter().map(|h| h.key.clone()).collect();
+    mem.transitions.retain(|from, dests| {
+        if !keys.contains(from) && retired_host_copy(from, "", "") {
+            return false;
+        }
+        dests.retain(|to, _| keys.contains(to) || !retired_host_copy(to, "", ""));
+        !dests.is_empty()
+    });
+    if mem
+        .last_chip_key
+        .as_ref()
+        .is_some_and(|k| retired_host_copy(k, "", ""))
+    {
+        mem.last_chip_key = None;
+    }
+    mem.hits.len() != before
 }
 
 fn uniq_by_value(chips: Vec<QuickChip>) -> Vec<QuickChip> {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen_value = std::collections::HashSet::new();
+    let mut seen_label = std::collections::HashSet::new();
     let mut out = vec![];
     for c in chips {
-        let key = c.value.to_ascii_lowercase();
-        if seen.contains(&key) {
+        let value = c.value.to_ascii_lowercase();
+        let label = c.label.to_ascii_lowercase();
+        if seen_value.contains(&value) || seen_label.contains(&label) {
             continue;
         }
-        seen.insert(key);
+        seen_value.insert(value);
+        seen_label.insert(label);
         out.push(c);
     }
     out
@@ -1597,9 +1640,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         ));
     }
     chips.extend(stage_chips(stage, input.mode));
-    if ctx.host {
-        chips.extend(host_chips());
-    }
+    chips.extend(default_chips(input.mode));
     if ctx.imagine {
         chips.push(chip(
             "ctx-imagine",
@@ -1816,6 +1857,7 @@ pub fn chip_suggest_prompt(
         "- Prefer habits if they fit the current context".into(),
         "- No markdown fences, no commentary outside JSON".into(),
         "- Cabin-real only: no SuperGrok, subscription, Outlook, Gmail, Drive, or Office".into(),
+        "- Never suggest Turn host on, Take over this desktop, Scan the desk, or Check the machine. Grok Build already has computer-use from chat.".into(),
         "- Imagine stills use grok-imagine-image-2.0; Video kind uses grok-imagine-video-1.5".into(),
         String::new(),
         format!("Stage: {}", stage.as_str()),
@@ -1960,6 +2002,9 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
 }
 
 fn cabin_chip_copy_ok(label: &str, value: &str, hint: &str) -> bool {
+    if retired_host_copy("", label, value) || retired_host_copy("", hint, "") {
+        return false;
+    }
     let blob = format!("{label} {value} {hint}").to_ascii_lowercase();
     for w in [
         "video",
@@ -2042,9 +2087,37 @@ mod tests {
     }
 
     #[test]
-    fn empty_stage_offers_think_harder() {
+    fn empty_stage_offers_cabin_chips() {
         let mem = ChipMemory::default();
         let chips = build_quick_chips(input(&[], "", &mem, &[], &[]));
+        let labels: Vec<_> = chips.iter().map(|c| c.label.as_str()).collect();
+        assert!(
+            labels.iter().any(|l| *l == "Open Imagine"),
+            "empty {:?}",
+            labels
+        );
+        assert!(
+            labels.iter().any(|l| *l == "Cabin brief" || *l == "Recent chats" || *l == "What's next"),
+            "empty {:?}",
+            labels
+        );
+        assert!(
+            !labels.iter().any(|l| *l == "Voice"),
+            "Voice is the mic, not a duplicate chip: {:?}",
+            labels
+        );
+        assert!(chips.len() <= CHIP_VISIBLE_MAX);
+        assert!(chips[0].primary);
+    }
+
+    #[test]
+    fn mid_stage_offers_think_harder() {
+        let mem = ChipMemory::default();
+        let chat = [
+            msg("user", "hi"),
+            msg("assistant", "Hello — what should we work on in the cabin tonight?"),
+        ];
+        let chips = build_quick_chips(input(&chat, "", &mem, &[], &[]));
         let think = chips
             .iter()
             .find(|c| c.label == "Think Harder" && c.kind == ChipKind::Mode)
@@ -2052,20 +2125,23 @@ mod tests {
         assert_eq!(think.value, "__mode:think");
         assert_eq!(mode_from_chip_value(&think.value), Some("think"));
         assert!(chips.len() <= CHIP_VISIBLE_MAX);
-        assert!(chips[0].primary);
     }
 
     #[test]
     fn routing_chips_follow_new_modes() {
         let mem = ChipMemory::default();
-        let mut auto = input(&[], "", &mem, &[], &[]);
+        let chat = [
+            msg("user", "hi"),
+            msg("assistant", "Hello — what should we work on in the cabin tonight?"),
+        ];
+        let mut auto = input(&chat, "", &mem, &[], &[]);
         auto.mode = "auto";
         let auto_chips = build_quick_chips(auto);
         assert!(auto_chips.iter().any(|c| {
             c.label == "Think Harder" && c.value == "__mode:think" && c.kind == ChipKind::Mode
         }));
 
-        let mut think = input(&[], "", &mem, &[], &[]);
+        let mut think = input(&chat, "", &mem, &[], &[]);
         think.mode = "think";
         let think_chips = build_quick_chips(think);
         assert!(think_chips.iter().any(|c| {
@@ -2075,13 +2151,39 @@ mod tests {
         }));
         assert!(!think_chips.iter().any(|c| c.label == "Think Harder"));
 
-        let mut max = input(&[], "", &mem, &[], &[]);
+        let mut max = input(&chat, "", &mem, &[], &[]);
         max.mode = "max";
         let max_chips = build_quick_chips(max);
         assert!(max_chips.iter().any(|c| {
             c.label == "Use Adaptive" && c.value == "__mode:auto" && c.kind == ChipKind::Mode
         }));
         assert!(!max_chips.iter().any(|c| c.label == "Think Harder"));
+    }
+
+    #[test]
+    fn duplicate_chip_labels_collapse() {
+        let mem = ChipMemory::default();
+        let llm = vec![
+            chip(
+                "llm-voice-a",
+                "Voice",
+                "Start a voice session with Hey Grok.",
+                ChipKind::Chat,
+                200.0,
+                "Suggested",
+            ),
+            chip(
+                "llm-voice-b",
+                "Voice",
+                "Open duplex voice on this cabin.",
+                ChipKind::Chat,
+                199.0,
+                "Suggested",
+            ),
+        ];
+        let chips = build_quick_chips(input(&[], "", &mem, &[], &llm));
+        let voices = chips.iter().filter(|c| c.label == "Voice").count();
+        assert_eq!(voices, 1, "{:?}", labels(&chips));
     }
 
     #[test]
@@ -2168,13 +2270,13 @@ mod tests {
         let after = build_quick_chips(input(&chat, "", &mem, &[think.id.clone(), think.value.clone()], &[]));
         assert!(!after.iter().any(|c| c.id == think.id));
 
-        let habit = chip("empty-host", "Check the machine", "Run a quick read-only system snapshot via HOST_CMD (uname, whoami, pwd). Summarize.", ChipKind::Chat, 64.0, "Desktop host");
+        let habit = chip("empty-brief", "Cabin brief", "Give me a short cabin brief: bound project, recent chats, and the next useful step.", ChipKind::Chat, 64.0, "New chat");
         remember_chip_click(&mut mem, &habit, Some("mid"), 3_000, 21);
         remember_chip_click(&mut mem, &habit, Some("mid"), 4_000, 21);
         remember_chip_click(&mut mem, &habit, Some("mid"), 5_000, 21);
         let ranked = build_quick_chips(input(&chat, "", &mem, &[], &[]));
         assert!(
-            ranked.iter().any(|c| c.value.contains("HOST_CMD") || c.label.contains("machine") || c.label.contains("snapshot")),
+            ranked.iter().any(|c| c.label.contains("Cabin brief") || c.value.contains("cabin brief")),
             "{:?}",
             ranked.iter().map(|c| c.label.clone()).collect::<Vec<_>>()
         );
@@ -2328,25 +2430,66 @@ mod tests {
     #[test]
     fn chips_drop_desk_takeover() {
         let mem = ChipMemory::default();
-        let llm = [QuickChip {
-            id: "llm-desk".into(),
-            label: "Take over this desktop".into(),
-            value: "Take over this desktop and drive it.".into(),
-            kind: ChipKind::Chat,
-            score: 200.0,
-            hint: "Suggested".into(),
-            primary: true,
-        }];
+        let llm = [
+            QuickChip {
+                id: "llm-desk".into(),
+                label: "Take over this desktop".into(),
+                value: "Take over this desktop and drive it.".into(),
+                kind: ChipKind::Chat,
+                score: 200.0,
+                hint: "Suggested".into(),
+                primary: true,
+            },
+            QuickChip {
+                id: "llm-scan".into(),
+                label: "Scan the desk".into(),
+                value: "Look at my desk and tell me what you see.".into(),
+                kind: ChipKind::Chat,
+                score: 199.0,
+                hint: "Suggested".into(),
+                primary: false,
+            },
+            QuickChip {
+                id: "llm-host".into(),
+                label: "Turn host on".into(),
+                value: "/host on".into(),
+                kind: ChipKind::Chat,
+                score: 198.0,
+                hint: "Suggested".into(),
+                primary: false,
+            },
+            QuickChip {
+                id: "llm-machine".into(),
+                label: "Check the machine".into(),
+                value: "Run a read-only HOST_CMD snapshot.".into(),
+                kind: ChipKind::Chat,
+                score: 197.0,
+                hint: "Suggested".into(),
+                primary: false,
+            },
+        ];
         let chips = build_quick_chips(input(&[], "", &mem, &[], &llm));
         assert!(
-            chips.iter().all(|c| !c.label.to_ascii_lowercase().contains("take over")),
-            "desk takeover chips must not sit on the composer: {:?}",
+            chips.iter().all(|c| !retired_host_copy(&c.id, &c.label, &c.value)),
+            "desk/host chips must not sit on the composer: {:?}",
             labels(&chips)
         );
         assert!(
             chips.iter().all(|c| c.id != "ctx-host"),
             "Turn host on is gone: {:?}",
             labels(&chips)
+        );
+        let empty = build_quick_chips(input(&[], "", &mem, &[], &[]));
+        assert!(
+            empty.iter().all(|c| !retired_host_copy(&c.id, &c.label, &c.value)),
+            "empty home must not paint leftover desk chips: {:?}",
+            labels(&empty)
+        );
+        assert!(
+            parse_llm_chips(
+                r#"[{"label":"Check the machine","value":"Run HOST_CMD now.","kind":"chat"},{"label":"Scan the desk","value":"Look at my desk.","kind":"chat"}]"#
+            )
+            .is_empty()
         );
     }
 
@@ -2392,7 +2535,7 @@ mod tests {
     #[test]
     fn parse_llm_accepts_five() {
         let chips = parse_llm_chips(
-            r#"[{"label":"Continue the wall","value":"Continue painting the cabin wall.","kind":"chat"},{"label":"Check the machine","value":"Run a read-only HOST_CMD snapshot.","kind":"chat"},{"label":"Think Harder","value":"__mode:think","kind":"mode"},{"label":"Open Imagine","value":"__nav:imagine","kind":"nav"},{"label":"Make a checklist","value":"Turn the last answer into a short checklist.","kind":"chat"}]"#,
+            r#"[{"label":"Continue the wall","value":"Continue painting the cabin wall.","kind":"chat"},{"label":"Cabin brief","value":"Give me a short cabin brief.","kind":"chat"},{"label":"Think Harder","value":"__mode:think","kind":"mode"},{"label":"Open Imagine","value":"__nav:imagine","kind":"nav"},{"label":"Make a checklist","value":"Turn the last answer into a short checklist.","kind":"chat"}]"#,
         );
         assert_eq!(chips.len(), 5, "{:?}", labels(&chips));
     }
@@ -2523,12 +2666,12 @@ mod tests {
     fn previous_reply_outcome_boosts_the_habit() {
         let mut mem = ChipMemory::default();
         let habit = chip(
-            "empty-host",
-            "Check the machine",
-            "Run a quick read-only system snapshot via HOST_CMD (uname, whoami, pwd). Summarize.",
+            "empty-brief",
+            "Cabin brief",
+            "Give me a short cabin brief: bound project, recent chats, and the next useful step.",
             ChipKind::Chat,
             64.0,
-            "Desktop host",
+            "New chat",
         );
         remember_chip_click(&mut mem, &habit, Some("mid"), 3_000, 21);
         remember_chip_outcome(&mut mem, true, 4_000);
@@ -2539,9 +2682,26 @@ mod tests {
         ];
         let ranked = build_quick_chips(input(&chat, "", &mem, &[], &[]));
         assert!(
-            ranked.iter().any(|c| c.value.contains("HOST_CMD") || c.label.contains("machine")),
+            ranked.iter().any(|c| c.label.contains("Cabin brief") || c.value.contains("cabin brief")),
             "{:?}",
             labels(&ranked)
+        );
+        prune_retired_chip_memory(&mut mem);
+        let desk = chip(
+            "empty-host",
+            "Check the machine",
+            "Run a quick read-only system snapshot via HOST_CMD (uname, whoami, pwd). Summarize.",
+            ChipKind::Chat,
+            64.0,
+            "Desktop host",
+        );
+        remember_chip_click(&mut mem, &desk, Some("empty"), 6_000, 21);
+        assert!(prune_retired_chip_memory(&mut mem));
+        let cleaned = build_quick_chips(input(&[], "", &mem, &[], &[]));
+        assert!(
+            cleaned.iter().all(|c| !c.label.contains("machine") && !c.label.to_ascii_lowercase().contains("desk")),
+            "{:?}",
+            labels(&cleaned)
         );
     }
 }
