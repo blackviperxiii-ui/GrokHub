@@ -58,7 +58,7 @@ use grokhub_core::{
     add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
     host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
     verify_ok_after_user_turn, VerifyResult,
-    project_menu_acts, project_menu_label, rename_node, resolve_acp_cwd, restore_bound_path, seed_from_bound,
+    project_menu_acts, project_menu_label, rename_node, resolve_acp_cwd, resolve_bind_path, restore_bound_path, seed_from_bound,
     settle_project_path, should_seed_sidebar, stage_project, toggle_folder, upsert_bound,
     visible_tree, ProjectKind, ProjectMenuAct,
     ProjectNode,
@@ -320,7 +320,14 @@ fn cabin_fast_llm(key: String, prompt: String) -> String {
     let Some(bin) = grokhub_acp::find_grok() else {
         return String::new();
     };
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let home = std::env::var("HOME").ok();
+    let work = match home.as_deref() {
+        Some(h) => format!("{h}/GrokHub-Work"),
+        None => "GrokHub-Work".into(),
+    };
+    let picked = resolve_acp_cwd("", home.as_deref(), &work);
+    let path = std::path::PathBuf::from(picked);
+    let cwd = grokhub_acp::ensure_session_cwd(&path).unwrap_or(path);
     let text = grokhub_acp::grok_stdout(
         &bin,
         &cwd,
@@ -1872,6 +1879,9 @@ impl Cabin {
     }
 
     fn drop_leaving_thread_chrome(&mut self) {
+        if self.running {
+            self.halt_in_flight();
+        }
         self.attach_url = None;
         self.attach_name = None;
         self.followup_step = 0;
@@ -2931,8 +2941,9 @@ impl Cabin {
                     if let Some(fresh) = crate::oauth::refresh_grok_login() {
                         return fresh;
                     }
+                } else {
+                    return k;
                 }
-                return k;
             }
         }
         let mut oauth_usable = false;
@@ -3044,7 +3055,14 @@ impl Cabin {
         if let Some(idx) = reuse {
             if idx != self.thread_idx {
                 self.switch_thread(idx);
+            } else {
+                self.drop_leaving_thread_chrome();
             }
+            if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                t.grok_session = None;
+            }
+            self.stamp_current_access();
+            self.persist();
             self.status = if scratch {
                 "Scratch — no memory writes".into()
             } else {
@@ -3376,7 +3394,6 @@ impl Cabin {
                 self.persist();
             }
             Slash::New => {
-                self.acp = None;
                 self.new_thread(false);
             }
             Slash::Scratch => self.new_thread(true),
@@ -3528,9 +3545,8 @@ impl Cabin {
             Slash::Inspect => {
                 self.nav = Nav::Connectors;
                 if let Some(bin) = grokhub_acp::find_grok() {
-                    let cwd = expand_home(&self.cfg.project_dir);
-                    let cwd = std::path::Path::new(if cwd.is_empty() { "." } else { &cwd });
-                    self.inspect_text = match grokhub_acp::inspect_json(&bin, cwd) {
+                    let cwd = self.grok_cwd();
+                    self.inspect_text = match grokhub_acp::inspect_json(&bin, &cwd) {
                         Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string()),
                         Err(e) => e,
                     };
@@ -3541,8 +3557,14 @@ impl Cabin {
                 }
             }
             Slash::ProjectBind(path) => {
-                let p = path.unwrap_or_else(|| self.cfg.project_dir.clone());
-                let p = expand_home(&p);
+                let raw = path.unwrap_or_else(|| self.cfg.project_dir.clone());
+                let home = std::env::var("HOME").ok();
+                let p = resolve_bind_path(
+                    &raw,
+                    &self.cfg.project_dir,
+                    &self.work_root(),
+                    home.as_deref(),
+                );
                 self.cfg.project_dir = p.clone();
                 let _ = std::fs::create_dir_all(&p);
                 self.project_sel = upsert_bound(&mut self.projects, &p);
@@ -3923,9 +3945,8 @@ impl Cabin {
             self.status = self.inspect_text.clone();
             return;
         };
-        let cwd = expand_home(&self.cfg.project_dir);
-        let cwd = std::path::Path::new(if cwd.is_empty() { "." } else { &cwd });
-        self.inspect_text = match grokhub_acp::grok_stdout(&bin, cwd, args) {
+        let cwd = self.grok_cwd();
+        self.inspect_text = match grokhub_acp::grok_stdout(&bin, &cwd, args) {
             Ok(t) => {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
                     serde_json::to_string_pretty(&v).unwrap_or(t)
@@ -5140,7 +5161,12 @@ impl Cabin {
             match ev {
                 AcpEvent::Ready { session_id } => {
                     if !session_id.trim().is_empty() {
-                        if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        let job = self.chat_job_thread.clone();
+                        let idx = job
+                            .as_deref()
+                            .and_then(|id| self.threads.iter().position(|t| t.id == id))
+                            .unwrap_or(self.thread_idx);
+                        if let Some(t) = self.threads.get_mut(idx) {
                             t.grok_session = Some(session_id);
                         }
                     }
@@ -11027,6 +11053,10 @@ mod tests {
             bearer.contains("refresh_grok_login"),
             "grok login JWT must refresh before Imagine 401s: {bearer}"
         );
+        assert!(
+            bearer.contains("} else {") && bearer.contains("return k;"),
+            "a dead grok login JWT must fall through to console key, not keep the expired token: {bearer}"
+        );
         let cwd = src
             .split("fn grok_cwd(")
             .nth(1)
@@ -11039,6 +11069,42 @@ mod tests {
         assert!(
             !cwd.contains("current_dir"),
             "unbound ACP must not inherit the overlay or cargo tree cwd: {cwd}"
+        );
+        let inspect = src
+            .split("Slash::Inspect =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::ProjectBind").next())
+            .expect("inspect");
+        assert!(
+            inspect.contains("grok_cwd") && !inspect.contains("current_dir"),
+            "/inspect must use the bound tree or work root, not the cabin process cwd: {inspect}"
+        );
+        let bind = src
+            .split("Slash::ProjectBind(path)")
+            .nth(1)
+            .and_then(|s| s.split("Slash::ProjectClear").next())
+            .expect("project bind");
+        assert!(
+            bind.contains("resolve_bind_path"),
+            "/project bind . must not inherit the cabin process cwd: {bind}"
+        );
+        let ext = src
+            .split("fn run_grok_extension(")
+            .nth(1)
+            .and_then(|s| s.split("fn doctor_text(").next())
+            .expect("run_grok_extension");
+        assert!(
+            ext.contains("grok_cwd") && !ext.contains("current_dir"),
+            "Connectors inspect must use grok_cwd, not `.`: {ext}"
+        );
+        let fast = src
+            .split("fn cabin_fast_llm(")
+            .nth(1)
+            .and_then(|s| s.split("fn mode_status_line(").next())
+            .expect("cabin_fast_llm");
+        assert!(
+            fast.contains("resolve_acp_cwd") && !fast.contains("current_dir"),
+            "grok -p fallback must not inherit the overlay cwd: {fast}"
         );
         let open = src
             .split("fn open_grok_session(")
@@ -11066,6 +11132,10 @@ mod tests {
         assert!(
             poll.contains("grok_session") && poll.contains("session_id"),
             "ACP Ready must stamp the grok session id: {poll}"
+        );
+        assert!(
+            poll.contains("chat_job_thread"),
+            "ACP Ready must stamp the job thread, not whichever tab is visible: {poll}"
         );
     }
 
@@ -11562,6 +11632,14 @@ mod tests {
             created.contains("reuse_empty_thread_idx"),
             "/new must reuse an empty Chat instead of stacking leftover tabs: {created}"
         );
+        assert!(
+            created.contains("grok_session = None"),
+            "New chat must forget the last ACP session id so the next send is session/new: {created}"
+        );
+        assert!(
+            created.contains("self.persist()"),
+            "forgetting the ACP session on New chat must hit disk or restart reloads Chat 1: {created}"
+        );
         let boot = src
             .split("pub fn new(hidden: bool)")
             .nth(1)
@@ -11600,6 +11678,10 @@ mod tests {
         assert!(
             chrome.contains("self.acp = None") && chrome.contains("tool_cards.clear()"),
             "leaving a tab must drop the ACP handle so New chat does not reuse the last session: {chrome}"
+        );
+        assert!(
+            chrome.contains("halt_in_flight"),
+            "dropping the ACP handle on tab switch must halt or the cabin stays Thinking on Chat 2: {chrome}"
         );
         assert!(
             chrome.contains("last_receipt_ok = None"),

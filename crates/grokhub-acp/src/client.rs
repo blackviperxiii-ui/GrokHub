@@ -10,6 +10,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -59,24 +60,26 @@ pub fn is_session_cwd_error(err: &str) -> bool {
 pub fn explain_handshake_error(raw: &str, cwd: &Path) -> String {
     let raw = raw.trim();
     let loc = cwd.display();
+    let load = raw.to_ascii_lowercase().contains("session/load");
+    let verb = if load { "session/load" } else { "session/new" };
     if raw.is_empty() {
-        return format!("ACP session/new failed in {loc}");
+        return format!("ACP {verb} failed in {loc}");
     }
     let l = raw.to_ascii_lowercase();
     if l.contains("no space left") || l.contains("os error 28") {
         return format!(
-            "ACP session/new failed: disk is full while starting Grok Build in {loc}. Free space (check ~/.grok and {loc}), then send again."
+            "ACP {verb} failed: disk is full while starting Grok Build in {loc}. Free space (check ~/.grok and {loc}), then send again."
         );
     }
     if l.contains("permission denied") || l.contains("os error 13") || l.contains("read-only") {
         return format!(
-            "ACP session/new failed: Grok Build cannot write in {loc}. Bind a folder you own (sidebar) or /project bind ~/GrokHub-Work, then send again."
+            "ACP {verb} failed: Grok Build cannot write in {loc}. Bind a folder you own (sidebar) or /project bind ~/GrokHub-Work, then send again."
         );
     }
     if raw.starts_with("ACP ") {
         return raw.to_string();
     }
-    format!("ACP session/new failed: {raw}")
+    format!("ACP {verb} failed: {raw}")
 }
 
 /// Create `path` and probe a write so session/new does not start on a missing or read-only tree.
@@ -421,6 +424,11 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
 
     let stdin = Arc::new(Mutex::new(stdin));
     let id_gen = Arc::new(Mutex::new(next_id));
+    let swallow_load = Arc::new(AtomicBool::new(
+        opts.resume
+            .as_ref()
+            .is_some_and(|s| !s.trim().is_empty()),
+    ));
     let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
     let (evt_tx, evt_rx) = mpsc::channel();
     let _ = early;
@@ -431,7 +439,9 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
     let sid = session_id.clone();
     let stdin_w = stdin.clone();
     let ids = id_gen.clone();
+    let swallow_w = swallow_load.clone();
     thread::spawn(move || {
+        let swallow_load = swallow_w;
         for cmd in cmd_rx {
             let mut stdin = match stdin_w.lock() {
                 Ok(s) => s,
@@ -452,6 +462,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                     );
                 }
                 Cmd::Prompt(text) => {
+                    swallow_load.store(false, Ordering::SeqCst);
                     let id = {
                         let mut n = ids.lock().unwrap();
                         let id = *n;
@@ -502,6 +513,9 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                     };
                     if let Some(method) = &msg.method {
                         if method == "session/update" {
+                            if swallow_load.load(Ordering::SeqCst) {
+                                continue;
+                            }
                             if let Some(ev) =
                                 parse_session_update(msg.params.as_ref().unwrap_or(&json!({})))
                             {
@@ -1067,6 +1081,9 @@ mod tests {
         assert!(is_session_cwd_error(&disk));
         assert!(is_session_cwd_error(&perm));
         assert!(!is_session_cwd_error("ACP handshake timed out"));
+        let load = explain_handshake_error("session/load failed: session not found", &cwd);
+        assert!(load.contains("session/load"), "{load}");
+        assert!(!load.contains("session/new"), "{load}");
     }
 
     #[test]
@@ -1083,5 +1100,28 @@ mod tests {
         assert!(dir.is_dir());
         assert!(!dir.join(".grokhub-cwd-ok").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn with_resume_does_not_pass_cli_resume() {
+        let opts = SpawnOpts {
+            program: PathBuf::from("grok"),
+            args: agent_args(false),
+            cwd: PathBuf::from("/tmp"),
+            api_key: None,
+            always_approve: false,
+            auto: false,
+            session_mode: SessionMode::Chat,
+            extra_env: vec![],
+            handshake_timeout: None,
+            resume: None,
+        }
+        .with_resume(Some("abc-123".into()));
+        assert_eq!(opts.resume.as_deref(), Some("abc-123"));
+        assert!(
+            !opts.args.iter().any(|a| a == "--resume"),
+            "CLI --resume plus session/new mixed sessions: {:?}",
+            opts.args
+        );
     }
 }

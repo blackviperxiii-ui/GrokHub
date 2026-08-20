@@ -135,7 +135,6 @@ pub fn grok_stdout_timeout(bin: &Path, cwd: &Path, args: &[&str], secs: u64) -> 
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let mut child = child;
         let out = child.wait_with_output();
         let _ = tx.send(out);
     });

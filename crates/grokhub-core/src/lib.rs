@@ -272,7 +272,7 @@ pub use project::{
     normalize_host_path, refund_host_reserved, is_under_project,
     project_menu_acts, project_menu_label, project_name_from_path, project_slug, project_work_path,
     rename_node, restore_bound_path, seed_from_bound, settle_project_path, should_seed_sidebar,
-    resolve_acp_cwd,
+    resolve_acp_cwd, resolve_bind_path,
     stage_project, toggle_folder, upsert_bound, visible_tree, DropOutcome, ProjectKind,
     ProjectMenuAct, ProjectNode,
 };

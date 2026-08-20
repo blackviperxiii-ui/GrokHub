@@ -139,3 +139,43 @@ fn handshake_does_not_deadlock_when_stderr_floods() {
         t.elapsed()
     );
 }
+
+#[test]
+fn session_load_fails_closed_without_session_new() {
+    let mut opts = fake_opts();
+    opts.resume = Some("dead-sess".into());
+    opts.extra_env = vec![("FAKE_ACP_LOAD_FAIL".into(), "1".into())];
+    let err = match connect(opts) {
+        Err(e) => e,
+        Ok(_) => panic!("dead session/load must fail closed"),
+    };
+    let l = err.to_ascii_lowercase();
+    assert!(
+        l.contains("session/load") || l.contains("not found"),
+        "{err}"
+    );
+}
+
+#[test]
+fn session_load_swallows_replay_and_keeps_id() {
+    let mut opts = fake_opts();
+    opts.resume = Some("sess-abc-load".into());
+    let h = connect(opts).expect("session/load");
+    assert_eq!(h.session_id, "sess-abc-load");
+    let mut text = String::new();
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(250) {
+        match h.try_recv() {
+            Ok(AcpEvent::Ready { session_id }) => {
+                assert_eq!(session_id, "sess-abc-load");
+            }
+            Ok(AcpEvent::Text(t)) | Ok(AcpEvent::Thought(t)) => text.push_str(&t),
+            Ok(_) => {}
+            Err(_) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    assert!(
+        !text.contains("LOAD_REPLAY_SHOULD_NOT_PAINT"),
+        "load replay must not paint as a live turn: {text}"
+    );
+}
