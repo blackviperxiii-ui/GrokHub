@@ -1093,7 +1093,7 @@ pub struct Cabin {
     mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
     mem_file_rx: Option<(String, mpsc::Receiver<(u64, String)>)>,
     recall_rx: Option<mpsc::Receiver<String>>,
-    sync_rx: Option<mpsc::Receiver<()>>,
+    sync_rx: Option<mpsc::Receiver<(String, Vec<HubMemoryFile>)>>,
     inhabit_rx: Option<mpsc::Receiver<InhabitBundle>>,
     reflect_rx: Option<mpsc::Receiver<(MemoryEdit, Option<MemoryEdit>)>>,
     session_show_rx: Option<(String, mpsc::Receiver<String>)>,
@@ -5001,9 +5001,13 @@ impl Cabin {
                     Some(remote) => merge_hub_snapshots(&snap, &remote),
                     None => snap,
                 };
+                let from = snap.from_device_name.clone();
+                let files = snap.memory_files.clone();
                 st.snapshot = serde_json::to_value(&snap).ok();
+                let _ = tx.send((from, files));
+            } else {
+                let _ = tx.send((snap.from_device_name, snap.memory_files));
             }
-            let _ = tx.send(());
         });
     }
 
@@ -5012,10 +5016,10 @@ impl Cabin {
             return;
         };
         match rx.try_recv() {
-            Ok(()) => {
+            Ok((from, files)) => {
                 self.persist();
                 self.status = "Hub snapshot written — peers pull /v1/snapshot".into();
-                self.apply_inbound_snapshot();
+                self.apply_inbound_snapshot(from, files);
                 self.nav = Nav::Devices;
             }
             Err(mpsc::TryRecvError::Empty) => {
@@ -5799,14 +5803,8 @@ impl Cabin {
         }
     }
 
-    fn apply_inbound_snapshot(&mut self) {
-        let Some(remote_v) = self.hub.lock().ok().and_then(|s| s.snapshot.clone()) else {
-            return;
-        };
-        let Ok(remote) = serde_json::from_value::<HubSnapshot>(remote_v) else {
-            return;
-        };
-        for f in remote.memory_files {
+    fn apply_inbound_snapshot(&mut self, from: String, files: Vec<HubMemoryFile>) {
+        for f in files {
             if import_memory_file(&f.name, &f.content).is_some() {
                 let name = f.name.clone();
                 if let Some(i) = Self::mem_file_idx(&name) {
@@ -5823,7 +5821,7 @@ impl Cabin {
                 });
             }
         }
-        self.status = format!("Merged hub snapshot from {}", remote.from_device_name);
+        self.status = format!("Merged hub snapshot from {from}");
     }
 
     fn remember_last_frame(&mut self, url: &str) {
@@ -14795,6 +14793,10 @@ mod tests {
         assert!(
             inbound_spawn < wrote,
             "inbound MEMORY.md must not freeze the cabin writing markdown: {inbound}"
+        );
+        assert!(
+            !inbound.contains("snapshot.clone()") && !inbound.contains("from_value"),
+            "/sync inbound must not clone the hub snapshot on the UI thread: {inbound}"
         );
         let send = src
             .split("fn dispatch_send")
