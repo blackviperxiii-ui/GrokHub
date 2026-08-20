@@ -173,15 +173,15 @@ pub use heartbeat::{
     HEARTBEAT_MS,
 };
 pub use reflect::{
-    fact_candidates, restore_memory_prev, should_idle_reflect, surgical_memory_edit, MemoryEdit,
+    fact_candidates, fact_candidates_from, restore_memory_prev, should_idle_reflect, surgical_memory_edit, MemoryEdit,
     IDLE_REFLECT_MS,
 };
 pub use review::{
-    build_review_digest, cabin_real_text, dedupe_suggestions, merge_suggestion_store,
+    build_review_digest, cabin_real_text, dedupe_suggestions, digest_line_from, merge_suggestion_store,
     parse_suggest_lines, parse_suggest_skill_patches, partition_suggestions, prune_live_suggestions, review_due,
     review_status_line, review_system_prompt,
     DigestLine, LearnedSuggestion, SkillPatch,
-    ReviewDigest, SuggestionKind, SuggestionStore, CABIN_GITHUB_TOOLS, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
+    ReviewDigest, SuggestionKind, SuggestionStore, CABIN_GITHUB_TOOLS, DIGEST_LINE_CAP, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
 };
 pub use pair::{
     devices_shows_pair_code, hub_pair_url, make_pair_code, normalize_code, pair_code_is_live,
@@ -240,7 +240,7 @@ pub use shortcuts::{
     shortcut_help, ComposerEnter, ComposerGo, SHORTCUTS,
 };
 pub use stream::{
-    chat_include_usage, chat_stream_flag, fold_sse_acc, fold_stream_token, keep_sse_acc,
+    chat_include_usage, chat_stream_flag, fold_sse_acc, fold_stream_fields, fold_stream_token, keep_sse_acc,
     parse_sse_delta, parse_sse_finish, parse_sse_text, parse_sse_thought, parse_sse_usage,
     prefer_complete_reply, sse_done, sse_live_delta, should_replace_stream_acc, stream_was_truncated,
     StreamTokenKind, StreamUsage,

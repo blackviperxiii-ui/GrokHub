@@ -51,7 +51,7 @@ use grokhub_core::{
     imagine_aspect_label, imagine_aspect_name, imagine_image_resolution, imagine_style_label,
     imagine_video_dur_label, imagine_video_duration_secs, imagine_video_res_label,
     imagine_video_resolution, last_imagine_receipt,
-    extract_insights, extract_work_updates, fact_candidates, failover_model, filter_slash_commands,
+    extract_insights, extract_work_updates, fact_candidates, fact_candidates_from, failover_model, filter_slash_commands,
     frame_bytes, PresenceFrame,
     forget_topic, greet_from_last_job, has_auth, has_verify_ok, hey_grok_on_press,
     thread_host_receipts, thread_host_receipts_from,
@@ -109,7 +109,7 @@ use grokhub_core::{
     parse_suggest_skill_patches, parse_trajectory_jsonl, summarize_trajectory, trajectory_jsonl_line,
     trim_result_bodies, yesterday_ms, RESULT_TRIM_KEEP_HOPS,
     partition_suggestions, prune_live_suggestions, review_due,
-    review_status_line, review_system_prompt, DigestLine, ReviewDigest, SuggestionStore,
+    review_status_line, review_system_prompt, digest_line_from, DigestLine, ReviewDigest, SuggestionStore,
     CABIN_GITHUB_TOOLS, REVIEW_NIGHT_HOUR,
     should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
     apply_auto_title_in, apply_manual_rename, delete_thread, display_tab_title, history_order,
@@ -122,7 +122,7 @@ use grokhub_core::{
     unified_diff_cite, usage_line,
     transcribe_route, uid, update_cmds, overlay_update_begin, overlay_update_finish,
     realtime_bearer, realtime_can_connect, voice_log_role, voice_stream_token, voice_transcript_sends_chat,
-    fold_stream_token, StreamTokenKind,
+    fold_stream_fields, StreamTokenKind,
     update_wipes_config, voice_session_url, Automation, BoardCard,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ChipThread, ComputerOp, DeviceCodeStart, HeyGrokAction,
     HeyGrokRoute, HubMemoryFile, QuickChip,
@@ -4489,24 +4489,34 @@ impl Cabin {
             .chat_job_thread
             .clone()
             .unwrap_or_else(|| vis.clone());
-        let pairs: Vec<(String, String)> =
-            if self.chat_job_thread.as_deref().is_none_or(|id| id == vis) {
-                self.messages
-                    .iter()
-                    .map(|m| (m.role.clone(), m.content.clone()))
-                    .collect()
-            } else {
-                self.threads
-                    .iter()
-                    .find(|t| t.id == origin)
-                    .map(|t| t.messages.clone())
-                    .unwrap_or_default()
-            };
-        if !should_trim_result_bodies(estimate_messages(&pairs), CONTEXT_BUDGET_TOKENS) {
+        let here = self.chat_job_thread.as_deref().is_none_or(|id| id == vis);
+        let tokens = if here {
+            estimate_messages_from(
+                self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+            )
+        } else {
+            self.threads
+                .iter()
+                .find(|t| t.id == origin)
+                .map(|t| estimate_messages(&t.messages))
+                .unwrap_or(0)
+        };
+        if !should_trim_result_bodies(tokens, CONTEXT_BUDGET_TOKENS) {
             return;
         }
-        let trimmed = trim_result_bodies(&pairs, RESULT_TRIM_KEEP_HOPS);
-        if self.chat_job_thread.as_deref().is_none_or(|id| id == vis) {
+        let trimmed = if here {
+            let pairs: Vec<(String, String)> = self
+                .messages
+                .iter()
+                .map(|m| (m.role.clone(), m.content.clone()))
+                .collect();
+            trim_result_bodies(&pairs, RESULT_TRIM_KEEP_HOPS)
+        } else if let Some(t) = self.threads.iter().find(|t| t.id == origin) {
+            trim_result_bodies(&t.messages, RESULT_TRIM_KEEP_HOPS)
+        } else {
+            return;
+        };
+        if here {
             self.messages = trimmed
                 .iter()
                 .map(|(role, content)| Msg {
@@ -5193,15 +5203,11 @@ impl Cabin {
             .unwrap_or("");
         let mut thread_lines = Vec::new();
         for m in self.messages.iter().rev() {
-            if m.role != "user" && m.role != "assistant" {
-                continue;
-            }
-            thread_lines.push(DigestLine {
-                role: m.role.clone(),
-                text: m.content.clone(),
-            });
-            if thread_lines.len() >= 24 {
-                break;
+            if let Some(line) = digest_line_from(&m.role, &m.content) {
+                thread_lines.push(line);
+                if thread_lines.len() >= 24 {
+                    break;
+                }
             }
         }
         for t in self.threads.iter().rev() {
@@ -5209,15 +5215,11 @@ impl Cabin {
                 continue;
             }
             for (role, text) in t.messages.iter().rev() {
-                if role != "user" && role != "assistant" {
-                    continue;
-                }
-                thread_lines.push(DigestLine {
-                    role: role.clone(),
-                    text: text.clone(),
-                });
-                if thread_lines.len() >= 40 {
-                    break;
+                if let Some(line) = digest_line_from(role, text) {
+                    thread_lines.push(line);
+                    if thread_lines.len() >= 40 {
+                        break;
+                    }
                 }
             }
             if thread_lines.len() >= 40 {
@@ -7285,19 +7287,20 @@ impl Cabin {
             return;
         }
         let vis = self.visible_thread_id();
-        let visible_pairs: Vec<(String, String)> = self
-            .messages
-            .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
-            .collect();
-        let stored = self.job_stored_pairs(self.chat_job_thread.as_deref(), &vis);
-        let msgs = kick_messages_for_job(
-            self.chat_job_thread.as_deref(),
-            &vis,
-            &visible_pairs,
-            &stored,
-        );
-        let facts = fact_candidates(&msgs);
+        let job = self.chat_job_thread.as_deref();
+        let facts = if job.is_none() || job == Some(vis.as_str()) {
+            fact_candidates_from(self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())))
+        } else {
+            self.threads
+                .iter()
+                .find(|t| Some(t.id.as_str()) == job)
+                .map(|t| fact_candidates(&t.messages))
+                .unwrap_or_else(|| {
+                    fact_candidates_from(
+                        self.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())),
+                    )
+                })
+        };
         if self.policy().learns() {
             extract_insights(&mut self.learning, &facts);
         }
@@ -7804,16 +7807,16 @@ impl Cabin {
                                 self.send_chat(text.to_string());
                             }
                         } else {
-                            let mut pairs: Vec<(String, String)> = self
-                                .messages
-                                .iter()
-                                .map(|m| (m.role.clone(), m.content.clone()))
-                                .collect();
-                            fold_stream_token(&mut pairs, role, text, kind);
-                            self.messages = pairs
-                                .into_iter()
-                                .map(|(role, content)| Msg { role, content })
-                                .collect();
+                            let push = {
+                                let last = self
+                                    .messages
+                                    .last_mut()
+                                    .map(|m| (m.role.as_str(), &mut m.content));
+                                fold_stream_fields(last, role, text, kind)
+                            };
+                            if let Some((role, content)) = push {
+                                self.messages.push(Msg { role, content });
+                            }
                             if matches!(kind, StreamTokenKind::Replace) && voice_log_role(&ev).is_some()
                             {
                                 self.persist();
@@ -11939,6 +11942,15 @@ mod tests {
             cache.contains("refresh_last_stretch") || cache.contains("visible_chat_refs"),
             "last-message growth must refresh the trailing stretch without a full transcript clone: {cache}"
         );
+        let voice = src
+            .split("fn poll_voice(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_tray(").next())
+            .expect("poll_voice");
+        assert!(
+            voice.contains("fold_stream_fields") && !voice.contains("content.clone()"),
+            "a voice token must not clone an 8MB transcript to append a delta: {voice}"
+        );
     }
 
     fn with_fonts_ui(mut add: impl FnMut(&mut egui::Ui)) {
@@ -13537,12 +13549,13 @@ mod tests {
             .and_then(|s| s.split("fn run_skill_verify").next())
             .expect("run_reflect");
         assert!(
-            reflect.contains("kick_messages_for_job"),
+            reflect.contains("kick_messages_for_job")
+                || (reflect.contains("chat_job_thread") && reflect.contains("self.threads")),
             "/learn reflect must read the origin thread, not only the visible tab: {reflect}"
         );
         assert!(
-            !reflect.contains("t.messages.clone()"),
-            "/learn reflect must not clone every thread to read the origin: {reflect}"
+            !reflect.contains("t.messages.clone()") && !reflect.contains("content.clone()"),
+            "/learn reflect must not clone an 8MB transcript to harvest facts: {reflect}"
         );
         let mem = reflect.find("read_memory(\"MEMORY.md\")").expect("reflect memory");
         assert!(
@@ -14662,6 +14675,17 @@ mod tests {
             traj_spawn < traj_write,
             "HostDone must not freeze the cabin rewriting a 2MB trajectory.jsonl: {traj}"
         );
+        let trim = src
+            .split("fn trim_job_result_dumps(")
+            .nth(1)
+            .and_then(|s| s.split("fn queue_sh(").next())
+            .expect("trim_job_result_dumps");
+        let est = trim.find("should_trim_result_bodies").expect("estimate before clone");
+        let clone = trim.find("content.clone()");
+        assert!(
+            clone.is_none_or(|c| est < c),
+            "result trim must estimate borrowed tokens before cloning an 8MB pane: {trim}"
+        );
         let commit = src
             .split("fn commit_proposed_skill(")
             .nth(1)
@@ -15100,6 +15124,12 @@ mod tests {
                 && !digest_fn.contains("last_receipts")
                 && !digest_fn.contains("last_host"),
             "nightly review must take host receipts from the digested threads, not cabin-global last_host: {digest_fn}"
+        );
+        assert!(
+            digest_fn.contains("digest_line_from")
+                && !digest_fn.contains("content.clone()")
+                && !digest_fn.contains("text.clone()"),
+            "nightly review must not clone an 8MB complete into the digest: {digest_fn}"
         );
         let apply = src
             .split("fn apply_review_reply(")
