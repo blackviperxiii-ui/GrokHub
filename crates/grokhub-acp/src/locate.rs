@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Resolve the Grok Build CLI. `GROKHUB_GROK` wins, then PATH, then common install dirs.
 pub fn find_grok() -> Option<PathBuf> {
@@ -92,28 +92,44 @@ fn grok_key_from_value(v: &serde_json::Value) -> Option<String> {
 }
 
 pub fn grok_version(bin: &Path) -> Result<String, String> {
-    let out = std::process::Command::new(bin)
-        .arg("--version")
-        .output()
-        .map_err(|e| e.to_string())?;
-    let mut text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if text.is_empty() {
-        text = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    }
-    if text.is_empty() {
+    let cwd = std::env::temp_dir();
+    let text = grok_stdout_timeout(bin, &cwd, &["--version"], 3)?;
+    let line = text.lines().next().unwrap_or(text.trim()).trim();
+    if line.is_empty() {
         return Err("grok --version empty".into());
     }
-    Ok(text.lines().next().unwrap_or(&text).to_string())
+    Ok(line.to_string())
+}
+
+fn doctor_line_cache() -> &'static Mutex<Option<(Option<PathBuf>, Instant, bool, String)>> {
+    static C: OnceLock<Mutex<Option<(Option<PathBuf>, Instant, bool, String)>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(None))
 }
 
 pub fn doctor_grok_line(bin: Option<&Path>) -> (bool, String) {
-    match bin {
+    if let Ok(held) = doctor_line_cache().lock() {
+        if let Some((path, at, ok, text)) = held.as_ref() {
+            if at.elapsed() < Duration::from_secs(8) && path.as_deref() == bin {
+                return (*ok, text.clone());
+            }
+        }
+    }
+    let (ok, text) = match bin {
         None => (false, "Grok Build CLI missing — install from x.ai/cli".into()),
         Some(p) => match grok_version(p) {
             Ok(v) => (true, format!("Grok Build {v}")),
             Err(e) => (false, format!("Grok Build present but unreadable: {e}")),
         },
+    };
+    if let Ok(mut held) = doctor_line_cache().lock() {
+        *held = Some((
+            bin.map(|p| p.to_path_buf()),
+            Instant::now(),
+            ok,
+            text.clone(),
+        ));
     }
+    (ok, text)
 }
 
 pub fn grok_stdout(bin: &Path, cwd: &Path, args: &[&str]) -> Result<String, String> {
@@ -213,6 +229,25 @@ mod tests {
         let (ok, text) = doctor_grok_line(None);
         assert!(!ok);
         assert!(text.contains("x.ai/cli"));
+        let src = include_str!("locate.rs");
+        let ver = src
+            .split("pub fn grok_version(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn doctor_grok_line(").next())
+            .expect("grok_version");
+        assert!(
+            ver.contains("grok_stdout_timeout"),
+            "grok --version must not hang the settings overlay: {ver}"
+        );
+        let doc = src
+            .split("pub fn doctor_grok_line(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn grok_stdout(").next())
+            .expect("doctor_grok_line");
+        assert!(
+            doc.contains("elapsed"),
+            "Settings must not spawn grok --version every frame: {doc}"
+        );
     }
 
     #[test]
