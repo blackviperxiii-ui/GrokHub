@@ -173,6 +173,9 @@ fn session_load_swallows_replay_and_keeps_id() {
                 assert_eq!(session_id, "sess-abc-load");
             }
             Ok(AcpEvent::Text(t)) | Ok(AcpEvent::Thought(t)) => text.push_str(&t),
+            Ok(AcpEvent::Permission(_)) => {
+                panic!("load replay permission must not paint as a live ask")
+            }
             Ok(_) => {}
             Err(_) => std::thread::sleep(Duration::from_millis(10)),
         }
