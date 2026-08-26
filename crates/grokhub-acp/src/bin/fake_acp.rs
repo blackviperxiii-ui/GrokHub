@@ -23,6 +23,11 @@ fn main() {
     let tool = std::env::var("FAKE_ACP_TOOL").unwrap_or_default();
     let want_perm = std::env::var("FAKE_ACP_PERMISSION").ok().as_deref() == Some("1");
     let image = std::env::var("FAKE_ACP_IMAGE").unwrap_or_default();
+    let hs_req = std::env::var("FAKE_ACP_HS_REQ").ok().as_deref() == Some("1");
+    let mut hs_req_answered = false;
+    let models_id = std::env::var("FAKE_ACP_MODELS_ID").ok().as_deref() == Some("1");
+    let mut models_acked = !models_id;
+    let mut prompt_id: Option<Value> = None;
 
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
@@ -59,6 +64,14 @@ fn main() {
                 }
             }
             "session/new" => {
+                if hs_req {
+                    write_json(&json!({
+                        "jsonrpc": "2.0",
+                        "id": 77,
+                        "method": "fs/readTextFile",
+                        "params": { "path": "/tmp/grokhub-acp-hs-req" }
+                    }));
+                }
                 if let Some(id) = id {
                     result(&id, json!({ "sessionId": "sess-test" }));
                 }
@@ -130,6 +143,26 @@ fn main() {
                 }
             }
             "session/prompt" => {
+                if hs_req && !hs_req_answered {
+                    // Unanswered client-bound RPC: Grok Build exits. The cabin
+                    // then shows "Grok Build agent exited: agent closed".
+                    std::process::exit(1);
+                }
+                if let Ok(code) = std::env::var("FAKE_ACP_EXIT_AFTER_PROMPT") {
+                    if let Ok(c) = code.parse::<i32>() {
+                        std::process::exit(c);
+                    }
+                }
+                if models_id && !models_acked {
+                    prompt_id = id.clone();
+                    write_json(&json!({
+                        "jsonrpc": "2.0",
+                        "id": 99,
+                        "method": "_x.ai/models/update",
+                        "params": { "model_count": 2 }
+                    }));
+                    continue;
+                }
                 notify(
                     "session/update",
                     json!({
@@ -192,6 +225,32 @@ fn main() {
                 }
             }
             _ => {
+                if msg.get("id").and_then(|v| v.as_u64()) == Some(99) {
+                    if msg.get("error").is_some() {
+                        std::process::exit(143);
+                    }
+                    models_acked = true;
+                    notify(
+                        "session/update",
+                        json!({
+                            "sessionId": "sess-test",
+                            "update": {
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": { "text": text }
+                            }
+                        }),
+                    );
+                    if let Some(id) = prompt_id.clone() {
+                        result(&id, json!({ "stopReason": "end_turn" }));
+                    }
+                    continue;
+                }
+                if msg.get("id").and_then(|v| v.as_u64()) == Some(77)
+                    && (msg.get("result").is_some() || msg.get("error").is_some())
+                {
+                    hs_req_answered = true;
+                    continue;
+                }
                 if msg.get("result").is_some() && want_perm {
                     notify(
                         "session/update",

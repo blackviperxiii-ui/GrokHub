@@ -56,6 +56,12 @@ pub enum Slash {
     Effort(String),
     Sessions,
     Inspect,
+    Loop(String),
+    GrokSkills,
+    GrokConnectors,
+    Model(String),
+    ImagineVideo(String),
+    Goal(String),
 }
 
 fn looks_like_bind_path(s: &str) -> bool {
@@ -111,7 +117,25 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         }
         "/recall" if !rest.is_empty() => Some(Slash::Recall(rest.to_string())),
         "/board" => Some(Slash::Board),
-        "/imagine" if !rest.is_empty() => Some(Slash::Imagine(rest.to_string())),
+        "/imagine" => Some(Slash::Imagine(rest.to_string())),
+        "/imagine-video" => Some(Slash::ImagineVideo(rest.to_string())),
+        "/loop" => Some(Slash::Loop(rest.to_string())),
+        "/skills" => Some(Slash::GrokSkills),
+        "/plugins" | "/marketplace" | "/mcps" | "/hooks" | "/connectors" | "/workflows" => {
+            Some(Slash::GrokConnectors)
+        }
+        "/model" | "/m" if !rest.is_empty() => Some(Slash::Model(rest.to_string())),
+        "/goal" => Some(Slash::Goal(rest.to_string())),
+        "/dashboard" | "/agents-dashboard" => Some(Slash::Sessions),
+        "/mem" => {
+            if rest.is_empty() || rest.eq_ignore_ascii_case("show") {
+                Some(Slash::MemoryShow)
+            } else {
+                Some(Slash::Remember(rest.to_string()))
+            }
+        }
+        "/title" if !rest.is_empty() => Some(Slash::Rename(rest.to_string())),
+        "/status" | "/info" | "/session-info" | "/doctor" => Some(Slash::Inspect),
         "/compact" => Some(Slash::Compact),
         "/skill" if !rest.is_empty() => Some(Slash::Skill(rest.to_string())),
         "/learn" if rest.eq_ignore_ascii_case("reflect") => Some(Slash::LearnReflect),
@@ -203,10 +227,22 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
     }
 }
 
-/// Local slash that the composer should not send to Grok (`/project binding`, retired `/approve`).
+/// Retired cabin-only slashes. Grok Build skills (`/create-skill`) and CLI
+/// builtins the cabin does not handle must reach `grok -p`.
 pub fn unknown_cabin_slash(line: &str) -> bool {
     let t = line.trim();
-    t.starts_with('/') && parse_slash(t).is_none()
+    if !t.starts_with('/') {
+        return false;
+    }
+    if parse_slash(t).is_some() {
+        return false;
+    }
+    let cmd = t
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    cmd == "/approve" || t.to_ascii_lowercase().starts_with("/project binding")
 }
 
 pub const SLASH_RESULT_PREFIX: &str = "SLASH_RESULT:";
@@ -297,6 +333,12 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Effort(_) => "effort",
         Slash::Sessions => "sessions",
         Slash::Inspect => "inspect",
+        Slash::Loop(_) => "loop",
+        Slash::GrokSkills => "grok_skills",
+        Slash::GrokConnectors => "grok_connectors",
+        Slash::Model(_) => "model",
+        Slash::ImagineVideo(_) => "imagine_video",
+        Slash::Goal(_) => "goal",
     }
 }
 
@@ -359,7 +401,15 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/plan", hint: "Grok Build plan mode", insert: "/plan", run_on_pick: true },
     SlashDef { cmd: "/always-approve", hint: "Skip Grok tool prompts", insert: "/always-approve", run_on_pick: true },
     SlashDef { cmd: "/sessions", hint: "List Grok Build sessions", insert: "/sessions", run_on_pick: true },
+    SlashDef { cmd: "/resume", hint: "Resume a Grok Build session", insert: "/resume", run_on_pick: true },
     SlashDef { cmd: "/inspect", hint: "Inspect Grok Build config", insert: "/inspect", run_on_pick: true },
+    SlashDef { cmd: "/loop", hint: "Schedule a Grok /loop…", insert: "/loop ", run_on_pick: false },
+    SlashDef { cmd: "/skills", hint: "Grok Build skills", insert: "/skills", run_on_pick: true },
+    SlashDef { cmd: "/plugins", hint: "Grok Build plugins and marketplace", insert: "/plugins", run_on_pick: true },
+    SlashDef { cmd: "/mcps", hint: "Grok Build MCP servers", insert: "/mcps", run_on_pick: true },
+    SlashDef { cmd: "/model", hint: "Set grok -p --model…", insert: "/model ", run_on_pick: false },
+    SlashDef { cmd: "/imagine-video", hint: "Open Imagine video", insert: "/imagine-video ", run_on_pick: false },
+    SlashDef { cmd: "/goal", hint: "Pin a Grok goal…", insert: "/goal ", run_on_pick: false },
 ];
 
 pub fn filter_slash_commands(draft: &str) -> Vec<&'static SlashDef> {
@@ -423,7 +473,15 @@ pub fn slash_help() -> String {
         "/auto — auto-approve safe tools",
         "/effort <low|medium|high|xhigh> — reasoning effort (composer dropdown too)",
         "/sessions — Grok Build sessions",
-        "/inspect — grok inspect",
+        "/resume — same as /sessions (Grok /resume)",
+        "/inspect — grok inspect --json against ~/.grok",
+        "/loop [30m] <prompt> — Grok Build scheduler",
+        "/skills — Grok Build skills catalog",
+        "/plugins /marketplace /mcps — connectors",
+        "/model <id> — grok -p --model",
+        "/imagine-video <prompt> — Imagine video",
+        "/goal <objective> — pin a Grok goal",
+        "Grok skill slashes such as /create-skill go to grok -p.",
         "/project bind <path> — bound tree is the world (ACP cwd)",
         "/project new <name> — create a project",
         "/project folder <name> — create a sidebar folder",
@@ -518,6 +576,20 @@ mod tests {
         assert!(unknown_cabin_slash("/approve"));
         assert!(!unknown_cabin_slash("/help"));
         assert!(!unknown_cabin_slash("hello"));
+        assert!(
+            !unknown_cabin_slash("/create-skill"),
+            "Grok skill slashes must reach grok -p"
+        );
+        assert!(!unknown_cabin_slash("/workflow runs"));
+        assert_eq!(parse_slash("/loop 30m check deploy").as_ref().map(slash_kind), Some("loop"));
+        assert_eq!(parse_slash("/skills"), Some(Slash::GrokSkills));
+        assert_eq!(parse_slash("/mcps"), Some(Slash::GrokConnectors));
+        assert_eq!(parse_slash("/model grok-4.6").as_ref().map(slash_kind), Some("model"));
+        assert_eq!(parse_slash("/m grok-4.5").as_ref().map(slash_kind), Some("model"));
+        assert_eq!(parse_slash("/imagine-video a cat").as_ref().map(slash_kind), Some("imagine_video"));
+        assert_eq!(parse_slash("/goal migrate auth").as_ref().map(slash_kind), Some("goal"));
+        assert_eq!(parse_slash("/resume"), Some(Slash::Sessions));
+        assert_eq!(parse_slash("/dashboard"), Some(Slash::Sessions));
         assert_eq!(parse_slash("/project ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
         assert_eq!(parse_slash("/project /tmp/cabin"), Some(Slash::ProjectBind(Some("/tmp/cabin".into()))));
         assert_eq!(parse_slash("/project typo"), None);
@@ -585,6 +657,8 @@ mod tests {
         assert_eq!(parse_slash("/always-approve"), Some(Slash::AlwaysApprove));
         assert_eq!(parse_slash("/sessions"), Some(Slash::Sessions));
         assert_eq!(parse_slash("/inspect"), Some(Slash::Inspect));
+        assert!(slash_help().contains("/loop"));
+        assert!(slash_help().contains("/create-skill"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());

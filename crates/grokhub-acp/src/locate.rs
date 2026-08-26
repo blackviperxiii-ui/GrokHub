@@ -43,6 +43,8 @@ fn find_grok_scan() -> Option<PathBuf> {
         if p.is_file() {
             return Some(p);
         }
+        // Explicit override: do not fall through to PATH / ~/.local/bin/grok.
+        return None;
     }
     if let Some(p) = which("grok") {
         return Some(p);
@@ -90,6 +92,40 @@ pub fn which(name: &str) -> Option<PathBuf> {
 pub fn grok_home() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
     Some(PathBuf::from(home).join(".grok"))
+}
+
+/// Socket for cabin `grok agent stdio`. Must not be `~/.grok/leader.sock` or the
+/// interactive CLI leader SIGTERMs the cabin child (wait status 143).
+pub fn cabin_leader_socket() -> Option<PathBuf> {
+    Some(cabin_grok_home()?.join("leader.sock"))
+}
+
+/// Isolated grok home for the cabin child. Sharing `~/.grok` loads the CLI's
+/// chrome-devtools MCP plugin and the running CLI can SIGTERM this process
+/// (exit 143) while it pushes the model catalog.
+pub fn cabin_grok_home() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(PathBuf::from(home).join(".config/GrokHub/grok-home"))
+}
+
+/// Make `GROK_HOME` usable: directory plus a symlink to the real `grok login`.
+pub fn prepare_cabin_grok_home() -> Option<PathBuf> {
+    let dir = cabin_grok_home()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    if let Some(src) = grok_auth_path() {
+        let dst = dir.join("auth.json");
+        if !dst.exists() {
+            #[cfg(unix)]
+            {
+                let _ = std::os::unix::fs::symlink(&src, &dst);
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = std::fs::copy(&src, &dst);
+            }
+        }
+    }
+    Some(dir)
 }
 
 pub fn grok_auth_path() -> Option<PathBuf> {
@@ -272,16 +308,43 @@ pub fn grok_stdout(bin: &Path, cwd: &Path, args: &[&str]) -> Result<String, Stri
 
 /// Run `grok` and cap how long we wait so History cannot freeze the cabin.
 pub fn grok_stdout_timeout(bin: &Path, cwd: &Path, args: &[&str], secs: u64) -> Result<String, String> {
+    grok_stdout_inner(bin, cwd, args, secs, true)
+}
+
+/// Skills / MCP / marketplace live in the user's `~/.grok`, not cabin GROK_HOME.
+pub fn grok_user_stdout_timeout(
+    bin: &Path,
+    cwd: &Path,
+    args: &[&str],
+    secs: u64,
+) -> Result<String, String> {
+    grok_stdout_inner(bin, cwd, args, secs, false)
+}
+
+fn grok_stdout_inner(
+    bin: &Path,
+    cwd: &Path,
+    args: &[&str],
+    secs: u64,
+    isolate_cabin: bool,
+) -> Result<String, String> {
     let bin = bin.to_path_buf();
     let cwd = cwd.to_path_buf();
     let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    let child = Command::new(&bin)
-        .args(&owned)
+    let mut cmd = Command::new(&bin);
+    cmd.args(&owned)
         .current_dir(&cwd)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        .stderr(Stdio::piped());
+    if isolate_cabin {
+        if let Some(dir) = prepare_cabin_grok_home() {
+            cmd.env("GROK_HOME", dir);
+        }
+        if let Some(sock) = cabin_leader_socket() {
+            cmd.env("GROK_LEADER_SOCKET", sock);
+        }
+    }
+    let child = cmd.spawn().map_err(|e| e.to_string())?;
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -334,6 +397,67 @@ pub fn agent_args(always_approve: bool, reasoning_effort: Option<&str>) -> Vec<S
     a
 }
 
+/// Headless `grok -p` so a cabin chat maps 1:1 onto a Grok Build session
+/// without a long-lived `agent stdio` child of the GUI (exit 143).
+pub fn single_turn_args(
+    prompt: &str,
+    cwd: &str,
+    resume: Option<&str>,
+    always_approve: bool,
+    auto: bool,
+) -> Vec<String> {
+    let mut a = vec![
+        "--no-auto-update".into(),
+        "-p".into(),
+        prompt.to_string(),
+        "--cwd".into(),
+        cwd.to_string(),
+        "--output-format".into(),
+        "json".into(),
+    ];
+    if always_approve {
+        a.push("--always-approve".into());
+    } else if auto {
+        a.push("--permission-mode".into());
+        a.push("auto".into());
+    }
+    if let Some(id) = resume.map(str::trim).filter(|s| !s.is_empty()) {
+        a.push("--resume".into());
+        a.push(id.to_string());
+    }
+    if let Some(sock) = cabin_leader_socket() {
+        a.push("--leader-socket".into());
+        a.push(sock.display().to_string());
+    }
+    a
+}
+
+pub fn single_turn_args_full(
+    prompt: &str,
+    cwd: &str,
+    resume: Option<&str>,
+    always_approve: bool,
+    auto: bool,
+    model: Option<&str>,
+    effort: Option<&str>,
+    plan: bool,
+) -> Vec<String> {
+    let mut a = single_turn_args(prompt, cwd, resume, always_approve && !plan, auto && !plan);
+    if plan {
+        a.push("--permission-mode".into());
+        a.push("plan".into());
+    }
+    if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
+        a.push("--model".into());
+        a.push(m.to_string());
+    }
+    if let Some(e) = effort.map(str::trim).filter(|s| !s.is_empty()) {
+        a.push("--reasoning-effort".into());
+        a.push(e.to_string());
+    }
+    a
+}
+
 pub fn agent_args_resume(
     always_approve: bool,
     resume: Option<&str>,
@@ -357,9 +481,10 @@ mod tests {
         } else {
             std::env::remove_var("GROKHUB_GROK");
         }
-        if let Some(p) = hit {
-            assert_ne!(p, PathBuf::from("/no/such/grok-binary-xyz"));
-        }
+        assert!(
+            hit.is_none(),
+            "GROKHUB_GROK must not fall through to ~/.local/bin/grok: {hit:?}"
+        );
     }
 
     #[test]
@@ -416,6 +541,78 @@ mod tests {
             key.contains("thread::spawn") && key.contains("inflight"),
             "stale grok login must refresh auth.json off the UI thread: {key}"
         );
+    }
+
+    #[test]
+    fn cabin_leader_socket_is_not_the_cli_leader() {
+        let p = cabin_leader_socket().expect("HOME");
+        let s = p.to_string_lossy();
+        assert!(
+            s.contains("GrokHub/grok-home") && s.ends_with("leader.sock"),
+            "{s}"
+        );
+        assert!(
+            !s.contains("/.grok/leader.sock"),
+            "sharing ~/.grok/leader.sock lets the CLI SIGTERM cabin grok: {s}"
+        );
+        let connect = include_str!("client.rs");
+        assert!(
+            connect.contains("cabin_leader_socket")
+                && connect.contains("GROK_LEADER_SOCKET")
+                && connect.contains("leader-socket")
+                && connect.contains("GROK_HOME")
+                && connect.contains("prepare_cabin_grok_home"),
+            "connect() must isolate GROK_HOME or chrome-devtools MCP / CLI SIGTERM cabin grok (exit 143)"
+        );
+    }
+
+    #[test]
+    fn single_turn_args_bind_resume_and_json() {
+        let fresh = single_turn_args("hi", "/tmp/work", None, false, true);
+        assert!(fresh.contains(&"-p".into()), "{fresh:?}");
+        assert!(fresh.contains(&"hi".into()), "{fresh:?}");
+        assert!(
+            fresh.windows(2).any(|w| w[0] == "--output-format" && w[1] == "json"),
+            "headless json so the cabin can stamp sessionId: {fresh:?}"
+        );
+        assert!(
+            !fresh.iter().any(|a| a == "--resume"),
+            "a new chat must create a Grok Build session: {fresh:?}"
+        );
+        assert!(
+            fresh.windows(2).any(|w| w[0] == "--permission-mode" && w[1] == "auto"),
+            "{fresh:?}"
+        );
+        let resume = single_turn_args("again", "/tmp/work", Some("01abc"), true, false);
+        assert!(
+            resume.windows(2).any(|w| w[0] == "--resume" && w[1] == "01abc"),
+            "later turns resume the attached session: {resume:?}"
+        );
+        let full = single_turn_args_full(
+            "hi",
+            "/tmp/work",
+            None,
+            false,
+            false,
+            Some("grok-4.6"),
+            Some("high"),
+            true,
+        );
+        assert!(
+            full.windows(2).any(|w| w[0] == "--model" && w[1] == "grok-4.6"),
+            "{full:?}"
+        );
+        assert!(
+            full.windows(2)
+                .any(|w| w[0] == "--reasoning-effort" && w[1] == "high"),
+            "{full:?}"
+        );
+        assert!(
+            full.windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "plan"),
+            "{full:?}"
+        );
+        assert!(resume.iter().any(|a| a == "--always-approve"), "{resume:?}");
     }
 
     #[test]
