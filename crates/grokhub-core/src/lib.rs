@@ -81,7 +81,8 @@ pub use chat::{
     chat_request_body, chat_request_body_for_mode, chat_request_body_vision, chat_timeout_secs,
     effective_chat_mode, extract_host_cmds, failover_model, is_composer_ladder_model, model_for_mode,
     needs_auth_banner, paint_connect_banner, parse_chat_content, parse_chat_reasoning, parse_model_reasoning, parse_model_text,
-    parse_responses_reasoning, parse_responses_text, reasoning_effort_for_mode, resolve_chat_model,
+    parse_responses_reasoning, parse_responses_text, agent_reasoning_effort_for_mode,
+    reasoning_effort_for_mode, resolve_chat_model,
     responses_request_body, responses_url, route_auto_mode, settings_pin_blocks_auto,
     should_failover_status, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, XAI_BASE,
 };
