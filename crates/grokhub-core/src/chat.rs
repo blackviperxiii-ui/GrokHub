@@ -82,6 +82,17 @@ pub fn reasoning_effort_for_mode(mode: &str) -> Option<&'static str> {
     }
 }
 
+/// Grok Build `grok agent --reasoning-effort` from the composer ladder / `/effort`.
+pub fn agent_reasoning_effort_for_mode(mode: &str) -> Option<&'static str> {
+    match mode.trim() {
+        "max" | "deep" | "heavy" => Some("xhigh"),
+        "think" | "build" | "expert" => Some("high"),
+        "fast" | "auto" => Some("low"),
+        "balanced" | "balance" => Some("medium"),
+        _ => None,
+    }
+}
+
 pub fn chat_timeout_secs(effort: Option<&str>) -> u64 {
     match effort {
         Some("high") | Some("xhigh") => 600,
@@ -466,6 +477,8 @@ mod tests {
         assert_eq!(resolve_chat_model("think", ""), "grok-4.6");
         assert_eq!(reasoning_effort_for_mode("think"), Some("high"));
         assert_eq!(reasoning_effort_for_mode("max"), Some("xhigh"));
+        assert_eq!(agent_reasoning_effort_for_mode("fast"), Some("low"));
+        assert_eq!(agent_reasoning_effort_for_mode("balanced"), Some("medium"));
         assert_eq!(reasoning_effort_for_mode("auto"), None);
         let think = chat_request_body_for_mode("think", &[("user".into(), "hi".into())]);
         assert_eq!(think["model"], "grok-4.6");
