@@ -120,6 +120,28 @@ pub fn picker_args(bin: &str) -> Option<Vec<String>> {
     }
 }
 
+pub fn picker_save_args(bin: &str, filename: &str) -> Option<Vec<String>> {
+    let filename = filename.trim();
+    if filename.is_empty() {
+        return None;
+    }
+    match bin {
+        "zenity" | "qarma" => Some(vec![
+            "--file-selection".into(),
+            "--save".into(),
+            "--confirm-overwrite".into(),
+            format!("--filename={filename}"),
+        ]),
+        "kdialog" => Some(vec!["--getsavefilename".into(), filename.into()]),
+        "yad" => Some(vec![
+            "--file".into(),
+            "--save".into(),
+            format!("--filename={filename}"),
+        ]),
+        _ => None,
+    }
+}
+
 pub fn clip_image_args(bin: &str) -> Option<Vec<String>> {
     match bin {
         "xclip" => Some(vec![
@@ -308,6 +330,11 @@ mod tests {
         assert!(picker_args("yad").is_some());
         assert!(picker_args("qarma").is_some());
         assert!(picker_args("not-a-picker").is_none());
+        let save = picker_save_args("zenity", "night.png").expect("save");
+        assert!(save.iter().any(|a| a == "--save"));
+        assert!(save.iter().any(|a| a.contains("night.png")));
+        assert!(picker_save_args("kdialog", "clip.mp4").is_some());
+        assert!(picker_save_args("zenity", "  ").is_none());
         let x = clip_image_args("xclip").expect("xclip");
         assert!(x.iter().any(|a| a.contains("image/png")));
         assert!(clip_image_args("wl-paste").is_some());

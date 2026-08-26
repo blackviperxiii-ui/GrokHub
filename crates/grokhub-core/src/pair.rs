@@ -91,6 +91,12 @@ pub fn devices_shows_pair_code(sharing: bool, code_live: bool) -> bool {
     sharing && code_live
 }
 
+/// tiny-http / std bind errors when grokhub-hub.service already owns :18766.
+pub fn lan_bind_in_use(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("address already in use") || e.contains("os error 98") || e.contains("eaddrinuse")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,5 +167,8 @@ mod tests {
         );
         assert!(devices_shows_pair_code(true, true));
         assert!(!devices_shows_pair_code(true, false));
+        assert!(lan_bind_in_use("Address already in use (os error 98)"));
+        assert!(lan_bind_in_use("EADDRINUSE"));
+        assert!(!lan_bind_in_use("permission denied"));
     }
 }

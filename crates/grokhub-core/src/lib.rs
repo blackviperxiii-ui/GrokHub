@@ -18,6 +18,7 @@ pub mod context;
 pub mod diagnostics;
 pub mod doctor;
 pub mod frame;
+pub mod grok_loop;
 pub mod goal;
 pub mod greeting;
 pub mod hands;
@@ -74,7 +75,7 @@ pub use attach::{
     append_composer, attach_kind, attach_name, attach_prompt_line, chat_attach_status,
     cabin_eyes_request_text, cabin_frame_only, clip_image_args, imagine_ref_status, list_pick_names,
     kick_consumes_attach, next_chat_image, parse_picker_stdout, this_turn_cabin_frame,
-    picker_args, plus_empty_status, plus_menu_rows, take_text_body, AttachKind, PlusAct, PlusTarget,
+    picker_args, picker_save_args, plus_empty_status, plus_menu_rows, take_text_body, AttachKind, PlusAct, PlusTarget,
     IMAGE_FILE_CAP, IMAGE_PIXEL_CAP, MEDIA_FILE_CAP, TEXT_FILE_CAP, bound_scan, image_pixels_ok, png_ihdr_size,
 };
 pub use chat::{
@@ -110,7 +111,10 @@ pub use chips::{
     top_habit_labels, ChipInput, ChipKind, ChipMemory, ChipStage, ChipThread, PredictedIntent,
     QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
 };
-pub use doctor::{doctor_extras, doctor_hands_line, doctor_lines, doctor_ok, DoctorLine};
+pub use doctor::{
+    doctor_cabin_line, doctor_extras, doctor_hands_line, doctor_lines, doctor_ok,
+    hub_kind_from_health, DoctorLine,
+};
 pub use capture::{
     capture_kinds, clamp_to_desktop, cursor_on_output, ffmpeg_webcam_args, ffmpeg_x11_args,
     format_cursor_line, format_cursor_line_miss, frame_is_blank, gnome_shell_screenshot_args,
@@ -133,12 +137,14 @@ pub use imagine::{
     imagine_image_resolution, imagine_image_shaped, imagine_is_video_path, imagine_receipt_path,
     imagine_request_body, imagine_should_retry_model, imagine_slug, imagine_style_label,
     imagine_toolbox_dock, imagine_toolbox_shows_title, imagine_toolbox_top, imagine_result_fit,
-    imagine_shows_result_above, imagine_video_fallback_model, imagine_wall_bounds,
+    imagine_shows_result_above, imagine_stage_h, imagine_stage_visible,
+    imagine_video_fallback_model, imagine_wall_bounds,
     imagine_wall_overlaps_toolbox, imagine_video_dur_label, imagine_video_duration_secs,
     imagine_video_res_label, imagine_video_resolution, last_imagine_receipt, media_ext_from_bytes,
     parse_imagine_url, parse_video_job_status, parse_video_request_id, parse_video_url,
     pick_fresh_seed, retired_imagine_model, video_moderation_blocked, video_request_body,
-    wall_can_paint, wall_curate_seed, wall_due, wall_evict, ImagineKind, ImagineSpec,
+    wall_can_paint, wall_curate_seed, wall_due, wall_evict, wall_gif_from_generation,
+    ImagineKind, ImagineSpec,
     ImagineToolboxDock, ImagineWall, VideoJobStatus, WallGif, WallSeed, WallSlot,
     DEFAULT_IMAGINE_MODEL, DEFAULT_VIDEO_MODEL, FALLBACK_IMAGINE_MODEL, FALLBACK_VIDEO_MODEL,
     IMAGINE_ASPECTS, IMAGINE_STYLES, IMAGINE_TOOLBOX_PAD, IMAGINE_VIDEO_DURS, IMAGINE_VIDEO_RES,
@@ -186,8 +192,9 @@ pub use review::{
     ReviewDigest, SuggestionKind, SuggestionStore, CABIN_GITHUB_TOOLS, DIGEST_LINE_CAP, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
 };
 pub use pair::{
-    devices_shows_pair_code, hub_pair_url, make_pair_code, normalize_code, pair_code_is_live,
-    parse_hostname_i, pick_lan_ipv4, start_hub_rotates_pair, CODE_ALPH, PAIR_TTL_MS,
+    devices_shows_pair_code, hub_pair_url, lan_bind_in_use, make_pair_code, normalize_code,
+    pair_code_is_live, parse_hostname_i, pick_lan_ipv4, start_hub_rotates_pair, CODE_ALPH,
+    PAIR_TTL_MS,
 };
 pub use automation::{
     automation_blocked_by_policy, compute_next_run, due_automations, ensure_automation_schedule,
@@ -220,6 +227,10 @@ pub use goal::{
     parse_fast_topics, parse_goal_outcome, reply_needs_followup, should_auto_continue_goal,
     should_name_thread, thread_goal_prompt, ThreadGoal, FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT,
     GOAL_DROP_AFTER, GOAL_MAX_STEPS,
+};
+pub use grok_loop::{
+    due_loops, loop_interval_ms, loop_next_run, loop_slash, mark_loop_ran, new_loop, parse_loop_line,
+    GrokLoop, LOOP_MAX, LOOP_MIN_MS,
 };
 pub use greeting::{
     greeting_fingerprint, greeting_name, greeting_prompt, local_greeting, parse_llm_greeting,
@@ -332,7 +343,8 @@ pub use thread_tab::{
 pub use update::{
     discover_source, is_grokhub_source, overlay_update_begin, overlay_update_can_restart,
     overlay_update_finish, overlay_update_progress, restart_acts, restart_argv, restart_bin,
-    origin_needs_retarget, stale_github_origin, systemd_user_restart_args, update_cmds,
+    origin_needs_retarget, stale_github_origin, systemd_user_restart_args, systemd_user_stop_args,
+    update_cmds,
     update_plan_steps, update_progress_pct, update_step_label, update_wipes_config, walk_up_source,
     OverlayUpdateView, RestartAct, GITHUB_REMOTE_URL, ORIGIN_REMOTE_URL,
 };

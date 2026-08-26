@@ -109,6 +109,12 @@ pub enum GeomFlush {
 }
 
 pub const GEOM_FLUSH_MS: u64 = 400;
+/// Skip the first frames after restore so a default 1100×720 does not clobber app.json.
+pub const GEOM_SETTLE_FRAMES: u8 = 3;
+
+pub fn geom_can_remember(applied: bool, frames: u8) -> bool {
+    applied && frames >= GEOM_SETTLE_FRAMES
+}
 
 pub fn geom_flush(dirty: bool, since_persist_ms: u64) -> GeomFlush {
     if !dirty {
@@ -228,6 +234,27 @@ mod tests {
     fn dirty_move_flushes_without_waiting_for_the_two_second_persist() {
         assert_eq!(geom_flush(true, 400), GeomFlush::Now);
         assert_eq!(geom_flush(true, 0), GeomFlush::AfterMs(400));
+    }
+
+    #[test]
+    fn first_frames_do_not_remember_geometry() {
+        assert!(!geom_can_remember(false, 0));
+        assert!(!geom_can_remember(true, 0));
+        assert!(!geom_can_remember(true, 2));
+        assert!(geom_can_remember(true, GEOM_SETTLE_FRAMES));
+    }
+
+    #[test]
+    fn launch_geom_keeps_size_and_position() {
+        let g = clamp_geom(WindowGeom {
+            x: Some(2418.0),
+            y: Some(80.0),
+            w: 1400.0,
+            h: 900.0,
+            maximized: false,
+        });
+        assert_eq!(launch_size(&g), [1400.0, 900.0]);
+        assert_eq!(launch_pos(&g), Some([2418.0, 80.0]));
     }
 
     #[test]

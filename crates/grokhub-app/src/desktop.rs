@@ -301,6 +301,15 @@ fn invalidate_cdp_cache() {
     }
 }
 
+pub fn probe_hub_health_body(port: u16) -> Option<String> {
+    let url = format!("http://127.0.0.1:{port}/v1/health");
+    ureq::get(&url)
+        .timeout(Duration::from_millis(400))
+        .call()
+        .ok()
+        .and_then(|r| r.into_string().ok())
+}
+
 fn cdp_http(port: u16, path: &str) -> Result<String, String> {
     let url = format!("http://127.0.0.1:{port}{path}");
     let resp = ureq::get(&url)
@@ -1723,6 +1732,33 @@ pub fn record_pcm_chunks() -> Vec<Vec<u8>> {
     } else {
         vec![pcm.to_vec()]
     }
+}
+
+pub fn save_file_dialog(suggested: &str) -> Option<PathBuf> {
+    let name = std::path::Path::new(suggested)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("imagine.png");
+    for bin in ["zenity", "kdialog", "yad", "qarma"] {
+        let Some(args) = grokhub_core::picker_save_args(bin, name) else {
+            continue;
+        };
+        if !which(bin) {
+            continue;
+        }
+        if let Ok(o) = Command::new(bin).args(args).output() {
+            if o.status.success() {
+                if let Some(p) = grokhub_core::parse_picker_stdout(&String::from_utf8_lossy(&o.stdout)) {
+                    let path = PathBuf::from(p);
+                    if !path.as_os_str().is_empty() {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 pub fn pick_file() -> Option<PathBuf> {

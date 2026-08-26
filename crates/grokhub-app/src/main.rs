@@ -14,6 +14,7 @@ mod github;
 mod host;
 mod markdown;
 mod night;
+mod loops;
 mod recipes;
 mod notify;
 mod store;
@@ -30,7 +31,9 @@ mod xai;
 use app::Cabin;
 use cli::{parse_args, Launch};
 use eframe::egui;
-use grokhub_core::{doctor_lines, doctor_ok, DEFAULT_PORT, HUB_KIND};
+use grokhub_core::{
+    doctor_cabin_line, doctor_lines, doctor_ok, hub_kind_from_health, DEFAULT_PORT,
+};
 use std::env;
 
 fn main() {
@@ -100,6 +103,22 @@ fn run_oauth_cli() {
     }
 }
 
+fn probe_hub_health_body() -> Option<String> {
+    let port = env::var("GROKHUB_HUB_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_PORT);
+    desktop::probe_hub_health_body(port)
+}
+
+fn cabin_running() -> bool {
+    let dir = config::config_dir();
+    std::fs::read_to_string(tray::cabin_pid_path(&dir))
+        .ok()
+        .and_then(|t| tray::parse_cabin_pid(&t))
+        .is_some_and(tray::cabin_pid_alive)
+}
+
 fn run_doctor() {
     let cfg = config::load();
     let sec = secrets::load();
@@ -108,8 +127,10 @@ fn run_doctor() {
         secrets::console_key(&sec, &cfg.api_key),
         &secrets::access_token(&sec),
     );
-    let mut lines = doctor_lines(authed, mem_ok, HUB_KIND);
+    let kind = hub_kind_from_health(probe_hub_health_body().as_deref());
+    let mut lines = doctor_lines(authed, mem_ok, &kind);
     lines.extend(grokhub_core::doctor_extras(None, crate::skills::list_skills().len()));
+    lines.push(doctor_cabin_line(cabin_running()));
     for l in &lines {
         println!("{} {}", if l.ok { "ok " } else { "ERR" }, l.text);
     }
