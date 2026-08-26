@@ -8611,54 +8611,18 @@ impl Cabin {
                 ui.set_min_width(220.0);
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (id, label) in crate::theme::CABIN_MENU {
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new(*label)
-                                    .size(crate::theme::FONT_CHROME)
-                                    .color(crate::theme::fg()),
-                            )
-                            .fill(egui::Color32::TRANSPARENT)
-                            .rounding(8.0)
-                            .min_size(egui::vec2(204.0, 36.0)),
-                        )
-                        .clicked()
-                    {
+                    if crate::cards::felt_menu_row(ui, *label) {
                         pick = Some(*id);
                     }
                 }
                 ui.add_space(4.0);
                 ui.separator();
                 ui.add_space(4.0);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new("Help")
-                                .size(crate::theme::FONT_CHROME)
-                                .color(crate::theme::fg()),
-                        )
-                        .fill(egui::Color32::TRANSPARENT)
-                        .rounding(8.0)
-                        .min_size(egui::vec2(204.0, 36.0)),
-                    )
-                    .clicked()
-                {
+                if crate::cards::felt_menu_row(ui, "Help") {
                     help = true;
                 }
                 let auth_label = if authed { "Sign out" } else { "Connect Grok" };
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new(auth_label)
-                                .size(crate::theme::FONT_CHROME)
-                                .color(crate::theme::fg()),
-                        )
-                        .fill(egui::Color32::TRANSPARENT)
-                        .rounding(8.0)
-                        .min_size(egui::vec2(204.0, 36.0)),
-                    )
-                    .clicked()
-                {
+                if crate::cards::felt_menu_row(ui, auth_label) {
                     if authed {
                         disconnect = true;
                     } else {
@@ -9182,14 +9146,16 @@ impl Cabin {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Projects").size(12.0).color(crate::theme::subtle()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let plus = ui.add(
-                            egui::Button::new(RichText::new("+").size(16.0).color(crate::theme::muted()))
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE)
-                                .min_size(egui::vec2(22.0, 22.0)),
-                        );
+                        let plus = crate::theme::felt_icon_hit(
+                            ui,
+                            "+",
+                            22.0,
+                            crate::theme::muted(),
+                            16.0,
+                        )
+                        .on_hover_text("New project or folder");
                         let plus_pos = plus.rect.left_bottom();
-                        if plus.on_hover_text("New project or folder").clicked() {
+                        if plus.clicked() {
                             self.proj_plus_open = true;
                             self.proj_plus_pos = plus_pos;
                             self.proj_ignore_close = true;
@@ -9291,13 +9257,17 @@ impl Cabin {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("History").size(12.0).color(crate::theme::subtle()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new("See all").size(11.0).color(crate::theme::subtle()))
-                                    .fill(egui::Color32::TRANSPARENT)
-                                    .stroke(egui::Stroke::NONE),
-                            )
-                            .clicked()
+                        if crate::theme::felt_label_button(
+                            ui,
+                            "See all",
+                            egui::Color32::TRANSPARENT,
+                            crate::theme::subtle(),
+                            6.0,
+                            egui::vec2(0.0, 20.0),
+                            None,
+                            false,
+                        )
+                        .clicked()
                         {
                             self.nav = Nav::History;
                         }

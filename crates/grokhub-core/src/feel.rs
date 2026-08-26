@@ -1,4 +1,4 @@
-//! Click feel. Hover grows a hair, press shrinks. No bounce.
+//! Click feel for GrokHub on CachyOS — snappy Plasma-adjacent timing, no bounce.
 
 pub const HOVER_GROW: f32 = 0.015;
 pub const PRESS_SHRINK: f32 = 0.045;
@@ -6,8 +6,14 @@ pub const HOVER_WASH: f32 = 0.10;
 pub const PRESS_WASH: f32 = 0.18;
 pub const HOVER_SECS: f32 = 0.08;
 pub const PRESS_SECS: f32 = 0.05;
+/// Selection / knob slide — ~120ms, between egui hover and KDE widget motion.
+pub const SELECT_SECS: f32 = 0.12;
 pub const HOVER_EXPANSION: f32 = 1.0;
 pub const PRESS_EXPANSION: f32 = -1.5;
+
+pub fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t.clamp(0.0, 1.0)
+}
 
 pub fn feel_scale(hover_t: f32, press_t: f32) -> f32 {
     let hover = hover_t.clamp(0.0, 1.0);
@@ -120,5 +126,12 @@ mod tests {
         assert!(PRESS_EXPANSION < 0.0);
         assert_eq!(HOVER_EXPANSION, 1.0);
         assert_eq!(PRESS_EXPANSION, -1.5);
+    }
+
+    #[test]
+    fn lerp_endpoints() {
+        assert_eq!(lerp_f32(0.0, 100.0, 0.0), 0.0);
+        assert_eq!(lerp_f32(0.0, 100.0, 1.0), 100.0);
+        assert!((lerp_f32(10.0, 30.0, 0.5) - 20.0).abs() < 1e-6);
     }
 }

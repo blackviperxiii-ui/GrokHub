@@ -16,7 +16,7 @@ Transport: spawn installed `grok --no-auto-update agent stdio`. Do not vendor gr
 
 `send_chat` opens or reuses an ACP session whose cwd is the bound project, or `~/GrokHub-Work` when unbound — never the cabin process cwd. Stream thought and text into existing bubbles. Stop / Halt / tray Halt is `session/cancel`. A dead stored session id retries `session/new` without resume. Disk-full / permission-denied handshake errors land in the chat with the cwd named.
 
-Composer pills: Chat / Plan / Ask, Ask / Auto / Always-approve, and Effort (low / medium / high / xhigh → `grok agent --reasoning-effort`). Tool cards, diffs, and computer-use frames render in the chat pane. Permission prompts Allow / Deny / Always.
+Composer pills: Chat / Plan / Ask, Ask / Auto / Always-approve, and Effort (low / medium / high / xhigh → `grok agent --reasoning-effort`). Segment pills, catalog triggers, settings switches, and sidebar chrome use Plasma-style click feel (hover wash, press shrink, ~120ms selection blend). Tool cards, diffs, and computer-use frames render in the chat pane. Permission prompts Allow / Deny / Always.
 
 ## Desktop
 

@@ -6,8 +6,8 @@ use eframe::egui::{
     TextureHandle, TextureOptions,
 };
 use grokhub_core::{
-    feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb, os_prefers_dark, HOVER_EXPANSION,
-    HOVER_SECS, PRESS_EXPANSION, PRESS_SECS,
+    feel_scale, felt_rect, hover_alpha, hover_mix, lerp_f32, lift_rgb, mix_channel, os_prefers_dark,
+    HOVER_EXPANSION, HOVER_SECS, PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
@@ -419,6 +419,81 @@ pub fn pointing(resp: egui::Response) -> egui::Response {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+pub fn blend_color(from: Color32, to: Color32, t: f32) -> Color32 {
+    Color32::from_rgba_unmultiplied(
+        mix_channel(from.r(), to.r(), t),
+        mix_channel(from.g(), to.g(), t),
+        mix_channel(from.b(), to.b(), t),
+        mix_channel(from.a(), to.a(), t),
+    )
+}
+
+/// Animated on/off for toggles and segment selection (~120ms on CachyOS).
+pub fn animate_selection(ui: &egui::Ui, id: egui::Id, on: bool) -> f32 {
+    ui.ctx().animate_bool_with_time(id, on, SELECT_SECS)
+}
+
+/// Painted label button with hover grow / press shrink (Plasma-style pointer feedback).
+pub fn felt_label_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    base_fill: Color32,
+    text_color: Color32,
+    rounding: f32,
+    min_size: egui::Vec2,
+    stroke: Option<Stroke>,
+    strong: bool,
+) -> egui::Response {
+    let font = if strong {
+        title_font(FONT_CHROME)
+    } else {
+        FontId::proportional(FONT_CHROME)
+    };
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, text_color));
+    let pad = ui.style().spacing.button_padding;
+    let size = egui::vec2(
+        (galley.size().x + pad.x * 2.0).max(min_size.x),
+        (galley.size().y + pad.y * 2.0).max(min_size.y),
+    );
+    let (_rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let (resp, rect, fill) = feel_response(ui, resp, base_fill);
+    ui.painter().rect_filled(rect, rounding, fill);
+    if let Some(s) = stroke {
+        ui.painter().rect_stroke(rect, rounding, s);
+    }
+    ui.painter()
+        .galley(rect.min + pad, galley, text_color);
+    pointing(resp)
+}
+
+/// Compact square hit for sidebar `+` and similar chrome.
+pub fn felt_icon_hit(
+    ui: &mut egui::Ui,
+    label: &str,
+    size: f32,
+    text_color: Color32,
+    font_size: f32,
+) -> egui::Response {
+    let (_rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let (resp, rect, wash) = feel_response(ui, resp, Color32::TRANSPARENT);
+    if wash.a() > 0 {
+        ui.painter()
+            .rect_filled(rect, 6.0, wash);
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(font_size),
+        if resp.hovered() {
+            fg()
+        } else {
+            text_color
+        },
+    );
+    pointing(resp)
+}
+
 pub fn lift_fill(fill: Color32, mix: f32) -> Color32 {
     let toward_white = !USE_LIGHT.load(Ordering::Relaxed);
     if fill.a() == 0 {
@@ -472,6 +547,18 @@ pub fn mark(ctx: &egui::Context) -> TextureHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blend_color_endpoints() {
+        assert_eq!(
+            blend_color(Color32::from_rgb(0, 0, 0), Color32::from_rgb(100, 100, 100), 0.0),
+            Color32::from_rgb(0, 0, 0)
+        );
+        assert_eq!(
+            blend_color(Color32::from_rgb(0, 0, 0), Color32::from_rgb(100, 100, 100), 1.0),
+            Color32::from_rgb(100, 100, 100)
+        );
+    }
 
     #[test]
     fn grok_com_chrome_tokens() {
