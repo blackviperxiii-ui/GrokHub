@@ -318,8 +318,15 @@ pub fn grok_stdout_timeout(bin: &Path, cwd: &Path, args: &[&str], secs: u64) -> 
     }
 }
 
-pub fn agent_args(always_approve: bool) -> Vec<String> {
+pub fn agent_args(always_approve: bool, reasoning_effort: Option<&str>) -> Vec<String> {
     let mut a = vec!["--no-auto-update".into(), "agent".into()];
+    if let Some(effort) = reasoning_effort {
+        let effort = effort.trim();
+        if !effort.is_empty() {
+            a.push("--reasoning-effort".into());
+            a.push(effort.into());
+        }
+    }
     if always_approve {
         a.push("--always-approve".into());
     }
@@ -327,9 +334,13 @@ pub fn agent_args(always_approve: bool) -> Vec<String> {
     a
 }
 
-pub fn agent_args_resume(always_approve: bool, resume: Option<&str>) -> Vec<String> {
+pub fn agent_args_resume(
+    always_approve: bool,
+    resume: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> Vec<String> {
     let _ = resume;
-    agent_args(always_approve)
+    agent_args(always_approve, reasoning_effort)
 }
 
 #[cfg(test)]
@@ -410,19 +421,35 @@ mod tests {
     #[test]
     fn agent_args_yolo() {
         assert_eq!(
-            agent_args(true),
+            agent_args(true, None),
             vec!["--no-auto-update", "agent", "--always-approve", "stdio"]
         );
         assert_eq!(
-            agent_args(false),
+            agent_args(false, None),
             vec!["--no-auto-update", "agent", "stdio"]
         );
         assert_eq!(
-            agent_args_resume(false, Some("abc-123")),
-            vec!["--no-auto-update", "agent", "stdio"]
+            agent_args(false, Some("high")),
+            vec![
+                "--no-auto-update",
+                "agent",
+                "--reasoning-effort",
+                "high",
+                "stdio"
+            ]
+        );
+        assert_eq!(
+            agent_args_resume(false, Some("abc-123"), Some("xhigh")),
+            vec![
+                "--no-auto-update",
+                "agent",
+                "--reasoning-effort",
+                "xhigh",
+                "stdio"
+            ]
         );
         assert!(
-            !agent_args_resume(true, Some("abc-123"))
+            !agent_args_resume(true, Some("abc-123"), None)
                 .iter()
                 .any(|a| a == "--resume"),
             "CLI --resume plus session/new mixed sessions"

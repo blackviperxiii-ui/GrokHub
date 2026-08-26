@@ -2149,6 +2149,8 @@ impl Cabin {
         let auth_key = grok_login.or_else(|| xai_env.clone());
         let perm = self.permission_mode;
         let mode = self.session_mode;
+        let reasoning_effort = grokhub_core::agent_reasoning_effort_for_mode(&self.cfg.mode)
+            .map(|s| s.to_string());
         let foreign = self
             .threads
             .get(idx)
@@ -2177,6 +2179,7 @@ impl Cabin {
                     xai_env.clone(),
                     perm,
                     mode,
+                    reasoning_effort.clone(),
                     resume,
                 )
             };
@@ -13356,7 +13359,7 @@ mod tests {
         let open_find = open.find("find_grok").expect("find_grok");
         assert!(
             open_spawn < open_show && open_spawn < open_read && open_spawn < open_find,
-            "opening a grok session must not block on grok sessions show: {open}"
+            "opening a grok session must not block on grok export/show: {open}"
         );
         assert!(
             open.contains("apply_switch_thread") && open.contains("self.persist()"),

@@ -270,6 +270,9 @@ pub fn pick_auth_method(auth_methods: &Value, api_key: &str) -> Option<String> {
     if ids.iter().any(|i| i == "cached_token") {
         return Some("cached_token".into());
     }
+    if ids.iter().any(|i| i == "grok.com") {
+        return Some("grok.com".into());
+    }
     if has_api_key && ids.iter().any(|i| i == "xai.api_key") {
         return Some("xai.api_key".into());
     }
@@ -671,6 +674,12 @@ mod tests {
             pick_auth_method(&methods, "aaa.bbb.ccc").as_deref(),
             Some("cached_token"),
             "grok login JWT must not steal xai.api_key"
+        );
+        let alpha = json!([{ "id": "grok.com", "name": "Grok" }]);
+        assert_eq!(
+            pick_auth_method(&alpha, "").as_deref(),
+            Some("grok.com"),
+            "alpha advertises grok.com when logged out"
         );
     }
 
