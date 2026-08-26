@@ -3,12 +3,13 @@
 mod catalog;
 mod client;
 mod locate;
+mod stream;
 pub mod protocol;
 
 pub use catalog::{
     load_grok_catalog, parse_inspect_skills, parse_mcp_list, parse_models_list, parse_plugin_list,
-    skill_source_label,
-    GrokCatalog, GrokMcpRow, GrokPluginRow, GrokSkillRow,
+    parse_workflows, skill_source_label,
+    GrokCatalog, GrokMcpRow, GrokPluginRow, GrokSkillRow, GrokWorkflowRow,
 };
 pub use client::{
     cabin_has_session, connect, delete_session, discover_session_files, discover_session_files_in,
@@ -16,7 +17,7 @@ pub use client::{
     explain_handshake_error, inspect_json, is_placeholder_session_title, is_session_cwd_error,
     jsonrpc_error_text, list_sessions, merge_grok_sessions, parse_session_list,
     parse_session_markdown, parse_single_turn, preferred_history_title, run_single_turn,
-    run_single_turn_full,
+    run_single_turn_full, spawn_grok_p_stream,
     session_title_from_chat_history,
     show_session, split_session_row, wait_event, AcpHandle, GrokSession, SingleTurn, SpawnOpts,
 };
@@ -30,3 +31,4 @@ pub use protocol::{
     merge_tool_card, AcpEvent, PermissionAsk, PermissionMode, SessionMode, ToolCard,
     PROTOCOL_VERSION,
 };
+pub use stream::{fold_stream, kill_pid, parse_stream_line, prompt_json, GrokPEvent};

@@ -5,9 +5,9 @@ pub const XAI_BASE: &str = "https://api.x.ai/v1";
 pub const DEFAULT_MODEL: &str = "grok-3-mini-fast";
 /// Greeting, chips, and other cabin Fast-path calls. Not the composer ladder.
 /// Product name: Grok 4.1 Fast. Live API id still accepted after retirement.
-pub const CABIN_FAST_MODEL: &str = "grok-4-1-fast-non-reasoning";
-/// Used only if 4.1 Fast returns empty (retired alias). Fast non-reasoning successor.
-pub const CABIN_FAST_FALLBACK: &str = "grok-4.20-0309-non-reasoning";
+pub const CABIN_FAST_MODEL: &str = "grok-4.6";
+/// Used only if the default model returns empty.
+pub const CABIN_FAST_FALLBACK: &str = "grok-4.5";
 
 pub fn needs_auth_banner(has_key: bool) -> bool {
     !has_key
@@ -93,21 +93,27 @@ pub fn agent_reasoning_effort_for_mode(mode: &str) -> Option<&'static str> {
     }
 }
 
-/// Composer effort dropdown levels (Grok Build alpha).
+/// Composer effort dropdown levels (Grok Build 1.0.11 canonical ladder).
 pub const REASONING_EFFORTS: &[(&str, &str)] = &[
+    ("none", "None"),
+    ("minimal", "Minimal"),
     ("low", "Low"),
     ("medium", "Medium"),
     ("high", "High"),
     ("xhigh", "Extra High"),
+    ("max", "Max"),
 ];
 
 /// Normalize effort ids and legacy aliases (`/effort`, `/mode`).
 pub fn parse_reasoning_effort(s: &str) -> Option<&'static str> {
     match s.trim().to_ascii_lowercase().as_str() {
-        "low" | "fast" | "mini" => Some("low"),
+        "none" | "off" => Some("none"),
+        "minimal" | "mini" => Some("minimal"),
+        "low" | "fast" => Some("low"),
         "medium" | "med" | "balanced" | "balance" => Some("medium"),
         "high" | "think" | "build" | "expert" => Some("high"),
-        "xhigh" | "max" | "deep" | "heavy" => Some("xhigh"),
+        "xhigh" | "deep" | "heavy" => Some("xhigh"),
+        "max" => Some("max"),
         _ => None,
     }
 }
@@ -120,7 +126,7 @@ pub fn effort_label(id: &str) -> &'static str {
 
 pub fn chat_timeout_secs(effort: Option<&str>) -> u64 {
     match effort {
-        Some("high") | Some("xhigh") => 600,
+        Some("high") | Some("xhigh") | Some("max") => 600,
         _ => 120,
     }
 }
@@ -502,9 +508,12 @@ mod tests {
         assert_eq!(parse_reasoning_effort("high"), Some("high"));
         assert_eq!(parse_reasoning_effort("think"), Some("high"));
         assert_eq!(parse_reasoning_effort("xhigh"), Some("xhigh"));
-        assert_eq!(parse_reasoning_effort("max"), Some("xhigh"));
+        assert_eq!(parse_reasoning_effort("max"), Some("max"));
+        assert_eq!(parse_reasoning_effort("mini"), Some("minimal"));
+        assert_eq!(parse_reasoning_effort("none"), Some("none"));
         assert_eq!(effort_label("xhigh"), "Extra High");
-        assert_eq!(REASONING_EFFORTS.len(), 4);
+        assert_eq!(effort_label("max"), "Max");
+        assert_eq!(REASONING_EFFORTS.len(), 7);
     }
 
     #[test]
