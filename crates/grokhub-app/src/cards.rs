@@ -643,27 +643,102 @@ pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
 }
 
 pub fn white_pill(ui: &mut egui::Ui, label: &str) -> bool {
-    crate::theme::pointing(ui.add(
-        egui::Button::new(
-            RichText::new(label)
-                .size(crate::theme::FONT_CHROME)
-                .strong()
-                .color(crate::theme::bg()),
-        )
-        .fill(crate::theme::fg())
-        .rounding(crate::theme::HIT)
-        .min_size(egui::vec2(0.0, crate::theme::HIT)),
-    ))
-    .clicked()
+    felt_pill(ui, label, PillStyle::Solid)
 }
 
 pub fn ghost_pill(ui: &mut egui::Ui, label: &str) -> bool {
-    crate::theme::pointing(ui.add(
-        egui::Button::new(RichText::new(label).size(12.0).color(crate::theme::muted()))
-            .fill(egui::Color32::TRANSPARENT)
-            .rounding(14.0)
-            .stroke(Stroke::new(1.0_f32, crate::theme::border())),
-    ))
+    felt_pill(ui, label, PillStyle::Ghost)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PillStyle {
+    Solid,
+    Ghost,
+}
+
+pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
+    let (base_fill, text_color, rounding, min_size, stroke, strong) = match style {
+        PillStyle::Solid => (
+            crate::theme::fg(),
+            crate::theme::bg(),
+            crate::theme::HIT,
+            egui::vec2(0.0, crate::theme::HIT),
+            None,
+            true,
+        ),
+        PillStyle::Ghost => (
+            Color32::TRANSPARENT,
+            crate::theme::muted(),
+            14.0,
+            egui::vec2(0.0, 0.0),
+            Some(Stroke::new(1.0_f32, crate::theme::border())),
+            false,
+        ),
+    };
+    crate::theme::felt_label_button(
+        ui,
+        label,
+        base_fill,
+        text_color,
+        rounding,
+        min_size,
+        stroke,
+        strong,
+    )
+    .clicked()
+}
+
+/// Segmented control segment — animated active wash, Plasma-style click feel.
+pub fn felt_segment(ui: &mut egui::Ui, label: &str, selected: bool) -> bool {
+    let min = egui::vec2(52.0, 28.0);
+    let (_rect, resp) = ui.allocate_exact_size(min, Sense::click());
+    let on_t = crate::theme::animate_selection(ui, resp.id.with("seg"), selected);
+    let base_fill =
+        crate::theme::blend_color(Color32::TRANSPARENT, crate::theme::nav_active(), on_t);
+    let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::fg(), on_t);
+    let (resp, rect, fill) = crate::theme::feel_response(ui, resp, base_fill);
+    ui.painter().rect_filled(rect, 14.0, fill);
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(crate::theme::FONT_CHROME),
+        text_color,
+    );
+    resp.clicked()
+}
+
+/// Catalog / settings tab with animated active fill.
+pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
+    let font = FontId::proportional(13.0);
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, crate::theme::fg()));
+    let pad = ui.style().spacing.button_padding;
+    let size = egui::vec2((galley.size().x + pad.x * 2.0).max(32.0), 32.0);
+    let (_rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let on_t = crate::theme::animate_selection(ui, resp.id.with("tab"), active);
+    let base_fill = crate::theme::blend_color(Color32::TRANSPARENT, crate::theme::fg(), on_t);
+    let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::bg(), on_t);
+    let stroke_color = crate::theme::blend_color(crate::theme::border(), crate::theme::fg(), on_t);
+    let (resp, rect, fill) = crate::theme::feel_response(ui, resp, base_fill);
+    ui.painter().rect_filled(rect, 18.0, fill);
+    ui.painter()
+        .rect_stroke(rect, 18.0, Stroke::new(1.0_f32, stroke_color));
+    ui.painter()
+        .galley(rect.min + pad, galley, text_color);
+    resp.clicked()
+}
+
+pub fn felt_menu_row(ui: &mut egui::Ui, label: &str) -> bool {
+    crate::theme::felt_label_button(
+        ui,
+        label,
+        Color32::TRANSPARENT,
+        crate::theme::fg(),
+        8.0,
+        egui::vec2(204.0, 36.0),
+        None,
+        false,
+    )
     .clicked()
 }
 
@@ -787,17 +862,16 @@ fn catalog_pill(
 ) -> Option<String> {
     let mut next = None;
     let id = ui.make_persistent_id(popup_id);
-    let resp = crate::theme::pointing(ui.add(
-        egui::Button::new(
-            RichText::new(label)
-                .size(crate::theme::FONT_CHROME)
-                .color(crate::theme::muted()),
-        )
-        .fill(Color32::TRANSPARENT)
-        .rounding(14.0)
-        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .min_size(egui::vec2(MODE_PILL_W, 28.0)),
-    ));
+    let resp = crate::theme::felt_label_button(
+        ui,
+        label,
+        Color32::TRANSPARENT,
+        crate::theme::muted(),
+        14.0,
+        egui::vec2(MODE_PILL_W, 28.0),
+        Some(Stroke::new(1.0_f32, crate::theme::border())),
+        false,
+    );
     if resp.clicked() {
         ui.memory_mut(|m| m.toggle_popup(id));
     }
@@ -874,25 +948,7 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
         ui.spacing_mut().item_spacing.x = 4.0;
         for (id, label) in composer_modes() {
             let on = *id == mode;
-            let hit = crate::theme::pointing(ui.add(
-                egui::Button::new(
-                    RichText::new(*label)
-                        .size(crate::theme::FONT_CHROME)
-                        .color(if on {
-                            crate::theme::fg()
-                        } else {
-                            crate::theme::muted()
-                        }),
-                )
-                .fill(if on {
-                    crate::theme::nav_active()
-                } else {
-                    Color32::TRANSPARENT
-                })
-                .rounding(14.0)
-                .min_size(egui::vec2(52.0, 28.0)),
-            ));
-            if hit.clicked() && !on {
+            if felt_segment(ui, *label, on) && !on {
                 out.mode = Some((*id).to_string());
             }
         }
@@ -905,25 +961,7 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
         ui.add_space(6.0);
         for (id, label) in permission_modes() {
             let on = *id == perm;
-            let hit = crate::theme::pointing(ui.add(
-                egui::Button::new(
-                    RichText::new(*label)
-                        .size(crate::theme::FONT_CHROME)
-                        .color(if on {
-                            crate::theme::fg()
-                        } else {
-                            crate::theme::muted()
-                        }),
-                )
-                .fill(if on {
-                    crate::theme::nav_active()
-                } else {
-                    Color32::TRANSPARENT
-                })
-                .rounding(14.0)
-                .min_size(egui::vec2(52.0, 28.0)),
-            ));
-            if hit.clicked() && !on {
+            if felt_segment(ui, *label, on) && !on {
                 out.perm = Some((*id).to_string());
             }
         }
@@ -1014,6 +1052,11 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                     .ctx()
                     .data(|d| d.get_temp::<bool>(chip_id))
                     .unwrap_or(false);
+                let dismiss_t = ui.ctx().animate_bool_with_time(
+                    chip_id.with("dismiss"),
+                    hovered,
+                    grokhub_core::SELECT_SECS,
+                );
                 let fill = quick_chip_fill(c.primary);
                 let stroke = quick_chip_stroke(c.primary);
                 let color = quick_chip_fg(c.primary);
@@ -1037,39 +1080,43 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
                         ui.horizontal(|ui| {
-                            let hit = crate::theme::pointing(
-                                ui.add(
-                                    egui::Button::new(
-                                        RichText::new(paint).size(13.0).color(color),
-                                    )
-                                    .fill(Color32::TRANSPARENT)
-                                    .stroke(Stroke::NONE)
-                                    .frame(quick_chip_inner_button_framed()),
-                                ),
-                            )
-                            .on_hover_text(tip);
+                            let label_galley = ui.fonts(|f| {
+                                f.layout_no_wrap(paint.clone(), FontId::proportional(13.0), color)
+                            });
+                            let label_w = label_galley.size().x.max(8.0);
+                            let (_rect, hit_resp) =
+                                ui.allocate_exact_size(egui::vec2(label_w, 20.0), Sense::click());
+                            let (hit_resp, felt, wash) =
+                                crate::theme::feel_response(ui, hit_resp, Color32::TRANSPARENT);
+                            if wash.a() > 0 {
+                                ui.painter().rect_filled(felt, 10.0, wash);
+                            }
+                            ui.painter().galley(felt.min, label_galley, color);
+                            let hit = hit_resp.on_hover_text(tip);
                             if hit.clicked() {
                                 act = Some(ChipRowAct::Apply(i));
                             }
-                            let x = crate::theme::pointing(
-                                ui.add(
-                                    egui::Button::new(
-                                        RichText::new(if hovered { "×" } else { " " })
-                                            .size(12.0)
-                                            .color(if hovered {
-                                                crate::theme::subtle()
-                                            } else {
-                                                Color32::TRANSPARENT
-                                            }),
-                                    )
-                                    .fill(Color32::TRANSPARENT)
-                                    .stroke(Stroke::NONE)
-                                    .frame(quick_chip_inner_button_framed())
-                                    .min_size(egui::vec2(16.0, 16.0)),
-                                ),
-                            );
-                            if hovered {
-                                let x = x.on_hover_text("Hide this suggestion");
+                            if dismiss_t > 0.01 {
+                                let (_xr, x_resp) =
+                                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::click());
+                                let (x_resp, x_felt, x_wash) =
+                                    crate::theme::feel_response(ui, x_resp, Color32::TRANSPARENT);
+                                if x_wash.a() > 0 {
+                                    ui.painter().rect_filled(x_felt, 6.0, x_wash);
+                                }
+                                let x_color = crate::theme::blend_color(
+                                    Color32::TRANSPARENT,
+                                    crate::theme::subtle(),
+                                    dismiss_t,
+                                );
+                                ui.painter().text(
+                                    x_felt.center(),
+                                    Align2::CENTER_CENTER,
+                                    "×",
+                                    FontId::proportional(12.0),
+                                    x_color,
+                                );
+                                let x = x_resp.on_hover_text("Hide this suggestion");
                                 if x.clicked() {
                                     act = Some(ChipRowAct::Dismiss(i));
                                 }
@@ -1091,29 +1138,7 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
 }
 
 pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
-    crate::theme::pointing(ui.add(
-        egui::Button::new(RichText::new(label).size(13.0).strong().color(if active {
-            crate::theme::bg()
-        } else {
-            crate::theme::muted()
-        }))
-        .fill(if active {
-            crate::theme::fg()
-        } else {
-            Color32::TRANSPARENT
-        })
-        .rounding(18.0)
-        .min_size(egui::vec2(0.0, 32.0))
-        .stroke(Stroke::new(
-            1.0_f32,
-            if active {
-                crate::theme::fg()
-            } else {
-                crate::theme::border()
-            },
-        )),
-    ))
-    .clicked()
+    felt_tab(ui, label, active)
 }
 
 pub fn section_label(ui: &mut egui::Ui, label: &str) -> bool {
@@ -1163,27 +1188,16 @@ pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool
 
 pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
     let (_rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 24.0), Sense::click());
-    let fill = if on {
-        crate::theme::fg()
-    } else {
-        crate::theme::panel()
-    };
-    let (resp, rect, fill) = crate::theme::feel_response(ui, resp, fill);
+    let on_t = crate::theme::animate_selection(ui, resp.id.with("sw-on"), on);
+    let base_fill = crate::theme::blend_color(crate::theme::panel(), crate::theme::fg(), on_t);
+    let (resp, rect, fill) = crate::theme::feel_response(ui, resp, base_fill);
     ui.painter().rect_filled(rect, 12.0, fill);
-    if !on {
+    if on_t < 0.98 {
         ui.painter()
             .rect_stroke(rect, 12.0, Stroke::new(1.0_f32, crate::theme::border_strong()));
     }
-    let knob_x = if on {
-        rect.right() - 12.0
-    } else {
-        rect.left() + 12.0
-    };
-    let knob = if on {
-        crate::theme::bg()
-    } else {
-        crate::theme::muted()
-    };
+    let knob_x = grokhub_core::lerp_f32(rect.left() + 12.0, rect.right() - 12.0, on_t);
+    let knob = crate::theme::blend_color(crate::theme::muted(), crate::theme::bg(), on_t);
     ui.painter()
         .circle_filled(egui::pos2(knob_x, rect.center().y), 8.0, knob);
     resp.clicked()
@@ -1255,25 +1269,21 @@ pub fn settings_progress(ui: &mut egui::Ui, pct: u8, fill: Color32) {
 }
 
 pub fn settings_nav(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
-    crate::theme::pointing(ui.add(
-        egui::Button::new(
-            RichText::new(label)
-                .size(crate::theme::FONT_CHROME)
-                .color(if active {
-                    crate::theme::fg()
-                } else {
-                    crate::theme::muted()
-                }),
-        )
-        .fill(if active {
-            crate::theme::nav_active()
-        } else {
-            Color32::TRANSPARENT
-        })
-        .rounding(10.0)
-        .min_size(egui::vec2(188.0, 36.0)),
-    ))
-    .clicked()
+    let (_rect, resp) = ui.allocate_exact_size(egui::vec2(188.0, 36.0), Sense::click());
+    let on_t = crate::theme::animate_selection(ui, resp.id.with("nav"), active);
+    let base_fill =
+        crate::theme::blend_color(Color32::TRANSPARENT, crate::theme::nav_active(), on_t);
+    let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::fg(), on_t);
+    let (resp, rect, fill) = crate::theme::feel_response(ui, resp, base_fill);
+    ui.painter().rect_filled(rect, 10.0, fill);
+    ui.painter().text(
+        rect.left_center() + egui::vec2(12.0, 0.0),
+        Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(crate::theme::FONT_CHROME),
+        text_color,
+    );
+    resp.clicked()
 }
 
 pub fn settings_note(ui: &mut egui::Ui, text: &str) {
@@ -1987,8 +1997,23 @@ mod tests {
             .and_then(|s| s.split("pub fn clip_status(").next())
             .expect("session_row");
         assert!(
-            session.contains("effort_pill") && session.contains("out.effort = Some(next)"),
+            session.contains("felt_segment") && session.contains("out.effort = Some(next)"),
             "composer session row must include effort dropdown: {session}"
+        );
+        let switch = include_str!("cards.rs")
+            .split("pub fn settings_switch(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn settings_field(").next())
+            .expect("settings_switch");
+        assert!(
+            switch.contains("animate_selection") && switch.contains("lerp_f32"),
+            "settings switch must slide the knob: {switch}"
+        );
+        let pills = include_str!("cards.rs");
+        assert!(
+            pills.contains("pub fn felt_pill(")
+                && pills.contains("white_pill(ui, label, PillStyle::Solid)"),
+            "white_pill must delegate to felt_pill"
         );
         assert_eq!(clip_status("one\ntwo", 80), "one");
         assert_eq!(clip_status("abcdefghij", 6), "abcde…");
