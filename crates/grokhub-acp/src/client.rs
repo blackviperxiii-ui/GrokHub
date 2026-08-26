@@ -1002,6 +1002,8 @@ pub fn run_single_turn_full(
         model,
         effort,
         plan,
+        None,
+        false,
     ) {
         Ok(t) => Ok(t),
         Err(e) if resume.is_some() && session_resume_is_missing(&e) => grok_p_once(
@@ -1013,12 +1015,15 @@ pub fn run_single_turn_full(
             model,
             effort,
             plan,
+            None,
+            false,
         ),
         Err(e) => Err(e),
     }
 }
 
-fn grok_p_once(
+/// Live `grok -p --output-format streaming-json`. Halt kills `pid`.
+pub fn spawn_grok_p_stream(
     prompt: &str,
     cwd: &Path,
     resume: Option<&str>,
@@ -1027,12 +1032,104 @@ fn grok_p_once(
     model: Option<&str>,
     effort: Option<&str>,
     plan: bool,
-) -> Result<SingleTurn, String> {
+    image: Option<&str>,
+    fork: bool,
+) -> Result<(u32, mpsc::Receiver<crate::stream::GrokPEvent>), String> {
+    let mut child = grok_p_child(
+        prompt,
+        cwd,
+        resume,
+        always_approve,
+        auto,
+        model,
+        effort,
+        plan,
+        image,
+        fork,
+    )?;
+    let pid = child.id();
+    let stdout = child.stdout.take().ok_or("grok -p stdout")?;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        let mut text = String::new();
+        let mut thought = String::new();
+        let mut session_id = String::new();
+        for line in reader.lines() {
+            let Ok(line) = line else { break };
+            match crate::stream::parse_stream_line(&line) {
+                Some(crate::stream::GrokPEvent::Text(d)) => {
+                    text.push_str(&d);
+                    if tx.send(crate::stream::GrokPEvent::Text(d)).is_err() {
+                        crate::stream::kill_pid(pid);
+                        return;
+                    }
+                }
+                Some(crate::stream::GrokPEvent::Thought(d)) => {
+                    thought.push_str(&d);
+                    if tx.send(crate::stream::GrokPEvent::Thought(d)).is_err() {
+                        crate::stream::kill_pid(pid);
+                        return;
+                    }
+                }
+                Some(ev @ crate::stream::GrokPEvent::Tool { .. }) => {
+                    if tx.send(ev).is_err() {
+                        crate::stream::kill_pid(pid);
+                        return;
+                    }
+                }
+                Some(crate::stream::GrokPEvent::End(t)) => {
+                    if !t.session_id.is_empty() {
+                        session_id = t.session_id;
+                    }
+                    if !t.text.is_empty() && text.is_empty() {
+                        text = t.text;
+                    }
+                }
+                Some(crate::stream::GrokPEvent::Err(e)) => {
+                    let _ = tx.send(crate::stream::GrokPEvent::Err(e));
+                    let _ = child.wait();
+                    return;
+                }
+                None => {}
+            }
+        }
+        let status = child.wait();
+        if session_id.is_empty() {
+            let _ = tx.send(crate::stream::GrokPEvent::Err(
+                status
+                    .ok()
+                    .map(format_exit_status)
+                    .unwrap_or_else(|| "grok -p missing sessionId".into()),
+            ));
+            return;
+        }
+        let _ = tx.send(crate::stream::GrokPEvent::End(SingleTurn {
+            session_id,
+            text: text.trim().to_string(),
+            thought: thought.trim().to_string(),
+        }));
+    });
+    Ok((pid, rx))
+}
+
+fn grok_p_child(
+    prompt: &str,
+    cwd: &Path,
+    resume: Option<&str>,
+    always_approve: bool,
+    auto: bool,
+    model: Option<&str>,
+    effort: Option<&str>,
+    plan: bool,
+    image: Option<&str>,
+    fork: bool,
+) -> Result<Child, String> {
     let program = find_grok().ok_or_else(|| {
         "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
     })?;
     let cwd_path = ensure_session_cwd(cwd)?;
-    let args = crate::locate::single_turn_args_full(
+    let mut args = crate::locate::single_turn_args_full(
         prompt,
         &cwd_path.display().to_string(),
         resume,
@@ -1042,12 +1139,21 @@ fn grok_p_once(
         effort,
         plan,
     );
+    if image.is_some() {
+        args = crate::locate::with_prompt_json(args, &crate::stream::prompt_json(prompt, image));
+    }
+    args = crate::locate::with_fork_session(args, fork);
     let mut cmd = Command::new(&program);
     cmd.args(&args)
         .current_dir(&cwd_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("GROK_NO_AUTO_UPDATE", "1");
+    if always_approve {
+        cmd.env("GROK_DEFAULT_SELECTED_PERMISSION", "always_allow_all_sessions");
+    } else if auto {
+        cmd.env("GROK_DEFAULT_SELECTED_PERMISSION", "allow_command_always");
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -1064,9 +1170,33 @@ fn grok_p_once(
     if let Some(sock) = cabin_leader_socket() {
         cmd.env("GROK_LEADER_SOCKET", &sock);
     }
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("spawn grok -p: {e}"))?;
+    cmd.spawn().map_err(|e| format!("spawn grok -p: {e}"))
+}
+
+fn grok_p_once(
+    prompt: &str,
+    cwd: &Path,
+    resume: Option<&str>,
+    always_approve: bool,
+    auto: bool,
+    model: Option<&str>,
+    effort: Option<&str>,
+    plan: bool,
+    image: Option<&str>,
+    fork: bool,
+) -> Result<SingleTurn, String> {
+    let mut child = grok_p_child(
+        prompt,
+        cwd,
+        resume,
+        always_approve,
+        auto,
+        model,
+        effort,
+        plan,
+        image,
+        fork,
+    )?;
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -1076,30 +1206,24 @@ fn grok_p_once(
         Ok(Ok(o)) => o,
         Ok(Err(e)) => return Err(e.to_string()),
         Err(_) => {
-            let _ = Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .status();
-            thread::sleep(Duration::from_millis(80));
-            let _ = Command::new("kill")
-                .args(["-KILL", &pid.to_string()])
-                .status();
+            crate::stream::kill_pid(pid);
             return Err("grok -p timed out".into());
         }
     };
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    if !out.status.success() {
-        if let Ok(t) = parse_single_turn(&stdout) {
-            return Ok(t);
-        }
-        let extra = if stderr.is_empty() {
-            format_exit_status(out.status)
-        } else {
-            stderr
-        };
-        return Err(format!("grok -p failed ({extra})"));
+    if let Ok(t) = crate::stream::fold_stream(&stdout) {
+        return Ok(t);
     }
-    parse_single_turn(&stdout)
+    if let Ok(t) = parse_single_turn(&stdout) {
+        return Ok(t);
+    }
+    let extra = if stderr.is_empty() {
+        format_exit_status(out.status)
+    } else {
+        stderr
+    };
+    Err(format!("grok -p failed ({extra})"))
 }
 
 /// Alpha `grok -p --resume` looks in GROK_HOME. A cabin-isolated home misses
@@ -1433,6 +1557,8 @@ pub struct GrokSession {
     pub path: Option<PathBuf>,
     /// Worktree `grok sessions list` used when this row came from the CLI.
     pub cwd: Option<PathBuf>,
+    /// True when the session files live under cabin GROK_HOME (safe to `--resume`).
+    pub cabin: bool,
 }
 
 pub fn split_session_row(row: &str) -> GrokSession {
@@ -1450,6 +1576,7 @@ pub fn split_session_row(row: &str) -> GrokSession {
         id,
         path: None,
         cwd: None,
+        cabin: false,
     }
 }
 
@@ -1574,6 +1701,7 @@ fn walk_session_dirs(dir: &Path, depth: u8, out: &mut Vec<GrokSession>) {
                 title,
                 path: Some(path.join("chat_history.jsonl")),
                 cwd: None,
+                cabin: false,
             });
             continue;
         }
@@ -1671,6 +1799,7 @@ fn walk_session_md(dir: &Path, depth: u8, out: &mut Vec<GrokSession>) {
             title: session_title_from_markdown(&text, &id),
             path: Some(path),
             cwd: None,
+            cabin: false,
         });
     }
 }
@@ -1954,6 +2083,7 @@ mod tests {
                 title: "Hello".into(),
                 path: Some(std::path::PathBuf::from("/tmp/x.md")),
                 cwd: None,
+                cabin: false,
             }],
         );
         assert_eq!(merged.len(), 1);
@@ -1965,6 +2095,7 @@ mod tests {
                 title: "Chat".into(),
                 path: Some(std::path::PathBuf::from("/tmp/bbb.md")),
                 cwd: None,
+                cabin: false,
             }],
         );
         assert_eq!(mixed.len(), 2, "same title must not attach the wrong transcript");
