@@ -144,6 +144,96 @@ fn handshake_does_not_deadlock_when_stderr_floods() {
 }
 
 #[test]
+fn models_update_request_must_not_sigterm_the_agent() {
+    let mut opts = fake_opts();
+    opts.extra_env = vec![("FAKE_ACP_MODELS_ID".into(), "1".into())];
+    let h = connect(opts).expect("connect");
+    h.prompt("hi").unwrap();
+    let mut done = false;
+    let mut err = None;
+    for _ in 0..40 {
+        match wait_event(&h.events, Duration::from_secs(2)) {
+            Ok(AcpEvent::Done { .. }) => {
+                done = true;
+                break;
+            }
+            Ok(AcpEvent::Err(e)) => {
+                err = Some(e);
+                break;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                err = Some(e);
+                break;
+            }
+        }
+    }
+    assert!(
+        done,
+        "_x.ai/models/update with an id must be ACKed, not method-not-found (exit 143): {err:?}"
+    );
+}
+
+#[test]
+fn agent_exit_status_is_in_the_closed_error() {
+    let mut opts = fake_opts();
+    opts.extra_env = vec![("FAKE_ACP_EXIT_AFTER_PROMPT".into(), "42".into())];
+    let h = connect(opts).expect("connect");
+    h.prompt("hi").unwrap();
+    let mut err = None;
+    for _ in 0..40 {
+        match wait_event(&h.events, Duration::from_secs(2)) {
+            Ok(AcpEvent::Err(e)) => {
+                err = Some(e);
+                break;
+            }
+            Ok(AcpEvent::Done { .. }) => panic!("exited child must not finish the turn"),
+            Ok(_) => {}
+            Err(e) => {
+                err = Some(e);
+                break;
+            }
+        }
+    }
+    let err = err.expect("agent closed");
+    assert!(
+        err.contains("42"),
+        "EOF must reap grok and name the wait status, not a bare agent closed: {err}"
+    );
+}
+
+#[test]
+fn handshake_unknown_request_must_not_kill_the_turn() {
+    let mut opts = fake_opts();
+    opts.extra_env = vec![("FAKE_ACP_HS_REQ".into(), "1".into())];
+    let h = connect(opts).expect("connect after handshake client request");
+    h.prompt("hi").unwrap();
+    let mut done = false;
+    let mut err = None;
+    for _ in 0..40 {
+        match wait_event(&h.events, Duration::from_secs(2)) {
+            Ok(AcpEvent::Done { .. }) => {
+                done = true;
+                break;
+            }
+            Ok(AcpEvent::Err(e)) => {
+                err = Some(e);
+                break;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                err = Some(e);
+                break;
+            }
+        }
+    }
+    assert!(
+        done,
+        "unanswered fs/readTextFile during session/new must not exit the agent: {err:?}"
+    );
+}
+
+#[test]
 fn session_load_fails_closed_without_session_new() {
     let mut opts = fake_opts();
     opts.resume = Some("dead-sess".into());

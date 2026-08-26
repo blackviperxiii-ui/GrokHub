@@ -1,14 +1,18 @@
 use crate::protocol::{
-    encode_line, initialize_params, parse_permission, parse_session_update, permission_allow,
-    permission_allow_always, permission_deny, pick_auth_method, prompt_params_with_image, request,
-    session_load_params, session_new_params, AcpEvent, JsonRpc,
+    encode_line, initialize_params, method_not_found, parse_permission, parse_session_update,
+    permission_allow, permission_allow_always, permission_deny, pick_auth_method,
+    prompt_params_with_image, request, response, session_load_params, session_new_params, AcpEvent,
+    JsonRpc,
 };
 use crate::protocol::SessionMode;
-use crate::{agent_args, find_grok, grok_home, grok_stdout_timeout};
+use crate::{
+    agent_args, cabin_leader_socket, find_grok, grok_home, grok_stdout_timeout,
+    prepare_cabin_grok_home,
+};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, Command, Stdio};
+use std::process::{Child, ChildStderr, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -30,6 +34,11 @@ pub fn jsonrpc_error_text(err: &Value) -> String {
     if let Some(msg) = err.get("message").and_then(|v| v.as_str()) {
         let t = msg.trim();
         if !t.is_empty() {
+            if let Some(data) = err.get("data").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()) {
+                if !t.contains(data) {
+                    return format!("{t}: {data}");
+                }
+            }
             return t.to_string();
         }
     }
@@ -72,6 +81,14 @@ pub fn explain_handshake_error(raw: &str, cwd: &Path) -> String {
         return format!(
             "ACP {verb} failed: Grok Build cannot write in {loc}. Bind a folder you own (sidebar) or /project bind ~/GrokHub-Work, then send again."
         );
+    }
+    if l.contains("unauthorized (401)") || l.contains("invalid or expired") {
+        return format!(
+            "Grok Build auth failed (401). Run grok login, then send again.\n{raw}"
+        );
+    }
+    if (l.contains("agent closed") || l.contains("agent exited")) && !l.contains("during handshake") {
+        return format!("Grok Build agent exited: {raw}");
     }
     if raw.starts_with("ACP ") {
         return raw.to_string();
@@ -149,12 +166,14 @@ enum Cmd {
     Prompt { text: String, image: Option<String> },
     Cancel,
     Permission { id: Value, allow: bool, always: bool },
+    Reject { id: Value },
+    Ack { id: Value },
     Shutdown,
 }
 
 /// Long-lived `grok agent stdio` session.
 pub struct AcpHandle {
-    child: Option<Child>,
+    child: Arc<Mutex<Option<Child>>>,
     cmd: Sender<Cmd>,
     pub events: Receiver<AcpEvent>,
     pub session_id: String,
@@ -248,6 +267,7 @@ fn drain_stderr(stderr: ChildStderr) -> Arc<Mutex<String>> {
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Ok(n) => {
                     if let Ok(mut held) = slot.lock() {
                         let chunk = String::from_utf8_lossy(&buf[..n]);
@@ -271,6 +291,36 @@ fn drain_stderr(stderr: ChildStderr) -> Arc<Mutex<String>> {
     tail
 }
 
+fn format_exit_status(st: ExitStatus) -> String {
+    if let Some(code) = st.code() {
+        return format!("exit {code}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(sig) = st.signal() {
+            return format!("signal {sig}");
+        }
+    }
+    st.to_string()
+}
+
+fn wait_status_text(child: &Arc<Mutex<Option<Child>>>) -> Option<String> {
+    let mut slot = child.lock().ok()?;
+    let c = slot.as_mut()?;
+    match c.try_wait() {
+        Ok(Some(st)) => Some(format_exit_status(st)),
+        Ok(None) => {
+            thread::sleep(Duration::from_millis(30));
+            c.try_wait()
+                .ok()
+                .flatten()
+                .map(format_exit_status)
+        }
+        Err(_) => None,
+    }
+}
+
 fn with_stderr(msg: String, tail: &Arc<Mutex<String>>) -> String {
     let extra = tail
         .lock()
@@ -284,6 +334,7 @@ fn with_stderr(msg: String, tail: &Arc<Mutex<String>>) -> String {
 }
 
 fn read_until_result(
+    stdin: &mut impl Write,
     reader: &mut BufReader<impl Read>,
     want: u64,
     pending_perm: &mut Vec<Value>,
@@ -311,9 +362,15 @@ fn read_until_result(
                 }
                 continue;
             }
-            if msg.result.is_none() && msg.error.is_none() {
+            if let Some(id) = rpc_reply_id(msg.id.clone()) {
+                if method.starts_with("_x.ai/") {
+                    let _ = write_msg(stdin, &response(id, json!({})));
+                } else {
+                    let _ = write_msg(stdin, &method_not_found(id));
+                }
                 continue;
             }
+            continue;
         }
         if msg.id.as_ref().and_then(|v| v.as_u64()) == Some(want) {
             if let Some(err) = msg.error {
@@ -346,7 +403,7 @@ fn handshake(
     let mut next_id = 1u64;
     let mut pending_perm = Vec::new();
     write_msg(&mut stdin, &request(next_id, "initialize", initialize_params()))?;
-    let init = read_until_result(&mut reader, next_id, &mut pending_perm)?;
+    let init = read_until_result(&mut stdin, &mut reader, next_id, &mut pending_perm)?;
     next_id += 1;
     let methods = init.get("authMethods").cloned().unwrap_or(json!([]));
     if let Some(method_id) = pick_auth_method(&methods, api_key) {
@@ -358,7 +415,7 @@ fn handshake(
                 json!({ "methodId": method_id, "_meta": { "headless": true } }),
             ),
         )?;
-        let _ = read_until_result(&mut reader, next_id, &mut pending_perm)?;
+        let _ = read_until_result(&mut stdin, &mut reader, next_id, &mut pending_perm)?;
         next_id += 1;
     }
     let resume_id = resume.and_then(|s| {
@@ -378,7 +435,7 @@ fn handshake(
                 session_load_params(cwd, &id, always_approve, auto, session_mode),
             ),
         )?;
-        match read_until_result(&mut reader, next_id, &mut pending_perm) {
+        match read_until_result(&mut stdin, &mut reader, next_id, &mut pending_perm) {
             Ok(v) => {
                 next_id += 1;
                 v
@@ -396,7 +453,7 @@ fn handshake(
                 session_new_params(cwd, always_approve, auto, session_mode),
             ),
         )?;
-        let v = read_until_result(&mut reader, next_id, &mut pending_perm)?;
+        let v = read_until_result(&mut stdin, &mut reader, next_id, &mut pending_perm)?;
         next_id += 1;
         v
     };
@@ -417,6 +474,52 @@ fn handshake(
     })
 }
 
+#[cfg(unix)]
+fn ignore_sigpipe() {
+    // SIGPIPE=13, SIG_IGN=1. exec preserves SIG_IGN, so a closed log pipe
+    // cannot kill Grok Build mid-turn.
+    extern "C" {
+        fn signal(signum: i32, handler: usize) -> usize;
+    }
+    unsafe {
+        let _ = signal(13, 1);
+    }
+}
+
+/// JSON-RPC notifications sometimes include `"id": null`. That is not a request.
+fn rpc_reply_id(id: Option<Value>) -> Option<Value> {
+    match id {
+        Some(v) if !v.is_null() => Some(v),
+        _ => None,
+    }
+}
+
+fn isolate_spawned_grok() {
+    ignore_sigpipe();
+    // The cabin GUI holds DRI/Wayland fds. Grok Build inherits them and its
+    // leader has SIGTERM'd the stdio child (exit 143) ~70ms after inference.
+    let mut extra = Vec::new();
+    if let Ok(dir) = std::fs::read_dir("/proc/self/fd") {
+        for ent in dir.flatten() {
+            if let Ok(n) = ent.file_name().to_string_lossy().parse::<i32>() {
+                if n > 2 {
+                    extra.push(n);
+                }
+            }
+        }
+    }
+    extern "C" {
+        fn close(fd: i32) -> i32;
+        fn setsid() -> i32;
+    }
+    unsafe {
+        for fd in extra {
+            let _ = close(fd);
+        }
+        let _ = setsid();
+    }
+}
+
 /// Spawn and handshake. Puts `XAI_API_KEY` on the child when provided.
 pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
     let timeout = opts.handshake_timeout.unwrap_or(HANDSHAKE_TIMEOUT);
@@ -429,6 +532,16 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("GROK_NO_AUTO_UPDATE", "1");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                isolate_spawned_grok();
+                Ok(())
+            });
+        }
+    }
     if let Some(key) = &opts.xai_api_key {
         if !key.is_empty() {
             cmd.env("XAI_API_KEY", key);
@@ -436,6 +549,23 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
     }
     for (k, v) in &opts.extra_env {
         cmd.env(k, v);
+    }
+    // Interactive `grok` owns ~/.grok/leader.sock. Sharing it SIGTERMs this
+    // child (exit 143) when the CLI leader evicts a "stale" stdio agent.
+    if opts.args.iter().any(|a| a == "stdio")
+        && !opts.extra_env.iter().any(|(k, _)| k == "GROK_LEADER_SOCKET")
+    {
+        if let Some(sock) = cabin_leader_socket() {
+            cmd.arg("--leader-socket").arg(&sock);
+            cmd.env("GROK_LEADER_SOCKET", &sock);
+        }
+    }
+    if opts.args.iter().any(|a| a == "stdio")
+        && !opts.extra_env.iter().any(|(k, _)| k == "GROK_HOME")
+    {
+        if let Some(dir) = prepare_cabin_grok_home() {
+            cmd.env("GROK_HOME", &dir);
+        }
     }
     let mut child = cmd
         .spawn()
@@ -569,27 +699,46 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                     };
                     let _ = write_msg(&mut *stdin, &msg);
                 }
+                Cmd::Reject { id } => {
+                    let _ = write_msg(&mut *stdin, &method_not_found(id));
+                }
+                Cmd::Ack { id } => {
+                    let _ = write_msg(&mut *stdin, &response(id, json!({})));
+                }
             }
         }
     });
 
+    let allow_pending = opts.always_approve || opts.auto;
     for id in pending_perm {
         let _ = cmd_tx.send(Cmd::Permission {
             id,
-            allow: false,
-            always: false,
+            allow: allow_pending,
+            always: opts.always_approve,
         });
     }
 
     let cmd_tx_r = cmd_tx.clone();
     let prompt_r = prompt_rpc.clone();
+    let stderr_live = stderr_tail.clone();
+    let child_slot = Arc::new(Mutex::new(Some(child)));
+    let child_live = child_slot.clone();
     thread::spawn(move || {
         let mut buf = String::new();
         loop {
             buf.clear();
             match reader.read_line(&mut buf) {
                 Ok(0) => {
-                    let _ = evt_tx.send(AcpEvent::Err("agent closed".into()));
+                    let status = wait_status_text(&child_live);
+                    let mut msg = "agent closed".to_string();
+                    if let Some(st) = status {
+                        msg = format!("{msg} ({st})");
+                    }
+                    let msg = match &stderr_live {
+                        Some(t) => with_stderr(msg, t),
+                        None => msg,
+                    };
+                    let _ = evt_tx.send(AcpEvent::Err(msg));
                     return;
                 }
                 Ok(_) => {
@@ -599,8 +748,9 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                     }
                     let msg: JsonRpc = match serde_json::from_str(line) {
                         Ok(m) => m,
-                        Err(e) => {
-                            let _ = evt_tx.send(AcpEvent::Err(format!("acp json: {e}")));
+                        Err(_) => {
+                            // Grok Build emits _x.ai chatter and huge model-catalog
+                            // lines. Killing the session here SIGKILLs grok mid-turn.
                             continue;
                         }
                     };
@@ -635,6 +785,15 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                             }
                             continue;
                         }
+                        if let Some(id) = rpc_reply_id(msg.id.clone()) {
+                            if method.starts_with("_x.ai/") {
+                                let _ = cmd_tx_r.send(Cmd::Ack { id });
+                            } else {
+                                let _ = cmd_tx_r.send(Cmd::Reject { id });
+                            }
+                            continue;
+                        }
+                        continue;
                     }
                     if msg.result.is_some() || msg.error.is_some() {
                         let rpc = msg
@@ -680,7 +839,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
     });
 
     Ok(AcpHandle {
-        child: Some(child),
+        child: child_slot,
         cmd: cmd_tx,
         events: evt_rx,
         session_id,
@@ -733,14 +892,176 @@ impl AcpHandle {
 
 impl Drop for AcpHandle {
     fn drop(&mut self) {
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/grokhub-acp-drop.log")
+            {
+                let _ = writeln!(
+                    f,
+                    "==== AcpHandle::drop {:?} ====\n{}",
+                    std::time::SystemTime::now(),
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
+        }
         let _ = self.cmd.send(Cmd::Shutdown);
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
+        let child = self.child.lock().ok().and_then(|mut slot| slot.take());
+        if let Some(mut child) = child {
             thread::spawn(move || {
+                if child.try_wait().ok().flatten().is_none() {
+                    let _ = child.kill();
+                }
                 let _ = child.wait();
             });
         }
     }
+}
+
+/// One headless `grok -p` turn. The cabin chat stays bound to `session_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SingleTurn {
+    pub session_id: String,
+    pub text: String,
+    pub thought: String,
+}
+
+pub fn parse_single_turn(stdout: &str) -> Result<SingleTurn, String> {
+    let trimmed = stdout.trim();
+    let json = if let Some(i) = trimmed.find('{') {
+        &trimmed[i..]
+    } else {
+        trimmed
+    };
+    let v: Value = serde_json::from_str(json).map_err(|e| format!("grok -p json: {e}"))?;
+    let session_id = v
+        .get("sessionId")
+        .or_else(|| v.get("session_id"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if session_id.is_empty() {
+        return Err("grok -p missing sessionId".into());
+    }
+    let text = v
+        .get("text")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let thought = v
+        .get("thought")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if text.is_empty() && thought.is_empty() {
+        return Err("grok -p empty reply".into());
+    }
+    Ok(SingleTurn {
+        session_id,
+        text,
+        thought,
+    })
+}
+
+/// Spawn `grok -p` in the cabin grok home. Not `agent stdio` — that child of
+/// the GUI is SIGTERM'd (exit 143) while pushing the model catalog.
+pub fn run_single_turn(
+    prompt: &str,
+    cwd: &Path,
+    resume: Option<&str>,
+    always_approve: bool,
+    auto: bool,
+) -> Result<SingleTurn, String> {
+    run_single_turn_full(prompt, cwd, resume, always_approve, auto, None, None, false)
+}
+
+pub fn run_single_turn_full(
+    prompt: &str,
+    cwd: &Path,
+    resume: Option<&str>,
+    always_approve: bool,
+    auto: bool,
+    model: Option<&str>,
+    effort: Option<&str>,
+    plan: bool,
+) -> Result<SingleTurn, String> {
+    let program = find_grok().ok_or_else(|| {
+        "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
+    })?;
+    let cwd_path = ensure_session_cwd(cwd)?;
+    let args = crate::locate::single_turn_args_full(
+        prompt,
+        &cwd_path.display().to_string(),
+        resume,
+        always_approve,
+        auto,
+        model,
+        effort,
+        plan,
+    );
+    let mut cmd = Command::new(&program);
+    cmd.args(&args)
+        .current_dir(&cwd_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("GROK_NO_AUTO_UPDATE", "1");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                isolate_spawned_grok();
+                Ok(())
+            });
+        }
+    }
+    if let Some(dir) = prepare_cabin_grok_home() {
+        cmd.env("GROK_HOME", &dir);
+    }
+    if let Some(sock) = cabin_leader_socket() {
+        cmd.env("GROK_LEADER_SOCKET", &sock);
+    }
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("spawn grok -p: {e}"))?;
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    let out = match rx.recv_timeout(Duration::from_secs(600)) {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return Err(e.to_string()),
+        Err(_) => {
+            let _ = Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+            thread::sleep(Duration::from_millis(80));
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+            return Err("grok -p timed out".into());
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if !out.status.success() {
+        if let Ok(t) = parse_single_turn(&stdout) {
+            return Ok(t);
+        }
+        let extra = if stderr.is_empty() {
+            format_exit_status(out.status)
+        } else {
+            stderr
+        };
+        return Err(format!("grok -p failed ({extra})"));
+    }
+    parse_single_turn(&stdout)
 }
 
 fn looks_like_session_id(id: &str) -> bool {
@@ -767,7 +1088,120 @@ fn session_summary_after_meta(rest: &str) -> String {
     }) {
         toks.remove(0);
     }
-    toks.join(" ")
+    let s = toks.join(" ");
+    if is_placeholder_session_title(&s) {
+        String::new()
+    } else {
+        s
+    }
+}
+
+pub fn is_placeholder_session_title(s: &str) -> bool {
+    let t = s.trim();
+    t.is_empty()
+        || t.eq_ignore_ascii_case("(no summary)")
+        || t.eq_ignore_ascii_case("(no label)")
+        || t.eq_ignore_ascii_case("session")
+}
+
+/// Cabin History label: Grok Build session name unless the user renamed the tab.
+pub fn preferred_history_title(
+    cabin_title: &str,
+    title_locked: bool,
+    grok_title: Option<&str>,
+    grok_id: Option<&str>,
+) -> String {
+    if !title_locked {
+        if let Some(title) = grok_title.map(str::trim).filter(|t| !t.is_empty()) {
+            let id = grok_id.unwrap_or("").trim();
+            if !is_placeholder_session_title(title) && title != id {
+                return title.to_string();
+            }
+        }
+    }
+    cabin_title.to_string()
+}
+
+/// First real `<user_query>` line from a Grok Build `chat_history.jsonl`.
+pub fn session_title_from_chat_history(text: &str) -> Option<String> {
+    if let Some(t) = title_from_jsonl_records(text) {
+        return Some(t);
+    }
+    title_from_user_query_blocks(text)
+}
+
+fn title_from_jsonl_records(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("user") {
+            continue;
+        }
+        for blob in json_user_blobs(&v) {
+            if let Some(t) = title_from_user_query_blocks(&blob) {
+                return Some(t);
+            }
+        }
+    }
+    None
+}
+
+fn json_user_blobs(v: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(c) = v.get("content") {
+        collect_json_text(c, &mut out);
+    }
+    out
+}
+
+fn collect_json_text(v: &Value, out: &mut Vec<String>) {
+    match v {
+        Value::String(s) => out.push(s.clone()),
+        Value::Array(a) => {
+            for x in a {
+                collect_json_text(x, out);
+            }
+        }
+        Value::Object(m) => {
+            if let Some(Value::String(s)) = m.get("text") {
+                out.push(s.clone());
+            } else if let Some(c) = m.get("content") {
+                collect_json_text(c, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn title_from_user_query_blocks(text: &str) -> Option<String> {
+    for chunk in text.split("<user_query>").skip(1) {
+        if !chunk.contains("</user_query>") {
+            continue;
+        }
+        let Some(inner) = chunk.split("</user_query>").next() else {
+            continue;
+        };
+        if inner.contains("<work_policy>")
+            || inner.contains("<user_info>")
+            || inner.contains("<system-reminder>")
+        {
+            continue;
+        }
+        let normalized = inner.replace("\\n", "\n");
+        let Some(line) = normalized.lines().map(str::trim).find(|l| !l.is_empty()) else {
+            continue;
+        };
+        if line.eq_ignore_ascii_case("tag.") {
+            continue;
+        }
+        return Some(line.chars().take(80).collect());
+    }
+    None
 }
 
 /// Parse `grok sessions list` table / JSON / empty placeholder.
@@ -846,27 +1280,63 @@ fn session_rows_from_json(v: &Value) -> Option<Vec<String>> {
     Some(out)
 }
 
-/// List Grok sessions via `grok sessions list` in `cwd` (sessions are per worktree).
-pub fn list_sessions(bin: &Path, cwd: &Path) -> Result<Vec<String>, String> {
-    let text = grok_stdout_timeout(bin, cwd, &["sessions", "list", "-n", "50"], 8).unwrap_or_default();
-    let rows = parse_session_list(&text);
-    if !rows.is_empty() {
-        return Ok(rows);
+fn sessions_list_text(bin: &Path, cwd: &Path, isolate: bool) -> String {
+    let args = ["sessions", "list", "-n", "50"];
+    if isolate {
+        grok_stdout_timeout(bin, cwd, &args, 8).unwrap_or_default()
+    } else {
+        grokhub_acp_user_stdout(bin, cwd, &args, 8).unwrap_or_default()
     }
-    let json = grok_stdout_timeout(bin, cwd, &["sessions", "list", "--json", "-n", "50"], 8)
-        .unwrap_or_default();
-    Ok(parse_session_list(&json))
 }
 
-/// Dump one Grok session transcript (`grok sessions show <id>`).
+fn grokhub_acp_user_stdout(
+    bin: &Path,
+    cwd: &Path,
+    args: &[&str],
+    secs: u64,
+) -> Result<String, String> {
+    crate::locate::grok_user_stdout_timeout(bin, cwd, args, secs)
+}
+
+/// List Grok sessions via `grok sessions list` (no `--json` on grok 1.0.8).
+pub fn list_sessions(bin: &Path, cwd: &Path) -> Result<Vec<String>, String> {
+    let mut rows = parse_session_list(&sessions_list_text(bin, cwd, true));
+    for row in parse_session_list(&sessions_list_text(bin, cwd, false)) {
+        let id = split_session_row(&row).id;
+        if !rows.iter().any(|r| split_session_row(r).id == id) {
+            rows.push(row);
+        }
+    }
+    Ok(rows)
+}
+
+/// Permanently drop a Grok Build session (`grok sessions delete <id>`).
+pub fn delete_session(bin: &Path, cwd: &Path, id: &str) -> Result<(), String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("empty session id".into());
+    }
+    let args = ["sessions", "delete", id];
+    match grok_stdout_timeout(bin, cwd, &args, 12) {
+        Ok(_) => Ok(()),
+        Err(_) => grokhub_acp_user_stdout(bin, cwd, &args, 12).map(|_| ()),
+    }
+}
+
+/// Dump one Grok session transcript (`grok export <id>` — `sessions show` is gone).
 pub fn show_session(bin: &Path, cwd: &Path, id: &str) -> Result<String, String> {
     let id = id.trim();
     if id.is_empty() {
         return Err("empty session id".into());
     }
-    grok_stdout_timeout(bin, cwd, &["sessions", "show", id], 12).or_else(|_| {
-        grok_stdout_timeout(bin, cwd, &["session", "show", id], 12)
-    })
+    let args = ["export", id];
+    let cabin = grok_stdout_timeout(bin, cwd, &args, 20);
+    if let Ok(t) = cabin {
+        if !t.trim().is_empty() && !t.to_ascii_lowercase().contains("unrecognized subcommand") {
+            return Ok(t);
+        }
+    }
+    grokhub_acp_user_stdout(bin, cwd, &args, 20)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -987,7 +1457,80 @@ pub fn discover_session_files_in(home: &Path) -> Vec<GrokSession> {
     for root in roots {
         walk_session_md(&root, 0, &mut out);
     }
+    walk_session_dirs(&home.join("sessions"), 0, &mut out);
     out
+}
+
+fn walk_session_dirs(dir: &Path, depth: u8, out: &mut Vec<GrokSession>) {
+    if depth > 6 || out.len() >= 80 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        if looks_like_session_id(name) {
+            if out.iter().any(|s| s.id == name) {
+                continue;
+            }
+            let title = session_title_from_dir(&path, name);
+            out.push(GrokSession {
+                id: name.to_string(),
+                title,
+                path: Some(path.join("chat_history.jsonl")),
+                cwd: None,
+            });
+            continue;
+        }
+        walk_session_dirs(&path, depth + 1, out);
+    }
+}
+
+fn session_title_from_dir(dir: &Path, fallback: &str) -> String {
+    let raw = read_file_capped(&dir.join("summary.json"), SESSION_MD_CAP);
+    if let Ok(v) = serde_json::from_str::<Value>(&raw) {
+        if let Some(t) = v
+            .get("session_summary")
+            .or_else(|| v.get("title"))
+            .or_else(|| v.pointer("/info/title"))
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|t| !is_placeholder_session_title(t))
+        {
+            return t.chars().take(80).collect();
+        }
+    }
+    if let Some(t) = session_title_from_jsonl_path(&dir.join("chat_history.jsonl")) {
+        return t;
+    }
+    fallback.to_string()
+}
+
+fn session_title_from_jsonl_path(path: &Path) -> Option<String> {
+    let f = std::fs::File::open(path).ok()?;
+    let reader = BufReader::new(f);
+    let mut seen = 0usize;
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            continue;
+        };
+        seen = seen.saturating_add(line.len());
+        if let Some(t) = session_title_from_chat_history(&line) {
+            return Some(t);
+        }
+        if seen > 256 * 1024 {
+            break;
+        }
+    }
+    None
 }
 
 fn walk_session_md(dir: &Path, depth: u8, out: &mut Vec<GrokSession>) {
@@ -1067,7 +1610,9 @@ pub fn merge_grok_sessions(listed: &[String], files: Vec<GrokSession>) -> Vec<Gr
             if hit.path.is_none() {
                 hit.path = f.path;
             }
-            if hit.title == hit.id && f.title != f.id {
+            let listed_blank = hit.title == hit.id || is_placeholder_session_title(&hit.title);
+            let file_real = f.title != f.id && !is_placeholder_session_title(&f.title);
+            if listed_blank && file_real {
                 hit.title = f.title;
             }
         } else {
@@ -1078,14 +1623,8 @@ pub fn merge_grok_sessions(listed: &[String], files: Vec<GrokSession>) -> Vec<Gr
 }
 
 pub fn inspect_json(bin: &Path, cwd: &Path) -> Result<Value, String> {
-    let text = grok_stdout_timeout(bin, cwd, &["inspect", "--json"], 12)?;
-    serde_json::from_str(text.trim()).map_err(|e| {
-        if text.trim().is_empty() {
-            e.to_string()
-        } else {
-            e.to_string()
-        }
-    })
+    let text = crate::locate::grok_user_stdout_timeout(bin, cwd, &["inspect", "--json"], 20)?;
+    serde_json::from_str(text.trim()).map_err(|e| e.to_string())
 }
 
 pub fn wait_event(rx: &Receiver<AcpEvent>, timeout: Duration) -> Result<AcpEvent, String> {
@@ -1142,6 +1681,40 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!(rows[0].contains("01a01b0f-7e06-74b1-8f22-5236c9d57d45"), "{rows:?}");
         assert!(rows[0].contains("Ping Test"), "{rows:?}");
+        let blank = "01a01b0f-7e06-74b1-8f22-5236c9d57d45  2026-08-21  2026-08-21  local  (no summary)\n";
+        let rows = parse_session_list(blank);
+        assert_eq!(rows, vec!["01a01b0f-7e06-74b1-8f22-5236c9d57d45".to_string()]);
+        assert_eq!(
+            session_title_from_chat_history("<user_query>\nfix the dock\n</user_query>").as_deref(),
+            Some("fix the dock")
+        );
+        let grok_jsonl = concat!(
+            r#"{"type":"user","content":[{"type":"text","text":"the <user_query> tag.\n\n<work_policy>\n- Keep every explicit requirement"}]}"#,
+            "\n",
+            r#"{"type":"user","content":[{"type":"text","text":"<user_query>\ntest\n</user_query>"}],"prompt_index":0}"#,
+            "\n",
+        );
+        assert_eq!(
+            session_title_from_chat_history(grok_jsonl).as_deref(),
+            Some("test"),
+            "title must skip the system-prompt <user_query> mention"
+        );
+        assert_eq!(
+            preferred_history_title("Chat", false, Some("Night cabin"), Some("abc")),
+            "Night cabin"
+        );
+        assert_eq!(
+            preferred_history_title("My name", true, Some("Night cabin"), Some("abc")),
+            "My name"
+        );
+        assert_eq!(
+            preferred_history_title("Chat", false, Some("abc"), Some("abc")),
+            "Chat"
+        );
+        assert_eq!(
+            preferred_history_title("Chat", false, Some("(no summary)"), Some("abc")),
+            "Chat"
+        );
         let json = r#"[{"id":"abc-def-ghi-jkl-mnop","title":"Hi"}]"#;
         assert_eq!(
             parse_session_list(json),
@@ -1176,6 +1749,31 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].id, id);
         assert_eq!(found[0].title, "Night cabin");
+        let jsonl_root = std::env::temp_dir().join(format!(
+            "grokhub-jsonl-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let jsonl_id = "01a02504-ff87-7df1-8f3f-098e415ab465";
+        let jsonl_dir = jsonl_root.join("sessions").join("%2Fwork").join(jsonl_id);
+        std::fs::create_dir_all(&jsonl_dir).unwrap();
+        std::fs::write(
+            jsonl_dir.join("chat_history.jsonl"),
+            concat!(
+                r#"{"type":"user","content":[{"type":"text","text":"the <user_query> tag.\n\n<work_policy>\n- Keep"}]}"}"#,
+                "\n",
+                r#"{"type":"user","content":[{"type":"text","text":"<user_query>\nfix history names\n</user_query>"}]}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let jsonl_found = discover_session_files_in(&jsonl_root);
+        let _ = std::fs::remove_dir_all(&jsonl_root);
+        assert_eq!(jsonl_found.len(), 1, "{jsonl_found:?}");
+        assert_eq!(jsonl_found[0].id, jsonl_id);
+        assert_eq!(jsonl_found[0].title, "fix history names");
         let src = include_str!("client.rs");
         let walk = src
             .split("fn walk_session_md(")
@@ -1185,6 +1783,28 @@ mod tests {
         assert!(
             walk.contains("read_file_capped") && !walk.contains("read_to_string"),
             "session title scan must not slurp huge markdown: {walk}"
+        );
+    }
+
+    #[test]
+    fn parse_single_turn_stamps_session_and_text() {
+        let raw = r#"{
+            "text": "pong",
+            "stopReason": "end_turn",
+            "sessionId": "01a024f8-7606-74a2-8331-57a5177822eb",
+            "thought": "say pong"
+        }"#;
+        let t = parse_single_turn(raw).expect("json");
+        assert_eq!(t.session_id, "01a024f8-7606-74a2-8331-57a5177822eb");
+        assert_eq!(t.text, "pong");
+        assert_eq!(t.thought, "say pong");
+        let noisy = format!("debug line\n{raw}\n");
+        assert_eq!(parse_single_turn(&noisy).unwrap().text, "pong");
+        assert!(parse_single_turn("{}").is_err());
+        let src = include_str!("client.rs");
+        assert!(
+            src.contains("single_turn_args") && src.contains("GROK_HOME") && src.contains("-p"),
+            "chat turns must use grok -p, not long-lived agent stdio: {src}"
         );
     }
 
@@ -1265,6 +1885,24 @@ mod tests {
         let load = explain_handshake_error("session/load failed: session not found", &cwd);
         assert!(load.contains("session/load"), "{load}");
         assert!(!load.contains("session/new"), "{load}");
+        let closed = explain_handshake_error("agent closed", &cwd);
+        assert!(
+            !closed.contains("session/new"),
+            "a live agent exit must not look like session/new failed: {closed}"
+        );
+        let auth = explain_handshake_error(
+            "Internal error: Unauthorized (401) from https://cli-chat-proxy.grok.com/v1/responses: Invalid or expired",
+            &cwd,
+        );
+        assert!(auth.contains("401"), "{auth}");
+        assert!(auth.to_ascii_lowercase().contains("grok login"), "{auth}");
+        let rpc = jsonrpc_error_text(&serde_json::json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": "Unauthorized (401) from https://cli-chat-proxy.grok.com/v1/responses: Invalid or expired"
+        }));
+        assert!(rpc.contains("401"), "{rpc}");
+        assert!(rpc.contains("Internal error"), "{rpc}");
     }
 
     #[test]
@@ -1275,6 +1913,56 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn looks_like_session_id").next())
             .expect("AcpHandle drop");
+        let src = include_str!("client.rs");
+        let drain = src
+            .split("fn drain_stderr(")
+            .nth(1)
+            .and_then(|s| s.split("fn with_stderr(").next())
+            .expect("drain_stderr");
+        assert!(
+            drain.contains("Interrupted"),
+            "stderr drain must not exit on EINTR or grok dies on SIGPIPE: {drain}"
+        );
+        let connect = src
+            .split("pub fn connect(")
+            .nth(1)
+            .and_then(|s| s.split("fn write_msg(").next())
+            .unwrap_or(src);
+        assert!(
+            src.contains("ignore_sigpipe") && src.contains("pre_exec"),
+            "grok child must ignore SIGPIPE so a closed log pipe cannot kill the turn: {connect}"
+        );
+        assert!(
+            src.contains("isolate_spawned_grok")
+                && src.contains("setsid")
+                && src.contains("read_dir(\"/proc/self/fd\")"),
+            "cabin DRI/Wayland fds must not leak into grok or the leader SIGTERMs it (exit 143): {connect}"
+        );
+        let live = src
+            .split("let stderr_live = stderr_tail.clone();")
+            .nth(1)
+            .and_then(|s| s.split("impl AcpHandle").next())
+            .expect("live reader");
+        assert!(
+            !live.contains("acp json"),
+            "malformed ACP chatter must not abort the grok child: {live}"
+        );
+        assert!(
+            live.contains("Cmd::Reject") && live.contains("Cmd::Ack") && live.contains("_x.ai/"),
+            "live reader must ACK _x.ai/models/update, not method-not-found: {live}"
+        );
+        assert!(
+            src.contains("rpc_reply_id"),
+            "id:null notifications must not be treated as requests: {src}"
+        );
+        assert!(
+            live.contains("wait_status_text"),
+            "stdout EOF must reap grok so the chat names the wait status: {live}"
+        );
+        assert!(
+            connect.contains("Cmd::Reject") && connect.contains("method_not_found"),
+            "cmd thread must write method-not-found for unknown client-bound RPC: {connect}"
+        );
         let spawn = drop.find("thread::spawn").expect("wait off thread");
         let wait = drop.find(".wait()").expect("child wait");
         assert!(
@@ -1354,6 +2042,10 @@ mod tests {
         assert!(
             handshake.contains("session/request_permission") && handshake.contains("pending_perm"),
             "session/load must collect replay permission ids, not drop them unanswered: {handshake}"
+        );
+        assert!(
+            handshake.contains("method_not_found") && handshake.contains("write_msg"),
+            "handshake must answer unknown client-bound RPC or grok exits: {handshake}"
         );
         let load = src
             .split("if method == \"session/request_permission\"")

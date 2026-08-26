@@ -37,7 +37,7 @@ pub fn greeting_name(user_md: &str, display_name: &str) -> String {
         let t = line.trim();
         if let Some(rest) = t.strip_prefix('#') {
             let h = rest.trim().trim_start_matches('#').trim();
-            if h.eq_ignore_ascii_case("user") || h.eq_ignore_ascii_case("profile") {
+            if is_generic_heading(h) {
                 continue;
             }
             let n = clean_name(h);
@@ -65,6 +65,23 @@ fn split_name_line<'a>(lower: &str, raw: &'a str) -> Option<&'a str> {
         .map(|(_, rest)| rest)
 }
 
+fn is_generic_heading(h: &str) -> bool {
+    let t = h.trim().to_ascii_lowercase();
+    t == "user"
+        || t == "profile"
+        || t.starts_with("user profile")
+        || t == "who you are"
+        || t == "long-term memory"
+        || t == "memory"
+}
+
+fn is_placeholder_name(s: &str) -> bool {
+    matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "user" | "profile" | "guest" | "anonymous"
+    )
+}
+
 fn is_product_name(s: &str) -> bool {
     let t = s.trim().to_ascii_lowercase();
     t.is_empty()
@@ -75,6 +92,7 @@ fn is_product_name(s: &str) -> bool {
         || t == "this computer"
         || t == "localhost"
         || t.contains("grokhub")
+        || is_placeholder_name(&t)
         || is_machine_name(&t)
 }
 
@@ -397,6 +415,12 @@ mod tests {
             "Viper"
         );
         assert_eq!(greeting_name("# User\n", "Jeremy Strickland"), "Jeremy");
+        assert_eq!(
+            greeting_name("# User profile\nWho you are, preferred tools.\n", "Viper"),
+            "Viper",
+            "the USER.md template heading must not become Hello, User"
+        );
+        assert_eq!(greeting_name("", "Viper"), "Viper");
         assert_eq!(greeting_name("", ""), "");
         assert_eq!(
             greeting_name("Named: my project\n", "Jeremy"),

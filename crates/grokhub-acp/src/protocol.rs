@@ -170,6 +170,23 @@ pub fn notification(method: &str, params: Value) -> JsonRpc {
     }
 }
 
+/// JSON-RPC 2.0 method-not-found. Grok Build closes stdio if a client-bound
+/// request (fs/readTextFile, terminal/*) sits unanswered after session/new.
+pub fn rpc_error(id: Value, code: i64, message: &str) -> JsonRpc {
+    JsonRpc {
+        jsonrpc: "2.0".into(),
+        id: Some(id),
+        method: None,
+        params: None,
+        result: None,
+        error: Some(json!({ "code": code, "message": message })),
+    }
+}
+
+pub fn method_not_found(id: Value) -> JsonRpc {
+    rpc_error(id, -32601, "Method not found")
+}
+
 pub fn encode_line(msg: &JsonRpc) -> String {
     format!("{}\n", serde_json::to_string(msg).unwrap_or_else(|_| "{}".into()))
 }
@@ -689,6 +706,10 @@ mod tests {
         assert!(split_image_data_url("not-a-data-url").is_none());
         assert!(is_jwt_api_key("aaa.bbb.ccc"));
         assert!(!is_jwt_api_key("xai-console-key"));
+        let reject = method_not_found(json!(77));
+        assert_eq!(reject.id, Some(json!(77)));
+        assert_eq!(reject.error.as_ref().unwrap()["code"], -32601);
+        assert!(encode_line(&reject).contains("Method not found"));
     }
 
     #[test]

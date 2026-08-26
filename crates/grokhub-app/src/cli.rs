@@ -52,4 +52,27 @@ mod tests {
     fn cabin_reports_version() {
         assert_eq!(env!("CARGO_PKG_VERSION"), "2.6.42");
     }
+
+    #[test]
+    fn doctor_probes_live_hub_kind() {
+        let main = include_str!("main.rs");
+        let doctor = main
+            .split("fn probe_hub_health_body()")
+            .nth(1)
+            .and_then(|s| s.split("fn run_update_cli()").next())
+            .expect("doctor probe");
+        assert!(
+            !doctor.contains("doctor_lines(authed, mem_ok, HUB_KIND)"),
+            "grokhub --doctor must not stamp hub kind as the compile-time constant: {doctor}"
+        );
+        assert!(
+            (doctor.contains("/v1/health") || doctor.contains("desktop::probe_hub_health_body"))
+                && doctor.contains("hub_kind_from_health"),
+            "doctor must read kind from live /v1/health: {doctor}"
+        );
+        assert!(
+            doctor.contains("doctor_cabin_line") || doctor.contains("cabin_running"),
+            "grokhub --doctor must report whether the cabin process is alive: {doctor}"
+        );
+    }
 }

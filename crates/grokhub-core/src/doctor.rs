@@ -32,6 +32,18 @@ pub fn doctor_ok(lines: &[DoctorLine]) -> bool {
     lines.iter().all(|l| l.ok)
 }
 
+/// Kind from a live `/v1/health` body. Missing or empty is unreachable.
+pub fn hub_kind_from_health(body: Option<&str>) -> String {
+    let Some(raw) = body.map(str::trim).filter(|s| !s.is_empty()) else {
+        return "unreachable".into();
+    };
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| v.get("kind")?.as_str().map(str::to_string))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".into())
+}
+
 pub fn doctor_extras(last_receipt_ok: Option<bool>, skill_count: usize) -> Vec<DoctorLine> {
     let mut out = Vec::new();
     match last_receipt_ok {
@@ -53,6 +65,17 @@ pub fn doctor_extras(last_receipt_ok: Option<bool>, skill_count: usize) -> Vec<D
         text: format!("{skill_count} skills on disk"),
     });
     out
+}
+
+pub fn doctor_cabin_line(running: bool) -> DoctorLine {
+    DoctorLine {
+        ok: running,
+        text: if running {
+            "cabin running".into()
+        } else {
+            "cabin not running".into()
+        },
+    }
 }
 
 pub fn doctor_hands_line(driver: &str) -> DoctorLine {
@@ -82,6 +105,14 @@ mod tests {
     fn doctor_ok_when_ready() {
         let lines = doctor_lines(true, true, HUB_KIND);
         assert!(doctor_ok(&lines));
+        assert_eq!(hub_kind_from_health(None), "unreachable");
+        assert!(!doctor_ok(&doctor_lines(true, true, &hub_kind_from_health(None))));
+        assert_eq!(
+            hub_kind_from_health(Some(r#"{"ok":true,"kind":"grokhub-hub-v1","name":"Beast"}"#)),
+            HUB_KIND
+        );
+        assert_eq!(hub_kind_from_health(Some("not-json")), "unknown");
+        assert!(!doctor_ok(&doctor_lines(true, true, "unknown")));
         let extra = doctor_extras(Some(false), 3);
         assert!(!doctor_ok(&extra));
         assert!(extra[1].text.contains("3 skills"));
@@ -92,5 +123,9 @@ mod tests {
         assert!(!doctor_hands_line("not installed").ok);
         assert!(!doctor_hands_line("uinput").ok);
         assert!(!doctor_hands_line("daemon").ok);
+        assert!(doctor_cabin_line(true).ok);
+        assert!(doctor_cabin_line(true).text.contains("running"));
+        assert!(!doctor_cabin_line(false).ok);
+        assert!(doctor_cabin_line(false).text.contains("not running"));
     }
 }
