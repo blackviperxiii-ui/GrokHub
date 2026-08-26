@@ -1,14 +1,15 @@
 //! Grok Build skills, MCP servers, plugins, and marketplace catalog.
 
-use crate::locate::grok_user_stdout_timeout;
+use crate::locate::{grok_home, grok_user_stdout_timeout};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default)]
 pub struct GrokCatalog {
     pub skills: Vec<GrokSkillRow>,
     pub mcp: Vec<GrokMcpRow>,
     pub plugins: Vec<GrokPluginRow>,
+    pub workflows: Vec<GrokWorkflowRow>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +36,13 @@ pub struct GrokPluginRow {
     pub marketplace: String,
     pub description: String,
     pub source: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GrokWorkflowRow {
+    pub name: String,
+    pub source: String,
+    pub description: String,
 }
 
 pub fn parse_inspect_skills(v: &Value) -> Vec<GrokSkillRow> {
@@ -206,11 +214,59 @@ pub fn load_grok_catalog(bin: &Path, cwd: &Path) -> Result<GrokCatalog, String> 
         45,
     )
     .unwrap_or_default();
+    let skills = parse_inspect_skills(&inspect_v);
+    let workflows = parse_workflows(&skills, grok_home(), cwd);
     Ok(GrokCatalog {
-        skills: parse_inspect_skills(&inspect_v),
+        skills,
         mcp: parse_mcp_list(&mcp_text),
         plugins: parse_plugin_list(&plug_text),
+        workflows,
     })
+}
+
+pub fn parse_workflows(skills: &[GrokSkillRow], grok_home: Option<PathBuf>, cwd: &Path) -> Vec<GrokWorkflowRow> {
+    let mut out = Vec::new();
+    for s in skills {
+        let n = s.name.to_ascii_lowercase();
+        if n.contains("workflow") || n == "execute-plan" || n == "writing-plans" || n == "executing-plans" {
+            out.push(GrokWorkflowRow {
+                name: s.name.clone(),
+                source: skill_source_label(s),
+                description: s.description.clone(),
+            });
+        }
+    }
+    for dir in [
+        grok_home.map(|h| h.join("workflows")),
+        Some(cwd.join(".grok/workflows")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("rhai") {
+                continue;
+            }
+            let name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("workflow")
+                .to_string();
+            if out.iter().any(|w| w.name == name) {
+                continue;
+            }
+            out.push(GrokWorkflowRow {
+                name,
+                source: dir.display().to_string(),
+                description: "Rhai workflow".into(),
+            });
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -269,5 +325,24 @@ mod tests {
         let text = "You are logged in with grok.com.\n\nDefault model: grok-4.6\n\nAvailable models:\n  * grok-4.6 (default)\n  - grok-4.5\n";
         let rows = parse_models_list(text);
         assert_eq!(rows, vec!["grok-4.6".to_string(), "grok-4.5".to_string()]);
+    }
+
+    #[test]
+    fn parse_workflows_picks_inspect_skills_and_rhai() {
+        let skills = parse_inspect_skills(&serde_json::json!({
+            "skills": [
+                {"name":"create-workflow","description":"Author a Rhai workflow","source":{"type":"bundled"}},
+                {"name":"review","description":"Code review","source":{"type":"bundled"}}
+            ]
+        }));
+        let dir = std::env::temp_dir().join(format!("grokhub-wf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("workflows")).unwrap();
+        std::fs::write(dir.join("workflows/nightly.rhai"), "let meta = #{ name: \"nightly\" };").unwrap();
+        let rows = parse_workflows(&skills, Some(dir.clone()), Path::new("/tmp"));
+        assert!(rows.iter().any(|w| w.name == "create-workflow"), "{rows:?}");
+        assert!(rows.iter().any(|w| w.name == "nightly"), "{rows:?}");
+        assert!(!rows.iter().any(|w| w.name == "review"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

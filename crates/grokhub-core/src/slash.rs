@@ -471,7 +471,7 @@ pub fn slash_help() -> String {
         "/plan — plan mode (Grok Build)",
         "/always-approve — skip tool permission prompts",
         "/auto — auto-approve safe tools",
-        "/effort <low|medium|high|xhigh> — reasoning effort (composer dropdown too)",
+        "/effort <none|minimal|low|medium|high|xhigh|max> — reasoning effort (composer dropdown too)",
         "/sessions — Grok Build sessions",
         "/resume — same as /sessions (Grok /resume)",
         "/inspect — grok inspect --json against ~/.grok",

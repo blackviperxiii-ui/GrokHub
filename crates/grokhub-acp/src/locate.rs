@@ -413,7 +413,7 @@ pub fn single_turn_args(
         "--cwd".into(),
         cwd.to_string(),
         "--output-format".into(),
-        "json".into(),
+        "streaming-json".into(),
     ];
     if always_approve {
         a.push("--always-approve".into());
@@ -456,6 +456,26 @@ pub fn single_turn_args_full(
         a.push(e.to_string());
     }
     a
+}
+
+/// Swap `-p <prompt>` for `--prompt-json` when a still is attached.
+pub fn with_prompt_json(mut args: Vec<String>, json: &str) -> Vec<String> {
+    if let Some(i) = args.iter().position(|a| a == "-p") {
+        args.remove(i);
+        if i < args.len() {
+            args.remove(i);
+        }
+        args.push("--prompt-json".into());
+        args.push(json.to_string());
+    }
+    args
+}
+
+pub fn with_fork_session(mut args: Vec<String>, fork: bool) -> Vec<String> {
+    if fork && args.iter().any(|a| a == "--resume") {
+        args.push("--fork-session".into());
+    }
+    args
 }
 
 pub fn agent_args_resume(
@@ -572,9 +592,12 @@ mod tests {
         assert!(fresh.contains(&"-p".into()), "{fresh:?}");
         assert!(fresh.contains(&"hi".into()), "{fresh:?}");
         assert!(
-            fresh.windows(2).any(|w| w[0] == "--output-format" && w[1] == "json"),
-            "headless json so the cabin can stamp sessionId: {fresh:?}"
+            fresh.windows(2).any(|w| w[0] == "--output-format" && w[1] == "streaming-json"),
+            "headless streaming-json so the cabin can paint live tokens: {fresh:?}"
         );
+        let pj = with_prompt_json(fresh.clone(), r#"[{"type":"text","text":"hi"}]"#);
+        assert!(pj.iter().any(|a| a == "--prompt-json"), "{pj:?}");
+        assert!(!pj.iter().any(|a| a == "-p"), "{pj:?}");
         assert!(
             !fresh.iter().any(|a| a == "--resume"),
             "a new chat must create a Grok Build session: {fresh:?}"

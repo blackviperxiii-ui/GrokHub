@@ -2105,7 +2105,7 @@ mod tests {
         assert_eq!(perm_label("always-approve"), "Always");
         assert_eq!(composer_modes().len(), 3);
         assert_eq!(permission_modes().len(), 3);
-        assert_eq!(effort_modes().len(), 4);
+        assert_eq!(effort_modes().len(), 7);
         assert_eq!(effort_label("high"), "High");
         let session = include_str!("cards.rs")
             .split("pub fn session_row(")
