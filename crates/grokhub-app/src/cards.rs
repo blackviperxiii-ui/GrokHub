@@ -747,6 +747,14 @@ pub fn permission_modes() -> &'static [(&'static str, &'static str)] {
     ]
 }
 
+pub fn effort_modes() -> &'static [(&'static str, &'static str)] {
+    grokhub_core::REASONING_EFFORTS
+}
+
+pub fn effort_label(id: &str) -> &'static str {
+    grokhub_core::effort_label(id)
+}
+
 pub fn mode_label(id: &str) -> &'static str {
     match id {
         "plan" => "Plan",
@@ -837,16 +845,30 @@ pub fn perm_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
     )
 }
 
+/// Grok Build reasoning effort (low / medium / high / xhigh).
+pub fn effort_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
+    let id = grokhub_core::parse_reasoning_effort(current).unwrap_or("high");
+    catalog_pill(
+        ui,
+        "composer-effort-pop",
+        id,
+        effort_modes(),
+        effort_label(id),
+    )
+}
+
 pub struct SessionRowOut {
     pub mode: Option<String>,
     pub perm: Option<String>,
+    pub effort: Option<String>,
 }
 
-/// Chat / Plan / Ask and Ask / Auto / Always as a row above the composer.
-pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str) -> SessionRowOut {
+/// Chat / Plan / Ask, Ask / Auto / Always, and reasoning effort above the composer.
+pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> SessionRowOut {
     let mut out = SessionRowOut {
         mode: None,
         perm: None,
+        effort: None,
     };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -904,6 +926,16 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str) -> SessionRowOut {
             if hit.clicked() && !on {
                 out.perm = Some((*id).to_string());
             }
+        }
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new("|")
+                .size(crate::theme::FONT_META)
+                .color(crate::theme::border()),
+        );
+        ui.add_space(6.0);
+        if let Some(next) = effort_pill(ui, effort) {
+            out.effort = Some(next);
         }
     });
     ui.add_space(8.0);
@@ -1947,6 +1979,17 @@ mod tests {
         assert_eq!(perm_label("always-approve"), "Always");
         assert_eq!(composer_modes().len(), 3);
         assert_eq!(permission_modes().len(), 3);
+        assert_eq!(effort_modes().len(), 4);
+        assert_eq!(effort_label("high"), "High");
+        let session = include_str!("cards.rs")
+            .split("pub fn session_row(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn clip_status(").next())
+            .expect("session_row");
+        assert!(
+            session.contains("effort_pill") && session.contains("out.effort = Some(next)"),
+            "composer session row must include effort dropdown: {session}"
+        );
         assert_eq!(clip_status("one\ntwo", 80), "one");
         assert_eq!(clip_status("abcdefghij", 6), "abcde…");
         assert_eq!(chip_tone_color(ChipTone::Offline), crate::theme::offline());

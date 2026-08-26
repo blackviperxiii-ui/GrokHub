@@ -2149,7 +2149,7 @@ impl Cabin {
         let auth_key = grok_login.or_else(|| xai_env.clone());
         let perm = self.permission_mode;
         let mode = self.session_mode;
-        let reasoning_effort = grokhub_core::agent_reasoning_effort_for_mode(&self.cfg.mode)
+        let reasoning_effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort)
             .map(|s| s.to_string());
         let foreign = self
             .threads
@@ -4173,14 +4173,22 @@ impl Cabin {
                 self.status = "Permission auto".into();
             }
             Slash::Effort(level) => {
-                self.cfg.mode = match level.to_ascii_lowercase().as_str() {
-                    "xhigh" | "max" => "max".into(),
-                    "high" | "think" => "think".into(),
-                    "low" | "fast" => "fast".into(),
-                    _ => "balanced".into(),
-                };
-                self.persist_cfg();
-                self.status = format!("Effort {level}");
+                if let Some(effort) = grokhub_core::parse_reasoning_effort(&level) {
+                    if self.running {
+                        self.halt_in_flight();
+                    }
+                    self.cfg.reasoning_effort = effort.to_string();
+                    self.acp = None;
+                    self.acp_spawn_rx = None;
+                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        t.grok_session = None;
+                    }
+                    self.persist_cfg();
+                    self.persist_idle_key = self.persist_idle_now();
+                    self.status = format!("Effort {}", grokhub_core::effort_label(effort));
+                } else {
+                    self.status = "Effort: low | medium | high | xhigh".into();
+                }
             }
             Slash::Sessions => {
                 self.nav = Nav::History;
@@ -9821,7 +9829,8 @@ impl Cabin {
             ui.set_max_width(cap);
             let session_now = self.session_mode.as_str().to_string();
             let perm_now = self.permission_mode.as_str().to_string();
-            let row = crate::cards::session_row(ui, &session_now, &perm_now);
+            let effort_now = self.cfg.reasoning_effort.clone();
+            let row = crate::cards::session_row(ui, &session_now, &perm_now, &effort_now);
             if let Some(mode) = row.mode {
                 if let Some(m) = SessionMode::parse(&mode) {
                     if self.running {
@@ -9850,6 +9859,22 @@ impl Cabin {
                     }
                     self.persist_idle_key = self.persist_idle_now();
                     self.status = format!("Permission {}", p.as_str());
+                }
+            }
+            if let Some(effort) = row.effort {
+                if let Some(e) = grokhub_core::parse_reasoning_effort(&effort) {
+                    if self.running {
+                        self.halt_in_flight();
+                    }
+                    self.cfg.reasoning_effort = e.to_string();
+                    self.acp = None;
+                    self.acp_spawn_rx = None;
+                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        t.grok_session = None;
+                    }
+                    self.persist_cfg();
+                    self.persist_idle_key = self.persist_idle_now();
+                    self.status = format!("Effort {}", grokhub_core::effort_label(e));
                 }
             }
             ui.allocate_ui_with_layout(
@@ -10407,7 +10432,7 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Console key", "Voice and Imagine only. Agent auth is grok login (cached token). Lives in secrets.json, never markdown.", &mut self.secrets.api_key, true);
                                                             crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
                                                             crate::cards::settings_field(ui, "Chat model", "Unused by Grok Build. Session model is /model in grok. Keep empty.", &mut self.cfg.model, false);
-                                                            crate::cards::settings_note(ui, "Session mode is Chat / Plan / Ask on the composer. /effort sets reasoning. The leftover ladder pin below is unused by Grok Build.");
+                                                            crate::cards::settings_note(ui, "Session mode is Chat / Plan / Ask on the composer. Effort sets grok agent --reasoning-effort. The leftover ladder pin below is legacy.");
                                                             crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
                                                             crate::cards::settings_field(ui, "Imagine override", "Must contain “image” or the cabin keeps grok-imagine-image-2.0. Retired grok-2-image names are rewritten.", &mut self.cfg.imagine_model, false);
                                                         }
@@ -10462,7 +10487,7 @@ impl Cabin {
                                                             crate::cards::settings_note(ui, "Night always runs. Quiet hours and daily caps do not hold work.");
                                                         }
                                                         SettingsSec::Host => {
-                                                            crate::cards::settings_note(ui, &format!("{}\nInstall: curl -fsSL https://x.ai/cli/install.sh | bash\nThen grok login --device-auth. Halt cancels the ACP turn.", build_agent::grok_banner()));
+                                                            crate::cards::settings_note(ui, &format!("{}\nInstall: curl -fsSL https://x.ai/cli/install.sh | bash\nThen grok login --device-auth. grok update --alpha for the alpha channel. Halt cancels the ACP turn.", build_agent::grok_banner()));
                                                         }
                                                         SettingsSec::Imagine => {
                                                             crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
@@ -10833,7 +10858,7 @@ impl Cabin {
             crate::cards::section_label(ui, "Grok Build sessions");
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new("ACP sessions on this machine (`grok sessions`). Cabin chats stay below.")
+                    RichText::new("ACP sessions on this machine (`grok sessions`). Transcripts load via `grok export`. Cabin chats stay below.")
                         .size(12.0)
                         .color(crate::theme::subtle()),
                 );
@@ -12528,10 +12553,12 @@ mod tests {
             .and_then(|s| s.split("Slash::Sessions").next())
             .expect("Effort");
         assert!(
-            effort.contains("self.persist_cfg()")
-                && !effort.contains("self.persist()")
-                && !effort.contains("persist_snap"),
-            "/effort must not clone every thread just to write app.json: {effort}"
+            effort.contains("cfg.reasoning_effort") && effort.contains("parse_reasoning_effort"),
+            "/effort must set reasoning_effort directly: {effort}"
+        );
+        assert!(
+            !effort.contains("cfg.mode"),
+            "/effort must not rewrite legacy cfg.mode: {effort}"
         );
         let appearance = src
             .split("SettingsSec::Appearance => {")
@@ -12597,18 +12624,18 @@ mod tests {
             .expect("session_row");
         assert_eq!(
             row.matches("acp_spawn_rx = None").count(),
-            2,
-            "session/permission row must drop an in-flight handshake: {row}"
+            3,
+            "session/permission/effort row must drop an in-flight handshake: {row}"
         );
         assert_eq!(
             row.matches("grok_session = None").count(),
-            2,
-            "session/permission row must session/new so mode takes: {row}"
+            3,
+            "session/permission/effort row must session/new so mode takes: {row}"
         );
         assert_eq!(
             row.matches("persist_idle_key").count(),
-            2,
-            "session/permission row must not clone every thread — bump the idle key so persist_bg skips: {row}"
+            3,
+            "session/permission/effort row must not clone every thread — bump the idle key so persist_bg skips: {row}"
         );
     }
 
@@ -12969,8 +12996,12 @@ mod tests {
             "ACP auth is grok login; XAI_API_KEY is the secrets console key: {ensure}"
         );
         assert!(
-            ensure.contains("agent_reasoning_effort_for_mode"),
-            "ACP spawn must pass alpha --reasoning-effort from composer ladder: {ensure}"
+            ensure.contains("parse_reasoning_effort") && ensure.contains("cfg.reasoning_effort"),
+            "ACP spawn must pass composer reasoning effort to grok agent: {ensure}"
+        );
+        assert!(
+            !ensure.contains("agent_reasoning_effort_for_mode(&self.cfg.mode)"),
+            "ACP effort must not route through legacy cfg.mode ladder: {ensure}"
         );
         let bearer = src
             .split("fn bearer(")
@@ -15852,7 +15883,7 @@ mod tests {
     fn chat_composer_pins_stop_on_the_right() {
         let src = include_str!("app.rs");
         let start = src.find("ComposerStackSlot::Pill =>").expect("pill arm");
-        let pill = &src[start..start + 8000];
+        let pill = &src[start..start + 10000];
         assert!(
             pill.contains("composer_go_cluster_w()"),
             "Fast + mic + Stop need a reserved strip: {pill}"

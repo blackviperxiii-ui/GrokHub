@@ -76,6 +76,8 @@ pub struct AppConfig {
     pub close_to_tray: bool,
     #[serde(default)]
     pub mode: String,
+    #[serde(default)]
+    pub reasoning_effort: String,
     #[serde(default = "default_quiet_start")]
     pub quiet_start: String,
     #[serde(default = "default_quiet_end")]
@@ -133,6 +135,10 @@ fn default_theme() -> String {
     "dark".into()
 }
 
+fn default_reasoning_effort() -> String {
+    "high".into()
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -153,6 +159,7 @@ impl Default for AppConfig {
             connector_hosts: Vec::new(),
             close_to_tray: default_close_to_tray(),
             mode: String::new(),
+            reasoning_effort: default_reasoning_effort(),
             quiet_start: default_quiet_start(),
             quiet_end: default_quiet_end(),
             daily_auto_cap: default_daily_auto(),
@@ -233,6 +240,13 @@ pub fn load() -> AppConfig {
     cfg.yolo = false;
     if cfg.device_name.trim().is_empty() {
         cfg.device_name = default_device_name();
+    }
+    if cfg.reasoning_effort.trim().is_empty() {
+        cfg.reasoning_effort = grokhub_core::agent_reasoning_effort_for_mode(&cfg.mode)
+            .unwrap_or("high")
+            .to_string();
+    } else if let Some(effort) = grokhub_core::parse_reasoning_effort(&cfg.reasoning_effort) {
+        cfg.reasoning_effort = effort.to_string();
     }
     cfg
 }
@@ -407,6 +421,7 @@ mod tests {
         );
         assert_eq!(loaded.device_name, "cabin");
         assert_eq!(loaded.source_dir, "/tmp/Grok-Hub");
+        assert_eq!(loaded.reasoning_effort, "high");
         let body = fs::read_to_string(config_dir().join("app.json")).expect("app.json");
         assert!(
             !body.contains("xai-test") && !body.to_ascii_lowercase().contains("apikey"),
@@ -473,6 +488,20 @@ mod tests {
         let loaded = load();
         assert!(!loaded.device_name.trim().is_empty());
         assert_eq!(loaded.device_name, default_device_name());
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn reasoning_effort_migrates_from_legacy_mode() {
+        let _g = TEST_CONFIG_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("grokhub-effort-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        fs::create_dir_all(&root).expect("dir");
+        fs::write(root.join("app.json"), r#"{"mode":"max"}"#).expect("write");
+        let loaded = load();
+        assert_eq!(loaded.reasoning_effort, "xhigh");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
