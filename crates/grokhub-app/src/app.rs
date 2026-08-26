@@ -6828,7 +6828,8 @@ impl Cabin {
             .threads
             .get(idx)
             .and_then(|t| t.grok_session.clone())
-            .filter(|s| !s.trim().is_empty());
+            .filter(|s| !s.trim().is_empty())
+            .filter(|s| grokhub_acp::cabin_has_session(s));
         let yolo = self.permission_mode == PermissionMode::AlwaysApprove;
         let auto = self.permission_mode == PermissionMode::Auto;
         let plan = self.session_mode == SessionMode::Plan;
@@ -6840,13 +6841,7 @@ impl Cabin {
                 Some(m.to_string())
             }
         };
-        let effort = match self.cfg.mode.to_ascii_lowercase().as_str() {
-            "fast" => Some("low"),
-            "think" => Some("high"),
-            "max" => Some("xhigh"),
-            "balanced" | "balance" => Some("medium"),
-            _ => None,
-        };
+        let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort);
         let (tx, rx) = mpsc::channel();
         self.single_rx = Some(rx);
         std::thread::spawn(move || {
@@ -14689,6 +14684,14 @@ mod tests {
         assert!(
             kick.contains("run_single_turn") && kick.contains("single_rx"),
             "kick_model must run grok -p on the attached session, not agent stdio: {kick}"
+        );
+        assert!(
+            kick.contains("parse_reasoning_effort") && kick.contains("cfg.reasoning_effort"),
+            "grok -p must use the Effort dropdown, not the leftover mode ladder: {kick}"
+        );
+        assert!(
+            kick.contains("cabin_has_session"),
+            "do not --resume a ~/.grok session id into isolated cabin GROK_HOME: {kick}"
         );
         assert!(
             kick.contains("apply_job_fail"),
