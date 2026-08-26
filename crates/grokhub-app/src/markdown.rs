@@ -75,7 +75,7 @@ pub fn show(ui: &mut Ui, text: &str) {
 
 fn wrapping_label(ui: &mut Ui, text: RichText, wrap: f32) {
     ui.set_max_width(wrap);
-    ui.add(Label::new(text).wrap());
+    ui.add(Label::new(text).wrap().selectable(true));
 }
 
 fn inline(ui: &mut Ui, line: &str, wrap: f32) {
@@ -93,7 +93,7 @@ fn inline(ui: &mut Ui, line: &str, wrap: f32) {
             while !rest.is_empty() {
                 if let Some(after) = rest.strip_prefix("**") {
                     if let Some(end) = after.find("**") {
-                        ui.add(Label::new(RichText::new(&after[..end]).strong()).wrap());
+                        ui.add(Label::new(RichText::new(&after[..end]).strong()).wrap().selectable(true));
                         rest = &after[end + 2..];
                         continue;
                     }
@@ -106,7 +106,8 @@ fn inline(ui: &mut Ui, line: &str, wrap: f32) {
                                     .monospace()
                                     .color(crate::theme::subtle()),
                             )
-                            .wrap(),
+                            .wrap()
+                            .selectable(true),
                         );
                         rest = &after[end + 1..];
                         continue;
@@ -119,7 +120,7 @@ fn inline(ui: &mut Ui, line: &str, wrap: f32) {
                     .min()
                     .unwrap_or(rest.len())
                     .max(1);
-                ui.add(Label::new(&rest[..next]).wrap());
+                ui.add(Label::new(&rest[..next]).wrap().selectable(true));
                 rest = &rest[next..];
             }
         },
@@ -180,6 +181,10 @@ mod tests {
         assert!(
             slice.contains("RichText::new(line).monospace()"),
             "fence body must stay monospace: {slice}"
+        );
+        assert!(
+            include_str!("markdown.rs").contains("selectable(true)"),
+            "markdown in bubbles must stay selectable so copy does not vanish"
         );
     }
 
