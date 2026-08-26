@@ -11,7 +11,8 @@ pub use catalog::{
     GrokCatalog, GrokMcpRow, GrokPluginRow, GrokSkillRow,
 };
 pub use client::{
-    connect, delete_session, discover_session_files, discover_session_files_in, ensure_session_cwd,
+    cabin_has_session, connect, delete_session, discover_session_files, discover_session_files_in,
+    ensure_session_cwd, session_id_in_home, session_resume_is_missing,
     explain_handshake_error, inspect_json, is_placeholder_session_title, is_session_cwd_error,
     jsonrpc_error_text, list_sessions, merge_grok_sessions, parse_session_list,
     parse_session_markdown, parse_single_turn, preferred_history_title, run_single_turn,
