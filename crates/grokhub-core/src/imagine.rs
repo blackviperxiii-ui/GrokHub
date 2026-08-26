@@ -455,11 +455,42 @@ pub enum ImagineToolboxDock {
     Bottom,
 }
 
-pub fn imagine_toolbox_dock(prompt_filled: bool, has_result: bool, working: bool) -> ImagineToolboxDock {
-    if prompt_filled || has_result || working {
+pub fn imagine_toolbox_dock(
+    _prompt_filled: bool,
+    has_result: bool,
+    working: bool,
+) -> ImagineToolboxDock {
+    if working || has_result {
         ImagineToolboxDock::Bottom
     } else {
         ImagineToolboxDock::Middle
+    }
+}
+
+/// Generating / finished still sits above the docked chat box.
+pub fn imagine_stage_visible(working: bool, has_result: bool) -> bool {
+    working || has_result
+}
+
+fn imagine_aspect_wh(aspect: &str) -> (f32, f32) {
+    match aspect.trim() {
+        "3:2" => (3.0, 2.0),
+        "1:1" => (1.0, 1.0),
+        "9:16" => (9.0, 16.0),
+        "16:9" => (16.0, 9.0),
+        _ => (2.0, 3.0),
+    }
+}
+
+/// Height of the generating/result card in leftover space above the chat box.
+pub fn imagine_stage_h(avail_above: f32, aspect: &str, bar_w: f32) -> f32 {
+    let (w, h) = imagine_aspect_wh(aspect);
+    let want = bar_w.max(1.0) * (h / w.max(0.01));
+    let cap = (avail_above * 0.88).max(0.0);
+    if cap < 48.0 {
+        cap
+    } else {
+        want.min(cap).max(48.0)
     }
 }
 
@@ -487,13 +518,15 @@ pub fn imagine_toolbox_top(
 /// Gap between the Imagine chat box and the photogif wall.
 pub const IMAGINE_WALL_GAP: f32 = IMAGINE_TOOLBOX_PAD;
 
-/// Top and height of the photogif wall. Never occupies the chat box.
+/// Top and height of the photogif wall.
+/// Idle: under the chat box. Generating: under the stage, above the docked box.
 pub fn imagine_wall_bounds(
     content_top: f32,
     content_h: f32,
     toolbox_top: f32,
     toolbox_h: f32,
     dock: ImagineToolboxDock,
+    stage_h: f32,
 ) -> (f32, f32) {
     let content_bottom = content_top + content_h;
     match dock {
@@ -502,8 +535,13 @@ pub fn imagine_wall_bounds(
             (top, (content_bottom - top).max(0.0))
         }
         ImagineToolboxDock::Bottom => {
-            let bottom = (toolbox_top - IMAGINE_WALL_GAP).max(content_top);
-            (content_top, (bottom - content_top).max(0.0))
+            let band_bottom = (toolbox_top - IMAGINE_WALL_GAP).max(content_top);
+            let top = if stage_h > 0.0 {
+                content_top + stage_h + IMAGINE_WALL_GAP
+            } else {
+                content_top
+            };
+            (top, (band_bottom - top).max(0.0))
         }
     }
 }
@@ -519,13 +557,9 @@ pub fn imagine_wall_overlaps_toolbox(
     wall_top < toolbox_bottom && toolbox_top < wall_bottom
 }
 
-/// Generated still fills the wall slot above the docked chat box — never the idle middle.
-pub fn imagine_shows_result_above(has_result: bool, dock: ImagineToolboxDock) -> bool {
-    has_result
-        && match dock {
-            ImagineToolboxDock::Bottom => true,
-            ImagineToolboxDock::Middle => false,
-        }
+/// Result lives in the stage under the chat box, not as a wall takeover.
+pub fn imagine_shows_result_above(_has_result: bool, _dock: ImagineToolboxDock) -> bool {
+    false
 }
 
 /// Letterbox a still inside the wall so the full generated image sits above the chat box.
@@ -581,6 +615,27 @@ pub struct WallGif {
     pub path_a: String,
     pub path_b: String,
     pub tall: bool,
+}
+
+/// Pin a generated still or video onto the Imagine wall.
+pub fn wall_gif_from_generation(
+    path: &str,
+    prompt: &str,
+    created_ms: u64,
+    aspect: &str,
+) -> WallGif {
+    let path = path.trim().to_string();
+    let title = imagine_slug(prompt).replace('-', " ");
+    let tall = matches!(aspect.trim(), "2:3" | "9:16");
+    WallGif {
+        id: format!("gen-{created_ms:x}"),
+        title,
+        prompt: prompt.trim().chars().take(400).collect(),
+        created_ms,
+        path_a: path.clone(),
+        path_b: path,
+        tall,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1086,10 +1141,10 @@ mod tests {
     }
 
     #[test]
-    fn entered_prompt_and_work_drop_the_toolbox() {
+    fn typing_keeps_the_toolbox_in_the_middle_send_docks_it() {
         assert_eq!(
             imagine_toolbox_dock(true, false, false),
-            ImagineToolboxDock::Bottom
+            ImagineToolboxDock::Middle
         );
         assert_eq!(
             imagine_toolbox_dock(false, false, true),
@@ -1099,10 +1154,15 @@ mod tests {
             imagine_toolbox_dock(false, true, false),
             ImagineToolboxDock::Bottom
         );
+        let idle = imagine_toolbox_top(100.0, 600.0, 180.0, ImagineToolboxDock::Middle);
+        let busy = imagine_toolbox_top(
+            100.0,
+            600.0,
+            180.0,
+            imagine_toolbox_dock(true, false, true),
+        );
+        assert!(busy > idle, "send must drop the chat box to the floor: idle={idle} busy={busy}");
         assert!(!imagine_toolbox_shows_title(ImagineToolboxDock::Bottom));
-        let top = imagine_toolbox_top(100.0, 600.0, 180.0, ImagineToolboxDock::Bottom);
-        assert_eq!(top, 496.0);
-        assert!(top > imagine_toolbox_top(100.0, 600.0, 180.0, ImagineToolboxDock::Middle));
     }
 
     #[test]
@@ -1114,6 +1174,7 @@ mod tests {
             toolbox_top,
             180.0,
             ImagineToolboxDock::Middle,
+            0.0,
         );
         assert!(
             top >= toolbox_top + 180.0,
@@ -1131,28 +1192,24 @@ mod tests {
     }
 
     #[test]
-    fn docked_photogif_wall_stops_above_the_chat_box() {
-        let toolbox_top = imagine_toolbox_top(100.0, 600.0, 180.0, ImagineToolboxDock::Bottom);
-        let (top, h) = imagine_wall_bounds(
-            100.0,
-            600.0,
-            toolbox_top,
-            180.0,
-            ImagineToolboxDock::Bottom,
-        );
-        assert_eq!(top, 100.0);
+    fn photogif_wall_stays_under_the_stage_when_working() {
+        let dock = imagine_toolbox_dock(false, false, true);
+        assert_eq!(dock, ImagineToolboxDock::Bottom);
+        let toolbox_top = imagine_toolbox_top(100.0, 600.0, 180.0, dock);
+        let leftover = (toolbox_top - 100.0 - IMAGINE_WALL_GAP).max(0.0);
+        let stage_h = imagine_stage_h(leftover, "2:3", 720.0);
+        let (top, h) = imagine_wall_bounds(100.0, 600.0, toolbox_top, 180.0, dock, stage_h);
         assert!(
-            top + h <= toolbox_top,
+            top >= 100.0 + stage_h,
+            "wall must sit under the generating box: wall_top={top} stage_bottom={}",
+            100.0 + stage_h
+        );
+        assert!(
+            top + h <= toolbox_top + 0.01,
             "wall must not run behind the docked chat box: wall_bottom={} box_top={toolbox_top}",
             top + h
         );
-        assert!(h > 0.0);
-        assert!(!imagine_wall_overlaps_toolbox(
-            top,
-            h,
-            toolbox_top,
-            180.0
-        ));
+        assert!(!imagine_wall_overlaps_toolbox(top, h, toolbox_top, 180.0));
     }
 
     #[test]
@@ -1185,39 +1242,39 @@ mod tests {
     }
 
     #[test]
-    fn generated_still_shows_above_the_docked_chat_box() {
-        assert!(imagine_shows_result_above(
-            true,
-            ImagineToolboxDock::Bottom
-        ));
-        assert!(!imagine_shows_result_above(
-            false,
-            ImagineToolboxDock::Bottom
-        ));
-        assert!(!imagine_shows_result_above(
-            true,
-            ImagineToolboxDock::Middle
-        ));
-        assert!(!imagine_shows_result_above(
-            false,
-            ImagineToolboxDock::Middle
-        ));
-        let dock = imagine_toolbox_dock(true, true, false);
-        assert_eq!(dock, ImagineToolboxDock::Bottom);
-        assert!(imagine_shows_result_above(true, dock));
-        let toolbox_top = imagine_toolbox_top(100.0, 600.0, 180.0, dock);
-        let (wall_top, wall_h) = imagine_wall_bounds(100.0, 600.0, toolbox_top, 180.0, dock);
-        let (x, y, w, h) = imagine_result_fit(40.0, wall_top, 720.0, wall_h, 1024.0, 768.0);
-        assert!(w > 0.0 && h > 0.0);
-        assert!(y >= wall_top);
-        assert!(y + h <= wall_top + wall_h + 0.01);
-        assert!(x >= 40.0);
-        assert!(x + w <= 40.0 + 720.0 + 0.01);
+    fn generating_stage_sits_above_the_docked_chat_box() {
+        assert!(imagine_stage_visible(true, false));
+        assert!(imagine_stage_visible(false, true));
+        assert!(!imagine_stage_visible(false, false));
+        let leftover = 400.0;
+        let stage_h = imagine_stage_h(leftover, "2:3", 720.0);
         assert!(
-            y + h <= toolbox_top,
-            "generated still must sit above the chat box: still_bottom={} box_top={toolbox_top}",
-            y + h
+            stage_h > leftover * 0.7 && stage_h < leftover,
+            "stage must use most of the space above the chat box: {stage_h} of {leftover}"
         );
-        assert!(!imagine_wall_overlaps_toolbox(y, h, toolbox_top, 180.0));
+        let dock = imagine_toolbox_dock(true, true, true);
+        assert_eq!(dock, ImagineToolboxDock::Bottom);
+        let toolbox_top = imagine_toolbox_top(100.0, 600.0, 180.0, dock);
+        let avail = (toolbox_top - 100.0 - IMAGINE_WALL_GAP).max(0.0);
+        let stage_h = imagine_stage_h(avail, "2:3", 720.0);
+        let (wall_top, _wall_h) =
+            imagine_wall_bounds(100.0, 600.0, toolbox_top, 180.0, dock, stage_h);
+        assert!(
+            100.0 + stage_h <= toolbox_top,
+            "generating box must sit above the docked chat box: stage_bottom={} box_top={toolbox_top}",
+            100.0 + stage_h
+        );
+        assert!(
+            wall_top >= 100.0 + stage_h,
+            "wall starts under the generating box so you can scroll to it: wall_top={wall_top}"
+        );
+        assert!(wall_top <= toolbox_top);
+        let gif = wall_gif_from_generation("/tmp/night.png", "a night cabin", 9, "2:3");
+        assert_eq!(gif.path_a, "/tmp/night.png");
+        assert!(gif.prompt.contains("night cabin"));
+        assert!(gif.tall);
+        let vid = wall_gif_from_generation("/tmp/clip.mp4", "waves", 10, "16:9");
+        assert!(!vid.tall);
+        assert!(imagine_is_video_path(&vid.path_a));
     }
 }
