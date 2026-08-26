@@ -6441,12 +6441,14 @@ impl Cabin {
                     if stop_reason.eq_ignore_ascii_case("cancelled") || !self.running {
                         continue;
                     }
-                    let text = if self.thought_buf.is_empty() {
-                        self.stream_buf.clone()
+                    let thought = std::mem::take(&mut self.thought_buf);
+                    let stream = std::mem::take(&mut self.stream_buf);
+                    let text = if thought.is_empty() {
+                        stream
                     } else {
                         merge_thinking_capped(
-                            &self.thought_buf,
-                            &strip_thinking(&self.stream_buf),
+                            &thought,
+                            &strip_thinking(&stream),
                             IMAGE_FILE_CAP as usize,
                         )
                     };
@@ -6601,28 +6603,28 @@ impl Cabin {
                 remember_chip_outcome(&mut self.chip_memory, true, now_ms());
                 record_turn(&mut self.learning);
                 bump_usage(&mut self.usage, "message");
-                let finished = if self.thought_buf.is_empty() {
+                let thought = std::mem::take(&mut self.thought_buf);
+                let stream = std::mem::take(&mut self.stream_buf);
+                let finished = if thought.is_empty() {
                     text
                 } else {
                     merge_thinking_capped(
-                        &self.thought_buf,
+                        &thought,
                         &strip_thinking(&text),
                         IMAGE_FILE_CAP as usize,
                     )
                 };
-                let streamed = if self.thought_buf.is_empty() {
-                    self.stream_buf.clone()
+                let streamed = if thought.is_empty() {
+                    stream
                 } else {
                     merge_thinking_capped(
-                        &self.thought_buf,
-                        &strip_thinking(&self.stream_buf),
+                        &thought,
+                        &strip_thinking(&stream),
                         IMAGE_FILE_CAP as usize,
                     )
                 };
                 let text = prefer_complete_reply(&streamed, &finished);
                 self.apply_assistant_snapshot(text.clone());
-                self.thought_buf.clear();
-                self.stream_buf.clear();
                 let job = self.chat_job_thread.clone();
                 let vis = self.visible_thread_id();
                 let last_user = self.last_user_on_job();
@@ -13444,6 +13446,17 @@ mod tests {
             poll.contains("chat_job_thread"),
             "ACP Ready must stamp the job thread, not whichever tab is visible: {poll}"
         );
+        let done = poll
+            .split("AcpEvent::Done")
+            .nth(1)
+            .and_then(|s| s.split("AcpEvent::Err").next())
+            .expect("AcpEvent::Done");
+        assert!(
+            done.contains("mem::take")
+                && !done.contains("stream_buf.clone()")
+                && !done.contains("thought_buf.clone()"),
+            "ACP Done must take the stream buffers, not clone an 8MB complete on the UI thread: {done}"
+        );
         let spawn_poll = src
             .split("fn poll_acp_spawn(")
             .nth(1)
@@ -16277,6 +16290,12 @@ mod tests {
         assert!(
             !chat.contains("t.messages.clone()") && !chat.contains("content.clone()"),
             "Chat complete must not clone an 8MB transcript to estimate/compact: {chat}"
+        );
+        assert!(
+            chat.contains("mem::take")
+                && !chat.contains("stream_buf.clone()")
+                && !chat.contains("thought_buf.clone()"),
+            "Chat complete must take the stream buffers, not clone an 8MB complete on the UI thread: {chat}"
         );
         assert!(
             chat.contains("should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, compact_step)"),
