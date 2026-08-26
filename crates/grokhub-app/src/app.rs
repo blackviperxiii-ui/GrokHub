@@ -12968,6 +12968,10 @@ mod tests {
             ensure.contains("console_key") && ensure.contains("grok_cli_key") && ensure.contains("xai_env"),
             "ACP auth is grok login; XAI_API_KEY is the secrets console key: {ensure}"
         );
+        assert!(
+            ensure.contains("agent_reasoning_effort_for_mode"),
+            "ACP spawn must pass alpha --reasoning-effort from composer ladder: {ensure}"
+        );
         let bearer = src
             .split("fn bearer(")
             .nth(1)
