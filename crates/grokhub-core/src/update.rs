@@ -317,6 +317,10 @@ pub fn systemd_user_restart_args(units: &[String]) -> Vec<String> {
     args
 }
 
+pub fn systemd_user_stop_args(unit: &str) -> Vec<String> {
+    vec!["--user".into(), "stop".into(), unit.to_string()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,6 +548,10 @@ mod tests {
                 "ydotoold.service",
                 "grokhub-hub.service"
             ]
+        );
+        assert_eq!(
+            systemd_user_stop_args("grokhub-hub.service"),
+            vec!["--user".to_string(), "stop".into(), "grokhub-hub.service".into()]
         );
         let _ = fs::remove_dir_all(&root);
     }

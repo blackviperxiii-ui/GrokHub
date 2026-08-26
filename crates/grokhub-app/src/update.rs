@@ -2,7 +2,8 @@ use crate::config;
 use crate::host::run_host;
 use grokhub_core::{
     discover_source, forbidden_reason, restart_acts, restart_bin, systemd_user_restart_args,
-    update_cmds, update_progress_pct, update_step_label, update_wipes_config, RestartAct,
+    systemd_user_stop_args, update_cmds, update_progress_pct, update_step_label,
+    update_wipes_config, RestartAct,
 };
 use std::env;
 use std::process::{Command, Stdio};
@@ -102,6 +103,13 @@ fn unit_is_active(unit: &str) -> bool {
     let mut cmd = Command::new("systemctl");
     cmd.args(["--user", "is-active", "--quiet", unit]);
     crate::desktop::run_limited(cmd, Duration::from_millis(1500)).is_some_and(|o| o.status.success())
+}
+
+pub fn stop_user_unit(unit: &str) -> bool {
+    let args = systemd_user_stop_args(unit);
+    let mut cmd = Command::new("systemctl");
+    cmd.args(&args);
+    crate::desktop::run_limited(cmd, Duration::from_secs(3)).is_some_and(|o| o.status.success())
 }
 
 fn spawn_detached(argv: &[String]) -> Result<(), String> {

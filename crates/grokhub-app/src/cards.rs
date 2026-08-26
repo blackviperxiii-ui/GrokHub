@@ -3,8 +3,8 @@
 use crate::icons::{self, TileIcon};
 use eframe::egui::{self, Align2, Color32, ColorImage, FontId, RichText, Sense, Stroke, TextureHandle, TextureOptions};
 use grokhub_core::{
-    curate_wall, imagine_result_fit, wall_curate_seed, LearnedSuggestion, SkillMd, SuggestionKind,
-    WallGif, WallSlot, IMAGE_FILE_CAP,
+    curate_wall, imagine_result_fit, parse_loop_line, wall_curate_seed, LearnedSuggestion, SkillMd,
+    SuggestionKind, WallGif, WallSlot, IMAGE_FILE_CAP,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
@@ -137,44 +137,44 @@ pub const SUGGESTED_AUTOS: &[SuggestedAuto] = &[
     SuggestedAuto {
         icon: TileIcon::Sun,
         title: "Morning brief",
-        body: "Weekdays at 09:00 — workboard and last host receipt.",
-        seed: "every weekday at 9, summarize the workboard",
+        body: "Every 1d — workboard and last host receipt.",
+        seed: "/loop 1d summarize the workboard and last host receipt",
     },
     SuggestedAuto {
         icon: TileIcon::Bolt,
         title: "Host heartbeat",
-        body: "Every 60 min — read-only snapshot, then a short note.",
-        seed: "heartbeat every 60 min, run a read-only host snapshot and summarize",
+        body: "Every 60m — read-only snapshot, then a short note.",
+        seed: "/loop 60m run a read-only host snapshot and summarize",
     },
     SuggestedAuto {
         icon: TileIcon::List,
         title: "Task extractor",
-        body: "Weekdays at 18:00 — pull today's open tasks onto the board.",
-        seed: "every weekday at 18, extract open tasks onto the workboard",
+        body: "Every 1d — pull today's open tasks onto the board.",
+        seed: "/loop 1d extract open tasks onto the workboard",
     },
     SuggestedAuto {
         icon: TileIcon::Host,
         title: "Dawn snapshot",
-        body: "Weekdays at 08:00 — read-only host snapshot before the day.",
-        seed: "every weekday at 8, run a read-only host snapshot and summarize",
+        body: "Every 1d — read-only host snapshot.",
+        seed: "/loop 1d run a read-only host snapshot and summarize",
     },
     SuggestedAuto {
         icon: TileIcon::Board,
         title: "Midday board",
-        body: "Weekdays at 12:00 — summarize the workboard.",
-        seed: "every weekday at 12, summarize the workboard",
+        body: "Every 12h — summarize the workboard.",
+        seed: "/loop 12h summarize the workboard",
     },
     SuggestedAuto {
         icon: TileIcon::Moon,
         title: "Nightly triage",
-        body: "Every day at 21:00 — extract leftover tasks onto the board.",
-        seed: "every day at 21, extract open tasks onto the workboard",
+        body: "Every 1d — extract leftover tasks onto the board.",
+        seed: "/loop 1d extract leftover tasks onto the workboard",
     },
     SuggestedAuto {
         icon: TileIcon::Host,
         title: "Replay last desktop run",
-        body: "Ask Grok to repeat the last desktop task. Night does not chat first.",
-        seed: "every day at 21, replay last",
+        body: "Every 1d — ask Grok to repeat the last desktop task.",
+        seed: "/loop 1d replay the last desktop task",
     },
 ];
 
@@ -473,6 +473,23 @@ pub fn skill_from_learned(s: &LearnedSuggestion) -> SkillMd {
     }
 }
 
+fn auto_seen_keys(title: &str, seed: &str) -> Vec<String> {
+    let mut keys = vec![title.trim().to_ascii_lowercase()];
+    let seed = seed.trim();
+    if !seed.is_empty() {
+        keys.push(seed.to_ascii_lowercase());
+        if let Some((_, prompt)) = parse_loop_line(seed) {
+            keys.push(prompt.to_ascii_lowercase());
+        }
+    }
+    keys.retain(|k| !k.is_empty());
+    keys
+}
+
+fn autos_already_active(seen: &[String], keys: &[String]) -> bool {
+    keys.iter().any(|k| seen.iter().any(|s| s == k))
+}
+
 /// Learned automations first, then static seeds not already active.
 pub fn merge_suggested_autos(
     learned: &[LearnedSuggestion],
@@ -484,24 +501,25 @@ pub fn merge_suggested_autos(
         if s.kind != SuggestionKind::Auto {
             continue;
         }
-        let key = s.title.to_ascii_lowercase();
-        if seen.iter().any(|n| n == &key) {
+        let seed = s.seed.clone().unwrap_or_default();
+        let keys = auto_seen_keys(&s.title, &seed);
+        if autos_already_active(&seen, &keys) {
             continue;
         }
-        seen.push(key);
+        seen.extend(keys);
         out.push((
             icons::icon_for_label(&s.title),
             s.title.clone(),
             s.body.clone(),
-            s.seed.clone().unwrap_or_default(),
+            seed,
         ));
     }
     for s in SUGGESTED_AUTOS {
-        let key = s.title.to_ascii_lowercase();
-        if seen.iter().any(|n| n == &key) {
+        let keys = auto_seen_keys(s.title, s.seed);
+        if autos_already_active(&seen, &keys) {
             continue;
         }
-        seen.push(key);
+        seen.extend(keys);
         out.push((s.icon, s.title.into(), s.body.into(), s.seed.into()));
     }
     out
@@ -1016,6 +1034,9 @@ pub fn chip_row_width_lock(avail: f32) -> f32 {
     crate::theme::QUERY_MAX_W.min(avail.max(120.0))
 }
 
+/// Tight row so leftover empty-home height cannot vertically center the chips.
+pub const CHIP_ROW_H: f32 = 36.0;
+
 pub fn quick_chip_fill(_primary: bool) -> Color32 {
     crate::theme::elevated()
 }
@@ -1038,13 +1059,12 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
     }
     let mut act = None;
     let max_w = chip_row_width_lock(ui.available_width());
-    ui.scope(|ui| {
-        ui.set_max_width(max_w);
-        ui.with_layout(
-            egui::Layout::left_to_right(egui::Align::Center)
-                .with_main_wrap(true)
-                .with_main_align(egui::Align::Center),
-            |ui| {
+    ui.allocate_ui_with_layout(
+        egui::vec2(max_w, CHIP_ROW_H),
+        egui::Layout::left_to_right(egui::Align::Center)
+            .with_main_wrap(false)
+            .with_main_align(egui::Align::Center),
+        |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
             for (i, c) in chips.iter().take(grokhub_core::CHIP_VISIBLE_MAX).enumerate() {
                 let chip_id = ui.id().with(("qchip", i));
@@ -1130,10 +1150,8 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                 ui.ctx()
                     .data_mut(|d| d.insert_temp(chip_id, hit.hovered()));
             }
-            },
-        );
-    });
-    ui.add_space(8.0);
+        },
+    );
     act
 }
 
@@ -1565,7 +1583,76 @@ fn tile_h(tall: bool, scale: f32) -> f32 {
     base * scale
 }
 
-/// Generated still, letterboxed in the wall slot above the docked chat box.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImagineStageHit {
+    pub expand: bool,
+    pub save: bool,
+    pub open: bool,
+}
+
+/// Generating or finished still/video above the docked Imagine chat box.
+pub fn imagine_stage(ui: &mut egui::Ui, path: &str, working: bool, video: bool) -> ImagineStageHit {
+    let mut hit = ImagineStageHit::default();
+    let wall = ui.max_rect();
+    if wall.width() < 8.0 || wall.height() < 8.0 {
+        return hit;
+    }
+    ui.allocate_rect(wall, Sense::hover());
+    let r = wall.shrink(1.0);
+    ui.painter()
+        .rect_filled(r, 18.0, crate::theme::elevated());
+    ui.painter()
+        .rect_stroke(r, 18.0, Stroke::new(1.0_f32, crate::theme::border()));
+    if working {
+        let label = if video {
+            "Imagining video…"
+        } else {
+            "Imagining…"
+        };
+        ui.painter().text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            label,
+            FontId::proportional(crate::theme::FONT_CHROME),
+            crate::theme::muted(),
+        );
+        return hit;
+    }
+    if path.is_empty() {
+        return hit;
+    }
+    let bar_h = 40.0;
+    let media = egui::Rect::from_min_max(
+        r.min,
+        egui::pos2(r.right(), (r.bottom() - bar_h).max(r.top() + 8.0)),
+    );
+    ui.allocate_ui_at_rect(media, |ui| {
+        ui.set_clip_rect(media);
+        imagine_result_hero(ui, path);
+        let resp = ui.interact(media, egui::Id::new("imagine-stage-media"), Sense::click());
+        if resp.clicked() {
+            hit.expand = true;
+        }
+        resp.on_hover_text("Expand");
+    });
+    let bar = egui::Rect::from_min_max(egui::pos2(r.left() + 10.0, media.bottom()), r.max);
+    ui.allocate_ui_at_rect(bar, |ui| {
+        ui.horizontal(|ui| {
+            if ghost_pill(ui, "Expand") {
+                hit.expand = true;
+            }
+            if ghost_pill(ui, "Save") {
+                hit.save = true;
+            }
+            if ghost_pill(ui, "Open") {
+                hit.open = true;
+            }
+        });
+    });
+    hit
+}
+
+/// Generated still, letterboxed in the Imagine stage under the chat box.
 pub fn imagine_result_hero(ui: &mut egui::Ui, path: &str) {
     let wall = ui.max_rect();
     if wall.width() < 8.0 || wall.height() < 8.0 || path.is_empty() {
@@ -1848,6 +1935,35 @@ fn imagine_disk_tile(
         Sense::click(),
     );
     let (resp, _felt, wash) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
+    if grokhub_core::imagine_is_video_path(&gif.path_a) {
+        ui.painter()
+            .rect_filled(rect, 0.0, crate::theme::elevated());
+        ui.painter()
+            .circle_filled(rect.center(), 22.0, crate::theme::panel());
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            "▶",
+            FontId::proportional(18.0),
+            crate::theme::fg(),
+        );
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(rect.left(), rect.bottom() - 42.0),
+                rect.max,
+            ),
+            0.0,
+            Color32::from_black_alpha(140),
+        );
+        ui.painter().text(
+            egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0),
+            egui::Align2::LEFT_BOTTOM,
+            &gif.title,
+            egui::FontId::proportional(crate::theme::FONT_CHROME),
+            Color32::WHITE,
+        );
+        return resp.clicked();
+    }
     let n = if gif.path_b.is_empty() { 1 } else { 2 };
     let tick = (now_ms / crate::theme::IMAGINE_FRAME_MS) as usize + gif.title.len();
     let path_a = if tick % n == 0 {
@@ -1958,7 +2074,7 @@ pub fn chip_icon(label: &str) -> TileIcon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grokhub_core::parse_nl_automation;
+    use grokhub_core::parse_loop_line;
 
     #[test]
     fn chip_row_act_is_apply_or_dismiss() {
@@ -2042,15 +2158,24 @@ mod tests {
             !slice.contains("set_width(max_w)") && !slice.contains("set_min_width"),
             "chip cluster must shrink-wrap, not fill the pill: {slice}"
         );
+        assert!(
+            slice.contains("CHIP_ROW_H") && slice.contains("allocate_ui_with_layout"),
+            "chip row must use a tight height or leftover empty-home space vertically centers it: {slice}"
+        );
+        assert!(
+            !slice.contains("ui.with_layout("),
+            "with_layout eats remaining height and drops chips to the bottom: {slice}"
+        );
     }
 
     #[test]
     fn suggested_autos_parse() {
         assert_eq!(SUGGESTED_AUTOS.len(), 7);
         for s in SUGGESTED_AUTOS {
-            let a = parse_nl_automation(s.seed).expect(s.title);
-            assert!(!a.instructions.is_empty());
-            assert!(a.enabled);
+            let (iv, prompt) = parse_loop_line(s.seed).expect(s.title);
+            assert!(!iv.is_empty());
+            assert!(!prompt.is_empty());
+            assert!(s.seed.contains("/loop"));
             let _ = s.icon;
         }
     }
@@ -2073,6 +2198,14 @@ mod tests {
         assert!(autos.iter().any(|t| t.1 == "Morning brief"));
         let hidden = merge_suggested_autos(&[], &["Morning brief".into()]);
         assert!(!hidden.iter().any(|t| t.1 == "Morning brief"));
+        let by_prompt = merge_suggested_autos(
+            &[],
+            &["summarize the workboard and last host receipt".into()],
+        );
+        assert!(
+            !by_prompt.iter().any(|t| t.1 == "Morning brief"),
+            "adding a /loop seed must hide the matching Suggested tile: {by_prompt:?}"
+        );
 
         let learned_skill = LearnedSuggestion {
             kind: SuggestionKind::Skill,
@@ -2245,6 +2378,20 @@ mod tests {
         assert!(
             bar_inner > chip_top,
             "a stretching prompt of {bar_inner}px would cover chips starting at {chip_top}"
+        );
+        let stage = include_str!("cards.rs");
+        let stage = stage
+            .split("pub fn imagine_stage(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn imagine_result_hero(").next())
+            .expect("imagine_stage");
+        assert!(
+            stage.contains("Imagining…")
+                && stage.contains("Imagining video…")
+                && stage.contains("Expand")
+                && stage.contains("Save")
+                && stage.contains("Open"),
+            "generating box must be interactive: {stage}"
         );
         assert_eq!(imagine_kind_label(ImagineKind::Image), "Image");
         assert_eq!(imagine_kind_label(ImagineKind::Video), "Video");

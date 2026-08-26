@@ -271,7 +271,7 @@ pub fn stage_subtitle(id: &str) -> &'static str {
         "imagine" => "Images",
         "workboard" => "Pinned tasks",
         "skills" => "Personal skills and connectors",
-        "automations" => "Scheduled tasks",
+        "automations" => "Grok Build /loop scheduler",
         "command" => "Overview",
         "queue" => "Background jobs",
         "settings" => "Preferences",
