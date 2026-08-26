@@ -1165,6 +1165,11 @@ mod tests {
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert!(rows[0].contains("01a01b0f-7e06-74b1-8f22-5236c9d57d45"), "{rows:?}");
         assert!(rows[0].contains("Night"), "{rows:?}");
+        let alpha = "\n(no label)\nSESSION ID                            CREATED     UPDATED     STATUS      SUMMARY\n01a03f9b-df3e-7b23-a839-58e031e50ef4  2026-08-26  2026-08-26  local  (no summary)\n01a03f93-8752-7422-9919-0b7529a1c3b9  2026-08-26  2026-08-26  local  Reply with exactly: alpha-ok\n";
+        let alpha_rows = parse_session_list(alpha);
+        assert_eq!(alpha_rows.len(), 2, "{alpha_rows:?}");
+        assert!(alpha_rows[0].contains("01a03f9b"), "{alpha_rows:?}");
+        assert!(alpha_rows[1].contains("alpha-ok"), "{alpha_rows:?}");
         let list_fn = include_str!("client.rs")
             .split("pub fn list_sessions(")
             .nth(1)
@@ -1390,6 +1395,15 @@ mod tests {
         assert!(
             handshake.contains("session/request_permission") && handshake.contains("pending_perm"),
             "session/load must collect replay permission ids, not drop them unanswered: {handshake}"
+        );
+        let sid_pick = src
+            .split("let session_id = created")
+            .nth(1)
+            .and_then(|s| s.split("Ok(HandshakeOk").next())
+            .expect("session_id pick");
+        assert!(
+            sid_pick.contains(".or(resume_id)"),
+            "alpha session/load may omit sessionId; resume id must be the fallback: {sid_pick}"
         );
         let load = src
             .split("if method == \"session/request_permission\"")

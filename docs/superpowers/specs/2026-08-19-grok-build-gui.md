@@ -16,7 +16,7 @@ Transport: spawn installed `grok --no-auto-update agent stdio`. Do not vendor gr
 
 `send_chat` opens or reuses an ACP session whose cwd is the bound project, or `~/GrokHub-Work` when unbound — never the cabin process cwd. Stream thought and text into existing bubbles. Stop / Halt / tray Halt is `session/cancel`. A dead stored session id retries `session/new` without resume. Disk-full / permission-denied handshake errors land in the chat with the cwd named.
 
-Composer pills: Chat / Plan / Ask and Ask / Auto / Always-approve. Tool cards, diffs, and computer-use frames render in the chat pane. Permission prompts Allow / Deny / Always.
+Composer pills: Chat / Plan / Ask, Ask / Auto / Always-approve, and Effort (low / medium / high / xhigh → `grok agent --reasoning-effort`). Tool cards, diffs, and computer-use frames render in the chat pane. Permission prompts Allow / Deny / Always.
 
 ## Desktop
 
@@ -24,12 +24,12 @@ Grok Build owns computer-use. There is no Desk / Take over menu. The cabin rende
 
 ## History and extensions
 
-History lists `grok sessions` plus cabin chats. The Connectors tab runs `grok inspect` / `grok mcp` / skills / plugins JSON.
+History lists `grok sessions` plus cabin chats. Session transcripts load via `grok export` (alpha removed `sessions show`). The Connectors tab runs `grok inspect` / `grok mcp` / skills / plugins JSON.
 
 ## Auth
 
-Agent: `grok login` cached token or `XAI_API_KEY`. Imagine uses the same token (console key optional). Voice still prefers cabin `secrets.json` / console key.
+Agent: `grok login` cached token, `grok.com` ACP auth (alpha), or `XAI_API_KEY`. Imagine uses the same token (console key optional). Voice still prefers cabin `secrets.json` / console key.
 
 ## Overlay vs agent updates
 
-Cabin overlay (`/update`) updates the GUI only. `grok update` updates the agent.
+Cabin overlay (`/update`) updates the GUI only. `grok update` updates the agent. `grok update --alpha` switches to the alpha channel.

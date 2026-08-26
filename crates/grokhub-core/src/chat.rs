@@ -93,6 +93,31 @@ pub fn agent_reasoning_effort_for_mode(mode: &str) -> Option<&'static str> {
     }
 }
 
+/// Composer effort dropdown levels (Grok Build alpha).
+pub const REASONING_EFFORTS: &[(&str, &str)] = &[
+    ("low", "Low"),
+    ("medium", "Medium"),
+    ("high", "High"),
+    ("xhigh", "Extra High"),
+];
+
+/// Normalize effort ids and legacy aliases (`/effort`, `/mode`).
+pub fn parse_reasoning_effort(s: &str) -> Option<&'static str> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "low" | "fast" | "mini" => Some("low"),
+        "medium" | "med" | "balanced" | "balance" => Some("medium"),
+        "high" | "think" | "build" | "expert" => Some("high"),
+        "xhigh" | "max" | "deep" | "heavy" => Some("xhigh"),
+        _ => None,
+    }
+}
+
+pub fn effort_label(id: &str) -> &'static str {
+    parse_reasoning_effort(id)
+        .and_then(|e| REASONING_EFFORTS.iter().find(|(k, _)| *k == e).map(|(_, l)| *l))
+        .unwrap_or("High")
+}
+
 pub fn chat_timeout_secs(effort: Option<&str>) -> u64 {
     match effort {
         Some("high") | Some("xhigh") => 600,
@@ -466,6 +491,20 @@ mod tests {
             reasoning_effort_for_mode("max"),
             Some("xhigh")
         );
+    }
+
+    #[test]
+    fn parse_reasoning_effort_aliases() {
+        assert_eq!(parse_reasoning_effort("low"), Some("low"));
+        assert_eq!(parse_reasoning_effort("fast"), Some("low"));
+        assert_eq!(parse_reasoning_effort("medium"), Some("medium"));
+        assert_eq!(parse_reasoning_effort("balance"), Some("medium"));
+        assert_eq!(parse_reasoning_effort("high"), Some("high"));
+        assert_eq!(parse_reasoning_effort("think"), Some("high"));
+        assert_eq!(parse_reasoning_effort("xhigh"), Some("xhigh"));
+        assert_eq!(parse_reasoning_effort("max"), Some("xhigh"));
+        assert_eq!(effort_label("xhigh"), "Extra High");
+        assert_eq!(REASONING_EFFORTS.len(), 4);
     }
 
     #[test]
