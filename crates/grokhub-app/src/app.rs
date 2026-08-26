@@ -692,7 +692,8 @@ fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool
                             } else {
                                 ui.add(
                                     egui::Label::new(RichText::new(body).color(crate::theme::fg()))
-                                        .wrap(),
+                                        .wrap()
+                                        .selectable(true),
                                 );
                             }
                         })
@@ -749,19 +750,11 @@ fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, thought_op
     match block.kind {
         ChatKind::User => {
             let resp = paint_speech_bubble(ui, &block.body, true, false);
-            if resp.hovered() {
-                paint_msg_acts(ui, true, &block.body, avail, resp.rect.width())
-            } else {
-                ChatBlockAct::None
-            }
+            paint_msg_acts(ui, true, &block.body, avail, resp.rect.width())
         }
         ChatKind::Assistant => {
             let resp = paint_speech_bubble(ui, &block.body, false, true);
-            if resp.hovered() {
-                paint_msg_acts(ui, false, &block.body, avail, resp.rect.width())
-            } else {
-                ChatBlockAct::None
-            }
+            paint_msg_acts(ui, false, &block.body, avail, resp.rect.width())
         }
         ChatKind::Thought => {
             let open = thought_open;
@@ -4125,6 +4118,44 @@ impl Cabin {
             self.forget_grok_build_session(&id);
         }
         self.rename_idx = None;
+        self.persist();
+    }
+
+    fn delete_all_history(&mut self) {
+        self.halt_in_flight();
+        self.finish_hub_dispatch("Chats deleted", false);
+        let mut ids: Vec<String> = self
+            .threads
+            .iter()
+            .filter_map(|t| t.grok_session.clone())
+            .filter(|s| !s.trim().is_empty())
+            .collect();
+        for s in &self.grok_sessions {
+            if !ids.iter().any(|id| id == &s.id) {
+                ids.push(s.id.clone());
+            }
+        }
+        self.grok_sessions.clear();
+        let bin = grokhub_acp::find_grok();
+        let cwd = self.grok_cwd();
+        std::thread::spawn(move || {
+            if let Some(bin) = bin {
+                for id in ids {
+                    let _ = grokhub_acp::delete_session(&bin, &cwd, &id);
+                }
+            }
+        });
+        self.threads.clear();
+        self.threads.push(ChatThread::new("Chat", false));
+        self.thread_idx = 0;
+        self.messages = self.threads[0].messages.clone();
+        self.imagine_last.clear();
+        self.cfg.goal_pin.clear();
+        self.goal_step = 0;
+        self.drop_leaving_thread_chrome();
+        self.rename_idx = None;
+        self.status = "Deleted all chats".into();
+        self.stamp_current_access();
         self.persist();
     }
 
@@ -11594,7 +11625,9 @@ impl Cabin {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
-            let _ = crate::cards::page_header(ui, "History", "");
+            if crate::cards::page_header(ui, "History", "Delete all") {
+                self.delete_all_history();
+            }
             ui.horizontal(|ui| {
                 crate::cards::search_bar(ui, &mut self.history_q, "Search chats and memory", 320.0);
                 if crate::cards::white_pill(ui, "Search") {
@@ -11787,14 +11820,25 @@ impl Cabin {
                         } else {
                             crate::icons::RailIcon::Chat
                         };
-                        let resp = Self::nav_row(
-                            ui,
-                            i == self.thread_idx && self.nav == Nav::Chat,
-                            icon,
-                            &display_tab_title(&title),
-                            false,
-                        );
-                        if resp.double_clicked() {
+                        let mut deleted = false;
+                        let resp = ui
+                            .horizontal(|ui| {
+                                let resp = Self::nav_row(
+                                    ui,
+                                    i == self.thread_idx && self.nav == Nav::Chat,
+                                    icon,
+                                    &display_tab_title(&title),
+                                    false,
+                                );
+                                if crate::cards::ghost_pill(ui, "Delete") {
+                                    deleted = true;
+                                }
+                                resp
+                            })
+                            .inner;
+                        if deleted {
+                            act = Some(TabAct::Delete(i));
+                        } else if resp.double_clicked() {
                             act = Some(TabAct::StartRename(i));
                         } else if resp.clicked() {
                             act = Some(TabAct::Switch(i));
@@ -11834,9 +11878,15 @@ impl Cabin {
                             self.rename_focus = false;
                             self.rename_lock = None;
                         }
-                        Some(TabAct::Delete(i)) => self.delete_thread_at(i),
+                        Some(TabAct::Delete(i)) => {
+                            self.delete_thread_at(i);
+                            self.nav = Nav::History;
+                        }
                         Some(TabAct::OpenGrok(id)) => self.open_grok_session(&id),
-                        Some(TabAct::DeleteGrok(id)) => self.delete_grok_history(&id),
+                        Some(TabAct::DeleteGrok(id)) => {
+                            self.delete_grok_history(&id);
+                            self.nav = Nav::History;
+                        }
                         None => {}
                     }
                 });
@@ -13286,6 +13336,22 @@ mod tests {
         assert!(src.contains("quote_for_reply"));
         assert!(src.contains("composer_want_focus"));
         assert!(src.contains("copy_text"));
+        let block = src
+            .split("fn paint_chat_block(")
+            .nth(1)
+            .and_then(|s| s.split("fn screen_from_rows(").next())
+            .expect("paint_chat_block");
+        assert!(
+            !block.contains("resp.hovered()"),
+            "Copy/Reply must stay visible when the pointer leaves the bubble: {block}"
+        );
+        assert!(
+            src.contains("selectable(true)"),
+            "chat bubble text must be selectable for copy: {}",
+            &src[src.find("fn paint_speech_bubble").unwrap_or(0)..]
+                .get(..400)
+                .unwrap_or("")
+        );
         let bubble = src.find("fn paint_speech_bubble").expect("speech bubble");
         let bubble_fn = &src[bubble..bubble + 1800];
         assert!(
@@ -14566,6 +14632,19 @@ mod tests {
         assert!(
             page.contains("Delete") && page.contains("delete_grok_history"),
             "History page must delete Grok sessions from the list: {page}"
+        );
+        assert!(
+            page.contains("ghost_pill(ui, \"Delete\")") && page.contains("self.nav = Nav::History"),
+            "deleting a History chat must keep the See all pane: {page}"
+        );
+        let hist = src
+            .split("fn ui_history(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_board(").next())
+            .expect("ui_history");
+        assert!(
+            hist.contains("Delete all") && hist.contains("delete_all_history"),
+            "History See all must offer Delete all: {hist}"
         );
         let poll = src
             .split("fn poll_single(")

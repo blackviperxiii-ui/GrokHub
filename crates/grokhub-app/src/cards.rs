@@ -1375,6 +1375,7 @@ pub fn grok_tile(
 ) -> TileHit {
     let mut hit = TileHit::None;
     let mut add_clicked = false;
+    let mut add_rect = None;
     let resp = egui::Frame::none()
         .fill(crate::theme::elevated())
         .rounding(18.0)
@@ -1400,7 +1401,18 @@ pub fn grok_tile(
                 });
                 if let Some(label) = add {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        add_clicked = white_pill(ui, label);
+                        let r = crate::theme::felt_label_button(
+                            ui,
+                            label,
+                            crate::theme::fg(),
+                            crate::theme::bg(),
+                            crate::theme::HIT,
+                            egui::vec2(0.0, crate::theme::HIT),
+                            None,
+                            true,
+                        );
+                        add_clicked = r.clicked();
+                        add_rect = Some(r.rect);
                     });
                 }
             });
@@ -1411,7 +1423,10 @@ pub fn grok_tile(
     if wash.a() > 0 {
         ui.painter().rect_filled(felt, 18.0, wash);
     }
-    if add_clicked {
+    let click_on_add = add_rect
+        .zip(ui.input(|i| i.pointer.interact_pos()))
+        .is_some_and(|(r, p)| r.expand(6.0).contains(p));
+    if add_clicked || (resp.clicked() && click_on_add) {
         hit = TileHit::Add;
     } else if resp.clicked() {
         hit = TileHit::Body;
