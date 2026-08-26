@@ -172,6 +172,7 @@ pub struct SpawnOpts {
     pub always_approve: bool,
     pub auto: bool,
     pub session_mode: SessionMode,
+    pub reasoning_effort: Option<String>,
     pub extra_env: Vec<(String, String)>,
     pub handshake_timeout: Option<Duration>,
     pub resume: Option<String>,
@@ -184,12 +185,13 @@ impl SpawnOpts {
         always_approve: bool,
         auto: bool,
         session_mode: SessionMode,
+        reasoning_effort: Option<String>,
     ) -> Result<Self, String> {
         let program = find_grok().ok_or_else(|| {
             "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
         })?;
         Ok(Self {
-            args: agent_args(always_approve),
+            args: agent_args(always_approve, reasoning_effort.as_deref()),
             program,
             cwd,
             api_key,
@@ -197,6 +199,7 @@ impl SpawnOpts {
             always_approve,
             auto,
             session_mode,
+            reasoning_effort,
             extra_env: Vec::new(),
             handshake_timeout: None,
             resume: None,
@@ -215,7 +218,7 @@ impl SpawnOpts {
         self.resume = id;
         // ACP session/load is the resume path. CLI --resume plus a later
         // session/new on the same child mixed sessions.
-        self.args = agent_args(self.always_approve);
+        self.args = agent_args(self.always_approve, self.reasoning_effort.as_deref());
         self
     }
 
@@ -848,25 +851,20 @@ fn session_rows_from_json(v: &Value) -> Option<Vec<String>> {
 
 /// List Grok sessions via `grok sessions list` in `cwd` (sessions are per worktree).
 pub fn list_sessions(bin: &Path, cwd: &Path) -> Result<Vec<String>, String> {
-    let text = grok_stdout_timeout(bin, cwd, &["sessions", "list", "-n", "50"], 8).unwrap_or_default();
-    let rows = parse_session_list(&text);
-    if !rows.is_empty() {
-        return Ok(rows);
-    }
-    let json = grok_stdout_timeout(bin, cwd, &["sessions", "list", "--json", "-n", "50"], 8)
-        .unwrap_or_default();
-    Ok(parse_session_list(&json))
+    let text =
+        grok_stdout_timeout(bin, cwd, &["sessions", "list", "-n", "50"], 8).unwrap_or_default();
+    Ok(parse_session_list(&text))
 }
 
-/// Dump one Grok session transcript (`grok sessions show <id>`).
+/// Dump one Grok session transcript. Alpha uses `grok export`; older builds used `sessions show`.
 pub fn show_session(bin: &Path, cwd: &Path, id: &str) -> Result<String, String> {
     let id = id.trim();
     if id.is_empty() {
         return Err("empty session id".into());
     }
-    grok_stdout_timeout(bin, cwd, &["sessions", "show", id], 12).or_else(|_| {
-        grok_stdout_timeout(bin, cwd, &["session", "show", id], 12)
-    })
+    grok_stdout_timeout(bin, cwd, &["export", id], 12)
+        .or_else(|_| grok_stdout_timeout(bin, cwd, &["sessions", "show", id], 12))
+        .or_else(|_| grok_stdout_timeout(bin, cwd, &["session", "show", id], 12))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1112,16 +1110,28 @@ mod tests {
     fn spawn_opts_missing_grok() {
         let prev = std::env::var_os("GROKHUB_GROK");
         let path_prev = std::env::var_os("PATH");
+        let home_prev = std::env::var_os("HOME");
         std::env::set_var("GROKHUB_GROK", "/definitely/missing/grok");
         std::env::set_var("PATH", "/empty-grok-path");
+        let fake_home = std::env::temp_dir().join(format!(
+            "grokhub-no-grok-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&fake_home).unwrap();
+        std::env::set_var("HOME", &fake_home);
         let err = SpawnOpts::grok(
             std::env::temp_dir(),
             None,
             false,
             false,
             SessionMode::Chat,
+            None,
         )
         .unwrap_err();
+        let _ = std::fs::remove_dir_all(&fake_home);
         if let Some(p) = prev {
             std::env::set_var("GROKHUB_GROK", p);
         } else {
@@ -1129,6 +1139,9 @@ mod tests {
         }
         if let Some(p) = path_prev {
             std::env::set_var("PATH", p);
+        }
+        if let Some(p) = home_prev {
+            std::env::set_var("HOME", p);
         }
         assert!(err.contains("x.ai/cli"), "{err}");
     }
@@ -1152,6 +1165,24 @@ mod tests {
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert!(rows[0].contains("01a01b0f-7e06-74b1-8f22-5236c9d57d45"), "{rows:?}");
         assert!(rows[0].contains("Night"), "{rows:?}");
+        let list_fn = include_str!("client.rs")
+            .split("pub fn list_sessions(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn show_session(").next())
+            .expect("list_sessions");
+        assert!(
+            !list_fn.contains("--json"),
+            "alpha removed sessions list --json: {list_fn}"
+        );
+        let show_fn = include_str!("client.rs")
+            .split("pub fn show_session(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn split_session_row(").next())
+            .expect("show_session");
+        assert!(
+            show_fn.contains(r#"["export", id]"#),
+            "alpha uses grok export for session transcripts: {show_fn}"
+        );
     }
 
     #[test]
@@ -1195,6 +1226,10 @@ mod tests {
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0], ("user".into(), "Look at the pane.".into()));
         assert_eq!(turns[1], ("assistant".into(), "On it.".into()));
+        let export = "## User\n\nReply with exactly: alpha-ok\n\n## Assistant\n\nalpha-ok\n";
+        let exported = parse_session_markdown(export);
+        assert_eq!(exported.len(), 2);
+        assert_eq!(exported[1].1.trim(), "alpha-ok");
         let row = split_session_row("01a01b0f-7e06-74b1-8f22-5236c9d57d45  Night cabin");
         assert_eq!(row.id, "01a01b0f-7e06-74b1-8f22-5236c9d57d45");
         assert_eq!(row.title, "Night cabin");
@@ -1327,13 +1362,14 @@ mod tests {
     fn with_resume_does_not_pass_cli_resume() {
         let opts = SpawnOpts {
             program: PathBuf::from("grok"),
-            args: agent_args(false),
+            args: agent_args(false, None),
             cwd: PathBuf::from("/tmp"),
             api_key: None,
             xai_api_key: None,
             always_approve: false,
             auto: false,
             session_mode: SessionMode::Chat,
+            reasoning_effort: None,
             extra_env: vec![],
             handshake_timeout: None,
             resume: None,
