@@ -993,6 +993,41 @@ pub fn run_single_turn_full(
     effort: Option<&str>,
     plan: bool,
 ) -> Result<SingleTurn, String> {
+    match grok_p_once(
+        prompt,
+        cwd,
+        resume,
+        always_approve,
+        auto,
+        model,
+        effort,
+        plan,
+    ) {
+        Ok(t) => Ok(t),
+        Err(e) if resume.is_some() && session_resume_is_missing(&e) => grok_p_once(
+            prompt,
+            cwd,
+            None, // resume: None — session lived in ~/.grok, not cabin GROK_HOME
+            always_approve,
+            auto,
+            model,
+            effort,
+            plan,
+        ),
+        Err(e) => Err(e),
+    }
+}
+
+fn grok_p_once(
+    prompt: &str,
+    cwd: &Path,
+    resume: Option<&str>,
+    always_approve: bool,
+    auto: bool,
+    model: Option<&str>,
+    effort: Option<&str>,
+    plan: bool,
+) -> Result<SingleTurn, String> {
     let program = find_grok().ok_or_else(|| {
         "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
     })?;
@@ -1065,6 +1100,49 @@ pub fn run_single_turn_full(
         return Err(format!("grok -p failed ({extra})"));
     }
     parse_single_turn(&stdout)
+}
+
+/// Alpha `grok -p --resume` looks in GROK_HOME. A cabin-isolated home misses
+/// sessions that live in `~/.grok`, then 404s on the remote restore.
+pub fn session_resume_is_missing(err: &str) -> bool {
+    let l = err.to_ascii_lowercase();
+    (l.contains("not found locally") && l.contains("404"))
+        || l.contains("session get failed: 404")
+        || (l.contains("not found locally") && l.contains("restoring conversation"))
+}
+
+pub fn session_id_in_home(home: &Path, id: &str) -> bool {
+    let id = id.trim();
+    if id.is_empty() || !looks_like_session_id(id) {
+        return false;
+    }
+    dir_has_named_session(&home.join("sessions"), id, 0)
+}
+
+pub fn cabin_has_session(id: &str) -> bool {
+    let Some(home) = crate::locate::cabin_grok_home() else {
+        return false;
+    };
+    session_id_in_home(&home, id)
+}
+
+fn dir_has_named_session(dir: &Path, id: &str, depth: u8) -> bool {
+    if depth > 6 {
+        return false;
+    }
+    if dir.join(id).is_dir() {
+        return true;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.is_dir() && dir_has_named_session(&path, id, depth + 1) {
+            return true;
+        }
+    }
+    false
 }
 
 fn looks_like_session_id(id: &str) -> bool {
@@ -1954,6 +2032,41 @@ mod tests {
         }));
         assert!(rpc.contains("401"), "{rpc}");
         assert!(rpc.contains("Internal error"), "{rpc}");
+    }
+
+    #[test]
+    fn missing_resume_is_a_local_404_not_a_cwd_error() {
+        let err = "grok -p failed (Session \"01a0400f-2bbc-7501-ba65-578617720d19\" not found locally, restoring conversation from remote...\n  [0.000s] Fetching session record — Loading restore metadata from the registry\nError: Failed to restore session from remote: fetching session record: session get failed: 404 Not Found)";
+        assert!(
+            session_resume_is_missing(err),
+            "cabin GROK_HOME miss plus remote 404 must drop --resume: {err}"
+        );
+        assert!(!session_resume_is_missing("grok -p timed out"));
+        assert!(!is_session_cwd_error(err));
+        let root = std::env::temp_dir().join(format!(
+            "grokhub-sess-home-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let id = "01a0400f-2bbc-7501-ba65-578617720d19";
+        let dir = root
+            .join("sessions")
+            .join("%2Fhome%2Fviper%2FGrokHub-Work")
+            .join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(session_id_in_home(&root, id));
+        assert!(!session_id_in_home(&root, "01a0400f-0000-0000-0000-000000000000"));
+        let src = include_str!("client.rs");
+        let run = src
+            .split("pub fn run_single_turn_full(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn session_resume_is_missing(").next())
+            .expect("run_single_turn_full");
+        assert!(
+            run.contains("session_resume_is_missing") && run.contains("resume: None"),
+            "a 404 resume must retry grok -p without --resume: {run}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
