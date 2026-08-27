@@ -78,6 +78,7 @@ use grokhub_core::{
     bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X,
     BUBBLE_PAD_Y,
     BUBBLE_RADIUS,
+    append_say, append_thought, append_tool, views_up_to_last_user, LiveBlock, LiveKind,
     plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
     parse_computer_op, see_drive_attach, user_asks_cabin_eyes,
     resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
@@ -744,7 +745,11 @@ fn paint_msg_acts(ui: &mut egui::Ui, user: bool, body: &str, avail: f32, align_w
     act
 }
 
-fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, thought_open: bool) -> ChatBlockAct {
+fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Response {
+    paint_speech_bubble(ui, body, false, false)
+}
+
+fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, _thought_open: bool) -> ChatBlockAct {
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
     let bubble_w = crate::markdown::bubble_width(avail);
     match block.kind {
@@ -757,33 +762,14 @@ fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, thought_op
             paint_msg_acts(ui, false, &block.body, avail, resp.rect.width())
         }
         ChatKind::Thought => {
-            let open = thought_open;
-            egui::Frame::none()
-                .fill(crate::theme::elevated())
-                .rounding(10.0)
-                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                .inner_margin(egui::Margin::symmetric(10.0, 6.0))
-                .show(ui, |ui| {
-                    ui.set_max_width(bubble_w);
-                    ui.label(
-                        RichText::new("Thought")
-                            .size(crate::theme::FONT_META)
-                            .color(crate::theme::muted()),
-                    );
-                    if open {
-                        ui.add_space(4.0);
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(&block.body)
-                                    .size(crate::theme::FONT_META)
-                                    .color(crate::theme::subtle()),
-                            )
-                            .wrap(),
-                        );
-                    }
-                });
-            ChatBlockAct::None
+            ui.label(
+                RichText::new("Thought")
+                    .size(crate::theme::FONT_META)
+                    .color(crate::theme::muted()),
+            );
+            ui.add_space(4.0);
+            let resp = paint_thought_bubble(ui, &block.body);
+            paint_msg_acts(ui, false, &block.body, avail, resp.rect.width())
         }
         ChatKind::Tool => {
             egui::Frame::none()
@@ -1117,6 +1103,7 @@ pub struct Cabin {
     grok_p_rx: Option<mpsc::Receiver<GrokPEvent>>,
     grok_p_pid: Option<u32>,
     tool_cards: Vec<ToolCard>,
+    live_blocks: Vec<LiveBlock>,
     desk_frame: Option<String>,
     perm_ask: Option<grokhub_acp::PermissionAsk>,
     session_mode: SessionMode,
@@ -1491,6 +1478,7 @@ impl Cabin {
             grok_p_rx: None,
             grok_p_pid: None,
             tool_cards: Vec::new(),
+            live_blocks: Vec::new(),
             desk_frame: None,
             perm_ask: None,
             session_mode: SessionMode::Chat,
@@ -2685,6 +2673,7 @@ impl Cabin {
         self.acp = None;
         self.acp_spawn_rx = None;
         self.tool_cards.clear();
+        self.live_blocks.clear();
         self.perm_ask = None;
     }
 
@@ -6851,6 +6840,7 @@ impl Cabin {
         self.stream_buf.clear();
         self.thought_buf.clear();
         self.tool_cards.clear();
+        self.live_blocks.clear();
         self.perm_ask = None;
         let image = if consume_attach {
             let url = next_chat_image(self.attach_url.as_deref(), cabin.as_deref()).map(str::to_string);
@@ -6921,17 +6911,20 @@ impl Cabin {
         match rx.try_recv() {
             Ok(GrokPEvent::Thought(d)) => {
                 let _ = push_stream_capped(&mut self.thought_buf, &d, IMAGE_FILE_CAP);
+                append_thought(&mut self.live_blocks, &d);
                 self.status = "Thinking…".into();
                 self.upsert_stream_assistant();
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::Text(d)) => {
                 let _ = push_stream_capped(&mut self.stream_buf, &d, IMAGE_FILE_CAP);
+                append_say(&mut self.live_blocks, &d);
                 self.status = "Thinking…".into();
                 self.upsert_stream_assistant();
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::Tool { id, title, status }) => {
+                append_tool(&mut self.live_blocks, &id, &title, &status, "");
                 let card = ToolCard {
                     id,
                     title,
@@ -7064,6 +7057,9 @@ impl Cabin {
                         continue;
                     }
                     let changed = push_stream_capped(&mut self.thought_buf, &t, IMAGE_FILE_CAP);
+                    if changed {
+                        append_thought(&mut self.live_blocks, &t);
+                    }
                     if chat_stream_is_visible(
                         self.chat_job_thread.as_deref(),
                         &self.visible_thread_id(),
@@ -7079,6 +7075,9 @@ impl Cabin {
                         continue;
                     }
                     let changed = push_stream_capped(&mut self.stream_buf, &t, IMAGE_FILE_CAP);
+                    if changed {
+                        append_say(&mut self.live_blocks, &t);
+                    }
                     if chat_stream_is_visible(
                         self.chat_job_thread.as_deref(),
                         &self.visible_thread_id(),
@@ -7090,6 +7089,13 @@ impl Cabin {
                     }
                 }
                 AcpEvent::Tool(card) => {
+                    append_tool(
+                        &mut self.live_blocks,
+                        &card.id,
+                        &card.title,
+                        &card.status,
+                        &card.detail,
+                    );
                     if let Some(url) = &card.image_data_url {
                         self.desk_frame = Some(url.clone());
                         self.remember_last_frame(url);
@@ -7192,6 +7198,17 @@ impl Cabin {
         record_turn(&mut self.learning);
         bump_usage(&mut self.usage, "message");
         self.apply_assistant_snapshot(text.clone());
+        let prose = grokhub_core::assistant_prose(&text);
+        if !prose.is_empty() {
+            match self.live_blocks.last_mut() {
+                Some(b) if b.kind == LiveKind::Say => {
+                    if b.body.trim().len() < prose.trim().len() {
+                        b.body = prose;
+                    }
+                }
+                _ => append_say(&mut self.live_blocks, &prose),
+            }
+        }
         self.thought_buf.clear();
         self.stream_buf.clear();
         let origin = self.chat_job_thread.take();
@@ -7267,6 +7284,9 @@ impl Cabin {
             Ok(JobOut::ChatDelta(d)) => {
                 self.rx = Some(rx);
                 let changed = push_stream_capped(&mut self.stream_buf, &d, IMAGE_FILE_CAP);
+                if changed {
+                    append_say(&mut self.live_blocks, &d);
+                }
                 if chat_stream_is_visible(
                     self.chat_job_thread.as_deref(),
                     &self.visible_thread_id(),
@@ -7280,6 +7300,9 @@ impl Cabin {
             Ok(JobOut::ThoughtDelta(d)) => {
                 self.rx = Some(rx);
                 let changed = push_stream_capped(&mut self.thought_buf, &d, IMAGE_FILE_CAP);
+                if changed {
+                    append_thought(&mut self.live_blocks, &d);
+                }
                 if chat_stream_is_visible(
                     self.chat_job_thread.as_deref(),
                     &self.visible_thread_id(),
@@ -7326,6 +7349,17 @@ impl Cabin {
                 };
                 let text = prefer_complete_reply(&streamed, &finished);
                 self.apply_assistant_snapshot(text.clone());
+                let prose = grokhub_core::assistant_prose(&text);
+                if !prose.is_empty() {
+                    match self.live_blocks.last_mut() {
+                        Some(b) if b.kind == LiveKind::Say => {
+                            if b.body.trim().len() < prose.trim().len() {
+                                b.body = prose;
+                            }
+                        }
+                        _ => append_say(&mut self.live_blocks, &prose),
+                    }
+                }
                 let job = self.chat_job_thread.clone();
                 let vis = self.visible_thread_id();
                 let last_user = self.last_user_on_job();
@@ -10317,16 +10351,21 @@ impl Cabin {
                     .stick_to_bottom(true)
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
+                        ui.set_width(pane);
                         ui.set_max_width(pane);
                         let thinking = self.thinking_here();
+                        let live = !self.live_blocks.is_empty();
                         let mut act = ChatBlockAct::None;
-                        let last_kind;
                         {
                             let views = self.cached_chat_views();
+                            let shown = if live {
+                                views_up_to_last_user(views)
+                            } else {
+                                views
+                            };
                             let last_thought =
-                                views.iter().rposition(|v| v.kind == ChatKind::Thought);
-                            last_kind = views.last().map(|v| v.kind);
-                            for (i, block) in views.iter().enumerate() {
+                                shown.iter().rposition(|v| v.kind == ChatKind::Thought);
+                            for (i, block) in shown.iter().enumerate() {
                                 match paint_chat_block(
                                     ui,
                                     block,
@@ -10338,6 +10377,17 @@ impl Cabin {
                                 }
                                 ui.add_space(10.0);
                             }
+                        }
+                        if live {
+                            match self.paint_live_blocks(ui, thinking) {
+                                ChatBlockAct::None => {}
+                                other => act = other,
+                            }
+                        } else {
+                            self.paint_tool_cards(ui);
+                        }
+                        if thinking {
+                            paint_running(ui);
                         }
                         match act {
                             ChatBlockAct::Copy(body) => {
@@ -10354,24 +10404,62 @@ impl Cabin {
                             }
                             ChatBlockAct::None => {}
                         }
-                        if thinking {
-                            match last_kind {
-                                None | Some(ChatKind::User) => {
-                                    ui.label(
-                                        RichText::new("Thinking…")
-                                            .size(crate::theme::GREETING_SIZE)
-                                            .color(crate::theme::whisper()),
-                                    );
-                                }
-                                Some(ChatKind::Assistant)
-                                | Some(ChatKind::Thought)
-                                | Some(ChatKind::Tool) => {}
-                            }
-                        }
-                        self.paint_tool_cards(ui);
                         self.paint_perm_ask(ui);
                     });
             });
+    }
+
+    fn paint_live_blocks(&self, ui: &mut egui::Ui, thinking: bool) -> ChatBlockAct {
+        let mut act = ChatBlockAct::None;
+        let last_thought = self
+            .live_blocks
+            .iter()
+            .rposition(|b| b.kind == LiveKind::Thought);
+        for (i, b) in self.live_blocks.iter().enumerate() {
+            match b.kind {
+                LiveKind::Thought => {
+                    let view = ChatView {
+                        kind: ChatKind::Thought,
+                        title: "Thought".into(),
+                        body: b.body.clone(),
+                    };
+                    match paint_chat_block(ui, &view, i, thinking && last_thought == Some(i)) {
+                        ChatBlockAct::None => {}
+                        other => act = other,
+                    }
+                }
+                LiveKind::Say => {
+                    let view = ChatView {
+                        kind: ChatKind::Assistant,
+                        title: String::new(),
+                        body: b.body.clone(),
+                    };
+                    match paint_chat_block(ui, &view, i, false) {
+                        ChatBlockAct::None => {}
+                        other => act = other,
+                    }
+                }
+                LiveKind::Tool => {
+                    let card = self
+                        .tool_cards
+                        .iter()
+                        .find(|c| c.id == b.tool_id)
+                        .cloned()
+                        .unwrap_or_else(|| ToolCard {
+                            id: b.tool_id.clone(),
+                            title: b.tool_title.clone(),
+                            kind: String::new(),
+                            status: b.tool_status.clone(),
+                            detail: b.tool_detail.clone(),
+                            diff: String::new(),
+                            image_data_url: None,
+                        });
+                    paint_one_tool_card(ui, &card);
+                }
+            }
+            ui.add_space(10.0);
+        }
+        act
     }
 
     fn paint_tool_cards(&self, ui: &mut egui::Ui) {
@@ -10380,6 +10468,36 @@ impl Cabin {
         }
         ui.add_space(8.0);
         for card in &self.tool_cards {
+            paint_one_tool_card(ui, card);
+            ui.add_space(6.0);
+        }
+    }
+}
+
+fn paint_running(ui: &mut egui::Ui) {
+    let t = ui.ctx().input(|i| i.time) as f32;
+    let pulse = 0.35 + 0.65 * (t * 4.0).sin().abs();
+    let fill = crate::theme::live();
+    let color = egui::Color32::from_rgba_unmultiplied(
+        fill.r(),
+        fill.g(),
+        fill.b(),
+        (pulse * 255.0) as u8,
+    );
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+        ui.painter().circle_filled(rect.center(), 4.0, color);
+        ui.label(
+            RichText::new("Running")
+                .size(crate::theme::FONT_META)
+                .color(crate::theme::muted()),
+        );
+    });
+    ui.ctx().request_repaint();
+}
+
+fn paint_one_tool_card(ui: &mut egui::Ui, card: &ToolCard) {
             egui::Frame::none()
                 .fill(crate::theme::elevated())
                 .rounding(12.0)
@@ -10430,10 +10548,9 @@ impl Cabin {
                         }
                     }
                 });
-            ui.add_space(6.0);
-        }
-    }
+}
 
+impl Cabin {
     fn paint_perm_ask(&mut self, ui: &mut egui::Ui) {
         let Some(p) = self.perm_ask.clone() else {
             return;
@@ -13234,6 +13351,65 @@ mod tests {
     }
 
     #[test]
+    fn long_thought_wraps_instead_of_truncating() {
+        with_fonts_ui(|ui| {
+            ui.allocate_ui(egui::vec2(800.0, 500.0), |ui| {
+                ui.set_max_width(800.0);
+                let body = "word ".repeat(80);
+                let resp = super::paint_thought_bubble(ui, &body);
+                assert!(
+                    resp.rect.width() <= grokhub_core::bubble_max_width(800.0) + 8.0,
+                    "thought bubble spilled the pane: {}",
+                    resp.rect.width()
+                );
+                assert!(
+                    resp.rect.height() > 48.0,
+                    "thought stayed one clipped line, height {}",
+                    resp.rect.height()
+                );
+            });
+        });
+        let src = include_str!("app.rs");
+        let thought = src
+            .split("ChatKind::Thought => {")
+            .nth(1)
+            .and_then(|s| s.split("ChatKind::Tool => {").next())
+            .expect("thought arm");
+        assert!(
+            thought.contains("paint_thought_bubble") || thought.contains("paint_speech_bubble"),
+            "thoughts must wrap through the speech bubble path: {thought}"
+        );
+        assert!(
+            !thought.contains("if open"),
+            "thought body must stay visible after the turn, not collapse to a badge: {thought}"
+        );
+    }
+
+    #[test]
+    fn thought_body_stays_visible_when_idle() {
+        with_fonts_ui(|ui| {
+            ui.allocate_ui(egui::vec2(800.0, 400.0), |ui| {
+                ui.set_max_width(800.0);
+                let block = grokhub_core::ChatView {
+                    kind: grokhub_core::ChatKind::Thought,
+                    title: "Thought".into(),
+                    body: "I'll start by checking which desktop environment and session-restore setup you already have, then wire window size and position into that boot path. After that I'll confirm the restored geometry.".into(),
+                };
+                let closed = ui
+                    .scope(|ui| {
+                        let _ = super::paint_chat_block(ui, &block, 0, false);
+                    })
+                    .response;
+                assert!(
+                    closed.rect.height() > 36.0,
+                    "idle thought hid the body, height {}",
+                    closed.rect.height()
+                );
+            });
+        });
+    }
+
+    #[test]
     fn long_sentence_stays_inside_the_pane_on_a_wide_row() {
         with_fonts_ui(|ui| {
             ui.allocate_ui(egui::vec2(1600.0, 500.0), |ui| {
@@ -13386,6 +13562,14 @@ mod tests {
         assert!(
             chat.contains("cached_chat_views") && !chat.contains("visible_chat(&pairs)"),
             "idle chat must not clone the whole transcript every paint: {chat}"
+        );
+        assert!(
+            chat.contains("paint_live_blocks") && chat.contains("views_up_to_last_user"),
+            "tools must sit in the live turn, not always under the last bubble: {chat}"
+        );
+        assert!(
+            chat.contains("paint_running"),
+            "a running pulse must show while the agent is working: {chat}"
         );
     }
 
