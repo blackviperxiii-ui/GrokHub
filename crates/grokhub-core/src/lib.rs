@@ -90,8 +90,9 @@ pub use chat::{
     should_failover_status, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, XAI_BASE,
 };
 pub use chat_view::{
-    assistant_prose, is_workload_user, merge_thinking, merge_thinking_capped, quote_for_reply, scrub_thought, strip_thinking,
-    refresh_last_stretch, visible_chat, visible_chat_refs, visible_turn_count, visible_turn_count_from, ChatKind, ChatView,
+    assistant_prose, cluster_gap, is_workload_user, merge_thinking, merge_thinking_capped, quote_for_reply, scrub_thought, strip_thinking,
+    refresh_last_stretch, thought_shows_acts, thought_shows_label, visible_chat, visible_chat_refs, visible_turn_count, visible_turn_count_from,
+    ChatKind, ChatView, CHAT_BLOCK_GAP, THOUGHT_CLUSTER_GAP,
 };
 pub use chat_bubble::{
     bubble_max_width, bubble_outer_height, bubble_outer_width, bubble_wrap_width, clamp_row_width,

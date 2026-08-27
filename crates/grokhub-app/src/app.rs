@@ -71,7 +71,8 @@ use grokhub_core::{
     kick_consumes_attach, next_chat_image, next_goal_prompt, paint_connect_banner,
     this_turn_cabin_frame,
     is_workload_user, merge_thinking_capped, prefer_complete_reply, quote_for_reply, strip_thinking,
-    refresh_last_stretch, visible_chat_refs, visible_turn_count, visible_turn_count_from, ChatKind, ChatView,
+    refresh_last_stretch, thought_shows_acts, thought_shows_label, visible_chat_refs, visible_turn_count, visible_turn_count_from,
+    cluster_gap, ChatKind, ChatView,
     apply_job_error, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     upsert_assistant_turn,
     worker_gone_status, ChatSendKind,
@@ -746,10 +747,52 @@ fn paint_msg_acts(ui: &mut egui::Ui, user: bool, body: &str, avail: f32, align_w
 }
 
 fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Response {
-    paint_speech_bubble(ui, body, false, false)
+    let body = crate::markdown::display_text(body);
+    let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
+    let wrap = bubble_wrap_width(avail, BUBBLE_PAD_X);
+    let content = crate::markdown::measure_text(ui, body, wrap);
+    let inner_w = content.x.max(1.0).min(wrap);
+    let outer_w = bubble_outer_width(avail, inner_w, BUBBLE_PAD_X);
+    let frame = egui::Frame::none()
+        .fill(crate::theme::surface())
+        .rounding(BUBBLE_RADIUS)
+        .inner_margin(egui::Margin::symmetric(BUBBLE_PAD_X, BUBBLE_PAD_Y));
+    let mut resp = None;
+    ui.scope(|ui| {
+        ui.set_max_width(avail);
+        ui.horizontal(|ui| {
+            ui.set_max_width(avail);
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                ui.set_max_width(outer_w);
+                resp = Some(
+                    frame
+                        .show(ui, |ui| {
+                            ui.set_max_width(inner_w);
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(body)
+                                        .size(crate::theme::FONT_META)
+                                        .color(crate::theme::subtle()),
+                                )
+                                .wrap()
+                                .selectable(true),
+                            );
+                        })
+                        .response,
+                );
+            });
+        });
+    });
+    resp.expect("thought bubble")
 }
 
-fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, _thought_open: bool) -> ChatBlockAct {
+fn paint_chat_block(
+    ui: &mut egui::Ui,
+    block: &ChatView,
+    thought_label: bool,
+    thought_acts: bool,
+) -> ChatBlockAct {
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
     let bubble_w = crate::markdown::bubble_width(avail);
     match block.kind {
@@ -762,14 +805,20 @@ fn paint_chat_block(ui: &mut egui::Ui, block: &ChatView, _idx: usize, _thought_o
             paint_msg_acts(ui, false, &block.body, avail, resp.rect.width())
         }
         ChatKind::Thought => {
-            ui.label(
-                RichText::new("Thought")
-                    .size(crate::theme::FONT_META)
-                    .color(crate::theme::muted()),
-            );
-            ui.add_space(4.0);
+            if thought_label {
+                ui.label(
+                    RichText::new("Thought")
+                        .size(crate::theme::FONT_META)
+                        .color(crate::theme::muted()),
+                );
+                ui.add_space(4.0);
+            }
             let resp = paint_thought_bubble(ui, &block.body);
-            paint_msg_acts(ui, false, &block.body, avail, resp.rect.width())
+            if thought_acts {
+                paint_msg_acts(ui, false, &block.body, avail, resp.rect.width())
+            } else {
+                ChatBlockAct::None
+            }
         }
         ChatKind::Tool => {
             egui::Frame::none()
@@ -10363,19 +10412,27 @@ impl Cabin {
                             } else {
                                 views
                             };
-                            let last_thought =
-                                shown.iter().rposition(|v| v.kind == ChatKind::Thought);
                             for (i, block) in shown.iter().enumerate() {
+                                let prev_thought = i
+                                    .checked_sub(1)
+                                    .and_then(|p| shown.get(p))
+                                    .is_some_and(|v| v.kind == ChatKind::Thought);
+                                let next_thought = shown
+                                    .get(i + 1)
+                                    .is_some_and(|v| v.kind == ChatKind::Thought);
                                 match paint_chat_block(
                                     ui,
                                     block,
-                                    i,
-                                    thinking && last_thought == Some(i),
+                                    thought_shows_label(prev_thought),
+                                    thought_shows_acts(next_thought),
                                 ) {
                                     ChatBlockAct::None => {}
                                     other => act = other,
                                 }
-                                ui.add_space(10.0);
+                                ui.add_space(cluster_gap(
+                                    block.kind == ChatKind::Thought,
+                                    next_thought,
+                                ));
                             }
                         }
                         if live {
@@ -10409,13 +10466,18 @@ impl Cabin {
             });
     }
 
-    fn paint_live_blocks(&self, ui: &mut egui::Ui, thinking: bool) -> ChatBlockAct {
+    fn paint_live_blocks(&self, ui: &mut egui::Ui, _thinking: bool) -> ChatBlockAct {
         let mut act = ChatBlockAct::None;
-        let last_thought = self
-            .live_blocks
-            .iter()
-            .rposition(|b| b.kind == LiveKind::Thought);
         for (i, b) in self.live_blocks.iter().enumerate() {
+            let this_thought = b.kind == LiveKind::Thought;
+            let prev_thought = i
+                .checked_sub(1)
+                .and_then(|p| self.live_blocks.get(p))
+                .is_some_and(|v| v.kind == LiveKind::Thought);
+            let next_thought = self
+                .live_blocks
+                .get(i + 1)
+                .is_some_and(|v| v.kind == LiveKind::Thought);
             match b.kind {
                 LiveKind::Thought => {
                     let view = ChatView {
@@ -10423,7 +10485,12 @@ impl Cabin {
                         title: "Thought".into(),
                         body: b.body.clone(),
                     };
-                    match paint_chat_block(ui, &view, i, thinking && last_thought == Some(i)) {
+                    match paint_chat_block(
+                        ui,
+                        &view,
+                        thought_shows_label(prev_thought),
+                        thought_shows_acts(next_thought),
+                    ) {
                         ChatBlockAct::None => {}
                         other => act = other,
                     }
@@ -10434,7 +10501,7 @@ impl Cabin {
                         title: String::new(),
                         body: b.body.clone(),
                     };
-                    match paint_chat_block(ui, &view, i, false) {
+                    match paint_chat_block(ui, &view, false, false) {
                         ChatBlockAct::None => {}
                         other => act = other,
                     }
@@ -10457,7 +10524,7 @@ impl Cabin {
                     paint_one_tool_card(ui, &card);
                 }
             }
-            ui.add_space(10.0);
+            ui.add_space(cluster_gap(this_thought, next_thought));
         }
         act
     }
@@ -13397,7 +13464,7 @@ mod tests {
                 };
                 let closed = ui
                     .scope(|ui| {
-                        let _ = super::paint_chat_block(ui, &block, 0, false);
+                        let _ = super::paint_chat_block(ui, &block, true, false);
                     })
                     .response;
                 assert!(
@@ -13506,7 +13573,7 @@ mod tests {
         let slice = &src[start..start + 2800];
         assert!(slice.contains("Copy"), "{slice}");
         assert!(slice.contains("Reply"), "{slice}");
-        assert!(slice.contains("fn paint_chat_block"), "{slice}");
+        assert!(src.contains("fn paint_chat_block"), "{src}");
         assert!(src.contains("ChatBlockAct::Copy"));
         assert!(src.contains("ChatBlockAct::Reply"));
         assert!(src.contains("quote_for_reply"));
@@ -13570,6 +13637,10 @@ mod tests {
         assert!(
             chat.contains("paint_running"),
             "a running pulse must show while the agent is working: {chat}"
+        );
+        assert!(
+            chat.contains("cluster_gap"),
+            "consecutive thoughts must cluster tighter than chat: {chat}"
         );
     }
 
@@ -17259,9 +17330,25 @@ mod tests {
         let start = src.find("ChatKind::Thought =>").expect("thought");
         let slice = &src[start..start + 1600];
         assert!(slice.contains("theme::muted()"), "{slice}");
-        assert!(slice.contains("theme::subtle()"), "{slice}");
         assert!(!slice.contains("theme::MUTED"));
         assert!(!slice.contains("theme::SUBTLE"));
+        let bubble = src
+            .split("fn paint_thought_bubble(")
+            .nth(1)
+            .and_then(|s| s.split("fn paint_chat_block(").next())
+            .expect("paint_thought_bubble");
+        assert!(
+            bubble.contains("theme::subtle()"),
+            "thought words must be darker than chat fg: {bubble}"
+        );
+        assert!(
+            !bubble.contains("theme::fg()"),
+            "thought words must not use chat fg: {bubble}"
+        );
+        assert!(
+            bubble.contains("theme::surface()"),
+            "thought bubbles must recede from assistant chat: {bubble}"
+        );
     }
 
     #[test]
