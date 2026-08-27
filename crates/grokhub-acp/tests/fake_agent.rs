@@ -15,6 +15,8 @@ fn fake_opts() -> SpawnOpts {
         extra_env: vec![],
         handshake_timeout: None,
         resume: None,
+        skip_cabin_home: false,
+        worktree: false,
     }
 }
 
@@ -97,6 +99,8 @@ fn handshake_times_out_on_a_silent_child() {
         extra_env: vec![],
         handshake_timeout: Some(Duration::from_secs(2)),
         resume: None,
+        skip_cabin_home: false,
+        worktree: false,
     };
     let t = Instant::now();
     let err = match connect(opts) {
@@ -132,6 +136,8 @@ fn handshake_does_not_deadlock_when_stderr_floods() {
         extra_env: vec![],
         handshake_timeout: Some(Duration::from_secs(2)),
         resume: None,
+        skip_cabin_home: false,
+        worktree: false,
     };
     let t = Instant::now();
     let err = match connect(opts) {

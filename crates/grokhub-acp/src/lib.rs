@@ -13,7 +13,7 @@ pub use catalog::{
 };
 pub use client::{
     cabin_has_session, connect, delete_session, discover_session_files, discover_session_files_in,
-    ensure_session_cwd, session_id_in_home, session_resume_is_missing,
+    ensure_session_cwd, load_session_signals, session_id_in_home, session_resume_is_missing,
     explain_handshake_error, inspect_json, is_placeholder_session_title, is_session_cwd_error,
     jsonrpc_error_text, list_sessions, merge_grok_sessions, parse_session_list,
     parse_session_markdown, parse_single_turn, preferred_history_title, run_single_turn,
@@ -31,4 +31,7 @@ pub use protocol::{
     merge_tool_card, AcpEvent, PermissionAsk, PermissionMode, SessionMode, ToolCard,
     PROTOCOL_VERSION,
 };
-pub use stream::{fold_stream, kill_pid, parse_stream_line, prompt_json, GrokPEvent};
+pub use stream::{
+    fold_stream, grok_context_line, grok_usage_line, kill_pid, parse_signals_json, parse_stream_line,
+    parse_usage, prompt_json, rewrite_truncation_error, turn_footer, GrokPEvent, GrokUsage,
+};

@@ -118,6 +118,10 @@ pub enum AcpEvent {
     Tool(ToolCard),
     Plan(String),
     Permission(PermissionAsk),
+    Usage(crate::stream::GrokUsage),
+    Commands(Vec<String>),
+    Task { id: String, title: String, done: bool },
+    Compact { started: bool, usage: crate::stream::GrokUsage },
     Done { stop_reason: String },
     Err(String),
 }
@@ -607,7 +611,97 @@ pub fn parse_session_update(params: &Value) -> Option<AcpEvent> {
             }
         }
         "tool_call" | "tool_call_update" => Some(AcpEvent::Tool(parse_tool_card(update))),
+        "available_commands_update" | "available_commands" => {
+            let cmds = update
+                .get("availableCommands")
+                .or_else(|| update.get("commands"))
+                .and_then(|x| x.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| {
+                            x.get("name")
+                                .or_else(|| x.get("command"))
+                                .and_then(|n| n.as_str())
+                                .or_else(|| x.as_str())
+                                .map(|s| s.trim().to_string())
+                        })
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if cmds.is_empty() {
+                None
+            } else {
+                Some(AcpEvent::Commands(cmds))
+            }
+        }
+        "usage_update" | "turn_completed" => {
+            let u = crate::stream::parse_usage(update);
+            if u.is_empty() {
+                None
+            } else {
+                Some(AcpEvent::Usage(u))
+            }
+        }
+        "task_backgrounded" => Some(AcpEvent::Task {
+            id: update
+                .get("task_id")
+                .or_else(|| update.get("tool_call_id"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            title: update
+                .get("command")
+                .or_else(|| update.get("title"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("task")
+                .chars()
+                .take(80)
+                .collect(),
+            done: false,
+        }),
+        "task_completed" => Some(AcpEvent::Task {
+            id: update
+                .get("task_id")
+                .or_else(|| update.pointer("/task_snapshot/task_id"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            title: update
+                .get("command")
+                .or_else(|| update.pointer("/task_snapshot/command"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("task")
+                .chars()
+                .take(80)
+                .collect(),
+            done: true,
+        }),
+        "auto_compact_started" => Some(AcpEvent::Compact {
+            started: true,
+            usage: crate::stream::parse_usage(update),
+        }),
+        "auto_compact_completed" => Some(AcpEvent::Compact {
+            started: false,
+            usage: crate::stream::parse_usage(update),
+        }),
         "plan" => {
+            if let Some(entries) = update.get("entries").and_then(|e| e.as_array()) {
+                let lines: Vec<String> = entries
+                    .iter()
+                    .filter_map(|e| {
+                        let c = e.get("content").and_then(|x| x.as_str())?.trim();
+                        if c.is_empty() {
+                            None
+                        } else {
+                            Some(c.to_string())
+                        }
+                    })
+                    .collect();
+                if !lines.is_empty() {
+                    return Some(AcpEvent::Plan(lines.join(" · ")));
+                }
+            }
             let t = update
                 .get("title")
                 .or_else(|| update.get("text"))
