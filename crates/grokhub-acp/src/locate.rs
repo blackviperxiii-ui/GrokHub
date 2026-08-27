@@ -481,6 +481,13 @@ pub fn with_fork_session(mut args: Vec<String>, fork: bool) -> Vec<String> {
     args
 }
 
+pub fn with_worktree(mut args: Vec<String>, on: bool) -> Vec<String> {
+    if on && !args.iter().any(|a| a == "--worktree") {
+        args.push("--worktree".into());
+    }
+    args
+}
+
 pub fn agent_args_resume(
     always_approve: bool,
     resume: Option<&str>,

@@ -19,6 +19,8 @@ fn main() {
         extra_env: vec![],
         handshake_timeout: None,
         resume: None,
+        skip_cabin_home: false,
+        worktree: false,
     };
     eprintln!("connect…");
     let h = connect(opts).expect("connect");

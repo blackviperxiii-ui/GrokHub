@@ -22,7 +22,10 @@ use crate::xai::{
     grok_tts, http_status_of,
 };
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
-use grokhub_acp::{kill_pid, merge_tool_card, AcpEvent, GrokPEvent, PermissionMode, SessionMode, ToolCard};
+use grokhub_acp::{
+    grok_context_line, grok_usage_line, kill_pid, merge_tool_card, rewrite_truncation_error,
+    turn_footer, AcpEvent, GrokPEvent, GrokUsage, PermissionMode, SessionMode, ToolCard,
+};
 use grokhub_core::{
     append_composer, anticipate_consumes_slot, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
     cabin_system_prompt,
@@ -52,7 +55,7 @@ use grokhub_core::{
     imagine_aspect_label, imagine_aspect_name, imagine_image_resolution, imagine_style_label,
     imagine_video_dur_label, imagine_video_duration_secs, imagine_video_res_label,
     imagine_video_resolution, last_imagine_receipt,
-    extract_insights, extract_work_updates, fact_candidates, fact_candidates_from, failover_model, filter_slash_commands,
+    extract_insights, extract_work_updates, fact_candidates, fact_candidates_from, failover_model, filter_slash_commands, filter_slash_hits, grok_command_hits,
     frame_bytes, PresenceFrame,
     forget_topic, greet_from_last_job, has_auth, has_verify_ok, hey_grok_on_press,
     thread_host_receipts, thread_host_receipts_from,
@@ -120,7 +123,7 @@ use grokhub_core::{
     history_row_visible, leftover_empty_thread, mark_slash_result, reuse_empty_thread_idx,
     unknown_cabin_slash, ThreadReuseView,
     should_name_thread,
-    skill_follow_block, skill_use_in_chat_prompt, slash_help, summarize_write, surgical_memory_edit, MemoryEdit,
+    skill_follow_block, skill_use_in_chat_prompt, slash_help, SlashHit, summarize_write, surgical_memory_edit, MemoryEdit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
     unified_diff_cite, usage_line,
@@ -284,6 +287,7 @@ fn slash_pick_retain(pick: usize, list_changed: bool, len: usize) -> usize {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ComposerStackSlot {
     AuthBanner,
+    ContextBar,
     SlashPalette,
     Chips,
     Attach,
@@ -293,6 +297,7 @@ enum ComposerStackSlot {
 fn composer_stack_order() -> &'static [ComposerStackSlot] {
     &[
         ComposerStackSlot::AuthBanner,
+        ComposerStackSlot::ContextBar,
         ComposerStackSlot::SlashPalette,
         ComposerStackSlot::Attach,
         ComposerStackSlot::Pill,
@@ -1002,7 +1007,7 @@ pub struct Cabin {
     daily_auto_day: String,
     slash_pick: usize,
     slash_filter_n: usize,
-    slash_filter_first: &'static str,
+    slash_filter_first: String,
     last_window_title: String,
     voice_orb: String,
     last_night_tick: Instant,
@@ -1151,6 +1156,10 @@ pub struct Cabin {
     acp_spawn_rx: Option<mpsc::Receiver<Result<grokhub_acp::AcpHandle, String>>>,
     grok_p_rx: Option<mpsc::Receiver<GrokPEvent>>,
     grok_p_pid: Option<u32>,
+    grok_usage: GrokUsage,
+    grok_commands: Vec<SlashHit>,
+    grok_tasks: Vec<(String, String, bool)>,
+    followup_queue: Vec<String>,
     tool_cards: Vec<ToolCard>,
     live_blocks: Vec<LiveBlock>,
     desk_frame: Option<String>,
@@ -1378,7 +1387,7 @@ impl Cabin {
             daily_auto_day: String::new(),
             slash_pick: 0,
             slash_filter_n: 0,
-            slash_filter_first: "",
+            slash_filter_first: String::new(),
             last_window_title: String::new(),
             voice_orb: "idle".into(),
             last_night_tick: Instant::now(),
@@ -1526,6 +1535,10 @@ impl Cabin {
             acp_spawn_rx: None,
             grok_p_rx: None,
             grok_p_pid: None,
+            grok_usage: GrokUsage::default(),
+            grok_commands: Vec::new(),
+            grok_tasks: Vec::new(),
+            followup_queue: Vec::new(),
             tool_cards: Vec::new(),
             live_blocks: Vec::new(),
             desk_frame: None,
@@ -2408,11 +2421,8 @@ impl Cabin {
             .filter(|t| !t.is_empty())
             .unwrap_or_else(|| id.chars().take(24).collect());
         let mut t = ChatThread::new(&title, false);
-        t.grok_session = if sess.as_ref().is_some_and(|s| s.cabin) {
-            Some(id.to_string())
-        } else {
-            None
-        };
+        t.grok_session = Some(id.to_string());
+        t.grok_user_home = sess.as_ref().is_none_or(|s| !s.cabin);
         t.grok_cwd = sess
             .as_ref()
             .and_then(|s| s.cwd.as_ref())
@@ -2511,6 +2521,16 @@ impl Cabin {
             .get(idx)
             .map(|t| t.grok_cwd.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true))
             .unwrap_or(true);
+        let user_home = self
+            .threads
+            .get(idx)
+            .map(|t| t.grok_user_home)
+            .unwrap_or(false);
+        let worktree = self
+            .threads
+            .get(idx)
+            .map(|t| t.grok_worktree)
+            .unwrap_or(false);
         let (tx, rx) = mpsc::channel();
         self.acp_spawn_rx = Some(rx);
         std::thread::spawn(move || {
@@ -2530,6 +2550,8 @@ impl Cabin {
                     mode,
                     reasoning_effort.clone(),
                     resume,
+                    user_home,
+                    worktree,
                 )
             };
             let out = match spawn(resume.clone()) {
@@ -4216,6 +4238,11 @@ impl Cabin {
             self.running,
         ) {
             ChatSendKind::Redirect => {
+                if self.acp.is_some() || self.grok_p_rx.is_some() {
+                    self.followup_queue.push(text);
+                    self.status = format!("Queued ({})", self.followup_queue.len());
+                    return;
+                }
                 let prev = last_user_scan(
                     self.messages
                         .iter()
@@ -4440,6 +4467,46 @@ impl Cabin {
                     self.kick_imagine();
                 }
             }
+            Slash::Fork => {
+                let sid = self
+                    .threads
+                    .get(self.thread_idx)
+                    .and_then(|t| t.grok_session.clone());
+                let cwd = self
+                    .threads
+                    .get(self.thread_idx)
+                    .and_then(|t| t.grok_cwd.clone());
+                let user_home = self
+                    .threads
+                    .get(self.thread_idx)
+                    .map(|t| t.grok_user_home)
+                    .unwrap_or(false);
+                self.new_thread(false);
+                if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                    t.grok_session = sid;
+                    t.grok_cwd = cwd;
+                    t.grok_user_home = user_home;
+                    t.grok_fork = true;
+                    t.title = "Fork".into();
+                }
+                self.acp = None;
+                self.status = "Forked — next send starts a new Grok session from this history".into();
+            }
+            Slash::Workflow(name) => {
+                self.send_grok_slash(&format!("/workflow {name}"));
+                self.status = format!("Workflow {name}");
+            }
+            Slash::Worktree => {
+                if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                    t.grok_worktree = !t.grok_worktree;
+                    self.status = if t.grok_worktree {
+                        "Next chat uses --worktree".into()
+                    } else {
+                        "Worktree off".into()
+                    };
+                }
+            }
+            Slash::RewindFiles => self.rewind_project(),
             Slash::Compact => {
                 let pin = self.cfg.goal_pin.trim().to_string();
                 let start = compact_keep_start_from(
@@ -4464,7 +4531,8 @@ impl Cabin {
                 }
                 self.stamp_current_access();
                 self.persist();
-                self.status = "Compacted".into();
+                self.send_grok_slash("/compact");
+                self.status = "Compacting Grok context…".into();
             }
             Slash::Skill(name) => {
                 if let Some(s) = self.skill_list.iter().find(|s| s.name == name || s.slash == name) {
@@ -4514,7 +4582,8 @@ impl Cabin {
                     self.active_skill_follow = None;
                     self.stamp_current_access();
                     self.persist();
-                    self.status = "Undid last assistant turn".into();
+                    self.send_grok_slash("/rewind");
+                    self.status = "Rewinding Grok conversation…".into();
                 } else {
                     self.status = "Nothing to undo".into();
                 }
@@ -4544,19 +4613,31 @@ impl Cabin {
                 let n = visible_turn_count_from(
                     self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
                 );
-                let tokens = estimate_messages_from(
-                    self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
-                );
-                self.status = format!(
-                    "{n} turns · {} tokens · {}% · pin {}",
-                    tokens,
-                    context_percent(tokens, CONTEXT_BUDGET_TOKENS),
-                    if self.cfg.goal_pin.is_empty() {
-                        "none"
-                    } else {
-                        &self.cfg.goal_pin
-                    }
-                );
+                if !self.grok_usage.is_empty() {
+                    let grok = grok_context_line(&self.grok_usage);
+                    self.status = format!(
+                        "{n} turns · {grok} · pin {}",
+                        if self.cfg.goal_pin.is_empty() {
+                            "none"
+                        } else {
+                            &self.cfg.goal_pin
+                        }
+                    );
+                } else {
+                    let tokens = estimate_messages_from(
+                        self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
+                    );
+                    self.status = format!(
+                        "{n} turns · {} tokens · {}% · pin {}",
+                        tokens,
+                        context_percent(tokens, CONTEXT_BUDGET_TOKENS),
+                        if self.cfg.goal_pin.is_empty() {
+                            "none"
+                        } else {
+                            &self.cfg.goal_pin
+                        }
+                    );
+                }
             }
             Slash::Health => {
                 self.nav = Nav::Settings;
@@ -4579,7 +4660,13 @@ impl Cabin {
             Slash::Import => self.import_openclaw(),
             Slash::Consult(q) => self.run_consult(q),
             Slash::Usage => {
-                self.status = usage_line(&self.usage);
+                let cabin = usage_line(&self.usage);
+                let grok = grok_usage_line(&self.grok_usage);
+                self.status = if grok.is_empty() {
+                    cabin
+                } else {
+                    format!("{cabin} · {grok}")
+                };
             }
             Slash::Models => {
                 if let Some(bin) = grokhub_acp::find_grok() {
@@ -4797,7 +4884,13 @@ impl Cabin {
                 self.status = if self.hub_on { "Hub sharing".into() } else { "Start share on Devices".into() };
             }
             Slash::Inhabit(peer) => self.queue_inhabit(peer),
-            Slash::Rewind => self.rewind_project(),
+            Slash::Rewind => {
+                if let Some(i) = self.messages.iter().rposition(|m| m.0 == "assistant") {
+                    self.live_mut().remove(i);
+                }
+                self.send_grok_slash("/rewind");
+                self.status = "Rewinding Grok conversation…".into();
+            }
             Slash::Room(name) => {
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
                 let plan = plan_room(&name, &home);
@@ -6882,6 +6975,13 @@ impl Cabin {
             self.pending_kick = Some(consume_attach);
             return;
         }
+        if self.acp.is_none() {
+            let _ = self.ensure_acp();
+        }
+        if self.acp_spawn_rx.is_some() {
+            self.pending_kick = Some(consume_attach);
+            return;
+        }
         let cabin = self.kick_frame.take();
         self.kick_skip = false;
         self.eyes_attach = false;
@@ -6914,9 +7014,14 @@ impl Cabin {
         let resume = self
             .threads
             .get(idx)
-            .and_then(|t| t.grok_session.clone())
-            .filter(|s| !s.trim().is_empty())
-            .filter(|s| grokhub_acp::cabin_has_session(s));
+            .and_then(|t| {
+                let id = t.grok_session.clone().filter(|s| !s.trim().is_empty())?;
+                if t.grok_user_home || grokhub_acp::cabin_has_session(&id) {
+                    Some(id)
+                } else {
+                    None
+                }
+            });
         let yolo = self.permission_mode == PermissionMode::AlwaysApprove;
         let auto = self.permission_mode == PermissionMode::Auto;
         let plan = self.session_mode == SessionMode::Plan;
@@ -6929,6 +7034,28 @@ impl Cabin {
             }
         };
         let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort);
+        let user_home = self
+            .threads
+            .get(idx)
+            .map(|t| t.grok_user_home)
+            .unwrap_or(false);
+        let fork = self.threads.get(idx).map(|t| t.grok_fork).unwrap_or(false);
+        let worktree = self
+            .threads
+            .get(idx)
+            .map(|t| t.grok_worktree)
+            .unwrap_or(false);
+        if let Some(h) = &self.acp {
+            match h.prompt_with_image(&last_user, image.as_deref()) {
+                Ok(()) => {
+                    if let Some(t) = self.threads.get_mut(idx) {
+                        t.grok_fork = false;
+                    }
+                    return;
+                }
+                Err(_) => self.acp = None,
+            }
+        }
         match grokhub_acp::spawn_grok_p_stream(
             &last_user,
             &cwd,
@@ -6939,7 +7066,9 @@ impl Cabin {
             effort,
             plan,
             image.as_deref(),
-            false,
+            fork,
+            user_home,
+            worktree,
         ) {
             Ok((pid, rx)) => {
                 self.grok_p_pid = Some(pid);
@@ -6961,33 +7090,67 @@ impl Cabin {
             Ok(GrokPEvent::Thought(d)) => {
                 let _ = push_stream_capped(&mut self.thought_buf, &d, IMAGE_FILE_CAP);
                 append_thought(&mut self.live_blocks, &d);
-                self.status = "Thinking…".into();
+                self.status = self.thinking_status();
                 self.upsert_stream_assistant();
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::Text(d)) => {
                 let _ = push_stream_capped(&mut self.stream_buf, &d, IMAGE_FILE_CAP);
                 append_say(&mut self.live_blocks, &d);
-                self.status = "Thinking…".into();
+                self.status = self.thinking_status();
                 self.upsert_stream_assistant();
                 self.grok_p_rx = Some(rx);
             }
-            Ok(GrokPEvent::Tool { id, title, status }) => {
-                append_tool(&mut self.live_blocks, &id, &title, &status, "");
-                let card = ToolCard {
-                    id,
-                    title,
-                    kind: String::new(),
-                    status,
-                    detail: String::new(),
-                    diff: String::new(),
-                    image_data_url: None,
-                };
+            Ok(GrokPEvent::Tool(card)) => {
+                append_tool(
+                    &mut self.live_blocks,
+                    &card.id,
+                    &card.title,
+                    &card.status,
+                    &card.detail,
+                );
+                if let Some(url) = &card.image_data_url {
+                    self.desk_frame = Some(url.clone());
+                    self.remember_last_frame(url);
+                    self.store_hub_frame(url);
+                }
                 if let Some(old) = self.tool_cards.iter_mut().find(|c| c.id == card.id) {
                     *old = merge_tool_card(old.clone(), card);
                 } else {
                     self.tool_cards.push(card);
                 }
+                self.grok_p_rx = Some(rx);
+            }
+            Ok(GrokPEvent::Usage(u)) => {
+                self.grok_usage.merge(&u);
+                self.grok_p_rx = Some(rx);
+            }
+            Ok(GrokPEvent::Commands(cmds)) => {
+                self.apply_grok_commands(cmds);
+                self.grok_p_rx = Some(rx);
+            }
+            Ok(GrokPEvent::Task { id, title, done }) => {
+                self.apply_grok_task(id, title, done);
+                self.grok_p_rx = Some(rx);
+            }
+            Ok(GrokPEvent::Plan(t)) => {
+                self.status = format!("Plan · {t}");
+                self.grok_p_rx = Some(rx);
+            }
+            Ok(GrokPEvent::Compact { started, usage }) => {
+                self.grok_usage.merge(&usage);
+                let ctx = grok_context_line(&self.grok_usage);
+                self.status = if started {
+                    if ctx.is_empty() {
+                        "Compacting…".into()
+                    } else {
+                        format!("Compacting… {ctx}")
+                    }
+                } else if ctx.is_empty() {
+                    "Compacted".into()
+                } else {
+                    format!("Compacted · {ctx}")
+                };
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::End(turn)) => {
@@ -6998,7 +7161,7 @@ impl Cabin {
                 self.grok_p_pid = None;
                 self.running = false;
                 self.pending_kick = None;
-                self.status = self.apply_job_fail(&e);
+                self.status = self.apply_job_fail(&rewrite_truncation_error(&e));
                 self.chat_job_thread = None;
                 self.persist();
             }
@@ -7031,6 +7194,9 @@ impl Cabin {
                 .find(|m| m.0 == "user")
                 .map(|m| m.1.clone())
         });
+        if !turn.usage.is_empty() {
+            self.grok_usage.merge(&turn.usage);
+        }
         if let Some(t) = self.threads.get_mut(idx) {
             t.grok_session = Some(turn.session_id.clone());
             if t.grok_cwd
@@ -7066,7 +7232,82 @@ impl Cabin {
         } else {
             streamed
         };
+        let footer = turn_footer(&turn.stop_reason, &self.grok_usage);
         self.finish_acp_turn(text);
+        if !footer.is_empty() && self.status.is_empty() {
+            self.status = footer;
+        }
+        self.drain_followup_queue();
+    }
+
+    fn send_grok_slash(&mut self, cmd: &str) {
+        if let Some(h) = &self.acp {
+            let _ = h.prompt(cmd);
+            return;
+        }
+        let idx = self.thread_idx;
+        let cwd = self
+            .threads
+            .get(idx)
+            .and_then(|t| t.grok_cwd.clone())
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| self.grok_cwd());
+        let resume = self
+            .threads
+            .get(idx)
+            .and_then(|t| t.grok_session.clone())
+            .filter(|s| !s.trim().is_empty());
+        let user_home = self.threads.get(idx).map(|t| t.grok_user_home).unwrap_or(false);
+        let worktree = self.threads.get(idx).map(|t| t.grok_worktree).unwrap_or(false);
+        if let Ok((pid, rx)) = grokhub_acp::spawn_grok_p_stream(
+            cmd,
+            &cwd,
+            resume.as_deref(),
+            true,
+            false,
+            None,
+            None,
+            false,
+            None,
+            false,
+            user_home,
+            worktree,
+        ) {
+            self.grok_p_pid = Some(pid);
+            self.grok_p_rx = Some(rx);
+            self.running = true;
+        }
+    }
+
+    fn apply_grok_commands(&mut self, cmds: Vec<String>) {
+        self.grok_commands = grok_command_hits(&cmds);
+    }
+
+    fn apply_grok_task(&mut self, id: String, title: String, done: bool) {
+        if let Some(row) = self.grok_tasks.iter_mut().find(|t| t.0 == id) {
+            row.1 = title;
+            row.2 = done;
+        } else {
+            self.grok_tasks.push((id, title, done));
+        }
+    }
+
+    fn drain_followup_queue(&mut self) {
+        let Some(next) = self.followup_queue.first().cloned() else {
+            return;
+        };
+        self.followup_queue.remove(0);
+        self.send_chat(next);
+    }
+
+    fn thinking_status(&self) -> String {
+        let ctx = grok_context_line(&self.grok_usage);
+        if ctx.is_empty() {
+            "Thinking…".into()
+        } else {
+            format!("Thinking… {ctx}")
+        }
     }
 
     fn upsert_stream_assistant(&mut self) {
@@ -7113,7 +7354,7 @@ impl Cabin {
                         self.chat_job_thread.as_deref(),
                         &self.visible_thread_id(),
                     ) {
-                        self.status = "Thinking…".into();
+                        self.status = self.thinking_status();
                     }
                     if changed {
                         self.upsert_stream_assistant();
@@ -7131,7 +7372,7 @@ impl Cabin {
                         self.chat_job_thread.as_deref(),
                         &self.visible_thread_id(),
                     ) {
-                        self.status = "Thinking…".into();
+                        self.status = self.thinking_status();
                     }
                     if changed {
                         self.upsert_stream_assistant();
@@ -7158,6 +7399,24 @@ impl Cabin {
                 }
                 AcpEvent::Plan(t) => {
                     self.status = format!("Plan · {t}");
+                }
+                AcpEvent::Usage(u) => self.grok_usage.merge(&u),
+                AcpEvent::Commands(cmds) => self.apply_grok_commands(cmds),
+                AcpEvent::Task { id, title, done } => self.apply_grok_task(id, title, done),
+                AcpEvent::Compact { started, usage } => {
+                    self.grok_usage.merge(&usage);
+                    let ctx = grok_context_line(&self.grok_usage);
+                    self.status = if started {
+                        if ctx.is_empty() {
+                            "Compacting…".into()
+                        } else {
+                            format!("Compacting… {ctx}")
+                        }
+                    } else if ctx.is_empty() {
+                        "Compacted".into()
+                    } else {
+                        format!("Compacted · {ctx}")
+                    };
                 }
                 AcpEvent::Permission(p) => {
                     if !self.running {
@@ -7200,6 +7459,7 @@ impl Cabin {
                         )
                     };
                     self.finish_acp_turn(text);
+                    self.drain_followup_queue();
                 }
                 AcpEvent::Err(e) => {
                     if e.contains("acp json") {
@@ -7591,7 +7851,9 @@ impl Cabin {
                 } else {
                     job_step
                 };
-                if should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, compact_step) {
+                if !self.grok_usage.is_empty() {
+                    // Grok Build 1.0.12 auto-compacts at 85% of the real window.
+                } else if should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, compact_step) {
                     if here {
                         self.run_slash(Slash::Compact);
                         self.status = format!(
@@ -9738,7 +10000,24 @@ impl Cabin {
                 ui.add_space(8.0);
             }
             let mut run_at: Option<usize> = None;
-            if self.agents.is_empty() {
+            if !self.grok_tasks.is_empty() {
+                crate::cards::section_label(ui, "Grok tasks");
+                ui.add_space(8.0);
+                for (id, title, done) in &self.grok_tasks {
+                    let st = if *done { "done" } else { "running" };
+                    crate::cards::grok_tile(
+                        ui,
+                        crate::icons::TileIcon::Bolt,
+                        title,
+                        &format!("{st} · {id}"),
+                        None,
+                        *done,
+                    );
+                    ui.add_space(6.0);
+                }
+                ui.add_space(12.0);
+            }
+            if self.agents.is_empty() && self.grok_tasks.is_empty() {
                 let _ = crate::cards::empty_prompt_tile(
                     ui,
                     crate::icons::TileIcon::List,
@@ -10739,15 +11018,39 @@ impl Cabin {
                             });
                         }
                     }
+                    ComposerStackSlot::ContextBar => {
+                        if !self.grok_usage.is_empty() {
+                            let used = self.grok_usage.context_used();
+                            let window = self.grok_usage.context_window().max(1);
+                            let frac = (used as f32 / window as f32).clamp(0.0, 1.0);
+                            let line = grok_context_line(&self.grok_usage);
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 14.0),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().rect_filled(rect, 4.0, crate::theme::elevated());
+                            let mut fill = rect;
+                            fill.set_width((rect.width() * frac).max(2.0));
+                            ui.painter().rect_filled(fill, 4.0, crate::theme::nav_active());
+                            ui.painter().text(
+                                rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                line,
+                                egui::FontId::proportional(11.0),
+                                crate::theme::muted(),
+                            );
+                            ui.add_space(4.0);
+                        }
+                    }
                     ComposerStackSlot::SlashPalette => {
-                        let hits = filter_slash_commands(&self.composer);
+                        let hits = filter_slash_hits(&self.composer, &self.grok_commands);
                         if !hits.is_empty() {
-                            let first = hits.first().map(|s| s.cmd).unwrap_or("");
+                            let first = hits.first().map(|s| s.cmd.as_str()).unwrap_or("");
                             let n = hits.len();
                             let changed = self.slash_filter_n != n || self.slash_filter_first != first;
                             self.slash_pick = slash_pick_retain(self.slash_pick, changed, n);
                             self.slash_filter_n = n;
-                            self.slash_filter_first = first;
+                            self.slash_filter_first = first.to_string();
                             ui.label(
                                 RichText::new("↑↓  Tab accepts")
                                     .size(crate::theme::FONT_META)
@@ -10792,7 +11095,7 @@ impl Cabin {
                                                 {
                                                     if let Some(t) = slash_pick_take(
                                                         &mut self.composer,
-                                                        s.insert,
+                                                        &s.insert,
                                                         s.run_on_pick,
                                                     ) {
                                                         self.send_chat(t);
@@ -10809,9 +11112,9 @@ impl Cabin {
                                 self.slash_pick = slash_pick_step(self.slash_pick, hits.len(), -1);
                             } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
                             {
-                                let s = hits[self.slash_pick.min(hits.len() - 1)];
+                                let s = &hits[self.slash_pick.min(hits.len() - 1)];
                                 if let Some(t) =
-                                    slash_pick_take(&mut self.composer, s.insert, s.run_on_pick)
+                                    slash_pick_take(&mut self.composer, &s.insert, s.run_on_pick)
                                 {
                                     self.send_chat(t);
                                 }
@@ -10820,7 +11123,7 @@ impl Cabin {
                         } else {
                             self.slash_pick = 0;
                             self.slash_filter_n = 0;
-                            self.slash_filter_first = "";
+                            self.slash_filter_first.clear();
                         }
                     }
                     ComposerStackSlot::Chips => {
@@ -14910,6 +15213,13 @@ mod tests {
             poll.contains("apply_auto_title"),
             "a finished turn must name the tab from the session, not leave Chat: {poll}"
         );
+        assert!(
+            poll.contains("GrokPEvent::Usage")
+                && poll.contains("GrokPEvent::Compact")
+                && poll.contains("thinking_status")
+                && poll.contains("turn_footer"),
+            "1.0.12 stream must paint usage, compact, and a turn footer: {poll}"
+        );
         let deleted = src
             .split("fn delete_thread_at")
             .nth(1)
@@ -15128,8 +15438,12 @@ mod tests {
             .and_then(|s| s.split("fn upsert_stream_assistant").next())
             .expect("kick_model");
         assert!(
+            kick.contains("ensure_acp") && kick.contains("prompt_with_image"),
+            "kick_model must prefer grok agent stdio so Ask can prompt: {kick}"
+        );
+        assert!(
             kick.contains("spawn_grok_p_stream") && kick.contains("grok_p_rx"),
-            "kick_model must run grok -p on the attached session, not agent stdio: {kick}"
+            "kick_model must keep grok -p as fallback: {kick}"
         );
         assert!(
             kick.contains("parse_reasoning_effort") && kick.contains("cfg.reasoning_effort"),
@@ -16204,8 +16518,10 @@ mod tests {
             .and_then(|s| s.split("fn upsert_stream_assistant").next())
             .expect("kick_model");
         assert!(
-            kick.contains("spawn_grok_p_stream") && !kick.contains("prompt_with_image"),
-            "kick_model talks to grok -p, not cabin windshield: {kick}"
+            kick.contains("ensure_acp")
+                && kick.contains("prompt_with_image")
+                && kick.contains("spawn_grok_p_stream"),
+            "kick_model prefers ACP then grok -p fallback: {kick}"
         );
         let cap_fn = src
             .split("fn capture_cabin_frame_this_turn")
@@ -16821,8 +17137,10 @@ mod tests {
         assert!(
             context.contains("visible_turn_count")
                 && context.contains("estimate_messages")
+                && context.contains("grok_usage")
+                && context.contains("grok_context_line")
                 && !context.contains("content.clone()"),
-            "/context must count real turns without cloning an 8MB transcript: {context}"
+            "/context must prefer Grok Build server tokens without cloning an 8MB transcript: {context}"
         );
         let finish = src
             .split("fn finish_hub_dispatch")
@@ -17368,6 +17686,7 @@ mod tests {
             order,
             &[
                 super::ComposerStackSlot::AuthBanner,
+                super::ComposerStackSlot::ContextBar,
                 super::ComposerStackSlot::SlashPalette,
                 super::ComposerStackSlot::Attach,
                 super::ComposerStackSlot::Pill,
