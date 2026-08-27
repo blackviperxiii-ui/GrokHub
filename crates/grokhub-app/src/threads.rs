@@ -27,6 +27,13 @@ pub struct ChatThread {
     /// Worktree this Grok session was created in. Resume must load here, not the currently bound tree.
     #[serde(default)]
     pub grok_cwd: Option<String>,
+    /// Resume from ~/.grok (TUI session) instead of cabin GROK_HOME.
+    #[serde(default)]
+    pub grok_user_home: bool,
+    #[serde(default)]
+    pub grok_fork: bool,
+    #[serde(default)]
+    pub grok_worktree: bool,
 }
 
 impl ChatThread {
@@ -42,6 +49,9 @@ impl ChatThread {
             accessed_ms: 0,
             grok_session: None,
             grok_cwd: None,
+            grok_user_home: false,
+            grok_fork: false,
+            grok_worktree: false,
         }
     }
 

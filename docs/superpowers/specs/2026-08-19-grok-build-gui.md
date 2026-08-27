@@ -10,7 +10,7 @@ Cabin owns: window, tray, project sidebar as cwd, LAN hub / Android, Hey Grok vo
 
 Grok Build owns: coding tools, bash, sandbox, permissions, plan mode, skills/plugins/MCP, sessions, `/imagine` when ACP supports it, and desktop computer-use.
 
-Transport: spawn installed `grok --no-auto-update agent stdio`. Do not vendor grok-build crates. Headless `grok -p` is only a fallback. Cabin overlay (`install.sh`) runs the official installer from `https://x.ai/cli` so `grok` is on PATH with `grokhub`.
+Transport: spawn installed `grok --no-auto-update agent stdio` with isolated `GROK_HOME` and a cabin leader socket (do not share `~/.grok/leader.sock`). Headless `grok -p` is Night, phone `/v1/task`, and ACP-connect fallback. Do not vendor grok-build crates. Cabin overlay (`install.sh`) runs the official installer from `https://x.ai/cli` so `grok` is on PATH with `grokhub`.
 
 ## Chat
 

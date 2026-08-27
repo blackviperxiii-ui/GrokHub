@@ -35,7 +35,7 @@ GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub
 
 The tray icon is there from launch. Close / titlebar × hides the cabin — the window unmaps and stays unmapped until it loses focus (then a pinned taskbar click, tray **Show cabin**, or a second `grokhub` raises it). It does not minimize to the taskbar. Drag the titlebar body to move the undecorated window. Size and position come back on the next launch. Jobs, hub, and idle reflect keep running. Tray: **Show cabin**, **Halt**, **Quit**. One ping when it first hides; it does not spam the desktop. `grokhub --agent` starts already hidden. `GROKHUB_TRAY=0` quits on close.
 
-`./scripts/install.sh --user` installs [Grok Build](https://x.ai/cli) (`grok`) next to the cabin. Then `grok login`. Cabin chats spawn headless `grok -p --output-format streaming-json` (Grok Build 1.0.11+). Bound project is `--cwd`; unbound uses `~/GrokHub-Work` (never the cabin process cwd). Overlay `/update` updates the GUI and installs `grok` if it is missing; `grok update --alpha` updates the agent.
+`./scripts/install.sh --user` installs [Grok Build](https://x.ai/cli) (`grok`) next to the cabin. Then `grok login`. Interactive chat is **`grok agent stdio` (ACP)** so Ask can show Allow / Deny. Night and phone `/v1/task` still use headless `grok -p --output-format streaming-json` (Grok Build 1.0.12+). Bound project is `--cwd`; unbound uses `~/GrokHub-Work` (never the cabin process cwd). Overlay `/update` updates the GUI and installs `grok` if it is missing; `grok update --alpha` updates the agent. `/context` and `/usage` show Grok Build server tokens (including reasoning). `/compact` and `/rewind` talk to Grok. Halt is `session/cancel`.
 
 Slash: `/help` · `/new` · `/scratch` · `/clear` · `/undo` · `/retry` · `/stop` · `/sh` · `/host` · `/plan` · `/always-approve` · `/sessions` · `/inspect` · `/project` · `/memory` · `/recall` · `/forget` · `/board` · `/imagine` · `/skill` · `/compact` · `/learn reflect` · `/update` · `/send` · `/sync` · `/hub` · `/inhabit` · `/rewind` · `/room` · `/export` · `/rename` · `/pin` · `/delete` · `/effort` · `/dream` · `/palette`. Type `/help` in the cabin for the rest. `/skill <name>` runs that skill. `/compact` keeps the last 8 visible turns. `/context` counts visible turns. `/scratch` blocks `/forget` and Memory Save. `/rewind` restores the bound project root (or Grok conversation rewind when mapped). `/sync` merges chats and memory with paired computers. `/project` also takes `bind`, `new`, `folder`, `rename`, `move`, `delete`, `clear`. Right-click a sidebar project to rename or remove it — Delete drops the row, not the files.
 
@@ -71,11 +71,11 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `suggestion
 1. Land in **chat**. Banner: `grok login` (install.sh already put `grok` on PATH), then Connect Grok in Settings for Voice/Imagine.
 2. `grok login` (or paste `XAI_API_KEY`). Optional cabin OAuth for media.
 3. Optional: Devices → **Start share** for the Android key-fob.
-4. Chat is ACP. Halt cancels the Grok Build turn.
+4. Chat is `grok agent stdio`. Halt is `session/cancel`. Ask shows Allow / Deny.
 
 Tokens stay in `secrets.json`. Never in markdown.
 
-Composer is a pill: **Ask anything**. Five quick chips sit centered under the bar. Plus opens Upload / Paste. Session pills are Chat / Plan / Ask; permission is Ask / Auto / Always. Mic is Hey Grok. Enter sends; Ctrl+Enter is a newline. Send becomes Stop while a reply runs. Chat streams ACP tokens onto the thread that started the job. Tool cards, diffs, permission prompts, and desk frames render in the pane. Leftover pages (Desk, Devices, Memory, History, Night, Workboard, Command) use the same catalog chrome. Command is a user `/sh` field, not the agent. `/v1/frame.jpg` serves the last ACP computer-use image when one exists.
+Composer is a pill: **Ask anything**. Five quick chips sit centered under the bar. Plus opens Upload / Paste. Session pills are Chat / Plan / Ask; permission is Ask / Auto / Always. Mic is Hey Grok. Enter sends; Ctrl+Enter is a newline. Send becomes Stop while a reply runs. Chat streams Grok Build tokens onto the thread that started the job. Follow-ups queue instead of killing the turn. Tool cards, diffs, permission prompts, and desk frames render in the pane. Leftover pages (Desk, Devices, Memory, History, Night, Workboard, Command) use the same catalog chrome. Command is a user `/sh` field, not the agent. `/v1/frame.jpg` serves the last ACP computer-use image when one exists.
 
 ## Always-on hub
 

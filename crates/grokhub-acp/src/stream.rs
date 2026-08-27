@@ -6,16 +6,182 @@ use std::thread;
 use std::time::Duration;
 
 use crate::client::SingleTurn;
+use crate::protocol::{parse_tool_card, ToolCard};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Server-reported spend and context. Grok Build 1.0.12 includes reasoning.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GrokUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub total_tokens: u64,
+    pub num_turns: u32,
+    pub context_tokens_used: u64,
+    pub context_window_tokens: u64,
+    pub stop_reason: String,
+}
+
+impl GrokUsage {
+    pub fn is_empty(&self) -> bool {
+        self.input_tokens == 0
+            && self.output_tokens == 0
+            && self.reasoning_tokens == 0
+            && self.total_tokens == 0
+            && self.context_tokens_used == 0
+            && self.context_window_tokens == 0
+    }
+
+    pub fn context_used(&self) -> u64 {
+        if self.context_tokens_used > 0 {
+            self.context_tokens_used
+        } else {
+            self.context_total()
+        }
+    }
+
+    pub fn context_window(&self) -> u64 {
+        if self.context_window_tokens > 0 {
+            self.context_window_tokens
+        } else {
+            500_000
+        }
+    }
+
+    pub fn context_total(&self) -> u64 {
+        if self.total_tokens > 0 {
+            self.total_tokens
+        } else {
+            self.input_tokens
+                + self.cache_read_input_tokens
+                + self.cache_creation_input_tokens
+                + self.output_tokens
+        }
+    }
+
+    pub fn merge(&mut self, other: &GrokUsage) {
+        if other.input_tokens > 0 {
+            self.input_tokens = other.input_tokens;
+        }
+        if other.output_tokens > 0 {
+            self.output_tokens = other.output_tokens;
+        }
+        if other.reasoning_tokens > 0 {
+            self.reasoning_tokens = other.reasoning_tokens;
+        }
+        if other.cache_read_input_tokens > 0 {
+            self.cache_read_input_tokens = other.cache_read_input_tokens;
+        }
+        if other.cache_creation_input_tokens > 0 {
+            self.cache_creation_input_tokens = other.cache_creation_input_tokens;
+        }
+        if other.total_tokens > 0 {
+            self.total_tokens = other.total_tokens;
+        }
+        if other.num_turns > 0 {
+            self.num_turns = other.num_turns;
+        }
+        if other.context_tokens_used > 0 {
+            self.context_tokens_used = other.context_tokens_used;
+        }
+        if other.context_window_tokens > 0 {
+            self.context_window_tokens = other.context_window_tokens;
+        }
+        if !other.stop_reason.is_empty() {
+            self.stop_reason = other.stop_reason.clone();
+        }
+    }
+}
+
+pub fn grok_context_line(u: &GrokUsage) -> String {
+    if u.is_empty() {
+        return String::new();
+    }
+    let used = u.context_used();
+    let window = u.context_window();
+    let pct = if window == 0 {
+        100
+    } else {
+        ((used.min(window) * 100) / window) as u32
+    };
+    let mut s = format!("{pct}% · {}/{}", compact_k(used), compact_k(window));
+    if u.reasoning_tokens > 0 {
+        s.push_str(&format!(" · {} think", compact_k(u.reasoning_tokens)));
+    }
+    s
+}
+
+pub fn grok_usage_line(u: &GrokUsage) -> String {
+    if u.is_empty() {
+        return String::new();
+    }
+    let mut s = format!(
+        "grok {} in / {} out",
+        compact_k(u.input_tokens),
+        compact_k(u.output_tokens)
+    );
+    if u.reasoning_tokens > 0 {
+        s.push_str(&format!(" / {} think", compact_k(u.reasoning_tokens)));
+    }
+    if u.cache_read_input_tokens > 0 {
+        s.push_str(&format!(" / {} cache", compact_k(u.cache_read_input_tokens)));
+    }
+    s
+}
+
+pub fn turn_footer(stop_reason: &str, usage: &GrokUsage) -> String {
+    let reason = stop_reason.trim();
+    let ctx = grok_context_line(usage);
+    let head = match reason {
+        "" | "end_turn" => {
+            if ctx.is_empty() {
+                return String::new();
+            }
+            "Done"
+        }
+        "cancelled" | "canceled" => "Cancelled",
+        "max_tokens" => "Truncated — continue next turn",
+        "max_turn_requests" | "max_turns_reached" => "Max turns",
+        "refusal" => "Refused",
+        other => other,
+    };
+    if ctx.is_empty() {
+        head.to_string()
+    } else {
+        format!("{head} · {ctx}")
+    }
+}
+
+pub fn rewrite_truncation_error(msg: &str) -> String {
+    let l = msg.to_ascii_lowercase();
+    if l.contains("shorter answer")
+        || (l.contains("truncat") && (l.contains("max_output") || l.contains("max_tokens")))
+    {
+        "Output hit the token limit. Continue in the next turn — do not shrink the ask.".into()
+    } else {
+        msg.to_string()
+    }
+}
+
+fn compact_k(n: u64) -> String {
+    if n >= 1000 {
+        format!("{}k", (n + 500) / 1000)
+    } else {
+        n.to_string()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum GrokPEvent {
     Thought(String),
     Text(String),
-    Tool {
-        id: String,
-        title: String,
-        status: String,
-    },
+    Tool(ToolCard),
+    Usage(GrokUsage),
+    Plan(String),
+    Compact { started: bool, usage: GrokUsage },
+    Commands(Vec<String>),
+    Task { id: String, title: String, done: bool },
     End(SingleTurn),
     Err(String),
 }
@@ -44,54 +210,208 @@ pub fn parse_stream_line(line: &str) -> Option<GrokPEvent> {
                 Some(GrokPEvent::Text(d.to_string()))
             }
         }
-        "tool_call" | "tool_call_update" => {
-            let id = v
-                .get("toolCallId")
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .to_string();
-            let title = v
-                .get("title")
-                .or_else(|| v.get("toolName"))
-                .and_then(|x| x.as_str())
-                .unwrap_or("tool")
-                .to_string();
-            let status = v
-                .get("status")
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .to_string();
-            Some(GrokPEvent::Tool { id, title, status })
+        "tool_call" | "tool_call_update" => Some(GrokPEvent::Tool(parse_tool_card(&v))),
+        "plan" => {
+            let t = plan_from_value(&v);
+            if t.is_empty() {
+                None
+            } else {
+                Some(GrokPEvent::Plan(t))
+            }
         }
+        "usage" => {
+            let u = parse_usage(&v);
+            if u.is_empty() {
+                None
+            } else {
+                Some(GrokPEvent::Usage(u))
+            }
+        }
+        "auto_compact_started" => Some(GrokPEvent::Compact {
+            started: true,
+            usage: parse_usage(&v),
+        }),
+        "auto_compact_completed" => Some(GrokPEvent::Compact {
+            started: false,
+            usage: parse_usage(&v),
+        }),
+        "available_commands" => {
+            let cmds = v
+                .get("commands")
+                .and_then(|x| x.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if cmds.is_empty() {
+                None
+            } else {
+                Some(GrokPEvent::Commands(cmds))
+            }
+        }
+        "task_backgrounded" | "task_completed" => {
+            let done = v.get("type").and_then(|x| x.as_str()) == Some("task_completed");
+            let id = json_str(&v, &["task_id", "tool_call_id", "toolCallId"]);
+            let title = json_str(&v, &["command", "title"]).chars().take(80).collect();
+            Some(GrokPEvent::Task { id, title, done })
+        }
+        "max_turns_reached" => Some(GrokPEvent::Err("Max turns reached".into())),
         "error" => {
             let msg = v
                 .get("message")
                 .and_then(|x| x.as_str())
                 .unwrap_or("grok -p error")
                 .to_string();
-            Some(GrokPEvent::Err(msg))
+            Some(GrokPEvent::Err(rewrite_truncation_error(&msg)))
         }
-        "end" => {
-            let session_id = v
-                .get("sessionId")
-                .or_else(|| v.get("session_id"))
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            let text = v
-                .get("text")
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .to_string();
-            Some(GrokPEvent::End(SingleTurn {
-                session_id,
-                text,
-                thought: String::new(),
-            }))
-        }
+        "end" => Some(GrokPEvent::End(end_turn_from_value(&v))),
         _ => None,
     }
+}
+
+pub fn parse_usage(v: &Value) -> GrokUsage {
+    let body = v.get("usage").unwrap_or(v);
+    let mut u = GrokUsage {
+        input_tokens: json_u64(body, &["input_tokens", "inputTokens"]),
+        output_tokens: json_u64(body, &["output_tokens", "outputTokens"]),
+        reasoning_tokens: json_u64(body, &["reasoning_tokens", "reasoningTokens"]),
+        cache_read_input_tokens: json_u64(
+            body,
+            &["cache_read_input_tokens", "cacheReadInputTokens", "cachedReadTokens"],
+        ),
+        cache_creation_input_tokens: json_u64(
+            body,
+            &[
+                "cache_creation_input_tokens",
+                "cacheCreationInputTokens",
+                "cacheCreationTokens",
+            ],
+        ),
+        total_tokens: json_u64(body, &["total_tokens", "totalTokens"]),
+        num_turns: json_u64(v, &["num_turns", "numTurns"]).min(u32::MAX as u64) as u32,
+        context_tokens_used: json_u64(
+            v,
+            &["context_tokens_used", "contextTokensUsed", "tokens_used", "tokensUsed"],
+        ),
+        context_window_tokens: json_u64(
+            v,
+            &[
+                "context_window_tokens",
+                "contextWindowTokens",
+                "context_window",
+                "contextWindow",
+            ],
+        ),
+        stop_reason: json_str(v, &["stopReason", "stop_reason"]),
+    };
+    if u.num_turns == 0 {
+        u.num_turns = json_u64(body, &["num_turns", "numTurns", "modelCalls"]).min(u32::MAX as u64) as u32;
+    }
+    if u.context_tokens_used == 0 {
+        u.context_tokens_used = json_u64(body, &["context_tokens_used", "contextTokensUsed"]);
+    }
+    if u.context_window_tokens == 0 {
+        u.context_window_tokens = json_u64(body, &["context_window", "contextWindow", "contextWindowTokens"]);
+    }
+    if u.stop_reason.is_empty() {
+        u.stop_reason = json_str(body, &["stopReason", "stop_reason"]);
+    }
+    if u.total_tokens == 0 {
+        u.total_tokens = u.context_total();
+    }
+    u
+}
+
+pub fn parse_signals_json(raw: &str) -> Option<GrokUsage> {
+    let v: Value = serde_json::from_str(raw).ok()?;
+    let u = GrokUsage {
+        context_tokens_used: json_u64(&v, &["contextTokensUsed", "context_tokens_used"]),
+        context_window_tokens: json_u64(&v, &["contextWindowTokens", "context_window_tokens"]),
+        num_turns: json_u64(&v, &["turnCount", "turn_count"]).min(u32::MAX as u64) as u32,
+        ..GrokUsage::default()
+    };
+    if u.context_tokens_used == 0 && u.context_window_tokens == 0 {
+        None
+    } else {
+        Some(u)
+    }
+}
+
+fn end_turn_from_value(v: &Value) -> SingleTurn {
+    let session_id = json_str(v, &["sessionId", "session_id"]);
+    let text = v
+        .get("text")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let thought = v
+        .get("thought")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mut usage = parse_usage(v);
+    if usage.stop_reason.is_empty() {
+        usage.stop_reason = json_str(v, &["stopReason", "stop_reason"]);
+    }
+    SingleTurn {
+        session_id,
+        text,
+        thought,
+        usage,
+        stop_reason: json_str(v, &["stopReason", "stop_reason"]),
+    }
+}
+
+fn plan_from_value(v: &Value) -> String {
+    if let Some(entries) = v.get("entries").and_then(|e| e.as_array()) {
+        let lines: Vec<String> = entries
+            .iter()
+            .filter_map(|e| {
+                let c = e.get("content").and_then(|x| x.as_str())?.trim();
+                if c.is_empty() {
+                    return None;
+                }
+                let st = e.get("status").and_then(|x| x.as_str()).unwrap_or("").trim();
+                Some(if st.is_empty() {
+                    c.to_string()
+                } else {
+                    format!("{c} ({st})")
+                })
+            })
+            .collect();
+        if !lines.is_empty() {
+            return lines.join(" · ");
+        }
+    }
+    json_str(v, &["title", "text", "data"])
+}
+
+fn json_u64(v: &Value, keys: &[&str]) -> u64 {
+    for k in keys {
+        let Some(x) = v.get(*k) else { continue };
+        if let Some(n) = x.as_u64() {
+            return n;
+        }
+        if let Some(n) = x.as_i64() {
+            return n.max(0) as u64;
+        }
+        if let Some(n) = x.as_f64() {
+            return n.max(0.0) as u64;
+        }
+    }
+    0
+}
+
+fn json_str(v: &Value, keys: &[&str]) -> String {
+    for k in keys {
+        if let Some(s) = v.get(*k).and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty()) {
+            return s.to_string();
+        }
+    }
+    String::new()
 }
 
 /// Fold a full streaming-json stdout into one turn.
@@ -99,6 +419,8 @@ pub fn fold_stream(stdout: &str) -> Result<SingleTurn, String> {
     let mut text = String::new();
     let mut thought = String::new();
     let mut session_id = String::new();
+    let mut usage = GrokUsage::default();
+    let mut stop_reason = String::new();
     let mut err: Option<String> = None;
     for line in stdout.lines() {
         match parse_stream_line(line) {
@@ -111,7 +433,12 @@ pub fn fold_stream(stdout: &str) -> Result<SingleTurn, String> {
                 if !t.text.is_empty() && text.is_empty() {
                     text = t.text;
                 }
+                usage.merge(&t.usage);
+                if !t.stop_reason.is_empty() {
+                    stop_reason = t.stop_reason;
+                }
             }
+            Some(GrokPEvent::Usage(u)) => usage.merge(&u),
             Some(GrokPEvent::Err(e)) => err = Some(e),
             _ => {}
         }
@@ -134,6 +461,8 @@ pub fn fold_stream(stdout: &str) -> Result<SingleTurn, String> {
         session_id,
         text: text.trim().to_string(),
         thought: thought.trim().to_string(),
+        usage,
+        stop_reason,
     })
 }
 
@@ -196,8 +525,78 @@ mod tests {
             r#"{"type":"tool_call","toolCallId":"c1","title":"Read","toolName":"read_file","status":"in_progress"}"#,
         );
         assert!(
-            matches!(tool, Some(GrokPEvent::Tool { id, title, .. }) if id == "c1" && title == "Read")
+            matches!(tool, Some(GrokPEvent::Tool(card)) if card.id == "c1" && card.title == "Read")
         );
+    }
+
+    #[test]
+    fn streaming_json_1_0_12_usage_compact_and_plan() {
+        let usage = parse_stream_line(
+            r#"{"type":"usage","usage":{"input_tokens":18007,"output_tokens":45,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"reasoning_tokens":40},"signature":"sig"}"#,
+        );
+        match usage {
+            Some(GrokPEvent::Usage(u)) => {
+                assert_eq!(u.input_tokens, 18007);
+                assert_eq!(u.output_tokens, 45);
+                assert_eq!(u.reasoning_tokens, 40);
+                assert!(grok_context_line(&u).contains("think"), "{}", grok_context_line(&u));
+            }
+            other => panic!("{other:?}"),
+        }
+        let end = parse_stream_line(
+            r#"{"type":"end","stopReason":"end_turn","sessionId":"01a04535-7671-75f0-9635-8d6c68bb2537","usage":{"input_tokens":18007,"output_tokens":45,"reasoning_tokens":40,"total_tokens":18052},"num_turns":1}"#,
+        );
+        match end {
+            Some(GrokPEvent::End(t)) => {
+                assert_eq!(t.session_id, "01a04535-7671-75f0-9635-8d6c68bb2537");
+                assert_eq!(t.usage.reasoning_tokens, 40);
+                assert_eq!(t.usage.total_tokens, 18052);
+                assert_eq!(t.stop_reason, "end_turn");
+            }
+            other => panic!("{other:?}"),
+        }
+        let compact = parse_stream_line(
+            r#"{"type":"auto_compact_started","percentage":85,"tokens_used":420000,"context_window":500000}"#,
+        );
+        match compact {
+            Some(GrokPEvent::Compact { started, usage }) => {
+                assert!(started);
+                assert_eq!(usage.context_tokens_used, 420000);
+                assert_eq!(usage.context_window_tokens, 500000);
+                assert!(grok_context_line(&usage).starts_with("84%") || grok_context_line(&usage).starts_with("85%"), "{}", grok_context_line(&usage));
+            }
+            other => panic!("{other:?}"),
+        }
+        let plan = parse_stream_line(
+            r#"{"type":"plan","entries":[{"content":"Read the changelog","status":"in_progress"},{"content":"Wire usage","status":"pending"}]}"#,
+        );
+        match plan {
+            Some(GrokPEvent::Plan(t)) => assert!(t.contains("changelog") && t.contains("Wire usage"), "{t}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            matches!(
+                parse_stream_line(r#"{"type":"error","message":"Output truncated. Try asking for a shorter answer."}"#),
+                Some(GrokPEvent::Err(e)) if e.contains("do not shrink")
+            )
+        );
+        let folded = fold_stream(
+            r#"
+{"type":"text","data":"pong"}
+{"type":"usage","usage":{"input_tokens":18007,"output_tokens":45,"reasoning_tokens":40}}
+{"type":"end","stopReason":"end_turn","sessionId":"sid","usage":{"input_tokens":18007,"output_tokens":45,"reasoning_tokens":40,"total_tokens":18052},"num_turns":1}
+"#,
+        )
+        .expect("fold usage");
+        assert_eq!(folded.usage.reasoning_tokens, 40);
+        assert_eq!(folded.stop_reason, "end_turn");
+        let sig = parse_signals_json(
+            r#"{"turnCount":2,"contextWindowUsage":14,"contextTokensUsed":72438,"contextWindowTokens":500000}"#,
+        )
+        .expect("signals");
+        assert_eq!(sig.context_tokens_used, 72438);
+        assert_eq!(sig.context_window_tokens, 500000);
+        assert!(grok_context_line(&sig).contains("14%"), "{}", grok_context_line(&sig));
     }
 
     #[test]

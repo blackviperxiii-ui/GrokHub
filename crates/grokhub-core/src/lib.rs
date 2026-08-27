@@ -303,9 +303,9 @@ pub use skill::{
     SkillMd,
 };
 pub use slash::{
-    filter_slash_commands, is_cabin_slash_turn, mark_slash_result, parse_slash, resolve_mode_arg,
-    slash_help, slash_kind, strip_slash_result, unknown_cabin_slash, Slash, SlashDef,
-    SLASH_COMMANDS, SLASH_RESULT_PREFIX,
+    filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,
+    mark_slash_result, parse_slash, resolve_mode_arg, slash_help, slash_kind, strip_slash_result,
+    unknown_cabin_slash, Slash, SlashDef, SlashHit, SLASH_COMMANDS, SLASH_RESULT_PREFIX,
 };
 pub use verify::{
     can_mark_done, has_goal_complete, has_verify_ok, interpret_verify, verify_ok_after_user_turn,

@@ -62,6 +62,10 @@ pub enum Slash {
     Model(String),
     ImagineVideo(String),
     Goal(String),
+    Fork,
+    Workflow(String),
+    RewindFiles,
+    Worktree,
 }
 
 fn looks_like_bind_path(s: &str) -> bool {
@@ -120,6 +124,10 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/imagine" => Some(Slash::Imagine(rest.to_string())),
         "/imagine-video" => Some(Slash::ImagineVideo(rest.to_string())),
         "/loop" => Some(Slash::Loop(rest.to_string())),
+        "/fork" => Some(Slash::Fork),
+        "/workflow" if rest.is_empty() => Some(Slash::GrokConnectors),
+        "/workflow" if !rest.is_empty() => Some(Slash::Workflow(rest.to_string())),
+        "/worktree" => Some(Slash::Worktree),
         "/skills" => Some(Slash::GrokSkills),
         "/plugins" | "/marketplace" | "/mcps" | "/hooks" | "/connectors" | "/workflows" => {
             Some(Slash::GrokConnectors)
@@ -220,6 +228,9 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/sync" => Some(Slash::Sync),
         "/hub" => Some(Slash::Hub),
         "/inhabit" if !rest.is_empty() => Some(Slash::Inhabit(rest.to_string())),
+        "/rewind" if rest == "--files" || rest == "--code" || rest == "files" => {
+            Some(Slash::RewindFiles)
+        }
         "/rewind" => Some(Slash::Rewind),
         "/room" if !rest.is_empty() => Some(Slash::Room(rest.to_string())),
         "/export" => Some(Slash::Export),
@@ -339,6 +350,10 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Model(_) => "model",
         Slash::ImagineVideo(_) => "imagine_video",
         Slash::Goal(_) => "goal",
+        Slash::Fork => "fork",
+        Slash::Workflow(_) => "workflow",
+        Slash::RewindFiles => "rewind_files",
+        Slash::Worktree => "worktree",
     }
 }
 
@@ -355,8 +370,8 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/new", hint: "New chat", insert: "/new", run_on_pick: true },
     SlashDef { cmd: "/scratch", hint: "New scratch chat (no memory)", insert: "/scratch", run_on_pick: true },
     SlashDef { cmd: "/clear", hint: "Clear current chat", insert: "/clear", run_on_pick: true },
-    SlashDef { cmd: "/compact", hint: "Compact older turns", insert: "/compact", run_on_pick: true },
-    SlashDef { cmd: "/context", hint: "Show context budget", insert: "/context", run_on_pick: true },
+    SlashDef { cmd: "/compact", hint: "Compact Grok context", insert: "/compact", run_on_pick: true },
+    SlashDef { cmd: "/context", hint: "Show Grok Build context", insert: "/context", run_on_pick: true },
     SlashDef { cmd: "/health", hint: "Run install/session health pass", insert: "/health", run_on_pick: true },
     SlashDef { cmd: "/fix", hint: "Self-heal stuck UI + health pass", insert: "/fix", run_on_pick: true },
     SlashDef { cmd: "/memory", hint: "Show memory files", insert: "/memory ", run_on_pick: false },
@@ -380,7 +395,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/host", hint: "Desktop host status", insert: "/host", run_on_pick: true },
     SlashDef { cmd: "/recall", hint: "Search chats and memory", insert: "/recall ", run_on_pick: false },
     SlashDef { cmd: "/forget", hint: "Remove a memory topic", insert: "/forget ", run_on_pick: false },
-    SlashDef { cmd: "/undo", hint: "Drop last assistant turn", insert: "/undo", run_on_pick: true },
+    SlashDef { cmd: "/undo", hint: "Rewind Grok conversation", insert: "/undo", run_on_pick: true },
     SlashDef { cmd: "/retry", hint: "Re-send last user prompt", insert: "/retry", run_on_pick: true },
     SlashDef { cmd: "/stop", hint: "Stop generation", insert: "/stop", run_on_pick: true },
     SlashDef { cmd: "/sh", hint: "Run shell on host", insert: "/sh ", run_on_pick: false },
@@ -388,14 +403,18 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/hub", hint: "Device hub status", insert: "/hub", run_on_pick: true },
     SlashDef { cmd: "/sync", hint: "Sync chats & memory with paired computers", insert: "/sync", run_on_pick: true },
     SlashDef { cmd: "/send", hint: "Send a task to another computer", insert: "/send ", run_on_pick: false },
-    SlashDef { cmd: "/rewind", hint: "Restore last job snapshot", insert: "/rewind", run_on_pick: true },
+    SlashDef { cmd: "/rewind", hint: "Rewind Grok conversation", insert: "/rewind", run_on_pick: true },
+    SlashDef { cmd: "/rewind --files", hint: "Restore last project snapshot", insert: "/rewind --files", run_on_pick: true },
+    SlashDef { cmd: "/fork", hint: "Fork this Grok session", insert: "/fork", run_on_pick: true },
+    SlashDef { cmd: "/worktree", hint: "Next chat in a git worktree", insert: "/worktree", run_on_pick: true },
+    SlashDef { cmd: "/workflow", hint: "Launch a Grok workflow…", insert: "/workflow ", run_on_pick: false },
     SlashDef { cmd: "/room", hint: "Speak the room — stage a project", insert: "/room ", run_on_pick: false },
     SlashDef { cmd: "/dream", hint: "Imagine last night’s job", insert: "/dream", run_on_pick: true },
     SlashDef { cmd: "/inhabit", hint: "Hand this Grok to another box", insert: "/inhabit ", run_on_pick: false },
     SlashDef { cmd: "/update", hint: "Overlay install", insert: "/update", run_on_pick: true },
     SlashDef { cmd: "/import", hint: "Import OpenClaw workspace", insert: "/import", run_on_pick: true },
     SlashDef { cmd: "/consult", hint: "One-shot consult", insert: "/consult ", run_on_pick: false },
-    SlashDef { cmd: "/usage", hint: "Today's usage", insert: "/usage", run_on_pick: true },
+    SlashDef { cmd: "/usage", hint: "Today's usage + Grok spend", insert: "/usage", run_on_pick: true },
     SlashDef { cmd: "/models", hint: "Grok catalog", insert: "/models", run_on_pick: true },
     SlashDef { cmd: "/palette", hint: "Command palette", insert: "/palette", run_on_pick: true },
     SlashDef { cmd: "/plan", hint: "Grok Build plan mode", insert: "/plan", run_on_pick: true },
@@ -442,6 +461,66 @@ pub fn filter_slash_commands(draft: &str) -> Vec<&'static SlashDef> {
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlashHit {
+    pub cmd: String,
+    pub hint: String,
+    pub insert: String,
+    pub run_on_pick: bool,
+}
+
+impl From<&SlashDef> for SlashHit {
+    fn from(s: &SlashDef) -> Self {
+        Self {
+            cmd: s.cmd.to_string(),
+            hint: s.hint.to_string(),
+            insert: s.insert.to_string(),
+            run_on_pick: s.run_on_pick,
+        }
+    }
+}
+
+pub fn grok_command_hits(names: &[String]) -> Vec<SlashHit> {
+    let mut out = Vec::new();
+    for name in names {
+        let n = name.trim().trim_start_matches('/');
+        if n.is_empty() {
+            continue;
+        }
+        let cmd = format!("/{n}");
+        if SLASH_COMMANDS.iter().any(|s| s.cmd.eq_ignore_ascii_case(&cmd)) {
+            continue;
+        }
+        out.push(SlashHit {
+            hint: "Grok Build".into(),
+            insert: format!("{cmd} "),
+            cmd,
+            run_on_pick: false,
+        });
+    }
+    out
+}
+
+pub fn filter_slash_hits(draft: &str, extra: &[SlashHit]) -> Vec<SlashHit> {
+    let mut hits: Vec<SlashHit> = filter_slash_commands(draft)
+        .into_iter()
+        .map(SlashHit::from)
+        .collect();
+    let needle = draft.trim_start().to_ascii_lowercase();
+    if needle.starts_with('/') {
+        for e in extra {
+            let c = e.cmd.to_ascii_lowercase();
+            if (c.starts_with(&needle) || needle.starts_with(&format!("{c} ")))
+                && !hits.iter().any(|h| h.cmd.eq_ignore_ascii_case(&e.cmd))
+            {
+                hits.push(e.clone());
+            }
+        }
+    }
+    hits.truncate(12);
+    hits
+}
+
 pub fn resolve_mode_arg(arg: &str) -> Option<String> {
     let a = arg.trim().to_ascii_lowercase();
     let mapped = match a.as_str() {
@@ -462,8 +541,8 @@ pub fn slash_help() -> String {
         "/new — new chat (new Grok Build session)",
         "/scratch — new scratch chat (no memory; /forget and Memory Save stay off)",
         "/clear — clear this chat",
-        "/compact — keep last 8 visible turns",
-        "/undo — drop last assistant turn",
+        "/compact — compact Grok context (also trims the painted pane)",
+        "/undo — rewind Grok conversation (alias /rewind)",
         "/retry — re-send last user prompt",
         "/stop — halt the current Grok Build turn",
         "/sh <cmd> — run a local shell (you, not the agent)",
@@ -499,13 +578,16 @@ pub fn slash_help() -> String {
         "/sync — merge chats and memory with paired computers",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another box (not the phone)",
-        "/rewind — restore last project snapshot (Restoring until host finishes; refuses empty dest and ~/.ssh)",
+        "/rewind — rewind Grok conversation; /rewind --files restores the last project snapshot",
+        "/fork — fork the Grok session into a new chat tab",
+        "/worktree — next chat starts in a git worktree",
+        "/workflow <name> — launch a Grok Build workflow",
         "/room <name> — speak the room",
         "/export — write this chat as markdown",
         "/rename <title> — name this chat (permanent)",
         "/pin — pin or unpin this chat",
         "/delete — delete this chat tab",
-        "/context — context budget (visible turns, not host rows)",
+        "/context — Grok Build context (server tokens + reasoning; visible turns as fallback)",
         "/health — doctor",
         "/fix — halt + doctor",
         "/remember <fact> — write MEMORY.md",
@@ -514,12 +596,12 @@ pub fn slash_help() -> String {
         "/tools — same as /host",
         "/import — OpenClaw workspace",
         "/consult <q> — one-shot consult",
-        "/usage — today's buckets",
+        "/usage — today's cabin buckets plus last Grok Build spend",
         "/models — Grok catalog",
         "/palette — command palette",
         "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs.",
         "Mode pill: Chat / Plan / Ask. Permission: Ask / Auto / Always-approve. Effort: Low / Medium / High / Extra High. Grok Build runs the agent.",
-        "Appearance: Dark, Light, System. Chat streams Grok Build ACP tokens on the thread that started them.",
+        "Appearance: Dark, Light, System. Interactive chat is grok agent stdio (ACP). Night and phone use grok -p. Halt is session/cancel.",
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
         "install.sh installs the Grok Build CLI (grok) from https://x.ai/cli. Settings shows grok --version. Cabin overlay updates the GUI and installs grok if missing; grok update updates the agent.",
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
@@ -557,6 +639,15 @@ mod tests {
         assert_eq!(parse_slash("/board"), Some(Slash::Board));
         assert_eq!(parse_slash("/imagine a cabin"), Some(Slash::Imagine("a cabin".into())));
         assert_eq!(parse_slash("/compact"), Some(Slash::Compact));
+        assert_eq!(parse_slash("/fork"), Some(Slash::Fork));
+        assert_eq!(parse_slash("/rewind --files"), Some(Slash::RewindFiles));
+        assert_eq!(parse_slash("/workflow review"), Some(Slash::Workflow("review".into())));
+        assert_eq!(parse_slash("/worktree"), Some(Slash::Worktree));
+        let extra = grok_command_hits(&["create-skill".into(), "help".into()]);
+        assert!(extra.iter().any(|h| h.cmd == "/create-skill"));
+        assert!(!extra.iter().any(|h| h.cmd == "/help"));
+        let hits = filter_slash_hits("/cre", &extra);
+        assert!(hits.iter().any(|h| h.cmd == "/create-skill"), "{hits:?}");
         assert_eq!(parse_slash("/learn reflect"), Some(Slash::LearnReflect));
         assert_eq!(parse_slash("/update"), Some(Slash::Update));
     }
@@ -646,7 +737,7 @@ mod tests {
         assert!(slash_help().contains("Chat rail opens the last-accessed thread"));
         assert!(slash_help().contains("Tool calls, diffs, and desk frames"));
         assert!(slash_help().contains("User bubbles sit on the right"));
-        assert!(slash_help().contains("keep last 8 visible turns"));
+        assert!(slash_help().contains("compact Grok context"));
         assert!(slash_help().contains("/forget and Memory Save stay off"));
         assert!(slash_help().contains("/skill <name> — run a skill"));
         assert!(slash_help().contains("/sync — merge chats and memory"));

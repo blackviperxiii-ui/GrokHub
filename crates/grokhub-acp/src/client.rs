@@ -6,7 +6,7 @@ use crate::protocol::{
 };
 use crate::protocol::SessionMode;
 use crate::{
-    agent_args, cabin_leader_socket, find_grok, grok_home, grok_stdout_timeout,
+    agent_args, cabin_grok_home, cabin_leader_socket, find_grok, grok_home, grok_stdout_timeout,
     prepare_cabin_grok_home,
 };
 use serde_json::{json, Value};
@@ -195,6 +195,8 @@ pub struct SpawnOpts {
     pub extra_env: Vec<(String, String)>,
     pub handshake_timeout: Option<Duration>,
     pub resume: Option<String>,
+    pub skip_cabin_home: bool,
+    pub worktree: bool,
 }
 
 impl SpawnOpts {
@@ -222,6 +224,8 @@ impl SpawnOpts {
             extra_env: Vec::new(),
             handshake_timeout: None,
             resume: None,
+            skip_cabin_home: false,
+            worktree: false,
         })
     }
 
@@ -563,7 +567,11 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
             cmd.env("GROK_LEADER_SOCKET", &sock);
         }
     }
+    if opts.worktree && !opts.args.iter().any(|a| a == "--worktree") {
+        cmd.arg("--worktree");
+    }
     if opts.args.iter().any(|a| a == "stdio")
+        && !opts.skip_cabin_home
         && !opts.extra_env.iter().any(|(k, _)| k == "GROK_HOME")
     {
         if let Some(dir) = prepare_cabin_grok_home() {
@@ -929,6 +937,8 @@ pub struct SingleTurn {
     pub session_id: String,
     pub text: String,
     pub thought: String,
+    pub usage: crate::stream::GrokUsage,
+    pub stop_reason: String,
 }
 
 pub fn parse_single_turn(stdout: &str) -> Result<SingleTurn, String> {
@@ -964,10 +974,23 @@ pub fn parse_single_turn(stdout: &str) -> Result<SingleTurn, String> {
     if text.is_empty() && thought.is_empty() {
         return Err("grok -p empty reply".into());
     }
+    let mut usage = crate::stream::parse_usage(&v);
+    if usage.stop_reason.is_empty() {
+        usage.stop_reason = v
+            .get("stopReason")
+            .or_else(|| v.get("stop_reason"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+    }
+    let stop_reason = usage.stop_reason.clone();
     Ok(SingleTurn {
         session_id,
         text,
         thought,
+        usage,
+        stop_reason,
     })
 }
 
@@ -1034,6 +1057,8 @@ pub fn spawn_grok_p_stream(
     plan: bool,
     image: Option<&str>,
     fork: bool,
+    skip_cabin_home: bool,
+    worktree: bool,
 ) -> Result<(u32, mpsc::Receiver<crate::stream::GrokPEvent>), String> {
     let mut child = grok_p_child(
         prompt,
@@ -1046,15 +1071,20 @@ pub fn spawn_grok_p_stream(
         plan,
         image,
         fork,
+        skip_cabin_home,
+        worktree,
     )?;
     let pid = child.id();
     let stdout = child.stdout.take().ok_or("grok -p stdout")?;
+    let grok_home = cabin_grok_home();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let reader = BufReader::new(stdout);
         let mut text = String::new();
         let mut thought = String::new();
         let mut session_id = String::new();
+        let mut usage = crate::stream::GrokUsage::default();
+        let mut stop_reason = String::new();
         for line in reader.lines() {
             let Ok(line) = line else { break };
             match crate::stream::parse_stream_line(&line) {
@@ -1072,8 +1102,19 @@ pub fn spawn_grok_p_stream(
                         return;
                     }
                 }
-                Some(ev @ crate::stream::GrokPEvent::Tool { .. }) => {
+                Some(ev @ crate::stream::GrokPEvent::Tool(_))
+                | Some(ev @ crate::stream::GrokPEvent::Plan(_))
+                | Some(ev @ crate::stream::GrokPEvent::Compact { .. })
+                | Some(ev @ crate::stream::GrokPEvent::Commands(_))
+                | Some(ev @ crate::stream::GrokPEvent::Task { .. }) => {
                     if tx.send(ev).is_err() {
+                        crate::stream::kill_pid(pid);
+                        return;
+                    }
+                }
+                Some(crate::stream::GrokPEvent::Usage(u)) => {
+                    usage.merge(&u);
+                    if tx.send(crate::stream::GrokPEvent::Usage(u)).is_err() {
                         crate::stream::kill_pid(pid);
                         return;
                     }
@@ -1084,6 +1125,10 @@ pub fn spawn_grok_p_stream(
                     }
                     if !t.text.is_empty() && text.is_empty() {
                         text = t.text;
+                    }
+                    usage.merge(&t.usage);
+                    if !t.stop_reason.is_empty() {
+                        stop_reason = t.stop_reason;
                     }
                 }
                 Some(crate::stream::GrokPEvent::Err(e)) => {
@@ -1104,10 +1149,17 @@ pub fn spawn_grok_p_stream(
             ));
             return;
         }
+        if let Some(home) = grok_home {
+            if let Some(sig) = load_session_signals(&home, &session_id) {
+                usage.merge(&sig);
+            }
+        }
         let _ = tx.send(crate::stream::GrokPEvent::End(SingleTurn {
             session_id,
             text: text.trim().to_string(),
             thought: thought.trim().to_string(),
+            usage,
+            stop_reason,
         }));
     });
     Ok((pid, rx))
@@ -1124,6 +1176,8 @@ fn grok_p_child(
     plan: bool,
     image: Option<&str>,
     fork: bool,
+    skip_cabin_home: bool,
+    worktree: bool,
 ) -> Result<Child, String> {
     let program = find_grok().ok_or_else(|| {
         "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
@@ -1143,6 +1197,7 @@ fn grok_p_child(
         args = crate::locate::with_prompt_json(args, &crate::stream::prompt_json(prompt, image));
     }
     args = crate::locate::with_fork_session(args, fork);
+    args = crate::locate::with_worktree(args, worktree);
     let mut cmd = Command::new(&program);
     cmd.args(&args)
         .current_dir(&cwd_path)
@@ -1164,8 +1219,10 @@ fn grok_p_child(
             });
         }
     }
-    if let Some(dir) = prepare_cabin_grok_home() {
-        cmd.env("GROK_HOME", &dir);
+    if !skip_cabin_home {
+        if let Some(dir) = prepare_cabin_grok_home() {
+            cmd.env("GROK_HOME", &dir);
+        }
     }
     if let Some(sock) = cabin_leader_socket() {
         cmd.env("GROK_LEADER_SOCKET", &sock);
@@ -1196,6 +1253,8 @@ fn grok_p_once(
         plan,
         image,
         fork,
+        false,
+        false,
     )?;
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
@@ -1661,6 +1720,38 @@ pub fn discover_session_files() -> Vec<GrokSession> {
     discover_session_files_in(&home)
 }
 
+/// Read Grok Build 1.0.12 `signals.json` (context window + used tokens).
+pub fn load_session_signals(home: &Path, session_id: &str) -> Option<crate::stream::GrokUsage> {
+    let id = session_id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    find_signals_json(&home.join("sessions"), id, 0)
+}
+
+fn find_signals_json(dir: &Path, id: &str, depth: u8) -> Option<crate::stream::GrokUsage> {
+    if depth > 4 {
+        return None;
+    }
+    let direct = dir.join(id).join("signals.json");
+    if direct.is_file() {
+        let raw = std::fs::read_to_string(&direct).ok()?;
+        return crate::stream::parse_signals_json(&raw);
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return None;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            if let Some(u) = find_signals_json(&p, id, depth + 1) {
+                return Some(u);
+            }
+        }
+    }
+    None
+}
+
 pub fn discover_session_files_in(home: &Path) -> Vec<GrokSession> {
     let mut out = Vec::new();
     let roots = [
@@ -2052,6 +2143,19 @@ mod tests {
         assert_eq!(t.session_id, "01a024f8-7606-74a2-8331-57a5177822eb");
         assert_eq!(t.text, "pong");
         assert_eq!(t.thought, "say pong");
+        let spent = parse_single_turn(
+            r#"{
+            "text": "pong",
+            "stopReason": "end_turn",
+            "sessionId": "01a024f8-7606-74a2-8331-57a5177822eb",
+            "usage": {"input_tokens": 18007, "output_tokens": 45, "reasoning_tokens": 40, "total_tokens": 18052},
+            "num_turns": 1
+        }"#,
+        )
+        .expect("usage");
+        assert_eq!(spent.usage.reasoning_tokens, 40);
+        assert_eq!(spent.usage.total_tokens, 18052);
+        assert_eq!(spent.stop_reason, "end_turn");
         let noisy = format!("debug line\n{raw}\n");
         assert_eq!(parse_single_turn(&noisy).unwrap().text, "pong");
         assert!(parse_single_turn("{}").is_err());
@@ -2321,6 +2425,8 @@ mod tests {
             extra_env: vec![],
             handshake_timeout: None,
             resume: None,
+            skip_cabin_home: false,
+            worktree: false,
         }
         .with_resume(Some("abc-123".into()));
         assert_eq!(opts.resume.as_deref(), Some("abc-123"));
