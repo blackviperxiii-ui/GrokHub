@@ -51,6 +51,7 @@ pub mod stream;
 pub mod task;
 pub mod trajectory;
 pub mod thread_tab;
+pub mod turn_timeline;
 pub mod update;
 pub mod usage;
 pub mod verify;
@@ -95,6 +96,10 @@ pub use chat_view::{
 pub use chat_bubble::{
     bubble_max_width, bubble_outer_height, bubble_outer_width, bubble_wrap_width, clamp_row_width,
     BUBBLE_MAX_FRAC, BUBBLE_PAD_X, BUBBLE_PAD_Y, BUBBLE_RADIUS,
+};
+pub use turn_timeline::{
+    append_say, append_thought, append_tool, split_at_last_sentence, views_up_to_last_user,
+    LiveBlock, LiveKind,
 };
 pub use chat_job::{
     apply_job_error, apply_stream_snapshot, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
