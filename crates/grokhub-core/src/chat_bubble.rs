@@ -4,7 +4,8 @@ pub const BUBBLE_MAX_FRAC: f32 = 0.84;
 pub const BUBBLE_PAD_X: f32 = 12.0;
 pub const BUBBLE_PAD_Y: f32 = 8.0;
 pub const BUBBLE_RADIUS: f32 = 16.0;
-const ROW_SANE_MAX: f32 = 1600.0;
+/// 8K-wide pane. Above this, ScrollArea is reporting garbage, not a monitor.
+const ROW_SANE_MAX: f32 = 8192.0;
 const ROW_FALLBACK: f32 = 640.0;
 const ROW_MIN: f32 = 160.0;
 
@@ -94,7 +95,7 @@ mod tests {
     #[test]
     fn unbounded_scroll_width_still_stays_in_a_pane() {
         let from_inf = bubble_max_width(f32::INFINITY);
-        let from_huge = bubble_max_width(12_000.0);
+        let from_huge = bubble_max_width(50_000.0);
         let fallback = bubble_max_width(ROW_FALLBACK);
         assert!(
             (from_inf - fallback).abs() < 0.1,
@@ -105,9 +106,29 @@ mod tests {
             (from_huge - ROW_SANE_MAX * BUBBLE_MAX_FRAC).abs() < 0.1,
             "huge scroll width must use the sane row, got {from_huge}"
         );
-        assert!(from_huge < 1600.0);
+        assert!(from_huge < ROW_SANE_MAX);
         let wrap = bubble_wrap_width(f32::INFINITY, BUBBLE_PAD_X);
         assert!(wrap <= from_inf - BUBBLE_PAD_X * 2.0 + 0.1);
         assert!(wrap > 200.0);
+    }
+
+    #[test]
+    fn ultrawide_pane_uses_the_real_width() {
+        let pane = clamp_row_width(3180.0);
+        assert!(
+            (pane - 3180.0).abs() < 0.1,
+            "a 3440 ultrawide minus the rail must keep the pane, got {pane}"
+        );
+        let max = bubble_max_width(3180.0);
+        assert!(
+            (max - 3180.0 * BUBBLE_MAX_FRAC).abs() < 0.1,
+            "thoughts and replies wrap with the window, got {max}"
+        );
+        assert!(max > 2000.0, "ultrawide chat must not sit in a 1600px strip, got {max}");
+        let mid = clamp_row_width(1660.0);
+        assert!(
+            (mid - 1660.0).abs() < 0.1,
+            "a 1920 pane minus the rail must keep the width, got {mid}"
+        );
     }
 }

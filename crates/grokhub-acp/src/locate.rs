@@ -446,6 +446,9 @@ pub fn single_turn_args_full(
     if plan {
         a.push("--permission-mode".into());
         a.push("plan".into());
+    } else if !always_approve && !auto {
+        // grok -p has no TTY. Default Ask would cancel every shell tool.
+        a.push("--always-approve".into());
     }
     if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
         a.push("--model".into());
@@ -636,6 +639,16 @@ mod tests {
             "{full:?}"
         );
         assert!(resume.iter().any(|a| a == "--always-approve"), "{resume:?}");
+        let ask = single_turn_args_full("hi", "/tmp/work", None, false, false, None, None, false);
+        assert!(
+            ask.iter().any(|a| a == "--always-approve"),
+            "grok -p cannot prompt; Ask must not cancel shell tools: {ask:?}"
+        );
+        assert!(
+            !ask.windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "plan"),
+            "{ask:?}"
+        );
     }
 
     #[test]

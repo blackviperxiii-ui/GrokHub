@@ -321,9 +321,7 @@ pub fn composer_mid_w(inner: f32) -> f32 {
 /// Visible pill width from the window, not egui available (chips/wordmark
 /// inflate that past the pane so Stop paints off-screen).
 pub fn composer_pill_w(screen_w: f32) -> f32 {
-    (screen_w - crate::theme::SIDEBAR_W - 40.0)
-        .min(crate::theme::QUERY_MAX_W)
-        .max(360.0)
+    (screen_w - crate::theme::SIDEBAR_W - 40.0).max(360.0)
 }
 
 /// Prompt field is a fixed strip. A stretching `TextEdit` covers the chips
@@ -1029,9 +1027,9 @@ pub(crate) fn chip_paint_label(label: &str) -> String {
     format!("{}…", out.trim_end())
 }
 
-/// Max width of the chip cluster — the composer pill, not a forced full-width strip.
+/// Max width of the chip cluster — follows the composer column.
 pub fn chip_row_width_lock(avail: f32) -> f32 {
-    crate::theme::QUERY_MAX_W.min(avail.max(120.0))
+    avail.max(120.0)
 }
 
 /// Tight row so leftover empty-home height cannot vertically center the chips.
@@ -2158,8 +2156,7 @@ mod tests {
         assert_eq!(quick_chip_stroke(true), quick_chip_stroke(false));
         assert_eq!(quick_chip_fg(true), crate::theme::fg());
         let max_w = chip_row_width_lock(640.0);
-        assert_eq!(max_w, crate::theme::QUERY_MAX_W.min(640.0_f32.max(120.0)));
-        assert!(max_w <= crate::theme::QUERY_MAX_W);
+        assert_eq!(max_w, 640.0);
         assert_ne!(max_w, 0.0);
         assert!(!quick_chip_inner_button_framed());
         let src = include_str!("cards.rs");
@@ -2366,7 +2363,17 @@ mod tests {
         );
         assert_eq!(
             composer_pill_w(1400.0),
-            crate::theme::QUERY_MAX_W
+            1100.0,
+            "1400-wide cabin must grow past the grok.com 800px query bar"
+        );
+        assert!(
+            composer_pill_w(3440.0) > 2500.0,
+            "ultrawide composer must fill the pane, got {}",
+            composer_pill_w(3440.0)
+        );
+        assert!(
+            composer_pill_w(3440.0) > composer_pill_w(1920.0),
+            "composer width must track the monitor"
         );
         assert!(
             composer_pill_w(900.0) > composer_go_cluster_w() + 80.0,
@@ -2478,6 +2485,19 @@ mod tests {
         assert!(github_api_path("list_issues", "repo:owner/name").is_ok());
         assert!(github_api_path("search_code", "query:foo").is_ok());
         assert!(github_api_path("search_issues", "query:foo").is_ok());
+    }
+
+    #[test]
+    fn composer_pill_tracks_the_monitor() {
+        assert_eq!(composer_pill_w(900.0), 600.0);
+        assert_eq!(composer_pill_w(1400.0), 1100.0);
+        assert!(
+            composer_pill_w(3440.0) > 2500.0,
+            "ultrawide composer must fill the pane, got {}",
+            composer_pill_w(3440.0)
+        );
+        assert!(composer_pill_w(3440.0) > composer_pill_w(1920.0));
+        assert!(composer_pill_w(1920.0) > composer_pill_w(1400.0));
     }
 
     #[test]
