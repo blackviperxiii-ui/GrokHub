@@ -18,6 +18,26 @@ pub struct ChatView {
     pub body: String,
 }
 
+pub const CHAT_BLOCK_GAP: f32 = 10.0;
+pub const THOUGHT_CLUSTER_GAP: f32 = 3.0;
+
+/// Consecutive thoughts sit in one cluster; other blocks keep the chat gap.
+pub fn cluster_gap(this_thought: bool, next_thought: bool) -> f32 {
+    if this_thought && next_thought {
+        THOUGHT_CLUSTER_GAP
+    } else {
+        CHAT_BLOCK_GAP
+    }
+}
+
+pub fn thought_shows_label(prev_thought: bool) -> bool {
+    !prev_thought
+}
+
+pub fn thought_shows_acts(next_thought: bool) -> bool {
+    !next_thought
+}
+
 pub fn visible_turn_count(messages: &[(String, String)]) -> usize {
     visible_turn_count_from(messages.iter().map(|(r, c)| (r.as_str(), c.as_str())))
 }
@@ -555,6 +575,18 @@ mod tests {
         assert!(!v.iter().any(|x| x.body.contains("CONNECTOR_RESULT")));
         assert!(!v.iter().any(|x| x.body.contains("CONNECTOR_CMD")));
         assert!(!v.iter().any(|x| x.body.contains("github user")));
+    }
+
+    #[test]
+    fn consecutive_thoughts_cluster_tighter_than_chat() {
+        assert_eq!(cluster_gap(true, true), THOUGHT_CLUSTER_GAP);
+        assert_eq!(cluster_gap(true, false), CHAT_BLOCK_GAP);
+        assert_eq!(cluster_gap(false, true), CHAT_BLOCK_GAP);
+        assert!(THOUGHT_CLUSTER_GAP < CHAT_BLOCK_GAP);
+        assert!(thought_shows_label(false));
+        assert!(!thought_shows_label(true));
+        assert!(thought_shows_acts(false));
+        assert!(!thought_shows_acts(true));
     }
 
     #[test]
