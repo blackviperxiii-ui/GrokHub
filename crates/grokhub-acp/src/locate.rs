@@ -367,11 +367,13 @@ fn grok_stdout_inner(
     };
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    if !out.status.success() && stdout.is_empty() {
-        return Err(if stderr.is_empty() {
-            format!("grok {} failed", args.join(" "))
-        } else {
+    if !out.status.success() {
+        return Err(if !stderr.is_empty() {
             stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            format!("grok {} failed", args.join(" "))
         });
     }
     if stdout.is_empty() {
@@ -458,8 +460,15 @@ pub fn single_turn_args_full(
         a.push("--reasoning-effort".into());
         a.push(e.to_string());
     }
+    a.push("--sandbox".into());
+    a.push("off".into());
+    a.push("--rules".into());
+    a.push(CABIN_DESKTOP_RULES.into());
     a
 }
+
+/// Headless GrokHub chat is Grok Build on this Linux box, not grok.com.
+pub const CABIN_DESKTOP_RULES: &str = "You are Grok Build running on this Linux desktop through GrokHub. You have full local filesystem, shell, and computer-use tools. Never say you lack access to this computer, files, or desktop. Do the work with tools.";
 
 /// Swap `-p <prompt>` for `--prompt-json` when a still is attached.
 pub fn with_prompt_json(mut args: Vec<String>, json: &str) -> Vec<String> {
@@ -574,6 +583,19 @@ mod tests {
     }
 
     #[test]
+    fn grok_cmd_fails_on_nonzero_even_with_stdout() {
+        let inner = include_str!("locate.rs")
+            .split("fn grok_stdout_inner(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn agent_args(").next())
+            .expect("grok_stdout_inner");
+        assert!(
+            inner.contains("if !out.status.success()") && !inner.contains("&& stdout.is_empty()"),
+            "grok sessions delete must fail on a non-zero exit even when it printed a reason: {inner}"
+        );
+    }
+
+    #[test]
     fn cabin_leader_socket_is_not_the_cli_leader() {
         let p = cabin_leader_socket().expect("HOME");
         let s = p.to_string_lossy();
@@ -655,6 +677,14 @@ mod tests {
             !ask.windows(2)
                 .any(|w| w[0] == "--permission-mode" && w[1] == "plan"),
             "{ask:?}"
+        );
+        assert!(
+            ask.windows(2).any(|w| w[0] == "--sandbox" && w[1] == "off"),
+            "cabin grok -p must not sandbox away the desktop: {ask:?}"
+        );
+        assert!(
+            ask.windows(2).any(|w| w[0] == "--rules" && w[1] == CABIN_DESKTOP_RULES),
+            "cabin grok -p must tell Grok it has this computer: {ask:?}"
         );
     }
 

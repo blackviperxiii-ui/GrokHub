@@ -108,6 +108,8 @@ pub struct PermissionAsk {
     pub session_id: String,
     pub title: String,
     pub tool_call_id: String,
+    /// Hook `ask` reason (or any other prompt body the CLI sent).
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -121,7 +123,11 @@ pub enum AcpEvent {
     Usage(crate::stream::GrokUsage),
     Commands(Vec<String>),
     Task { id: String, title: String, done: bool },
-    Compact { started: bool, usage: crate::stream::GrokUsage },
+    Compact {
+        started: bool,
+        usage: crate::stream::GrokUsage,
+        error: Option<String>,
+    },
     Done { stop_reason: String },
     Err(String),
 }
@@ -680,11 +686,32 @@ pub fn parse_session_update(params: &Value) -> Option<AcpEvent> {
         "auto_compact_started" => Some(AcpEvent::Compact {
             started: true,
             usage: crate::stream::parse_usage(update),
+            error: None,
         }),
         "auto_compact_completed" => Some(AcpEvent::Compact {
             started: false,
             usage: crate::stream::parse_usage(update),
+            error: None,
         }),
+        "auto_compact_failed" => {
+            let msg = update
+                .get("message")
+                .or_else(|| update.get("error"))
+                .or_else(|| update.get("reason"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("Compact failed")
+                .trim()
+                .to_string();
+            Some(AcpEvent::Compact {
+                started: false,
+                usage: crate::stream::parse_usage(update),
+                error: Some(if msg.is_empty() {
+                    "Compact failed".into()
+                } else {
+                    msg
+                }),
+            })
+        }
         "plan" => {
             if let Some(entries) = update.get("entries").and_then(|e| e.as_array()) {
                 let lines: Vec<String> = entries
@@ -731,11 +758,22 @@ pub fn parse_permission(id: Value, params: &Value) -> PermissionAsk {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    let reason = params
+        .get("reason")
+        .or_else(|| params.get("message"))
+        .or_else(|| params.get("permissionDecisionReason"))
+        .or_else(|| params.get("hookReason"))
+        .or_else(|| tool.get("reason"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     PermissionAsk {
         rpc_id: id,
         session_id,
         title,
         tool_call_id,
+        reason,
     }
 }
 
@@ -805,6 +843,16 @@ mod tests {
         assert_eq!(with["prompt"][1]["type"], "image");
         assert_eq!(with["prompt"][1]["mimeType"], "image/jpeg");
         assert_eq!(with["prompt"][1]["data"], "QQ==");
+        let ask = parse_permission(
+            json!(1),
+            &json!({
+                "sessionId": "s1",
+                "toolCall": { "title": "Run", "toolCallId": "c1" },
+                "reason": "Confirm this deploy"
+            }),
+        );
+        assert_eq!(ask.title, "Run");
+        assert_eq!(ask.reason, "Confirm this deploy");
         assert!(split_image_data_url("data:text/plain;base64,QQ==").is_none());
         assert!(split_image_data_url("not-a-data-url").is_none());
         assert!(is_jwt_api_key("aaa.bbb.ccc"));

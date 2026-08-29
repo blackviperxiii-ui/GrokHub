@@ -15,7 +15,7 @@ pub use client::{
     cabin_has_session, connect, delete_session, discover_session_files, discover_session_files_in,
     ensure_session_cwd, load_session_signals, session_id_in_home, session_resume_is_missing,
     explain_handshake_error, inspect_json, is_placeholder_session_title, is_session_cwd_error,
-    jsonrpc_error_text, list_sessions, merge_grok_sessions, parse_session_list,
+    is_sigterm_status, jsonrpc_error_text, list_sessions, merge_grok_sessions, parse_session_list,
     parse_session_markdown, parse_single_turn, preferred_history_title, run_single_turn,
     run_single_turn_full, spawn_grok_p_stream,
     session_title_from_chat_history,
@@ -33,5 +33,6 @@ pub use protocol::{
 };
 pub use stream::{
     fold_stream, grok_context_line, grok_usage_line, kill_pid, parse_signals_json, parse_stream_line,
-    parse_usage, prompt_json, rewrite_truncation_error, turn_footer, GrokPEvent, GrokUsage,
+    parse_usage, prompt_json, rewrite_truncation_error, turn_footer, classify_stream_error,
+    StreamErrorKind, GrokPEvent, GrokUsage,
 };

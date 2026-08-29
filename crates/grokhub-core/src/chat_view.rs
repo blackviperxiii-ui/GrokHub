@@ -317,7 +317,7 @@ fn host_cmd_heredoc_delim(line: &str) -> Option<String> {
 pub fn scrub_thought(text: &str) -> String {
     let mut out = String::new();
     for chunk in split_thought_chunks(text) {
-        if thought_chunk_is_attach_noise(chunk) {
+        if thought_chunk_is_attach_noise(chunk) || thought_chunk_is_false_no_computer(chunk) {
             continue;
         }
         out.push_str(chunk);
@@ -346,6 +346,29 @@ fn split_thought_chunks(text: &str) -> Vec<&str> {
         out.push(&text[start..]);
     }
     out
+}
+
+fn thought_chunk_is_false_no_computer(chunk: &str) -> bool {
+    let t = chunk.to_ascii_lowercase();
+    if t.trim().is_empty() {
+        return false;
+    }
+    let no_access = t.contains("don't have")
+        || t.contains("do not have")
+        || t.contains("can't access")
+        || t.contains("cannot access")
+        || t.contains("no direct access")
+        || t.contains("don't have direct access")
+        || t.contains("do not have direct access");
+    let target = t.contains("file system")
+        || t.contains("filesystem")
+        || t.contains("your computer")
+        || t.contains("your files")
+        || t.contains("move files around")
+        || t.contains("on your computer");
+    let cop_out = t.contains("exact commands to run on your computer")
+        || (t.contains("give you") && t.contains("plan") && t.contains("command"));
+    (no_access && target) || cop_out
 }
 
 fn thought_chunk_is_attach_noise(chunk: &str) -> bool {
@@ -786,6 +809,24 @@ mod tests {
         )]);
         assert_eq!(kinds(&gone), vec![ChatKind::Assistant]);
         assert_eq!(gone[0].body, "Hello.");
+    }
+
+    #[test]
+    fn thought_drops_false_no_computer_claim() {
+        assert_eq!(
+            scrub_thought("I don't have direct access to your actual file system. I'll list Videos."),
+            "I'll list Videos."
+        );
+        assert!(scrub_thought(
+            "I need to be upfront about a limitation: I don't have the ability to move files around on your computer."
+        )
+        .is_empty());
+        let v = visible_chat(&[(
+            "assistant".into(),
+            "THINKING:\nI don't have access to your computer.\n\nYour Videos folder is sorted.".into(),
+        )]);
+        assert_eq!(kinds(&v), vec![ChatKind::Assistant]);
+        assert_eq!(v[0].body, "Your Videos folder is sorted.");
     }
 
     #[test]

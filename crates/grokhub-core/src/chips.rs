@@ -1344,8 +1344,8 @@ fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
             ),
             chip(
                 "err-retry",
-                "Retry last ask",
-                "Retry the last request. Stay concrete. If it failed, change the approach.",
+                "Try Again",
+                "/retry",
                 ChipKind::Chat,
                 88.0,
                 "Last attempt failed",
@@ -1598,17 +1598,15 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             }
         }
     }
-    if input.last_failed {
-        if let Some(last_user) = recent_user(input.chat, 1).into_iter().next() {
-            chips.push(chip(
-                "pred-act-retry",
-                "Retry last ask",
-                &last_user,
-                ChipKind::Chat,
-                105.0,
-                "Predicted — last attempt failed",
-            ));
-        }
+    if input.last_failed && recent_user(input.chat, 1).into_iter().next().is_some() {
+        chips.push(chip(
+            "pred-act-retry",
+            "Try Again",
+            "/retry",
+            ChipKind::Chat,
+            105.0,
+            "Predicted — last attempt failed",
+        ));
     }
 
     chips.extend(chips_from_last_assistant(input.chat));
