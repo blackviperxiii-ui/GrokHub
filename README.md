@@ -2,12 +2,12 @@
 
 Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 
-**v2.6.42** — New chat does not reuse the last ACP session. Imagine prefers `grok login`. History is in the avatar menu. Handshake no longer mixes load-replay into the live turn. Default permission is Ask.
+**v2.7.0** — Grok Build **1.0.13** stable. History is `grok sessions` 1:1. Chat is this Linux desktop (filesystem and shell), not grok.com. Truncated turns and 5xx retries stay alive; credit-limit offers Try Again.
 
 | Platform | Repository | Latest |
 |----------|------------|--------|
-| **Linux** (this) | [GrokHub](https://github.com/blackviperxiii-ui/GrokHub) | **v2.6.42** |
-| **Windows** | [Grok-Hub-Windows](https://github.com/blackviperxiii-ui/Grok-Hub-Windows) | sibling — same `grokhub-core` |
+| **Linux** (this) | [GrokHub](https://github.com/blackviperxiii-ui/GrokHub) | **v2.7.0** |
+| **Windows** | [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) | native cabin — same crates |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 ## Run
@@ -35,7 +35,7 @@ GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub
 
 The tray icon is there from launch. Close / titlebar × hides the cabin — the window unmaps and stays unmapped until it loses focus (then a pinned taskbar click, tray **Show cabin**, or a second `grokhub` raises it). It does not minimize to the taskbar. Drag the titlebar body to move the undecorated window. Size and position come back on the next launch. Jobs, hub, and idle reflect keep running. Tray: **Show cabin**, **Halt**, **Quit**. One ping when it first hides; it does not spam the desktop. `grokhub --agent` starts already hidden. `GROKHUB_TRAY=0` quits on close.
 
-`./scripts/install.sh --user` installs [Grok Build](https://x.ai/cli) (`grok`) next to the cabin. Then `grok login`. Interactive chat is **`grok agent stdio` (ACP)** so Ask can show Allow / Deny. Night and phone `/v1/task` still use headless `grok -p --output-format streaming-json` (Grok Build 1.0.12+). Bound project is `--cwd`; unbound uses `~/GrokHub-Work` (never the cabin process cwd). Overlay `/update` updates the GUI and installs `grok` if it is missing; `grok update --alpha` updates the agent. `/context` and `/usage` show Grok Build server tokens (including reasoning). `/compact` and `/rewind` talk to Grok. Halt is `session/cancel`.
+`./scripts/install.sh --user` installs [Grok Build](https://x.ai/cli) (`grok`) next to the cabin. Then `grok login`. Chat is headless **`grok -p --output-format streaming-json`** (Grok Build 1.0.13+) with `--sandbox off` and a desktop rule so Grok uses this machine. Ask/Allow/Deny is ACP (`grok agent stdio`) when the permission pill is Ask. Night and phone `/v1/task` stay on `grok -p`. Bound project is `--cwd`; unbound uses `~/GrokHub-Work` (never the cabin process cwd). Overlay `/update` updates the GUI and installs `grok` if it is missing; `grok update` updates the agent on the stable channel (`grok update --alpha` is optional). `/context` and `/usage` show Grok Build server tokens (including reasoning). `/compact` and `/rewind` talk to Grok. Halt kills the `grok -p` child (`session/cancel` on ACP). Truncated replies and transient 5xx retries stay on the same turn. Credit-limit errors offer Try Again.
 
 Slash: `/help` · `/new` · `/scratch` · `/clear` · `/undo` · `/retry` · `/stop` · `/sh` · `/host` · `/plan` · `/always-approve` · `/sessions` · `/inspect` · `/project` · `/memory` · `/recall` · `/forget` · `/board` · `/imagine` · `/skill` · `/compact` · `/learn reflect` · `/update` · `/send` · `/sync` · `/hub` · `/inhabit` · `/rewind` · `/room` · `/export` · `/rename` · `/pin` · `/delete` · `/effort` · `/dream` · `/palette`. Type `/help` in the cabin for the rest. `/skill <name>` runs that skill. `/compact` keeps the last 8 visible turns. `/context` counts visible turns. `/scratch` blocks `/forget` and Memory Save. `/rewind` restores the bound project root (or Grok conversation rewind when mapped). `/sync` merges chats and memory with paired computers. `/project` also takes `bind`, `new`, `folder`, `rename`, `move`, `delete`, `clear`. Right-click a sidebar project to rename or remove it — Delete drops the row, not the files.
 
@@ -43,9 +43,7 @@ Composer session pills: **Chat** / **Plan** / **Ask**. Permission: **Ask** / **A
 
 Projects sit in the left rail. `+` makes a project (`~/GrokHub-Work/<slug>`) or a one-level folder. Double-click or right-click to rename (display name only — the path stays). Right-click a project to add it to a folder or remove it. Folders are sidebar only; they do not move files. Click a project to bind it. Click the bound project again to open the Workboard. Bound tree is the world.
 
-History tabs pin, rename, and delete (right-click, or `/pin` `/rename` `/delete`). A manual rename is locked. After each turn Fast names the tab from the first topic (max 16 characters) unless that lock is set. Scratch stays unnamed. The Chat rail opens the last-accessed thread (scratch is skipped when another thread exists). Each thread stores `accessed_ms`; sitting on Chat stamps it.
-
-History lists cabin chats plus Grok Build sessions. Cabin `grok -p` sessions (under `~/.config/GrokHub/grok-home`) resume. Grok TUI sessions from `~/.grok` open as a transcript; the next send starts a cabin session. Transcripts load via `grok export`. Alpha channel: `grok update --alpha`.
+History is the same list as `grok sessions list` (newest first). Right-click **Delete** or the History-page Delete button runs `grok sessions delete` against `~/.grok`, then refreshes from the CLI — a row cannot come back until Grok Build says it is gone. Cabin chats use the user Grok home so they show up in that list. Transcripts load via `grok export`. Stable channel: `grok update`. Optional faster builds: `grok update --alpha`.
 
 Imagine stills use dedicated **`grok-imagine-image-2.0`** (falls back to `grok-imagine-image` on timeout). Video kind calls **`grok-imagine-video-1.5`**. Auth is `grok login` first, then a console key / cabin OAuth. Hey Grok: console API key for duplex Voice; OAuth is PTT STT + TTS. Desktop control is **Grok Build computer-use** — the cabin renders tool cards, diffs, and computer-use frames in chat. No Desk / Take over menu. Halt / Stop / tray Halt / Ctrl+Shift+Esc SIGTERM the `grok -p` child. Stream buffers clip at `IMAGE_FILE_CAP` / `TEXT_FILE_CAP`. Desk frames drop above `FRAME_CAP`. Titlebar × unmaps to tray. Plus-button stills ride `--prompt-json` image blocks.
 
@@ -53,7 +51,7 @@ Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is cabin sign-in for 
 
 Settings → **Update** (or `grokhub --update` / `/update`) retargets a leftover Origin clone to GitHub (`https://github.com/blackviperxiii-ui/GrokHub.git`), then `git pull --ff-only origin main` and `./scripts/install.sh --user`. Overlay updates the GUI and installs Grok Build CLI (`grok`) if it is missing. `grok update` updates the agent. Progress stays on Settings. After a clean overlay, **Restart** reloads hub, drops the cabin pid lock, starts a new overlay `grokhub`, and exits this process.
 
-Chat is headless `grok -p`. Night and phone `/v1/task` enqueue the same on the bound project. Halt / Stop / Ctrl+Shift+Esc kill the child. Chat only saves a night job when you asked to schedule one — a reply that mentions “every day at” or “heartbeat every” as advice does not. Anticipate only fires a `Follow skill` on a real `need to` / `remind me` insight that matches a skill, not polite “if you need” chit-chat. A 15s heartbeat runs housekeep, inbox, night, review, wall, mid-thought, reflect, and anticipate. Hidden idle cabins wait for that pulse. Phone dispatch completes on halt / error. `/rewind` restores only the bound project root.
+Chat is headless `grok -p` on this desktop (full filesystem and shell; Grok is told not to claim it lacks computer access). Night and phone `/v1/task` enqueue the same on the bound project. Halt / Stop / Ctrl+Shift+Esc kill the child. Chat only saves a night job when you asked to schedule one — a reply that mentions “every day at” or “heartbeat every” as advice does not. Anticipate only fires a `Follow skill` on a real `need to` / `remind me` insight that matches a skill, not polite “if you need” chit-chat. A 15s heartbeat runs housekeep, inbox, night, review, wall, mid-thought, reflect, and anticipate. Hidden idle cabins wait for that pulse. Phone dispatch completes on halt / error. `/rewind` restores only the bound project root.
 
 Android / Windows: link `libgrokhub_ffi` and include `crates/grokhub-ffi/include/grokhub.h`.
 
@@ -71,7 +69,7 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `suggestion
 1. Land in **chat**. Banner: `grok login` (install.sh already put `grok` on PATH), then Connect Grok in Settings for Voice/Imagine.
 2. `grok login` (or paste `XAI_API_KEY`). Optional cabin OAuth for media.
 3. Optional: Devices → **Start share** for the Android key-fob.
-4. Chat is `grok agent stdio`. Halt is `session/cancel`. Ask shows Allow / Deny.
+4. Chat is `grok -p`. Halt stops the child. Ask shows Allow / Deny when ACP is up.
 
 Tokens stay in `secrets.json`. Never in markdown.
 

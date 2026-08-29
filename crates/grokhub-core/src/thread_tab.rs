@@ -99,18 +99,23 @@ pub fn toggle_pin(pinned: bool) -> bool {
     !pinned
 }
 
-pub fn history_order(pinned: &[bool]) -> Vec<usize> {
-    let mut pins = Vec::new();
-    let mut rest = Vec::new();
-    for (i, on) in pinned.iter().enumerate() {
-        if *on {
-            pins.push(i);
-        } else {
-            rest.push(i);
+pub fn history_order(pinned: &[bool], accessed: &[u64]) -> Vec<usize> {
+    let n = pinned.len();
+    let mut idx: Vec<usize> = (0..n).collect();
+    idx.sort_by(|&a, &b| {
+        let pa = pinned.get(a).copied().unwrap_or(false);
+        let pb = pinned.get(b).copied().unwrap_or(false);
+        match (pa, pb) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => {
+                let aa = accessed.get(a).copied().unwrap_or(0);
+                let bb = accessed.get(b).copied().unwrap_or(0);
+                bb.cmp(&aa).then(b.cmp(&a))
+            }
         }
-    }
-    pins.extend(rest);
-    pins
+    });
+    idx
 }
 
 pub fn delete_thread(count: usize, idx: usize, current: usize) -> DeleteOutcome {
@@ -237,7 +242,21 @@ mod tests {
     fn pin_sorts_to_the_top_and_delete_keeps_a_tab() {
         assert!(toggle_pin(false));
         assert!(!toggle_pin(true));
-        assert_eq!(history_order(&[false, true, false, true]), vec![1, 3, 0, 2]);
+        assert_eq!(
+            history_order(&[false, true, false, true], &[0, 0, 0, 0]),
+            vec![3, 1, 2, 0],
+            "pins first (newest pin first), then newest unpinned"
+        );
+        assert_eq!(
+            history_order(&[false, false, false], &[1_000, 9_000, 5_000]),
+            vec![1, 2, 0],
+            "newest accessed chats sit on top"
+        );
+        assert_eq!(
+            history_order(&[true, false, true], &[1, 99, 2]),
+            vec![2, 0, 1],
+            "pinned chats stay above unpinned, newest pin first"
+        );
         assert_eq!(delete_thread(3, 0, 0), DeleteOutcome::Removed { next: 0 });
         assert_eq!(delete_thread(3, 0, 2), DeleteOutcome::Removed { next: 1 });
         assert_eq!(delete_thread(3, 2, 2), DeleteOutcome::Removed { next: 1 });

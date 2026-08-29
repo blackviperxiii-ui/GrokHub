@@ -312,6 +312,15 @@ fn format_exit_status(st: ExitStatus) -> String {
     st.to_string()
 }
 
+/// SIGTERM (128+15). The GUI/leader kills `grok agent stdio` this way.
+pub fn is_sigterm_status(s: &str) -> bool {
+    let l = s.to_ascii_lowercase();
+    l.contains("exit 143")
+        || l.contains("signal 15")
+        || l.contains("sigterm")
+        || (l.contains("agent closed") && l.contains("143"))
+}
+
 fn wait_status_text(child: &Arc<Mutex<Option<Child>>>) -> Option<String> {
     let mut slot = child.lock().ok()?;
     let c = slot.as_mut()?;
@@ -1106,7 +1115,8 @@ pub fn spawn_grok_p_stream(
                 | Some(ev @ crate::stream::GrokPEvent::Plan(_))
                 | Some(ev @ crate::stream::GrokPEvent::Compact { .. })
                 | Some(ev @ crate::stream::GrokPEvent::Commands(_))
-                | Some(ev @ crate::stream::GrokPEvent::Task { .. }) => {
+                | Some(ev @ crate::stream::GrokPEvent::Task { .. })
+                | Some(ev @ crate::stream::GrokPEvent::Recovering(_)) => {
                     if tx.send(ev).is_err() {
                         crate::stream::kill_pid(pid);
                         return;
@@ -1141,12 +1151,14 @@ pub fn spawn_grok_p_stream(
         }
         let status = child.wait();
         if session_id.is_empty() {
-            let _ = tx.send(crate::stream::GrokPEvent::Err(
-                status
-                    .ok()
-                    .map(format_exit_status)
-                    .unwrap_or_else(|| "grok -p missing sessionId".into()),
-            ));
+            let st = status
+                .ok()
+                .map(format_exit_status)
+                .unwrap_or_else(|| "grok -p missing sessionId".into());
+            if is_sigterm_status(&st) {
+                return;
+            }
+            let _ = tx.send(crate::stream::GrokPEvent::Err(st));
             return;
         }
         if let Some(home) = grok_home {
@@ -1572,30 +1584,31 @@ fn grok_cmd_text(bin: &Path, cwd: &Path, args: &[&str], secs: u64) -> Result<Str
     grokhub_acp_user_stdout(bin, cwd, args, secs)
 }
 
-/// List Grok sessions via `grok sessions list` in `cwd` (sessions are per worktree).
-/// Isolated GROK_HOME first, then the user CLI home, merged by id.
+/// List Grok Build CLI sessions (`grok sessions list`). User `~/.grok` only —
+/// not cabin GROK_HOME and not a disk walk of subagent dirs.
 pub fn list_sessions(bin: &Path, cwd: &Path) -> Result<Vec<String>, String> {
-    let mut rows = parse_session_list(&sessions_list_text(bin, cwd, true));
-    for row in parse_session_list(&sessions_list_text(bin, cwd, false)) {
-        let id = split_session_row(&row).id;
-        if !rows.iter().any(|r| split_session_row(r).id == id) {
-            rows.push(row);
-        }
-    }
-    Ok(rows)
+    Ok(parse_session_list(&sessions_list_text(bin, cwd, false)))
 }
 
 /// Permanently drop a Grok Build session (`grok sessions delete <id>`).
+/// Always delete in the user CLI home so History stays 1:1 with `grok sessions`.
 pub fn delete_session(bin: &Path, cwd: &Path, id: &str) -> Result<(), String> {
     let id = id.trim();
     if id.is_empty() {
         return Err("empty session id".into());
     }
     let args = ["sessions", "delete", id];
-    match grok_stdout_timeout(bin, cwd, &args, 12) {
-        Ok(_) => Ok(()),
-        Err(_) => grokhub_acp_user_stdout(bin, cwd, &args, 12).map(|_| ()),
-    }
+    let user = grokhub_acp_user_stdout(bin, cwd, &args, 20);
+    // Cabin GROK_HOME is not History. Do not let that extra delete block the
+    // ~/.grok refresh — a miss there used to wait out the timeout and the
+    // session row came back from `grok sessions list`.
+    let bin = bin.to_path_buf();
+    let cwd = cwd.to_path_buf();
+    let extra = id.to_string();
+    thread::spawn(move || {
+        let _ = grok_stdout_timeout(&bin, &cwd, &["sessions", "delete", &extra], 12);
+    });
+    user.map(|_| ())
 }
 
 /// Dump one Grok session transcript. Alpha uses `grok export`; older builds used `sessions show`.
@@ -2061,6 +2074,27 @@ mod tests {
             !list_fn.contains("--json"),
             "alpha removed sessions list --json: {list_fn}"
         );
+        assert!(
+            list_fn.contains("sessions_list_text(bin, cwd, false)")
+                && !list_fn.contains("sessions_list_text(bin, cwd, true)"),
+            "History must list the user CLI home, not isolated cabin GROK_HOME: {list_fn}"
+        );
+        assert!(
+            list_fn.contains("grokhub_acp_user_stdout"),
+            "delete must hit grok sessions delete in ~/.grok: {list_fn}"
+        );
+        let del_fn = include_str!("client.rs")
+            .split("pub fn delete_session(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn show_session(").next())
+            .expect("delete_session");
+        let user = del_fn.find("grokhub_acp_user_stdout").expect("user delete");
+        let spawn = del_fn.find("thread::spawn").expect("cabin delete off the History path");
+        let cabin = del_fn.find("grok_stdout_timeout").expect("cabin grok-home delete");
+        assert!(
+            user < spawn && spawn < cabin,
+            "cabin GROK_HOME delete must not block ~/.grok History: {del_fn}"
+        );
         let show_fn = include_str!("client.rs")
             .split("pub fn show_session(")
             .nth(1)
@@ -2211,6 +2245,9 @@ mod tests {
 
     #[test]
     fn jsonrpc_error_extracts_message() {
+        assert!(is_sigterm_status("agent closed (exit 143)"));
+        assert!(is_sigterm_status("signal 15"));
+        assert!(!is_sigterm_status("exit 1"));
         let obj = serde_json::json!({
             "code": -32603,
             "message": "ACP session/new failed: Failed to initialize session: Permission denied (os error 13)"

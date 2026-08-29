@@ -24,7 +24,8 @@ use crate::xai::{
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use grokhub_acp::{
     grok_context_line, grok_usage_line, kill_pid, merge_tool_card, rewrite_truncation_error,
-    turn_footer, AcpEvent, GrokPEvent, GrokUsage, PermissionMode, SessionMode, ToolCard,
+    turn_footer, classify_stream_error, StreamErrorKind, AcpEvent, GrokPEvent, GrokUsage,
+    PermissionMode, SessionMode, ToolCard,
 };
 use grokhub_core::{
     append_composer, anticipate_consumes_slot, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
@@ -928,6 +929,39 @@ fn write_persist_disk(snap: &PersistSnap) {
     }
 }
 
+enum GrokSessMsg {
+    Listed {
+        gen: u64,
+        rows: Vec<grokhub_acp::GrokSession>,
+        done: Vec<String>,
+        error: Option<String>,
+    },
+}
+
+fn grok_session_rows(listed: Vec<String>, cwd: PathBuf) -> Vec<grokhub_acp::GrokSession> {
+    listed
+        .into_iter()
+        .map(|r| {
+            let mut s = grokhub_acp::split_session_row(&r);
+            s.cwd = Some(cwd.clone());
+            s.cabin = false;
+            s
+        })
+        .collect()
+}
+
+fn hide_pending_grok_sessions(
+    rows: Vec<grokhub_acp::GrokSession>,
+    pending: &HashSet<String>,
+) -> Vec<grokhub_acp::GrokSession> {
+    if pending.is_empty() {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(|s| !pending.contains(&s.id))
+        .collect()
+}
+
 pub struct Cabin {
     nav: Nav,
     cfg: AppConfig,
@@ -1000,6 +1034,7 @@ pub struct Cabin {
     history_hits: Vec<String>,
     last_receipt_ok: Option<bool>,
     last_receipts: Vec<(String, bool)>,
+    try_again: bool,
     last_rewind_id: Option<String>,
     rewind_rows: Vec<RewindRecord>,
     host_live: String,
@@ -1168,7 +1203,11 @@ pub struct Cabin {
     permission_mode: PermissionMode,
     grok_sessions: Vec<grokhub_acp::GrokSession>,
     grok_sessions_loaded: bool,
-    grok_sessions_rx: Option<mpsc::Receiver<Vec<grokhub_acp::GrokSession>>>,
+    grok_sessions_tx: mpsc::Sender<GrokSessMsg>,
+    grok_sessions_rx: mpsc::Receiver<GrokSessMsg>,
+    grok_list_gen: u64,
+    grok_sessions_inflight: u32,
+    pending_grok_deletes: HashSet<String>,
     inspect_rx: Option<mpsc::Receiver<String>>,
     history_rx: Option<mpsc::Receiver<Vec<String>>>,
     mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
@@ -1304,6 +1343,7 @@ impl Cabin {
         let win_max = cfg.window.maximized;
         let approve_risky_only = cfg.approve_risky_only;
         let goal_step = threads.get(thread_idx).map(|t| t.goal.step).unwrap_or(0);
+        let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
         let mut c = Self {
             nav: Nav::Chat,
             cfg,
@@ -1380,6 +1420,7 @@ impl Cabin {
             history_hits: vec![],
             last_receipt_ok: None,
             last_receipts: vec![],
+            try_again: false,
             last_rewind_id: None,
             rewind_rows: crate::night::load_rewinds(),
             host_live: String::new(),
@@ -1547,7 +1588,11 @@ impl Cabin {
             permission_mode: PermissionMode::Ask,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
-            grok_sessions_rx: None,
+            grok_sessions_tx,
+            grok_sessions_rx,
+            grok_list_gen: 0,
+            grok_sessions_inflight: 0,
+            pending_grok_deletes: HashSet::new(),
             inspect_rx: None,
             history_rx: None,
             mem_restore_rx: None,
@@ -1958,6 +2003,13 @@ impl Cabin {
         std::path::PathBuf::from(picked)
     }
 
+    /// Same home `grok sessions list` uses in a terminal — not the bound project cwd.
+    fn grok_cli_cwd(&self) -> std::path::PathBuf {
+        std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| self.grok_cwd())
+    }
+
     fn thread_rail_title(&self, idx: usize) -> String {
         let Some(t) = self.threads.get(idx) else {
             return String::new();
@@ -2006,13 +2058,30 @@ impl Cabin {
         if id.is_empty() {
             return;
         }
+        self.pending_grok_deletes.insert(id.clone());
         self.grok_sessions.retain(|s| s.id != id);
+        self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
+        let gen = self.grok_list_gen;
+        self.grok_sessions_inflight = self.grok_sessions_inflight.saturating_add(1);
         let bin = grokhub_acp::find_grok();
-        let cwd = self.grok_cwd();
+        let cwd = self.grok_cli_cwd();
+        let tx = self.grok_sessions_tx.clone();
         std::thread::spawn(move || {
-            if let Some(bin) = bin {
-                let _ = grokhub_acp::delete_session(&bin, &cwd, &id);
-            }
+            let error = match bin.as_ref() {
+                Some(bin) => grokhub_acp::delete_session(bin, &cwd, &id).err(),
+                None => Some("Grok Build CLI missing".into()),
+            };
+            let listed = match bin.as_ref() {
+                Some(bin) => grokhub_acp::list_sessions(bin, &cwd).unwrap_or_default(),
+                None => Vec::new(),
+            };
+            let rows = grok_session_rows(listed, cwd);
+            let _ = tx.send(GrokSessMsg::Listed {
+                gen,
+                rows,
+                done: vec![id],
+                error,
+            });
         });
     }
 
@@ -2026,69 +2095,78 @@ impl Cabin {
             return;
         }
         self.forget_grok_build_session(id);
-        self.status = "Deleted session".into();
+        self.status = "Deleting session…".into();
         self.persist();
     }
 
     fn reload_grok_sessions(&mut self) {
-        if self.grok_sessions_rx.is_some() {
+        if self.grok_sessions_inflight > 0 {
             return;
         }
+        self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
+        let gen = self.grok_list_gen;
+        self.grok_sessions_inflight = self.grok_sessions_inflight.saturating_add(1);
         let bin = grokhub_acp::find_grok();
-        let cwd = self.grok_cwd();
-        let (tx, rx) = mpsc::channel();
-        self.grok_sessions_rx = Some(rx);
+        let cwd = self.grok_cli_cwd();
+        let tx = self.grok_sessions_tx.clone();
         std::thread::spawn(move || {
             let listed = if let Some(bin) = bin {
                 grokhub_acp::list_sessions(&bin, &cwd).unwrap_or_default()
             } else {
                 Vec::new()
             };
-            let mut files = grokhub_acp::cabin_grok_home()
-                .map(|h| grokhub_acp::discover_session_files_in(&h))
-                .unwrap_or_default();
-            for s in &mut files {
-                s.cabin = true;
-            }
-            for mut s in grokhub_acp::discover_session_files() {
-                if !files.iter().any(|x| x.id == s.id) {
-                    s.cabin = false;
-                    files.push(s);
-                }
-            }
-            let listed_ids: Vec<String> = listed
-                .iter()
-                .map(|r| grokhub_acp::split_session_row(r).id)
-                .collect();
-            let mut rows = grokhub_acp::merge_grok_sessions(&listed, files);
-            for s in &mut rows {
-                if listed_ids.iter().any(|id| id == &s.id) {
-                    s.cwd = Some(cwd.clone());
-                }
-            }
-            let _ = tx.send(rows);
+            let rows = grok_session_rows(listed, cwd);
+            let _ = tx.send(GrokSessMsg::Listed {
+                gen,
+                rows,
+                done: Vec::new(),
+                error: None,
+            });
         });
     }
 
     fn poll_grok_sessions(&mut self) {
-        let Some(rx) = self.grok_sessions_rx.take() else {
+        loop {
+            match self.grok_sessions_rx.try_recv() {
+                Ok(msg) => self.apply_grok_sess_msg(msg),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+    }
+
+    fn apply_grok_sess_msg(&mut self, msg: GrokSessMsg) {
+        self.grok_sessions_inflight = self.grok_sessions_inflight.saturating_sub(1);
+        let GrokSessMsg::Listed {
+            gen,
+            rows,
+            done,
+            error,
+        } = msg;
+        for id in &done {
+            self.pending_grok_deletes.remove(id);
+        }
+        let delete_failed = error.is_some();
+        if let Some(e) = error {
+            let e = e.trim();
+            self.status = if e.is_empty() {
+                "Could not delete session".into()
+            } else {
+                format!("Could not delete session: {e}")
+            };
+        } else if done.len() == 1 {
+            self.status = "Deleted session".into();
+        } else if done.len() > 1 {
+            self.status = "Deleted sessions".into();
+        }
+        if gen != self.grok_list_gen {
             return;
-        };
-        match rx.try_recv() {
-            Ok(rows) => {
-                self.grok_sessions = rows;
-                self.grok_sessions_loaded = true;
-                self.sync_unlocked_titles_from_sessions();
-                if self.nav == Nav::History {
-                    self.status = format!("{} Grok sessions", self.grok_sessions.len());
-                }
-            }
-            Err(mpsc::TryRecvError::Empty) => {
-                self.grok_sessions_rx = Some(rx);
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.grok_sessions_loaded = true;
-            }
+        }
+        self.grok_sessions = hide_pending_grok_sessions(rows, &self.pending_grok_deletes);
+        self.grok_sessions_loaded = true;
+        self.sync_unlocked_titles_from_sessions();
+        if self.nav == Nav::History && done.is_empty() && !delete_failed {
+            self.status = format!("{} Grok sessions", self.grok_sessions.len());
         }
     }
 
@@ -4195,15 +4273,38 @@ impl Cabin {
                 ids.push(s.id.clone());
             }
         }
+        for id in &ids {
+            self.pending_grok_deletes.insert(id.clone());
+        }
         self.grok_sessions.clear();
+        self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
+        let gen = self.grok_list_gen;
+        self.grok_sessions_inflight = self.grok_sessions_inflight.saturating_add(1);
         let bin = grokhub_acp::find_grok();
-        let cwd = self.grok_cwd();
+        let cwd = self.grok_cli_cwd();
+        let tx = self.grok_sessions_tx.clone();
         std::thread::spawn(move || {
-            if let Some(bin) = bin {
-                for id in ids {
-                    let _ = grokhub_acp::delete_session(&bin, &cwd, &id);
+            let mut error = None;
+            if let Some(bin) = bin.as_ref() {
+                for id in &ids {
+                    if let Err(e) = grokhub_acp::delete_session(bin, &cwd, id) {
+                        if error.is_none() {
+                            error = Some(e);
+                        }
+                    }
                 }
             }
+            let listed = match bin.as_ref() {
+                Some(bin) => grokhub_acp::list_sessions(bin, &cwd).unwrap_or_default(),
+                None => Vec::new(),
+            };
+            let rows = grok_session_rows(listed, cwd);
+            let _ = tx.send(GrokSessMsg::Listed {
+                gen,
+                rows,
+                done: ids,
+                error,
+            });
         });
         self.threads.clear();
         self.threads.push(ChatThread::new("Chat", false));
@@ -5012,6 +5113,7 @@ impl Cabin {
     }
 
     fn kick_model_retry(&mut self, t: String) {
+        self.try_again = false;
         self.halt_in_flight();
         self.active_skill_follow = None;
         if let Some(sk) = match_skill(&t, &self.skill_list) {
@@ -6975,13 +7077,6 @@ impl Cabin {
             self.pending_kick = Some(consume_attach);
             return;
         }
-        if self.acp.is_none() {
-            let _ = self.ensure_acp();
-        }
-        if self.acp_spawn_rx.is_some() {
-            self.pending_kick = Some(consume_attach);
-            return;
-        }
         let cabin = self.kick_frame.take();
         self.kick_skip = false;
         self.eyes_attach = false;
@@ -7034,28 +7129,21 @@ impl Cabin {
             }
         };
         let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort);
+        let resume_in_cabin = resume
+            .as_deref()
+            .is_some_and(grokhub_acp::cabin_has_session);
         let user_home = self
             .threads
             .get(idx)
             .map(|t| t.grok_user_home)
-            .unwrap_or(false);
+            .unwrap_or(true)
+            || !resume_in_cabin;
         let fork = self.threads.get(idx).map(|t| t.grok_fork).unwrap_or(false);
         let worktree = self
             .threads
             .get(idx)
             .map(|t| t.grok_worktree)
             .unwrap_or(false);
-        if let Some(h) = &self.acp {
-            match h.prompt_with_image(&last_user, image.as_deref()) {
-                Ok(()) => {
-                    if let Some(t) = self.threads.get_mut(idx) {
-                        t.grok_fork = false;
-                    }
-                    return;
-                }
-                Err(_) => self.acp = None,
-            }
-        }
         match grokhub_acp::spawn_grok_p_stream(
             &last_user,
             &cwd,
@@ -7073,6 +7161,10 @@ impl Cabin {
             Ok((pid, rx)) => {
                 self.grok_p_pid = Some(pid);
                 self.grok_p_rx = Some(rx);
+                if let Some(t) = self.threads.get_mut(idx) {
+                    t.grok_fork = false;
+                    t.grok_user_home = user_home;
+                }
             }
             Err(e) => {
                 self.running = false;
@@ -7137,20 +7229,16 @@ impl Cabin {
                 self.status = format!("Plan · {t}");
                 self.grok_p_rx = Some(rx);
             }
-            Ok(GrokPEvent::Compact { started, usage }) => {
-                self.grok_usage.merge(&usage);
-                let ctx = grok_context_line(&self.grok_usage);
-                self.status = if started {
-                    if ctx.is_empty() {
-                        "Compacting…".into()
-                    } else {
-                        format!("Compacting… {ctx}")
-                    }
-                } else if ctx.is_empty() {
-                    "Compacted".into()
-                } else {
-                    format!("Compacted · {ctx}")
-                };
+            Ok(GrokPEvent::Compact {
+                started,
+                usage,
+                error,
+            }) => {
+                self.apply_compact_status(started, usage, error);
+                self.grok_p_rx = Some(rx);
+            }
+            Ok(GrokPEvent::Recovering(msg)) => {
+                self.status = msg;
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::End(turn)) => {
@@ -7161,9 +7249,21 @@ impl Cabin {
                 self.grok_p_pid = None;
                 self.running = false;
                 self.pending_kick = None;
-                self.status = self.apply_job_fail(&rewrite_truncation_error(&e));
-                self.chat_job_thread = None;
-                self.persist();
+                if grokhub_acp::is_sigterm_status(&e) {
+                    let empty = self.stream_buf.is_empty() && self.thought_buf.is_empty();
+                    if empty && self.status != "Retrying…" {
+                        self.status = "Retrying…".into();
+                        self.kick_model(false);
+                    } else {
+                        self.status.clear();
+                        self.chat_job_thread = None;
+                        self.persist();
+                    }
+                } else {
+                    self.status = self.apply_job_fail(&rewrite_truncation_error(&e));
+                    self.chat_job_thread = None;
+                    self.persist();
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.grok_p_rx = Some(rx);
@@ -7172,9 +7272,21 @@ impl Cabin {
                 self.grok_p_pid = None;
                 self.running = false;
                 self.pending_kick = None;
-                self.status = self.apply_job_fail("Grok Build session missing");
-                self.chat_job_thread = None;
-                self.persist();
+                let streamed = !self.stream_buf.is_empty() || !self.thought_buf.is_empty();
+                if streamed {
+                    let thought = std::mem::take(&mut self.thought_buf);
+                    let stream = std::mem::take(&mut self.stream_buf);
+                    let text = if thought.is_empty() {
+                        stream
+                    } else {
+                        merge_thinking_capped(&thought, &stream, TEXT_FILE_CAP)
+                    };
+                    self.finish_acp_turn(text);
+                } else {
+                    self.status = self.apply_job_fail("Grok Build session missing");
+                    self.chat_job_thread = None;
+                    self.persist();
+                }
             }
         }
     }
@@ -7403,20 +7515,12 @@ impl Cabin {
                 AcpEvent::Usage(u) => self.grok_usage.merge(&u),
                 AcpEvent::Commands(cmds) => self.apply_grok_commands(cmds),
                 AcpEvent::Task { id, title, done } => self.apply_grok_task(id, title, done),
-                AcpEvent::Compact { started, usage } => {
-                    self.grok_usage.merge(&usage);
-                    let ctx = grok_context_line(&self.grok_usage);
-                    self.status = if started {
-                        if ctx.is_empty() {
-                            "Compacting…".into()
-                        } else {
-                            format!("Compacting… {ctx}")
-                        }
-                    } else if ctx.is_empty() {
-                        "Compacted".into()
-                    } else {
-                        format!("Compacted · {ctx}")
-                    };
+                AcpEvent::Compact {
+                    started,
+                    usage,
+                    error,
+                } => {
+                    self.apply_compact_status(started, usage, error);
                 }
                 AcpEvent::Permission(p) => {
                     if !self.running {
@@ -7465,18 +7569,25 @@ impl Cabin {
                     if e.contains("acp json") {
                         continue;
                     }
+                    match classify_stream_error(&e) {
+                        StreamErrorKind::Transient | StreamErrorKind::TruncationContinue => {
+                            self.status = rewrite_truncation_error(&e);
+                            continue;
+                        }
+                        StreamErrorKind::CreditLimit | StreamErrorKind::Fatal => {}
+                    }
                     if let Some(p) = self.perm_ask.take() {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission(p.rpc_id, false);
                         }
                     }
                     self.running = false;
-                    let job = self.chat_job_thread.clone();
-                    let idx = job
-                        .as_deref()
-                        .and_then(|id| self.threads.iter().position(|t| t.id == id))
-                        .unwrap_or(self.thread_idx);
                     self.acp = None;
+                    if grokhub_acp::is_sigterm_status(&e) {
+                        self.status = "Retrying…".into();
+                        self.kick_model(false);
+                        continue;
+                    }
                     let e = grokhub_acp::explain_handshake_error(&e, &self.grok_cwd());
                     self.status = self.apply_job_fail(&e);
                     self.chat_job_thread = None;
@@ -8586,7 +8697,39 @@ impl Cabin {
         }
     }
 
+    fn apply_compact_status(
+        &mut self,
+        started: bool,
+        usage: GrokUsage,
+        error: Option<String>,
+    ) {
+        self.grok_usage.merge(&usage);
+        if let Some(e) = error.filter(|s| !s.trim().is_empty()) {
+            self.status = format!("Compact failed: {e}");
+            return;
+        }
+        let ctx = grok_context_line(&self.grok_usage);
+        self.status = if started {
+            if ctx.is_empty() {
+                "Compacting…".into()
+            } else {
+                format!("Compacting… {ctx}")
+            }
+        } else if ctx.is_empty() {
+            "Compacted".into()
+        } else {
+            format!("Compacted · {ctx}")
+        };
+    }
+
     fn apply_job_fail(&mut self, err: &str) -> String {
+        if grokhub_acp::is_sigterm_status(err) {
+            return "Stopped".into();
+        }
+        if classify_stream_error(err) == StreamErrorKind::CreditLimit {
+            self.try_again = true;
+            self.last_receipt_ok = Some(false);
+        }
         if !job_error_goes_to_chat(self.chat_job_thread.as_deref()) {
             return err.to_string();
         }
@@ -9616,7 +9759,7 @@ impl eframe::App for Cabin {
                 || self.recipe_desk_rx.is_some()
                 || self.host_diff_rx.is_some()
                 || self.verify_rx.is_some()
-                || self.grok_sessions_rx.is_some()
+                || self.grok_sessions_inflight > 0
                 || self.persist_rx.is_some()
                 || self.inspect_rx.is_some()
                 || self.grok_catalog_rx.is_some()
@@ -10478,110 +10621,36 @@ impl Cabin {
                     .auto_shrink([false, true])
                     .max_height(hist_h)
                     .show(ui, |ui| {
-                        let q = self.sidebar_q.to_ascii_lowercase();
-                        let pinned: Vec<bool> = self.threads.iter().map(|t| t.pinned).collect();
-                        let order = history_order(&pinned);
-                        let mut act: Option<TabAct> = None;
-                        for i in order {
-                            let cabin = self.threads[i].title.clone();
-                            let title = self.thread_rail_title(i);
-                            if !history_row_visible(
-                                &cabin,
-                                self.threads[i].scratch,
-                                self.threads[i].messages.is_empty(),
-                                i == self.thread_idx,
-                                self.threads[i].pinned,
-                            ) {
-                                continue;
-                            }
-                            if !q.is_empty()
-                                && !title.to_ascii_lowercase().contains(&q)
-                                && !cabin.to_ascii_lowercase().contains(&q)
-                            {
-                                continue;
-                            }
-                            if self.rename_idx == Some(i) {
-                                let edit = ui.add(
-                                    egui::TextEdit::singleline(&mut self.rename_buf)
-                                        .desired_width(ui.available_width())
-                                        .hint_text("Name this chat")
-                                        .font(egui::FontId::proportional(13.0)),
-                                );
-                                if self.rename_focus {
-                                    edit.request_focus();
-                                    if edit.has_focus() {
-                                        self.rename_focus = false;
-                                    }
-                                }
-                                if let Some(lock) = self.rename_lock.clone() {
-                                    if self.rename_buf == lock {
-                                        select_all_edit(ui, edit.id, &self.rename_buf);
-                                    } else {
-                                        self.rename_lock = None;
-                                    }
-                                }
-                                if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
-                                    act = Some(TabAct::CancelRename);
-                                } else if ui.input(|inp| inp.key_pressed(egui::Key::Enter)) {
-                                    act = Some(TabAct::CommitRename(i));
-                                } else if edit.lost_focus() && !self.rename_focus {
-                                    act = Some(TabAct::CommitRename(i));
-                                }
-                                continue;
-                            }
-                            let icon = if self.threads[i].pinned {
-                                crate::icons::RailIcon::Pin
-                            } else {
-                                crate::icons::RailIcon::Chat
-                            };
-                            let resp = Self::nav_row(
-                                ui,
-                                i == self.thread_idx && self.nav == Nav::Chat,
-                                icon,
-                                &display_tab_title(&title),
-                                false,
-                            );
-                            if resp.double_clicked() {
-                                act = Some(TabAct::StartRename(i));
-                            } else if resp.clicked() {
-                                act = Some(TabAct::Switch(i));
-                            }
-                            let pinned = self.threads[i].pinned;
-                            resp.context_menu(|ui| {
-                                if ui.button(if pinned { "Unpin" } else { "Pin" }).clicked() {
-                                    act = Some(TabAct::Pin(i));
-                                    ui.close_menu();
-                                }
-                                if ui.button("Rename").clicked() {
-                                    act = Some(TabAct::StartRename(i));
-                                    ui.close_menu();
-                                }
-                                if ui.button("Delete").clicked() {
-                                    act = Some(TabAct::Delete(i));
-                                    ui.close_menu();
-                                }
-                            });
-                        }
                         if !self.grok_sessions_loaded {
                             self.reload_grok_sessions();
                         }
-                        let owned: Vec<(String, String)> = self
+                        let q = self.sidebar_q.to_ascii_lowercase();
+                        let current_sid = self
                             .threads
-                            .iter()
-                            .filter_map(|t| t.grok_session.clone().map(|id| (id, t.id.clone())))
-                            .collect();
+                            .get(self.thread_idx)
+                            .and_then(|t| t.grok_session.clone());
+                        let mut act: Option<TabAct> = None;
                         for s in &self.grok_sessions {
-                            if owned.iter().any(|(id, _)| id == &s.id) {
+                            if self.pending_grok_deletes.contains(&s.id) {
                                 continue;
                             }
-                            if !q.is_empty() && !s.title.to_ascii_lowercase().contains(&q) {
+                            let title = if s.title.is_empty() || s.title == s.id {
+                                s.id.clone()
+                            } else {
+                                s.title.clone()
+                            };
+                            if !q.is_empty()
+                                && !title.to_ascii_lowercase().contains(&q)
+                                && !s.id.to_ascii_lowercase().contains(&q)
+                            {
                                 continue;
                             }
+                            let on = current_sid.as_deref() == Some(s.id.as_str());
                             let resp = Self::nav_row(
                                 ui,
-                                false,
+                                on && self.nav == Nav::Chat,
                                 crate::icons::RailIcon::Chat,
-                                &s.title,
+                                &display_tab_title(&title),
                                 false,
                             );
                             if resp.clicked() {
@@ -10741,6 +10810,7 @@ impl Cabin {
                             ChatBlockAct::None => {}
                         }
                         self.paint_perm_ask(ui);
+                        self.paint_try_again(ui);
                     });
             });
     }
@@ -10913,6 +10983,14 @@ impl Cabin {
                         .size(14.0)
                         .color(crate::theme::fg()),
                 );
+                if !p.reason.trim().is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(&p.reason)
+                            .size(13.0)
+                            .color(crate::theme::muted()),
+                    );
+                }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if crate::cards::white_pill(ui, "Allow") {
@@ -10937,6 +11015,23 @@ impl Cabin {
                     }
                 });
             });
+    }
+
+    fn paint_try_again(&mut self, ui: &mut egui::Ui) {
+        if !self.try_again || self.running {
+            return;
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Credit limit")
+                    .size(13.0)
+                    .color(crate::theme::muted()),
+            );
+            if crate::cards::white_pill(ui, "Try Again") {
+                self.run_slash(Slash::Retry);
+            }
+        });
     }
 
     fn ui_empty_home(&mut self, ui: &mut egui::Ui) {
@@ -10986,6 +11081,7 @@ impl Cabin {
                     ui.set_width(pane_w);
                     self.ui_composer_stack(ui);
                     self.paint_perm_ask(ui);
+                    self.paint_try_again(ui);
                 },
             );
         });
@@ -11812,7 +11908,7 @@ impl Cabin {
                                                             crate::cards::settings_note(ui, "Night always runs. Quiet hours and daily caps do not hold work.");
                                                         }
                                                         SettingsSec::Host => {
-                                                            crate::cards::settings_note(ui, &format!("{}\nInstall: curl -fsSL https://x.ai/cli/install.sh | bash\nThen grok login --device-auth. grok update --alpha for the alpha channel. Halt cancels the ACP turn.", build_agent::grok_banner()));
+                                                            crate::cards::settings_note(ui, &format!("{}\nInstall: curl -fsSL https://x.ai/cli/install.sh | bash\nThen grok login --device-auth. grok update installs the stable channel (1.0.13+). grok update --alpha is optional. Halt cancels the ACP turn.", build_agent::grok_banner()));
                                                         }
                                                         SettingsSec::Imagine => {
                                                             crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
@@ -11976,7 +12072,7 @@ impl Cabin {
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
             ui.label(
-                RichText::new("Grok Build `/loop` scheduler — interval prompts against your grok home.")
+                RichText::new("Grok Build `/loop` scheduler — interval prompts against your grok home. Stop a loop when the work is done.")
                     .size(12.0)
                     .color(crate::theme::muted()),
             );
@@ -12191,7 +12287,7 @@ impl Cabin {
             crate::cards::section_label(ui, "Grok Build sessions");
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new("Cabin grok -p sessions resume. Grok TUI sessions open as a transcript; the next send starts a cabin session.")
+                    RichText::new("Same list as `grok sessions list`. Delete here deletes it in Grok Build.")
                         .size(12.0)
                         .color(crate::theme::subtle()),
                 );
@@ -12208,7 +12304,7 @@ impl Cabin {
             if !self.grok_sessions_loaded {
                 self.reload_grok_sessions();
             }
-            if self.grok_sessions_rx.is_some() {
+            if self.grok_sessions_inflight > 0 && self.grok_sessions.is_empty() {
                 ui.label(
                     RichText::new("Listing Grok sessions…")
                         .size(13.0)
@@ -12228,11 +12324,10 @@ impl Cabin {
                 let mut open: Option<String> = None;
                 let mut del: Option<String> = None;
                 for s in &self.grok_sessions {
-                    let kind = if s.cabin {
-                        "Cabin session"
-                    } else {
-                        "Grok TUI transcript"
-                    };
+                    if self.pending_grok_deletes.contains(&s.id) {
+                        continue;
+                    }
+                    let kind = "Grok Build";
                     match crate::cards::grok_tile(
                         ui,
                         crate::icons::TileIcon::Chat,
@@ -12252,131 +12347,9 @@ impl Cabin {
                 }
                 if let Some(id) = del {
                     self.delete_grok_history(&id);
+                    self.nav = Nav::History;
                 }
             }
-            ui.add_space(16.0);
-            crate::cards::section_label(ui, "Chats");
-            ui.label(
-                RichText::new("Double-click to rename. Right-click to pin, rename, or delete.")
-                    .size(12.0)
-                    .color(crate::theme::subtle()),
-            );
-            egui::ScrollArea::vertical()
-                .id_salt("history-chats")
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    let pinned: Vec<bool> = self.threads.iter().map(|t| t.pinned).collect();
-                    let order = history_order(&pinned);
-                    let mut act: Option<TabAct> = None;
-                    for i in order {
-                        let cabin = self.threads[i].title.clone();
-                        let title = self.thread_rail_title(i);
-                        if !history_row_visible(
-                            &cabin,
-                            self.threads[i].scratch,
-                            self.threads[i].messages.is_empty(),
-                            i == self.thread_idx,
-                            self.threads[i].pinned,
-                        ) {
-                            continue;
-                        }
-                        if self.rename_idx == Some(i) {
-                            let edit = ui.add(
-                                egui::TextEdit::singleline(&mut self.rename_buf)
-                                    .id_salt(("page", i))
-                                    .desired_width(ui.available_width())
-                                    .hint_text("Name this chat"),
-                            );
-                            if self.rename_focus {
-                                edit.request_focus();
-                                if edit.has_focus() {
-                                    self.rename_focus = false;
-                                }
-                            }
-                            if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
-                                act = Some(TabAct::CancelRename);
-                            } else if ui.input(|inp| inp.key_pressed(egui::Key::Enter)) {
-                                act = Some(TabAct::CommitRename(i));
-                            } else if edit.lost_focus() && !self.rename_focus {
-                                act = Some(TabAct::CommitRename(i));
-                            }
-                            continue;
-                        }
-                        let icon = if self.threads[i].pinned {
-                            crate::icons::RailIcon::Pin
-                        } else {
-                            crate::icons::RailIcon::Chat
-                        };
-                        let mut deleted = false;
-                        let resp = ui
-                            .horizontal(|ui| {
-                                let resp = Self::nav_row(
-                                    ui,
-                                    i == self.thread_idx && self.nav == Nav::Chat,
-                                    icon,
-                                    &display_tab_title(&title),
-                                    false,
-                                );
-                                if crate::cards::ghost_pill(ui, "Delete") {
-                                    deleted = true;
-                                }
-                                resp
-                            })
-                            .inner;
-                        if deleted {
-                            act = Some(TabAct::Delete(i));
-                        } else if resp.double_clicked() {
-                            act = Some(TabAct::StartRename(i));
-                        } else if resp.clicked() {
-                            act = Some(TabAct::Switch(i));
-                        }
-                        let pinned_on = self.threads[i].pinned;
-                        resp.context_menu(|ui| {
-                            if ui
-                                .button(if pinned_on { "Unpin" } else { "Pin" })
-                                .clicked()
-                            {
-                                act = Some(TabAct::Pin(i));
-                                ui.close_menu();
-                            }
-                            if ui.button("Rename").clicked() {
-                                act = Some(TabAct::StartRename(i));
-                                ui.close_menu();
-                            }
-                            if ui.button("Delete").clicked() {
-                                act = Some(TabAct::Delete(i));
-                                ui.close_menu();
-                            }
-                        });
-                    }
-                    match act {
-                        Some(TabAct::Switch(i)) => {
-                            self.switch_thread(i);
-                            self.nav = Nav::Chat;
-                        }
-                        Some(TabAct::Pin(i)) => self.pin_thread(i),
-                        Some(TabAct::StartRename(i)) => self.begin_chat_rename(i),
-                        Some(TabAct::CommitRename(i)) => {
-                            let name = self.rename_buf.clone();
-                            self.rename_thread(i, &name);
-                        }
-                        Some(TabAct::CancelRename) => {
-                            self.rename_idx = None;
-                            self.rename_focus = false;
-                            self.rename_lock = None;
-                        }
-                        Some(TabAct::Delete(i)) => {
-                            self.delete_thread_at(i);
-                            self.nav = Nav::History;
-                        }
-                        Some(TabAct::OpenGrok(id)) => self.open_grok_session(&id),
-                        Some(TabAct::DeleteGrok(id)) => {
-                            self.delete_grok_history(&id);
-                            self.nav = Nav::History;
-                        }
-                        None => {}
-                    }
-                });
         });
     }
 
@@ -14123,6 +14096,10 @@ mod tests {
             !ask.contains("self.acp = None"),
             "Always on a live prompt must not drop the ACP session: {ask}"
         );
+        assert!(
+            ask.contains("p.reason") && src.contains("fn paint_try_again("),
+            "hook ask reasons and credit-limit Try Again must paint: {ask}"
+        );
         let poll = src
             .split("fn poll_acp(")
             .nth(1)
@@ -14135,6 +14112,13 @@ mod tests {
         assert!(
             poll.contains("answer_permission_always"),
             "Always must answer allow-always, not allow-once: {poll}"
+        );
+        let err = poll.split("AcpEvent::Err").nth(1).expect("acp err");
+        let classify = err.find("classify_stream_error").expect("classify 1.0.13 errors");
+        let drop_acp = err.find("self.acp = None").expect("drop acp");
+        assert!(
+            classify < drop_acp,
+            "transient 5xx / truncation must not drop ACP: {err}"
         );
         let always = src
             .split("Slash::AlwaysApprove =>")
@@ -14308,7 +14292,7 @@ mod tests {
             .and_then(|s| s.split("ctx.request_repaint_after").next())
             .expect("wants_live_repaint call");
         assert!(
-            live.contains("grok_sessions_rx")
+            live.contains("grok_sessions_inflight")
                 && live.contains("persist_rx")
                 && live.contains("inspect_rx")
                 && live.contains("grok_catalog_rx")
@@ -15042,6 +15026,10 @@ mod tests {
             spawn < list,
             "History must list grok sessions off the UI thread: {reload}"
         );
+        assert!(
+            !reload.contains("discover_session_files"),
+            "History must not walk disk (subagents) — grok sessions list only: {reload}"
+        );
         let kick = src
             .split("fn kick_imagine(")
             .nth(1)
@@ -15155,6 +15143,22 @@ mod tests {
     }
 
     #[test]
+    fn hide_pending_grok_sessions_drops_in_flight_deletes() {
+        let a = grokhub_acp::split_session_row("01a01b0f-7e06-74b1-8f22-5236c9d57d45  Keep");
+        let b = grokhub_acp::split_session_row("01a01b0f-7e06-74b1-8f22-5236c9d57d46  Drop");
+        let mut pending = std::collections::HashSet::new();
+        pending.insert(b.id.clone());
+        let shown = super::hide_pending_grok_sessions(vec![a.clone(), b], &pending);
+        assert_eq!(shown.len(), 1, "{shown:?}");
+        assert_eq!(shown[0].id, a.id);
+        assert_eq!(
+            super::hide_pending_grok_sessions(vec![a.clone()], &std::collections::HashSet::new())
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn history_rail_uses_session_names_and_can_delete() {
         let src = include_str!("app.rs");
         let rail = src
@@ -15163,8 +15167,12 @@ mod tests {
             .and_then(|s| s.split("fn cached_chat_views(").next())
             .expect("rail-history");
         assert!(
-            rail.contains("thread_rail_title"),
-            "sidebar History must paint Grok Build session names, not leftover Chat: {rail}"
+            rail.contains("grok_sessions") && rail.contains("OpenGrok"),
+            "sidebar History must be grok sessions list, not cabin leftover Chat tabs: {rail}"
+        );
+        assert!(
+            !rail.contains("discover_session_files") && !rail.contains("rail_history_order"),
+            "sidebar History must not walk session dirs or cabin threads: {rail}"
         );
         assert!(
             rail.contains("TabAct::DeleteGrok") && rail.contains("button(\"Delete\")"),
@@ -15178,21 +15186,58 @@ mod tests {
             rail.contains("delete_grok_history") || rail.contains("TabAct::DeleteGrok(id)"),
             "sidebar DeleteGrok must drop the session from the list: {rail}"
         );
+        assert!(
+            rail.contains("pending_grok_deletes"),
+            "sidebar must hide a session while grok sessions delete is still running: {rail}"
+        );
         let page = src
             .split("crate::cards::section_label(ui, \"Grok Build sessions\")")
             .nth(1)
             .and_then(|s| s.split("fn ui_board(").next())
             .expect("history grok section");
         assert!(
-            page.contains("thread_rail_title"),
-            "History page chats must paint Grok Build session names: {page}"
+            page.contains("s.title") && page.contains("grok_sessions"),
+            "History page must paint grok sessions list titles: {page}"
         );
         assert!(
             page.contains("Delete") && page.contains("delete_grok_history"),
             "History page must delete Grok sessions from the list: {page}"
         );
         assert!(
-            page.contains("ghost_pill(ui, \"Delete\")") && page.contains("self.nav = Nav::History"),
+            page.contains("pending_grok_deletes"),
+            "History page must hide a session while grok sessions delete is still running: {page}"
+        );
+        let forget = src
+            .split("fn forget_grok_build_session(")
+            .nth(1)
+            .and_then(|s| s.split("fn delete_grok_history(").next())
+            .expect("forget_grok_build_session");
+        let del = forget.find("delete_session").expect("forget deletes");
+        let list = forget.find("list_sessions").expect("forget lists after delete");
+        assert!(
+            del < list,
+            "History delete must run grok sessions delete before listing or the row comes back: {forget}"
+        );
+        let delh = src
+            .split("fn delete_grok_history(")
+            .nth(1)
+            .and_then(|s| s.split("fn reload_grok_sessions(").next())
+            .expect("delete_grok_history");
+        assert!(
+            delh.contains("forget_grok_build_session") && !delh.contains("reload_grok_sessions"),
+            "Delete must not list until grok sessions delete finishes: {delh}"
+        );
+        let dta = src
+            .split("fn delete_thread_at")
+            .nth(1)
+            .and_then(|s| s.split("fn delete_all_history").next())
+            .expect("delete_thread_at");
+        assert!(
+            dta.contains("forget_grok_build_session") && !dta.contains("reload_grok_sessions"),
+            "deleting a linked tab must not list until grok sessions delete finishes: {dta}"
+        );
+        assert!(
+            page.contains("self.nav = Nav::History"),
             "deleting a History chat must keep the See all pane: {page}"
         );
         let hist = src
@@ -15218,7 +15263,11 @@ mod tests {
                 && poll.contains("GrokPEvent::Compact")
                 && poll.contains("thinking_status")
                 && poll.contains("turn_footer"),
-            "1.0.12 stream must paint usage, compact, and a turn footer: {poll}"
+            "1.0.13 stream must paint usage, compact, and a turn footer: {poll}"
+        );
+        assert!(
+            poll.contains("GrokPEvent::Recovering") && poll.contains("apply_compact_status"),
+            "1.0.13 truncation/5xx recovery and compact errors must not kill the turn: {poll}"
         );
         let deleted = src
             .split("fn delete_thread_at")
@@ -15438,8 +15487,8 @@ mod tests {
             .and_then(|s| s.split("fn upsert_stream_assistant").next())
             .expect("kick_model");
         assert!(
-            kick.contains("ensure_acp") && kick.contains("prompt_with_image"),
-            "kick_model must prefer grok agent stdio so Ask can prompt: {kick}"
+            kick.contains("spawn_grok_p_stream") && !kick.contains("prompt_with_image"),
+            "kick_model must use grok -p, not agent stdio (exit 143): {kick}"
         );
         assert!(
             kick.contains("spawn_grok_p_stream") && kick.contains("grok_p_rx"),
@@ -15452,6 +15501,10 @@ mod tests {
         assert!(
             kick.contains("cabin_has_session"),
             "do not --resume a ~/.grok session id into isolated cabin GROK_HOME: {kick}"
+        );
+        assert!(
+            kick.contains("grok_user_home = user_home"),
+            "new GrokHub chats must use ~/.grok so Grok has this desktop: {kick}"
         );
         assert!(
             kick.contains("apply_job_fail"),
@@ -16518,10 +16571,8 @@ mod tests {
             .and_then(|s| s.split("fn upsert_stream_assistant").next())
             .expect("kick_model");
         assert!(
-            kick.contains("ensure_acp")
-                && kick.contains("prompt_with_image")
-                && kick.contains("spawn_grok_p_stream"),
-            "kick_model prefers ACP then grok -p fallback: {kick}"
+            kick.contains("spawn_grok_p_stream") && kick.contains("is_sigterm_status"),
+            "kick_model uses grok -p and must not surface leader SIGTERM as a chat error: {kick}"
         );
         let cap_fn = src
             .split("fn capture_cabin_frame_this_turn")

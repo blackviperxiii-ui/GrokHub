@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::client::SingleTurn;
 use crate::protocol::{parse_tool_card, ToolCard};
 
-/// Server-reported spend and context. Grok Build 1.0.12 includes reasoning.
+/// Server-reported spend and context. Grok Build 1.0.12+ includes reasoning.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GrokUsage {
     pub input_tokens: u64,
@@ -141,7 +141,7 @@ pub fn turn_footer(stop_reason: &str, usage: &GrokUsage) -> String {
             "Done"
         }
         "cancelled" | "canceled" => "Cancelled",
-        "max_tokens" => "Truncated — continue next turn",
+        "max_tokens" => "Truncated — Grok is continuing",
         "max_turn_requests" | "max_turns_reached" => "Max turns",
         "refusal" => "Refused",
         other => other,
@@ -153,14 +153,60 @@ pub fn turn_footer(stop_reason: &str, usage: &GrokUsage) -> String {
     }
 }
 
-pub fn rewrite_truncation_error(msg: &str) -> String {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamErrorKind {
+    Fatal,
+    Transient,
+    TruncationContinue,
+    CreditLimit,
+}
+
+pub fn classify_stream_error(msg: &str) -> StreamErrorKind {
     let l = msg.to_ascii_lowercase();
-    if l.contains("shorter answer")
-        || (l.contains("truncat") && (l.contains("max_output") || l.contains("max_tokens")))
+    if l.contains("credit")
+        || l.contains("quota")
+        || l.contains("usage limit")
+        || l.contains("upgrade tier")
+        || (l.contains("limit") && (l.contains("upsell") || l.contains("out of")))
     {
-        "Output hit the token limit. Continue in the next turn — do not shrink the ask.".into()
+        StreamErrorKind::CreditLimit
+    } else if l.contains("shorter answer")
+        || l.contains("max_output")
+        || l.contains("max_tokens")
+        || (l.contains("truncat") && (l.contains("output") || l.contains("response") || l.contains("token")))
+    {
+        StreamErrorKind::TruncationContinue
+    } else if ["500", "502", "503", "504"].iter().any(|c| {
+        l.split(|ch: char| !ch.is_ascii_digit()).any(|w| w == *c)
+    }) || l.contains("5xx")
+        || l.contains("stall")
+        || l.contains("dropped")
+        || l.contains("timed out")
+        || l.contains("timeout")
+        || l.contains("unavailable")
+        || l.contains("connection reset")
+        || l.contains("econnreset")
+        || l.contains("temporarily")
+        || l.contains("try again later")
+    {
+        StreamErrorKind::Transient
     } else {
-        msg.to_string()
+        StreamErrorKind::Fatal
+    }
+}
+
+pub fn rewrite_truncation_error(msg: &str) -> String {
+    match classify_stream_error(msg) {
+        StreamErrorKind::TruncationContinue => {
+            "Output hit the token limit. Grok is continuing automatically.".into()
+        }
+        StreamErrorKind::CreditLimit => {
+            "Credit limit reached. Try Again retries the last prompt.".into()
+        }
+        StreamErrorKind::Transient => {
+            "Grok hit a transient inference error and is retrying.".into()
+        }
+        StreamErrorKind::Fatal => msg.to_string(),
     }
 }
 
@@ -179,9 +225,14 @@ pub enum GrokPEvent {
     Tool(ToolCard),
     Usage(GrokUsage),
     Plan(String),
-    Compact { started: bool, usage: GrokUsage },
+    Compact {
+        started: bool,
+        usage: GrokUsage,
+        error: Option<String>,
+    },
     Commands(Vec<String>),
     Task { id: String, title: String, done: bool },
+    Recovering(String),
     End(SingleTurn),
     Err(String),
 }
@@ -230,11 +281,25 @@ pub fn parse_stream_line(line: &str) -> Option<GrokPEvent> {
         "auto_compact_started" => Some(GrokPEvent::Compact {
             started: true,
             usage: parse_usage(&v),
+            error: None,
         }),
         "auto_compact_completed" => Some(GrokPEvent::Compact {
             started: false,
             usage: parse_usage(&v),
+            error: None,
         }),
+        "auto_compact_failed" => {
+            let msg = json_str(&v, &["message", "error", "reason"]);
+            Some(GrokPEvent::Compact {
+                started: false,
+                usage: parse_usage(&v),
+                error: Some(if msg.is_empty() {
+                    "Compact failed".into()
+                } else {
+                    msg
+                }),
+            })
+        }
         "available_commands" => {
             let cmds = v
                 .get("commands")
@@ -260,12 +325,18 @@ pub fn parse_stream_line(line: &str) -> Option<GrokPEvent> {
         }
         "max_turns_reached" => Some(GrokPEvent::Err("Max turns reached".into())),
         "error" => {
-            let msg = v
+            let raw = v
                 .get("message")
                 .and_then(|x| x.as_str())
                 .unwrap_or("grok -p error")
                 .to_string();
-            Some(GrokPEvent::Err(rewrite_truncation_error(&msg)))
+            let msg = rewrite_truncation_error(&raw);
+            match classify_stream_error(&raw) {
+                StreamErrorKind::Transient | StreamErrorKind::TruncationContinue => {
+                    Some(GrokPEvent::Recovering(msg))
+                }
+                StreamErrorKind::CreditLimit | StreamErrorKind::Fatal => Some(GrokPEvent::Err(msg)),
+            }
         }
         "end" => Some(GrokPEvent::End(end_turn_from_value(&v))),
         _ => None,
@@ -559,11 +630,19 @@ mod tests {
             r#"{"type":"auto_compact_started","percentage":85,"tokens_used":420000,"context_window":500000}"#,
         );
         match compact {
-            Some(GrokPEvent::Compact { started, usage }) => {
+            Some(GrokPEvent::Compact { started, usage, error }) => {
                 assert!(started);
+                assert!(error.is_none());
                 assert_eq!(usage.context_tokens_used, 420000);
                 assert_eq!(usage.context_window_tokens, 500000);
                 assert!(grok_context_line(&usage).starts_with("84%") || grok_context_line(&usage).starts_with("85%"), "{}", grok_context_line(&usage));
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse_stream_line(r#"{"type":"auto_compact_failed","message":"disk full while compacting"}"#) {
+            Some(GrokPEvent::Compact { started, error, .. }) => {
+                assert!(!started);
+                assert_eq!(error.as_deref(), Some("disk full while compacting"));
             }
             other => panic!("{other:?}"),
         }
@@ -577,8 +656,29 @@ mod tests {
         assert!(
             matches!(
                 parse_stream_line(r#"{"type":"error","message":"Output truncated. Try asking for a shorter answer."}"#),
-                Some(GrokPEvent::Err(e)) if e.contains("do not shrink")
+                Some(GrokPEvent::Recovering(e)) if e.contains("continuing automatically")
             )
+        );
+        assert!(
+            matches!(
+                parse_stream_line(r#"{"type":"error","message":"503 Bad Gateway"}"#),
+                Some(GrokPEvent::Recovering(e)) if e.to_ascii_lowercase().contains("retry")
+            )
+        );
+        assert!(
+            matches!(
+                parse_stream_line(r#"{"type":"error","message":"Credit limit reached. Upgrade tier."}"#),
+                Some(GrokPEvent::Err(e)) if e.contains("Try Again")
+            )
+        );
+        assert_eq!(
+            classify_stream_error("Output truncated. Try asking for a shorter answer."),
+            StreamErrorKind::TruncationContinue
+        );
+        assert_eq!(classify_stream_error("502 Bad Gateway"), StreamErrorKind::Transient);
+        assert_eq!(
+            classify_stream_error("Credit limit reached. Upgrade tier."),
+            StreamErrorKind::CreditLimit
         );
         let folded = fold_stream(
             r#"
