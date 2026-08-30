@@ -736,7 +736,6 @@ mod tests {
 
     #[test]
     fn oversized_json_store_is_quarantined_not_wiped() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!("grokhub-oversize-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("root");
@@ -777,7 +776,6 @@ mod tests {
 
     #[test]
     fn corrupt_json_store_is_quarantined_and_missing_one_is_not() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!("grokhub-corrupt-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("root");
@@ -812,7 +810,6 @@ mod tests {
     #[test]
     fn atomic_write_temp_is_private_before_the_rename() {
         use std::os::unix::fs::PermissionsExt;
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!("grokhub-priv-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("root");
@@ -837,7 +834,6 @@ mod tests {
 
     #[test]
     fn read_file_capped_loops_to_the_cap() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!("grokhub-shortread-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("root");
