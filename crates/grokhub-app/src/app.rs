@@ -128,7 +128,7 @@ use grokhub_core::{
     skill_follow_block, skill_use_in_chat_prompt, slash_help, SlashHit, summarize_write, surgical_memory_edit, MemoryEdit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
-    unified_diff_cite, usage_line,
+    unified_diff_cite, usage_line, add_tokens, token_delta,
     transcribe_route, uid, update_cmds, overlay_update_begin, overlay_update_finish,
     realtime_bearer, realtime_can_connect, voice_log_role, voice_stream_token, voice_transcript_sends_chat,
     fold_stream_fields, StreamTokenKind,
@@ -1194,6 +1194,8 @@ pub struct Cabin {
     grok_p_rx: Option<mpsc::Receiver<GrokPEvent>>,
     grok_p_pid: Option<u32>,
     grok_usage: GrokUsage,
+    /// Last Grok token totals already banked into `usage.json`.
+    tokens_seen: (u64, u64, u64),
     grok_commands: Vec<SlashHit>,
     grok_tasks: Vec<(String, String, bool)>,
     followup_queue: Vec<String>,
@@ -1582,6 +1584,7 @@ impl Cabin {
             grok_p_rx: None,
             grok_p_pid: None,
             grok_usage: GrokUsage::default(),
+            tokens_seen: (0, 0, 0),
             grok_commands: Vec::new(),
             grok_tasks: Vec::new(),
             followup_queue: Vec::new(),
@@ -5744,6 +5747,30 @@ impl Cabin {
         });
     }
 
+    /// Grok reports session totals; `/usage` wants a day. Bank the delta so the token
+    /// line survives a restart and does not double-count a resumed session.
+    fn merge_grok_usage(&mut self, u: &GrokUsage) {
+        self.grok_usage.merge(u);
+        self.roll_today();
+        let seen = self.tokens_seen;
+        let now = (
+            self.grok_usage.input_tokens,
+            self.grok_usage.output_tokens,
+            self.grok_usage.reasoning_tokens,
+        );
+        let spent = (
+            token_delta(seen.0, now.0),
+            token_delta(seen.1, now.1),
+            token_delta(seen.2, now.2),
+        );
+        if spent == (0, 0, 0) {
+            return;
+        }
+        self.tokens_seen = now;
+        add_tokens(&mut self.usage, spent.0, spent.1, spent.2);
+        self.persist_usage();
+    }
+
     fn persist_usage(&self) {
         let io = self.persist_io.clone();
         let usage = self.usage.clone();
@@ -7254,7 +7281,7 @@ impl Cabin {
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::Usage(u)) => {
-                self.grok_usage.merge(&u);
+                self.merge_grok_usage(&u);
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::Commands(cmds)) => {
@@ -7347,7 +7374,8 @@ impl Cabin {
                 .map(|m| m.1.clone())
         });
         if !turn.usage.is_empty() {
-            self.grok_usage.merge(&turn.usage);
+            let u = turn.usage.clone();
+            self.merge_grok_usage(&u);
         }
         if let Some(t) = self.threads.get_mut(idx) {
             t.grok_session = Some(turn.session_id.clone());
@@ -7552,7 +7580,7 @@ impl Cabin {
                 AcpEvent::Plan(t) => {
                     self.status = format!("Plan · {t}");
                 }
-                AcpEvent::Usage(u) => self.grok_usage.merge(&u),
+                AcpEvent::Usage(u) => self.merge_grok_usage(&u),
                 AcpEvent::Commands(cmds) => self.apply_grok_commands(cmds),
                 AcpEvent::Task { id, title, done } => self.apply_grok_task(id, title, done),
                 AcpEvent::Compact {
@@ -8454,6 +8482,9 @@ impl Cabin {
         self.running = true;
         self.imagine_job_prompt = prompt.clone();
         self.imagine_expand = false;
+        self.roll_today();
+        bump_usage(&mut self.usage, "imagine");
+        self.persist_usage();
         if self.chat_job_thread.is_none() {
             self.chat_job_thread = Some(self.visible_thread_id());
         }
@@ -8725,7 +8756,7 @@ impl Cabin {
         usage: GrokUsage,
         error: Option<String>,
     ) {
-        self.grok_usage.merge(&usage);
+        self.merge_grok_usage(&usage);
         if let Some(e) = error.filter(|s| !s.trim().is_empty()) {
             self.status = format!("Compact failed: {e}");
             return;
@@ -15177,6 +15208,25 @@ mod tests {
         assert!(
             kick.contains("bearer()") && !kick.contains("has_key()"),
             "Imagine must use grok login, not cabin OAuth only: {kick}"
+        );
+        assert!(
+            kick.contains("bump_usage(&mut self.usage, \"imagine\")"),
+            "the imagine bucket has to count something for /usage to mean anything: {kick}"
+        );
+        let tokens = src
+            .split("fn merge_grok_usage(")
+            .nth(1)
+            .and_then(|s| s.split("fn persist_usage(").next())
+            .expect("merge_grok_usage");
+        assert!(
+            tokens.contains("token_delta") && tokens.contains("add_tokens"),
+            "Grok reports session totals — the day must bank the delta: {tokens}"
+        );
+        // Split so this assertion is not its own counter-example.
+        let direct = format!("self.grok_usage{}", ".merge(&");
+        assert!(
+            !src.contains(&direct),
+            "every usage merge goes through merge_grok_usage or the day loses tokens"
         );
         assert_eq!(
             kick.matches("bearer()").count(),

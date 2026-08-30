@@ -266,7 +266,9 @@ pub use stream::{
     prefer_complete_reply, sse_done, sse_live_delta, should_replace_stream_acc, stream_was_truncated,
     StreamTokenKind, StreamUsage,
 };
-pub use usage::{bump_usage, roll_usage_day, usage_blocked, usage_line, UsageDay};
+pub use usage::{
+    add_tokens, bump_usage, roll_usage_day, token_delta, usage_blocked, usage_line, UsageDay,
+};
 pub use hub_sync::{build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, HubMemoryFile, HubSnapshot};
 pub use hygiene::{lockish, should_send_screenshot};
 pub use organs::{
