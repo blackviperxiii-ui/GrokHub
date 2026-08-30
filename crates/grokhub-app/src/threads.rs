@@ -95,8 +95,7 @@ pub fn threads_path() -> std::path::PathBuf {
 }
 
 pub fn load() -> Vec<ChatThread> {
-    let raw = config::read_file_capped(&threads_path(), config::MEMORY_FILE_CAP);
-    serde_json::from_str(&raw).unwrap_or_default()
+    config::load_json(&threads_path(), config::JSON_STORE_CAP)
 }
 
 pub fn save(threads: &[ChatThread]) -> Result<(), String> {
@@ -176,8 +175,14 @@ mod tests {
             .and_then(|s| s.split("pub fn save(").next())
             .expect("threads load");
         assert!(
-            load.contains("read_file_capped") && !load.contains("read_to_string"),
-            "boot must not slurp a huge threads.json: {load}"
+            load.contains("load_json") && !load.contains("read_to_string"),
+            "boot must not slurp an unbounded threads.json: {load}"
+        );
+        assert!(
+            !load.contains("MEMORY_FILE_CAP"),
+            "threads.json is chat history, not a memory file: a 1MiB cap truncates it \
+             into unparseable JSON and the next persist saves the empty default back \
+             over every thread: {load}"
         );
     }
 

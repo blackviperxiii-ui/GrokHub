@@ -8,8 +8,7 @@ pub fn path() -> std::path::PathBuf {
 }
 
 pub fn load() -> Vec<GrokLoop> {
-    let raw = config::read_file_capped(&path(), config::MEMORY_FILE_CAP);
-    let mut list: Vec<GrokLoop> = serde_json::from_str(&raw).unwrap_or_default();
+    let mut list: Vec<GrokLoop> = config::load_json(&path(), config::JSON_STORE_CAP);
     for a in &mut list {
         if a.id.is_empty() {
             a.id = uid("loop");
