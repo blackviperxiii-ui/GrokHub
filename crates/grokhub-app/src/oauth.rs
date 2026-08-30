@@ -314,9 +314,22 @@ fn refresh_grok_login_now() -> Option<String> {
         }
     }
     let out = serde_json::to_string_pretty(&v).ok()?;
+    // `auth.json` belongs to the Grok CLI and holds its refresh token. `fs::write` would
+    // create the temp — and then the renamed destination — 0644, permanently downgrading
+    // a credential file the cabin does not own.
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, out).ok()?;
-    std::fs::rename(&tmp, &path).ok()?;
+    {
+        use std::io::Write;
+        let mut f = crate::config::create_private(&tmp).ok()?;
+        if f.write_all(out.as_bytes()).is_err() || f.sync_all().is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return None;
+        }
+    }
+    if std::fs::rename(&tmp, &path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return None;
+    }
     Some(access)
 }
 

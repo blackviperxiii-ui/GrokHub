@@ -33,11 +33,24 @@ pub fn store_frame(data_url: &str, at: u64) -> Option<PresenceFrame> {
 pub fn frame_bytes(frame: &PresenceFrame) -> Option<(String, Vec<u8>)> {
     let rest = frame.data_url.strip_prefix("data:")?;
     let (mime, b64) = rest.split_once(";base64,")?;
-    if !mime.starts_with("image/") {
+    if !is_image_mime(mime) {
         return None;
     }
     let buf = decode_b64(b64)?;
     Some((mime.to_string(), buf))
+}
+
+/// The hub echoes this straight into a `content-type` response header, so a CR or LF here
+/// would let a paired device inject its own headers and body into the reply.
+fn is_image_mime(mime: &str) -> bool {
+    let Some(sub) = mime.strip_prefix("image/") else {
+        return false;
+    };
+    if sub.is_empty() || sub.len() > 64 {
+        return false;
+    }
+    sub.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
 }
 
 pub fn get_jpeg(frame: Option<&PresenceFrame>, since: u64) -> FrameGet {
@@ -155,5 +168,41 @@ mod tests {
         let stored = store_frame(&url, 1).unwrap();
         let (_, raw) = frame_bytes(&stored).unwrap();
         assert_eq!(raw, vec![0xFF, 0xD8, 0xFF, 0xD9]);
+    }
+
+    #[test]
+    fn mime_cannot_smuggle_response_headers() {
+        // The hub puts this mime straight into a `content-type` header, so a CR or LF
+        // would let a paired device append headers and a body of its own.
+        let body = encode_b64(&[0xFF, 0xD8, 0xFF, 0xD9]);
+        for bad in [
+            "image/jpeg\r\nX-Injected: pwned",
+            "image/jpeg\r\nContent-Length: 9\r\n\r\nHIJACKED!",
+            "image/jpeg\nX-Injected: pwned",
+            "image/jpeg; charset=\"\r\n\"",
+            "image/../../etc/passwd",
+            "image/",
+        ] {
+            let url = format!("data:{bad};base64,{body}");
+            assert!(
+                store_frame(&url, 1).is_none(),
+                "must reject a mime the hub would echo into a header: {bad:?}"
+            );
+            let frame = PresenceFrame {
+                data_url: url,
+                at: 1,
+            };
+            assert!(
+                frame_bytes(&frame).is_none(),
+                "a frame already on disk must not serve {bad:?} either"
+            );
+            assert!(matches!(get_jpeg(Some(&frame), 0), FrameGet::Missing));
+        }
+
+        for good in ["image/jpeg", "image/png", "image/svg+xml", "image/x-icon"] {
+            let url = format!("data:{good};base64,{body}");
+            let stored = store_frame(&url, 1).expect(good);
+            assert_eq!(frame_bytes(&stored).expect(good).0, good);
+        }
     }
 }

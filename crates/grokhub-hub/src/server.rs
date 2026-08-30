@@ -86,6 +86,11 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
                 403,
                 json!({ "ok": false, "error": "Pairing code does not match." }),
             ),
+            Err(grokhub_core::state::PairError::ReservedId) => send_json(
+                req,
+                403,
+                json!({ "ok": false, "error": "That device id is reserved by the hub." }),
+            ),
         };
     }
 
@@ -693,6 +698,44 @@ mod tests {
         );
         let (st_p, _, body) = http(port, &req);
         assert_eq!(st_p, 403, "{}", String::from_utf8_lossy(&body));
+    }
+
+    #[test]
+    fn pair_cannot_claim_the_hub_id() {
+        let mut st = HubState::empty();
+        let hub_id = st.device_id.clone();
+        let code = st.rotate_pair().code;
+        let state = Arc::new(Mutex::new(st));
+        let port = serve_background(state.clone(), 0).expect("bind");
+        std::thread::sleep(std::time::Duration::from_millis(40));
+
+        // `/v1/pair` returns the hub id and `/v1/status` lists it, so a caller holding the
+        // code knows it. Claiming it would let them read tasks addressed to the hub and
+        // forge their completion.
+        let body = format!(r#"{{"code":"{code}","deviceId":"{hub_id}","deviceName":"Impostor"}}"#);
+        let req = format!(
+            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let (status, _, out) = http(port, &req);
+        assert_eq!(status, 403, "{}", String::from_utf8_lossy(&out));
+        assert!(
+            !String::from_utf8_lossy(&out).contains("\"token\""),
+            "a rejected pair must not hand back a token: {}",
+            String::from_utf8_lossy(&out)
+        );
+        assert!(
+            state.lock().unwrap().peers.is_empty(),
+            "the impostor must not be registered as a peer"
+        );
+
+        // The code is still good for an honest device.
+        let body = format!(r#"{{"code":"{code}","deviceId":"d-phone","deviceName":"Pixel"}}"#);
+        let req = format!(
+            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        assert_eq!(http(port, &req).0, 200);
     }
 
     #[test]

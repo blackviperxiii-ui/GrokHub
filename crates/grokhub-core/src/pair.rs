@@ -3,6 +3,23 @@ use crate::fill_random;
 pub const CODE_ALPH: &str = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 pub const PAIR_TTL_MS: u64 = 15 * 60 * 1000;
 
+/// Wrong guesses a live pair code tolerates before it burns. Six characters over a 32
+/// symbol alphabet is only ~30 bits, which is fine for a code a human retypes once and
+/// hopeless against a caller that may keep guessing for the full TTL.
+pub const PAIR_MAX_TRIES: u32 = 10;
+
+/// Compare without leaking a match prefix through timing.
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 pub fn normalize_code(c: &str) -> String {
     c.chars()
         .filter(|ch| ch.is_ascii_alphanumeric())

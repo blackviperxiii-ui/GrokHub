@@ -8,8 +8,7 @@ pub fn path() -> std::path::PathBuf {
 }
 
 pub fn load() -> Vec<Automation> {
-    let raw = config::read_file_capped(&path(), config::MEMORY_FILE_CAP);
-    let mut list: Vec<Automation> = serde_json::from_str(&raw).unwrap_or_default();
+    let mut list: Vec<Automation> = config::load_json(&path(), config::JSON_STORE_CAP);
     for a in &mut list {
         if a.id.is_empty() {
             a.id = uid("auto");
@@ -28,8 +27,7 @@ pub fn rewind_index_path() -> std::path::PathBuf {
 }
 
 pub fn load_rewinds() -> Vec<grokhub_core::RewindRecord> {
-    let raw = config::read_file_capped(&rewind_index_path(), config::MEMORY_FILE_CAP);
-    serde_json::from_str(&raw).unwrap_or_default()
+    config::load_json(&rewind_index_path(), config::JSON_STORE_CAP)
 }
 
 pub fn save_rewinds(rows: &[grokhub_core::RewindRecord]) -> Result<(), String> {
@@ -74,8 +72,13 @@ mod tests {
         let src = include_str!("night.rs");
         let code = src.split("#[cfg(test)]").next().expect("night");
         assert!(
-            code.contains("read_file_capped") && !code.contains("read_to_string"),
-            "boot must not slurp huge automations/rewind JSON: {code}"
+            code.contains("load_json") && !code.contains("read_to_string"),
+            "boot must not slurp unbounded automations/rewind JSON: {code}"
+        );
+        assert!(
+            !code.contains("MEMORY_FILE_CAP"),
+            "a capped read severs JSON mid-token, so the loader returns the default and \
+             the next persist writes it back over the store: {code}"
         );
     }
 }

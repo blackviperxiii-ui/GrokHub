@@ -1,6 +1,6 @@
 use crate::frame::{store_frame, PresenceFrame};
 use crate::inhabit::InhabitBundle;
-use crate::pair::{make_pair_code, normalize_code, PAIR_TTL_MS};
+use crate::pair::{ct_eq, make_pair_code, normalize_code, PAIR_TTL_MS};
 use crate::task::{HubTask, Receipt};
 use crate::{new_token, now_ms, uid};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -18,6 +18,10 @@ pub const DEFAULT_PORT: u16 = 18766;
 pub struct PairCode {
     pub code: String,
     pub expires_at: u64,
+    /// Wrong guesses so far. The code burns at `PAIR_MAX_TRIES` so a 30-bit code cannot be
+    /// ground down by a client that is free to guess thousands of times a second.
+    #[serde(default)]
+    pub tries: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +91,7 @@ impl HubState {
         let p = PairCode {
             code: make_pair_code(),
             expires_at: now_ms() + PAIR_TTL_MS,
+            tries: 0,
         };
         self.pair = Some(p.clone());
         p
@@ -102,7 +107,15 @@ impl HubState {
         if want.is_empty() {
             return Err(PairError::NoCode);
         }
-        if normalize_code(code) != want {
+        if !ct_eq(normalize_code(code).as_bytes(), want.as_bytes()) {
+            // Burn the code once guessing looks like grinding. Leaving it live let a
+            // caller try the whole keyspace inside the 15 minute TTL.
+            if let Some(p) = self.pair.as_mut() {
+                p.tries = p.tries.saturating_add(1);
+                if p.tries >= crate::pair::PAIR_MAX_TRIES {
+                    self.pair = None;
+                }
+            }
             return Err(PairError::Mismatch);
         }
         let id = if device_id.trim().is_empty() {
@@ -110,6 +123,12 @@ impl HubState {
         } else {
             device_id.trim().to_string()
         };
+        // Every authorization check downstream keys off these ids, and the hub's own id is
+        // handed out by `/v1/pair` and `/v1/status`. A peer allowed to claim it could read
+        // tasks addressed to the hub and forge their completion.
+        if id == self.device_id {
+            return Err(PairError::ReservedId);
+        }
         let name: String = {
             let n = device_name.trim();
             let n = if n.is_empty() { "Computer" } else { n };
@@ -317,6 +336,8 @@ impl HubState {
 pub enum PairError {
     NoCode,
     Mismatch,
+    /// The request asked to be paired under an id the hub reserves for itself.
+    ReservedId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -394,13 +415,21 @@ pub fn save_hub_state(path: &std::path::Path, st: &HubState) -> Result<(), Strin
     }
     let disk = state_for_disk(st);
     let s = serde_json::to_string_pretty(&disk).map_err(|e| e.to_string())?;
+    // The cabin and the standalone `grokhub-hub` daemon both persist this path. A temp
+    // name derived only from the destination means they interleave writes into one file
+    // and rename a torn result into place, so keep the pid in the name.
     let tmp = path.with_file_name(format!(
-        ".{}.tmp",
+        ".{}.{}.tmp",
         path.file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("hub-state.json")
+            .unwrap_or("hub-state.json"),
+        std::process::id()
     ));
-    std::fs::write(&tmp, s).map_err(|e| e.to_string())?;
+    // Every peer's bearer token is in `s`, so the temp must be private before the bytes
+    // land, not after the rename.
+    write_private_synced(&tmp, s.as_bytes()).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })?;
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         e.to_string()
@@ -413,16 +442,57 @@ pub fn save_hub_state(path: &std::path::Path, st: &HubState) -> Result<(), Strin
     Ok(())
 }
 
+fn write_private_synced(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let _ = std::fs::remove_file(path);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path).map_err(|e| e.to_string())?;
+    f.write_all(bytes).map_err(|e| e.to_string())?;
+    // Without the fsync a power loss can leave a zero-length file that the rename already
+    // published, which reads back as "no peers" and unpairs every device.
+    f.sync_all().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn load_hub_state(path: &std::path::Path) -> Option<HubState> {
     let file = std::fs::File::open(path).ok()?;
     let mut raw = String::new();
-    let n = file.take(HUB_STATE_CAP.saturating_add(1)).read_to_string(&mut raw).ok()?;
-    if (n as u64) > HUB_STATE_CAP {
+    let read = file
+        .take(HUB_STATE_CAP.saturating_add(1))
+        .read_to_string(&mut raw)
+        .ok()
+        .filter(|n| (*n as u64) <= HUB_STATE_CAP);
+    // Callers fall back to an empty state, which the next persist tick writes back over
+    // this file. Move a state we cannot parse aside so the pairings stay recoverable.
+    let Some(_) = read else {
+        quarantine_hub_state(path);
         return None;
+    };
+    match serde_json::from_str::<HubState>(&raw) {
+        Ok(mut st) => {
+            st.last_frame = None;
+            Some(st)
+        }
+        Err(_) if raw.trim().is_empty() => None,
+        Err(_) => {
+            quarantine_hub_state(path);
+            None
+        }
     }
-    let mut st: HubState = serde_json::from_str(&raw).ok()?;
-    st.last_frame = None;
-    Some(st)
+}
+
+fn quarantine_hub_state(path: &std::path::Path) {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    let stamp = crate::now_ms();
+    let _ = std::fs::rename(path, path.with_file_name(format!("{name}.corrupt-{stamp}")));
 }
 
 fn hostname() -> String {
@@ -604,6 +674,7 @@ mod tests {
         st.pair = Some(PairCode {
             code: "ABC-234".into(),
             expires_at: 1,
+            tries: 0,
         });
         assert_eq!(
             st.pair_with("ABC-234", "phone", "Pixel").unwrap_err(),
@@ -612,12 +683,88 @@ mod tests {
         st.pair = Some(PairCode {
             code: "ABC-234".into(),
             expires_at: now_ms() + 60_000,
+            tries: 0,
         });
         assert_eq!(
             st.pair_with("ZZZ-999", "phone", "Pixel").unwrap_err(),
             PairError::Mismatch
         );
         assert!(st.pair.is_some(), "a mismatch must leave the code live");
+    }
+
+    #[test]
+    fn pair_code_burns_after_repeated_wrong_guesses() {
+        let mut st = HubState::empty();
+        let code = st.rotate_pair().code;
+        // Six characters over a 32 symbol alphabet is ~30 bits. Left live for the full
+        // 15 minute TTL a caller can guess thousands of times a second, so the code has
+        // to stop accepting attempts long before the keyspace is in reach.
+        for i in 1..crate::pair::PAIR_MAX_TRIES {
+            assert_eq!(
+                st.pair_with("ZZZ-999", "attacker", "Laptop").unwrap_err(),
+                PairError::Mismatch
+            );
+            assert!(st.pair.is_some(), "still live after {i} wrong guesses");
+        }
+        assert_eq!(
+            st.pair_with("ZZZ-999", "attacker", "Laptop").unwrap_err(),
+            PairError::Mismatch
+        );
+        assert!(st.pair.is_none(), "the code must burn at PAIR_MAX_TRIES");
+        assert_eq!(
+            st.pair_with(&code, "phone", "Pixel").unwrap_err(),
+            PairError::NoCode,
+            "even the real code is dead once it burned; the host rotates a new one"
+        );
+
+        // A correct guess never counts against the budget.
+        let mut st = HubState::empty();
+        let code = st.rotate_pair().code;
+        for _ in 0..(crate::pair::PAIR_MAX_TRIES * 3) {
+            let code = st.rotate_pair().code;
+            assert!(st.pair_with(&code, "phone", "Pixel").is_ok());
+        }
+        let _ = code;
+    }
+
+    #[test]
+    fn peer_cannot_pair_as_the_hub() {
+        let mut st = HubState::empty();
+        let hub_id = st.device_id.clone();
+        let code = st.rotate_pair().code;
+        // `/v1/pair` and `/v1/status` both hand out the hub id, and every authorization
+        // check downstream keys off these ids. A peer that could claim the hub's id would
+        // read tasks addressed to the hub and forge their completion.
+        assert_eq!(
+            st.pair_with(&code, &hub_id, "Impostor").unwrap_err(),
+            PairError::ReservedId
+        );
+        assert!(st.peers.is_empty(), "the impostor must not be registered");
+        assert!(st.pair.is_some(), "a reserved id is not a wrong code");
+        assert!(
+            st.pair_with(&code, " ", "Pixel").is_ok(),
+            "an ordinary device still pairs"
+        );
+
+        // Re-pairing the same real device is still allowed to rotate its token.
+        let mut st = HubState::empty();
+        let code = st.rotate_pair().code;
+        let first = st.pair_with(&code, "phone", "Pixel").unwrap();
+        let code = st.rotate_pair().code;
+        let again = st.pair_with(&code, "phone", "Pixel").unwrap();
+        assert_eq!(st.peers.len(), 1, "re-pairing must not duplicate the peer");
+        assert_ne!(first.token, again.token, "re-pairing rotates the token");
+    }
+
+    #[test]
+    fn pair_code_compare_is_constant_time() {
+        use crate::pair::ct_eq;
+        assert!(ct_eq(b"ABC234", b"ABC234"));
+        assert!(!ct_eq(b"ABC234", b"ABC235"));
+        assert!(!ct_eq(b"ABC234", b"ZZZ999"));
+        assert!(!ct_eq(b"ABC234", b"ABC2345"), "length must not match");
+        assert!(!ct_eq(b"", b"ABC234"));
+        assert!(ct_eq(b"", b""));
     }
 
     #[test]
