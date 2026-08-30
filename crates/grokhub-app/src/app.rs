@@ -103,7 +103,7 @@ use grokhub_core::{
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
-    rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
+    rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus, dedupe_hits,
     search_thread_body,
     state_for_disk,
     clear_pending_after_complete, inbox_claim_ready,
@@ -5065,6 +5065,15 @@ impl Cabin {
                 let q_owned = q.clone();
                 let mem_name = self.mem_name.clone();
                 let mem_body = self.mem_body.clone();
+                // What the cabin learned by itself lives in learning.json, not the
+                // markdown, and /recall used to miss all of it.
+                let insights = self
+                    .learning
+                    .insights
+                    .iter()
+                    .map(|i| i.text.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 let vis = self.thread_idx;
                 let mut thread_rows = Vec::new();
                 for (i, t) in self.threads.iter().enumerate() {
@@ -5098,6 +5107,7 @@ impl Cabin {
                         ("SOUL.md", soul),
                         ("USER.md", user),
                         ("MEMORY.md", memory),
+                        ("learned", insights),
                     ];
                     let refs: Vec<(&str, &str)> =
                         corpus.iter().map(|(n, b)| (*n, b.as_str())).collect();
@@ -5108,8 +5118,7 @@ impl Cabin {
                         .collect();
                     rows.extend(thread_rows);
                     hits.extend(search_corpus(&q_owned, &rows));
-                    hits.sort();
-                    hits.dedup();
+                    let hits = dedupe_hits(hits);
                     let body = if hits.is_empty() {
                         format!("No recall for {q_owned}")
                     } else {
@@ -17143,6 +17152,14 @@ mod tests {
         assert!(
             recall[..mem].contains("thread::spawn"),
             "/recall must slurp SOUL/USER/MEMORY off the UI thread: {recall}"
+        );
+        assert!(
+            recall.contains("learning") && recall.contains("(\"learned\", insights)"),
+            "what the cabin learned by itself is memory too — /recall must search it: {recall}"
+        );
+        assert!(
+            recall.contains("dedupe_hits") && !recall.contains("hits.sort()"),
+            "sorting hits alphabetically buries the memory line under chat titles: {recall}"
         );
         let recall_poll = src
             .split("fn poll_recall(")
