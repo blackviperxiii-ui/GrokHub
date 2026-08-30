@@ -427,9 +427,8 @@ pub fn save_hub_state(path: &std::path::Path, st: &HubState) -> Result<(), Strin
     ));
     // Every peer's bearer token is in `s`, so the temp must be private before the bytes
     // land, not after the rename.
-    write_private_synced(&tmp, s.as_bytes()).map_err(|e| {
+    write_private_synced(&tmp, s.as_bytes()).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
-        e
     })?;
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
