@@ -11,8 +11,7 @@ pub fn learning_path() -> std::path::PathBuf {
 }
 
 pub fn load_learning() -> LearningState {
-    let raw = config::read_file_capped(&learning_path(), config::MEMORY_FILE_CAP);
-    let mut s: LearningState = serde_json::from_str(&raw).unwrap_or_default();
+    let mut s: LearningState = config::load_json(&learning_path(), config::JSON_STORE_CAP);
     if prune_ephemeral_insights(&mut s) {
         let _ = save_learning(&s);
     }
@@ -29,8 +28,7 @@ pub fn usage_path() -> std::path::PathBuf {
 }
 
 pub fn load_usage() -> UsageDay {
-    let raw = config::read_file_capped(&usage_path(), config::MEMORY_FILE_CAP);
-    serde_json::from_str(&raw).unwrap_or_default()
+    config::load_json(&usage_path(), config::JSON_STORE_CAP)
 }
 
 pub fn save_usage(d: &UsageDay) -> Result<(), String> {
@@ -43,8 +41,7 @@ pub fn chips_path() -> std::path::PathBuf {
 }
 
 pub fn load_chips() -> ChipMemory {
-    let raw = config::read_file_capped(&chips_path(), config::MEMORY_FILE_CAP);
-    let mut mem = serde_json::from_str(&raw).unwrap_or_else(|_| empty_chip_memory());
+    let mut mem = config::load_json_or(&chips_path(), config::JSON_STORE_CAP, empty_chip_memory);
     if prune_retired_chip_memory(&mut mem) {
         let _ = save_chips(&mem);
     }
@@ -56,8 +53,7 @@ pub fn wall_path() -> std::path::PathBuf {
 }
 
 pub fn load_wall() -> ImagineWall {
-    let raw = config::read_file_capped(&wall_path(), config::MEMORY_FILE_CAP);
-    serde_json::from_str(&raw).unwrap_or_default()
+    config::load_json(&wall_path(), config::JSON_STORE_CAP)
 }
 
 pub fn save_wall(w: &ImagineWall) -> Result<(), String> {
@@ -70,8 +66,7 @@ pub fn projects_path() -> std::path::PathBuf {
 }
 
 pub fn load_projects() -> Vec<ProjectNode> {
-    let raw = config::read_file_capped(&projects_path(), config::MEMORY_FILE_CAP);
-    serde_json::from_str(&raw).unwrap_or_default()
+    config::load_json(&projects_path(), config::JSON_STORE_CAP)
 }
 
 pub fn save_projects(nodes: &[ProjectNode]) -> Result<(), String> {
@@ -89,8 +84,7 @@ pub fn suggestions_path() -> std::path::PathBuf {
 }
 
 pub fn load_suggestions() -> SuggestionStore {
-    let raw = config::read_file_capped(&suggestions_path(), config::MEMORY_FILE_CAP);
-    serde_json::from_str(&raw).unwrap_or_default()
+    config::load_json(&suggestions_path(), config::JSON_STORE_CAP)
 }
 
 pub fn save_suggestions(s: &SuggestionStore) -> Result<(), String> {
@@ -237,8 +231,13 @@ mod tests {
         let src = include_str!("store.rs");
         let code = src.split("#[cfg(test)]").next().expect("store");
         assert!(
-            code.contains("read_file_capped") && !code.contains("read_to_string"),
-            "boot must not slurp huge learning/chips/wall JSON: {code}"
+            code.contains("load_json") && !code.contains("read_to_string"),
+            "boot must not slurp unbounded learning/chips/wall JSON: {code}"
+        );
+        assert!(
+            !code.contains("MEMORY_FILE_CAP"),
+            "a capped read severs JSON mid-token, so the loader returns the default and \
+             the next persist writes it back over the store: {code}"
         );
     }
 

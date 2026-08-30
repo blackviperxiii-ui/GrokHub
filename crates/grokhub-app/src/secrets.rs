@@ -23,8 +23,7 @@ pub fn secrets_path() -> PathBuf {
 }
 
 pub fn load() -> Secrets {
-    let raw = config::read_file_capped(&secrets_path(), config::MEMORY_FILE_CAP);
-    serde_json::from_str(&raw).unwrap_or_default()
+    config::load_json(&secrets_path(), config::JSON_STORE_CAP)
 }
 
 pub fn save(s: &Secrets) -> Result<(), String> {
@@ -139,8 +138,13 @@ mod tests {
             .and_then(|s| s.split("pub fn save(").next())
             .expect("secrets load");
         assert!(
-            load.contains("read_file_capped") && !load.contains("read_to_string"),
-            "boot must not slurp a huge secrets.json: {load}"
+            load.contains("load_json") && !load.contains("read_to_string"),
+            "boot must not slurp an unbounded secrets.json: {load}"
+        );
+        assert!(
+            !load.contains("MEMORY_FILE_CAP"),
+            "a capped read severs secrets.json mid-token, so load returns empty and the \
+             next save writes that over the console key and OAuth tokens: {load}"
         );
     }
 }
