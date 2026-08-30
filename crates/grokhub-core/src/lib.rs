@@ -257,8 +257,8 @@ pub use openclaw::{
     default_openclaw_paths, import_memory_file, is_openclaw_workspace, merge_imported_memory,
 };
 pub use shortcuts::{
-    apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette,
-    shortcut_help, ComposerEnter, ComposerGo, SHORTCUTS,
+    apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette, perm_key,
+    shortcut_help, ComposerEnter, ComposerGo, PermKey, SHORTCUTS,
 };
 pub use stream::{
     chat_include_usage, chat_stream_flag, fold_sse_acc, fold_stream_fields, fold_stream_token, keep_sse_acc,

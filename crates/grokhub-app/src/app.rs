@@ -110,7 +110,7 @@ use grokhub_core::{
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm,
     should_trim_result_bodies, shortcut_help,
     windshield_prompt,
-    composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
+    composer_enter, composer_go, composer_go_tip, perm_key, ComposerEnter, ComposerGo, PermKey,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
     chip_scan,
@@ -1344,6 +1344,8 @@ impl Cabin {
         secrets::migrate_console_key(&mut cfg, &mut secrets);
         let win_max = cfg.window.maximized;
         let approve_risky_only = cfg.approve_risky_only;
+        let boot_session = SessionMode::parse(&cfg.session_mode).unwrap_or(SessionMode::Chat);
+        let boot_perm = PermissionMode::parse(&cfg.permission_mode).unwrap_or(PermissionMode::Ask);
         let goal_step = threads.get(thread_idx).map(|t| t.goal.step).unwrap_or(0);
         let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
         let mut c = Self {
@@ -1587,8 +1589,8 @@ impl Cabin {
             live_blocks: Vec::new(),
             desk_frame: None,
             perm_ask: None,
-            session_mode: SessionMode::Chat,
-            permission_mode: PermissionMode::Ask,
+            session_mode: boot_session,
+            permission_mode: boot_perm,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
             grok_sessions_tx,
@@ -4808,7 +4810,7 @@ impl Cabin {
                 if self.running {
                     self.halt_in_flight();
                 }
-                self.session_mode = SessionMode::Plan;
+                self.set_session_mode(SessionMode::Plan);
                 self.acp = None;
                 self.acp_spawn_rx = None;
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
@@ -4818,11 +4820,12 @@ impl Cabin {
                 self.status = "Plan mode — Grok Build will plan first".into();
             }
             Slash::AlwaysApprove => {
-                self.permission_mode = if self.permission_mode == PermissionMode::AlwaysApprove {
+                let next = if self.permission_mode == PermissionMode::AlwaysApprove {
                     PermissionMode::Ask
                 } else {
                     PermissionMode::AlwaysApprove
                 };
+                self.set_permission_mode(next);
                 if self.running {
                     self.halt_in_flight();
                 }
@@ -4835,7 +4838,7 @@ impl Cabin {
                 self.status = format!("Permission {}", self.permission_mode.as_str());
             }
             Slash::AutoPerm => {
-                self.permission_mode = PermissionMode::Auto;
+                self.set_permission_mode(PermissionMode::Auto);
                 if self.running {
                     self.halt_in_flight();
                 }
@@ -5695,6 +5698,20 @@ impl Cabin {
                 }
             }
         });
+    }
+
+    /// The composer pills survive a restart: Ask/Auto/Plan is a preference, not a per-run
+    /// choice. Always-approve is the exception — `config::load` drops it back to Ask.
+    fn set_session_mode(&mut self, mode: SessionMode) {
+        self.session_mode = mode;
+        self.cfg.session_mode = mode.as_str().to_string();
+        self.persist_cfg();
+    }
+
+    fn set_permission_mode(&mut self, mode: PermissionMode) {
+        self.permission_mode = mode;
+        self.cfg.permission_mode = mode.as_str().to_string();
+        self.persist_cfg();
     }
 
     fn persist_cfg(&self) {
@@ -10997,21 +11014,27 @@ impl Cabin {
                     );
                 }
                 ui.add_space(8.0);
+                let key = perm_key(
+                    ui.input(|i| i.key_pressed(egui::Key::Enter)),
+                    ui.input(|i| i.key_pressed(egui::Key::Escape)),
+                    !self.composer.trim().is_empty(),
+                    self.palette_open || self.nav == Nav::Settings,
+                );
                 ui.horizontal(|ui| {
-                    if crate::cards::white_pill(ui, "Allow") {
+                    if crate::cards::white_pill(ui, "Allow") || key == Some(PermKey::Allow) {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission(p.rpc_id.clone(), true);
                         }
                         self.perm_ask = None;
                     }
-                    if crate::cards::ghost_pill(ui, "Deny") {
+                    if crate::cards::ghost_pill(ui, "Deny") || key == Some(PermKey::Deny) {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission(p.rpc_id.clone(), false);
                         }
                         self.perm_ask = None;
                     }
                     if crate::cards::ghost_pill(ui, "Always") {
-                        self.permission_mode = PermissionMode::AlwaysApprove;
+                        self.set_permission_mode(PermissionMode::AlwaysApprove);
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission_always(p.rpc_id.clone());
                         }
@@ -11262,7 +11285,7 @@ impl Cabin {
                     if self.running {
                         self.halt_in_flight();
                     }
-                    self.session_mode = m;
+                    self.set_session_mode(m);
                     self.acp = None;
                     self.acp_spawn_rx = None;
                     if let Some(t) = self.threads.get_mut(self.thread_idx) {
@@ -11277,7 +11300,7 @@ impl Cabin {
                     if self.running {
                         self.halt_in_flight();
                     }
-                    self.permission_mode = p;
+                    self.set_permission_mode(p);
                     self.acp = None;
                     self.acp_spawn_rx = None;
                     if let Some(t) = self.threads.get_mut(self.thread_idx) {
@@ -14193,6 +14216,16 @@ mod tests {
         assert!(
             ask.contains("p.reason") && src.contains("fn paint_try_again("),
             "hook ask reasons and credit-limit Try Again must paint: {ask}"
+        );
+        assert!(
+            ask.contains("perm_key(")
+                && ask.contains("PermKey::Allow")
+                && ask.contains("PermKey::Deny"),
+            "the shortcut sheet promises Enter / Esc on a permission card: {ask}"
+        );
+        assert!(
+            ask.contains("self.composer"),
+            "Enter must send a typed follow-up instead of approving a tool: {ask}"
         );
         let poll = src
             .split("fn poll_acp(")

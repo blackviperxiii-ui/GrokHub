@@ -181,6 +181,12 @@ pub struct AppConfig {
     pub mode: String,
     #[serde(default)]
     pub reasoning_effort: String,
+    /// Composer session pill — chat / plan / ask.
+    #[serde(default = "default_session_mode")]
+    pub session_mode: String,
+    /// Composer permission pill — ask / auto. Always-approve is a per-run choice.
+    #[serde(default = "default_permission_mode")]
+    pub permission_mode: String,
     #[serde(default = "default_quiet_start")]
     pub quiet_start: String,
     #[serde(default = "default_quiet_end")]
@@ -242,6 +248,14 @@ fn default_reasoning_effort() -> String {
     "high".into()
 }
 
+fn default_session_mode() -> String {
+    "chat".into()
+}
+
+fn default_permission_mode() -> String {
+    "ask".into()
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -263,6 +277,8 @@ impl Default for AppConfig {
             close_to_tray: default_close_to_tray(),
             mode: String::new(),
             reasoning_effort: default_reasoning_effort(),
+            session_mode: default_session_mode(),
+            permission_mode: default_permission_mode(),
             quiet_start: default_quiet_start(),
             quiet_end: default_quiet_end(),
             daily_auto_cap: default_daily_auto(),
@@ -350,6 +366,18 @@ pub fn load() -> AppConfig {
     } else if let Some(effort) = grokhub_core::parse_reasoning_effort(&cfg.reasoning_effort) {
         cfg.reasoning_effort = effort.to_string();
     }
+    cfg.session_mode = grokhub_acp::SessionMode::parse(&cfg.session_mode)
+        .unwrap_or(grokhub_acp::SessionMode::Chat)
+        .as_str()
+        .to_string();
+    // Always-approve is a per-run choice, same as the yolo reset above: a cabin must not
+    // boot into blanket approval because one turn needed it last week.
+    cfg.permission_mode = match grokhub_acp::PermissionMode::parse(&cfg.permission_mode) {
+        Some(grokhub_acp::PermissionMode::Auto) => grokhub_acp::PermissionMode::Auto,
+        _ => grokhub_acp::PermissionMode::Ask,
+    }
+    .as_str()
+    .to_string();
     cfg
 }
 
@@ -588,6 +616,38 @@ mod tests {
         let loaded = load();
         assert!(!loaded.device_name.trim().is_empty());
         assert_eq!(loaded.device_name, default_device_name());
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn composer_pills_survive_a_restart_but_always_approve_does_not() {
+        let _g = TEST_CONFIG_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("grokhub-pills-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut cfg = AppConfig::default();
+        assert_eq!(cfg.session_mode, "chat");
+        assert_eq!(cfg.permission_mode, "ask");
+        cfg.session_mode = "plan".into();
+        cfg.permission_mode = "auto".into();
+        save(&cfg).expect("save");
+        let loaded = load();
+        assert_eq!(loaded.session_mode, "plan");
+        assert_eq!(loaded.permission_mode, "auto");
+        cfg.permission_mode = "always-approve".into();
+        save(&cfg).expect("save");
+        assert_eq!(
+            load().permission_mode,
+            "ask",
+            "a cabin must not boot into blanket approval because one turn needed it"
+        );
+        cfg.session_mode = "nonsense".into();
+        cfg.permission_mode = "nonsense".into();
+        save(&cfg).expect("save");
+        let fallback = load();
+        assert_eq!(fallback.session_mode, "chat");
+        assert_eq!(fallback.permission_mode, "ask");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
