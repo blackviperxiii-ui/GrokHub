@@ -86,6 +86,11 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
                 403,
                 json!({ "ok": false, "error": "Pairing code does not match." }),
             ),
+            Err(grokhub_core::state::PairError::ReservedId) => send_json(
+                req,
+                403,
+                json!({ "ok": false, "error": "That device id is reserved by the hub." }),
+            ),
         };
     }
 
