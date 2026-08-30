@@ -1046,6 +1046,7 @@ pub struct Cabin {
     last_window_title: String,
     voice_orb: String,
     last_night_tick: Instant,
+    last_auto_tick: Instant,
     last_heartbeat: Instant,
     night_check_rx: Option<(String, mpsc::Receiver<(String, i32)>)>,
     learning: LearningState,
@@ -1432,6 +1433,7 @@ impl Cabin {
             last_window_title: String::new(),
             voice_orb: "idle".into(),
             last_night_tick: Instant::now(),
+            last_auto_tick: Instant::now(),
             last_heartbeat: Instant::now(),
             night_check_rx: None,
             learning: crate::store::load_learning(),
@@ -5874,7 +5876,15 @@ impl Cabin {
                     }
                 }
                 HeartbeatAct::Inbox => self.drain_inbox(),
-                HeartbeatAct::Night => night_fired = self.tick_loops(),
+                HeartbeatAct::Night => {
+                    // Grok `/loop` intervals and clock-time cabin automations both live on
+                    // this slot. Loops go first; automations still get the pulse when no
+                    // loop is due, so a 09:00 job is not starved by an idle loop list.
+                    night_fired = self.tick_loops();
+                    if !night_fired {
+                        night_fired = self.tick_night();
+                    }
+                }
                 HeartbeatAct::Review => {
                     if !night_fired && !self.running {
                         self.tick_review();
@@ -5940,6 +5950,14 @@ impl Cabin {
         let list = self.grok_loops.clone();
         std::thread::spawn(move || {
             let _ = crate::loops::save(&list);
+        });
+        self.persist_idle_key = self.persist_idle_now();
+    }
+
+    fn persist_automations(&mut self) {
+        let list = self.automations.clone();
+        std::thread::spawn(move || {
+            let _ = crate::night::save(&list);
         });
         self.persist_idle_key = self.persist_idle_now();
     }
@@ -6045,10 +6063,10 @@ impl Cabin {
     }
 
     fn tick_night(&mut self) -> bool {
-        if self.running || self.last_night_tick.elapsed() < Duration::from_secs(5) {
+        if self.running || self.last_auto_tick.elapsed() < Duration::from_secs(5) {
             return self.running || self.night_check_rx.is_some();
         }
-        self.last_night_tick = Instant::now();
+        self.last_auto_tick = Instant::now();
         let clock = Self::local_clock();
         self.roll_today();
         self.daily_auto_day = self.usage.day.clone();
@@ -15338,6 +15356,38 @@ mod tests {
                 || speak[..clone].contains("chip_scan")
                 || speak[..clone].contains("take_ui"),
             "voice speak must not clone an 8MB complete onto the UI thread: {speak}"
+        );
+    }
+
+    #[test]
+    fn the_night_slot_runs_loops_and_clock_time_automations() {
+        let src = include_str!("app.rs");
+        let beat = src
+            .split("fn tick_heartbeat")
+            .nth(1)
+            .and_then(|s| s.split("fn tick_anticipate").next())
+            .expect("tick_heartbeat");
+        assert!(
+            beat.contains("self.tick_loops()") && beat.contains("self.tick_night()"),
+            "the Night slot owns both schedulers — a 09:00 automation must still fire: {beat}"
+        );
+        let night = src
+            .split("fn tick_night(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_night_check(").next())
+            .expect("tick_night");
+        assert!(
+            night.contains("last_auto_tick") && !night.contains("last_night_tick"),
+            "automations need their own debounce or an idle loop list starves them: {night}"
+        );
+        let loops = src
+            .split("fn tick_loops(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_grok_loop(").next())
+            .expect("tick_loops");
+        assert!(
+            loops.contains("last_night_tick") && !loops.contains("last_auto_tick"),
+            "loops keep their own debounce: {loops}"
         );
     }
 
