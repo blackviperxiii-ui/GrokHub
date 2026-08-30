@@ -203,12 +203,14 @@ pub use pair::{
     PAIR_TTL_MS,
 };
 pub use automation::{
-    automation_blocked_by_policy, compute_next_run, due_automations, ensure_automation_schedule,
+    automation_blocked_by_policy, automation_schedule_label, automation_summary_line,
+    compute_next_run, due_automations, ensure_automation_schedule,
     mark_automation_ran, mark_automation_skipped, night_check_command, night_check_exit_code,
     night_check_may_fire, night_counts_run, night_unauth_should_skip,
-    night_check_stdout, parse_nl_automation, replay_automation_target, skip_automation,
+    night_check_stdout, parse_clock_token, parse_nl_automation, replay_automation_target,
+    route_schedule, skip_automation,
     chat_may_save_automation, user_asked_to_schedule,
-    skip_night_check_receipt, Automation,
+    skip_night_check_receipt, Automation, ScheduleRoute,
 };
 pub use connector::{
     connector_url_allowed, extract_connector_cmds, github_api_path, map_website_connector_name,

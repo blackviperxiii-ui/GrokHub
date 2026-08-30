@@ -92,7 +92,8 @@ use grokhub_core::{
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
     reply_needs_followup,
     recipe_from_cmds, replay_automation_target,
-    mark_loop_ran, new_loop, parse_loop_line, parse_nl_automation, parse_recipe, parse_slash,
+    mark_loop_ran, new_loop, parse_recipe, parse_slash, route_schedule, ScheduleRoute,
+    automation_schedule_label, automation_summary_line,
     parse_theme, pick_theme, plan_from_text, plan_room, LOOP_MAX,
     chat_may_save_automation, user_asked_to_schedule,
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
@@ -7879,30 +7880,12 @@ impl Cabin {
                 if user_asked_to_schedule(&last_user)
                     && chat_may_save_automation(&last_user, &scan)
                 {
-                    let parsed = parse_loop_line(&scan)
-                        .or_else(|| parse_loop_line(&last_user))
-                        .or_else(|| {
-                            parse_nl_automation(&scan).map(|a| {
-                                let iv = if a.schedule == "heartbeat" {
-                                    format!("{}m", a.heartbeat_every_min.max(1))
-                                } else {
-                                    "1d".into()
-                                };
-                                (iv, a.instructions)
-                            })
-                        });
-                    if let Some((iv, prompt)) = parsed {
-                        if self.grok_loops.len() < LOOP_MAX {
-                            let mut row = new_loop(iv.clone(), prompt, now_ms());
-                            row.id = uid("loop");
-                            self.grok_loops.push(row);
-                            self.persist_loops();
-                            if here {
-                                self.status = format!("Loop saved: /loop {iv}");
-                            }
-                        } else if here {
-                            self.status = "Maximum 50 scheduled loops".into();
-                        }
+                    // The reply carries the schedule; fall back to the ask when it does not.
+                    let saved = self
+                        .save_schedule(&scan)
+                        .or_else(|| self.save_schedule(&last_user));
+                    if let (Some(status), true) = (saved, here) {
+                        self.status = status;
                     }
                 }
                 if let Some(q) = parse_consult(&scan) {
@@ -12060,41 +12043,51 @@ impl Cabin {
     }
 
     fn add_automation_seed(&mut self, seed: &str) {
-        let parsed = parse_loop_line(seed).or_else(|| {
-            parse_nl_automation(seed).map(|a| {
-                let iv = if a.schedule == "heartbeat" {
-                    format!("{}m", a.heartbeat_every_min.max(1))
-                } else {
-                    "1d".into()
-                };
-                (iv, a.instructions)
-            })
-        });
-        let Some((iv, prompt)) = parsed else {
-            self.status = "Need `/loop 30m …` or `every 2h …`".into();
-            return;
-        };
-        if self.grok_loops.len() >= LOOP_MAX {
-            self.status = "Maximum 50 scheduled loops".into();
-            return;
+        match self.save_schedule(seed) {
+            Some(status) => self.status = status,
+            None => self.status = "Need `/loop 30m …`, `every 2h …`, or `every day at 9 …`".into(),
         }
-        let mut row = new_loop(iv, prompt, now_ms());
-        row.id = uid("loop");
-        self.grok_loops.push(row);
-        self.persist_loops();
-        self.status = "Loop added".into();
+    }
+
+    /// One door for both schedulers. A clock time ("every weekday at 9") is a cabin
+    /// automation in `automations.json`; an interval stays a Grok Build `/loop` row.
+    fn save_schedule(&mut self, seed: &str) -> Option<String> {
+        match route_schedule(seed)? {
+            ScheduleRoute::Clock(a) => {
+                if self.automations.len() >= LOOP_MAX {
+                    return Some("Maximum 50 scheduled automations".into());
+                }
+                let mut a = *a;
+                a.id = uid("auto");
+                a = ensure_automation_schedule(a, Self::local_clock());
+                let label = automation_schedule_label(&a);
+                self.automations.push(a);
+                self.persist_automations();
+                Some(format!("Automation added · {label}"))
+            }
+            ScheduleRoute::Interval { interval, prompt } => {
+                if self.grok_loops.len() >= LOOP_MAX {
+                    return Some("Maximum 50 scheduled loops".into());
+                }
+                let mut row = new_loop(interval.clone(), prompt, now_ms());
+                row.id = uid("loop");
+                self.grok_loops.push(row);
+                self.persist_loops();
+                Some(format!("Loop added · every {interval}"))
+            }
+        }
     }
 
     fn ui_night(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
-            if crate::cards::page_header(ui, "Loops", "New Loop") {
+            if crate::cards::page_header(ui, "Automations", "New job") {
                 self.auto_compose = true;
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
             ui.label(
-                RichText::new("Grok Build `/loop` scheduler — interval prompts against your grok home. Stop a loop when the work is done.")
+                RichText::new("Interval prompts run as Grok Build `/loop`. A clock time — `every weekday at 9` — runs as a cabin automation on the 15s pulse. Stop a job when the work is done.")
                     .size(12.0)
                     .color(crate::theme::muted()),
             );
@@ -12106,17 +12099,20 @@ impl Cabin {
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .inner_margin(egui::Margin::same(14.0))
                     .show(ui, |ui| {
-                        ui.label(RichText::new("New loop").strong());
-                        ui.add(
+                        ui.label(RichText::new("New job").strong());
+                        let edit = ui.add(
                             egui::TextEdit::singleline(&mut self.night_nl)
-                                .hint_text("/loop 30m check deploy status")
+                                .hint_text("/loop 30m check deploy · every weekday at 9, summarize the board")
                                 .desired_width(f32::INFINITY),
                         );
+                        let enter = edit.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         ui.horizontal(|ui| {
-                            if crate::cards::white_pill(ui, "Add") {
-                                let seed = std::mem::take(&mut self.night_nl);
+                            if crate::cards::white_pill(ui, "Add") || enter {
+                                let seed = self.night_nl.clone();
                                 self.add_automation_seed(&seed);
-                                if self.status == "Loop added" {
+                                if self.status.contains("added") {
+                                    self.night_nl.clear();
                                     self.auto_compose = false;
                                 }
                             }
@@ -12127,7 +12123,8 @@ impl Cabin {
                     });
             }
             ui.add_space(8.0);
-            crate::cards::section_label(ui, "Active");
+            self.ui_scheduled_automations(ui);
+            crate::cards::section_label(ui, "Loops");
             if self.status.starts_with("Loop:") {
                 crate::cards::status_chip(ui, &self.status, crate::cards::ChipTone::Live);
                 ui.add_space(8.0);
@@ -12224,6 +12221,81 @@ impl Cabin {
             }
             });
         });
+    }
+
+    /// Clock-time jobs from `automations.json` — the ones the 15s pulse fires at 09:00.
+    fn ui_scheduled_automations(&mut self, ui: &mut egui::Ui) {
+        crate::cards::section_label(ui, "Scheduled");
+        if self.automations.is_empty() {
+            ui.label(
+                RichText::new("No clock jobs yet. Add `every weekday at 9, summarize the board`.")
+                    .size(12.0)
+                    .color(crate::theme::muted()),
+            );
+            ui.add_space(16.0);
+            return;
+        }
+        let now = now_ms();
+        let clock = Self::local_clock();
+        let mut remove: Option<usize> = None;
+        let mut run: Option<usize> = None;
+        let mut toggled = false;
+        for i in 0..self.automations.len() {
+            let title = match self.automations[i].name.trim() {
+                "" => self.automations[i]
+                    .instructions
+                    .chars()
+                    .take(40)
+                    .collect::<String>(),
+                name => name.chars().take(40).collect::<String>(),
+            };
+            let body = automation_summary_line(&self.automations[i], now);
+            egui::Frame::none()
+                .fill(crate::theme::elevated())
+                .rounding(14.0)
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                .inner_margin(egui::Margin::same(12.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut self.automations[i].enabled, "").changed() {
+                            toggled = true;
+                        }
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(&title).size(15.0).color(crate::theme::fg()));
+                            ui.label(RichText::new(&body).size(12.0).color(crate::theme::muted()));
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if crate::cards::ghost_pill(ui, "Remove") {
+                                remove = Some(i);
+                            }
+                            if crate::cards::white_pill(ui, "Run") {
+                                run = Some(i);
+                            }
+                        });
+                    });
+                });
+            ui.add_space(8.0);
+        }
+        if toggled {
+            // A paused job drops its next run; re-enabling has to find the next slot.
+            self.automations = std::mem::take(&mut self.automations)
+                .into_iter()
+                .map(|a| ensure_automation_schedule(a, clock))
+                .collect();
+            self.persist_automations();
+        }
+        if let Some(i) = remove {
+            if i < self.automations.len() {
+                self.automations.remove(i);
+                self.persist_automations();
+                self.status = "Automation removed".into();
+            }
+        } else if let Some(i) = run {
+            if let Some(a) = self.automations.get(i).cloned() {
+                self.fire_night(a, now);
+            }
+        }
+        ui.add_space(12.0);
     }
 
     fn ui_history(&mut self, ctx: &egui::Context) {
@@ -14406,12 +14478,24 @@ mod tests {
         assert!(
             src.contains("user_asked_to_schedule")
                 && src.contains("chat_may_save_automation")
-                && night_save.contains("parse_loop_line"),
-            "ordinary replies that mention every day at / heartbeat every must not become live loops"
+                && night_save.contains("save_schedule"),
+            "ordinary replies that mention every day at / heartbeat every must not become live jobs"
+        );
+        let saver = src
+            .split("fn save_schedule(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_night(").next())
+            .expect("save_schedule");
+        assert!(
+            saver.contains("route_schedule") && saver.contains("ScheduleRoute::Clock"),
+            "`every day at 9` must keep its hour instead of becoming a 1d loop: {saver}"
         );
         assert!(
-            night_save.contains("persist_loops") && !night_save.contains("self.persist()"),
-            "chat loop save must not clone every thread 2s later — persist_loops bumps the idle key: {night_save}"
+            saver.contains("persist_loops")
+                && saver.contains("persist_automations")
+                && !saver.contains("self.persist()")
+                && !night_save.contains("self.persist()"),
+            "a saved job must not clone every thread 2s later — the persist helpers bump the idle key: {saver}"
         );
         assert!(
             src.contains("ignore_close_while_hidden"),
@@ -18090,8 +18174,28 @@ mod tests {
             "Suggested header shows Reviewed today / due tonight: {night}"
         );
         assert!(
-            night.contains("/loop") && night.contains("New Loop") && night.contains("grok_loops"),
-            "Automations page is Grok Build /loop, not cabin night cron: {night}"
+            night.contains("/loop") && night.contains("New job") && night.contains("grok_loops"),
+            "Automations page still owns the Grok Build /loop list: {night}"
+        );
+        assert!(
+            night.contains("ui_scheduled_automations") && night.contains("self.automations"),
+            "Automations page must also show the clock jobs the pulse fires: {night}"
+        );
+        let sched = src
+            .split("fn ui_scheduled_automations(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_history(").next())
+            .expect("ui_scheduled_automations");
+        assert!(
+            sched.contains("automation_summary_line")
+                && sched.contains("fire_night")
+                && sched.contains("persist_automations")
+                && !sched.contains("self.persist()"),
+            "a clock job needs its schedule, Run, Remove, and an off-thread persist: {sched}"
+        );
+        assert!(
+            sched.contains("ensure_automation_schedule"),
+            "re-enabling a paused job has to find its next slot: {sched}"
         );
         let enable = night
             .split("checkbox")
@@ -18112,12 +18216,12 @@ mod tests {
             .and_then(|s| s.split("fn ui_night(").next())
             .expect("add_automation_seed");
         assert!(
-            added.contains("parse_loop_line") && added.contains("persist_loops"),
-            "Add loop must parse /loop and persist loops.json off the UI thread: {added}"
+            added.contains("save_schedule") && added.contains("persist_loops"),
+            "Add must route the seed and persist loops.json off the UI thread: {added}"
         );
         assert!(
             !added.contains("self.persist()"),
-            "Add loop must not clone every thread 2s later: {added}"
+            "Add must not clone every thread 2s later: {added}"
         );
         let fire = src
             .split("fn fire_loop(")
