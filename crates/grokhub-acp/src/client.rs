@@ -284,11 +284,7 @@ fn drain_stderr(stderr: ChildStderr) -> Arc<Mutex<String>> {
                             }
                             held.push(ch);
                         }
-                        const CAP: usize = 4096;
-                        if held.len() > CAP * 2 {
-                            let extra = held.len() - CAP;
-                            held.drain(..extra);
-                        }
+                        trim_stderr_tail(&mut held, STDERR_TAIL_CAP);
                     }
                 }
                 Err(_) => break,
@@ -296,6 +292,25 @@ fn drain_stderr(stderr: ChildStderr) -> Arc<Mutex<String>> {
         }
     });
     tail
+}
+
+const STDERR_TAIL_CAP: usize = 4096;
+
+/// Keep roughly the last `cap` bytes of the stderr tail.
+///
+/// `String::drain` panics unless the index is a char boundary, and grok writes multi-byte
+/// spinner and box-drawing glyphs, so a byte offset lands mid-character two times in three.
+/// That panic used to poison the tail mutex and, worse, kill the only thread draining
+/// stderr — after which the child blocked on a full pipe and the turn hung forever.
+fn trim_stderr_tail(held: &mut String, cap: usize) {
+    if held.len() <= cap * 2 {
+        return;
+    }
+    let mut cut = held.len() - cap;
+    while cut < held.len() && !held.is_char_boundary(cut) {
+        cut += 1;
+    }
+    held.drain(..cut);
 }
 
 fn format_exit_status(st: ExitStatus) -> String {
@@ -1085,6 +1100,10 @@ pub fn spawn_grok_p_stream(
     )?;
     let pid = child.id();
     let stdout = child.stdout.take().ok_or("grok -p stdout")?;
+    // `grok_p_child` pipes stderr, but nothing here used to read it. Once grok filled the
+    // 64KB pipe buffer it blocked in `write`, stopped emitting stdout tokens, and the turn
+    // hung with no timeout above us. Drain it, and keep the tail for the error message.
+    let stderr_tail = child.stderr.take().map(drain_stderr);
     let grok_home = cabin_grok_home();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -1158,6 +1177,10 @@ pub fn spawn_grok_p_stream(
             if is_sigterm_status(&st) {
                 return;
             }
+            let st = match stderr_tail.as_ref() {
+                Some(tail) => with_stderr(st, tail),
+                None => st,
+            };
             let _ = tx.send(crate::stream::GrokPEvent::Err(st));
             return;
         }
@@ -2342,6 +2365,40 @@ mod tests {
     }
 
     #[test]
+    fn stderr_tail_trims_on_char_boundaries() {
+        // Every glyph grok uses for spinners and rules is multi-byte, so a byte-offset
+        // drain lands mid-character and panics — which stops the drain and hangs the turn.
+        for glyph in ["—", "⠋", "│", "の", "😀"] {
+            let cap = 8;
+            let mut held: String = glyph.repeat(200);
+            let before = held.clone();
+            trim_stderr_tail(&mut held, cap);
+            assert!(held.len() <= cap * 2, "{glyph:?} tail not trimmed: {}", held.len());
+            assert!(!held.is_empty(), "{glyph:?} trimmed to nothing");
+            assert!(
+                before.ends_with(&held),
+                "{glyph:?} must keep a suffix of the original, got {held:?}"
+            );
+            assert!(
+                held.chars().all(|c| glyph.starts_with(c)),
+                "{glyph:?} trim split a character: {held:?}"
+            );
+        }
+
+        // A tail under the trim threshold is left exactly as it was.
+        let mut small = "warning: grok is fine".to_string();
+        let untouched = small.clone();
+        trim_stderr_tail(&mut small, STDERR_TAIL_CAP);
+        assert_eq!(small, untouched);
+
+        // Mixed ASCII and wide text still ends up valid UTF-8 of a bounded size.
+        let mut mixed: String = "abc—def⠋".repeat(500);
+        trim_stderr_tail(&mut mixed, 32);
+        assert!(mixed.len() <= 64, "{}", mixed.len());
+        assert!(std::str::from_utf8(mixed.as_bytes()).is_ok());
+    }
+
+    #[test]
     fn drop_waits_off_the_ui_thread() {
         let src = include_str!("client.rs");
         let drop = src
@@ -2358,6 +2415,21 @@ mod tests {
         assert!(
             drain.contains("Interrupted"),
             "stderr drain must not exit on EINTR or grok dies on SIGPIPE: {drain}"
+        );
+        assert!(
+            drain.contains("trim_stderr_tail"),
+            "trimming must go through the char-boundary-safe helper: {drain}"
+        );
+        let stream = src
+            .split("pub fn spawn_grok_p_stream(")
+            .nth(1)
+            .and_then(|s| s.split("fn grok_p_child(").next())
+            .expect("spawn_grok_p_stream");
+        assert!(
+            stream.contains("child.stderr.take()") && stream.contains("drain_stderr"),
+            "grok_p_child pipes stderr, so the live stream must drain it — an undrained \
+             pipe fills at 64KB and grok blocks in write, ending the turn's output with \
+             no error and no timeout: {stream}"
         );
         let connect = src
             .split("pub fn connect(")

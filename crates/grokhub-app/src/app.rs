@@ -7180,15 +7180,19 @@ impl Cabin {
         };
         match rx.try_recv() {
             Ok(GrokPEvent::Thought(d)) => {
-                let _ = push_stream_capped(&mut self.thought_buf, &d, IMAGE_FILE_CAP);
-                append_thought(&mut self.live_blocks, &d);
+                // `append_thought` has no cap of its own, so it has to respect the buffer
+                // cap or the rendered blocks grow past IMAGE_FILE_CAP unbounded.
+                if push_stream_capped(&mut self.thought_buf, &d, IMAGE_FILE_CAP) {
+                    append_thought(&mut self.live_blocks, &d);
+                }
                 self.status = self.thinking_status();
                 self.upsert_stream_assistant();
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::Text(d)) => {
-                let _ = push_stream_capped(&mut self.stream_buf, &d, IMAGE_FILE_CAP);
-                append_say(&mut self.live_blocks, &d);
+                if push_stream_capped(&mut self.stream_buf, &d, IMAGE_FILE_CAP) {
+                    append_say(&mut self.live_blocks, &d);
+                }
                 self.status = self.thinking_status();
                 self.upsert_stream_assistant();
                 self.grok_p_rx = Some(rx);
