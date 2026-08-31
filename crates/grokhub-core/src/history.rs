@@ -24,6 +24,20 @@ pub fn search_corpus(q: &str, rows: &[(String, String)]) -> Vec<String> {
     out
 }
 
+/// Keep the first sighting of each hit and the order the corpus was searched in:
+/// memory lines lead, threads follow. Sorting the list alphabetically buried the
+/// memory answer under every chat whose title happened to start with an "A".
+pub fn dedupe_hits(hits: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for h in hits {
+        if seen.insert(h.clone()) {
+            out.push(h);
+        }
+    }
+    out
+}
+
 pub fn search_thread_body<'a>(chunks: impl IntoIterator<Item = &'a str>) -> String {
     let mut body = String::new();
     for c in chunks {
@@ -97,6 +111,26 @@ mod tests {
         let hit = search_corpus("pi", &uni);
         assert_eq!(hit.len(), 1);
         assert!(hit[0].contains("éclair") || hit[0].contains("matching"), "{hit:?}");
+    }
+
+    #[test]
+    fn recall_keeps_memory_first_and_drops_repeats() {
+        let hits = dedupe_hits(vec![
+            "MEMORY.md:2: prefer nvim".into(),
+            "alpha notes: prefer nvim here".into(),
+            "MEMORY.md:2: prefer nvim".into(),
+            "zeta notes: nvim again".into(),
+        ]);
+        assert_eq!(
+            hits,
+            vec![
+                "MEMORY.md:2: prefer nvim".to_string(),
+                "alpha notes: prefer nvim here".to_string(),
+                "zeta notes: nvim again".to_string(),
+            ],
+            "the memory line answers the question — it must not sort under chat titles"
+        );
+        assert!(dedupe_hits(vec![]).is_empty());
     }
 
     #[test]
