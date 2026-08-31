@@ -1026,6 +1026,9 @@ pub struct Cabin {
     /// Cap fields are typed, so they hold text until Save parses them.
     cap_auto_buf: String,
     cap_host_buf: String,
+    /// Quiet-hour clocks are typed, so they hold text until Save parses them.
+    quiet_start_buf: String,
+    quiet_end_buf: String,
     history_q: String,
     /// Last query the debounce saw, so typing kicks a search without a button.
     history_q_seen: String,
@@ -1211,7 +1214,7 @@ pub struct Cabin {
     grok_sessions_inflight: u32,
     pending_grok_deletes: HashSet<String>,
     inspect_rx: Option<mpsc::Receiver<String>>,
-    history_rx: Option<mpsc::Receiver<Vec<(String, String)>>>,
+    history_rx: Option<mpsc::Receiver<(String, Vec<(String, String)>)>>,
     mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
     mem_file_rx: Option<(String, mpsc::Receiver<(u64, String)>)>,
     recall_rx: Option<mpsc::Receiver<String>>,
@@ -1345,6 +1348,8 @@ impl Cabin {
         let win_max = cfg.window.maximized;
         let cfg_auto_cap = cfg.daily_auto_cap;
         let cfg_host_cap = cfg.host_hour_cap;
+        let cfg_quiet_start = cfg.quiet_start.clone();
+        let cfg_quiet_end = cfg.quiet_end.clone();
         let boot_session = SessionMode::parse(&cfg.session_mode).unwrap_or(SessionMode::Chat);
         let boot_perm = PermissionMode::parse(&cfg.permission_mode).unwrap_or(PermissionMode::Ask);
         let goal_step = threads.get(thread_idx).map(|t| t.goal.step).unwrap_or(0);
@@ -1422,6 +1427,8 @@ impl Cabin {
             night_nl: String::new(),
             cap_auto_buf: cfg_auto_cap.to_string(),
             cap_host_buf: cfg_host_cap.to_string(),
+            quiet_start_buf: cfg_quiet_start,
+            quiet_end_buf: cfg_quiet_end,
             history_q: String::new(),
             history_q_seen: String::new(),
             history_q_at: None,
@@ -2327,9 +2334,11 @@ impl Cabin {
             return;
         };
         match rx.try_recv() {
-            Ok(hits) => {
-                self.history_hits = hits;
-                self.status = format!("{} hits", self.history_hits.len());
+            Ok((q, hits)) => {
+                if q == self.history_q {
+                    self.history_hits = hits;
+                    self.status = format!("{} hits", self.history_hits.len());
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.history_rx = Some(rx);
@@ -11611,8 +11620,8 @@ impl Cabin {
         if self.history_q != self.history_q_seen {
             self.history_q_seen = self.history_q.clone();
             self.history_q_at = Some(Instant::now());
+            self.history_hits.clear();
             if self.history_q.trim().is_empty() {
-                self.history_hits.clear();
                 self.history_q_at = None;
             }
         }
@@ -11680,7 +11689,8 @@ impl Cabin {
                 ("mem:MEMORY.md".to_string(), "MEMORY.md".to_string(), memory),
             ];
             rows.extend(thread_rows);
-            let _ = tx.send(search_corpus_tagged(&q, &rows));
+            let hits = search_corpus_tagged(&q, &rows);
+            let _ = tx.send((q, hits));
         });
     }
 
@@ -11706,9 +11716,13 @@ impl Cabin {
     }
 
     /// Show a memory file in the editor. The file being left is flushed to disk off the
-    /// UI thread first, so switching tabs never drops an edit.
+    /// UI thread first, so switching tabs never drops an edit. Re-opening the file already
+    /// in the editor keeps `mem_body` — the cache is a disk snapshot and would wipe typing.
     fn open_memory_file(&mut self, name: &str) {
-        if !self.scratch() && self.mem_name != name {
+        if self.mem_name == name {
+            return;
+        }
+        if !self.scratch() {
             let leaving = self.mem_name.clone();
             let body = self.mem_body.clone();
             if let Some(i) = Self::mem_file_idx(&leaving) {
@@ -11817,10 +11831,12 @@ impl Cabin {
 
     fn save_settings(&mut self) {
         self.cfg.api_key.clear();
-        self.cfg.quiet_start = normalize_hm(&self.cfg.quiet_start, &config::default_quiet_start());
-        self.cfg.quiet_end = normalize_hm(&self.cfg.quiet_end, &config::default_quiet_end());
+        self.cfg.quiet_start = normalize_hm(&self.quiet_start_buf, &self.cfg.quiet_start);
+        self.cfg.quiet_end = normalize_hm(&self.quiet_end_buf, &self.cfg.quiet_end);
         self.cfg.daily_auto_cap = cap_from_text(&self.cap_auto_buf, self.cfg.daily_auto_cap);
         self.cfg.host_hour_cap = cap_from_text(&self.cap_host_buf, self.cfg.host_hour_cap);
+        self.quiet_start_buf = self.cfg.quiet_start.clone();
+        self.quiet_end_buf = self.cfg.quiet_end.clone();
         self.cap_auto_buf = self.cfg.daily_auto_cap.to_string();
         self.cap_host_buf = self.cfg.host_hour_cap.to_string();
         if let Ok(mut st) = self.hub.lock() {
@@ -12087,14 +12103,14 @@ impl Cabin {
                                                                 ui,
                                                                 "Quiet hours start",
                                                                 "24h clock. Inside quiet hours the cabin holds a destructive automation and stops anticipating.",
-                                                                &mut self.cfg.quiet_start,
+                                                                &mut self.quiet_start_buf,
                                                                 false,
                                                             );
                                                             crate::cards::settings_field(
                                                                 ui,
                                                                 "Quiet hours end",
                                                                 "Same clock. Start and end equal means no quiet hours.",
-                                                                &mut self.cfg.quiet_end,
+                                                                &mut self.quiet_end_buf,
                                                                 false,
                                                             );
                                                             crate::cards::settings_field(
@@ -14527,7 +14543,8 @@ mod tests {
             "Close to tray and Living wall must not clone every thread to write app.json: {behavior}"
         );
         assert!(
-            behavior.contains("quiet_start")
+            behavior.contains("quiet_start_buf")
+                && behavior.contains("quiet_end_buf")
                 && behavior.contains("cap_auto_buf")
                 && behavior.contains("cap_host_buf"),
             "quiet hours and the caps hold real work — they need a way in: {behavior}"
@@ -14540,6 +14557,12 @@ mod tests {
         assert!(
             saved.contains("normalize_hm") && saved.contains("cap_from_text"),
             "a typo in a clock or a cap must keep the old value, not switch the guard off: {saved}"
+        );
+        assert!(
+            saved.contains("quiet_start_buf")
+                && saved.contains("&self.cfg.quiet_start")
+                && !saved.contains("default_quiet_start"),
+            "Save must keep the last good clock, not the factory window: {saved}"
         );
         // Split so these assertions are not their own counter-examples.
         let gone = ["Host", "Voice", "Night", "Imagine"]
@@ -17227,6 +17250,10 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn ui_memory(").next())
             .expect("open_memory_file");
+        assert!(
+            tabs.contains("if self.mem_name == name") && tabs.contains("return;"),
+            "re-opening the file already in the editor must keep unsaved edits: {tabs}"
+        );
         let flush = tabs.find("write_memory").expect("flush leaving memory");
         let switch = tabs.find("mem_name = name").expect("switch name");
         assert!(
@@ -18365,6 +18392,19 @@ mod tests {
         assert!(
             debounce.contains("HISTORY_TYPE_DELAY") && debounce.contains("history_rx.is_some()"),
             "typing must not spawn a walk of every thread per keystroke: {debounce}"
+        );
+        assert!(
+            debounce.contains("self.history_hits.clear()"),
+            "a new query must drop the previous needle's hits so a click cannot open the wrong thread: {debounce}"
+        );
+        let poll = src
+            .split("fn poll_history_search(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_mem_restore(").next())
+            .expect("poll_history_search");
+        assert!(
+            poll.contains("q == self.history_q"),
+            "a finished walk must not install hits for a query the box no longer holds: {poll}"
         );
         let search = src
             .split("fn kick_history_search(")
