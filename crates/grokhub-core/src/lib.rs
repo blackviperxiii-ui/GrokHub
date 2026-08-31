@@ -68,7 +68,7 @@ pub use feel::{
     HOVER_SECS, PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
 };
 pub use autonomy::{
-    anticipate_consumes_slot, anticipated_need, autonomy_policy, cabin_system_prompt,
+    anticipate_consumes_slot, anticipated_need, cabin_system_prompt,
     host_plan_autorun, host_step_autorun, should_anticipate, HostAuto, LearnMode, Policy,
     SkillFollow, SkillWrite,
 };
@@ -245,7 +245,9 @@ pub use greeting::{
     pick_greeting, should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_DEBOUNCE_MS, GREETING_LLM_MODE,
     GREETING_MAX_CHARS,
 };
-pub use history::{dedupe_hits, search_corpus, search_text, search_thread_body};
+pub use history::{
+    dedupe_hits, search_corpus, search_corpus_tagged, search_text, search_thread_body,
+};
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
 pub use learning::{
     extract_insights, insight_key_for_fact, insight_pin, is_actionable_need, is_durable_fact, looks_like_user_pref,
@@ -267,12 +269,13 @@ pub use stream::{
     StreamTokenKind, StreamUsage,
 };
 pub use usage::{
-    add_tokens, bump_usage, roll_usage_day, token_delta, usage_blocked, usage_line, UsageDay,
+    add_tokens, bump_usage, roll_usage_day, token_delta, usage_line, UsageDay,
 };
 pub use hub_sync::{build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, HubMemoryFile, HubSnapshot};
 pub use hygiene::{lockish, should_send_screenshot};
 pub use organs::{
-    clipboard_context_block, daily_units_blocked, greet_from_last_job, last_user_scan, last_user_text,
+    cap_from_text, cap_label, clipboard_context_block, daily_units_blocked, greet_from_last_job,
+    last_user_scan, last_user_text, normalize_hm,
     thread_host_receipts, thread_host_receipts_from,
     on_wheel_grab, parse_local_clock, passenger_label, plan_room, presence_orb_state,
     presence_should_stream, quiet_hours_active, redirect_prompt, replay_frame_delay,

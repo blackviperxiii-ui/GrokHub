@@ -103,7 +103,8 @@ use grokhub_core::{
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
-    rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus, dedupe_hits,
+    rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
+    search_corpus_tagged, dedupe_hits,
     search_thread_body,
     state_for_disk,
     clear_pending_after_complete, inbox_claim_ready,
@@ -128,7 +129,7 @@ use grokhub_core::{
     skill_follow_block, skill_use_in_chat_prompt, slash_help, SlashHit, summarize_write, surgical_memory_edit, MemoryEdit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
-    unified_diff_cite, usage_line, add_tokens, token_delta,
+    unified_diff_cite, usage_line, add_tokens, token_delta, cap_from_text, cap_label, normalize_hm,
     transcribe_route, uid, update_cmds, overlay_update_begin, overlay_update_finish,
     realtime_bearer, realtime_can_connect, voice_log_role, voice_stream_token, voice_transcript_sends_chat,
     fold_stream_fields, StreamTokenKind,
@@ -165,7 +166,6 @@ enum Nav {
     Workboard,
     Imagine,
     Skills,
-    Eyes,
     Night,
     History,
     Command,
@@ -179,10 +179,6 @@ enum SettingsSec {
     Account,
     Appearance,
     Behavior,
-    Host,
-    Imagine,
-    Voice,
-    Night,
     Github,
     Update,
     About,
@@ -191,7 +187,6 @@ enum SettingsSec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsGroup {
     General,
-    Cabin,
     Data,
     About,
 }
@@ -250,7 +245,6 @@ fn plus_from_path(target: PlusTarget, path: PathBuf) -> PlusPick {
 fn settings_group_home(group: SettingsGroup) -> SettingsSec {
     match group {
         SettingsGroup::General => SettingsSec::Account,
-        SettingsGroup::Cabin => SettingsSec::Host,
         SettingsGroup::Data => SettingsSec::Github,
         SettingsGroup::About => SettingsSec::Update,
     }
@@ -464,6 +458,9 @@ fn mode_status_line(mode: &str, pinned_model: &str) -> String {
     }
 }
 
+/// How long a History query sits still before it runs. Every keystroke walks every
+/// thread, so the cabin waits for the typing to settle.
+const HISTORY_TYPE_DELAY: Duration = Duration::from_millis(250);
 const RAIL_FOOTER_H: f32 = 52.0;
 const PALETTE_LIST_H: f32 = 280.0;
 
@@ -484,10 +481,6 @@ fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::Account => "Account",
         SettingsSec::Appearance => "Appearance",
         SettingsSec::Behavior => "Behavior",
-        SettingsSec::Host => "Host",
-        SettingsSec::Imagine => "Imagine",
-        SettingsSec::Voice => "Voice",
-        SettingsSec::Night => "Night",
         SettingsSec::Github => "GitHub",
         SettingsSec::Update => "Update",
         SettingsSec::About => "About",
@@ -1017,7 +1010,6 @@ pub struct Cabin {
     host_hour_count: u32,
     host_hour_at: Instant,
     host_reserved: u32,
-    approve_risky_only: bool,
     plan_pending: Option<Vec<HostPlanStep>>,
     tray: Option<crate::tray::TrayHost>,
     tray_rx: Option<mpsc::Receiver<Option<crate::tray::TrayHost>>>,
@@ -1031,8 +1023,14 @@ pub struct Cabin {
     grok_loops: Vec<GrokLoop>,
     grok_loop_rx: Option<(String, mpsc::Receiver<String>)>,
     night_nl: String,
+    /// Cap fields are typed, so they hold text until Save parses them.
+    cap_auto_buf: String,
+    cap_host_buf: String,
     history_q: String,
-    history_hits: Vec<String>,
+    /// Last query the debounce saw, so typing kicks a search without a button.
+    history_q_seen: String,
+    history_q_at: Option<Instant>,
+    history_hits: Vec<(String, String)>,
     last_receipt_ok: Option<bool>,
     last_receipts: Vec<(String, bool)>,
     try_again: bool,
@@ -1213,7 +1211,7 @@ pub struct Cabin {
     grok_sessions_inflight: u32,
     pending_grok_deletes: HashSet<String>,
     inspect_rx: Option<mpsc::Receiver<String>>,
-    history_rx: Option<mpsc::Receiver<Vec<String>>>,
+    history_rx: Option<mpsc::Receiver<Vec<(String, String)>>>,
     mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
     mem_file_rx: Option<(String, mpsc::Receiver<(u64, String)>)>,
     recall_rx: Option<mpsc::Receiver<String>>,
@@ -1345,7 +1343,8 @@ impl Cabin {
         let mut secrets = secrets::load();
         secrets::migrate_console_key(&mut cfg, &mut secrets);
         let win_max = cfg.window.maximized;
-        let approve_risky_only = cfg.approve_risky_only;
+        let cfg_auto_cap = cfg.daily_auto_cap;
+        let cfg_host_cap = cfg.host_hour_cap;
         let boot_session = SessionMode::parse(&cfg.session_mode).unwrap_or(SessionMode::Chat);
         let boot_perm = PermissionMode::parse(&cfg.permission_mode).unwrap_or(PermissionMode::Ask);
         let goal_step = threads.get(thread_idx).map(|t| t.goal.step).unwrap_or(0);
@@ -1404,7 +1403,6 @@ impl Cabin {
             host_hour_count: 0,
             host_hour_at: Instant::now(),
             host_reserved: 0,
-            approve_risky_only,
             plan_pending: None,
             tray: None,
             tray_rx: if crate::tray::tray_needed_at_launch(hidden) {
@@ -1422,7 +1420,11 @@ impl Cabin {
             grok_loops: crate::loops::load(),
             grok_loop_rx: None,
             night_nl: String::new(),
+            cap_auto_buf: cfg_auto_cap.to_string(),
+            cap_host_buf: cfg_host_cap.to_string(),
             history_q: String::new(),
+            history_q_seen: String::new(),
+            history_q_at: None,
             history_hits: vec![],
             last_receipt_ok: None,
             last_receipts: vec![],
@@ -3973,6 +3975,7 @@ impl Cabin {
             "devices" => Nav::Devices,
             "memory" => Nav::Memory,
             "connectors" => Nav::Connectors,
+            "command" => Nav::Command,
             "chat" => Nav::Chat,
             _ => Nav::Chat,
         }
@@ -6677,10 +6680,7 @@ impl Cabin {
             "nav:history" => self.nav = Nav::History,
             "nav:devices" => self.nav = Nav::Devices,
             "nav:connectors" => self.nav = Nav::Connectors,
-            "nav:command" => {
-                self.open_recent_chat();
-                self.nav = Nav::Chat;
-            },
+            "nav:command" => self.nav = Nav::Command,
             "nav:agents" => self.nav = Nav::Agents,
             "nav:eyes" => {
                 self.open_recent_chat();
@@ -9904,7 +9904,6 @@ impl eframe::App for Cabin {
             Nav::Workboard => self.ui_board(ctx),
             Nav::Imagine => self.ui_imagine(ctx),
             Nav::Skills => self.ui_skills(ctx),
-            Nav::Eyes => self.ui_chat(ctx),
             Nav::Night => self.ui_night(ctx),
             Nav::History => self.ui_history(ctx),
             Nav::Command => self.ui_command(ctx),
@@ -10289,7 +10288,6 @@ impl Cabin {
             Nav::Agents => "queue",
             Nav::Devices => "devices",
             Nav::Memory => "memory",
-            Nav::Eyes => "eyes",
             Nav::Connectors => "connectors",
         }
     }
@@ -11607,6 +11605,147 @@ impl Cabin {
         });
     }
 
+    /// Search as the query settles. Every keystroke would spawn a walk of every thread,
+    /// so a query waits `HISTORY_TYPE_DELAY` before it runs.
+    fn tick_history_search(&mut self, ctx: &egui::Context) {
+        if self.history_q != self.history_q_seen {
+            self.history_q_seen = self.history_q.clone();
+            self.history_q_at = Some(Instant::now());
+            if self.history_q.trim().is_empty() {
+                self.history_hits.clear();
+                self.history_q_at = None;
+            }
+        }
+        let Some(at) = self.history_q_at else {
+            return;
+        };
+        if at.elapsed() < HISTORY_TYPE_DELAY {
+            ctx.request_repaint_after(HISTORY_TYPE_DELAY);
+            return;
+        }
+        if self.history_rx.is_some() {
+            // A search is still running. Come back for the newer query.
+            ctx.request_repaint_after(HISTORY_TYPE_DELAY);
+            return;
+        }
+        self.history_q_at = None;
+        self.kick_history_search();
+    }
+
+    fn kick_history_search(&mut self) {
+        if !self.scratch() {
+            let name = self.mem_name.clone();
+            let body = self.mem_body.clone();
+            std::thread::spawn(move || {
+                if config::read_memory(&name) != body {
+                    let _ = config::write_memory(&name, &body);
+                }
+            });
+        }
+        let q = self.history_q.clone();
+        let mem_name = self.mem_name.clone();
+        let mem_body = self.mem_body.clone();
+        let vis = self.thread_idx;
+        let mut thread_rows = Vec::new();
+        for (i, t) in self.threads.iter().enumerate() {
+            let body = if i == vis {
+                search_thread_body(self.messages.iter().map(|m| m.1.as_str()))
+            } else {
+                search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()))
+            };
+            thread_rows.push((format!("thread:{}", t.id), t.title.clone(), body));
+        }
+        let (tx, rx) = mpsc::channel();
+        self.history_rx = Some(rx);
+        self.status = "Searching…".into();
+        std::thread::spawn(move || {
+            let soul = if mem_name == "SOUL.md" {
+                mem_body.clone()
+            } else {
+                config::read_memory("SOUL.md")
+            };
+            let user = if mem_name == "USER.md" {
+                mem_body.clone()
+            } else {
+                config::read_memory("USER.md")
+            };
+            let memory = if mem_name == "MEMORY.md" {
+                mem_body.clone()
+            } else {
+                config::read_memory("MEMORY.md")
+            };
+            let mut rows = vec![
+                ("mem:SOUL.md".to_string(), "SOUL.md".to_string(), soul),
+                ("mem:USER.md".to_string(), "USER.md".to_string(), user),
+                ("mem:MEMORY.md".to_string(), "MEMORY.md".to_string(), memory),
+            ];
+            rows.extend(thread_rows);
+            let _ = tx.send(search_corpus_tagged(&q, &rows));
+        });
+    }
+
+    /// A hit is a door: memory hits open that file in the editor, chat hits open the
+    /// thread they came from.
+    fn open_history_hit(&mut self, target: &str) {
+        if let Some(name) = target.strip_prefix("mem:") {
+            let name = name.to_string();
+            self.open_memory_file(&name);
+            self.nav = Nav::Memory;
+            self.status = name;
+            return;
+        }
+        let Some(id) = target.strip_prefix("thread:") else {
+            return;
+        };
+        let Some(idx) = self.threads.iter().position(|t| t.id == id) else {
+            self.status = "That chat is gone".into();
+            return;
+        };
+        self.switch_thread(idx);
+        self.nav = Nav::Chat;
+    }
+
+    /// Show a memory file in the editor. The file being left is flushed to disk off the
+    /// UI thread first, so switching tabs never drops an edit.
+    fn open_memory_file(&mut self, name: &str) {
+        if !self.scratch() && self.mem_name != name {
+            let leaving = self.mem_name.clone();
+            let body = self.mem_body.clone();
+            if let Some(i) = Self::mem_file_idx(&leaving) {
+                self.mem_cache_body[i] = body.clone();
+                self.mem_cache_at[i] = config::memory_updated_at(&leaving);
+            }
+            std::thread::spawn(move || {
+                if config::read_memory(&leaving) != body {
+                    let _ = config::write_memory(&leaving, &body);
+                }
+            });
+        }
+        self.mem_name = name.into();
+        let at = config::memory_updated_at(name);
+        let Some(i) = Self::mem_file_idx(name) else {
+            self.mem_body = config::read_memory(name);
+            return;
+        };
+        if self.mem_cache_at[i] == 0 {
+            self.mem_body = config::read_memory(name);
+            self.mem_cache_body[i] = self.mem_body.clone();
+            self.mem_cache_at[i] = at;
+            return;
+        }
+        self.mem_body = self.mem_cache_body[i].clone();
+        if self.mem_cache_at[i] != at && self.mem_file_rx.is_none() {
+            let n = name.to_string();
+            let (tx, rx) = mpsc::channel();
+            self.mem_file_rx = Some((n.clone(), rx));
+            std::thread::spawn(move || {
+                let body = config::read_memory(&n);
+                let at = config::memory_updated_at(&n);
+                let _ = tx.send((at, body));
+            });
+        }
+    }
+
     fn ui_memory(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
@@ -11615,44 +11754,7 @@ impl Cabin {
             ui.horizontal(|ui| {
                 for name in ["SOUL.md", "USER.md", "MEMORY.md"] {
                     if crate::cards::tab_pill(ui, name, self.mem_name == name) {
-                        if !self.scratch()
-                            && self.mem_name != name
-                        {
-                            let leaving = self.mem_name.clone();
-                            let body = self.mem_body.clone();
-                            if let Some(i) = Self::mem_file_idx(&leaving) {
-                                self.mem_cache_body[i] = body.clone();
-                                self.mem_cache_at[i] = config::memory_updated_at(&leaving);
-                            }
-                            std::thread::spawn(move || {
-                                if config::read_memory(&leaving) != body {
-                                    let _ = config::write_memory(&leaving, &body);
-                                }
-                            });
-                        }
-                        self.mem_name = name.into();
-                        let at = config::memory_updated_at(name);
-                        if let Some(i) = Self::mem_file_idx(name) {
-                            if self.mem_cache_at[i] == 0 {
-                                self.mem_body = config::read_memory(name);
-                                self.mem_cache_body[i] = self.mem_body.clone();
-                                self.mem_cache_at[i] = at;
-                            } else {
-                                self.mem_body = self.mem_cache_body[i].clone();
-                                if self.mem_cache_at[i] != at && self.mem_file_rx.is_none() {
-                                    let n = name.to_string();
-                                    let (tx, rx) = mpsc::channel();
-                                    self.mem_file_rx = Some((n.clone(), rx));
-                                    std::thread::spawn(move || {
-                                        let body = config::read_memory(&n);
-                                        let at = config::memory_updated_at(&n);
-                                        let _ = tx.send((at, body));
-                                    });
-                                }
-                            }
-                        } else {
-                            self.mem_body = config::read_memory(name);
-                        }
+                        self.open_memory_file(name);
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -11715,6 +11817,12 @@ impl Cabin {
 
     fn save_settings(&mut self) {
         self.cfg.api_key.clear();
+        self.cfg.quiet_start = normalize_hm(&self.cfg.quiet_start, &config::default_quiet_start());
+        self.cfg.quiet_end = normalize_hm(&self.cfg.quiet_end, &config::default_quiet_end());
+        self.cfg.daily_auto_cap = cap_from_text(&self.cap_auto_buf, self.cfg.daily_auto_cap);
+        self.cfg.host_hour_cap = cap_from_text(&self.cap_host_buf, self.cfg.host_hour_cap);
+        self.cap_auto_buf = self.cfg.daily_auto_cap.to_string();
+        self.cap_host_buf = self.cfg.host_hour_cap.to_string();
         if let Ok(mut st) = self.hub.lock() {
             if !self.cfg.device_name.trim().is_empty() {
                 st.device_name = self.cfg.device_name.clone();
@@ -11924,6 +12032,8 @@ impl Cabin {
                                                             crate::cards::settings_note(ui, "Session mode is Chat / Plan / Ask on the composer. Effort sets grok agent --reasoning-effort. The leftover ladder pin below is legacy.");
                                                             crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
                                                             crate::cards::settings_field(ui, "Imagine override", "Must contain “image” or the cabin keeps grok-imagine-image-2.0. Retired grok-2-image names are rewritten.", &mut self.cfg.imagine_model, false);
+                                                            crate::cards::settings_note(ui, &format!("Live voice model: {voice_live}. OAuth runs Hey Grok STT and TTS; duplex needs a console key."));
+                                                            crate::cards::settings_field(ui, "Voice override", "Must contain “voice” or “realtime”. Empty keeps grok-voice-think-fast-2.0.", &mut self.cfg.voice_model, false);
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(
@@ -11973,41 +12083,43 @@ impl Cabin {
                                                                 self.persist_cfg();
                                                                 self.status = "Saved".into();
                                                             }
-                                                            crate::cards::settings_note(ui, "Night always runs. Quiet hours and daily caps do not hold work.");
-                                                        }
-                                                        SettingsSec::Host => {
-                                                            crate::cards::settings_note(ui, &format!("{}\nInstall: curl -fsSL https://x.ai/cli/install.sh | bash\nThen grok login --device-auth. grok update installs the stable channel (1.0.13+). grok update --alpha is optional. Halt cancels the ACP turn.", build_agent::grok_banner()));
-                                                        }
-                                                        SettingsSec::Imagine => {
-                                                            crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
-                                                            crate::cards::settings_field(ui, "Imagine override", "Must contain “image” or the cabin keeps grok-imagine-image-2.0. Retired grok-2-image names are rewritten.", &mut self.cfg.imagine_model, false);
-                                                            if crate::cards::settings_toggle(
+                                                            crate::cards::settings_field(
                                                                 ui,
-                                                                "Living wall",
-                                                                "Every few hours the cabin paints a new cover. Twenty live. Oldest leaves first. Random seat.",
-                                                                &mut self.cfg.imagine_wall,
-                                                            ) {
-                                                                self.persist_cfg();
-                                                                self.status = "Saved".into();
-                                                            }
-                                                            crate::cards::settings_note(
-                                                                ui,
-                                                                &format!(
-                                                                    "{} of {WALL_GIF_MAX} covers on the wall.",
-                                                                    self.wall.gifs.len()
-                                                                ),
+                                                                "Quiet hours start",
+                                                                "24h clock. Inside quiet hours the cabin holds a destructive automation and stops anticipating.",
+                                                                &mut self.cfg.quiet_start,
+                                                                false,
                                                             );
-                                                        }
-                                                        SettingsSec::Voice => {
-                                                            crate::cards::settings_note(ui, &format!("Live voice model: {voice_live}."));
-                                                            crate::cards::settings_note(
+                                                            crate::cards::settings_field(
                                                                 ui,
-                                                                "OAuth runs Hey Grok STT and TTS. Duplex (wss://api.x.ai/v1/realtime) needs a console API key.",
+                                                                "Quiet hours end",
+                                                                "Same clock. Start and end equal means no quiet hours.",
+                                                                &mut self.cfg.quiet_end,
+                                                                false,
                                                             );
-                                                            crate::cards::settings_field(ui, "Voice override", "Must contain “voice” or “realtime”. Empty keeps grok-voice-think-fast-2.0.", &mut self.cfg.voice_model, false);
-                                                        }
-                                                        SettingsSec::Night => {
-                                                            crate::cards::settings_note(ui, "Night always runs. Quiet hours and daily caps do not hold work.");
+                                                            crate::cards::settings_field(
+                                                                ui,
+                                                                "Automations a day",
+                                                                "Loops, clock jobs, and anticipate share this budget. 0 is no cap.",
+                                                                &mut self.cap_auto_buf,
+                                                                false,
+                                                            );
+                                                            crate::cards::settings_field(
+                                                                ui,
+                                                                "Host commands an hour",
+                                                                "Rolling hour for shell work. 0 is no cap.",
+                                                                &mut self.cap_host_buf,
+                                                                false,
+                                                            );
+                                                            crate::cards::settings_note(ui, &format!(
+                                                                "Now: quiet {}–{} · {} · {}. Today: {} automations, {} host runs.",
+                                                                self.cfg.quiet_start,
+                                                                self.cfg.quiet_end,
+                                                                cap_label(self.cfg.daily_auto_cap, "automations a day"),
+                                                                cap_label(self.cfg.host_hour_cap, "host runs an hour"),
+                                                                self.usage.automation,
+                                                                self.usage.host,
+                                                            ));
                                                         }
                                                         SettingsSec::Github => {
                                                             crate::cards::settings_field(ui, "Personal access token", "CONNECTOR_CMD only. GitHub is the only live connector.", &mut self.secrets.github_token, true);
@@ -12371,74 +12483,40 @@ impl Cabin {
             ui.horizontal(|ui| {
                 crate::cards::search_bar(ui, &mut self.history_q, "Search chats and memory", 320.0);
                 if crate::cards::white_pill(ui, "Search") {
-                    if self.history_rx.is_some() {
-                        self.status = "Searching…".into();
-                    } else {
-                    if !self.scratch() {
-                        let name = self.mem_name.clone();
-                        let body = self.mem_body.clone();
-                        std::thread::spawn(move || {
-                            if config::read_memory(&name) != body {
-                                let _ = config::write_memory(&name, &body);
-                            }
-                        });
-                    }
-                    let q = self.history_q.clone();
-                    let mem_name = self.mem_name.clone();
-                    let mem_body = self.mem_body.clone();
-                    let vis = self.thread_idx;
-                    let mut thread_rows = Vec::new();
-                    for (i, t) in self.threads.iter().enumerate() {
-                        let body = if i == vis {
-                            search_thread_body(self.messages.iter().map(|m| m.1.as_str()))
-                        } else {
-                            search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()))
-                        };
-                        thread_rows.push((t.title.clone(), body));
-                    }
-                    let (tx, rx) = mpsc::channel();
-                    self.history_rx = Some(rx);
-                    self.status = "Searching…".into();
-                    std::thread::spawn(move || {
-                        let soul = if mem_name == "SOUL.md" {
-                            mem_body.clone()
-                        } else {
-                            config::read_memory("SOUL.md")
-                        };
-                        let user = if mem_name == "USER.md" {
-                            mem_body.clone()
-                        } else {
-                            config::read_memory("USER.md")
-                        };
-                        let memory = if mem_name == "MEMORY.md" {
-                            mem_body.clone()
-                        } else {
-                            config::read_memory("MEMORY.md")
-                        };
-                        let mut rows = vec![
-                            ("SOUL.md".into(), soul),
-                            ("USER.md".into(), user),
-                            ("MEMORY.md".into(), memory),
-                        ];
-                        rows.extend(thread_rows);
-                        let _ = tx.send(search_corpus(&q, &rows));
-                    });
-                    }
+                    self.history_q_at = Some(Instant::now() - HISTORY_TYPE_DELAY);
                 }
             });
-            if self.history_hits.is_empty() && !self.history_q.is_empty() {
+            self.tick_history_search(ui.ctx());
+            if self.history_hits.is_empty()
+                && !self.history_q.trim().is_empty()
+                && self.history_rx.is_none()
+                && self.history_q_at.is_none()
+            {
                 ui.label(RichText::new("No matches.").size(13.0).color(crate::theme::muted()));
             }
-            for h in &self.history_hits {
-                egui::Frame::none()
+            let mut open: Option<String> = None;
+            for (target, line) in &self.history_hits {
+                let hit = egui::Frame::none()
                     .fill(crate::theme::elevated())
                     .rounding(10.0)
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .inner_margin(egui::Margin::symmetric(10.0, 6.0))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(h).size(13.0).color(crate::theme::fg()));
-                    });
+                        ui.set_width(ui.available_width());
+                        ui.label(RichText::new(line).size(13.0).color(crate::theme::fg()));
+                    })
+                    .response
+                    .interact(egui::Sense::click());
+                if hit.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if hit.clicked() {
+                    open = Some(target.clone());
+                }
                 ui.add_space(6.0);
+            }
+            if let Some(target) = open {
+                self.open_history_hit(&target);
             }
             ui.add_space(16.0);
             crate::cards::section_label(ui, "Grok Build sessions");
@@ -13197,6 +13275,7 @@ impl Cabin {
             .show(ctx, |ui| {
             if crate::cards::page_header(ui, "Skills and Connectors", "Refresh") {
                 self.reload_grok_catalog();
+                self.skill_list = skills::list_skills();
             }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -13215,6 +13294,7 @@ impl Cabin {
             ui.add_space(16.0);
             let q = self.skill_q.to_ascii_lowercase();
             let mut use_skill: Option<String> = None;
+            let mut use_cabin_skill: Option<(String, String)> = None;
             let mut mcp_toggle: Option<(String, bool)> = None;
             let mut mcp_remove: Option<String> = None;
             let mut plugin_toggle: Option<(String, bool)> = None;
@@ -13442,6 +13522,60 @@ impl Cabin {
                 });
                 ui.add_space(16.0);
             }
+            let cabin_skills: Vec<_> = self
+                .skill_list
+                .iter()
+                .filter(|s| {
+                    q.is_empty()
+                        || s.name.to_ascii_lowercase().contains(&q)
+                        || s.description.to_ascii_lowercase().contains(&q)
+                        || s.trigger.to_ascii_lowercase().contains(&q)
+                })
+                .cloned()
+                .collect();
+            crate::cards::section_label(ui, "Cabin skills");
+            ui.label(
+                RichText::new("SKILL.md under ~/.config/GrokHub/skills. The cabin follows these on a matching ask and writes new ones after a hard host run.")
+                    .size(12.0)
+                    .color(crate::theme::muted()),
+            );
+            ui.add_space(8.0);
+            if cabin_skills.is_empty() {
+                ui.label(
+                    RichText::new(if self.skill_list.is_empty() {
+                        "None yet. The cabin saves one after it works something out, or /skill <name> runs one you wrote."
+                    } else {
+                        "None matched."
+                    })
+                    .color(crate::theme::muted()),
+                );
+            } else {
+                crate::cards::tile_row(ui, cabin_skills.len(), |ui, i| {
+                    let s = &cabin_skills[i];
+                    let runs = match s.runs {
+                        0 => "never run".to_string(),
+                        1 => "1 run".to_string(),
+                        n => format!("{n} runs"),
+                    };
+                    let body = if s.description.trim().is_empty() {
+                        runs
+                    } else {
+                        format!("{runs} · {}", s.description)
+                    };
+                    if crate::cards::grok_tile(
+                        ui,
+                        crate::icons::icon_for_label(&s.name),
+                        &s.name,
+                        &body,
+                        Some("Use in chat"),
+                        false,
+                    ) == crate::cards::TileHit::Add
+                    {
+                        use_cabin_skill = Some((s.slash.clone(), s.name.clone()));
+                    }
+                });
+            }
+            ui.add_space(16.0);
             crate::cards::section_label(ui, "Grok Build skills");
             ui.label(
                 RichText::new("Bundled skills and plugin skills from `grok inspect`. Use in chat sends /name.")
@@ -13499,6 +13633,10 @@ impl Cabin {
                 self.nav = Nav::Chat;
                 self.send_chat(skill_use_in_chat_prompt(&format!("/{name}"), &name));
             }
+            if let Some((slash, name)) = use_cabin_skill {
+                self.nav = Nav::Chat;
+                self.send_chat(skill_use_in_chat_prompt(&slash, &name));
+            }
             if let Some((name, on)) = mcp_toggle {
                 let cmd = if on { "enable" } else { "disable" };
                 self.run_grok_user_cmd(vec!["mcp".into(), cmd.into(), name]);
@@ -13529,11 +13667,6 @@ impl Cabin {
         });
     }
 
-    fn ui_eyes(&mut self, ctx: &egui::Context) {
-        // Desk was a cabin computer-use menu. Grok Build already drives the
-        // desktop; frames land on the chat pane.
-        self.ui_chat(ctx);
-    }
 }
 
 fn eyes_frame_tex(ctx: &egui::Context, url: &str) -> Option<(TextureHandle, [usize; 2])> {
@@ -13625,7 +13758,6 @@ fn project_row_active(selected: bool, is_project: bool, nav: Nav) -> bool {
         | Nav::Memory
         | Nav::Imagine
         | Nav::Skills
-        | Nav::Eyes
         | Nav::Night
         | Nav::History
         | Nav::Command
@@ -14168,6 +14300,29 @@ mod tests {
     }
 
     #[test]
+    fn a_nav_action_opens_the_page_it_names() {
+        let src = include_str!("app.rs");
+        let run = src
+            .split("fn run_palette(")
+            .nth(1)
+            .and_then(|s| s.split("fn open_palette(").next())
+            .unwrap_or(src);
+        assert!(
+            run.contains("\"nav:command\" => self.nav = Nav::Command"),
+            "Command is a real page — a chip that names it must not land on Chat: {run}"
+        );
+        assert!(
+            super::Cabin::nav_from_id("command") == super::Nav::Command,
+            "the chip id and the page have to agree"
+        );
+        assert!(
+            super::Cabin::nav_from_id("eyes") == super::Nav::Chat,
+            "Desk is gone — its id lands on chat"
+        );
+        assert!(super::Cabin::nav_from_id("nonsense") == super::Nav::Chat);
+    }
+
+    #[test]
     fn settings_drops_cabin_tabs() {
         let src = include_str!("app.rs");
         let settings = src
@@ -14183,9 +14338,11 @@ mod tests {
             !settings.contains("Cabin eyes"),
             "Cabin eyes toggle is gone: {settings}"
         );
+        // The Host tab itself is gone; `always_permission_keeps_the_acp_session` proves
+        // the variant no longer exists anywhere in the file.
         assert!(
-            !settings.contains("(SettingsSec::Host, \"Host\")"),
-            "Host is not a Settings tab: {settings}"
+            settings.contains("(SettingsSec::Behavior, \"Behavior\")"),
+            "the tabs that remain are the ones with a home: {settings}"
         );
     }
 
@@ -14360,26 +14517,39 @@ mod tests {
         let behavior = src
             .split("SettingsSec::Behavior => {")
             .nth(1)
-            .and_then(|s| s.split("SettingsSec::Host => {").next())
+            .and_then(|s| s.split("SettingsSec::Github => {").next())
             .expect("Behavior");
         assert!(
             behavior.contains("self.persist_cfg()")
                 && !behavior.contains("save = true")
                 && !behavior.contains("self.persist()")
                 && !behavior.contains("persist_snap"),
-            "Close to tray must not clone every thread just to write app.json: {behavior}"
+            "Close to tray and Living wall must not clone every thread to write app.json: {behavior}"
         );
-        let imagine_sec = src
-            .split("SettingsSec::Imagine => {")
-            .nth(1)
-            .and_then(|s| s.split("SettingsSec::Voice => {").next())
-            .expect("Imagine settings");
         assert!(
-            imagine_sec.contains("self.persist_cfg()")
-                && !imagine_sec.contains("save = true")
-                && !imagine_sec.contains("self.persist()")
-                && !imagine_sec.contains("persist_snap"),
-            "Living wall must not clone every thread just to write app.json: {imagine_sec}"
+            behavior.contains("quiet_start")
+                && behavior.contains("cap_auto_buf")
+                && behavior.contains("cap_host_buf"),
+            "quiet hours and the caps hold real work — they need a way in: {behavior}"
+        );
+        let saved = src
+            .split("fn save_settings(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_settings(").next())
+            .expect("save_settings");
+        assert!(
+            saved.contains("normalize_hm") && saved.contains("cap_from_text"),
+            "a typo in a clock or a cap must keep the old value, not switch the guard off: {saved}"
+        );
+        // Split so these assertions are not their own counter-examples.
+        let gone = ["Host", "Voice", "Night", "Imagine"]
+            .iter()
+            .map(|s| format!("SettingsSec{}{s}", "::"))
+            .chain(std::iter::once(format!("SettingsGroup{}Cabin", "::")))
+            .find(|needle| src.contains(needle));
+        assert_eq!(
+            gone, None,
+            "unreachable Settings sections are gone, not left painting into the void"
         );
         let plan = src
             .split("Slash::Plan =>")
@@ -16586,13 +16756,21 @@ mod tests {
         let skills_ui = src
             .split("fn ui_skills")
             .nth(1)
-            .and_then(|s| s.split("fn ui_eyes").next())
+            .and_then(|s| s.split("fn project_row_active(").next())
             .expect("ui_skills");
         assert!(
             skills_ui.contains("reload_grok_catalog")
                 && skills_ui.contains("load_grok_catalog")
                 || skills_ui.contains("reload_grok_catalog"),
             "Skills must load Grok Build inspect/MCP/plugins: {skills_ui}"
+        );
+        assert!(
+            skills_ui.contains("Cabin skills") && skills_ui.contains("self.skill_list"),
+            "the skills the cabin follows and writes must be listed, not only the Grok catalog: {skills_ui}"
+        );
+        assert!(
+            skills_ui.contains("skills::list_skills()"),
+            "Refresh must re-read ~/.config/GrokHub/skills, not just the Grok catalog: {skills_ui}"
         );
         assert!(
             skills_ui.contains("skill_use_in_chat_prompt"),
@@ -17040,11 +17218,15 @@ mod tests {
             restore_spawn < restore_fn,
             "Memory Restore must not freeze the cabin reading MEMORY.md.prev: {restore}"
         );
-        let tabs = memory_ui
-            .split("tab_pill")
+        assert!(
+            memory_ui.contains("self.open_memory_file(name)"),
+            "the Memory tabs and a History hit open a file the same way: {memory_ui}"
+        );
+        let tabs = src
+            .split("fn open_memory_file(")
             .nth(1)
-            .and_then(|s| s.split("Restore").next())
-            .expect("memory tabs");
+            .and_then(|s| s.split("fn ui_memory(").next())
+            .expect("open_memory_file");
         let flush = tabs.find("write_memory").expect("flush leaving memory");
         let switch = tabs.find("mem_name = name").expect("switch name");
         assert!(
@@ -17825,29 +18007,6 @@ mod tests {
     }
 
     #[test]
-    fn eyes_page_is_product_copy() {
-        let src = include_str!("app.rs");
-        let start = src.find("fn ui_eyes").expect("eyes");
-        let slice = &src[start..start + 2800];
-        assert!(
-            !slice.contains("Presence ring"),
-            "intern presence notes stay off the page: {slice}"
-        );
-        assert!(
-            !slice.contains("ydotoold") && !slice.contains("xdotool on X11"),
-            "Eyes subtitle is not a man page: {slice}"
-        );
-        assert!(slice.contains("ui_chat"));
-        assert!(!slice.contains("Take over"));
-        assert!(!slice.contains("Install hands"));
-        assert!(!slice.contains("hands_chip_text"));
-        assert!(
-            slice.contains("Grok Build") || slice.contains("computer-use") || slice.contains("chat pane"),
-            "Eyes leftover must not be a cabin desktop-control menu: {slice}"
-        );
-    }
-
-    #[test]
     fn presence_ring_drops_a_huge_frame() {
         let src = include_str!("app.rs");
         let push = src
@@ -17862,20 +18021,6 @@ mod tests {
         assert!(
             push.contains("PRESENCE_RING_MAX") || (push.contains("presence_ring.len()") && push.contains("32")),
             "a 10-minute ring of FRAME_CAP JPEGs can still OOM live Eyes: {push}"
-        );
-    }
-
-    #[test]
-    fn eyes_paint_does_not_clone_last_frame_url() {
-        let src = include_str!("app.rs");
-        let eyes = src
-            .split("fn ui_eyes(")
-            .nth(1)
-            .and_then(|s| s.split("fn project_row_active(").next())
-            .expect("ui_eyes");
-        assert!(
-            !eyes.contains("last_frame_url.clone()"),
-            "Eyes paint must not clone a huge last-frame data URL every frame: {eyes}"
         );
     }
 
@@ -18208,10 +18353,23 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn ui_board(").next())
             .expect("ui_history");
-        let search = history
-            .split("white_pill(ui, \"Search\")")
+        assert!(
+            history.contains("tick_history_search") && history.contains("open_history_hit"),
+            "History searches as you type and a hit opens its source: {history}"
+        );
+        let debounce = src
+            .split("fn tick_history_search(")
             .nth(1)
-            .and_then(|s| s.split("history_hits").next())
+            .and_then(|s| s.split("fn kick_history_search(").next())
+            .expect("tick_history_search");
+        assert!(
+            debounce.contains("HISTORY_TYPE_DELAY") && debounce.contains("history_rx.is_some()"),
+            "typing must not spawn a walk of every thread per keystroke: {debounce}"
+        );
+        let search = src
+            .split("fn kick_history_search(")
+            .nth(1)
+            .and_then(|s| s.split("fn open_history_hit(").next())
             .expect("history search");
         assert!(
             search.contains("write_memory")
@@ -18239,6 +18397,29 @@ mod tests {
         assert!(
             search[..soul].contains("thread::spawn") && search.contains("history_rx"),
             "History Search must slurp SOUL/USER/MEMORY off the UI thread: {search}"
+        );
+        assert!(
+            search.contains("search_corpus_tagged")
+                && search.contains("format!(\"thread:{}\", t.id)")
+                && search.contains("mem:MEMORY.md"),
+            "every hit must carry the thread or file it came from: {search}"
+        );
+        let hit = src
+            .split("fn open_history_hit(")
+            .nth(1)
+            .and_then(|s| s.split("fn open_memory_file(").next())
+            .expect("open_history_hit");
+        assert!(
+            hit.contains("open_memory_file") && hit.contains("Nav::Memory"),
+            "a memory hit opens that file in the editor: {hit}"
+        );
+        assert!(
+            hit.contains("switch_thread") && hit.contains("Nav::Chat"),
+            "a chat hit opens the thread it came from: {hit}"
+        );
+        assert!(
+            hit.contains("That chat is gone"),
+            "a hit for a deleted thread must say so, not open the wrong chat: {hit}"
         );
         let board = src
             .split("fn ui_board(")
@@ -18338,7 +18519,7 @@ mod tests {
         let skills = src
             .split("fn ui_skills(")
             .nth(1)
-            .and_then(|s| s.split("fn ui_eyes(").next())
+            .and_then(|s| s.split("fn project_row_active(").next())
             .expect("ui_skills");
         assert!(
             skills.contains("Marketplace") && skills.contains("MCP servers") && skills.contains("Grok Build skills"),
