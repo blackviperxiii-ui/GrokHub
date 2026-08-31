@@ -76,7 +76,7 @@ use grokhub_core::{
     this_turn_cabin_frame,
     is_workload_user, merge_thinking_capped, prefer_complete_reply, quote_for_reply, strip_thinking,
     refresh_last_stretch, thought_shows_acts, thought_shows_label, visible_chat_refs, visible_turn_count, visible_turn_count_from,
-    cluster_gap, ChatKind, ChatView,
+    cluster_gap, scrolled_off_tail, ChatKind, ChatView, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK,
     apply_job_error, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     upsert_assistant_turn,
     worker_gone_status, ChatSendKind,
@@ -1023,6 +1023,8 @@ pub struct Cabin {
     grok_loops: Vec<GrokLoop>,
     grok_loop_rx: Option<(String, mpsc::Receiver<String>)>,
     night_nl: String,
+    /// Frames left pulling the chat pane to its newest message after a chat opens.
+    chat_tail_frames: u8,
     /// Cap fields are typed, so they hold text until Save parses them.
     cap_auto_buf: String,
     cap_host_buf: String,
@@ -1420,6 +1422,7 @@ impl Cabin {
             grok_loops: crate::loops::load(),
             grok_loop_rx: None,
             night_nl: String::new(),
+            chat_tail_frames: CHAT_TAIL_FRAMES,
             cap_auto_buf: cfg_auto_cap.to_string(),
             cap_host_buf: cfg_host_cap.to_string(),
             history_q: String::new(),
@@ -2436,6 +2439,7 @@ impl Cabin {
                 }
                 if i == self.thread_idx && self.messages.is_empty() {
                     self.messages = filled;
+                    self.pin_chat_tail();
                 }
                 self.persist_bg();
             }
@@ -4056,6 +4060,7 @@ impl Cabin {
                 .get(self.thread_idx)
                 .map(|t| t.messages.clone())
                 .unwrap_or_else(|| Arc::new(Vec::new()));
+            self.pin_chat_tail();
         } else if let Some(t) = self.threads.get_mut(self.thread_idx) {
             flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
         }
@@ -4085,6 +4090,7 @@ impl Cabin {
     }
 
     fn open_recent_chat(&mut self) {
+        self.pin_chat_tail();
         if let Some(idx) = threads::most_recently_accessed_index(&self.threads) {
             if idx != self.thread_idx {
                 self.switch_thread(idx);
@@ -10804,7 +10810,8 @@ impl Cabin {
                     return;
                 }
                 let pane = clamp_row_width(ui.available_width());
-                egui::ScrollArea::vertical()
+                let pin_tail = self.chat_tail_frames > 0;
+                let out = egui::ScrollArea::vertical()
                     .stick_to_bottom(true)
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
@@ -10871,8 +10878,51 @@ impl Cabin {
                         }
                         self.paint_perm_ask(ui);
                         self.paint_try_again(ui);
+                        if pin_tail {
+                            // The transcript is laid out now, so the bottom is a real place.
+                            ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                        }
                     });
+                self.chat_tail_frames = self.chat_tail_frames.saturating_sub(1);
+                if scrolled_off_tail(
+                    out.state.offset.y,
+                    out.content_size.y,
+                    out.inner_rect.height(),
+                    CHAT_TAIL_SLACK,
+                ) && self.jump_to_latest(ctx, out.inner_rect)
+                {
+                    self.pin_chat_tail();
+                }
             });
+    }
+
+    /// A way back to the newest message once the reader has scrolled up.
+    fn jump_to_latest(&self, ctx: &egui::Context, pane: egui::Rect) -> bool {
+        let size = egui::vec2(150.0, 34.0);
+        let pos = egui::pos2(
+            pane.center().x - size.x * 0.5,
+            (pane.max.y - size.y - 10.0).max(pane.min.y),
+        );
+        egui::Area::new(egui::Id::new("chat-jump-latest"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(ctx, |ui| {
+                ui.set_width(size.x);
+                crate::cards::white_pill(ui, "Jump to latest")
+            })
+            .inner
+    }
+
+    /// Open a chat on its newest message, not wherever the last one was scrolled to.
+    fn pin_chat_tail(&mut self) {
+        self.chat_tail_frames = CHAT_TAIL_FRAMES;
+    }
+
+    /// Sending from the composer follows your own message down. A night job or a phone
+    /// task calls `send_chat` directly, so it cannot yank the pane out of your reading.
+    fn send_from_composer(&mut self, text: String) {
+        self.pin_chat_tail();
+        self.send_chat(text);
     }
 
     fn paint_live_blocks(&self, ui: &mut egui::Ui, _thinking: bool) -> ChatBlockAct {
@@ -11401,7 +11451,7 @@ impl Cabin {
                         if let Some(t) =
                             take_focused_composer(ui, &mut self.composer, focused)
                         {
-                            self.send_chat(t);
+                            self.send_from_composer(t);
                         }
                         let cluster = crate::cards::composer_go_cluster_w();
                         let go_sz = crate::cards::composer_go_hit_w();
@@ -11431,7 +11481,7 @@ impl Cabin {
                                     &mut self.composer,
                                     edit.has_focus(),
                                 ) {
-                                    self.send_chat(t);
+                                    self.send_from_composer(t);
                                 }
                                 if crate::icons::paint_bar_icon(
                                     ui,
@@ -11483,7 +11533,7 @@ impl Cabin {
                                     ComposerGo::Send | ComposerGo::Idle => {
                                         if go_hit {
                                             let t = std::mem::take(&mut self.composer);
-                                            self.send_chat(t);
+                                            self.send_from_composer(t);
                                         }
                                     }
                                 }
@@ -11701,6 +11751,8 @@ impl Cabin {
             self.status = "That chat is gone".into();
             return;
         };
+        // Also re-pins when the hit belongs to the chat already on screen.
+        self.pin_chat_tail();
         self.switch_thread(idx);
         self.nav = Nav::Chat;
     }
@@ -14206,6 +14258,50 @@ mod tests {
         assert!(
             chat.contains("cluster_gap"),
             "consecutive thoughts must cluster tighter than chat: {chat}"
+        );
+        assert!(
+            chat.contains("scroll_to_cursor") && chat.contains("chat_tail_frames"),
+            "a chat opens on its newest message, not where the last one was left: {chat}"
+        );
+        assert!(
+            chat.contains("scrolled_off_tail") && chat.contains("jump_to_latest"),
+            "scrolled up, the pane owes you a way back down: {chat}"
+        );
+        let switch = src
+            .split("fn apply_switch_thread(")
+            .nth(1)
+            .and_then(|s| s.split("fn stamp_current_access(").next())
+            .expect("apply_switch_thread");
+        assert!(
+            switch.contains("pin_chat_tail"),
+            "the pane keeps the offset of the chat you left unless the swap re-pins it: {switch}"
+        );
+        let show = src
+            .split("fn poll_session_show(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_acp_spawn(").next())
+            .expect("poll_session_show");
+        assert!(
+            show.contains("pin_chat_tail"),
+            "a Grok transcript that lands after the click must bring the pane with it: {show}"
+        );
+        let composer_send = src
+            .split("fn send_from_composer(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ").next())
+            .expect("send_from_composer");
+        assert!(
+            composer_send.contains("pin_chat_tail") && composer_send.contains("send_chat"),
+            "your own message follows itself down: {composer_send}"
+        );
+        let night = src
+            .split("fn fire_night(")
+            .nth(1)
+            .and_then(|s| s.split("fn tick_review(").next())
+            .expect("fire_night");
+        assert!(
+            !night.contains("send_from_composer"),
+            "a night job must not yank the pane out of what you were reading: {night}"
         );
     }
 
