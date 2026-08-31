@@ -168,6 +168,7 @@ pub fn parse_plugin_list(text: &str) -> Vec<GrokPluginRow> {
 }
 
 /// Parse `grok models` text (no `--json` on grok 1.0.8).
+/// 1.0.14 can list a different id per reasoning-effort level on the same line.
 pub fn parse_models_list(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in text.lines() {
@@ -180,17 +181,46 @@ pub fn parse_models_list(text: &str) -> Vec<String> {
         {
             continue;
         }
-        let id = line
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .trim_end_matches(|c| c == ':' || c == ',')
-            .to_string();
-        if id.starts_with("grok-") && !out.iter().any(|x| x == &id) {
-            out.push(id);
+        for tok in line.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',' || c == ':')
+        {
+            let id = tok.trim().trim_end_matches(|c| c == '*' || c == '-');
+            if id.starts_with("grok-") && !out.iter().any(|x| x == id) {
+                out.push(id.to_string());
+            }
         }
     }
     out
+}
+
+/// One-line 1.0.14 inspect notes (Claude bypass lock is advisory, not enforced).
+pub fn inspect_advisory(v: &Value) -> String {
+    let ver = v
+        .get("grokVersion")
+        .or_else(|| v.get("version"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim();
+    let channel = v
+        .get("channel")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim();
+    let advisory = v
+        .pointer("/permissions/claudeBypassLockAdvisory")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    let mut parts = Vec::new();
+    if !ver.is_empty() {
+        parts.push(if channel.is_empty() {
+            format!("Grok Build {ver}")
+        } else {
+            format!("Grok Build {ver} ({channel})")
+        });
+    }
+    if advisory {
+        parts.push("Claude bypass lock is advisory, not enforced".into());
+    }
+    parts.join(" · ")
 }
 
 pub fn skill_source_label(skill: &GrokSkillRow) -> String {
@@ -325,6 +355,19 @@ mod tests {
         let text = "You are logged in with grok.com.\n\nDefault model: grok-4.6\n\nAvailable models:\n  * grok-4.6 (default)\n  - grok-4.5\n";
         let rows = parse_models_list(text);
         assert_eq!(rows, vec!["grok-4.6".to_string(), "grok-4.5".to_string()]);
+        let effort = parse_models_list(
+            "Available models:\n  * grok-4.6 (default)\n    high: grok-4.6-reasoning\n  - grok-4.5\n",
+        );
+        assert!(effort.contains(&"grok-4.6".into()), "{effort:?}");
+        assert!(effort.contains(&"grok-4.6-reasoning".into()), "{effort:?}");
+        assert!(effort.contains(&"grok-4.5".into()), "{effort:?}");
+        let note = inspect_advisory(&serde_json::json!({
+            "grokVersion": "1.0.14",
+            "channel": "alpha",
+            "permissions": { "claudeBypassLockAdvisory": true }
+        }));
+        assert!(note.contains("1.0.14"), "{note}");
+        assert!(note.contains("advisory"), "{note}");
     }
 
     #[test]
