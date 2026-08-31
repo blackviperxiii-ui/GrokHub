@@ -14300,6 +14300,29 @@ mod tests {
     }
 
     #[test]
+    fn a_nav_action_opens_the_page_it_names() {
+        let src = include_str!("app.rs");
+        let run = src
+            .split("fn run_palette(")
+            .nth(1)
+            .and_then(|s| s.split("fn open_palette(").next())
+            .unwrap_or(src);
+        assert!(
+            run.contains("\"nav:command\" => self.nav = Nav::Command"),
+            "Command is a real page — a chip that names it must not land on Chat: {run}"
+        );
+        assert!(
+            super::Cabin::nav_from_id("command") == super::Nav::Command,
+            "the chip id and the page have to agree"
+        );
+        assert!(
+            super::Cabin::nav_from_id("eyes") == super::Nav::Chat,
+            "Desk is gone — its id lands on chat"
+        );
+        assert!(super::Cabin::nav_from_id("nonsense") == super::Nav::Chat);
+    }
+
+    #[test]
     fn settings_drops_cabin_tabs() {
         let src = include_str!("app.rs");
         let settings = src
