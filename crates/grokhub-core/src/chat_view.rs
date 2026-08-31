@@ -38,6 +38,24 @@ pub fn thought_shows_acts(next_thought: bool) -> bool {
     !next_thought
 }
 
+/// How far above the newest message still counts as reading the tail.
+pub const CHAT_TAIL_SLACK: f32 = 48.0;
+
+/// Frames the pane keeps pulling itself to the newest message after a chat opens.
+/// One is not enough: the first frame lays the transcript out, and the real height
+/// only exists once that pass is done.
+pub const CHAT_TAIL_FRAMES: u8 = 3;
+
+/// True when the reader has scrolled up and away from the newest message. A pane
+/// shorter than its content is already showing everything.
+pub fn scrolled_off_tail(offset_y: f32, content_h: f32, view_h: f32, slack: f32) -> bool {
+    let max = content_h - view_h;
+    if max <= slack {
+        return false;
+    }
+    offset_y < max - slack
+}
+
 pub fn visible_turn_count(messages: &[(String, String)]) -> usize {
     visible_turn_count_from(messages.iter().map(|(r, c)| (r.as_str(), c.as_str())))
 }
@@ -446,6 +464,37 @@ pub fn quote_for_reply(body: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+#[cfg(test)]
+mod tail_tests {
+    use super::*;
+
+    #[test]
+    fn the_tail_is_where_a_chat_opens() {
+        // 400px of transcript in a 200px pane: 200px of scroll to give away.
+        assert!(
+            !scrolled_off_tail(200.0, 400.0, 200.0, CHAT_TAIL_SLACK),
+            "sitting on the newest message is not scrolled away"
+        );
+        assert!(
+            !scrolled_off_tail(160.0, 400.0, 200.0, CHAT_TAIL_SLACK),
+            "a nudge inside the slack still reads as the tail"
+        );
+        assert!(
+            scrolled_off_tail(0.0, 400.0, 200.0, CHAT_TAIL_SLACK),
+            "the top of a long chat is scrolled away from the newest message"
+        );
+        assert!(
+            !scrolled_off_tail(0.0, 180.0, 200.0, CHAT_TAIL_SLACK),
+            "a chat shorter than the pane is already showing everything"
+        );
+        assert!(
+            !scrolled_off_tail(0.0, 230.0, 200.0, CHAT_TAIL_SLACK),
+            "a chat barely taller than the pane must not flash the button"
+        );
+        assert!(CHAT_TAIL_FRAMES >= 2, "one frame lands before the layout does");
+    }
 }
 
 #[cfg(test)]
