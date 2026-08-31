@@ -103,7 +103,8 @@ use grokhub_core::{
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
-    rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus, dedupe_hits,
+    rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
+    search_corpus_tagged, dedupe_hits,
     search_thread_body,
     state_for_disk,
     clear_pending_after_complete, inbox_claim_ready,
@@ -464,6 +465,9 @@ fn mode_status_line(mode: &str, pinned_model: &str) -> String {
     }
 }
 
+/// How long a History query sits still before it runs. Every keystroke walks every
+/// thread, so the cabin waits for the typing to settle.
+const HISTORY_TYPE_DELAY: Duration = Duration::from_millis(250);
 const RAIL_FOOTER_H: f32 = 52.0;
 const PALETTE_LIST_H: f32 = 280.0;
 
@@ -1032,7 +1036,10 @@ pub struct Cabin {
     grok_loop_rx: Option<(String, mpsc::Receiver<String>)>,
     night_nl: String,
     history_q: String,
-    history_hits: Vec<String>,
+    /// Last query the debounce saw, so typing kicks a search without a button.
+    history_q_seen: String,
+    history_q_at: Option<Instant>,
+    history_hits: Vec<(String, String)>,
     last_receipt_ok: Option<bool>,
     last_receipts: Vec<(String, bool)>,
     try_again: bool,
@@ -1213,7 +1220,7 @@ pub struct Cabin {
     grok_sessions_inflight: u32,
     pending_grok_deletes: HashSet<String>,
     inspect_rx: Option<mpsc::Receiver<String>>,
-    history_rx: Option<mpsc::Receiver<Vec<String>>>,
+    history_rx: Option<mpsc::Receiver<Vec<(String, String)>>>,
     mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
     mem_file_rx: Option<(String, mpsc::Receiver<(u64, String)>)>,
     recall_rx: Option<mpsc::Receiver<String>>,
@@ -1423,6 +1430,8 @@ impl Cabin {
             grok_loop_rx: None,
             night_nl: String::new(),
             history_q: String::new(),
+            history_q_seen: String::new(),
+            history_q_at: None,
             history_hits: vec![],
             last_receipt_ok: None,
             last_receipts: vec![],
@@ -11607,6 +11616,147 @@ impl Cabin {
         });
     }
 
+    /// Search as the query settles. Every keystroke would spawn a walk of every thread,
+    /// so a query waits `HISTORY_TYPE_DELAY` before it runs.
+    fn tick_history_search(&mut self, ctx: &egui::Context) {
+        if self.history_q != self.history_q_seen {
+            self.history_q_seen = self.history_q.clone();
+            self.history_q_at = Some(Instant::now());
+            if self.history_q.trim().is_empty() {
+                self.history_hits.clear();
+                self.history_q_at = None;
+            }
+        }
+        let Some(at) = self.history_q_at else {
+            return;
+        };
+        if at.elapsed() < HISTORY_TYPE_DELAY {
+            ctx.request_repaint_after(HISTORY_TYPE_DELAY);
+            return;
+        }
+        if self.history_rx.is_some() {
+            // A search is still running. Come back for the newer query.
+            ctx.request_repaint_after(HISTORY_TYPE_DELAY);
+            return;
+        }
+        self.history_q_at = None;
+        self.kick_history_search();
+    }
+
+    fn kick_history_search(&mut self) {
+        if !self.scratch() {
+            let name = self.mem_name.clone();
+            let body = self.mem_body.clone();
+            std::thread::spawn(move || {
+                if config::read_memory(&name) != body {
+                    let _ = config::write_memory(&name, &body);
+                }
+            });
+        }
+        let q = self.history_q.clone();
+        let mem_name = self.mem_name.clone();
+        let mem_body = self.mem_body.clone();
+        let vis = self.thread_idx;
+        let mut thread_rows = Vec::new();
+        for (i, t) in self.threads.iter().enumerate() {
+            let body = if i == vis {
+                search_thread_body(self.messages.iter().map(|m| m.1.as_str()))
+            } else {
+                search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()))
+            };
+            thread_rows.push((format!("thread:{}", t.id), t.title.clone(), body));
+        }
+        let (tx, rx) = mpsc::channel();
+        self.history_rx = Some(rx);
+        self.status = "Searching…".into();
+        std::thread::spawn(move || {
+            let soul = if mem_name == "SOUL.md" {
+                mem_body.clone()
+            } else {
+                config::read_memory("SOUL.md")
+            };
+            let user = if mem_name == "USER.md" {
+                mem_body.clone()
+            } else {
+                config::read_memory("USER.md")
+            };
+            let memory = if mem_name == "MEMORY.md" {
+                mem_body.clone()
+            } else {
+                config::read_memory("MEMORY.md")
+            };
+            let mut rows = vec![
+                ("mem:SOUL.md".to_string(), "SOUL.md".to_string(), soul),
+                ("mem:USER.md".to_string(), "USER.md".to_string(), user),
+                ("mem:MEMORY.md".to_string(), "MEMORY.md".to_string(), memory),
+            ];
+            rows.extend(thread_rows);
+            let _ = tx.send(search_corpus_tagged(&q, &rows));
+        });
+    }
+
+    /// A hit is a door: memory hits open that file in the editor, chat hits open the
+    /// thread they came from.
+    fn open_history_hit(&mut self, target: &str) {
+        if let Some(name) = target.strip_prefix("mem:") {
+            let name = name.to_string();
+            self.open_memory_file(&name);
+            self.nav = Nav::Memory;
+            self.status = name;
+            return;
+        }
+        let Some(id) = target.strip_prefix("thread:") else {
+            return;
+        };
+        let Some(idx) = self.threads.iter().position(|t| t.id == id) else {
+            self.status = "That chat is gone".into();
+            return;
+        };
+        self.switch_thread(idx);
+        self.nav = Nav::Chat;
+    }
+
+    /// Show a memory file in the editor. The file being left is flushed to disk off the
+    /// UI thread first, so switching tabs never drops an edit.
+    fn open_memory_file(&mut self, name: &str) {
+        if !self.scratch() && self.mem_name != name {
+            let leaving = self.mem_name.clone();
+            let body = self.mem_body.clone();
+            if let Some(i) = Self::mem_file_idx(&leaving) {
+                self.mem_cache_body[i] = body.clone();
+                self.mem_cache_at[i] = config::memory_updated_at(&leaving);
+            }
+            std::thread::spawn(move || {
+                if config::read_memory(&leaving) != body {
+                    let _ = config::write_memory(&leaving, &body);
+                }
+            });
+        }
+        self.mem_name = name.into();
+        let at = config::memory_updated_at(name);
+        let Some(i) = Self::mem_file_idx(name) else {
+            self.mem_body = config::read_memory(name);
+            return;
+        };
+        if self.mem_cache_at[i] == 0 {
+            self.mem_body = config::read_memory(name);
+            self.mem_cache_body[i] = self.mem_body.clone();
+            self.mem_cache_at[i] = at;
+            return;
+        }
+        self.mem_body = self.mem_cache_body[i].clone();
+        if self.mem_cache_at[i] != at && self.mem_file_rx.is_none() {
+            let n = name.to_string();
+            let (tx, rx) = mpsc::channel();
+            self.mem_file_rx = Some((n.clone(), rx));
+            std::thread::spawn(move || {
+                let body = config::read_memory(&n);
+                let at = config::memory_updated_at(&n);
+                let _ = tx.send((at, body));
+            });
+        }
+    }
+
     fn ui_memory(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
@@ -11615,44 +11765,7 @@ impl Cabin {
             ui.horizontal(|ui| {
                 for name in ["SOUL.md", "USER.md", "MEMORY.md"] {
                     if crate::cards::tab_pill(ui, name, self.mem_name == name) {
-                        if !self.scratch()
-                            && self.mem_name != name
-                        {
-                            let leaving = self.mem_name.clone();
-                            let body = self.mem_body.clone();
-                            if let Some(i) = Self::mem_file_idx(&leaving) {
-                                self.mem_cache_body[i] = body.clone();
-                                self.mem_cache_at[i] = config::memory_updated_at(&leaving);
-                            }
-                            std::thread::spawn(move || {
-                                if config::read_memory(&leaving) != body {
-                                    let _ = config::write_memory(&leaving, &body);
-                                }
-                            });
-                        }
-                        self.mem_name = name.into();
-                        let at = config::memory_updated_at(name);
-                        if let Some(i) = Self::mem_file_idx(name) {
-                            if self.mem_cache_at[i] == 0 {
-                                self.mem_body = config::read_memory(name);
-                                self.mem_cache_body[i] = self.mem_body.clone();
-                                self.mem_cache_at[i] = at;
-                            } else {
-                                self.mem_body = self.mem_cache_body[i].clone();
-                                if self.mem_cache_at[i] != at && self.mem_file_rx.is_none() {
-                                    let n = name.to_string();
-                                    let (tx, rx) = mpsc::channel();
-                                    self.mem_file_rx = Some((n.clone(), rx));
-                                    std::thread::spawn(move || {
-                                        let body = config::read_memory(&n);
-                                        let at = config::memory_updated_at(&n);
-                                        let _ = tx.send((at, body));
-                                    });
-                                }
-                            }
-                        } else {
-                            self.mem_body = config::read_memory(name);
-                        }
+                        self.open_memory_file(name);
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -12371,74 +12484,40 @@ impl Cabin {
             ui.horizontal(|ui| {
                 crate::cards::search_bar(ui, &mut self.history_q, "Search chats and memory", 320.0);
                 if crate::cards::white_pill(ui, "Search") {
-                    if self.history_rx.is_some() {
-                        self.status = "Searching…".into();
-                    } else {
-                    if !self.scratch() {
-                        let name = self.mem_name.clone();
-                        let body = self.mem_body.clone();
-                        std::thread::spawn(move || {
-                            if config::read_memory(&name) != body {
-                                let _ = config::write_memory(&name, &body);
-                            }
-                        });
-                    }
-                    let q = self.history_q.clone();
-                    let mem_name = self.mem_name.clone();
-                    let mem_body = self.mem_body.clone();
-                    let vis = self.thread_idx;
-                    let mut thread_rows = Vec::new();
-                    for (i, t) in self.threads.iter().enumerate() {
-                        let body = if i == vis {
-                            search_thread_body(self.messages.iter().map(|m| m.1.as_str()))
-                        } else {
-                            search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()))
-                        };
-                        thread_rows.push((t.title.clone(), body));
-                    }
-                    let (tx, rx) = mpsc::channel();
-                    self.history_rx = Some(rx);
-                    self.status = "Searching…".into();
-                    std::thread::spawn(move || {
-                        let soul = if mem_name == "SOUL.md" {
-                            mem_body.clone()
-                        } else {
-                            config::read_memory("SOUL.md")
-                        };
-                        let user = if mem_name == "USER.md" {
-                            mem_body.clone()
-                        } else {
-                            config::read_memory("USER.md")
-                        };
-                        let memory = if mem_name == "MEMORY.md" {
-                            mem_body.clone()
-                        } else {
-                            config::read_memory("MEMORY.md")
-                        };
-                        let mut rows = vec![
-                            ("SOUL.md".into(), soul),
-                            ("USER.md".into(), user),
-                            ("MEMORY.md".into(), memory),
-                        ];
-                        rows.extend(thread_rows);
-                        let _ = tx.send(search_corpus(&q, &rows));
-                    });
-                    }
+                    self.history_q_at = Some(Instant::now() - HISTORY_TYPE_DELAY);
                 }
             });
-            if self.history_hits.is_empty() && !self.history_q.is_empty() {
+            self.tick_history_search(ui.ctx());
+            if self.history_hits.is_empty()
+                && !self.history_q.trim().is_empty()
+                && self.history_rx.is_none()
+                && self.history_q_at.is_none()
+            {
                 ui.label(RichText::new("No matches.").size(13.0).color(crate::theme::muted()));
             }
-            for h in &self.history_hits {
-                egui::Frame::none()
+            let mut open: Option<String> = None;
+            for (target, line) in &self.history_hits {
+                let hit = egui::Frame::none()
                     .fill(crate::theme::elevated())
                     .rounding(10.0)
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .inner_margin(egui::Margin::symmetric(10.0, 6.0))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(h).size(13.0).color(crate::theme::fg()));
-                    });
+                        ui.set_width(ui.available_width());
+                        ui.label(RichText::new(line).size(13.0).color(crate::theme::fg()));
+                    })
+                    .response
+                    .interact(egui::Sense::click());
+                if hit.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if hit.clicked() {
+                    open = Some(target.clone());
+                }
                 ui.add_space(6.0);
+            }
+            if let Some(target) = open {
+                self.open_history_hit(&target);
             }
             ui.add_space(16.0);
             crate::cards::section_label(ui, "Grok Build sessions");
@@ -17040,11 +17119,15 @@ mod tests {
             restore_spawn < restore_fn,
             "Memory Restore must not freeze the cabin reading MEMORY.md.prev: {restore}"
         );
-        let tabs = memory_ui
-            .split("tab_pill")
+        assert!(
+            memory_ui.contains("self.open_memory_file(name)"),
+            "the Memory tabs and a History hit open a file the same way: {memory_ui}"
+        );
+        let tabs = src
+            .split("fn open_memory_file(")
             .nth(1)
-            .and_then(|s| s.split("Restore").next())
-            .expect("memory tabs");
+            .and_then(|s| s.split("fn ui_memory(").next())
+            .expect("open_memory_file");
         let flush = tabs.find("write_memory").expect("flush leaving memory");
         let switch = tabs.find("mem_name = name").expect("switch name");
         assert!(
@@ -18208,10 +18291,23 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn ui_board(").next())
             .expect("ui_history");
-        let search = history
-            .split("white_pill(ui, \"Search\")")
+        assert!(
+            history.contains("tick_history_search") && history.contains("open_history_hit"),
+            "History searches as you type and a hit opens its source: {history}"
+        );
+        let debounce = src
+            .split("fn tick_history_search(")
             .nth(1)
-            .and_then(|s| s.split("history_hits").next())
+            .and_then(|s| s.split("fn kick_history_search(").next())
+            .expect("tick_history_search");
+        assert!(
+            debounce.contains("HISTORY_TYPE_DELAY") && debounce.contains("history_rx.is_some()"),
+            "typing must not spawn a walk of every thread per keystroke: {debounce}"
+        );
+        let search = src
+            .split("fn kick_history_search(")
+            .nth(1)
+            .and_then(|s| s.split("fn open_history_hit(").next())
             .expect("history search");
         assert!(
             search.contains("write_memory")
@@ -18239,6 +18335,29 @@ mod tests {
         assert!(
             search[..soul].contains("thread::spawn") && search.contains("history_rx"),
             "History Search must slurp SOUL/USER/MEMORY off the UI thread: {search}"
+        );
+        assert!(
+            search.contains("search_corpus_tagged")
+                && search.contains("format!(\"thread:{}\", t.id)")
+                && search.contains("mem:MEMORY.md"),
+            "every hit must carry the thread or file it came from: {search}"
+        );
+        let hit = src
+            .split("fn open_history_hit(")
+            .nth(1)
+            .and_then(|s| s.split("fn open_memory_file(").next())
+            .expect("open_history_hit");
+        assert!(
+            hit.contains("open_memory_file") && hit.contains("Nav::Memory"),
+            "a memory hit opens that file in the editor: {hit}"
+        );
+        assert!(
+            hit.contains("switch_thread") && hit.contains("Nav::Chat"),
+            "a chat hit opens the thread it came from: {hit}"
+        );
+        assert!(
+            hit.contains("That chat is gone"),
+            "a hit for a deleted thread must say so, not open the wrong chat: {hit}"
         );
         let board = src
             .split("fn ui_board(")

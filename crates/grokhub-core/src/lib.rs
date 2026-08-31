@@ -245,7 +245,9 @@ pub use greeting::{
     pick_greeting, should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_DEBOUNCE_MS, GREETING_LLM_MODE,
     GREETING_MAX_CHARS,
 };
-pub use history::{dedupe_hits, search_corpus, search_text, search_thread_body};
+pub use history::{
+    dedupe_hits, search_corpus, search_corpus_tagged, search_text, search_thread_body,
+};
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
 pub use learning::{
     extract_insights, insight_key_for_fact, insight_pin, is_actionable_need, is_durable_fact, looks_like_user_pref,
