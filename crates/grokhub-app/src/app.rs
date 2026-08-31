@@ -13276,6 +13276,7 @@ impl Cabin {
             .show(ctx, |ui| {
             if crate::cards::page_header(ui, "Skills and Connectors", "Refresh") {
                 self.reload_grok_catalog();
+                self.skill_list = skills::list_skills();
             }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -13294,6 +13295,7 @@ impl Cabin {
             ui.add_space(16.0);
             let q = self.skill_q.to_ascii_lowercase();
             let mut use_skill: Option<String> = None;
+            let mut use_cabin_skill: Option<(String, String)> = None;
             let mut mcp_toggle: Option<(String, bool)> = None;
             let mut mcp_remove: Option<String> = None;
             let mut plugin_toggle: Option<(String, bool)> = None;
@@ -13521,6 +13523,60 @@ impl Cabin {
                 });
                 ui.add_space(16.0);
             }
+            let cabin_skills: Vec<_> = self
+                .skill_list
+                .iter()
+                .filter(|s| {
+                    q.is_empty()
+                        || s.name.to_ascii_lowercase().contains(&q)
+                        || s.description.to_ascii_lowercase().contains(&q)
+                        || s.trigger.to_ascii_lowercase().contains(&q)
+                })
+                .cloned()
+                .collect();
+            crate::cards::section_label(ui, "Cabin skills");
+            ui.label(
+                RichText::new("SKILL.md under ~/.config/GrokHub/skills. The cabin follows these on a matching ask and writes new ones after a hard host run.")
+                    .size(12.0)
+                    .color(crate::theme::muted()),
+            );
+            ui.add_space(8.0);
+            if cabin_skills.is_empty() {
+                ui.label(
+                    RichText::new(if self.skill_list.is_empty() {
+                        "None yet. The cabin saves one after it works something out, or /skill <name> runs one you wrote."
+                    } else {
+                        "None matched."
+                    })
+                    .color(crate::theme::muted()),
+                );
+            } else {
+                crate::cards::tile_row(ui, cabin_skills.len(), |ui, i| {
+                    let s = &cabin_skills[i];
+                    let runs = match s.runs {
+                        0 => "never run".to_string(),
+                        1 => "1 run".to_string(),
+                        n => format!("{n} runs"),
+                    };
+                    let body = if s.description.trim().is_empty() {
+                        runs
+                    } else {
+                        format!("{runs} · {}", s.description)
+                    };
+                    if crate::cards::grok_tile(
+                        ui,
+                        crate::icons::icon_for_label(&s.name),
+                        &s.name,
+                        &body,
+                        Some("Use in chat"),
+                        false,
+                    ) == crate::cards::TileHit::Add
+                    {
+                        use_cabin_skill = Some((s.slash.clone(), s.name.clone()));
+                    }
+                });
+            }
+            ui.add_space(16.0);
             crate::cards::section_label(ui, "Grok Build skills");
             ui.label(
                 RichText::new("Bundled skills and plugin skills from `grok inspect`. Use in chat sends /name.")
@@ -13577,6 +13633,10 @@ impl Cabin {
             if let Some(name) = use_skill {
                 self.nav = Nav::Chat;
                 self.send_chat(skill_use_in_chat_prompt(&format!("/{name}"), &name));
+            }
+            if let Some((slash, name)) = use_cabin_skill {
+                self.nav = Nav::Chat;
+                self.send_chat(skill_use_in_chat_prompt(&slash, &name));
             }
             if let Some((name, on)) = mcp_toggle {
                 let cmd = if on { "enable" } else { "disable" };
@@ -16672,6 +16732,14 @@ mod tests {
                 && skills_ui.contains("load_grok_catalog")
                 || skills_ui.contains("reload_grok_catalog"),
             "Skills must load Grok Build inspect/MCP/plugins: {skills_ui}"
+        );
+        assert!(
+            skills_ui.contains("Cabin skills") && skills_ui.contains("self.skill_list"),
+            "the skills the cabin follows and writes must be listed, not only the Grok catalog: {skills_ui}"
+        );
+        assert!(
+            skills_ui.contains("skills::list_skills()"),
+            "Refresh must re-read ~/.config/GrokHub/skills, not just the Grok catalog: {skills_ui}"
         );
         assert!(
             skills_ui.contains("skill_use_in_chat_prompt"),
