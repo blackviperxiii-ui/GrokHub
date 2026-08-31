@@ -1634,6 +1634,15 @@ pub fn delete_session(bin: &Path, cwd: &Path, id: &str) -> Result<(), String> {
     user.map(|_| ())
 }
 
+/// Persisted per-turn tokens and cost (`grok usage <id>`, 1.0.14+).
+pub fn session_usage(bin: &Path, cwd: &Path, id: &str) -> Result<String, String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("empty session id".into());
+    }
+    grokhub_acp_user_stdout(bin, cwd, &["usage", id], 12)
+}
+
 /// Dump one Grok session transcript. Alpha uses `grok export`; older builds used `sessions show`.
 pub fn show_session(bin: &Path, cwd: &Path, id: &str) -> Result<String, String> {
     let id = id.trim();

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.7.1 — 2026-08-31
+
+GrokHub cabin for Grok Build **1.0.14** alpha.
+
+- `/usage` also runs `grok usage <session>` for persisted per-turn tokens and cost.
+- Retry status in the composer shows a short reason (1.0.14 retry line).
+- Failed task/todo tool calls stay on the Queue as **failed**.
+- `/inspect` notes Grok Build version and that Claude bypass locks are advisory.
+- Subagent coordinator “unreachable” retries instead of killing the turn.
+- `/models` lists per-effort model ids when the CLI prints them.
+
 ## 2.7.0 — 2026-08-29
 
 GrokHub cabin for Grok Build **1.0.13** stable.
