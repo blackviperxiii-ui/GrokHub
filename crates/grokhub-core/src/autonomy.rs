@@ -1,4 +1,5 @@
 //! Cabin policy. Always maximum autonomy — host, skill, learn, and anticipate.
+//! There is no dial: `Policy::max()` is the only policy the cabin runs.
 
 use crate::host_plan::{HostPlanStep, HostRisk};
 use crate::learning::LearningInsight;
@@ -74,10 +75,6 @@ impl Policy {
     }
 }
 
-/// Cabin is always max. Args are ignored so old call sites stay compiling.
-pub fn autonomy_policy(_level: u8, _yolo: bool, _approve_risky_only: bool) -> Policy {
-    Policy::max()
-}
 
 pub fn host_step_autorun(_policy: Policy, _risk: HostRisk, _outside_project: bool) -> bool {
     true
@@ -210,9 +207,8 @@ mod tests {
 
     #[test]
     fn always_max() {
-        for (level, yolo, risky) in [(0, false, false), (1, false, true), (9, true, false)] {
-            let p = autonomy_policy(level, yolo, risky);
-            assert_eq!(p, Policy::max());
+        {
+            let p = Policy::max();
             assert_eq!(p.host, HostAuto::All);
             assert!(p.auto_writes_skill());
             assert!(p.injects_skill());

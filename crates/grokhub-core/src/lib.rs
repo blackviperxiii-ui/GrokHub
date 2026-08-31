@@ -68,7 +68,7 @@ pub use feel::{
     HOVER_SECS, PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
 };
 pub use autonomy::{
-    anticipate_consumes_slot, anticipated_need, autonomy_policy, cabin_system_prompt,
+    anticipate_consumes_slot, anticipated_need, cabin_system_prompt,
     host_plan_autorun, host_step_autorun, should_anticipate, HostAuto, LearnMode, Policy,
     SkillFollow, SkillWrite,
 };
@@ -269,7 +269,7 @@ pub use stream::{
     StreamTokenKind, StreamUsage,
 };
 pub use usage::{
-    add_tokens, bump_usage, roll_usage_day, token_delta, usage_blocked, usage_line, UsageDay,
+    add_tokens, bump_usage, roll_usage_day, token_delta, usage_line, UsageDay,
 };
 pub use hub_sync::{build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, HubMemoryFile, HubSnapshot};
 pub use hygiene::{lockish, should_send_screenshot};
