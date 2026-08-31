@@ -224,11 +224,11 @@ fn default_close_to_tray() -> bool {
     true
 }
 
-fn default_quiet_start() -> String {
+pub fn default_quiet_start() -> String {
     "22:00".into()
 }
 
-fn default_quiet_end() -> String {
+pub fn default_quiet_end() -> String {
     "07:00".into()
 }
 
