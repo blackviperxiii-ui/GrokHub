@@ -48,19 +48,6 @@ pub fn add_tokens(day: &mut UsageDay, input: u64, output: u64, reasoning: u64) {
     day.tokens_think = day.tokens_think.saturating_add(reasoning);
 }
 
-pub fn usage_blocked(day: &UsageDay, bucket: &str, cap: u32) -> bool {
-    if cap == 0 {
-        return false;
-    }
-    let used = match bucket {
-        "imagine" => day.imagine,
-        "host" => day.host,
-        "automation" => day.automation,
-        _ => day.messages,
-    };
-    used >= cap
-}
-
 pub fn roll_usage_day(day: &mut UsageDay, today: &str) {
     let today = today.trim();
     if today.is_empty() || day.day == today {
@@ -116,9 +103,9 @@ mod tests {
         bump_usage(&mut d, "host");
         bump_usage(&mut d, "automation");
         assert_eq!(d.messages, 1);
-        assert!(usage_blocked(&d, "host", 1));
-        assert!(usage_blocked(&d, "automation", 1));
-        assert!(!usage_blocked(&d, "imagine", 5));
+        assert_eq!(d.host, 1);
+        assert_eq!(d.automation, 1);
+        assert_eq!(d.imagine, 0);
         assert!(usage_line(&d).contains("chat 1"));
         roll_usage_day(&mut d, "2026-08-15");
         assert_eq!(d.messages, 0);
