@@ -43,6 +43,38 @@ pub fn is_plain_text(s: &str) -> bool {
     redact_secrets(s) == s
 }
 
+/// `/forget pi` must not eat "principle". A topic matches on word boundaries.
+pub fn mentions_topic(line: &str, topic: &str) -> bool {
+    let needle = topic.trim().to_ascii_lowercase();
+    if needle.is_empty() {
+        return false;
+    }
+    let hay = line.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(i) = hay[from..].find(&needle) {
+        let start = from + i;
+        let end = start + needle.len();
+        let before_ok = hay[..start]
+            .chars()
+            .next_back()
+            .map(|c| !c.is_alphanumeric())
+            .unwrap_or(true);
+        let after_ok = hay[end..]
+            .chars()
+            .next()
+            .map(|c| !c.is_alphanumeric())
+            .unwrap_or(true);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = (start + 1).min(hay.len());
+        if from >= hay.len() {
+            break;
+        }
+    }
+    false
+}
+
 pub fn forget_topic(markdown: &str, topic: &str) -> String {
     let t = topic.trim().to_ascii_lowercase();
     if t.is_empty() {
@@ -50,7 +82,7 @@ pub fn forget_topic(markdown: &str, topic: &str) -> String {
     }
     let mut out = String::new();
     for line in markdown.lines() {
-        if line.to_ascii_lowercase().contains(&t) {
+        if mentions_topic(line, &t) {
             continue;
         }
         out.push_str(line);
@@ -73,6 +105,28 @@ mod tests {
         let kept = forget_topic("editor: nvim\nwifi printer in den\n", "wifi");
         assert!(kept.contains("nvim"));
         assert!(!kept.contains("wifi"));
+    }
+
+    #[test]
+    fn forget_takes_the_topic_not_every_word_that_contains_it() {
+        let notes = "pi is the raspberry pi in the den\nprinciple: keep it small\npicture day is friday\n";
+        let out = forget_topic(notes, "pi");
+        assert!(!out.contains("raspberry"), "the topic line goes: {out}");
+        assert!(
+            out.contains("principle") && out.contains("picture"),
+            "a substring of a longer word is not the topic: {out}"
+        );
+        assert!(mentions_topic("Wi-Fi password is taped to the router", "wi-fi"));
+        assert!(mentions_topic("the wifi.", "wifi"));
+        assert!(mentions_topic("wifi-extender in the den", "extender in"));
+        assert!(!mentions_topic("wifi-extender in the den", "tender"));
+        assert!(!mentions_topic("nothing here", "pi"));
+        assert!(!mentions_topic("anything", "  "));
+        assert_eq!(
+            forget_topic("keep me\n", "   "),
+            "keep me\n",
+            "an empty topic must not rewrite the file"
+        );
     }
 
     #[test]

@@ -92,7 +92,8 @@ use grokhub_core::{
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
     reply_needs_followup,
     recipe_from_cmds, replay_automation_target,
-    mark_loop_ran, new_loop, parse_loop_line, parse_nl_automation, parse_recipe, parse_slash,
+    mark_loop_ran, new_loop, parse_recipe, parse_slash, route_schedule, ScheduleRoute,
+    automation_schedule_label, automation_summary_line,
     parse_theme, pick_theme, plan_from_text, plan_room, LOOP_MAX,
     chat_may_save_automation, user_asked_to_schedule,
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
@@ -102,14 +103,14 @@ use grokhub_core::{
     should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
-    rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
+    rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus, dedupe_hits,
     search_thread_body,
     state_for_disk,
     clear_pending_after_complete, inbox_claim_ready,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm,
     should_trim_result_bodies, shortcut_help,
     windshield_prompt,
-    composer_enter, composer_go, composer_go_tip, ComposerEnter, ComposerGo,
+    composer_enter, composer_go, composer_go_tip, perm_key, ComposerEnter, ComposerGo, PermKey,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
     chip_scan,
@@ -127,7 +128,7 @@ use grokhub_core::{
     skill_follow_block, skill_use_in_chat_prompt, slash_help, SlashHit, summarize_write, surgical_memory_edit, MemoryEdit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
-    unified_diff_cite, usage_line,
+    unified_diff_cite, usage_line, add_tokens, token_delta,
     transcribe_route, uid, update_cmds, overlay_update_begin, overlay_update_finish,
     realtime_bearer, realtime_can_connect, voice_log_role, voice_stream_token, voice_transcript_sends_chat,
     fold_stream_fields, StreamTokenKind,
@@ -1046,6 +1047,7 @@ pub struct Cabin {
     last_window_title: String,
     voice_orb: String,
     last_night_tick: Instant,
+    last_auto_tick: Instant,
     last_heartbeat: Instant,
     night_check_rx: Option<(String, mpsc::Receiver<(String, i32)>)>,
     learning: LearningState,
@@ -1192,6 +1194,8 @@ pub struct Cabin {
     grok_p_rx: Option<mpsc::Receiver<GrokPEvent>>,
     grok_p_pid: Option<u32>,
     grok_usage: GrokUsage,
+    /// Last Grok token totals already banked into `usage.json`.
+    tokens_seen: (u64, u64, u64),
     grok_commands: Vec<SlashHit>,
     grok_tasks: Vec<(String, String, bool)>,
     followup_queue: Vec<String>,
@@ -1342,6 +1346,8 @@ impl Cabin {
         secrets::migrate_console_key(&mut cfg, &mut secrets);
         let win_max = cfg.window.maximized;
         let approve_risky_only = cfg.approve_risky_only;
+        let boot_session = SessionMode::parse(&cfg.session_mode).unwrap_or(SessionMode::Chat);
+        let boot_perm = PermissionMode::parse(&cfg.permission_mode).unwrap_or(PermissionMode::Ask);
         let goal_step = threads.get(thread_idx).map(|t| t.goal.step).unwrap_or(0);
         let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
         let mut c = Self {
@@ -1432,6 +1438,7 @@ impl Cabin {
             last_window_title: String::new(),
             voice_orb: "idle".into(),
             last_night_tick: Instant::now(),
+            last_auto_tick: Instant::now(),
             last_heartbeat: Instant::now(),
             night_check_rx: None,
             learning: crate::store::load_learning(),
@@ -1577,6 +1584,7 @@ impl Cabin {
             grok_p_rx: None,
             grok_p_pid: None,
             grok_usage: GrokUsage::default(),
+            tokens_seen: (0, 0, 0),
             grok_commands: Vec::new(),
             grok_tasks: Vec::new(),
             followup_queue: Vec::new(),
@@ -1584,8 +1592,8 @@ impl Cabin {
             live_blocks: Vec::new(),
             desk_frame: None,
             perm_ask: None,
-            session_mode: SessionMode::Chat,
-            permission_mode: PermissionMode::Ask,
+            session_mode: boot_session,
+            permission_mode: boot_perm,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
             grok_sessions_tx,
@@ -4805,7 +4813,7 @@ impl Cabin {
                 if self.running {
                     self.halt_in_flight();
                 }
-                self.session_mode = SessionMode::Plan;
+                self.set_session_mode(SessionMode::Plan);
                 self.acp = None;
                 self.acp_spawn_rx = None;
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
@@ -4815,11 +4823,12 @@ impl Cabin {
                 self.status = "Plan mode — Grok Build will plan first".into();
             }
             Slash::AlwaysApprove => {
-                self.permission_mode = if self.permission_mode == PermissionMode::AlwaysApprove {
+                let next = if self.permission_mode == PermissionMode::AlwaysApprove {
                     PermissionMode::Ask
                 } else {
                     PermissionMode::AlwaysApprove
                 };
+                self.set_permission_mode(next);
                 if self.running {
                     self.halt_in_flight();
                 }
@@ -4832,7 +4841,7 @@ impl Cabin {
                 self.status = format!("Permission {}", self.permission_mode.as_str());
             }
             Slash::AutoPerm => {
-                self.permission_mode = PermissionMode::Auto;
+                self.set_permission_mode(PermissionMode::Auto);
                 if self.running {
                     self.halt_in_flight();
                 }
@@ -5056,6 +5065,15 @@ impl Cabin {
                 let q_owned = q.clone();
                 let mem_name = self.mem_name.clone();
                 let mem_body = self.mem_body.clone();
+                // What the cabin learned by itself lives in learning.json, not the
+                // markdown, and /recall used to miss all of it.
+                let insights = self
+                    .learning
+                    .insights
+                    .iter()
+                    .map(|i| i.text.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 let vis = self.thread_idx;
                 let mut thread_rows = Vec::new();
                 for (i, t) in self.threads.iter().enumerate() {
@@ -5089,6 +5107,7 @@ impl Cabin {
                         ("SOUL.md", soul),
                         ("USER.md", user),
                         ("MEMORY.md", memory),
+                        ("learned", insights),
                     ];
                     let refs: Vec<(&str, &str)> =
                         corpus.iter().map(|(n, b)| (*n, b.as_str())).collect();
@@ -5099,8 +5118,7 @@ impl Cabin {
                         .collect();
                     rows.extend(thread_rows);
                     hits.extend(search_corpus(&q_owned, &rows));
-                    hits.sort();
-                    hits.dedup();
+                    let hits = dedupe_hits(hits);
                     let body = if hits.is_empty() {
                         format!("No recall for {q_owned}")
                     } else {
@@ -5694,6 +5712,20 @@ impl Cabin {
         });
     }
 
+    /// The composer pills survive a restart: Ask/Auto/Plan is a preference, not a per-run
+    /// choice. Always-approve is the exception — `config::load` drops it back to Ask.
+    fn set_session_mode(&mut self, mode: SessionMode) {
+        self.session_mode = mode;
+        self.cfg.session_mode = mode.as_str().to_string();
+        self.persist_cfg();
+    }
+
+    fn set_permission_mode(&mut self, mode: PermissionMode) {
+        self.permission_mode = mode;
+        self.cfg.permission_mode = mode.as_str().to_string();
+        self.persist_cfg();
+    }
+
     fn persist_cfg(&self) {
         let io = self.persist_io.clone();
         let mut cfg = self.cfg.clone();
@@ -5722,6 +5754,30 @@ impl Cabin {
                 let _ = secrets::save(&secrets);
             }
         });
+    }
+
+    /// Grok reports session totals; `/usage` wants a day. Bank the delta so the token
+    /// line survives a restart and does not double-count a resumed session.
+    fn merge_grok_usage(&mut self, u: &GrokUsage) {
+        self.grok_usage.merge(u);
+        self.roll_today();
+        let seen = self.tokens_seen;
+        let now = (
+            self.grok_usage.input_tokens,
+            self.grok_usage.output_tokens,
+            self.grok_usage.reasoning_tokens,
+        );
+        let spent = (
+            token_delta(seen.0, now.0),
+            token_delta(seen.1, now.1),
+            token_delta(seen.2, now.2),
+        );
+        if spent == (0, 0, 0) {
+            return;
+        }
+        self.tokens_seen = now;
+        add_tokens(&mut self.usage, spent.0, spent.1, spent.2);
+        self.persist_usage();
     }
 
     fn persist_usage(&self) {
@@ -5874,7 +5930,15 @@ impl Cabin {
                     }
                 }
                 HeartbeatAct::Inbox => self.drain_inbox(),
-                HeartbeatAct::Night => night_fired = self.tick_loops(),
+                HeartbeatAct::Night => {
+                    // Grok `/loop` intervals and clock-time cabin automations both live on
+                    // this slot. Loops go first; automations still get the pulse when no
+                    // loop is due, so a 09:00 job is not starved by an idle loop list.
+                    night_fired = self.tick_loops();
+                    if !night_fired {
+                        night_fired = self.tick_night();
+                    }
+                }
                 HeartbeatAct::Review => {
                     if !night_fired && !self.running {
                         self.tick_review();
@@ -5940,6 +6004,14 @@ impl Cabin {
         let list = self.grok_loops.clone();
         std::thread::spawn(move || {
             let _ = crate::loops::save(&list);
+        });
+        self.persist_idle_key = self.persist_idle_now();
+    }
+
+    fn persist_automations(&mut self) {
+        let list = self.automations.clone();
+        std::thread::spawn(move || {
+            let _ = crate::night::save(&list);
         });
         self.persist_idle_key = self.persist_idle_now();
     }
@@ -6045,10 +6117,10 @@ impl Cabin {
     }
 
     fn tick_night(&mut self) -> bool {
-        if self.running || self.last_night_tick.elapsed() < Duration::from_secs(5) {
+        if self.running || self.last_auto_tick.elapsed() < Duration::from_secs(5) {
             return self.running || self.night_check_rx.is_some();
         }
-        self.last_night_tick = Instant::now();
+        self.last_auto_tick = Instant::now();
         let clock = Self::local_clock();
         self.roll_today();
         self.daily_auto_day = self.usage.day.clone();
@@ -7218,7 +7290,7 @@ impl Cabin {
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::Usage(u)) => {
-                self.grok_usage.merge(&u);
+                self.merge_grok_usage(&u);
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::Commands(cmds)) => {
@@ -7311,7 +7383,8 @@ impl Cabin {
                 .map(|m| m.1.clone())
         });
         if !turn.usage.is_empty() {
-            self.grok_usage.merge(&turn.usage);
+            let u = turn.usage.clone();
+            self.merge_grok_usage(&u);
         }
         if let Some(t) = self.threads.get_mut(idx) {
             t.grok_session = Some(turn.session_id.clone());
@@ -7516,7 +7589,7 @@ impl Cabin {
                 AcpEvent::Plan(t) => {
                     self.status = format!("Plan · {t}");
                 }
-                AcpEvent::Usage(u) => self.grok_usage.merge(&u),
+                AcpEvent::Usage(u) => self.merge_grok_usage(&u),
                 AcpEvent::Commands(cmds) => self.apply_grok_commands(cmds),
                 AcpEvent::Task { id, title, done } => self.apply_grok_task(id, title, done),
                 AcpEvent::Compact {
@@ -7861,30 +7934,12 @@ impl Cabin {
                 if user_asked_to_schedule(&last_user)
                     && chat_may_save_automation(&last_user, &scan)
                 {
-                    let parsed = parse_loop_line(&scan)
-                        .or_else(|| parse_loop_line(&last_user))
-                        .or_else(|| {
-                            parse_nl_automation(&scan).map(|a| {
-                                let iv = if a.schedule == "heartbeat" {
-                                    format!("{}m", a.heartbeat_every_min.max(1))
-                                } else {
-                                    "1d".into()
-                                };
-                                (iv, a.instructions)
-                            })
-                        });
-                    if let Some((iv, prompt)) = parsed {
-                        if self.grok_loops.len() < LOOP_MAX {
-                            let mut row = new_loop(iv.clone(), prompt, now_ms());
-                            row.id = uid("loop");
-                            self.grok_loops.push(row);
-                            self.persist_loops();
-                            if here {
-                                self.status = format!("Loop saved: /loop {iv}");
-                            }
-                        } else if here {
-                            self.status = "Maximum 50 scheduled loops".into();
-                        }
+                    // The reply carries the schedule; fall back to the ask when it does not.
+                    let saved = self
+                        .save_schedule(&scan)
+                        .or_else(|| self.save_schedule(&last_user));
+                    if let (Some(status), true) = (saved, here) {
+                        self.status = status;
                     }
                 }
                 if let Some(q) = parse_consult(&scan) {
@@ -8436,6 +8491,9 @@ impl Cabin {
         self.running = true;
         self.imagine_job_prompt = prompt.clone();
         self.imagine_expand = false;
+        self.roll_today();
+        bump_usage(&mut self.usage, "imagine");
+        self.persist_usage();
         if self.chat_job_thread.is_none() {
             self.chat_job_thread = Some(self.visible_thread_id());
         }
@@ -8707,7 +8765,7 @@ impl Cabin {
         usage: GrokUsage,
         error: Option<String>,
     ) {
-        self.grok_usage.merge(&usage);
+        self.merge_grok_usage(&usage);
         if let Some(e) = error.filter(|s| !s.trim().is_empty()) {
             self.status = format!("Compact failed: {e}");
             return;
@@ -10996,21 +11054,27 @@ impl Cabin {
                     );
                 }
                 ui.add_space(8.0);
+                let key = perm_key(
+                    ui.input(|i| i.key_pressed(egui::Key::Enter)),
+                    ui.input(|i| i.key_pressed(egui::Key::Escape)),
+                    !self.composer.trim().is_empty(),
+                    self.palette_open || self.nav == Nav::Settings,
+                );
                 ui.horizontal(|ui| {
-                    if crate::cards::white_pill(ui, "Allow") {
+                    if crate::cards::white_pill(ui, "Allow") || key == Some(PermKey::Allow) {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission(p.rpc_id.clone(), true);
                         }
                         self.perm_ask = None;
                     }
-                    if crate::cards::ghost_pill(ui, "Deny") {
+                    if crate::cards::ghost_pill(ui, "Deny") || key == Some(PermKey::Deny) {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission(p.rpc_id.clone(), false);
                         }
                         self.perm_ask = None;
                     }
                     if crate::cards::ghost_pill(ui, "Always") {
-                        self.permission_mode = PermissionMode::AlwaysApprove;
+                        self.set_permission_mode(PermissionMode::AlwaysApprove);
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission_always(p.rpc_id.clone());
                         }
@@ -11261,7 +11325,7 @@ impl Cabin {
                     if self.running {
                         self.halt_in_flight();
                     }
-                    self.session_mode = m;
+                    self.set_session_mode(m);
                     self.acp = None;
                     self.acp_spawn_rx = None;
                     if let Some(t) = self.threads.get_mut(self.thread_idx) {
@@ -11276,7 +11340,7 @@ impl Cabin {
                     if self.running {
                         self.halt_in_flight();
                     }
-                    self.permission_mode = p;
+                    self.set_permission_mode(p);
                     self.acp = None;
                     self.acp_spawn_rx = None;
                     if let Some(t) = self.threads.get_mut(self.thread_idx) {
@@ -12042,41 +12106,51 @@ impl Cabin {
     }
 
     fn add_automation_seed(&mut self, seed: &str) {
-        let parsed = parse_loop_line(seed).or_else(|| {
-            parse_nl_automation(seed).map(|a| {
-                let iv = if a.schedule == "heartbeat" {
-                    format!("{}m", a.heartbeat_every_min.max(1))
-                } else {
-                    "1d".into()
-                };
-                (iv, a.instructions)
-            })
-        });
-        let Some((iv, prompt)) = parsed else {
-            self.status = "Need `/loop 30m …` or `every 2h …`".into();
-            return;
-        };
-        if self.grok_loops.len() >= LOOP_MAX {
-            self.status = "Maximum 50 scheduled loops".into();
-            return;
+        match self.save_schedule(seed) {
+            Some(status) => self.status = status,
+            None => self.status = "Need `/loop 30m …`, `every 2h …`, or `every day at 9 …`".into(),
         }
-        let mut row = new_loop(iv, prompt, now_ms());
-        row.id = uid("loop");
-        self.grok_loops.push(row);
-        self.persist_loops();
-        self.status = "Loop added".into();
+    }
+
+    /// One door for both schedulers. A clock time ("every weekday at 9") is a cabin
+    /// automation in `automations.json`; an interval stays a Grok Build `/loop` row.
+    fn save_schedule(&mut self, seed: &str) -> Option<String> {
+        match route_schedule(seed)? {
+            ScheduleRoute::Clock(a) => {
+                if self.automations.len() >= LOOP_MAX {
+                    return Some("Maximum 50 scheduled automations".into());
+                }
+                let mut a = *a;
+                a.id = uid("auto");
+                a = ensure_automation_schedule(a, Self::local_clock());
+                let label = automation_schedule_label(&a);
+                self.automations.push(a);
+                self.persist_automations();
+                Some(format!("Automation added · {label}"))
+            }
+            ScheduleRoute::Interval { interval, prompt } => {
+                if self.grok_loops.len() >= LOOP_MAX {
+                    return Some("Maximum 50 scheduled loops".into());
+                }
+                let mut row = new_loop(interval.clone(), prompt, now_ms());
+                row.id = uid("loop");
+                self.grok_loops.push(row);
+                self.persist_loops();
+                Some(format!("Loop added · every {interval}"))
+            }
+        }
     }
 
     fn ui_night(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
             .show(ctx, |ui| {
-            if crate::cards::page_header(ui, "Loops", "New Loop") {
+            if crate::cards::page_header(ui, "Automations", "New job") {
                 self.auto_compose = true;
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
             ui.label(
-                RichText::new("Grok Build `/loop` scheduler — interval prompts against your grok home. Stop a loop when the work is done.")
+                RichText::new("Interval prompts run as Grok Build `/loop`. A clock time — `every weekday at 9` — runs as a cabin automation on the 15s pulse. Stop a job when the work is done.")
                     .size(12.0)
                     .color(crate::theme::muted()),
             );
@@ -12088,17 +12162,20 @@ impl Cabin {
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .inner_margin(egui::Margin::same(14.0))
                     .show(ui, |ui| {
-                        ui.label(RichText::new("New loop").strong());
-                        ui.add(
+                        ui.label(RichText::new("New job").strong());
+                        let edit = ui.add(
                             egui::TextEdit::singleline(&mut self.night_nl)
-                                .hint_text("/loop 30m check deploy status")
+                                .hint_text("/loop 30m check deploy · every weekday at 9, summarize the board")
                                 .desired_width(f32::INFINITY),
                         );
+                        let enter = edit.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         ui.horizontal(|ui| {
-                            if crate::cards::white_pill(ui, "Add") {
-                                let seed = std::mem::take(&mut self.night_nl);
+                            if crate::cards::white_pill(ui, "Add") || enter {
+                                let seed = self.night_nl.clone();
                                 self.add_automation_seed(&seed);
-                                if self.status == "Loop added" {
+                                if self.status.contains("added") {
+                                    self.night_nl.clear();
                                     self.auto_compose = false;
                                 }
                             }
@@ -12109,7 +12186,8 @@ impl Cabin {
                     });
             }
             ui.add_space(8.0);
-            crate::cards::section_label(ui, "Active");
+            self.ui_scheduled_automations(ui);
+            crate::cards::section_label(ui, "Loops");
             if self.status.starts_with("Loop:") {
                 crate::cards::status_chip(ui, &self.status, crate::cards::ChipTone::Live);
                 ui.add_space(8.0);
@@ -12206,6 +12284,81 @@ impl Cabin {
             }
             });
         });
+    }
+
+    /// Clock-time jobs from `automations.json` — the ones the 15s pulse fires at 09:00.
+    fn ui_scheduled_automations(&mut self, ui: &mut egui::Ui) {
+        crate::cards::section_label(ui, "Scheduled");
+        if self.automations.is_empty() {
+            ui.label(
+                RichText::new("No clock jobs yet. Add `every weekday at 9, summarize the board`.")
+                    .size(12.0)
+                    .color(crate::theme::muted()),
+            );
+            ui.add_space(16.0);
+            return;
+        }
+        let now = now_ms();
+        let clock = Self::local_clock();
+        let mut remove: Option<usize> = None;
+        let mut run: Option<usize> = None;
+        let mut toggled = false;
+        for i in 0..self.automations.len() {
+            let title = match self.automations[i].name.trim() {
+                "" => self.automations[i]
+                    .instructions
+                    .chars()
+                    .take(40)
+                    .collect::<String>(),
+                name => name.chars().take(40).collect::<String>(),
+            };
+            let body = automation_summary_line(&self.automations[i], now);
+            egui::Frame::none()
+                .fill(crate::theme::elevated())
+                .rounding(14.0)
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                .inner_margin(egui::Margin::same(12.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut self.automations[i].enabled, "").changed() {
+                            toggled = true;
+                        }
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(&title).size(15.0).color(crate::theme::fg()));
+                            ui.label(RichText::new(&body).size(12.0).color(crate::theme::muted()));
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if crate::cards::ghost_pill(ui, "Remove") {
+                                remove = Some(i);
+                            }
+                            if crate::cards::white_pill(ui, "Run") {
+                                run = Some(i);
+                            }
+                        });
+                    });
+                });
+            ui.add_space(8.0);
+        }
+        if toggled {
+            // A paused job drops its next run; re-enabling has to find the next slot.
+            self.automations = std::mem::take(&mut self.automations)
+                .into_iter()
+                .map(|a| ensure_automation_schedule(a, clock))
+                .collect();
+            self.persist_automations();
+        }
+        if let Some(i) = remove {
+            if i < self.automations.len() {
+                self.automations.remove(i);
+                self.persist_automations();
+                self.status = "Automation removed".into();
+            }
+        } else if let Some(i) = run {
+            if let Some(a) = self.automations.get(i).cloned() {
+                self.fire_night(a, now);
+            }
+        }
+        ui.add_space(12.0);
     }
 
     fn ui_history(&mut self, ctx: &egui::Context) {
@@ -14104,6 +14257,16 @@ mod tests {
             ask.contains("p.reason") && src.contains("fn paint_try_again("),
             "hook ask reasons and credit-limit Try Again must paint: {ask}"
         );
+        assert!(
+            ask.contains("perm_key(")
+                && ask.contains("PermKey::Allow")
+                && ask.contains("PermKey::Deny"),
+            "the shortcut sheet promises Enter / Esc on a permission card: {ask}"
+        );
+        assert!(
+            ask.contains("self.composer"),
+            "Enter must send a typed follow-up instead of approving a tool: {ask}"
+        );
         let poll = src
             .split("fn poll_acp(")
             .nth(1)
@@ -14388,12 +14551,24 @@ mod tests {
         assert!(
             src.contains("user_asked_to_schedule")
                 && src.contains("chat_may_save_automation")
-                && night_save.contains("parse_loop_line"),
-            "ordinary replies that mention every day at / heartbeat every must not become live loops"
+                && night_save.contains("save_schedule"),
+            "ordinary replies that mention every day at / heartbeat every must not become live jobs"
+        );
+        let saver = src
+            .split("fn save_schedule(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_night(").next())
+            .expect("save_schedule");
+        assert!(
+            saver.contains("route_schedule") && saver.contains("ScheduleRoute::Clock"),
+            "`every day at 9` must keep its hour instead of becoming a 1d loop: {saver}"
         );
         assert!(
-            night_save.contains("persist_loops") && !night_save.contains("self.persist()"),
-            "chat loop save must not clone every thread 2s later — persist_loops bumps the idle key: {night_save}"
+            saver.contains("persist_loops")
+                && saver.contains("persist_automations")
+                && !saver.contains("self.persist()")
+                && !night_save.contains("self.persist()"),
+            "a saved job must not clone every thread 2s later — the persist helpers bump the idle key: {saver}"
         );
         assert!(
             src.contains("ignore_close_while_hidden"),
@@ -15043,6 +15218,25 @@ mod tests {
             kick.contains("bearer()") && !kick.contains("has_key()"),
             "Imagine must use grok login, not cabin OAuth only: {kick}"
         );
+        assert!(
+            kick.contains("bump_usage(&mut self.usage, \"imagine\")"),
+            "the imagine bucket has to count something for /usage to mean anything: {kick}"
+        );
+        let tokens = src
+            .split("fn merge_grok_usage(")
+            .nth(1)
+            .and_then(|s| s.split("fn persist_usage(").next())
+            .expect("merge_grok_usage");
+        assert!(
+            tokens.contains("token_delta") && tokens.contains("add_tokens"),
+            "Grok reports session totals — the day must bank the delta: {tokens}"
+        );
+        // Split so this assertion is not its own counter-example.
+        let direct = format!("self.grok_usage{}", ".merge(&");
+        assert!(
+            !src.contains(&direct),
+            "every usage merge goes through merge_grok_usage or the day loses tokens"
+        );
         assert_eq!(
             kick.matches("bearer()").count(),
             1,
@@ -15338,6 +15532,38 @@ mod tests {
                 || speak[..clone].contains("chip_scan")
                 || speak[..clone].contains("take_ui"),
             "voice speak must not clone an 8MB complete onto the UI thread: {speak}"
+        );
+    }
+
+    #[test]
+    fn the_night_slot_runs_loops_and_clock_time_automations() {
+        let src = include_str!("app.rs");
+        let beat = src
+            .split("fn tick_heartbeat")
+            .nth(1)
+            .and_then(|s| s.split("fn tick_anticipate").next())
+            .expect("tick_heartbeat");
+        assert!(
+            beat.contains("self.tick_loops()") && beat.contains("self.tick_night()"),
+            "the Night slot owns both schedulers — a 09:00 automation must still fire: {beat}"
+        );
+        let night = src
+            .split("fn tick_night(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_night_check(").next())
+            .expect("tick_night");
+        assert!(
+            night.contains("last_auto_tick") && !night.contains("last_night_tick"),
+            "automations need their own debounce or an idle loop list starves them: {night}"
+        );
+        let loops = src
+            .split("fn tick_loops(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_grok_loop(").next())
+            .expect("tick_loops");
+        assert!(
+            loops.contains("last_night_tick") && !loops.contains("last_auto_tick"),
+            "loops keep their own debounce: {loops}"
         );
     }
 
@@ -16927,6 +17153,14 @@ mod tests {
             recall[..mem].contains("thread::spawn"),
             "/recall must slurp SOUL/USER/MEMORY off the UI thread: {recall}"
         );
+        assert!(
+            recall.contains("learning") && recall.contains("(\"learned\", insights)"),
+            "what the cabin learned by itself is memory too — /recall must search it: {recall}"
+        );
+        assert!(
+            recall.contains("dedupe_hits") && !recall.contains("hits.sort()"),
+            "sorting hits alphabetically buries the memory line under chat titles: {recall}"
+        );
         let recall_poll = src
             .split("fn poll_recall(")
             .nth(1)
@@ -18040,8 +18274,28 @@ mod tests {
             "Suggested header shows Reviewed today / due tonight: {night}"
         );
         assert!(
-            night.contains("/loop") && night.contains("New Loop") && night.contains("grok_loops"),
-            "Automations page is Grok Build /loop, not cabin night cron: {night}"
+            night.contains("/loop") && night.contains("New job") && night.contains("grok_loops"),
+            "Automations page still owns the Grok Build /loop list: {night}"
+        );
+        assert!(
+            night.contains("ui_scheduled_automations") && night.contains("self.automations"),
+            "Automations page must also show the clock jobs the pulse fires: {night}"
+        );
+        let sched = src
+            .split("fn ui_scheduled_automations(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_history(").next())
+            .expect("ui_scheduled_automations");
+        assert!(
+            sched.contains("automation_summary_line")
+                && sched.contains("fire_night")
+                && sched.contains("persist_automations")
+                && !sched.contains("self.persist()"),
+            "a clock job needs its schedule, Run, Remove, and an off-thread persist: {sched}"
+        );
+        assert!(
+            sched.contains("ensure_automation_schedule"),
+            "re-enabling a paused job has to find its next slot: {sched}"
         );
         let enable = night
             .split("checkbox")
@@ -18062,12 +18316,12 @@ mod tests {
             .and_then(|s| s.split("fn ui_night(").next())
             .expect("add_automation_seed");
         assert!(
-            added.contains("parse_loop_line") && added.contains("persist_loops"),
-            "Add loop must parse /loop and persist loops.json off the UI thread: {added}"
+            added.contains("save_schedule") && added.contains("persist_loops"),
+            "Add must route the seed and persist loops.json off the UI thread: {added}"
         );
         assert!(
             !added.contains("self.persist()"),
-            "Add loop must not clone every thread 2s later: {added}"
+            "Add must not clone every thread 2s later: {added}"
         );
         let fire = src
             .split("fn fire_loop(")

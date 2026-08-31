@@ -56,6 +56,30 @@ pub fn apply_composer_enter(buf: &mut String, enter: bool, control: bool) -> boo
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermKey {
+    Allow,
+    Deny,
+}
+
+/// Keyboard answer for a tool permission card.
+///
+/// Esc always denies. Enter only allows when the composer is empty: a half-typed
+/// follow-up must send, not silently approve a shell command. An open palette or
+/// settings overlay owns both keys.
+pub fn perm_key(enter: bool, esc: bool, composer_has_text: bool, overlay_open: bool) -> Option<PermKey> {
+    if overlay_open {
+        return None;
+    }
+    if esc {
+        return Some(PermKey::Deny);
+    }
+    if enter && !composer_has_text {
+        return Some(PermKey::Allow);
+    }
+    None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Shortcut {
     pub keys: &'static str,
     pub action: &'static str,
@@ -72,7 +96,8 @@ pub const SHORTCUTS: &[Shortcut] = &[
     Shortcut { keys: "Enter", action: "Send message", scope: "Composer" },
     Shortcut { keys: "Ctrl+Enter", action: "New line", scope: "Composer" },
     Shortcut { keys: "Tab", action: "Accept slash", scope: "Composer" },
-    Shortcut { keys: "Enter / Esc", action: "Allow / deny tool permission", scope: "Chat" },
+    Shortcut { keys: "Enter / Esc", action: "Allow / deny tool permission (empty composer)", scope: "Chat" },
+    Shortcut { keys: "Ctrl+/", action: "Shortcut sheet", scope: "Global" },
 ];
 
 pub fn shortcut_help() -> String {
@@ -137,6 +162,29 @@ mod tests {
         assert_eq!(buf, "hi\n");
         assert!(!apply_composer_enter(&mut buf, false, false));
         assert_eq!(buf, "hi\n");
+    }
+
+    #[test]
+    fn enter_answers_a_permission_card_only_when_the_composer_is_empty() {
+        assert_eq!(perm_key(true, false, false, false), Some(PermKey::Allow));
+        assert_eq!(perm_key(false, true, false, false), Some(PermKey::Deny));
+        assert_eq!(
+            perm_key(true, false, true, false),
+            None,
+            "Enter on a typed follow-up must send it, not approve a shell command"
+        );
+        assert_eq!(
+            perm_key(false, true, true, false),
+            Some(PermKey::Deny),
+            "Esc still denies while typing"
+        );
+        assert_eq!(
+            perm_key(true, true, false, true),
+            None,
+            "an open palette or settings overlay owns Enter and Esc"
+        );
+        assert_eq!(perm_key(false, false, false, false), None);
+        assert!(shortcut_help().contains("Allow / deny tool permission"));
     }
 
     #[test]
