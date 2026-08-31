@@ -129,7 +129,7 @@ use grokhub_core::{
     skill_follow_block, skill_use_in_chat_prompt, slash_help, SlashHit, summarize_write, surgical_memory_edit, MemoryEdit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
-    unified_diff_cite, usage_line, add_tokens, token_delta,
+    unified_diff_cite, usage_line, add_tokens, token_delta, cap_from_text, cap_label, normalize_hm,
     transcribe_route, uid, update_cmds, overlay_update_begin, overlay_update_finish,
     realtime_bearer, realtime_can_connect, voice_log_role, voice_stream_token, voice_transcript_sends_chat,
     fold_stream_fields, StreamTokenKind,
@@ -180,10 +180,6 @@ enum SettingsSec {
     Account,
     Appearance,
     Behavior,
-    Host,
-    Imagine,
-    Voice,
-    Night,
     Github,
     Update,
     About,
@@ -192,7 +188,6 @@ enum SettingsSec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsGroup {
     General,
-    Cabin,
     Data,
     About,
 }
@@ -251,7 +246,6 @@ fn plus_from_path(target: PlusTarget, path: PathBuf) -> PlusPick {
 fn settings_group_home(group: SettingsGroup) -> SettingsSec {
     match group {
         SettingsGroup::General => SettingsSec::Account,
-        SettingsGroup::Cabin => SettingsSec::Host,
         SettingsGroup::Data => SettingsSec::Github,
         SettingsGroup::About => SettingsSec::Update,
     }
@@ -488,10 +482,6 @@ fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::Account => "Account",
         SettingsSec::Appearance => "Appearance",
         SettingsSec::Behavior => "Behavior",
-        SettingsSec::Host => "Host",
-        SettingsSec::Imagine => "Imagine",
-        SettingsSec::Voice => "Voice",
-        SettingsSec::Night => "Night",
         SettingsSec::Github => "GitHub",
         SettingsSec::Update => "Update",
         SettingsSec::About => "About",
@@ -1035,6 +1025,9 @@ pub struct Cabin {
     grok_loops: Vec<GrokLoop>,
     grok_loop_rx: Option<(String, mpsc::Receiver<String>)>,
     night_nl: String,
+    /// Cap fields are typed, so they hold text until Save parses them.
+    cap_auto_buf: String,
+    cap_host_buf: String,
     history_q: String,
     /// Last query the debounce saw, so typing kicks a search without a button.
     history_q_seen: String,
@@ -1353,6 +1346,8 @@ impl Cabin {
         secrets::migrate_console_key(&mut cfg, &mut secrets);
         let win_max = cfg.window.maximized;
         let approve_risky_only = cfg.approve_risky_only;
+        let cfg_auto_cap = cfg.daily_auto_cap;
+        let cfg_host_cap = cfg.host_hour_cap;
         let boot_session = SessionMode::parse(&cfg.session_mode).unwrap_or(SessionMode::Chat);
         let boot_perm = PermissionMode::parse(&cfg.permission_mode).unwrap_or(PermissionMode::Ask);
         let goal_step = threads.get(thread_idx).map(|t| t.goal.step).unwrap_or(0);
@@ -1429,6 +1424,8 @@ impl Cabin {
             grok_loops: crate::loops::load(),
             grok_loop_rx: None,
             night_nl: String::new(),
+            cap_auto_buf: cfg_auto_cap.to_string(),
+            cap_host_buf: cfg_host_cap.to_string(),
             history_q: String::new(),
             history_q_seen: String::new(),
             history_q_at: None,
@@ -11828,6 +11825,12 @@ impl Cabin {
 
     fn save_settings(&mut self) {
         self.cfg.api_key.clear();
+        self.cfg.quiet_start = normalize_hm(&self.cfg.quiet_start, &config::default_quiet_start());
+        self.cfg.quiet_end = normalize_hm(&self.cfg.quiet_end, &config::default_quiet_end());
+        self.cfg.daily_auto_cap = cap_from_text(&self.cap_auto_buf, self.cfg.daily_auto_cap);
+        self.cfg.host_hour_cap = cap_from_text(&self.cap_host_buf, self.cfg.host_hour_cap);
+        self.cap_auto_buf = self.cfg.daily_auto_cap.to_string();
+        self.cap_host_buf = self.cfg.host_hour_cap.to_string();
         if let Ok(mut st) = self.hub.lock() {
             if !self.cfg.device_name.trim().is_empty() {
                 st.device_name = self.cfg.device_name.clone();
@@ -12037,6 +12040,8 @@ impl Cabin {
                                                             crate::cards::settings_note(ui, "Session mode is Chat / Plan / Ask on the composer. Effort sets grok agent --reasoning-effort. The leftover ladder pin below is legacy.");
                                                             crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
                                                             crate::cards::settings_field(ui, "Imagine override", "Must contain “image” or the cabin keeps grok-imagine-image-2.0. Retired grok-2-image names are rewritten.", &mut self.cfg.imagine_model, false);
+                                                            crate::cards::settings_note(ui, &format!("Live voice model: {voice_live}. OAuth runs Hey Grok STT and TTS; duplex needs a console key."));
+                                                            crate::cards::settings_field(ui, "Voice override", "Must contain “voice” or “realtime”. Empty keeps grok-voice-think-fast-2.0.", &mut self.cfg.voice_model, false);
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(
@@ -12086,41 +12091,43 @@ impl Cabin {
                                                                 self.persist_cfg();
                                                                 self.status = "Saved".into();
                                                             }
-                                                            crate::cards::settings_note(ui, "Night always runs. Quiet hours and daily caps do not hold work.");
-                                                        }
-                                                        SettingsSec::Host => {
-                                                            crate::cards::settings_note(ui, &format!("{}\nInstall: curl -fsSL https://x.ai/cli/install.sh | bash\nThen grok login --device-auth. grok update installs the stable channel (1.0.13+). grok update --alpha is optional. Halt cancels the ACP turn.", build_agent::grok_banner()));
-                                                        }
-                                                        SettingsSec::Imagine => {
-                                                            crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
-                                                            crate::cards::settings_field(ui, "Imagine override", "Must contain “image” or the cabin keeps grok-imagine-image-2.0. Retired grok-2-image names are rewritten.", &mut self.cfg.imagine_model, false);
-                                                            if crate::cards::settings_toggle(
+                                                            crate::cards::settings_field(
                                                                 ui,
-                                                                "Living wall",
-                                                                "Every few hours the cabin paints a new cover. Twenty live. Oldest leaves first. Random seat.",
-                                                                &mut self.cfg.imagine_wall,
-                                                            ) {
-                                                                self.persist_cfg();
-                                                                self.status = "Saved".into();
-                                                            }
-                                                            crate::cards::settings_note(
-                                                                ui,
-                                                                &format!(
-                                                                    "{} of {WALL_GIF_MAX} covers on the wall.",
-                                                                    self.wall.gifs.len()
-                                                                ),
+                                                                "Quiet hours start",
+                                                                "24h clock. Inside quiet hours the cabin holds a destructive automation and stops anticipating.",
+                                                                &mut self.cfg.quiet_start,
+                                                                false,
                                                             );
-                                                        }
-                                                        SettingsSec::Voice => {
-                                                            crate::cards::settings_note(ui, &format!("Live voice model: {voice_live}."));
-                                                            crate::cards::settings_note(
+                                                            crate::cards::settings_field(
                                                                 ui,
-                                                                "OAuth runs Hey Grok STT and TTS. Duplex (wss://api.x.ai/v1/realtime) needs a console API key.",
+                                                                "Quiet hours end",
+                                                                "Same clock. Start and end equal means no quiet hours.",
+                                                                &mut self.cfg.quiet_end,
+                                                                false,
                                                             );
-                                                            crate::cards::settings_field(ui, "Voice override", "Must contain “voice” or “realtime”. Empty keeps grok-voice-think-fast-2.0.", &mut self.cfg.voice_model, false);
-                                                        }
-                                                        SettingsSec::Night => {
-                                                            crate::cards::settings_note(ui, "Night always runs. Quiet hours and daily caps do not hold work.");
+                                                            crate::cards::settings_field(
+                                                                ui,
+                                                                "Automations a day",
+                                                                "Loops, clock jobs, and anticipate share this budget. 0 is no cap.",
+                                                                &mut self.cap_auto_buf,
+                                                                false,
+                                                            );
+                                                            crate::cards::settings_field(
+                                                                ui,
+                                                                "Host commands an hour",
+                                                                "Rolling hour for shell work. 0 is no cap.",
+                                                                &mut self.cap_host_buf,
+                                                                false,
+                                                            );
+                                                            crate::cards::settings_note(ui, &format!(
+                                                                "Now: quiet {}–{} · {} · {}. Today: {} automations, {} host runs.",
+                                                                self.cfg.quiet_start,
+                                                                self.cfg.quiet_end,
+                                                                cap_label(self.cfg.daily_auto_cap, "automations a day"),
+                                                                cap_label(self.cfg.host_hour_cap, "host runs an hour"),
+                                                                self.usage.automation,
+                                                                self.usage.host,
+                                                            ));
                                                         }
                                                         SettingsSec::Github => {
                                                             crate::cards::settings_field(ui, "Personal access token", "CONNECTOR_CMD only. GitHub is the only live connector.", &mut self.secrets.github_token, true);
@@ -14322,9 +14329,11 @@ mod tests {
             !settings.contains("Cabin eyes"),
             "Cabin eyes toggle is gone: {settings}"
         );
+        // The Host tab itself is gone; `always_permission_keeps_the_acp_session` proves
+        // the variant no longer exists anywhere in the file.
         assert!(
-            !settings.contains("(SettingsSec::Host, \"Host\")"),
-            "Host is not a Settings tab: {settings}"
+            settings.contains("(SettingsSec::Behavior, \"Behavior\")"),
+            "the tabs that remain are the ones with a home: {settings}"
         );
     }
 
@@ -14499,26 +14508,39 @@ mod tests {
         let behavior = src
             .split("SettingsSec::Behavior => {")
             .nth(1)
-            .and_then(|s| s.split("SettingsSec::Host => {").next())
+            .and_then(|s| s.split("SettingsSec::Github => {").next())
             .expect("Behavior");
         assert!(
             behavior.contains("self.persist_cfg()")
                 && !behavior.contains("save = true")
                 && !behavior.contains("self.persist()")
                 && !behavior.contains("persist_snap"),
-            "Close to tray must not clone every thread just to write app.json: {behavior}"
+            "Close to tray and Living wall must not clone every thread to write app.json: {behavior}"
         );
-        let imagine_sec = src
-            .split("SettingsSec::Imagine => {")
-            .nth(1)
-            .and_then(|s| s.split("SettingsSec::Voice => {").next())
-            .expect("Imagine settings");
         assert!(
-            imagine_sec.contains("self.persist_cfg()")
-                && !imagine_sec.contains("save = true")
-                && !imagine_sec.contains("self.persist()")
-                && !imagine_sec.contains("persist_snap"),
-            "Living wall must not clone every thread just to write app.json: {imagine_sec}"
+            behavior.contains("quiet_start")
+                && behavior.contains("cap_auto_buf")
+                && behavior.contains("cap_host_buf"),
+            "quiet hours and the caps hold real work — they need a way in: {behavior}"
+        );
+        let saved = src
+            .split("fn save_settings(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_settings(").next())
+            .expect("save_settings");
+        assert!(
+            saved.contains("normalize_hm") && saved.contains("cap_from_text"),
+            "a typo in a clock or a cap must keep the old value, not switch the guard off: {saved}"
+        );
+        // Split so these assertions are not their own counter-examples.
+        let gone = ["Host", "Voice", "Night", "Imagine"]
+            .iter()
+            .map(|s| format!("SettingsSec{}{s}", "::"))
+            .chain(std::iter::once(format!("SettingsGroup{}Cabin", "::")))
+            .find(|needle| src.contains(needle));
+        assert_eq!(
+            gone, None,
+            "unreachable Settings sections are gone, not left painting into the void"
         );
         let plan = src
             .split("Slash::Plan =>")

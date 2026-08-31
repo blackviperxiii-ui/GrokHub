@@ -273,9 +273,58 @@ pub fn daily_units_blocked(used: u32, cap: u32) -> bool {
     cap > 0 && used >= cap
 }
 
+/// A clock typed into Settings. Nonsense keeps what the cabin already had rather than
+/// silently turning quiet hours off.
+pub fn normalize_hm(text: &str, fallback: &str) -> String {
+    match hm_min(text) {
+        Some(min) => format!("{:02}:{:02}", min / 60, min % 60),
+        None => fallback.trim().to_string(),
+    }
+}
+
+/// A cap typed into Settings. `0` means no cap; anything unreadable keeps the old cap.
+pub fn cap_from_text(text: &str, fallback: u32) -> u32 {
+    let t = text.trim();
+    if t.is_empty() {
+        return fallback;
+    }
+    t.parse::<u32>().unwrap_or(fallback)
+}
+
+/// "40 a day" / "no cap" — what a cap field means once it is saved.
+pub fn cap_label(cap: u32, unit: &str) -> String {
+    if cap == 0 {
+        format!("no cap on {unit}")
+    } else {
+        format!("{cap} {unit}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_fields_keep_the_old_value_when_the_typing_is_nonsense() {
+        assert_eq!(normalize_hm("22:00", "07:00"), "22:00");
+        assert_eq!(normalize_hm("7", "07:00"), "07:00", "an hour alone is midnight-safe");
+        assert_eq!(normalize_hm(" 9:5 ", "07:00"), "09:05");
+        assert_eq!(normalize_hm("", "22:00"), "22:00");
+        assert_eq!(normalize_hm("bedtime", "22:00"), "22:00");
+        assert_eq!(
+            normalize_hm("25:00", "22:00"),
+            "22:00",
+            "a bad clock must not switch quiet hours off"
+        );
+        assert_eq!(cap_from_text("12", 40), 12);
+        assert_eq!(cap_from_text("0", 40), 0, "zero is a deliberate no cap");
+        assert_eq!(cap_from_text("", 40), 40, "a cleared field keeps the cap");
+        assert_eq!(cap_from_text("lots", 40), 40);
+        assert_eq!(cap_label(0, "a day"), "no cap on a day");
+        assert_eq!(cap_label(40, "a day"), "40 a day");
+        assert!(!quiet_hours_active("21:00", "22:00", "07:00"));
+        assert!(quiet_hours_active("23:30", "22:00", "07:00"));
+    }
 
     #[test]
     fn greet_room_passenger_presence() {
