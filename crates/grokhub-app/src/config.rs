@@ -158,8 +158,6 @@ pub struct AppConfig {
     pub voice_model: String,
     #[serde(default)]
     pub cabin_eyes: bool,
-    #[serde(default = "default_autonomy")]
-    pub autonomy: u8,
     /// Git clone used by Settings → Update / `grokhub --update`.
     #[serde(default)]
     pub source_dir: String,
@@ -169,8 +167,6 @@ pub struct AppConfig {
     pub host_on: bool,
     #[serde(default = "default_host_cap")]
     pub host_hour_cap: u32,
-    #[serde(default)]
-    pub approve_risky_only: bool,
     #[serde(default)]
     pub current_thread: String,
     #[serde(default)]
@@ -206,10 +202,6 @@ pub struct AppConfig {
 
 fn default_yolo() -> bool {
     false
-}
-
-fn default_autonomy() -> u8 {
-    4
 }
 
 fn default_host_on() -> bool {
@@ -266,12 +258,10 @@ impl Default for AppConfig {
             imagine_model: String::new(),
             voice_model: String::new(),
             cabin_eyes: false,
-            autonomy: default_autonomy(),
             source_dir: String::new(),
             project_dir: String::new(),
             host_on: default_host_on(),
             host_hour_cap: default_host_cap(),
-            approve_risky_only: false,
             current_thread: String::new(),
             connector_hosts: Vec::new(),
             close_to_tray: default_close_to_tray(),
@@ -739,7 +729,6 @@ mod tests {
             !load().yolo,
             "leftover yolo true must not disable the bound-tree jail"
         );
-        assert_eq!(loaded.autonomy, 4);
         assert!(
             !loaded.yolo,
             "Ask is the default — leftover yolo true disables the bound-tree jail"

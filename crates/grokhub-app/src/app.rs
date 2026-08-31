@@ -166,7 +166,6 @@ enum Nav {
     Workboard,
     Imagine,
     Skills,
-    Eyes,
     Night,
     History,
     Command,
@@ -1011,7 +1010,6 @@ pub struct Cabin {
     host_hour_count: u32,
     host_hour_at: Instant,
     host_reserved: u32,
-    approve_risky_only: bool,
     plan_pending: Option<Vec<HostPlanStep>>,
     tray: Option<crate::tray::TrayHost>,
     tray_rx: Option<mpsc::Receiver<Option<crate::tray::TrayHost>>>,
@@ -1345,7 +1343,6 @@ impl Cabin {
         let mut secrets = secrets::load();
         secrets::migrate_console_key(&mut cfg, &mut secrets);
         let win_max = cfg.window.maximized;
-        let approve_risky_only = cfg.approve_risky_only;
         let cfg_auto_cap = cfg.daily_auto_cap;
         let cfg_host_cap = cfg.host_hour_cap;
         let boot_session = SessionMode::parse(&cfg.session_mode).unwrap_or(SessionMode::Chat);
@@ -1406,7 +1403,6 @@ impl Cabin {
             host_hour_count: 0,
             host_hour_at: Instant::now(),
             host_reserved: 0,
-            approve_risky_only,
             plan_pending: None,
             tray: None,
             tray_rx: if crate::tray::tray_needed_at_launch(hidden) {
@@ -3979,6 +3975,7 @@ impl Cabin {
             "devices" => Nav::Devices,
             "memory" => Nav::Memory,
             "connectors" => Nav::Connectors,
+            "command" => Nav::Command,
             "chat" => Nav::Chat,
             _ => Nav::Chat,
         }
@@ -6683,10 +6680,7 @@ impl Cabin {
             "nav:history" => self.nav = Nav::History,
             "nav:devices" => self.nav = Nav::Devices,
             "nav:connectors" => self.nav = Nav::Connectors,
-            "nav:command" => {
-                self.open_recent_chat();
-                self.nav = Nav::Chat;
-            },
+            "nav:command" => self.nav = Nav::Command,
             "nav:agents" => self.nav = Nav::Agents,
             "nav:eyes" => {
                 self.open_recent_chat();
@@ -9910,7 +9904,6 @@ impl eframe::App for Cabin {
             Nav::Workboard => self.ui_board(ctx),
             Nav::Imagine => self.ui_imagine(ctx),
             Nav::Skills => self.ui_skills(ctx),
-            Nav::Eyes => self.ui_chat(ctx),
             Nav::Night => self.ui_night(ctx),
             Nav::History => self.ui_history(ctx),
             Nav::Command => self.ui_command(ctx),
@@ -10295,7 +10288,6 @@ impl Cabin {
             Nav::Agents => "queue",
             Nav::Devices => "devices",
             Nav::Memory => "memory",
-            Nav::Eyes => "eyes",
             Nav::Connectors => "connectors",
         }
     }
@@ -13675,11 +13667,6 @@ impl Cabin {
         });
     }
 
-    fn ui_eyes(&mut self, ctx: &egui::Context) {
-        // Desk was a cabin computer-use menu. Grok Build already drives the
-        // desktop; frames land on the chat pane.
-        self.ui_chat(ctx);
-    }
 }
 
 fn eyes_frame_tex(ctx: &egui::Context, url: &str) -> Option<(TextureHandle, [usize; 2])> {
@@ -13771,7 +13758,6 @@ fn project_row_active(selected: bool, is_project: bool, nav: Nav) -> bool {
         | Nav::Memory
         | Nav::Imagine
         | Nav::Skills
-        | Nav::Eyes
         | Nav::Night
         | Nav::History
         | Nav::Command
@@ -16747,7 +16733,7 @@ mod tests {
         let skills_ui = src
             .split("fn ui_skills")
             .nth(1)
-            .and_then(|s| s.split("fn ui_eyes").next())
+            .and_then(|s| s.split("fn project_row_active(").next())
             .expect("ui_skills");
         assert!(
             skills_ui.contains("reload_grok_catalog")
@@ -17998,29 +17984,6 @@ mod tests {
     }
 
     #[test]
-    fn eyes_page_is_product_copy() {
-        let src = include_str!("app.rs");
-        let start = src.find("fn ui_eyes").expect("eyes");
-        let slice = &src[start..start + 2800];
-        assert!(
-            !slice.contains("Presence ring"),
-            "intern presence notes stay off the page: {slice}"
-        );
-        assert!(
-            !slice.contains("ydotoold") && !slice.contains("xdotool on X11"),
-            "Eyes subtitle is not a man page: {slice}"
-        );
-        assert!(slice.contains("ui_chat"));
-        assert!(!slice.contains("Take over"));
-        assert!(!slice.contains("Install hands"));
-        assert!(!slice.contains("hands_chip_text"));
-        assert!(
-            slice.contains("Grok Build") || slice.contains("computer-use") || slice.contains("chat pane"),
-            "Eyes leftover must not be a cabin desktop-control menu: {slice}"
-        );
-    }
-
-    #[test]
     fn presence_ring_drops_a_huge_frame() {
         let src = include_str!("app.rs");
         let push = src
@@ -18035,20 +17998,6 @@ mod tests {
         assert!(
             push.contains("PRESENCE_RING_MAX") || (push.contains("presence_ring.len()") && push.contains("32")),
             "a 10-minute ring of FRAME_CAP JPEGs can still OOM live Eyes: {push}"
-        );
-    }
-
-    #[test]
-    fn eyes_paint_does_not_clone_last_frame_url() {
-        let src = include_str!("app.rs");
-        let eyes = src
-            .split("fn ui_eyes(")
-            .nth(1)
-            .and_then(|s| s.split("fn project_row_active(").next())
-            .expect("ui_eyes");
-        assert!(
-            !eyes.contains("last_frame_url.clone()"),
-            "Eyes paint must not clone a huge last-frame data URL every frame: {eyes}"
         );
     }
 
@@ -18547,7 +18496,7 @@ mod tests {
         let skills = src
             .split("fn ui_skills(")
             .nth(1)
-            .and_then(|s| s.split("fn ui_eyes(").next())
+            .and_then(|s| s.split("fn project_row_active(").next())
             .expect("ui_skills");
         assert!(
             skills.contains("Marketplace") && skills.contains("MCP servers") && skills.contains("Grok Build skills"),
