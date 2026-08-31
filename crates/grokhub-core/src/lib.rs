@@ -203,12 +203,14 @@ pub use pair::{
     PAIR_TTL_MS,
 };
 pub use automation::{
-    automation_blocked_by_policy, compute_next_run, due_automations, ensure_automation_schedule,
+    automation_blocked_by_policy, automation_schedule_label, automation_summary_line,
+    compute_next_run, due_automations, ensure_automation_schedule,
     mark_automation_ran, mark_automation_skipped, night_check_command, night_check_exit_code,
     night_check_may_fire, night_counts_run, night_unauth_should_skip,
-    night_check_stdout, parse_nl_automation, replay_automation_target, skip_automation,
+    night_check_stdout, parse_clock_token, parse_nl_automation, replay_automation_target,
+    route_schedule, skip_automation,
     chat_may_save_automation, user_asked_to_schedule,
-    skip_night_check_receipt, Automation,
+    skip_night_check_receipt, Automation, ScheduleRoute,
 };
 pub use connector::{
     connector_url_allowed, extract_connector_cmds, github_api_path, map_website_connector_name,
@@ -243,7 +245,7 @@ pub use greeting::{
     pick_greeting, should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_DEBOUNCE_MS, GREETING_LLM_MODE,
     GREETING_MAX_CHARS,
 };
-pub use history::{search_corpus, search_text, search_thread_body};
+pub use history::{dedupe_hits, search_corpus, search_text, search_thread_body};
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
 pub use learning::{
     extract_insights, insight_key_for_fact, insight_pin, is_actionable_need, is_durable_fact, looks_like_user_pref,
@@ -255,8 +257,8 @@ pub use openclaw::{
     default_openclaw_paths, import_memory_file, is_openclaw_workspace, merge_imported_memory,
 };
 pub use shortcuts::{
-    apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette,
-    shortcut_help, ComposerEnter, ComposerGo, SHORTCUTS,
+    apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette, perm_key,
+    shortcut_help, ComposerEnter, ComposerGo, PermKey, SHORTCUTS,
 };
 pub use stream::{
     chat_include_usage, chat_stream_flag, fold_sse_acc, fold_stream_fields, fold_stream_token, keep_sse_acc,
@@ -264,7 +266,9 @@ pub use stream::{
     prefer_complete_reply, sse_done, sse_live_delta, should_replace_stream_acc, stream_was_truncated,
     StreamTokenKind, StreamUsage,
 };
-pub use usage::{bump_usage, roll_usage_day, usage_blocked, usage_line, UsageDay};
+pub use usage::{
+    add_tokens, bump_usage, roll_usage_day, token_delta, usage_blocked, usage_line, UsageDay,
+};
 pub use hub_sync::{build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, HubMemoryFile, HubSnapshot};
 pub use hygiene::{lockish, should_send_screenshot};
 pub use organs::{
