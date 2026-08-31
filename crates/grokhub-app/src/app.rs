@@ -23,9 +23,9 @@ use crate::xai::{
 };
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use grokhub_acp::{
-    grok_context_line, grok_usage_line, kill_pid, merge_tool_card, rewrite_truncation_error,
-    turn_footer, classify_stream_error, StreamErrorKind, AcpEvent, GrokPEvent, GrokUsage,
-    PermissionMode, SessionMode, ToolCard,
+    grok_context_line, grok_usage_line, inspect_advisory, kill_pid, merge_tool_card,
+    rewrite_truncation_error, retry_status_line, turn_footer, classify_stream_error,
+    StreamErrorKind, AcpEvent, GrokPEvent, GrokUsage, PermissionMode, SessionMode, ToolCard,
 };
 use grokhub_core::{
     append_composer, anticipate_consumes_slot, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
@@ -4785,6 +4785,24 @@ impl Cabin {
                 } else {
                     format!("{cabin} · {grok}")
                 };
+                let sid = self
+                    .threads
+                    .get(self.thread_idx)
+                    .and_then(|t| t.grok_session.clone())
+                    .filter(|s| !s.trim().is_empty());
+                if let (Some(bin), Some(id)) = (grokhub_acp::find_grok(), sid) {
+                    if self.inspect_rx.is_none() {
+                        let cwd = self.grok_cli_cwd();
+                        let (tx, rx) = mpsc::channel();
+                        self.inspect_rx = Some(rx);
+                        self.status = format!("{} · grok usage…", self.status);
+                        std::thread::spawn(move || {
+                            let text = grokhub_acp::session_usage(&bin, &cwd, &id)
+                                .unwrap_or_else(|e| e);
+                            let _ = tx.send(text);
+                        });
+                    }
+                }
             }
             Slash::Models => {
                 if let Some(bin) = grokhub_acp::find_grok() {
@@ -4901,8 +4919,16 @@ impl Cabin {
                         self.status = "Grok inspect".into();
                         std::thread::spawn(move || {
                             let text = match grokhub_acp::inspect_json(&bin, &cwd) {
-                                Ok(v) => serde_json::to_string_pretty(&v)
-                                    .unwrap_or_else(|_| v.to_string()),
+                                Ok(v) => {
+                                    let note = inspect_advisory(&v);
+                                    let pretty = serde_json::to_string_pretty(&v)
+                                        .unwrap_or_else(|_| v.to_string());
+                                    if note.is_empty() {
+                                        pretty
+                                    } else {
+                                        format!("{note}\n\n{pretty}")
+                                    }
+                                }
                                 Err(e) => e,
                             };
                             let _ = tx.send(text);
@@ -7320,7 +7346,7 @@ impl Cabin {
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::Recovering(msg)) => {
-                self.status = msg;
+                self.status = retry_status_line(&msg);
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::End(turn)) => {
@@ -7654,7 +7680,7 @@ impl Cabin {
                     }
                     match classify_stream_error(&e) {
                         StreamErrorKind::Transient | StreamErrorKind::TruncationContinue => {
-                            self.status = rewrite_truncation_error(&e);
+                            self.status = retry_status_line(&rewrite_truncation_error(&e));
                             continue;
                         }
                         StreamErrorKind::CreditLimit | StreamErrorKind::Fatal => {}
@@ -10214,7 +10240,14 @@ impl Cabin {
                 crate::cards::section_label(ui, "Grok tasks");
                 ui.add_space(8.0);
                 for (id, title, done) in &self.grok_tasks {
-                    let st = if *done { "done" } else { "running" };
+                    let failed = title.to_ascii_lowercase().starts_with("failed");
+                    let st = if *done {
+                        "done"
+                    } else if failed {
+                        "failed"
+                    } else {
+                        "running"
+                    };
                     crate::cards::grok_tile(
                         ui,
                         crate::icons::TileIcon::Bolt,
@@ -15732,6 +15765,10 @@ mod tests {
         assert!(
             poll.contains("GrokPEvent::Recovering") && poll.contains("apply_compact_status"),
             "1.0.13 truncation/5xx recovery and compact errors must not kill the turn: {poll}"
+        );
+        assert!(
+            poll.contains("retry_status_line"),
+            "1.0.14 retry status must show a short reason: {poll}"
         );
         let deleted = src
             .split("fn delete_thread_at")

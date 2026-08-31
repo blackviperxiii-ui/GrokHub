@@ -381,7 +381,22 @@ pub fn parse_tool_card(update: &Value) -> ToolCard {
     if let Some(c) = update.get("content") {
         walk_images(c, &mut images);
     }
-    let detail = tool_detail(update);
+    let mut detail = tool_detail(update);
+    if status.eq_ignore_ascii_case("failed") || status.eq_ignore_ascii_case("error") {
+        let err = update
+            .get("error")
+            .or_else(|| update.get("message"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim();
+        if !err.is_empty() && !detail.contains(err) {
+            if detail.is_empty() {
+                detail = err.to_string();
+            } else {
+                detail = format!("{detail}\n{err}");
+            }
+        }
+    }
     let diff = update
         .get("content")
         .and_then(|c| c.as_array())
@@ -683,6 +698,35 @@ pub fn parse_session_update(params: &Value) -> Option<AcpEvent> {
                 .collect(),
             done: true,
         }),
+        "task_failed" | "todo_failed" => {
+            let id = update
+                .get("task_id")
+                .or_else(|| update.get("tool_call_id"))
+                .or_else(|| update.get("toolCallId"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            let raw = update
+                .get("error")
+                .or_else(|| update.get("message"))
+                .or_else(|| update.get("title"))
+                .or_else(|| update.get("command"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("task")
+                .chars()
+                .take(80)
+                .collect::<String>();
+            let title = if raw.to_ascii_lowercase().starts_with("failed") {
+                raw
+            } else {
+                format!("Failed · {raw}")
+            };
+            Some(AcpEvent::Task {
+                id,
+                title,
+                done: false,
+            })
+        }
         "auto_compact_started" => Some(AcpEvent::Compact {
             started: true,
             usage: crate::stream::parse_usage(update),

@@ -188,10 +188,25 @@ pub fn classify_stream_error(msg: &str) -> StreamErrorKind {
         || l.contains("econnreset")
         || l.contains("temporarily")
         || l.contains("try again later")
+        || l.contains("unreachable")
+        || l.contains("coordinator")
     {
         StreamErrorKind::Transient
     } else {
         StreamErrorKind::Fatal
+    }
+}
+
+pub fn retry_status_line(msg: &str) -> String {
+    let t = msg.trim();
+    if t.is_empty() {
+        return "Retrying…".into();
+    }
+    let l = t.to_ascii_lowercase();
+    if l.starts_with("retry") {
+        t.to_string()
+    } else {
+        format!("Retry: {t}")
     }
 }
 
@@ -204,7 +219,12 @@ pub fn rewrite_truncation_error(msg: &str) -> String {
             "Credit limit reached. Try Again retries the last prompt.".into()
         }
         StreamErrorKind::Transient => {
-            "Grok hit a transient inference error and is retrying.".into()
+            let l = msg.to_ascii_lowercase();
+            if l.contains("unreachable") || l.contains("coordinator") {
+                "Subagent coordinator busy — retrying.".into()
+            } else {
+                "Grok hit a transient inference error and is retrying.".into()
+            }
         }
         StreamErrorKind::Fatal => msg.to_string(),
     }
@@ -317,10 +337,21 @@ pub fn parse_stream_line(line: &str) -> Option<GrokPEvent> {
                 Some(GrokPEvent::Commands(cmds))
             }
         }
-        "task_backgrounded" | "task_completed" => {
-            let done = v.get("type").and_then(|x| x.as_str()) == Some("task_completed");
+        "task_backgrounded" | "task_completed" | "task_failed" | "todo_failed" => {
+            let kind = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+            let done = kind == "task_completed";
+            let failed = kind == "task_failed" || kind == "todo_failed";
             let id = json_str(&v, &["task_id", "tool_call_id", "toolCallId"]);
-            let title = json_str(&v, &["command", "title"]).chars().take(80).collect();
+            let mut title: String = json_str(&v, &["command", "title", "error", "message"])
+                .chars()
+                .take(80)
+                .collect();
+            if title.is_empty() {
+                title = "task".into();
+            }
+            if failed && !title.to_ascii_lowercase().starts_with("failed") {
+                title = format!("Failed · {title}");
+            }
             Some(GrokPEvent::Task { id, title, done })
         }
         "max_turns_reached" => Some(GrokPEvent::Err("Max turns reached".into())),
@@ -680,6 +711,19 @@ mod tests {
             classify_stream_error("Credit limit reached. Upgrade tier."),
             StreamErrorKind::CreditLimit
         );
+        assert_eq!(
+            classify_stream_error("subagent coordinator unreachable"),
+            StreamErrorKind::Transient
+        );
+        assert!(retry_status_line("Subagent coordinator busy — retrying.").starts_with("Retry"));
+        match parse_stream_line(r#"{"type":"task_failed","task_id":"t1","title":"todo"}"#) {
+            Some(GrokPEvent::Task { id, title, done }) => {
+                assert_eq!(id, "t1");
+                assert!(!done);
+                assert!(title.contains("Failed"), "{title}");
+            }
+            other => panic!("{other:?}"),
+        }
         let folded = fold_stream(
             r#"
 {"type":"text","data":"pong"}
