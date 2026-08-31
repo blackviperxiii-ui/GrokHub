@@ -727,7 +727,10 @@ pub fn felt_segment(ui: &mut egui::Ui, label: &str, selected: bool) -> bool {
 /// Catalog / settings tab with animated active fill.
 pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let font = FontId::proportional(13.0);
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, crate::theme::fg()));
+    // PLACEHOLDER lets the painter pick the colour below. Baking one in here painted the
+    // selected tab's label in fg() on top of an fg() pill — a white label on white.
+    let galley =
+        ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
     let pad = ui.style().spacing.button_padding;
     let size = egui::vec2((galley.size().x + pad.x * 2.0).max(32.0), 32.0);
     let (_rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -2088,6 +2091,27 @@ pub fn chip_icon(label: &str) -> TileIcon {
 mod tests {
     use super::*;
     use grokhub_core::parse_loop_line;
+
+    #[test]
+    fn the_selected_tab_label_is_readable_on_its_pill() {
+        let src = include_str!("cards.rs");
+        let tab = src
+            .split("pub fn felt_tab(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn felt_menu_row(").next())
+            .expect("felt_tab");
+        let layout = tab.find("layout_no_wrap").expect("tab galley");
+        let paint = tab.find(".galley(").expect("tab paint");
+        assert!(
+            tab[layout..paint].contains("Color32::PLACEHOLDER"),
+            "a galley laid out in fg() ignores the paint colour, so the selected tab \
+             paints a white label on a white pill: {tab}"
+        );
+        assert!(
+            tab.contains("blend_color(crate::theme::muted(), crate::theme::bg()"),
+            "the selected tab reads in the background colour: {tab}"
+        );
+    }
 
     #[test]
     fn chip_row_act_is_apply_or_dismiss() {
