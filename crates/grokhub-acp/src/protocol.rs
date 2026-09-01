@@ -112,6 +112,23 @@ pub struct PermissionAsk {
     pub reason: String,
 }
 
+/// Grok Build 1.0.17 `x.ai/mcp/elicit` — MCP tool needs a form or URL from you.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ElicitAsk {
+    pub rpc_id: Value,
+    pub session_id: String,
+    pub tool_call_id: String,
+    pub server_name: String,
+    pub message: String,
+    /// `form` or `url`.
+    pub mode: String,
+    pub url: String,
+    pub elicitation_id: String,
+    /// First string field on a form, if the schema has one.
+    pub field_name: Option<String>,
+    pub field_title: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AcpEvent {
     Ready { session_id: String },
@@ -120,6 +137,8 @@ pub enum AcpEvent {
     Tool(ToolCard),
     Plan(String),
     Permission(PermissionAsk),
+    Elicit(ElicitAsk),
+    ElicitComplete { elicitation_id: String, server_name: String },
     Usage(crate::stream::GrokUsage),
     Commands(Vec<String>),
     Task { id: String, title: String, done: bool },
@@ -382,6 +401,9 @@ pub fn parse_tool_card(update: &Value) -> ToolCard {
         walk_images(c, &mut images);
     }
     let mut detail = tool_detail(update);
+    if status.eq_ignore_ascii_case("input_required") && detail.is_empty() {
+        detail = "Waiting for input".into();
+    }
     if status.eq_ignore_ascii_case("failed") || status.eq_ignore_ascii_case("error") {
         let err = update
             .get("error")
@@ -848,6 +870,126 @@ pub fn permission_deny(id: Value) -> JsonRpc {
     )
 }
 
+pub fn parse_elicit(id: Value, params: &Value) -> ElicitAsk {
+    let mode = params
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("form")
+        .to_ascii_lowercase();
+    let schema = params.get("requestedSchema").unwrap_or(&Value::Null);
+    let (field_name, field_title) = first_form_field(schema);
+    ElicitAsk {
+        rpc_id: id,
+        session_id: params
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        tool_call_id: params
+            .get("toolCallId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        server_name: params
+            .get("serverName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("MCP")
+            .to_string(),
+        message: params
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+        mode,
+        url: params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        elicitation_id: params
+            .get("elicitationId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        field_name,
+        field_title,
+    }
+}
+
+fn first_form_field(schema: &Value) -> (Option<String>, String) {
+    let props = match schema.get("properties").and_then(|v| v.as_object()) {
+        Some(p) if !p.is_empty() => p,
+        _ => return (None, String::new()),
+    };
+    let required: Vec<String> = schema
+        .get("required")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let pick = required
+        .iter()
+        .find(|k| {
+            props.get(k.as_str()).and_then(|p| p.get("type")).and_then(|t| t.as_str())
+                == Some("string")
+        })
+        .cloned()
+        .or_else(|| {
+            props.iter().find_map(|(k, p)| {
+                if p.get("type").and_then(|t| t.as_str()) == Some("string") {
+                    Some(k.clone())
+                } else {
+                    None
+                }
+            })
+        });
+    let Some(name) = pick else {
+        return (None, String::new());
+    };
+    let title = props
+        .get(&name)
+        .and_then(|p| p.get("title").or_else(|| p.get("description")))
+        .and_then(|v| v.as_str())
+        .unwrap_or(name.as_str())
+        .trim()
+        .to_string();
+    (Some(name), title)
+}
+
+pub fn parse_elicit_complete(params: &Value) -> (String, String) {
+    let id = params
+        .get("elicitationId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let server = params
+        .get("serverName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    (id, server)
+}
+
+pub fn elicit_accept(id: Value, content: Option<Value>) -> JsonRpc {
+    let mut body = json!({ "outcome": "accept" });
+    if let Some(c) = content {
+        body["content"] = c;
+    }
+    response(id, body)
+}
+
+pub fn elicit_decline(id: Value) -> JsonRpc {
+    response(id, json!({ "outcome": "decline" }))
+}
+
+pub fn elicit_cancel(id: Value) -> JsonRpc {
+    response(id, json!({ "outcome": "cancel" }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -897,6 +1039,51 @@ mod tests {
         );
         assert_eq!(ask.title, "Run");
         assert_eq!(ask.reason, "Confirm this deploy");
+        let elicit = parse_elicit(
+            json!(2),
+            &json!({
+                "sessionId": "s1",
+                "toolCallId": "mcp-elicit-1",
+                "serverName": "github",
+                "message": "Need email",
+                "mode": "form",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": { "email": { "type": "string", "title": "Email" } },
+                    "required": ["email"]
+                }
+            }),
+        );
+        assert_eq!(elicit.server_name, "github");
+        assert_eq!(elicit.field_name.as_deref(), Some("email"));
+        assert_eq!(elicit_accept(json!(2), Some(json!({"email": "a@b.com"}))).result.unwrap()["outcome"], "accept");
+        assert_eq!(elicit_decline(json!(3)).result.unwrap()["outcome"], "decline");
+        let url = parse_elicit(
+            json!(4),
+            &json!({
+                "sessionId": "s1",
+                "serverName": "linear",
+                "message": "Login",
+                "mode": "url",
+                "url": "https://example.com/auth",
+                "elicitationId": "el-1"
+            }),
+        );
+        assert_eq!(url.mode, "url");
+        assert_eq!(url.url, "https://example.com/auth");
+        let (cid, srv) = parse_elicit_complete(&json!({
+            "elicitationId": "el-1",
+            "serverName": "linear"
+        }));
+        assert_eq!(cid, "el-1");
+        assert_eq!(srv, "linear");
+        let waiting = parse_tool_card(&json!({
+            "toolCallId": "t1",
+            "title": "github",
+            "status": "input_required"
+        }));
+        assert_eq!(waiting.status, "input_required");
+        assert_eq!(waiting.detail, "Waiting for input");
         assert!(split_image_data_url("data:text/plain;base64,QQ==").is_none());
         assert!(split_image_data_url("not-a-data-url").is_none());
         assert!(is_jwt_api_key("aaa.bbb.ccc"));

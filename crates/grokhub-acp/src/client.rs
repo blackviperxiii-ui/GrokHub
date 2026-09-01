@@ -1,8 +1,8 @@
 use crate::protocol::{
-    encode_line, initialize_params, method_not_found, parse_permission, parse_session_update,
-    permission_allow, permission_allow_always, permission_deny, pick_auth_method,
-    prompt_params_with_image, request, response, session_load_params, session_new_params, AcpEvent,
-    JsonRpc,
+    elicit_accept, elicit_cancel, elicit_decline, encode_line, initialize_params, method_not_found,
+    parse_elicit, parse_elicit_complete, parse_permission, parse_session_update, permission_allow,
+    permission_allow_always, permission_deny, pick_auth_method, prompt_params_with_image, request,
+    response, session_load_params, session_new_params, AcpEvent, JsonRpc,
 };
 use crate::protocol::SessionMode;
 use crate::{
@@ -166,6 +166,11 @@ enum Cmd {
     Prompt { text: String, image: Option<String> },
     Cancel,
     Permission { id: Value, allow: bool, always: bool },
+    Elicit {
+        id: Value,
+        outcome: &'static str,
+        content: Option<Value>,
+    },
     Reject { id: Value },
     Ack { id: Value },
     Shutdown,
@@ -369,6 +374,7 @@ fn read_until_result(
     reader: &mut BufReader<impl Read>,
     want: u64,
     pending_perm: &mut Vec<Value>,
+    pending_elicit: &mut Vec<Value>,
 ) -> Result<Value, String> {
     let mut buf = String::new();
     loop {
@@ -391,6 +397,15 @@ fn read_until_result(
                 if let Some(id) = msg.id {
                     pending_perm.push(id);
                 }
+                continue;
+            }
+            if method == "x.ai/mcp/elicit" {
+                if let Some(id) = msg.id {
+                    pending_elicit.push(id);
+                }
+                continue;
+            }
+            if method == "x.ai/mcp/elicit_complete" {
                 continue;
             }
             if let Some(id) = rpc_reply_id(msg.id.clone()) {
@@ -418,6 +433,7 @@ struct HandshakeOk {
     session_id: String,
     next_id: u64,
     pending_perm: Vec<Value>,
+    pending_elicit: Vec<Value>,
 }
 
 fn handshake(
@@ -433,8 +449,15 @@ fn handshake(
     let mut reader = BufReader::new(stdout);
     let mut next_id = 1u64;
     let mut pending_perm = Vec::new();
+    let mut pending_elicit = Vec::new();
     write_msg(&mut stdin, &request(next_id, "initialize", initialize_params()))?;
-    let init = read_until_result(&mut stdin, &mut reader, next_id, &mut pending_perm)?;
+    let init = read_until_result(
+        &mut stdin,
+        &mut reader,
+        next_id,
+        &mut pending_perm,
+        &mut pending_elicit,
+    )?;
     next_id += 1;
     let methods = init.get("authMethods").cloned().unwrap_or(json!([]));
     if let Some(method_id) = pick_auth_method(&methods, api_key) {
@@ -446,7 +469,13 @@ fn handshake(
                 json!({ "methodId": method_id, "_meta": { "headless": true } }),
             ),
         )?;
-        let _ = read_until_result(&mut stdin, &mut reader, next_id, &mut pending_perm)?;
+        let _ = read_until_result(
+            &mut stdin,
+            &mut reader,
+            next_id,
+            &mut pending_perm,
+            &mut pending_elicit,
+        )?;
         next_id += 1;
     }
     let resume_id = resume.and_then(|s| {
@@ -466,7 +495,13 @@ fn handshake(
                 session_load_params(cwd, &id, always_approve, auto, session_mode),
             ),
         )?;
-        match read_until_result(&mut stdin, &mut reader, next_id, &mut pending_perm) {
+        match read_until_result(
+            &mut stdin,
+            &mut reader,
+            next_id,
+            &mut pending_perm,
+            &mut pending_elicit,
+        ) {
             Ok(v) => {
                 next_id += 1;
                 v
@@ -484,7 +519,13 @@ fn handshake(
                 session_new_params(cwd, always_approve, auto, session_mode),
             ),
         )?;
-        let v = read_until_result(&mut stdin, &mut reader, next_id, &mut pending_perm)?;
+        let v = read_until_result(
+            &mut stdin,
+            &mut reader,
+            next_id,
+            &mut pending_perm,
+            &mut pending_elicit,
+        )?;
         next_id += 1;
         v
     };
@@ -502,6 +543,7 @@ fn handshake(
         session_id,
         next_id,
         pending_perm,
+        pending_elicit,
     })
 }
 
@@ -659,6 +701,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
         session_id,
         next_id,
         pending_perm,
+        pending_elicit,
     } = hs;
 
     let stdin = Arc::new(Mutex::new(stdin));
@@ -734,6 +777,18 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                     };
                     let _ = write_msg(&mut *stdin, &msg);
                 }
+                Cmd::Elicit {
+                    id,
+                    outcome,
+                    content,
+                } => {
+                    let msg = match outcome {
+                        "accept" => elicit_accept(id, content),
+                        "decline" => elicit_decline(id),
+                        _ => elicit_cancel(id),
+                    };
+                    let _ = write_msg(&mut *stdin, &msg);
+                }
                 Cmd::Reject { id } => {
                     let _ = write_msg(&mut *stdin, &method_not_found(id));
                 }
@@ -750,6 +805,13 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
             id,
             allow: allow_pending,
             always: opts.always_approve,
+        });
+    }
+    for id in pending_elicit {
+        let _ = cmd_tx.send(Cmd::Elicit {
+            id,
+            outcome: "cancel",
+            content: None,
         });
     }
 
@@ -818,6 +880,34 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                                     msg.params.as_ref().unwrap_or(&json!({})),
                                 )));
                             }
+                            continue;
+                        }
+                        if method == "x.ai/mcp/elicit" {
+                            if swallow_load.load(Ordering::SeqCst) {
+                                if let Some(id) = msg.id {
+                                    let _ = cmd_tx_r.send(Cmd::Elicit {
+                                        id,
+                                        outcome: "cancel",
+                                        content: None,
+                                    });
+                                }
+                                continue;
+                            }
+                            if let Some(id) = msg.id {
+                                let _ = evt_tx.send(AcpEvent::Elicit(parse_elicit(
+                                    id,
+                                    msg.params.as_ref().unwrap_or(&json!({})),
+                                )));
+                            }
+                            continue;
+                        }
+                        if method == "x.ai/mcp/elicit_complete" {
+                            let (elicitation_id, server_name) =
+                                parse_elicit_complete(msg.params.as_ref().unwrap_or(&json!({})));
+                            let _ = evt_tx.send(AcpEvent::ElicitComplete {
+                                elicitation_id,
+                                server_name,
+                            });
                             continue;
                         }
                         if let Some(id) = rpc_reply_id(msg.id.clone()) {
@@ -916,6 +1006,21 @@ impl AcpHandle {
                 id,
                 allow: true,
                 always: true,
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn answer_elicit(
+        &self,
+        id: Value,
+        outcome: &'static str,
+        content: Option<Value>,
+    ) -> Result<(), String> {
+        self.cmd
+            .send(Cmd::Elicit {
+                id,
+                outcome,
+                content,
             })
             .map_err(|e| e.to_string())
     }
@@ -2586,6 +2691,12 @@ mod tests {
                 && load.contains("Cmd::Permission")
                 && load.contains("allow: false"),
             "load-replay permission must be denied so the agent is not stuck: {load}"
+        );
+        assert!(
+            src.contains("x.ai/mcp/elicit")
+                && src.contains("Cmd::Elicit")
+                && src.contains("parse_elicit"),
+            "1.0.17 MCP elicitation must answer x.ai/mcp/elicit, not method-not-found: {src}"
         );
         let cancel = src
             .split("Cmd::Cancel =>")

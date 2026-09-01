@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.8.0 — 2026-09-01
+
+GrokHub cabin for Grok Build **1.0.17** alpha (covers 1.0.15–1.0.17).
+
+- MCP tools that need a form or URL (`x.ai/mcp/elicit`) paint an Accept / Decline card instead of failing the turn.
+- URL elicitation opens the link; form elicitation can take the first string field.
+- Failed or waiting `input_required` tool calls stay visible on the Queue.
+- 1.0.15–1.0.16 CLI speed and token-refresh fixes ride through `grok -p` / ACP with no extra cabin work.
+
+TUI-only 1.0.15–1.0.17 (ghost prompt, `/btw` table copy, dock focus, drag-copy tips) stay in `grok`.
+
 ## 2.7.1 — 2026-08-31
 
 GrokHub cabin for Grok Build **1.0.14** alpha.
