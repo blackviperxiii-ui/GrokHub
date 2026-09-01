@@ -159,6 +159,7 @@ pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
     }
     cmds.push(format!("git -C {src} pull --ff-only origin main"));
     cmds.push(format!("{src}/scripts/install.sh --user"));
+    cmds.push("grok update".into());
     Ok(cmds)
 }
 
@@ -171,6 +172,8 @@ pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
                 "point origin at GitHub — Cursor Origin is not live yet".into()
             } else if cmd.contains("install.sh") {
                 "overlay ~/.local/bin — does not wipe config".into()
+            } else if grok_cli_update_cmd(&cmd) {
+                "update Grok Build CLI on the current channel".into()
             } else {
                 explain_host_risk(&cmd, host_risk(&cmd))
             };
@@ -199,6 +202,11 @@ pub fn update_progress_pct(done_cmds: usize, total_cmds: usize) -> u8 {
     pct.min(100) as u8
 }
 
+pub fn grok_cli_update_cmd(cmd: &str) -> bool {
+    let t = cmd.trim();
+    t == "grok update" || t.starts_with("grok update ") || t.ends_with("/grok update")
+}
+
 pub fn update_step_label(cmd: &str) -> &'static str {
     if cmd.contains("pull --ff-only") {
         "Pulling origin/main…"
@@ -206,6 +214,8 @@ pub fn update_step_label(cmd: &str) -> &'static str {
         "Retargeting origin…"
     } else if cmd.contains("install.sh") {
         "Installing overlay…"
+    } else if grok_cli_update_cmd(cmd) {
+        "Updating Grok Build CLI…"
     } else {
         "Updating…"
     }
@@ -426,11 +436,14 @@ mod tests {
         let cmds = update_cmds(&root).unwrap();
         assert!(cmds[0].contains("pull --ff-only origin main"), "{cmds:?}");
         assert!(cmds[1].ends_with("--user"));
+        assert_eq!(cmds.last().map(String::as_str), Some("grok update"));
         assert!(!cmds.iter().any(|c| c.contains("set-url")), "{cmds:?}");
+        assert!(!cmds.iter().any(|c| c.contains("--alpha") || c.contains("--stable")), "{cmds:?}");
         assert!(!update_wipes_config(&cmds));
         let plan = update_plan_steps(cmds);
         assert!(plan[0].explain.contains("origin/main"), "{plan:?}");
         assert!(plan[1].explain.contains("overlay"), "{plan:?}");
+        assert!(plan.last().unwrap().explain.contains("Grok Build CLI"), "{plan:?}");
         assert_ne!(plan[0].explain, "read-only");
         let _ = fs::remove_dir_all(&root);
     }
@@ -566,6 +579,9 @@ mod tests {
             update_step_label("'/x/scripts/install.sh' --user"),
             "Installing overlay…"
         );
+        assert_eq!(update_step_label("grok update"), "Updating Grok Build CLI…");
+        assert!(grok_cli_update_cmd("grok update"));
+        assert!(!grok_cli_update_cmd("echo grok update"));
         assert_eq!(update_step_label("echo hi"), "Updating…");
         assert_eq!(
             update_step_label("git -C '/x' remote set-url origin https://github.com/blackviperxiii-ui/GrokHub.git"),
@@ -604,6 +620,7 @@ mod tests {
         );
         assert!(cmds[1].contains("pull --ff-only origin main"), "{cmds:?}");
         assert!(cmds[2].ends_with("--user"), "{cmds:?}");
+        assert_eq!(cmds.last().map(String::as_str), Some("grok update"));
         let plan = update_plan_steps(cmds);
         assert!(plan[0].explain.contains("GitHub"), "{plan:?}");
         let _ = fs::remove_dir_all(&root);
