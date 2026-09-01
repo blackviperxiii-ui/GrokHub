@@ -1203,6 +1203,8 @@ pub struct Cabin {
     live_blocks: Vec<LiveBlock>,
     desk_frame: Option<String>,
     perm_ask: Option<grokhub_acp::PermissionAsk>,
+    elicit_ask: Option<grokhub_acp::ElicitAsk>,
+    elicit_draft: String,
     session_mode: SessionMode,
     permission_mode: PermissionMode,
     grok_sessions: Vec<grokhub_acp::GrokSession>,
@@ -1597,6 +1599,8 @@ impl Cabin {
             live_blocks: Vec::new(),
             desk_frame: None,
             perm_ask: None,
+            elicit_ask: None,
+            elicit_draft: String::new(),
             session_mode: boot_session,
             permission_mode: boot_perm,
             grok_sessions: Vec::new(),
@@ -1876,10 +1880,19 @@ impl Cabin {
             if let Some(p) = self.perm_ask.take() {
                 let _ = h.answer_permission(p.rpc_id, false);
             }
+            if let Some(p) = self.elicit_ask.take() {
+                let _ = h.answer_elicit(p.rpc_id, "cancel", None);
+            }
             let _ = h.cancel();
             while let Ok(ev) = h.try_recv() {
-                if let AcpEvent::Permission(p) = ev {
-                    let _ = h.answer_permission(p.rpc_id, false);
+                match ev {
+                    AcpEvent::Permission(p) => {
+                        let _ = h.answer_permission(p.rpc_id, false);
+                    }
+                    AcpEvent::Elicit(p) => {
+                        let _ = h.answer_elicit(p.rpc_id, "cancel", None);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1912,6 +1925,8 @@ impl Cabin {
         self.stream_buf.clear();
         self.thought_buf.clear();
         self.perm_ask = None;
+        self.elicit_ask = None;
+        self.elicit_draft.clear();
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.clone();
         if job.as_deref().is_none_or(|id| id == vis) {
@@ -2838,6 +2853,8 @@ impl Cabin {
         self.tool_cards.clear();
         self.live_blocks.clear();
         self.perm_ask = None;
+        self.elicit_ask = None;
+        self.elicit_draft.clear();
     }
 
     fn pick_entries(dir: &Path) -> Vec<(String, bool)> {
@@ -7190,6 +7207,8 @@ impl Cabin {
         self.tool_cards.clear();
         self.live_blocks.clear();
         self.perm_ask = None;
+        self.elicit_ask = None;
+        self.elicit_draft.clear();
         let image = if consume_attach {
             let url = next_chat_image(self.attach_url.as_deref(), cabin.as_deref()).map(str::to_string);
             self.attach_url = None;
@@ -7656,6 +7675,35 @@ impl Cabin {
                         self.status = "Grok wants permission".into();
                     }
                 }
+                AcpEvent::Elicit(p) => {
+                    if !self.running {
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_elicit(p.rpc_id, "cancel", None);
+                        }
+                        continue;
+                    }
+                    if let Some(old) = self.elicit_ask.take() {
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_elicit(old.rpc_id, "cancel", None);
+                        }
+                    }
+                    self.elicit_draft.clear();
+                    self.status = format!("{} wants input", p.server_name);
+                    self.elicit_ask = Some(p);
+                }
+                AcpEvent::ElicitComplete {
+                    elicitation_id,
+                    server_name,
+                } => {
+                    let same = self.elicit_ask.as_ref().is_some_and(|e| {
+                        (!elicitation_id.is_empty() && e.elicitation_id == elicitation_id)
+                            || (!server_name.is_empty() && e.server_name == server_name)
+                    });
+                    if same {
+                        self.elicit_ask = None;
+                        self.elicit_draft.clear();
+                    }
+                }
                 AcpEvent::Done { stop_reason } => {
                     if stop_reason.eq_ignore_ascii_case("cancelled") || !self.running {
                         continue;
@@ -7690,6 +7738,11 @@ impl Cabin {
                             let _ = h.answer_permission(p.rpc_id, false);
                         }
                     }
+                    if let Some(p) = self.elicit_ask.take() {
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_elicit(p.rpc_id, "cancel", None);
+                        }
+                    }
                     self.running = false;
                     self.acp = None;
                     if grokhub_acp::is_sigterm_status(&e) {
@@ -7713,7 +7766,14 @@ impl Cabin {
                 let _ = h.answer_permission(p.rpc_id, false);
             }
         }
+        if let Some(p) = self.elicit_ask.take() {
+            if let Some(h) = &self.acp {
+                let _ = h.answer_elicit(p.rpc_id, "cancel", None);
+            }
+        }
         self.perm_ask = None;
+        self.elicit_ask = None;
+        self.elicit_draft.clear();
         let here = chat_stream_is_visible(
             self.chat_job_thread.as_deref(),
             &self.visible_thread_id(),
@@ -10910,6 +10970,7 @@ impl Cabin {
                             ChatBlockAct::None => {}
                         }
                         self.paint_perm_ask(ui);
+                        self.paint_elicit_ask(ui);
                         self.paint_try_again(ui);
                         if pin_tail {
                             // The transcript is laid out now, so the bottom is a real place.
@@ -11166,6 +11227,90 @@ impl Cabin {
             });
     }
 
+    fn paint_elicit_ask(&mut self, ui: &mut egui::Ui) {
+        let Some(p) = self.elicit_ask.clone() else {
+            return;
+        };
+        ui.add_space(8.0);
+        egui::Frame::none()
+            .fill(crate::theme::elevated())
+            .rounding(12.0)
+            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+            .inner_margin(egui::Margin::same(12.0))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(format!("{} wants input", p.server_name))
+                        .size(14.0)
+                        .color(crate::theme::fg()),
+                );
+                if !p.message.trim().is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(&p.message)
+                            .size(13.0)
+                            .color(crate::theme::muted()),
+                    );
+                }
+                if p.mode == "url" && !p.url.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(&p.url)
+                            .size(12.0)
+                            .color(crate::theme::muted()),
+                    );
+                }
+                if p.field_name.is_some() {
+                    ui.add_space(6.0);
+                    let hint = if p.field_title.is_empty() {
+                        "Value"
+                    } else {
+                        p.field_title.as_str()
+                    };
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.elicit_draft)
+                            .hint_text(hint)
+                            .desired_width(ui.available_width()),
+                    );
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let accept_label = if p.mode == "url" { "Open" } else { "Accept" };
+                    if crate::cards::white_pill(ui, accept_label) {
+                        if p.mode == "url" && !p.url.is_empty() {
+                            #[cfg(windows)]
+                            let _ = std::process::Command::new("cmd")
+                                .args(["/C", "start", "", &p.url])
+                                .spawn();
+                            #[cfg(not(windows))]
+                            let _ = std::process::Command::new("xdg-open").arg(&p.url).spawn();
+                        }
+                        let content = p.field_name.as_ref().map(|name| {
+                            serde_json::json!({ name: self.elicit_draft.trim() })
+                        });
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_elicit(p.rpc_id.clone(), "accept", content);
+                        }
+                        self.elicit_ask = None;
+                        self.elicit_draft.clear();
+                    }
+                    if crate::cards::ghost_pill(ui, "Decline") {
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_elicit(p.rpc_id.clone(), "decline", None);
+                        }
+                        self.elicit_ask = None;
+                        self.elicit_draft.clear();
+                    }
+                    if crate::cards::ghost_pill(ui, "Cancel") {
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_elicit(p.rpc_id.clone(), "cancel", None);
+                        }
+                        self.elicit_ask = None;
+                        self.elicit_draft.clear();
+                    }
+                });
+            });
+    }
+
     fn paint_try_again(&mut self, ui: &mut egui::Ui) {
         if !self.try_again || self.running {
             return;
@@ -11230,6 +11375,7 @@ impl Cabin {
                     ui.set_width(pane_w);
                     self.ui_composer_stack(ui);
                     self.paint_perm_ask(ui);
+                    self.paint_elicit_ask(ui);
                     self.paint_try_again(ui);
                 },
             );
@@ -14542,6 +14688,10 @@ mod tests {
         assert!(
             ask.contains("p.reason") && src.contains("fn paint_try_again("),
             "hook ask reasons and credit-limit Try Again must paint: {ask}"
+        );
+        assert!(
+            src.contains("fn paint_elicit_ask(") && src.contains("answer_elicit"),
+            "1.0.17 MCP elicitation must paint Accept/Decline: {src}"
         );
         assert!(
             ask.contains("perm_key(")
