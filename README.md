@@ -2,11 +2,11 @@
 
 Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
 
-**v2.8.1** — Grok Build **1.0.17**. History is `grok sessions` 1:1. Chat is this Linux desktop. `/update` overlays the GUI and updates `grok`. MCP tools can ask for a form or URL.
+**v2.8.2** — Grok Build **1.0.17**. History is `grok sessions` 1:1. Chat is this Linux desktop. `/update` overlays the GUI and updates `grok`. MCP tools can ask for a form or URL.
 
 | Platform | Repository | Latest |
 |----------|------------|--------|
-| **Linux** (this) | [GrokHub](https://github.com/blackviperxiii-ui/GrokHub) | **v2.8.1** |
+| **Linux** (this) | [GrokHub](https://github.com/blackviperxiii-ui/GrokHub) | **v2.8.2** |
 | **Windows** | [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) | native cabin — same crates |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 

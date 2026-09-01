@@ -4098,6 +4098,7 @@ impl Cabin {
             self.drop_leaving_thread_chrome();
         }
         self.stamp_current_access();
+        self.composer_want_focus = true;
     }
 
     fn stamp_current_access(&mut self) {
@@ -4115,6 +4116,7 @@ impl Cabin {
             }
         }
         self.stamp_current_access();
+        self.composer_want_focus = true;
     }
 
     fn land_on_real_chat(&mut self) {
@@ -4163,6 +4165,7 @@ impl Cabin {
             } else {
                 "New chat".into()
             };
+            self.composer_want_focus = true;
             return;
         }
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
@@ -4184,6 +4187,7 @@ impl Cabin {
         };
         self.stamp_current_access();
         self.persist();
+        self.composer_want_focus = true;
     }
 
     fn begin_chat_rename(&mut self, idx: usize) {
@@ -10627,6 +10631,7 @@ impl Cabin {
                 {
                     self.new_thread(false);
                     self.nav = Nav::Chat;
+                    self.composer_want_focus = true;
                 }
                 ui.add_space(6.0);
                 let cur = self.nav_id();
@@ -10840,7 +10845,10 @@ impl Cabin {
                                 self.rename_lock = None;
                             }
                             Some(TabAct::Delete(i)) => self.delete_thread_at(i),
-                            Some(TabAct::OpenGrok(id)) => self.open_grok_session(&id),
+                            Some(TabAct::OpenGrok(id)) => {
+                                self.open_grok_session(&id);
+                                self.composer_want_focus = true;
+                            }
                             Some(TabAct::DeleteGrok(id)) => self.delete_grok_history(&id),
                             None => {}
                         }
@@ -16707,6 +16715,10 @@ mod tests {
             "forgetting the ACP session on New chat must hit disk or restart reloads Chat 1: {created}"
         );
         assert!(
+            created.contains("composer_want_focus = true"),
+            "New chat must put the cursor in the composer: {created}"
+        );
+        assert!(
             created.contains("apply_switch_thread") && !created.contains("self.switch_thread("),
             "/new reuse must not clone every thread twice — switch without persist_bg, then persist once: {created}"
         );
@@ -16755,6 +16767,10 @@ mod tests {
         assert!(
             switched.contains("apply_switch_thread"),
             "tab switch persist_bg must share the pane swap with /new reuse: {switched}"
+        );
+        assert!(
+            switched.contains("composer_want_focus = true"),
+            "opening a sidebar chat must put the cursor in the composer: {switched}"
         );
         assert!(
             switched.contains("self.messages.clone()")
@@ -19025,6 +19041,21 @@ mod tests {
         assert!(
             open.contains("most_recently_accessed_index") && open.contains("switch_thread"),
             "Chat rail uses last-access, not leftover thread_idx: {open}"
+        );
+        assert!(
+            open.contains("composer_want_focus = true"),
+            "Chat rail must put the cursor in the composer: {open}"
+        );
+        let side = src
+            .split("fn ui_sidebar(")
+            .nth(1)
+            .and_then(|s| s.split("fn cached_chat_views(").next())
+            .expect("ui_sidebar");
+        assert!(
+            side.contains("New chat")
+                && side.contains("composer_want_focus = true")
+                && side.contains("OpenGrok"),
+            "New chat and sidebar History clicks must focus the composer: {side}"
         );
         let land = src
             .split("fn land_on_real_chat(")
