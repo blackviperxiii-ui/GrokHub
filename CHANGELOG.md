@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.8.2 — 2026-09-01
+
+- New chat and sidebar History clicks put the cursor in the composer.
+
 ## 2.8.1 — 2026-09-01
 
 - `/update`, Settings → Update, and `grokhub --update` also run `grok update` on the current channel after the overlay install.
