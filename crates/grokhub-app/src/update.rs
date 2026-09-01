@@ -306,7 +306,11 @@ mod tests {
             .success());
         git(&["remote", "add", "origin", &bare.display().to_string()]);
         git(&["push", "-u", "origin", "main"]);
-        let out = run_update(&root).expect("update");
+        remember_source(&root);
+        let mut cmds = grokhub_core::update_cmds(&root).expect("cmds");
+        assert_eq!(cmds.last().map(String::as_str), Some("grok update"));
+        cmds.pop();
+        let out = run_update_cmds(&cmds).expect("update");
         assert!(out.contains("exit 0"), "{out}");
         assert!(root.join("overlay.ok").is_file(), "{out}");
         match prev_cfg {

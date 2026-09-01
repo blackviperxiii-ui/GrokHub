@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.8.0
+**Version:** 2.8.1
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands).
 
@@ -32,4 +32,4 @@ Agent: `grok login` cached token, `grok.com` ACP auth, or `XAI_API_KEY`. Imagine
 
 ## Overlay vs agent updates
 
-Cabin overlay (`/update`) updates the GUI only. `grok update` updates the agent on the stable channel. `grok update --alpha` is optional.
+Cabin overlay (`/update`) updates the GUI, then runs `grok update` on the current channel. It does not pass `--alpha` or `--stable`.

@@ -12,6 +12,6 @@ grokhub
 
 `./scripts/install.sh --user` installs the cabin, hub, and official Grok Build CLI (`grok` from https://x.ai/cli). Computer-use is Grok Build — the overlay does not build grim/ydotool sidecars.
 
-Later updates: Settings → **Update**, `/update`, or `grokhub --update`. The clone must be on `main` with an `origin`. Overlay only — `~/.config/GrokHub` stays. Progress stays on Settings. After a clean overlay, **Restart** reloads the new binary.
+Later updates: Settings → **Update**, `/update`, or `grokhub --update`. The clone must be on `main` with an `origin`. Overlay plus `grok update` on the current channel — `~/.config/GrokHub` stays. Progress stays on Settings. After a clean overlay, **Restart** reloads the new binary.
 
 See [aur/README.md](./aur/README.md) for makepkg.
