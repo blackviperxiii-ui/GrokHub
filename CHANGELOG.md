@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.8.1 — 2026-09-01
+
+- `/update`, Settings → Update, and `grokhub --update` also run `grok update` on the current channel after the overlay install.
+
 ## 2.8.0 — 2026-09-01
 
 GrokHub cabin for Grok Build **1.0.17** alpha (covers 1.0.15–1.0.17).
