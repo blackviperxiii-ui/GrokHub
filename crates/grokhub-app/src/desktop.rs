@@ -1910,7 +1910,7 @@ mod tests {
             hands_down_receipt(HandsDown::Daemon)
         );
         let a = grokhub_core::live_pcm_argv("arecord").unwrap();
-        assert!(a.iter().any(|x| *x == "raw"));
+        assert!(a.contains(&"raw"));
     }
 
     #[test]

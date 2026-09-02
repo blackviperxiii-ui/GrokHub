@@ -157,8 +157,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!("grokhub-wall-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
-        let mut w = ImagineWall::default();
-        w.last_ms = 9;
+        let mut w = ImagineWall {
+            last_ms: 9,
+            ..Default::default()
+        };
         w.gifs.push(grokhub_core::WallGif {
             id: "a1".into(),
             title: "Ember night".into(),
@@ -204,9 +206,11 @@ mod tests {
         let root = std::env::temp_dir().join(format!("grokhub-suggest-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
-        let mut s = SuggestionStore::default();
-        s.last_review_day = Some("2026-08-16".into());
-        s.last_review_ms = 9;
+        let mut s = SuggestionStore {
+            last_review_day: Some("2026-08-16".into()),
+            last_review_ms: 9,
+            ..Default::default()
+        };
         s.autos.push(grokhub_core::LearnedSuggestion {
             kind: grokhub_core::SuggestionKind::Auto,
             title: "Night wrap".into(),

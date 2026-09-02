@@ -4,6 +4,13 @@ use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// `(env key, scanned at, grok path, refresh in flight)`.
+type GrokBinCache = Option<(String, Instant, Option<PathBuf>, bool)>;
+/// `(settings path, settings mtime, read at, api key, refresh in flight)`.
+type GrokKeyCache = Option<(PathBuf, Option<std::time::SystemTime>, Instant, Option<String>, bool)>;
+/// `(grok path, probed at, ok, doctor line, probe in flight)`.
+type DoctorLineCache = Option<(Option<PathBuf>, Instant, bool, String, bool)>;
+
 /// Resolve the Grok Build CLI. `GROKHUB_GROK` wins, then PATH, then common install dirs.
 pub fn find_grok() -> Option<PathBuf> {
     let key = format!(
@@ -32,8 +39,8 @@ pub fn find_grok() -> Option<PathBuf> {
     path
 }
 
-fn grok_bin_cache() -> &'static Mutex<Option<(String, Instant, Option<PathBuf>, bool)>> {
-    static C: OnceLock<Mutex<Option<(String, Instant, Option<PathBuf>, bool)>>> = OnceLock::new();
+fn grok_bin_cache() -> &'static Mutex<GrokBinCache> {
+    static C: OnceLock<Mutex<GrokBinCache>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(None))
 }
 
@@ -156,9 +163,8 @@ pub fn grok_cli_key() -> Option<String> {
     key
 }
 
-fn grok_key_cache() -> &'static Mutex<Option<(PathBuf, Option<std::time::SystemTime>, Instant, Option<String>, bool)>> {
-    static C: OnceLock<Mutex<Option<(PathBuf, Option<std::time::SystemTime>, Instant, Option<String>, bool)>>> =
-        OnceLock::new();
+fn grok_key_cache() -> &'static Mutex<GrokKeyCache> {
+    static C: OnceLock<Mutex<GrokKeyCache>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(None))
 }
 
@@ -249,8 +255,8 @@ pub fn grok_version(bin: &Path) -> Result<String, String> {
     Ok(line.to_string())
 }
 
-fn doctor_line_cache() -> &'static Mutex<Option<(Option<PathBuf>, Instant, bool, String, bool)>> {
-    static C: OnceLock<Mutex<Option<(Option<PathBuf>, Instant, bool, String, bool)>>> = OnceLock::new();
+fn doctor_line_cache() -> &'static Mutex<DoctorLineCache> {
+    static C: OnceLock<Mutex<DoctorLineCache>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(None))
 }
 

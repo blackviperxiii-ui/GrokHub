@@ -527,10 +527,12 @@ mod tests {
         let root = std::env::temp_dir().join(format!("grokhub-cfg-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
-        let mut cfg = AppConfig::default();
-        cfg.api_key = "xai-test".into();
-        cfg.device_name = "cabin".into();
-        cfg.source_dir = "/tmp/Grok-Hub".into();
+        let cfg = AppConfig {
+            api_key: "xai-test".into(),
+            device_name: "cabin".into(),
+            source_dir: "/tmp/Grok-Hub".into(),
+            ..Default::default()
+        };
         save(&cfg).expect("save");
         let loaded = load();
         assert!(
@@ -749,8 +751,10 @@ mod tests {
         placed.window.maximized = true;
         save(&placed).expect("maximized save");
         assert!(load().window.maximized);
-        let mut themed = AppConfig::default();
-        themed.theme = "system".into();
+        let themed = AppConfig {
+            theme: "system".into(),
+            ..Default::default()
+        };
         save(&themed).expect("theme save");
         assert_eq!(load().theme, "system");
         let _ = fs::remove_dir_all(&root);

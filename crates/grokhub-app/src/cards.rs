@@ -1473,10 +1473,10 @@ pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui,
     let rows = n.div_ceil(cols);
     for r in 0..rows {
         ui.columns(cols, |col_uis| {
-            for c in 0..cols {
+            for (c, col_ui) in col_uis.iter_mut().enumerate() {
                 let i = r * cols + c;
                 if i < n {
-                    each(&mut col_uis[c], i);
+                    each(col_ui, i);
                 }
             }
         });
@@ -1642,7 +1642,7 @@ pub fn imagine_stage(ui: &mut egui::Ui, path: &str, working: bool, video: bool) 
         r.min,
         egui::pos2(r.right(), (r.bottom() - bar_h).max(r.top() + 8.0)),
     );
-    ui.allocate_ui_at_rect(media, |ui| {
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(media), |ui| {
         ui.set_clip_rect(media);
         imagine_result_hero(ui, path);
         let resp = ui.interact(media, egui::Id::new("imagine-stage-media"), Sense::click());
@@ -1652,7 +1652,7 @@ pub fn imagine_stage(ui: &mut egui::Ui, path: &str, working: bool, video: bool) 
         resp.on_hover_text("Expand");
     });
     let bar = egui::Rect::from_min_max(egui::pos2(r.left() + 10.0, media.bottom()), r.max);
-    ui.allocate_ui_at_rect(bar, |ui| {
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(bar), |ui| {
         ui.horizontal(|ui| {
             if ghost_pill(ui, "Expand") {
                 hit.expand = true;
@@ -2320,10 +2320,10 @@ mod tests {
         assert_eq!(LIVE_CONNECTORS.len(), 1);
         assert_eq!(LIVE_CONNECTORS[0].id, "github");
         assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *l == "Who am I" && *t == "user"));
-        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *t == "list_repos"));
-        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *t == "list_issues"));
-        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *t == "search_code"));
-        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *t == "search_issues"));
+        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(_, t)| *t == "list_repos"));
+        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(_, t)| *t == "list_issues"));
+        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(_, t)| *t == "search_code"));
+        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(_, t)| *t == "search_issues"));
         assert!(!LIVE_CONNECTORS[0].tools.iter().any(|(_, t)| *t == "create_pr_comment"));
         assert!(!is_cabin_catalog("outlook"));
         assert!(!is_cabin_catalog("gmail"));
@@ -2479,7 +2479,7 @@ mod tests {
             for key in s.frames {
                 let bytes = still_jpeg(key);
                 assert!(bytes.len() > 1000, "imagine still {key} is empty");
-                let img = image::load_from_memory(bytes).expect(*key);
+                let img = image::load_from_memory(bytes).expect(key);
                 assert!(img.width() >= 256);
                 assert!(img.height() >= 256);
             }

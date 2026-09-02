@@ -561,6 +561,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // pins design constants
     fn grok_com_chrome_tokens() {
         assert_eq!(BG, Color32::from_rgb(5, 5, 5));
         assert_eq!(SURFACE, Color32::from_rgb(20, 20, 20));

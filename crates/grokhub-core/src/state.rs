@@ -58,9 +58,12 @@ pub struct HubState {
     pub mint_realtime: Option<MintRealtimeFn>,
 }
 
+/// Console key in, xAI realtime client-secret JSON out.
+pub type MintRealtime = dyn Fn(&str) -> Result<Value, String> + Send + Sync;
+
 /// Mint an ephemeral realtime client secret with a console API key.
 #[derive(Clone)]
-pub struct MintRealtimeFn(pub Arc<dyn Fn(&str) -> Result<Value, String> + Send + Sync>);
+pub struct MintRealtimeFn(pub Arc<MintRealtime>);
 
 impl std::fmt::Debug for MintRealtimeFn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

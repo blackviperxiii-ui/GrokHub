@@ -165,7 +165,7 @@ fn single_quoted_args(s: &str) -> Vec<String> {
 
 pub fn keep_last_rewinds(rows: &[RewindRecord], max: usize) -> Vec<RewindRecord> {
     let mut v = rows.to_vec();
-    v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    v.sort_by_key(|r| std::cmp::Reverse(r.created_at));
     v.truncate(max.max(1));
     v
 }

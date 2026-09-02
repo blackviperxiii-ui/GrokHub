@@ -946,6 +946,9 @@ fn hide_pending_grok_sessions(
         .collect()
 }
 
+/// `(directory listed, [(entry name, is_dir)])` from the Plus file picker.
+type PickList = (String, Vec<(String, bool)>);
+
 pub struct Cabin {
     nav: Nav,
     cfg: AppConfig,
@@ -1158,9 +1161,9 @@ pub struct Cabin {
     plus_ignore_close: bool,
     file_pick: Option<PlusTarget>,
     pick_rx: Option<mpsc::Receiver<(PlusTarget, PlusPick)>>,
-    pick_list_rx: Option<mpsc::Receiver<(String, Vec<(String, bool)>)>>,
+    pick_list_rx: Option<mpsc::Receiver<PickList>>,
     pick_dir: String,
-    pick_cache: Option<(String, Vec<(String, bool)>)>,
+    pick_cache: Option<PickList>,
     projects: Vec<ProjectNode>,
     project_sel: Option<String>,
     proj_menu_pos: egui::Pos2,
@@ -1312,7 +1315,6 @@ impl Cabin {
             .unwrap_or_else(|| Arc::new(Vec::new()));
         let imagine_last =
             last_imagine_receipt(messages.iter().map(|(_, c)| c.as_str())).unwrap_or_default();
-        let mut cfg = cfg;
         if cfg.source_dir.trim().is_empty() {
             if let Some(src) = resolve_source("") {
                 remember_source(&src);
@@ -2654,12 +2656,14 @@ impl Cabin {
             let out = match spawn(resume.clone()) {
                 Ok(h) => Ok(h),
                 Err(e) => {
-                    if resume.is_none() {
-                        Err(grokhub_acp::explain_handshake_error(&e, &cwd))
-                    } else if foreign || unknown_cwd || grokhub_acp::is_session_cwd_error(&e) {
-                        Err(grokhub_acp::explain_handshake_error(&e, &cwd))
-                    } else {
+                    let retry_fresh = resume.is_some()
+                        && !foreign
+                        && !unknown_cwd
+                        && !grokhub_acp::is_session_cwd_error(&e);
+                    if retry_fresh {
                         spawn(None).map_err(|e2| grokhub_acp::explain_handshake_error(&e2, &cwd))
+                    } else {
+                        Err(grokhub_acp::explain_handshake_error(&e, &cwd))
                     }
                 }
             };
@@ -9387,9 +9391,7 @@ impl Cabin {
     }
 
     fn poll_eyes_cap(&mut self) -> Option<Result<String, String>> {
-        let Some(rx) = self.eyes_cap_rx.take() else {
-            return None;
-        };
+        let rx = self.eyes_cap_rx.take()?;
         match rx.try_recv() {
             Ok(cap) => {
                 if let Ok(url) = &cap {
@@ -10425,17 +10427,6 @@ impl Cabin {
         };
     }
 
-    #[allow(dead_code)]
-    fn conn_kind(&self) -> &'static str {
-        if self.has_key() {
-            "live"
-        } else if self.oauth_pending.is_some() {
-            "setup"
-        } else {
-            "setup"
-        }
-    }
-
     fn ui_titlebar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("titlebar")
             .exact_height(crate::theme::TITLEBAR_H)
@@ -10682,9 +10673,9 @@ impl Cabin {
                             }
                             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                                 self.cancel_proj_rename();
-                            } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                self.finish_proj_rename();
-                            } else if edit.lost_focus() && !self.proj_rename_focus {
+                            } else if ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                || (edit.lost_focus() && !self.proj_rename_focus)
+                            {
                                 self.finish_proj_rename();
                             }
                         });
@@ -11345,7 +11336,7 @@ impl Cabin {
                 egui::pos2(avail.left() + side, avail.top() + greet_top),
                 egui::vec2(pane_w, greet_h.max(1.0)),
             );
-            ui.allocate_ui_at_rect(greet_rect, |ui| {
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(greet_rect), |ui| {
                 ui.set_min_size(greet_rect.size());
                 ui.with_layout(
                     egui::Layout::top_down_justified(egui::Align::Center),
@@ -11365,7 +11356,7 @@ impl Cabin {
             egui::pos2(avail.left() + side, avail.top() + composer_top),
             egui::vec2(pane_w, composer_h),
         );
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_min_size(egui::vec2(pane_w, crate::theme::QUERY_MIN_H + 96.0));
             ui.with_layout(
                 egui::Layout::top_down_justified(egui::Align::Center),
@@ -12134,7 +12125,7 @@ impl Cabin {
                     screen.center(),
                     egui::vec2(920.0, 620.0).min(screen.size() - egui::vec2(48.0, 48.0)),
                 );
-                ui.allocate_ui_at_rect(modal, |ui| {
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(modal), |ui| {
                     egui::Frame::none()
                         .fill(crate::theme::bg())
                         .rounding(16.0)
@@ -12960,7 +12951,7 @@ impl Cabin {
                     } else {
                         0.0
                     };
-                    ui.allocate_ui_at_rect(viewport, |ui| {
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(viewport), |ui| {
                         ui.set_clip_rect(viewport);
                         egui::ScrollArea::vertical()
                             .id_salt("imagine-scroll")
@@ -12977,7 +12968,7 @@ impl Cabin {
                                         egui::pos2(x + stage_w * 0.5, st.center().y),
                                         egui::vec2(stage_w, stage_h),
                                     );
-                                    ui.allocate_ui_at_rect(stage, |ui| {
+                                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(stage), |ui| {
                                         ui.set_clip_rect(stage);
                                         stage_hit = crate::cards::imagine_stage(
                                             ui, &last, working, video,
@@ -13010,7 +13001,7 @@ impl Cabin {
                             egui::pos2(content.left(), wall_top),
                             egui::vec2(content.width(), wall_h),
                         );
-                        ui.allocate_ui_at_rect(wall, |ui| {
+                        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(wall), |ui| {
                             ui.set_clip_rect(wall);
                             egui::ScrollArea::vertical()
                                 .auto_shrink([false, false])
@@ -13031,9 +13022,7 @@ impl Cabin {
                 }
             });
         let content = panel.response.rect;
-        let bar_w = (content.width() - 48.0)
-            .min(crate::theme::IMAGINE_BAR_W)
-            .max(280.0);
+        let bar_w = (content.width() - 48.0).clamp(280.0, crate::theme::IMAGINE_BAR_W);
         let y = imagine_toolbox_top(content.top(), content.height(), box_h, dock);
         let x = content.center().x - bar_w * 0.5;
         egui::Area::new(egui::Id::new("imagine-new"))
@@ -13096,14 +13085,15 @@ impl Cabin {
                         egui::Color32::from_black_alpha(220),
                     );
                     let inner = full.shrink(28.0);
-                    ui.allocate_ui_at_rect(inner, |ui| {
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
                         crate::cards::imagine_result_hero(ui, &last);
                     });
-                    ui.allocate_ui_at_rect(
-                        egui::Rect::from_min_size(
-                            egui::pos2(full.right() - 220.0, full.top() + 16.0),
-                            egui::vec2(200.0, 40.0),
-                        ),
+                    let save_rect = egui::Rect::from_min_size(
+                        egui::pos2(full.right() - 220.0, full.top() + 16.0),
+                        egui::vec2(200.0, 40.0),
+                    );
+                    ui.allocate_new_ui(
+                        egui::UiBuilder::new().max_rect(save_rect),
                         |ui| {
                             ui.horizontal(|ui| {
                                 if crate::cards::white_pill(ui, "Save") {
@@ -14385,7 +14375,7 @@ mod tests {
         assert!(
             src.contains("selectable(true)"),
             "chat bubble text must be selectable for copy: {}",
-            &src[src.find("fn paint_speech_bubble").unwrap_or(0)..]
+            src[src.find("fn paint_speech_bubble").unwrap_or(0)..]
                 .get(..400)
                 .unwrap_or("")
         );
@@ -14880,6 +14870,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // pins design constants
     fn idle_visible_cabin_does_not_spin() {
         assert!(!super::wants_live_repaint(false, false, false, true, false, false));
         assert!(!super::wants_live_repaint(false, false, false, false, false, false));
@@ -16994,9 +16985,7 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("Ok(JobOut::Connector").next())
             .expect("HostDone facts");
-        let diff = host_done_facts
-            .find("HOST_DIFF:")
-            .expect("HOST_DIFF push");
+        assert!(host_done_facts.contains("HOST_DIFF:"), "HOST_DIFF push");
         assert!(
             host_done_facts.contains("resolve_host_cite_path"),
             "HOST_DIFF must read the write from the bound tree, not the cabin cwd: {host_done_facts}"
@@ -18248,6 +18237,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // pins design constants
     fn rail_footer_is_reserved() {
         assert_eq!(super::RAIL_FOOTER_H, 52.0);
         assert!(super::PALETTE_LIST_H < 400.0);
@@ -18494,7 +18484,7 @@ mod tests {
             "greeting paints inside the capped column"
         );
         assert!(
-            home.contains("allocate_ui_at_rect")
+            home.contains("allocate_new_ui")
                 && home.contains("empty_home_side_gap")
                 && home.contains("top_down_justified"),
             "empty-home cluster is a tight centered column, not a full-height justified fill: {home}"
@@ -19017,7 +19007,7 @@ mod tests {
         let set_nav = src
             .split("fn set_nav_id(")
             .nth(1)
-            .and_then(|s| s.split("fn conn_kind(").next())
+            .and_then(|s| s.split("fn ui_titlebar(").next())
             .expect("set_nav_id");
         assert!(
             set_nav.contains("\"chat\" =>") && set_nav.contains("self.open_recent_chat()"),
