@@ -24,23 +24,6 @@ pub fn cabin_menu_should_dismiss(ignore: bool, outside_click: bool) -> bool {
     !ignore && outside_click
 }
 
-pub fn next_starter_skill_name(existing: &[String]) -> String {
-    if !existing.iter().any(|n| n == "new-skill") {
-        return "new-skill".into();
-    }
-    let mut i = 2_u32;
-    loop {
-        let name = format!("new-skill-{i}");
-        if !existing.iter().any(|n| n == &name) {
-            return name;
-        }
-        i = i.saturating_add(1);
-        if i > 99 {
-            return format!("new-skill-{i}");
-        }
-    }
-}
-
 pub fn wants_live_repaint(
     running: bool,
     chip_busy: bool,
@@ -72,19 +55,6 @@ mod tests {
         assert!(cabin_menu_should_dismiss(false, true));
         assert!(!cabin_menu_should_dismiss(true, true));
         assert!(!cabin_menu_should_dismiss(false, false));
-    }
-
-    #[test]
-    fn new_skill_gets_a_free_name() {
-        assert_eq!(next_starter_skill_name(&[]), "new-skill");
-        assert_eq!(
-            next_starter_skill_name(&["new-skill".into()]),
-            "new-skill-2"
-        );
-        assert_eq!(
-            next_starter_skill_name(&["new-skill".into(), "new-skill-2".into()]),
-            "new-skill-3"
-        );
     }
 
     #[test]

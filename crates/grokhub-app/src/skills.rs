@@ -110,22 +110,6 @@ pub fn run_verify(name: &str, cwd: Option<&str>) -> Option<VerifyResult> {
     ))
 }
 
-pub fn pin_text(skills: &[SkillMd]) -> String {
-    let mut s = String::new();
-    for sk in skills.iter().take(12) {
-        if !s.is_empty() {
-            s.push('\n');
-        }
-        let desc = sk.description.trim();
-        if desc.is_empty() {
-            s.push_str(&format!("- {} — {}", sk.name, sk.trigger));
-        } else {
-            s.push_str(&format!("- {} — {} — {}", sk.name, sk.trigger, desc));
-        }
-    }
-    s.chars().take(1000).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,9 +139,7 @@ mod tests {
             "sync LWW needs a real skill file time, not now_ms"
         );
         assert!(skill_folder("flash-pi").join("scripts/verify.sh").exists());
-        let pins = pin_text(&listed);
-        assert!(pins.contains("flash-pi"));
-        assert!(pins.contains("write an image"), "{pins}");
+        assert_eq!(listed[0].description, "write an image");
         let patched = grokhub_core::patch_skill(
             &listed[0],
             &SkillMd {
@@ -224,7 +206,7 @@ mod tests {
         let verify = src
             .split("pub fn run_verify(")
             .nth(1)
-            .and_then(|s| s.split("\npub fn pin_text(").next())
+            .and_then(|s| s.split("\n#[cfg(test)]").next())
             .expect("run_verify");
         assert!(
             verify.contains("run_limited("),

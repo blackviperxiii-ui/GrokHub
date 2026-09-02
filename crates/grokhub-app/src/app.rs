@@ -366,10 +366,6 @@ fn take_focused_composer(
 
 const HIDDEN_HEARTBEAT_MS: u64 = 400;
 
-fn night_host_check_blocks_ui() -> bool {
-    false
-}
-
 fn cabin_fast_llm(key: String, prompt: String) -> String {
     let key = if key.trim().is_empty() {
         grokhub_acp::grok_cli_key().unwrap_or_default()
@@ -990,7 +986,6 @@ pub struct Cabin {
     last_activity: Instant,
     reflected_idle: bool,
     last_recipe: Option<Recipe>,
-    pending_update: bool,
     update_pct: Option<u8>,
     update_can_restart: bool,
     secrets: Secrets,
@@ -1085,7 +1080,6 @@ pub struct Cabin {
     hotkeys: Option<GlobalHotKeyManager>,
     hotkey_hey: u32,
     hotkey_halt: u32,
-    tools_collapsed: bool,
     sidebar_q: String,
     rename_idx: Option<usize>,
     rename_buf: String,
@@ -1118,7 +1112,6 @@ pub struct Cabin {
     skill_q: String,
     mcp_nl: String,
     mcp_compose: bool,
-    github_args: String,
     pending_connectors: Vec<(String, String, String)>,
     auto_compose: bool,
     board_compose: bool,
@@ -1386,7 +1379,6 @@ impl Cabin {
             last_activity: Instant::now(),
             reflected_idle: false,
             last_recipe: None,
-            pending_update: false,
             update_pct: None,
             update_can_restart: false,
             secrets,
@@ -1481,7 +1473,6 @@ impl Cabin {
             hotkeys: None,
             hotkey_hey: 0,
             hotkey_halt: 0,
-            tools_collapsed: false,
             sidebar_q: String::new(),
             rename_idx: None,
             rename_buf: String::new(),
@@ -1514,7 +1505,6 @@ impl Cabin {
             skill_q: String::new(),
             mcp_nl: String::new(),
             mcp_compose: false,
-            github_args: String::new(),
             pending_connectors: vec![],
             auto_compose: false,
             board_compose: false,
@@ -14609,6 +14599,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn about_section_opens_update() {
         assert_eq!(
             super::settings_group_home(super::SettingsGroup::About),
@@ -14877,7 +14868,6 @@ mod tests {
         assert!(super::wants_live_repaint(true, false, false, true, false, false));
         assert!(super::wants_live_repaint(false, false, false, false, false, true));
         assert!(super::HIDDEN_HEARTBEAT_MS > 80);
-        assert!(!super::night_host_check_blocks_ui());
         assert_eq!(
             grokhub_core::heartbeat_repaint_ms(false, false, grokhub_core::HEARTBEAT_MS, super::HIDDEN_HEARTBEAT_MS),
             grokhub_core::HEARTBEAT_MS
@@ -18190,7 +18180,7 @@ mod tests {
             "empty home must not paint a GrokHub wordmark: {slice}"
         );
         assert!(
-            !slice.contains("device_name") && !slice.contains("WORDMARK"),
+            !slice.contains("device_name"),
             "empty home must not paint the hostname: {slice}"
         );
         assert!(

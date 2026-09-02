@@ -1,15 +1,13 @@
 use grokhub_core::{
-    chat_include_usage, chat_request_body_vision, chat_stream_flag, chat_timeout_secs,
-    MEDIA_FILE_CAP, TEXT_FILE_CAP,
-    client_secrets_body, client_secrets_url, dedicated_imagine_model, dedicated_video_model,
-    fold_sse_acc, frame_bytes, imagine_image_fallback_model, imagine_image_shaped, keep_sse_acc,
-    imagine_should_retry_model, imagine_slug, imagine_video_fallback_model, media_ext_from_bytes,
-    merge_thinking, parse_client_secret, parse_imagine_url, parse_model_reasoning,
-    parse_model_text, parse_sse_finish, parse_sse_text, parse_sse_thought, parse_stt_text,
-    parse_video_job_status, parse_video_request_id, parse_video_url, realtime_can_connect,
-    responses_request_body, responses_url, sse_done, sse_live_delta, stream_was_truncated,
-    stt_multipart, stt_url, tts_request_body, tts_url, video_moderation_blocked, video_request_body,
-    voice_client_secret_denied, PresenceFrame, VideoJobStatus, XAI_BASE,
+    chat_request_body_vision, chat_timeout_secs, client_secrets_body, client_secrets_url,
+    dedicated_imagine_model, dedicated_video_model, frame_bytes, imagine_image_fallback_model,
+    imagine_image_shaped, imagine_should_retry_model, imagine_slug, imagine_video_fallback_model,
+    media_ext_from_bytes, merge_thinking, parse_client_secret, parse_imagine_url,
+    parse_model_reasoning, parse_model_text, parse_stt_text, parse_video_job_status,
+    parse_video_request_id, parse_video_url, realtime_can_connect, responses_request_body,
+    responses_url, stt_multipart, stt_url, tts_request_body, tts_url, video_moderation_blocked,
+    video_request_body, voice_client_secret_denied, PresenceFrame, VideoJobStatus, MEDIA_FILE_CAP,
+    TEXT_FILE_CAP, XAI_BASE,
 };
 use std::io::Read;
 
@@ -50,86 +48,6 @@ fn read_json_capped(resp: ureq::Response) -> Result<serde_json::Value, String> {
     serde_json::from_slice(&buf).map_err(|e| e.to_string())
 }
 
-fn consume_sse(
-    mut reader: impl Read,
-    on_delta: &mut impl FnMut(&str),
-    on_thought: &mut impl FnMut(&str),
-) -> Result<(String, bool), String> {
-    let mut raw = String::new();
-    let mut acc = String::new();
-    let mut finish: Option<String> = None;
-    let mut buf = [0u8; 2048];
-    loop {
-        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
-        if n == 0 {
-            break;
-        }
-        if (raw.len() as u64).saturating_add(n as u64) > MEDIA_FILE_CAP
-            || acc.len() as u64 > MEDIA_FILE_CAP
-        {
-            return Err("reply too large".into());
-        }
-        raw.push_str(&String::from_utf8_lossy(&buf[..n]));
-        while let Some(idx) = raw.find('\n') {
-            let line = raw[..idx].trim_end_matches('\r').to_string();
-            raw.drain(..=idx);
-            if let Some(reason) = parse_sse_finish(&line) {
-                finish = Some(reason);
-            }
-            if apply_sse_line(&line, &mut acc, on_delta, on_thought) {
-                return Ok((acc, stream_was_truncated(finish.as_deref())));
-            }
-        }
-    }
-    if !raw.trim().is_empty() {
-        let line = raw.trim_end_matches('\r');
-        if let Some(reason) = parse_sse_finish(line) {
-            finish = Some(reason);
-        }
-        apply_sse_line(line, &mut acc, on_delta, on_thought);
-    }
-    Ok((acc, stream_was_truncated(finish.as_deref())))
-}
-
-fn apply_sse_line(
-    line: &str,
-    acc: &mut String,
-    on_delta: &mut impl FnMut(&str),
-    on_thought: &mut impl FnMut(&str),
-) -> bool {
-    if sse_done(line) {
-        return true;
-    }
-    if let Some(t) = parse_sse_thought(line) {
-        on_thought(&t);
-    }
-    if let Some((d, kind)) = parse_sse_text(line) {
-        if sse_live_delta(acc.is_empty(), kind) {
-            on_delta(&d);
-        }
-        fold_sse_acc(acc, &d, kind);
-    }
-    false
-}
-
-fn grok_sse(
-    url: &str,
-    key: &str,
-    body: serde_json::Value,
-    timeout_secs: u64,
-    on_delta: &mut impl FnMut(&str),
-    on_thought: &mut impl FnMut(&str),
-) -> Result<(String, bool), String> {
-    let resp = ureq::post(url)
-        .set("authorization", &format!("Bearer {key}"))
-        .set("content-type", "application/json")
-        .set("accept", "text/event-stream")
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .send_json(body)
-        .map_err(http_err)?;
-    consume_sse(resp.into_reader(), on_delta, on_thought)
-}
-
 fn merge_reply(v: &serde_json::Value) -> Option<String> {
     parse_model_text(v).map(|content| {
         merge_thinking(&parse_model_reasoning(v).unwrap_or_default(), &content)
@@ -162,53 +80,6 @@ pub fn grok_chat(
         timeout,
     )?;
     merge_reply(&v).ok_or_else(|| "empty Grok reply".into())
-}
-
-pub fn grok_chat_stream(
-    api_key: &str,
-    model: &str,
-    messages: &[(String, String)],
-    image_data_url: Option<&str>,
-    effort: Option<&str>,
-    mut on_delta: impl FnMut(&str),
-    mut on_thought: impl FnMut(&str),
-) -> Result<(String, bool), String> {
-    let key = api_key.trim();
-    if key.is_empty() {
-        return Err("Connect Grok in Settings".into());
-    }
-    let timeout = chat_timeout_secs(effort);
-    let mut responses = responses_request_body(model, messages, image_data_url, effort);
-    chat_stream_flag(&mut responses, true);
-    if let Ok((acc, truncated)) = grok_sse(
-        &responses_url(),
-        key,
-        responses,
-        timeout,
-        &mut on_delta,
-        &mut on_thought,
-    ) {
-        if keep_sse_acc(&acc, truncated) {
-            return Ok((acc, truncated));
-        }
-    }
-    let mut body = chat_request_body_vision(model, messages, image_data_url, effort);
-    chat_stream_flag(&mut body, true);
-    chat_include_usage(&mut body);
-    match grok_sse(
-        &format!("{XAI_BASE}/chat/completions"),
-        key,
-        body,
-        timeout,
-        &mut on_delta,
-        &mut on_thought,
-    ) {
-        Ok((acc, truncated)) if keep_sse_acc(&acc, truncated) => Ok((acc, truncated)),
-        Ok(_) => grok_chat(api_key, model, messages, image_data_url, effort).map(|t| (t, false)),
-        Err(e) => grok_chat(api_key, model, messages, image_data_url, effort)
-            .map(|t| (t, false))
-            .map_err(|_| e),
-    }
 }
 
 pub fn grok_imagine_opts(
@@ -408,13 +279,6 @@ pub fn http_err(e: ureq::Error) -> String {
     }
 }
 
-pub fn http_status_of(err: &str) -> Option<u16> {
-    let rest = err.strip_prefix("HTTP ")?;
-    rest.split(|c: char| !c.is_ascii_digit())
-        .next()
-        .and_then(|s| s.parse().ok())
-}
-
 pub fn grok_tts(api_key: &str, text: &str) -> Result<Vec<u8>, String> {
     let key = api_key.trim();
     if key.is_empty() {
@@ -474,12 +338,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_prefix() {
-        assert_eq!(http_status_of("HTTP 429: rate"), Some(429));
-        assert!(http_status_of("timeout").is_none());
-    }
-
-    #[test]
     fn imagine_download_sends_the_bearer() {
         let src = include_str!("xai.rs");
         let save = src
@@ -511,25 +369,16 @@ mod tests {
         let json = src
             .split("fn grok_json(")
             .nth(1)
-            .and_then(|s| s.split("fn consume_sse(").next())
+            .and_then(|s| s.split("fn merge_reply(").next())
             .expect("grok_json");
         assert!(
             json.contains(".take(") && json.contains("MEDIA_FILE_CAP") && !json.contains("into_json()"),
             "chat JSON must not slurp an unbounded completion: {json}"
         );
-        let sse = src
-            .split("fn consume_sse(")
-            .nth(1)
-            .and_then(|s| s.split("fn apply_sse_line(").next())
-            .expect("consume_sse");
-        assert!(
-            sse.contains("MEDIA_FILE_CAP") && !sse.contains("raw[idx + 1..]"),
-            "SSE must cap the reply and not recopy the remainder every line: {sse}"
-        );
         let err = src
             .split("pub fn http_err(")
             .nth(1)
-            .and_then(|s| s.split("pub fn http_status_of").next())
+            .and_then(|s| s.split("pub fn grok_tts(").next())
             .expect("http_err");
         assert!(
             err.contains(".take(") && !err.contains("into_string()"),
@@ -556,49 +405,6 @@ mod tests {
             err.to_ascii_lowercase().contains("console")
                 || err.to_ascii_lowercase().contains("api key"),
             "{err}"
-        );
-    }
-
-    #[test]
-    fn responses_done_fills_empty_acc() {
-        let data = b"data: {\"type\":\"response.output_text.done\",\"text\":\"Hello\"}\n\n";
-        let mut deltas = String::new();
-        let (acc, _) = consume_sse(&data[..], &mut |d| deltas.push_str(d), &mut |_| {}).unwrap();
-        assert_eq!(acc, "Hello");
-        assert_eq!(deltas, "Hello");
-    }
-
-    #[test]
-    fn responses_done_after_delta_does_not_duplicate() {
-        let data = concat!(
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hel\"}\n",
-            "data: {\"type\":\"response.output_text.done\",\"text\":\"Hello\"}\n",
-        );
-        let mut deltas = String::new();
-        let (acc, _) = consume_sse(data.as_bytes(), &mut |d| deltas.push_str(d), &mut |_| {}).unwrap();
-        assert_eq!(acc, "Hello");
-        assert_eq!(deltas, "Hel");
-    }
-
-    #[test]
-    fn responses_tail_without_newline_is_kept() {
-        let data = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"CMD\"}";
-        let mut deltas = String::new();
-        let (acc, _) = consume_sse(&data[..], &mut |d| deltas.push_str(d), &mut |_| {}).unwrap();
-        assert_eq!(acc, "CMD");
-        assert_eq!(deltas, "CMD");
-    }
-
-    #[test]
-    fn responses_short_done_keeps_longer_deltas() {
-        let data = concat!(
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\\nCOMPUTER_CMD: key Alt+F4\"}\n",
-            "data: {\"type\":\"response.output_text.done\",\"text\":\"Hello\"}\n",
-        );
-        let (acc, _) = consume_sse(data.as_bytes(), &mut |_| {}, &mut |_| {}).unwrap();
-        assert!(
-            acc.contains("COMPUTER_CMD: key Alt+F4"),
-            "short done wiped the tool line: {acc}"
         );
     }
 }
