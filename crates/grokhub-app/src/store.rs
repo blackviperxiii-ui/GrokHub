@@ -2,7 +2,6 @@ use grokhub_core::{
     empty_chip_memory, prune_ephemeral_insights, prune_retired_chip_memory, rotate_trajectory, ChipMemory, ImagineWall,
     LearningState, ProjectNode, SuggestionStore, UsageDay, TRAJECTORY_MAX_BYTES,
 };
-use std::fs;
 
 use crate::config;
 
@@ -118,6 +117,7 @@ pub fn append_trajectory(line: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use crate::config::TEST_CONFIG_LOCK;
 
     #[test]

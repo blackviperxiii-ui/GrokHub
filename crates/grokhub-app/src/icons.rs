@@ -23,9 +23,9 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     let painter = ui.painter();
     let fill = crate::theme::surface();
-    let stroke = Stroke::new(1.5, crate::theme::fg());
+    let stroke = Stroke::new(1.5_f32, crate::theme::fg());
     painter.rect_filled(rect, 10.0, fill);
-    painter.rect_stroke(rect, 10.0, Stroke::new(1.0, crate::theme::border_strong()));
+    painter.rect_stroke(rect, 10.0, Stroke::new(1.0_f32, crate::theme::border_strong()));
     let r = rect.shrink(size * 0.22);
     let c = r.center();
     let w = r.width();
@@ -417,7 +417,7 @@ pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::
     }
     let c = rect.center();
     let w = rect.width();
-    let stroke = Stroke::new(1.6, color);
+    let stroke = Stroke::new(1.6_f32, color);
     match icon {
         BarIcon::Plus => {
             painter.line_segment(
@@ -470,7 +470,7 @@ pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::
         }
         BarIcon::Send => {
             painter.circle_filled(c, w * 0.46, crate::theme::fg());
-            let arrow = Stroke::new(1.8, crate::theme::bg());
+            let arrow = Stroke::new(1.8_f32, crate::theme::bg());
             painter.line_segment(
                 [Pos2::new(c.x, c.y + w * 0.16), Pos2::new(c.x, c.y - w * 0.16)],
                 arrow,

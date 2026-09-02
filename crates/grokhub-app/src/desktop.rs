@@ -1441,15 +1441,11 @@ pub fn play_audio(path: &Path) -> Result<(), String> {
 }
 
 /// Stream 24 kHz s16le mono PCM to the speakers (realtime Voice output).
+#[derive(Default)]
 pub struct PcmSink {
     child: Option<Child>,
 }
 
-impl Default for PcmSink {
-    fn default() -> Self {
-        Self { child: None }
-    }
-}
 
 impl PcmSink {
     pub fn new() -> Self {

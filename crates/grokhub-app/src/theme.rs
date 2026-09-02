@@ -6,7 +6,7 @@ use eframe::egui::{
     TextureHandle, TextureOptions,
 };
 use grokhub_core::{
-    feel_scale, felt_rect, hover_alpha, hover_mix, lerp_f32, lift_rgb, mix_channel, os_prefers_dark,
+    feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb, mix_channel, os_prefers_dark,
     HOVER_EXPANSION, HOVER_SECS, PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};

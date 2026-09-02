@@ -359,9 +359,7 @@ fn parse_suggest_auto(rest: &str) -> Option<LearnedSuggestion> {
     if !cabin_real_text(&title) || !cabin_real_text(&body) || !cabin_real_text(&seed) {
         return None;
     }
-    if parse_nl_automation(&seed).is_none() {
-        return None;
-    }
+    parse_nl_automation(&seed)?;
     Some(LearnedSuggestion {
         kind: SuggestionKind::Auto,
         title,

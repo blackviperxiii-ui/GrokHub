@@ -967,7 +967,7 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
         ui.spacing_mut().item_spacing.x = 4.0;
         for (id, label) in composer_modes() {
             let on = *id == mode;
-            if felt_segment(ui, *label, on) && !on {
+            if felt_segment(ui, label, on) && !on {
                 out.mode = Some((*id).to_string());
             }
         }
@@ -980,7 +980,7 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
         ui.add_space(6.0);
         for (id, label) in permission_modes() {
             let on = *id == perm;
-            if felt_segment(ui, *label, on) && !on {
+            if felt_segment(ui, label, on) && !on {
                 out.perm = Some((*id).to_string());
             }
         }
@@ -1982,12 +1982,12 @@ fn imagine_disk_tile(
     }
     let n = if gif.path_b.is_empty() { 1 } else { 2 };
     let tick = (now_ms / crate::theme::IMAGINE_FRAME_MS) as usize + gif.title.len();
-    let path_a = if tick % n == 0 {
+    let path_a = if tick.is_multiple_of(n) {
         gif.path_a.as_str()
     } else {
         gif.path_b.as_str()
     };
-    let path_b = if tick % n == 0 {
+    let path_b = if tick.is_multiple_of(n) {
         gif.path_b.as_str()
     } else {
         gif.path_a.as_str()

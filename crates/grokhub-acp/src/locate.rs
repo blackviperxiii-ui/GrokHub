@@ -269,10 +269,8 @@ pub fn doctor_grok_line(bin: Option<&Path>) -> (bool, String) {
     }
     if let Ok(held) = doctor_line_cache().lock() {
         if let Some((path, at, ok, text, inflight)) = held.as_ref() {
-            if path.as_deref() == bin {
-                if *inflight || at.elapsed() < Duration::from_secs(8) {
-                    return (*ok, text.clone());
-                }
+            if path.as_deref() == bin && (*inflight || at.elapsed() < Duration::from_secs(8)) {
+                return (*ok, text.clone());
             }
         }
     }

@@ -99,9 +99,7 @@ fn write_dest(c: &str) -> Option<String> {
 pub fn last_host_line(chunk: &str) -> String {
     chunk
         .lines()
-        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|l| !l.is_empty())
-        .last()
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" ")).rfind(|l| !l.is_empty())
         .unwrap_or_default()
         .chars()
         .take(200)

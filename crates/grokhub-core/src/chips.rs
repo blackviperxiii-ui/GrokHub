@@ -339,7 +339,7 @@ pub fn detect_chip_context(chat: &[(String, String)]) -> ChipContext {
         decide: regexish(&blob, &["should i", "which", "options", "tradeoff", "recommend", "compare"]),
         implement: regexish(&users.to_ascii_lowercase(), &["implement", "add ", "build ", "create ", "wire ", "ship ", "patch"]),
         incomplete: regexish(&asst.to_ascii_lowercase(), &["i'll", "i will", "let me", "next i", "continuing", "still need", "want me to", "shall i"])
-            || (asst.len() > 0
+            || (!asst.is_empty()
                 && asst.len() < 600
                 && regexish(&asst.to_ascii_lowercase(), &["check", "probe", "investigate"])
                 && !asst.to_ascii_lowercase().contains("host_cmd")),
@@ -2095,7 +2095,7 @@ mod tests {
         let chips = build_quick_chips(input(&[], "", &mem, &[], &[]));
         let labels: Vec<_> = chips.iter().map(|c| c.label.as_str()).collect();
         assert!(
-            labels.iter().any(|l| *l == "Open Imagine"),
+            labels.contains(&"Open Imagine"),
             "empty {:?}",
             labels
         );
@@ -2105,7 +2105,7 @@ mod tests {
             labels
         );
         assert!(
-            !labels.iter().any(|l| *l == "Voice"),
+            !labels.contains(&"Voice"),
             "Voice is the mic, not a duplicate chip: {:?}",
             labels
         );
@@ -2657,7 +2657,7 @@ mod tests {
         let finish = chips.iter().find(|c| {
             c.id == "last-run-host" || c.id == "ctx-incomplete" || c.label.contains("Finish")
         });
-        let finish = finish.expect(&format!("finish chip: {:?}", labels(&chips)));
+        let finish = finish.unwrap_or_else(|| panic!("finish chip: {:?}", labels(&chips)));
         assert!(
             finish.value.contains("computer-use") || finish.value.contains("desktop"),
             "GUI finish chip must ask Grok to drive the desktop: {}",

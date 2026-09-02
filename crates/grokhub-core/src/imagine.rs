@@ -229,7 +229,7 @@ pub fn imagine_is_video_path(path: &str) -> bool {
         .rsplit('.')
         .next()
         .unwrap_or("")
-        .split(|c: char| c == '?' || c == '#')
+        .split(['?', '#'])
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();

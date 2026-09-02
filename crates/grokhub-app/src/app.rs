@@ -1,7 +1,7 @@
 use crate::build_agent;
 use crate::helpers::{
     cabin_menu_should_dismiss, click_project_opens_board, collect_other_chip_threads, expand_home,
-    next_maximized, next_starter_skill_name, wants_live_repaint,
+    next_maximized, wants_live_repaint,
 };
 use crate::titlebar::{
     apply_tray_window, titlebar_chrome_btn, titlebar_chrome_hit, titlebar_should_start_drag,
@@ -18,8 +18,8 @@ use crate::skills;
 use crate::threads::{self, ChatThread};
 use crate::update::{remember_source, resolve_source};
 use crate::xai::{
-    grok_chat, grok_chat_stream, grok_imagine_opts, grok_imagine_video, grok_stt,
-    grok_tts, http_status_of,
+    grok_chat, grok_imagine_opts, grok_imagine_video, grok_stt,
+    grok_tts,
 };
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use grokhub_acp::{
@@ -29,8 +29,7 @@ use grokhub_acp::{
 };
 use grokhub_core::{
     append_composer, anticipate_consumes_slot, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
-    cabin_system_prompt,
-    appearance_choices, appearance_hint, approved_cmds, auth_bearer, automation_blocked_by_policy,
+    appearance_choices, appearance_hint, automation_blocked_by_policy,
     blend_thread_goal, flush_visible_goal,
     build_hub_snapshot, merge_hub_snapshots,
     build_quick_chips, build_windshield, bump_skill_run, bump_usage,
@@ -44,10 +43,8 @@ use grokhub_core::{
     ImagineToolboxDock, ImagineWall,
     WallGif, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
     imagine_stage_h, imagine_stage_visible, imagine_toolbox_dock, imagine_toolbox_shows_title,
-    imagine_toolbox_top, imagine_wall_bounds, IMAGINE_WALL_GAP,
-    doctor_hands_line, due_automations, due_loops, ensure_automation_schedule, estimate_messages,
-    estimate_messages_from,
-    extract_connector_cmds, mark_automation_skipped, retain_held_plan, yolo_plan_split, chat_bearer,
+    imagine_toolbox_top, imagine_wall_bounds, IMAGINE_WALL_GAP, due_automations, due_loops, ensure_automation_schedule, estimate_messages,
+    estimate_messages_from, mark_automation_skipped, retain_held_plan, chat_bearer,
     oauth_access_live,
     drop_trailing_assistant, job_error_goes_to_chat, job_is_scratch,
     persist_user_turn, refund_host_reserved, daily_units_blocked,
@@ -56,7 +53,7 @@ use grokhub_core::{
     imagine_aspect_label, imagine_aspect_name, imagine_image_resolution, imagine_style_label,
     imagine_video_dur_label, imagine_video_duration_secs, imagine_video_res_label,
     imagine_video_resolution, last_imagine_receipt,
-    extract_insights, extract_work_updates, fact_candidates, fact_candidates_from, failover_model, filter_slash_commands, filter_slash_hits, grok_command_hits,
+    extract_insights, extract_work_updates, fact_candidates, fact_candidates_from, filter_slash_hits, grok_command_hits,
     frame_bytes, PresenceFrame,
     forget_topic, greet_from_last_job, has_auth, has_verify_ok, hey_grok_on_press,
     thread_host_receipts, thread_host_receipts_from,
@@ -70,10 +67,7 @@ use grokhub_core::{
     ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_scan, load_hub_state, mark_automation_ran,
     night_check_may_fire, night_counts_run, night_unauth_should_skip,
-    match_skill, mode_from_chip_value, model_for_mode, nav_from_chip_value,
-    cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
-    kick_consumes_attach, next_chat_image, next_goal_prompt, paint_connect_banner,
-    this_turn_cabin_frame,
+    match_skill, mode_from_chip_value, model_for_mode, nav_from_chip_value, chat_attach_status, imagine_ref_status, next_chat_image, next_goal_prompt,
     is_workload_user, merge_thinking_capped, prefer_complete_reply, quote_for_reply, strip_thinking,
     refresh_last_stretch, thought_shows_acts, thought_shows_label, visible_chat_refs, visible_turn_count, visible_turn_count_from,
     cluster_gap, scrolled_off_tail, ChatKind, ChatView, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK,
@@ -84,9 +78,9 @@ use grokhub_core::{
     BUBBLE_PAD_Y,
     BUBBLE_RADIUS,
     append_say, append_thought, append_tool, views_up_to_last_user, LiveBlock, LiveKind,
-    plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
-    parse_computer_op, see_drive_attach, user_asks_cabin_eyes,
-    resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
+    plus_empty_status, plus_menu_rows, computer_cmd_line, lock_blocks_hands,
+    parse_computer_op,
+    resolve_chat_model, resolve_dark, settings_pin_blocks_auto, parse_fast_topics,
     goal_continue_pin, goal_pin_for_job, goal_step_after_outcome, hub_dispatch_ok, should_auto_continue_goal,
     visible_goal_step_on_continue,
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
@@ -94,13 +88,13 @@ use grokhub_core::{
     recipe_from_cmds, replay_automation_target,
     mark_loop_ran, new_loop, parse_recipe, parse_slash, route_schedule, ScheduleRoute,
     automation_schedule_label, automation_summary_line,
-    parse_theme, pick_theme, plan_from_text, plan_room, LOOP_MAX,
+    parse_theme, pick_theme, plan_room, LOOP_MAX,
     chat_may_save_automation, user_asked_to_schedule,
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
     remember_chip_outcome, remember_typed_prompt, roll_usage_day,
     greeting_fingerprint, greeting_name, greeting_prompt, local_greeting, pick_greeting,
-    should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
+    should_paint_greeting, should_refresh_greeting, GreetingInput,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
@@ -110,7 +104,6 @@ use grokhub_core::{
     clear_pending_after_complete, inbox_claim_ready,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm,
     should_trim_result_bodies, shortcut_help,
-    windshield_prompt,
     composer_enter, composer_go, composer_go_tip, perm_key, ComposerEnter, ComposerGo, PermKey,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
@@ -121,9 +114,7 @@ use grokhub_core::{
     partition_suggestions, prune_live_suggestions, review_due,
     review_status_line, review_system_prompt, digest_line_from, DigestLine, ReviewDigest, SuggestionStore,
     CABIN_GITHUB_TOOLS, REVIEW_NIGHT_HOUR,
-    should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
-    apply_auto_title, apply_auto_title_in, apply_manual_rename, delete_thread, display_tab_title, history_order,
-    history_row_visible, leftover_empty_thread, mark_slash_result, reuse_empty_thread_idx,
+    should_capture_before_chat, should_idle_reflect, should_send_screenshot, apply_auto_title_in, apply_manual_rename, delete_thread, display_tab_title, leftover_empty_thread, mark_slash_result, reuse_empty_thread_idx,
     unknown_cabin_slash, ThreadReuseView,
     should_name_thread,
     skill_follow_block, skill_use_in_chat_prompt, slash_help, SlashHit, summarize_write, surgical_memory_edit, MemoryEdit,
@@ -134,15 +125,14 @@ use grokhub_core::{
     realtime_bearer, realtime_can_connect, voice_log_role, voice_stream_token, voice_transcript_sends_chat,
     fold_stream_fields, StreamTokenKind,
     update_wipes_config, voice_session_url, Automation, BoardCard, GrokLoop,
-    BoardStatus, ChipInput, ChipKind, ChipMemory, ChipThread, ComputerOp, DeviceCodeStart, HeyGrokAction,
+    BoardStatus, ChipInput, ChipKind, ChipMemory, ChipThread, DeviceCodeStart, HeyGrokAction,
     HeyGrokRoute, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, MintRealtimeFn, Policy, Recipe, ReplayOp, RewindRecord,
     HostPlanStep, HostRisk, forbidden_reason, mint_host_halt,
-    AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
-    VoiceState, CONTEXT_BUDGET_TOKENS, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, CHIP_LLM_MODE, CHIP_VISIBLE_MAX, FRAME_CAP, IMAGE_FILE_CAP,
+    AttachKind, PlusAct, PlusTarget, SkillMd, Slash, TranscribeRoute, UsageDay, VoiceEvent,
+    VoiceState, CONTEXT_BUDGET_TOKENS, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, CHIP_VISIBLE_MAX, FRAME_CAP, IMAGE_FILE_CAP,
     TEXT_FILE_CAP, bound_scan,
-    user_pref_facts,
-    DEFAULT_MODEL, FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND,
+    user_pref_facts, FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND,
     IDLE_REFLECT_MS, IMAGINE_ASPECTS,
     IMAGINE_STYLES,
     PRESENCE_RING_MS, TRANSCRIBERS,
@@ -1975,7 +1965,7 @@ impl Cabin {
         let target = self
             .chat_job_thread
             .clone()
-            .unwrap_or_else(|| vis);
+            .unwrap_or(vis);
         if let Some(t) = self.threads.iter_mut().find(|t| t.id == target) {
             t.accessed_ms = now_ms();
         }
@@ -2621,7 +2611,7 @@ impl Cabin {
             .threads
             .get(idx)
             .and_then(|t| t.grok_cwd.as_ref())
-            .map(|p| std::path::PathBuf::from(p) != bound)
+            .map(|p| *p != bound)
             .unwrap_or(false);
         let unknown_cwd = self
             .threads
@@ -8016,7 +8006,7 @@ impl Cabin {
                     let _ = apply_work_update(&mut self.board, &key, st);
                 }
                 self.persist();
-                let mut host_needs_kick = false;
+                let host_needs_kick = false;
                 // Grok Build owns bash, files, and computer-use. Do not parse HOST_CMD / COMPUTER_CMD.
                 if let Some(p) = extract_imagine_prompt(&scan) {
                     self.chat_job_thread = origin.clone();
@@ -8096,7 +8086,7 @@ impl Cabin {
                         self.kick_model(false);
                     }
                 } else {
-                    let next_step = goal_step_after_outcome(job_step, &outcome, true);
+                    let next_step = goal_step_after_outcome(job_step, outcome, true);
                     if let Some(id) = job.as_deref() {
                         if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
                             t.goal.step = next_step;
@@ -9301,7 +9291,7 @@ impl Cabin {
 
     fn speak_reply(&mut self, text: &str) {
         let key = self.bearer();
-        let cap = TEXT_FILE_CAP as usize;
+        let cap = TEXT_FILE_CAP;
         let mut end = cap.min(text.len());
         while end > 0 && !text.is_char_boundary(end) {
             end -= 1;
@@ -10087,7 +10077,7 @@ impl Cabin {
                 ui.set_min_width(220.0);
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (id, label) in crate::theme::CABIN_MENU {
-                    if crate::cards::felt_menu_row(ui, *label) {
+                    if crate::cards::felt_menu_row(ui, label) {
                         pick = Some(*id);
                     }
                 }
@@ -10551,7 +10541,7 @@ impl Cabin {
         email: &str,
         photo: Option<&TextureHandle>,
     ) -> egui::Response {
-        let (rect, resp) =
+        let (_rect, resp) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), RAIL_FOOTER_H), egui::Sense::click());
         let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
         if wash.a() > 0 {

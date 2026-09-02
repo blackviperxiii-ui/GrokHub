@@ -167,8 +167,7 @@ pub fn keep_atspi_row(row: &AtspiRow, desk_w: i32, desk_h: i32) -> bool {
 pub fn filter_atspi_rows(rows: &[AtspiRow], desk_w: i32, desk_h: i32) -> Vec<AtspiRow> {
     rows.iter()
         .filter(|r| keep_atspi_row(r, desk_w, desk_h))
-        .cloned()
-        .take(80)
+        .take(80).cloned()
         .collect()
 }
 

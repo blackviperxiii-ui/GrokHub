@@ -390,7 +390,7 @@ pub fn automation_summary_line(a: &Automation, now_ms: u64) -> String {
 }
 
 fn minutes_label(mins: u32) -> String {
-    if mins % 60 == 0 && mins >= 60 {
+    if mins.is_multiple_of(60) && mins >= 60 {
         let h = mins / 60;
         return if h == 24 {
             "24h".into()
