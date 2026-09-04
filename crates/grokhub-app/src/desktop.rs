@@ -4,7 +4,7 @@ use grokhub_core::{
     computer_cmd_line, computer_drive_for, cursor_on_output, diagnose_hands, empty_hands_steps_error,
     ffmpeg_webcam_args, ffmpeg_x11_args, filter_atspi_rows, format_cursor_line_miss,
     format_tab_list, frame_is_blank, frame_origin_for, gnome_shell_screenshot_args, grim_capture_args,
-    hands_backend_name, hands_blocked_by_lock, hands_chip_label, hands_chip_live, hands_down_receipt,
+    hands_backend_name, hands_blocked_by_lock, hands_down_receipt,
     hands_windshield_line, image_pixels_ok, image_to_global, infer_wayland_display, jpeg_data_url,
     layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var, monitor_local_to_global,
     parse_atspi_line, parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
@@ -13,7 +13,7 @@ use grokhub_core::{
     resolve_bin_in, session_is_wayland, tab_list_from_rows, take_text_body, IMAGE_FILE_CAP,
     TEXT_FILE_CAP, virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path,
     AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp, DisplayOutput, HandsBackend,
-    HandsDown, TabAction, CDP_DOWN, CDP_PORTS, RECORDERS, TRANSCRIBERS, PYATSPI_MISSING,
+    HandsDown, TabAction, CDP_DOWN, CDP_PORTS, RECORDERS, TRANSCRIBERS,
 };
 use image::GenericImageView;
 use std::io::{Read, Write};
@@ -705,32 +705,6 @@ pub fn ensure_hands() -> HandsDown {
     hands_peek()
 }
 
-pub fn hands_chip_text() -> String {
-    hands_chip_label(hands_peek(), hands_driver_name())
-}
-
-pub fn hands_ready() -> bool {
-    hands_chip_live(hands_peek())
-}
-
-fn pyatspi_import_ok() -> bool {
-    let mut cmd = Command::new("python3");
-    cmd.args(["-c", "import pyatspi"]);
-    run_limited(cmd, DESK_LIST_TIMEOUT).is_some_and(|o| o.status.success())
-}
-
-pub fn install_hands_status() -> String {
-    let reason = ensure_hands();
-    let mut out = hands_down_receipt(reason).to_string();
-    if !pyatspi_import_ok() {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(PYATSPI_MISSING);
-    }
-    out
-}
-
 fn desk_scan() -> DeskScan {
     if let Ok(g) = LAST_DESK_SCAN.lock() {
         if let Some((at, scan)) = g.as_ref() {
@@ -1041,10 +1015,6 @@ fn wait_for_title(title: Option<&str>, cancel: Option<&AtomicBool>) -> Result<St
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-}
-
-pub fn run_computer_op(op: &ComputerOp) -> String {
-    run_computer_op_cancel(op, None)
 }
 
 pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> String {
@@ -1441,15 +1411,11 @@ pub fn play_audio(path: &Path) -> Result<(), String> {
 }
 
 /// Stream 24 kHz s16le mono PCM to the speakers (realtime Voice output).
+#[derive(Default)]
 pub struct PcmSink {
     child: Option<Child>,
 }
 
-impl Default for PcmSink {
-    fn default() -> Self {
-        Self { child: None }
-    }
-}
 
 impl PcmSink {
     pub fn new() -> Self {
@@ -1627,10 +1593,6 @@ fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {
         Some(_) => Err(format!("{bin} failed")),
         None => Err(format!("{bin} timed out")),
     }
-}
-
-pub fn imagine_save_path(slug: &str) -> PathBuf {
-    imagine_save_path_ext(slug, "png")
 }
 
 pub fn imagine_save_path_ext(slug: &str, ext: &str) -> PathBuf {
@@ -1914,7 +1876,7 @@ mod tests {
             hands_down_receipt(HandsDown::Daemon)
         );
         let a = grokhub_core::live_pcm_argv("arecord").unwrap();
-        assert!(a.iter().any(|x| *x == "raw"));
+        assert!(a.contains(&"raw"));
     }
 
     #[test]
@@ -2111,10 +2073,13 @@ mod tests {
         }
         let dest_x = 1500;
         let dest_y = 400;
-        let out = run_computer_op(&ComputerOp::Move {
-            x: dest_x,
-            y: dest_y,
-        });
+        let out = run_computer_op_cancel(
+            &ComputerOp::Move {
+                x: dest_x,
+                y: dest_y,
+            },
+            None,
+        );
         assert!(out.contains("exit 0"), "{out}");
         assert!(out.contains("moved 1500,400"), "{out}");
         assert!(out.contains("cursor"), "{out}");
@@ -2124,7 +2089,7 @@ mod tests {
             .unwrap();
         let row = parse_xdotool_mouse(&String::from_utf8_lossy(&loc.stdout)).unwrap();
         assert_eq!((row.x, row.y), (dest_x, dest_y), "{out} {} {}", row.x, row.y);
-        let cursor = run_computer_op(&ComputerOp::Cursor);
+        let cursor = run_computer_op_cancel(&ComputerOp::Cursor, None);
         assert!(cursor.contains("exit 0"), "{cursor}");
         assert!(cursor.contains("cursor"), "{cursor}");
         match grokhub_core::computer_drive(&ComputerOp::Click { x: 1, y: 2 }) {
@@ -2253,7 +2218,7 @@ mod tests {
         let run_ok = src
             .split("fn run_ok(")
             .nth(1)
-            .and_then(|s| s.split("\npub fn imagine_save_path(").next())
+            .and_then(|s| s.split("\npub fn imagine_save_path_ext(").next())
             .expect("run_ok");
         assert!(
             run_ok.contains("run_limited("),
@@ -2285,15 +2250,6 @@ mod tests {
         assert!(
             steps.contains("run_limited(") && !steps.contains(".status()"),
             "hung xdotool/ydotool must not freeze the UI: {steps}"
-        );
-        let py = src
-            .split("fn pyatspi_import_ok(")
-            .nth(1)
-            .and_then(|s| s.split("\npub fn install_hands_status").next())
-            .expect("pyatspi_import_ok");
-        assert!(
-            py.contains("run_limited(") && !py.contains(".status()"),
-            "pyatspi import must time out: {py}"
         );
         let clip = src
             .split("pub fn clipboard_once(")
@@ -2422,10 +2378,13 @@ mod tests {
 
     #[test]
     fn tab_list_without_cdp_says_down() {
-        let out = run_computer_op(&ComputerOp::Tab {
-            action: TabAction::List,
-            query: String::new(),
-        });
+        let out = run_computer_op_cancel(
+            &ComputerOp::Tab {
+                action: TabAction::List,
+                query: String::new(),
+            },
+            None,
+        );
         assert!(
             out.contains("browser hand down")
                 || out.contains("exit 0")

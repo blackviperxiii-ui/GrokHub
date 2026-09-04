@@ -100,11 +100,7 @@ pub fn grok_context_line(u: &GrokUsage) -> String {
     }
     let used = u.context_used();
     let window = u.context_window();
-    let pct = if window == 0 {
-        100
-    } else {
-        ((used.min(window) * 100) / window) as u32
-    };
+    let pct = (used.min(window) * 100).checked_div(window).unwrap_or(100) as u32;
     let mut s = format!("{pct}% · {}/{}", compact_k(used), compact_k(window));
     if u.reasoning_tokens > 0 {
         s.push_str(&format!(" · {} think", compact_k(u.reasoning_tokens)));

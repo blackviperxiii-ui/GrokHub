@@ -3,7 +3,7 @@ use grokhub_core::{bubble_max_width, TEXT_FILE_CAP};
 
 /// Paint/layout prefix. Stream buffers may hold `IMAGE_FILE_CAP`; laying that out freezes Chat.
 pub(crate) fn display_text(text: &str) -> &str {
-    let cap = TEXT_FILE_CAP as usize;
+    let cap = TEXT_FILE_CAP;
     if text.len() <= cap {
         return text;
     }
@@ -142,9 +142,9 @@ mod tests {
 
     #[test]
     fn display_text_stays_inside_text_file_cap() {
-        let huge = "é".repeat((TEXT_FILE_CAP as usize) + 16);
+        let huge = "é".repeat(TEXT_FILE_CAP + 16);
         let shown = display_text(&huge);
-        assert!(shown.len() <= TEXT_FILE_CAP as usize);
+        assert!(shown.len() <= TEXT_FILE_CAP);
         assert!(shown.is_char_boundary(shown.len()));
         assert!(!shown.is_empty());
     }

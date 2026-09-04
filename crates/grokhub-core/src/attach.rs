@@ -207,11 +207,11 @@ pub fn kick_consumes_attach(user_originated: bool) -> bool {
 
 /// Only a frame captured on this turn may go to the model.
 /// A leftover desktop or webcam JPEG is not a this-turn capture.
-pub fn this_turn_cabin_frame<'a>(
+pub fn this_turn_cabin_frame(
     eyes_turn: bool,
     hands_turn: bool,
-    captured_this_turn: Option<&'a str>,
-) -> Option<&'a str> {
+    captured_this_turn: Option<&str>,
+) -> Option<&str> {
     let url = captured_this_turn.filter(|s| !s.is_empty())?;
     if crate::recipe::should_attach_hands_frame(eyes_turn, hands_turn, true) {
         Some(url)

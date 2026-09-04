@@ -95,23 +95,11 @@ pub fn run_host_stream(
     let (tx, rx) = mpsc::channel::<(bool, String)>();
     if let Some(so) = stdout {
         let tx = tx.clone();
-        std::thread::spawn(move || {
-            for line in BufReader::new(so.take(TEXT_FILE_CAP as u64 + 1)).lines().flatten() {
-                if tx.send((false, line)).is_err() {
-                    break;
-                }
-            }
-        });
+        std::thread::spawn(move || pump_host_lines(so, false, &tx));
     }
     if let Some(se) = stderr {
         let tx = tx.clone();
-        std::thread::spawn(move || {
-            for line in BufReader::new(se.take(TEXT_FILE_CAP as u64 + 1)).lines().flatten() {
-                if tx.send((true, line)).is_err() {
-                    break;
-                }
-            }
-        });
+        std::thread::spawn(move || pump_host_lines(se, true, &tx));
     }
     drop(tx);
 
@@ -177,6 +165,25 @@ pub fn run_host_stream(
             format!("[stderr]\n{err_buf}")
         }
     )
+}
+
+/// Forward one pipe to the receipt channel, line by line.
+///
+/// Lines are split on bytes and decoded lossily, so a non-UTF-8 line (binary
+/// dumps, Latin-1 files) is shown with replacement characters instead of being
+/// dropped. A real read error ends the pump instead of being retried forever.
+fn pump_host_lines(pipe: impl Read, is_err: bool, tx: &mpsc::Sender<(bool, String)>) {
+    let reader = BufReader::new(pipe.take(TEXT_FILE_CAP as u64 + 1));
+    for chunk in reader.split(b'\n') {
+        let Ok(mut bytes) = chunk else { break };
+        if bytes.last() == Some(&b'\r') {
+            bytes.pop();
+        }
+        let line = String::from_utf8_lossy(&bytes).into_owned();
+        if tx.send((is_err, line)).is_err() {
+            break;
+        }
+    }
 }
 
 fn kill_host(child: &mut Child) {
@@ -315,6 +322,22 @@ mod tests {
     }
 
     #[test]
+    fn non_utf8_output_lines_still_land_in_the_receipt() {
+        let out = run_host(
+            "printf 'before\\n\\xff\\xfe latin\\nafter\\n'; printf 'err \\xc3\\x28\\n' >&2",
+            Duration::from_secs(5),
+        );
+        assert!(out.contains("before"), "{out}");
+        assert!(
+            out.contains("latin"),
+            "a line with invalid UTF-8 must be shown lossily, not dropped: {out}"
+        );
+        assert!(out.contains("after"), "{out}");
+        assert!(out.contains("[stderr]") && out.contains("err"), "{out}");
+        assert!(out.contains("exit 0"), "{out}");
+    }
+
+    #[test]
     fn run_host_stream_caps_a_huge_dump() {
         let src = include_str!("host.rs");
         let stream = src
@@ -326,11 +349,24 @@ mod tests {
             stream.contains("TEXT_FILE_CAP"),
             "a huge host dump must not grow the receipt without bound: {stream}"
         );
-        let take = stream.find("take(TEXT_FILE_CAP").expect("pipe take");
-        let lines = stream.find(".lines()").expect("line split");
+        assert_eq!(
+            stream.matches("pump_host_lines(").count(),
+            3,
+            "stdout and stderr must both go through the capped pump: {stream}"
+        );
+        let pump = stream
+            .split("fn pump_host_lines(")
+            .nth(1)
+            .expect("pump_host_lines body");
+        let take = pump.find("take(TEXT_FILE_CAP").expect("pipe take");
+        let split = pump.find(".split(b'\\n')").expect("line split");
         assert!(
-            take < lines && stream.matches("take(TEXT_FILE_CAP").count() >= 2,
-            "a newline-free host dump must not slurp the whole pipe into one line: {stream}"
+            take < split,
+            "a newline-free host dump must not slurp the whole pipe into one line: {pump}"
+        );
+        assert!(
+            pump.contains("from_utf8_lossy") && !pump.contains(".flatten()"),
+            "a non-UTF-8 line must be shown lossily and a read error must end the pump: {pump}"
         );
         let out = run_host(
             "python3 -c \"print('x'*200000)\"",

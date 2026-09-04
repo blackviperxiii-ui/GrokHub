@@ -3,7 +3,7 @@
 use crate::icons::{self, TileIcon};
 use eframe::egui::{self, Align2, Color32, ColorImage, FontId, RichText, Sense, Stroke, TextureHandle, TextureOptions};
 use grokhub_core::{
-    curate_wall, imagine_result_fit, parse_loop_line, wall_curate_seed, LearnedSuggestion, SkillMd,
+    curate_wall, imagine_result_fit, parse_loop_line, wall_curate_seed, LearnedSuggestion,
     SuggestionKind, WallGif, WallSlot, IMAGE_FILE_CAP,
 };
 use std::collections::{HashMap, HashSet};
@@ -20,118 +20,11 @@ pub struct SuggestedAuto {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SuggestedSkill {
-    pub icon: TileIcon,
-    pub name: &'static str,
-    pub title: &'static str,
-    pub body: &'static str,
-    pub trigger: &'static str,
-    pub instructions: &'static str,
-    pub verify: &'static str,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LiveConnector {
-    pub icon: TileIcon,
-    pub id: &'static str,
-    pub title: &'static str,
-    pub tools: &'static [(&'static str, &'static str)],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TileHit {
     None,
     Add,
     Body,
 }
-
-pub const SUGGESTED_SKILLS: &[SuggestedSkill] = &[
-    SuggestedSkill {
-        icon: TileIcon::Sun,
-        name: "morning-brief",
-        title: "Morning brief",
-        body: "Summarize the workboard, last host receipt, and pinned goal.",
-        trigger: "morning brief",
-        instructions: "Summarize the Workboard and last HOST_RESULT from the system context. List open cards and the next concrete step. If the board is empty, say so. No secrets.",
-        verify: "echo VERIFY_OK",
-    },
-    SuggestedSkill {
-        icon: TileIcon::Host,
-        name: "host-snapshot",
-        title: "Host snapshot",
-        body: "Read-only uname / whoami / pwd via Grok Build bash.",
-        trigger: "host snapshot",
-        instructions: "Run uname -a && whoami && pwd with Grok Build tools. Summarize in four lines.",
-        verify: "echo VERIFY_OK",
-    },
-    SuggestedSkill {
-        icon: TileIcon::List,
-        name: "workboard-triage",
-        title: "Workboard triage",
-        body: "Pull open tasks from this thread onto the workboard.",
-        trigger: "triage the board",
-        instructions: "Extract open tasks from this thread. For each task emit one line exactly: WORK_PIN: short title | one-line detail | priority=med. Do not emit WORK_UPDATE done without VERIFY_OK.",
-        verify: "echo VERIFY_OK",
-    },
-    SuggestedSkill {
-        icon: TileIcon::Image,
-        name: "imagine-scene",
-        title: "Imagine a scene",
-        body: "Write a tight still-image prompt; the cabin generates it.",
-        trigger: "imagine this",
-        instructions: "Write one tight still-image prompt (grok-imagine-image-2.0, no faces). Emit one line exactly: IMAGINE_PROMPT: <prompt>. Stay in the bound project.",
-        verify: "echo VERIFY_OK",
-    },
-    SuggestedSkill {
-        icon: TileIcon::Github,
-        name: "github-pulse",
-        title: "GitHub pulse",
-        body: "Who am I plus recent repos via CONNECTOR_CMD (needs a PAT).",
-        trigger: "github pulse",
-        instructions: "Emit these two lines exactly, each on its own line:\nCONNECTOR_CMD: github user\nCONNECTOR_CMD: github list_repos\nAfter both CONNECTOR_RESULT blocks, summarize in four lines. No secrets.",
-        verify: "echo VERIFY_OK",
-    },
-    SuggestedSkill {
-        icon: TileIcon::Check,
-        name: "verify-last",
-        title: "Verify last turn",
-        body: "Run verify.sh and hold done until VERIFY_OK.",
-        trigger: "verify this",
-        instructions: "Run the skill verify.sh. After the output, report VERIFY_OK or the exact failure. Do not mark workboard cards done without VERIFY_OK.",
-        verify: "echo VERIFY_OK",
-    },
-    SuggestedSkill {
-        icon: TileIcon::Board,
-        name: "board-status",
-        title: "Board status",
-        body: "List open workboard cards and the next concrete step.",
-        trigger: "board status",
-        instructions: "List every open Workboard card from the system context. One line each. Then the next concrete step. If empty, say so. Optional: WORK_PIN: follow-up | detail | priority=low",
-        verify: "echo VERIFY_OK",
-    },
-    SuggestedSkill {
-        icon: TileIcon::Bolt,
-        name: "host-health",
-        title: "Host health",
-        body: "Richer read-only snapshot: load, disk, and grokhub paths.",
-        trigger: "host health",
-        instructions: "Check uname, whoami, pwd, df -h /, and uptime with Grok Build tools. Four lines: machine, user, disk, load. No secrets.",
-        verify: "echo VERIFY_OK",
-    },
-];
-
-pub const LIVE_CONNECTORS: &[LiveConnector] = &[LiveConnector {
-    icon: TileIcon::Github,
-    id: "github",
-    title: "GitHub",
-    tools: &[
-        ("Who am I", "user"),
-        ("List repos", "list_repos"),
-        ("List issues", "list_issues"),
-        ("Search code", "search_code"),
-        ("Search issues", "search_issues"),
-    ],
-}];
 
 pub const SUGGESTED_AUTOS: &[SuggestedAuto] = &[
     SuggestedAuto {
@@ -258,19 +151,6 @@ pub const IMAGINE_SCENES: &[ImagineScene] = &[
     },
 ];
 
-/// grok.com/imagine Image-mode toolbar labels, measured 2026-08-15.
-pub const IMAGINE_BAR_CHIPS: &[&str] = &[
-    "Image",
-    "Video",
-    "Agent",
-    "Speed",
-    "Quality (v2.0)",
-    "Auto",
-];
-
-/// grok.com/imagine Video-mode chips, measured 2026-08-15.
-pub const IMAGINE_VIDEO_CHIPS: &[&str] = &["480p", "720p", "6s", "10s", "15s", "Video audio"];
-
 pub fn imagine_kind_label(kind: ImagineKind) -> &'static str {
     match kind {
         ImagineKind::Image => "Image",
@@ -284,14 +164,6 @@ pub fn imagine_quality_label(quality: bool) -> &'static str {
         "Quality (v2.0)"
     } else {
         "Speed"
-    }
-}
-
-pub fn imagine_quality_word(quality: bool) -> &'static str {
-    if quality {
-        "quality"
-    } else {
-        "speed"
     }
 }
 
@@ -340,51 +212,6 @@ pub fn imagine_chip_stack_h() -> f32 {
     (crate::theme::IMAGINE_HIT + 8.0) * 2.0
 }
 
-/// Inner width left for wrapping selector chips after send/mic are reserved.
-pub fn imagine_chip_row_w(bar_w: f32) -> f32 {
-    (bar_w - 24.0 - imagine_send_cluster_w()).max(crate::theme::IMAGINE_HIT * 4.0)
-}
-
-/// grok.com Imagine toolbox chips for the current kind. Aspect defaults to 2:3.
-pub fn imagine_toolbar_labels(kind: ImagineKind, authed: bool) -> Vec<&'static str> {
-    let mut out = vec!["Image", "Video", "Agent"];
-    match kind {
-        ImagineKind::Image | ImagineKind::Agent => {
-            out.extend(["Speed", "Quality (v2.0)"]);
-        }
-        ImagineKind::Video => {
-            out.extend(["480p", "720p", "6s", "10s", "15s", "Video audio"]);
-        }
-    }
-    out.push("Auto");
-    out.push("2:3");
-    if !authed {
-        out.push("Connect Grok");
-    }
-    out
-}
-
-/// Speed / Quality and aspect also map to Imagine API resolution and aspect_ratio.
-pub fn imagine_still_prompt(prompt: &str, aspect: &str, quality: bool) -> String {
-    let q = imagine_quality_word(quality);
-    let p = prompt.trim();
-    if p.is_empty() {
-        return String::new();
-    }
-    let has_aspect = p.contains(aspect);
-    let has_q = p.to_ascii_lowercase().contains(q);
-    match (has_aspect, has_q) {
-        (true, true) => p.to_string(),
-        (true, false) => format!("{p}, {q} still"),
-        (false, true) => format!("{p}, {aspect} still"),
-        (false, false) => format!("{p}, {aspect} {q} still"),
-    }
-}
-
-pub fn imagine_aspect_label(i: u8) -> &'static str {
-    grokhub_core::imagine_aspect_label(i)
-}
-
 /// Dark track + selected chip — grok.com Image|Video|Agent and Speed|Quality.
 pub fn imagine_seg_track(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::none()
@@ -426,10 +253,6 @@ pub fn imagine_seg_chip(ui: &mut egui::Ui, selected: bool, add: impl FnOnce(&mut
     resp.clicked()
 }
 
-pub fn imagine_frame_key(scene: &ImagineScene, now_ms: u64) -> &'static str {
-    imagine_frame_pair(scene, now_ms).0
-}
-
 /// Current cover, next cover, and 0..1 crossfade into the next still.
 pub fn imagine_frame_pair(scene: &ImagineScene, now_ms: u64) -> (&'static str, &'static str, f32) {
     let n = scene.frames.len().max(1);
@@ -446,29 +269,6 @@ pub fn imagine_frame_pair(scene: &ImagineScene, now_ms: u64) -> (&'static str, &
 
 pub fn imagine_word(now_ms: u64) -> &'static str {
     IMAGINE_WORDS[((now_ms / 2800) as usize) % IMAGINE_WORDS.len()]
-}
-
-pub fn is_cabin_catalog(name: &str) -> bool {
-    let k = name.trim().to_ascii_lowercase();
-    matches!(k.as_str(), "github" | "gh")
-}
-
-pub fn skill_from_learned(s: &LearnedSuggestion) -> SkillMd {
-    let name = s
-        .name
-        .as_deref()
-        .filter(|n| !n.is_empty())
-        .unwrap_or("learned-skill");
-    SkillMd {
-        name: name.into(),
-        description: s.body.clone(),
-        slash: format!("/{name}"),
-        trigger: s.trigger.clone().unwrap_or_default(),
-        instructions: s.instructions.clone().unwrap_or_default(),
-        pitfalls: "Do not write secrets into markdown.".into(),
-        verify: "echo VERIFY_OK".into(),
-        runs: 0,
-    }
 }
 
 fn auto_seen_keys(title: &str, seed: &str) -> Vec<String> {
@@ -521,122 +321,6 @@ pub fn merge_suggested_autos(
         out.push((s.icon, s.title.into(), s.body.into(), s.seed.into()));
     }
     out
-}
-
-/// Learned skills first, then static seeds not already saved.
-pub fn merge_suggested_skills(
-    learned: &[LearnedSuggestion],
-    saved_names: &[String],
-) -> Vec<LearnedSuggestion> {
-    let mut seen: Vec<String> = saved_names.iter().map(|s| s.to_ascii_lowercase()).collect();
-    let mut out = Vec::new();
-    for s in learned {
-        if s.kind != SuggestionKind::Skill {
-            continue;
-        }
-        let key = s
-            .name
-            .as_deref()
-            .unwrap_or(&s.title)
-            .to_ascii_lowercase();
-        if seen.iter().any(|n| n == &key) {
-            continue;
-        }
-        seen.push(key);
-        out.push(s.clone());
-    }
-    for s in SUGGESTED_SKILLS {
-        let key = s.name.to_ascii_lowercase();
-        if seen.iter().any(|n| n == &key) {
-            continue;
-        }
-        seen.push(key);
-        out.push(LearnedSuggestion {
-            kind: SuggestionKind::Skill,
-            title: s.title.into(),
-            body: s.body.into(),
-            seed: None,
-            name: Some(s.name.into()),
-            trigger: Some(s.trigger.into()),
-            instructions: Some(s.instructions.into()),
-            provider: None,
-            tool: None,
-        });
-    }
-    out
-}
-
-/// Learned GitHub tiles first, then the live tools as day-one fallback.
-pub fn merge_suggested_connectors(
-    learned: &[LearnedSuggestion],
-) -> Vec<(icons::TileIcon, String, String, String)> {
-    let mut seen = Vec::new();
-    let mut out = Vec::new();
-    for s in learned {
-        if s.kind != SuggestionKind::Connector {
-            continue;
-        }
-        let tool = s.tool.clone().unwrap_or_default();
-        if tool.is_empty() || seen.iter().any(|t| t == &tool) {
-            continue;
-        }
-        seen.push(tool.clone());
-        out.push((
-            icons::icon_for_label(&s.title),
-            s.title.clone(),
-            s.body.clone(),
-            tool,
-        ));
-    }
-    for c in LIVE_CONNECTORS {
-        for (label, tool) in c.tools {
-            if seen.iter().any(|t| t == *tool) {
-                continue;
-            }
-            seen.push((*tool).into());
-            out.push((
-                c.icon,
-                (*label).into(),
-                format!("GitHub {tool} — runs the live connector or opens Settings for a PAT."),
-                (*tool).into(),
-            ));
-        }
-    }
-    out
-}
-
-pub fn skill_from_suggested(s: &SuggestedSkill) -> SkillMd {
-    SkillMd {
-        name: s.name.into(),
-        description: s.body.into(),
-        slash: format!("/{}", s.name),
-        trigger: s.trigger.into(),
-        instructions: s.instructions.into(),
-        pitfalls: "Do not write secrets into markdown.".into(),
-        verify: s.verify.into(),
-        runs: 0,
-    }
-}
-
-pub fn skill_matches(name: &str, description: &str, q: &str) -> bool {
-    let q = q.trim().to_ascii_lowercase();
-    if q.is_empty() {
-        return true;
-    }
-    name.to_ascii_lowercase().contains(&q) || description.to_ascii_lowercase().contains(&q)
-}
-
-pub fn starter_skill(name: &str) -> SkillMd {
-    SkillMd {
-        name: name.into(),
-        description: format!("Cabin skill {name}"),
-        slash: format!("/{name}"),
-        trigger: name.into(),
-        instructions: format!("Follow skill {name}. Stay concrete."),
-        pitfalls: "Do not write secrets into markdown.".into(),
-        verify: "echo VERIFY_OK".into(),
-        runs: 0,
-    }
 }
 
 pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
@@ -790,27 +474,6 @@ pub fn status_chip(ui: &mut egui::Ui, label: &str, tone: ChipTone) {
         });
 }
 
-pub fn object_chip(ui: &mut egui::Ui, kind: &str, label: &str) {
-    let tone = match kind {
-        "wont" => ChipTone::Offline,
-        "cursor" => ChipTone::Live,
-        _ => ChipTone::Setup,
-    };
-    let color = chip_tone_color(tone);
-    egui::Frame::none()
-        .fill(crate::theme::elevated())
-        .rounding(12.0)
-        .stroke(Stroke::new(1.0_f32, color))
-        .inner_margin(egui::Margin::symmetric(8.0, 3.0))
-        .show(ui, |ui| {
-            ui.label(
-                RichText::new(format!("{kind} {label}"))
-                    .size(12.0)
-                    .color(color),
-            );
-        });
-}
-
 pub fn framed_preview(ui: &mut egui::Ui, tex: &TextureHandle, size: [usize; 2], max_w: f32) {
     let scale = max_w / size[0].max(1) as f32;
     let h = size[1] as f32 * scale;
@@ -847,29 +510,6 @@ pub fn effort_modes() -> &'static [(&'static str, &'static str)] {
 
 pub fn effort_label(id: &str) -> &'static str {
     grokhub_core::effort_label(id)
-}
-
-pub fn mode_label(id: &str) -> &'static str {
-    match id {
-        "plan" => "Plan",
-        "ask" => "Ask",
-        "chat" | "code" | "normal" | "build" => "Chat",
-        "max" | "deep" | "heavy" => "Max",
-        "think" | "expert" => "Think",
-        "balanced" | "balance" => "Balance",
-        "fast" => "Fast",
-        "always-approve" | "always" | "yolo" => "Always",
-        "auto" => "Auto",
-        _ => "Chat",
-    }
-}
-
-pub fn perm_label(id: &str) -> &'static str {
-    match id {
-        "auto" => "Auto",
-        "always-approve" | "always" | "yolo" => "Always",
-        _ => "Ask",
-    }
 }
 
 fn catalog_pill(
@@ -916,28 +556,6 @@ fn catalog_pill(
     next
 }
 
-/// Compact session picker (Chat / Plan / Ask).
-pub fn mode_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
-    catalog_pill(
-        ui,
-        "composer-session-pop",
-        current,
-        composer_modes(),
-        mode_label(current),
-    )
-}
-
-/// Permission Ask / Auto / Always-approve.
-pub fn perm_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
-    catalog_pill(
-        ui,
-        "composer-perm-pop",
-        current,
-        permission_modes(),
-        perm_label(current),
-    )
-}
-
 /// Grok Build reasoning effort (low / medium / high / xhigh).
 pub fn effort_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
     let id = grokhub_core::parse_reasoning_effort(current).unwrap_or("high");
@@ -967,7 +585,7 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
         ui.spacing_mut().item_spacing.x = 4.0;
         for (id, label) in composer_modes() {
             let on = *id == mode;
-            if felt_segment(ui, *label, on) && !on {
+            if felt_segment(ui, label, on) && !on {
                 out.mode = Some((*id).to_string());
             }
         }
@@ -980,7 +598,7 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
         ui.add_space(6.0);
         for (id, label) in permission_modes() {
             let on = *id == perm;
-            if felt_segment(ui, *label, on) && !on {
+            if felt_segment(ui, label, on) && !on {
                 out.perm = Some((*id).to_string());
             }
         }
@@ -1048,10 +666,6 @@ pub fn quick_chip_stroke(_primary: bool) -> Color32 {
 
 pub fn quick_chip_fg(_primary: bool) -> Color32 {
     crate::theme::fg()
-}
-
-pub fn quick_chip_inner_button_framed() -> bool {
-    false
 }
 
 pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> Option<ChipRowAct> {
@@ -1169,19 +783,6 @@ pub fn section_label(ui: &mut egui::Ui, label: &str) -> bool {
         .clicked();
     ui.add_space(10.0);
     hit
-}
-
-pub fn settings_group(ui: &mut egui::Ui, title: &str, mut body: impl FnMut(&mut egui::Ui)) {
-    section_label(ui, title);
-    egui::Frame::none()
-        .fill(crate::theme::surface())
-        .rounding(16.0)
-        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::symmetric(16.0, 6.0))
-        .show(ui, |ui| {
-            body(ui);
-        });
-    ui.add_space(18.0);
 }
 
 pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool) -> bool {
@@ -1473,10 +1074,10 @@ pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui,
     let rows = n.div_ceil(cols);
     for r in 0..rows {
         ui.columns(cols, |col_uis| {
-            for c in 0..cols {
+            for (c, col_ui) in col_uis.iter_mut().enumerate() {
                 let i = r * cols + c;
                 if i < n {
-                    each(&mut col_uis[c], i);
+                    each(col_ui, i);
                 }
             }
         });
@@ -1642,7 +1243,7 @@ pub fn imagine_stage(ui: &mut egui::Ui, path: &str, working: bool, video: bool) 
         r.min,
         egui::pos2(r.right(), (r.bottom() - bar_h).max(r.top() + 8.0)),
     );
-    ui.allocate_ui_at_rect(media, |ui| {
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(media), |ui| {
         ui.set_clip_rect(media);
         imagine_result_hero(ui, path);
         let resp = ui.interact(media, egui::Id::new("imagine-stage-media"), Sense::click());
@@ -1652,7 +1253,7 @@ pub fn imagine_stage(ui: &mut egui::Ui, path: &str, working: bool, video: bool) 
         resp.on_hover_text("Expand");
     });
     let bar = egui::Rect::from_min_max(egui::pos2(r.left() + 10.0, media.bottom()), r.max);
-    ui.allocate_ui_at_rect(bar, |ui| {
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(bar), |ui| {
         ui.horizontal(|ui| {
             if ghost_pill(ui, "Expand") {
                 hit.expand = true;
@@ -1982,12 +1583,12 @@ fn imagine_disk_tile(
     }
     let n = if gif.path_b.is_empty() { 1 } else { 2 };
     let tick = (now_ms / crate::theme::IMAGINE_FRAME_MS) as usize + gif.title.len();
-    let path_a = if tick % n == 0 {
+    let path_a = if tick.is_multiple_of(n) {
         gif.path_a.as_str()
     } else {
         gif.path_b.as_str()
     };
-    let path_b = if tick % n == 0 {
+    let path_b = if tick.is_multiple_of(n) {
         gif.path_b.as_str()
     } else {
         gif.path_a.as_str()
@@ -2042,14 +1643,6 @@ fn imagine_disk_tile(
     resp.clicked()
 }
 
-pub fn suggestion_card(ui: &mut egui::Ui, title: &str, body: &str) -> bool {
-    grok_tile(ui, icons::icon_for_label(title), title, body, Some("Add"), false) == TileHit::Add
-}
-
-pub fn catalog_card(ui: &mut egui::Ui, title: &str, body: &str, selected: bool) -> bool {
-    grok_tile(ui, icons::icon_for_label(title), title, body, None, selected) == TileHit::Body
-}
-
 pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &str) -> bool {
     let mut hit = false;
     let resp = egui::Frame::none()
@@ -2081,10 +1674,6 @@ pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &
             .rect_stroke(felt, 18.0, Stroke::new(1.0_f32, crate::theme::border_strong()));
     }
     hit
-}
-
-pub fn chip_icon(label: &str) -> TileIcon {
-    icons::icon_for_label(label)
 }
 
 #[cfg(test)]
@@ -2135,11 +1724,6 @@ mod tests {
             composer_go_cluster_w(),
             22.0 + 28.0 + 8.0 * 3.0 + 12.0
         );
-        assert_eq!(mode_label("plan"), "Plan");
-        assert_eq!(mode_label("code"), "Chat");
-        assert_eq!(mode_label("chat"), "Chat");
-        assert_eq!(mode_label("mystery"), "Chat");
-        assert_eq!(perm_label("always-approve"), "Always");
         assert_eq!(composer_modes().len(), 3);
         assert_eq!(permission_modes().len(), 3);
         assert_eq!(effort_modes().len(), 7);
@@ -2182,7 +1766,6 @@ mod tests {
         let max_w = chip_row_width_lock(640.0);
         assert_eq!(max_w, 640.0);
         assert_ne!(max_w, 0.0);
-        assert!(!quick_chip_inner_button_framed());
         let src = include_str!("cards.rs");
         let start = src.find("pub fn quick_chip_row").expect("chip row");
         let slice = &src[start..start + 900];
@@ -2243,45 +1826,6 @@ mod tests {
             "adding a /loop seed must hide the matching Suggested tile: {by_prompt:?}"
         );
 
-        let learned_skill = LearnedSuggestion {
-            kind: SuggestionKind::Skill,
-            title: "Desk tidy".into(),
-            body: "Straighten windows".into(),
-            seed: None,
-            name: Some("desk-tidy".into()),
-            trigger: Some("messy desk".into()),
-            instructions: Some("stack the windows".into()),
-            provider: None,
-            tool: None,
-        };
-        let skills = merge_suggested_skills(&[learned_skill], &[]);
-        assert_eq!(skills[0].name.as_deref(), Some("desk-tidy"));
-        assert!(skills.iter().any(|s| s.name.as_deref() == Some("morning-brief")));
-
-        let learned_conn = LearnedSuggestion {
-            kind: SuggestionKind::Connector,
-            title: "My GitHub".into(),
-            body: "Who am I".into(),
-            seed: None,
-            name: None,
-            trigger: None,
-            instructions: None,
-            provider: Some("github".into()),
-            tool: Some("user".into()),
-        };
-        let conns = merge_suggested_connectors(&[learned_conn]);
-        assert_eq!(conns[0].1, "My GitHub");
-        assert_eq!(conns[0].3, "user");
-        assert!(!conns.iter().any(|t| t.1 == "Who am I" && t.3 == "user"));
-        assert!(conns.iter().any(|t| t.3 == "list_repos"));
-    }
-
-    #[test]
-    fn skill_search() {
-        assert!(skill_matches("morning-brief", "cabin brief", "morn"));
-        assert!(skill_matches("host-snapshot", "uname whoami", "whoami"));
-        assert!(!skill_matches("morning-brief", "cabin brief", "pdf"));
-        assert!(skill_matches("PDFs", "merge split", ""));
     }
 
     #[test]
@@ -2296,82 +1840,12 @@ mod tests {
                 assert!(!blob.contains(w), "auto {} mentions {w}", s.title);
             }
         }
-        assert_eq!(SUGGESTED_SKILLS.len(), 8);
-        for s in SUGGESTED_SKILLS {
-            let blob = format!("{} {} {}", s.name, s.body, s.instructions).to_ascii_lowercase();
-            for w in forbidden {
-                assert!(!blob.contains(w), "skill {} mentions {w}", s.name);
-            }
-            let real = blob.contains("host_cmd")
-                || blob.contains("workboard")
-                || blob.contains("imagine")
-                || blob.contains("verify")
-                || blob.contains("connector_cmd")
-                || blob.contains("computer_cmd")
-                || blob.contains("computer-use")
-                || blob.contains("grok build")
-                || blob.contains("uname");
-            assert!(real, "skill {} is not a cabin verb", s.name);
-            let md = skill_from_suggested(s);
-            assert_eq!(md.name, s.name);
-            assert!(!md.instructions.is_empty());
-            let _ = s.icon;
-        }
-        assert_eq!(LIVE_CONNECTORS.len(), 1);
-        assert_eq!(LIVE_CONNECTORS[0].id, "github");
-        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *l == "Who am I" && *t == "user"));
-        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *t == "list_repos"));
-        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *t == "list_issues"));
-        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *t == "search_code"));
-        assert!(LIVE_CONNECTORS[0].tools.iter().any(|(l, t)| *t == "search_issues"));
-        assert!(!LIVE_CONNECTORS[0].tools.iter().any(|(_, t)| *t == "create_pr_comment"));
-        assert!(!is_cabin_catalog("outlook"));
-        assert!(!is_cabin_catalog("gmail"));
         assert_eq!(IMAGINE_SCENES.len(), 9);
         assert_eq!(imagine_word(0), "the cabin");
         assert_eq!(imagine_word(2800), "the night");
-        assert_eq!(imagine_aspect_label(0), "2:3");
-        assert_eq!(imagine_aspect_label(1), "3:2");
-        assert_eq!(imagine_aspect_label(2), "1:1");
-        assert_eq!(imagine_aspect_label(3), "9:16");
-        assert_eq!(imagine_aspect_label(4), "16:9");
+        assert_eq!(grokhub_core::imagine_aspect_label(0), "2:3");
+        assert_eq!(grokhub_core::imagine_aspect_label(4), "16:9");
         assert_eq!(grokhub_core::imagine_aspect_name(0), "Tall");
-        assert_eq!(IMAGINE_BAR_CHIPS, ["Image", "Video", "Agent", "Speed", "Quality (v2.0)", "Auto"]);
-        assert_eq!(IMAGINE_VIDEO_CHIPS, ["480p", "720p", "6s", "10s", "15s", "Video audio"]);
-        assert_eq!(
-            imagine_toolbar_labels(ImagineKind::Image, false),
-            [
-                "Image",
-                "Video",
-                "Agent",
-                "Speed",
-                "Quality (v2.0)",
-                "Auto",
-                "2:3",
-                "Connect Grok",
-            ]
-        );
-        assert_eq!(
-            imagine_toolbar_labels(ImagineKind::Video, true),
-            [
-                "Image",
-                "Video",
-                "Agent",
-                "480p",
-                "720p",
-                "6s",
-                "10s",
-                "15s",
-                "Video audio",
-                "Auto",
-                "2:3",
-            ]
-        );
-        assert!(
-            imagine_chip_row_w(crate::theme::IMAGINE_BAR_W)
-                > imagine_send_cluster_w() + crate::theme::IMAGINE_HIT * 3.0,
-            "chip row must leave a clickable strip beside send/mic"
-        );
         assert_eq!(
             imagine_send_cluster_w(),
             crate::theme::IMAGINE_HIT * 2.0 + 12.0
@@ -2409,7 +1883,8 @@ mod tests {
             inner,
             "Plus + mid + Stop must fill the frame inner, not overflow it"
         );
-        let bar_inner = crate::theme::IMAGINE_BAR_H - 20.0;
+        // grok.com/imagine `.query-bar` measured height (94) minus its padding.
+        let bar_inner = 94.0 - 20.0;
         assert_eq!(imagine_prompt_h(), 32.0);
         assert_eq!(imagine_prompt_chip_gap(), 8.0);
         assert_eq!(
@@ -2446,17 +1921,6 @@ mod tests {
         assert_eq!(imagine_quality_label(true), "Quality (v2.0)");
         let fallback = imagine_still_rgba(b"not-a-jpeg");
         assert_eq!((fallback.width(), fallback.height()), (1, 1));
-        assert_eq!(imagine_quality_word(true), "quality");
-        assert_eq!(imagine_quality_word(false), "speed");
-        assert_eq!(
-            imagine_still_prompt("a night cabin", "2:3", true),
-            "a night cabin, 2:3 quality still"
-        );
-        assert_eq!(
-            imagine_still_prompt("a night cabin, 2:3 still", "2:3", false),
-            "a night cabin, 2:3 still, speed still"
-        );
-        assert_eq!(imagine_still_prompt("", "2:3", true), "");
         for s in IMAGINE_SCENES {
             let blob = format!("{} {}", s.title, s.prompt).to_ascii_lowercase();
             for w in forbidden {
@@ -2479,12 +1943,12 @@ mod tests {
             for key in s.frames {
                 let bytes = still_jpeg(key);
                 assert!(bytes.len() > 1000, "imagine still {key} is empty");
-                let img = image::load_from_memory(bytes).expect(*key);
+                let img = image::load_from_memory(bytes).expect(key);
                 assert!(img.width() >= 256);
                 assert!(img.height() >= 256);
             }
-            let a = imagine_frame_key(s, 0);
-            let b = imagine_frame_key(s, crate::theme::IMAGINE_FRAME_MS);
+            let (a, _, _) = imagine_frame_pair(s, 0);
+            let (b, _, _) = imagine_frame_pair(s, crate::theme::IMAGINE_FRAME_MS);
             assert_ne!(a, b, "imagine {} cover must change", s.title);
             let (_, _, fade0) = imagine_frame_pair(s, 0);
             let (_, _, fade1) = imagine_frame_pair(s, crate::theme::IMAGINE_FRAME_MS - 1);
@@ -2493,22 +1957,6 @@ mod tests {
         }
         let uv = cover_uv(768.0, 512.0, 345.0, 230.0);
         assert!(uv.width() > 0.4 && uv.height() > 0.9);
-        assert!(is_cabin_catalog("github"));
-        let pulse = SUGGESTED_SKILLS.iter().find(|s| s.name == "github-pulse").unwrap();
-        let cmds = grokhub_core::extract_connector_cmds(pulse.instructions);
-        assert_eq!(cmds.len(), 2);
-        assert_eq!(cmds[0].tool, "user");
-        assert_eq!(cmds[1].tool, "list_repos");
-        let triage = SUGGESTED_SKILLS.iter().find(|s| s.name == "workboard-triage").unwrap();
-        assert!(triage.instructions.contains("WORK_PIN:"));
-        let img = SUGGESTED_SKILLS.iter().find(|s| s.name == "imagine-scene").unwrap();
-        assert!(img.instructions.contains("IMAGINE_PROMPT:"));
-        use grokhub_core::github_api_path;
-        assert!(github_api_path("user", "").is_ok());
-        assert!(github_api_path("list_repos", "").is_ok());
-        assert!(github_api_path("list_issues", "repo:owner/name").is_ok());
-        assert!(github_api_path("search_code", "query:foo").is_ok());
-        assert!(github_api_path("search_issues", "query:foo").is_ok());
     }
 
     #[test]

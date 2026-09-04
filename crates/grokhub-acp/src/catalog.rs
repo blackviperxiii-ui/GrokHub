@@ -183,7 +183,7 @@ pub fn parse_models_list(text: &str) -> Vec<String> {
         }
         for tok in line.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',' || c == ':')
         {
-            let id = tok.trim().trim_end_matches(|c| c == '*' || c == '-');
+            let id = tok.trim().trim_end_matches(['*', '-']);
             if id.starts_with("grok-") && !out.iter().any(|x| x == id) {
                 out.push(id.to_string());
             }

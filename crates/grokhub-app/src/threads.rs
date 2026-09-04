@@ -1,6 +1,5 @@
 use grokhub_core::{uid, ThreadGoal};
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::sync::Arc;
 
 use crate::config;
@@ -114,6 +113,7 @@ pub fn export_markdown(t: &ChatThread) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use crate::config::TEST_CONFIG_LOCK;
 
     #[test]
