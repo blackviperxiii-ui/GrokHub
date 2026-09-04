@@ -304,7 +304,7 @@ pub fn default_device_name() -> String {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| hostname_cmd())
+        .or_else(hostname_cmd)
         .unwrap_or_else(|| "This computer".into())
 }
 
@@ -319,7 +319,7 @@ fn hostname_cmd() -> Option<String> {
         match child.try_wait() {
             Ok(Some(st)) if st.success() => {
                 let mut out = String::new();
-                if let Some(mut stdout) = child.stdout.take() {
+                if let Some(stdout) = child.stdout.take() {
                     let _ = stdout.take(256).read_to_string(&mut out);
                 }
                 let name = out.trim().to_string();
@@ -399,7 +399,7 @@ pub fn save(cfg: &AppConfig) -> Result<(), String> {
 }
 
 pub fn read_file_capped(path: &Path, cap: usize) -> String {
-    let mut f = match fs::File::open(path) {
+    let f = match fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return String::new(),
     };
@@ -444,10 +444,10 @@ pub fn write_memory(name: &str, body: &str) -> Result<(), String> {
     let dir = memory_dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(name);
-    if path.exists() {
-        if fs::metadata(&path).map(|m| m.len()).unwrap_or(u64::MAX) <= MEMORY_FILE_CAP as u64 {
-            let _ = fs::copy(&path, dir.join(format!("{name}.prev")));
-        }
+    if path.exists()
+        && fs::metadata(&path).map(|m| m.len()).unwrap_or(u64::MAX) <= MEMORY_FILE_CAP as u64
+    {
+        let _ = fs::copy(&path, dir.join(format!("{name}.prev")));
     }
     atomic_write(&path, bytes)
 }
@@ -527,10 +527,12 @@ mod tests {
         let root = std::env::temp_dir().join(format!("grokhub-cfg-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
-        let mut cfg = AppConfig::default();
-        cfg.api_key = "xai-test".into();
-        cfg.device_name = "cabin".into();
-        cfg.source_dir = "/tmp/Grok-Hub".into();
+        let cfg = AppConfig {
+            api_key: "xai-test".into(),
+            device_name: "cabin".into(),
+            source_dir: "/tmp/Grok-Hub".into(),
+            ..Default::default()
+        };
         save(&cfg).expect("save");
         let loaded = load();
         assert!(
@@ -749,8 +751,10 @@ mod tests {
         placed.window.maximized = true;
         save(&placed).expect("maximized save");
         assert!(load().window.maximized);
-        let mut themed = AppConfig::default();
-        themed.theme = "system".into();
+        let themed = AppConfig {
+            theme: "system".into(),
+            ..Default::default()
+        };
         save(&themed).expect("theme save");
         assert_eq!(load().theme, "system");
         let _ = fs::remove_dir_all(&root);

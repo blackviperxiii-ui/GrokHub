@@ -167,8 +167,7 @@ pub fn keep_atspi_row(row: &AtspiRow, desk_w: i32, desk_h: i32) -> bool {
 pub fn filter_atspi_rows(rows: &[AtspiRow], desk_w: i32, desk_h: i32) -> Vec<AtspiRow> {
     rows.iter()
         .filter(|r| keep_atspi_row(r, desk_w, desk_h))
-        .cloned()
-        .take(80)
+        .take(80).cloned()
         .collect()
 }
 
@@ -219,7 +218,7 @@ pub fn rank_atspi_rows(rows: &[AtspiRow], ask: Option<&str>, limit: usize) -> Ve
         .iter()
         .map(|r| (row_rank(r, ask, cursor_xy), r))
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|s| std::cmp::Reverse(s.0));
     scored
         .into_iter()
         .take(limit)

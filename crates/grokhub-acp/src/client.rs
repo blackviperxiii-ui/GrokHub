@@ -1382,7 +1382,7 @@ fn grok_p_once(
     image: Option<&str>,
     fork: bool,
 ) -> Result<SingleTurn, String> {
-    let mut child = grok_p_child(
+    let child = grok_p_child(
         prompt,
         cwd,
         resume,

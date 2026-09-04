@@ -471,6 +471,7 @@ mod tail_tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // pins design constants
     fn the_tail_is_where_a_chat_opens() {
         // 400px of transcript in a 200px pane: 200px of scroll to give away.
         assert!(
@@ -650,6 +651,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // pins design constants
     fn consecutive_thoughts_cluster_tighter_than_chat() {
         assert_eq!(cluster_gap(true, true), THOUGHT_CLUSTER_GAP);
         assert_eq!(cluster_gap(true, false), CHAT_BLOCK_GAP);

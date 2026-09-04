@@ -52,7 +52,7 @@ fn looks_like_refusal(s: &str) -> bool {
 
 fn split_topics(rest: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for chunk in rest.split(|c| c == ',' || c == '/') {
+    for chunk in rest.split([',', '/']) {
         for part in chunk.split(" and ") {
             let t = part
                 .trim()

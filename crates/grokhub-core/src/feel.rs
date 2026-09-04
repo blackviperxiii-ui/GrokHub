@@ -121,6 +121,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // pins design constants
     fn widget_expansion_press_insets() {
         assert!(HOVER_EXPANSION > 0.0);
         assert!(PRESS_EXPANSION < 0.0);

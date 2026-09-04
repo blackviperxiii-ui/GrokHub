@@ -79,13 +79,15 @@ mod tests {
         let root = std::env::temp_dir().join(format!("grokhub-sec-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
-        let mut s = Secrets::default();
-        s.oauth = Some(XaiOAuthTokens {
-            access_token: "tok".into(),
-            refresh_token: Some("ref".into()),
-            connected_at: 1,
+        let s = Secrets {
+            oauth: Some(XaiOAuthTokens {
+                access_token: "tok".into(),
+                refresh_token: Some("ref".into()),
+                connected_at: 1,
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         save(&s).expect("save");
         let loaded = load();
         assert_eq!(access_token(&loaded), "tok");
@@ -94,8 +96,10 @@ mod tests {
         let parsed: Secrets = serde_json::from_str(old).unwrap();
         assert_eq!(access_token(&parsed), "legacy");
         assert!(parsed.oauth.unwrap().picture.is_none());
-        let mut cfg = crate::config::AppConfig::default();
-        cfg.api_key = "xai-from-app".into();
+        let mut cfg = crate::config::AppConfig {
+            api_key: "xai-from-app".into(),
+            ..Default::default()
+        };
         let mut migrated = Secrets::default();
         migrate_console_key(&mut cfg, &mut migrated);
         assert_eq!(migrated.api_key, "xai-from-app");
@@ -113,8 +117,10 @@ mod tests {
             api_key: "xai-secrets".into(),
             ..Default::default()
         };
-        let mut leftover = crate::config::AppConfig::default();
-        leftover.api_key = "xai-stale".into();
+        let mut leftover = crate::config::AppConfig {
+            api_key: "xai-stale".into(),
+            ..Default::default()
+        };
         migrate_console_key(&mut leftover, &mut keep);
         assert_eq!(keep.api_key, "xai-secrets");
         assert!(leftover.api_key.is_empty());

@@ -140,14 +140,13 @@ pub fn strip_host_cmd_line(line: &str) -> Option<&str> {
     let t = line.trim();
     let rest = if let Some(r) = t.strip_prefix("HOST_CMD:") {
         r
-    } else if let Some(r) = t.strip_prefix("HOST_CMD") {
+    } else {
+        let r = t.strip_prefix("HOST_CMD")?;
         if r.is_empty() || r.starts_with(':') || r.starts_with(char::is_whitespace) {
             r
         } else {
             return None;
         }
-    } else {
-        return None;
     };
     let cmd = rest.trim().trim_start_matches(':').trim();
     if cmd.is_empty() {

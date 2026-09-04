@@ -22,7 +22,9 @@ jobs:
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libgl1-mesa-dev libwayland-dev libasound2-dev
       - run: cargo test --workspace
-      - run: cargo clippy --workspace --all-targets
+      # dead_code stays a warning: the retired direct-xAI chat pipeline in app.rs
+      # (JobOut::Chat*, ensure_acp, refresh_eyes) is the owner's call to remove.
+      - run: cargo clippy --workspace --all-targets -- -D warnings -A dead_code
       - run: cargo build -p grokhub-app -p grokhub-hub -p grokhub-ffi
       - name: Cabin binary exists
         run: test -x target/debug/grokhub && test -x target/debug/grokhub-hub

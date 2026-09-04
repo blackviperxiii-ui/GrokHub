@@ -440,7 +440,7 @@ pub fn tts_url() -> String {
 }
 
 pub fn tts_request_body(text: &str) -> Value {
-    let mut end = (TEXT_FILE_CAP as usize).min(text.len());
+    let mut end = TEXT_FILE_CAP.min(text.len());
     while end > 0 && !text.is_char_boundary(end) {
         end -= 1;
     }
@@ -513,11 +513,11 @@ mod tests {
 
     #[test]
     fn tts_request_body_caps_text() {
-        let huge = "a".repeat(TEXT_FILE_CAP as usize + 8);
+        let huge = "a".repeat(TEXT_FILE_CAP + 8);
         let body = tts_request_body(&huge);
         let text = body.get("text").and_then(|v| v.as_str()).unwrap();
         assert!(
-            text.len() <= TEXT_FILE_CAP as usize,
+            text.len() <= TEXT_FILE_CAP,
             "TTS must not serialize an 8MB complete: {}",
             text.len()
         );
@@ -709,12 +709,12 @@ mod tests {
     #[test]
     fn duplex_pcm_and_transcript_roles() {
         let arecord = live_pcm_argv("arecord").expect("arecord argv");
-        assert!(arecord.iter().any(|a| *a == "raw"));
-        assert!(!arecord.iter().any(|a| *a == "wav"));
-        assert!(arecord.iter().any(|a| *a == "24000"));
+        assert!(arecord.contains(&"raw"));
+        assert!(!arecord.contains(&"wav"));
+        assert!(arecord.contains(&"24000"));
         let ffmpeg = live_pcm_argv("ffmpeg").expect("ffmpeg argv");
-        assert!(ffmpeg.iter().any(|a| *a == "s16le"));
-        assert!(ffmpeg.iter().any(|a| *a == "pipe:1"));
+        assert!(ffmpeg.contains(&"s16le"));
+        assert!(ffmpeg.contains(&"pipe:1"));
         assert!(live_pcm_argv("sox").is_none());
         assert_eq!(live_pcm_frame_bytes(), 4800);
         let user = parse_realtime_event(&serde_json::json!({

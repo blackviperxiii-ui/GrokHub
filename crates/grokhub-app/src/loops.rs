@@ -1,5 +1,4 @@
 use grokhub_core::{uid, GrokLoop};
-use std::fs;
 
 use crate::config;
 
@@ -25,6 +24,7 @@ pub fn save(list: &[GrokLoop]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use crate::config::TEST_CONFIG_LOCK;
 
     #[test]

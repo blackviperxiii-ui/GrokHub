@@ -72,7 +72,7 @@ pub fn compute_next_run(a: &Automation, clock: LocalClock) -> u64 {
         }
     }
     if best == u64::MAX {
-        clock.now_ms + 24 * 3600_000
+        clock.now_ms + 24 * 3_600_000
     } else {
         best
     }
@@ -86,7 +86,7 @@ fn next_for_slot(schedule: &str, time: &str, clock: LocalClock) -> u64 {
             if tgt > now {
                 clock.now_ms + (tgt - now) as u64 * 60_000
             } else {
-                clock.now_ms + 365 * 24 * 3600_000
+                clock.now_ms + 365 * 24 * 3_600_000
             }
         }
         "weekdays" => next_matching_day(clock, tgt, now, |wd| (1..=5).contains(&wd)),
@@ -95,7 +95,7 @@ fn next_for_slot(schedule: &str, time: &str, clock: LocalClock) -> u64 {
             if tgt > now {
                 clock.now_ms + (tgt - now) as u64 * 60_000
             } else {
-                clock.now_ms + 30 * 24 * 3600_000
+                clock.now_ms + 30 * 24 * 3_600_000
             }
         }
         _ => {
@@ -120,7 +120,7 @@ fn next_matching_day(clock: LocalClock, tgt: u32, now: u32, ok: impl Fn(u8) -> b
             return clock.now_ms + mins as u64 * 60_000;
         }
     }
-    clock.now_ms + 24 * 3600_000
+    clock.now_ms + 24 * 3_600_000
 }
 
 pub fn ensure_automation_schedule(mut a: Automation, clock: LocalClock) -> Automation {
@@ -390,7 +390,7 @@ pub fn automation_summary_line(a: &Automation, now_ms: u64) -> String {
 }
 
 fn minutes_label(mins: u32) -> String {
-    if mins % 60 == 0 && mins >= 60 {
+    if mins.is_multiple_of(60) && mins >= 60 {
         let h = mins / 60;
         return if h == 24 {
             "24h".into()
@@ -784,7 +784,7 @@ mod tests {
         };
         let next = compute_next_run(&monthly, after);
         assert!(
-            next >= 1_000 + 29 * 24 * 3600_000,
+            next >= 1_000 + 29 * 24 * 3_600_000,
             "monthly after today's slot must not become daily: {next}"
         );
     }
