@@ -1,5 +1,4 @@
 use grokhub_core::{uid, Automation};
-use std::fs;
 
 use crate::config;
 
@@ -38,6 +37,7 @@ pub fn save_rewinds(rows: &[grokhub_core::RewindRecord]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use crate::config::TEST_CONFIG_LOCK;
 
     #[test]

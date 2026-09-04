@@ -1,7 +1,7 @@
 use crate::build_agent;
 use crate::helpers::{
     cabin_menu_should_dismiss, click_project_opens_board, collect_other_chip_threads, expand_home,
-    next_maximized, next_starter_skill_name, wants_live_repaint,
+    next_maximized, wants_live_repaint,
 };
 use crate::titlebar::{
     apply_tray_window, titlebar_chrome_btn, titlebar_chrome_hit, titlebar_should_start_drag,
@@ -18,8 +18,8 @@ use crate::skills;
 use crate::threads::{self, ChatThread};
 use crate::update::{remember_source, resolve_source};
 use crate::xai::{
-    grok_chat, grok_chat_stream, grok_imagine_opts, grok_imagine_video, grok_stt,
-    grok_tts, http_status_of,
+    grok_chat, grok_imagine_opts, grok_imagine_video, grok_stt,
+    grok_tts,
 };
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use grokhub_acp::{
@@ -29,8 +29,7 @@ use grokhub_acp::{
 };
 use grokhub_core::{
     append_composer, anticipate_consumes_slot, anticipated_need, apply_work_update, attach_kind, attach_name, attach_prompt_line,
-    cabin_system_prompt,
-    appearance_choices, appearance_hint, approved_cmds, auth_bearer, automation_blocked_by_policy,
+    appearance_choices, appearance_hint, automation_blocked_by_policy,
     blend_thread_goal, flush_visible_goal,
     build_hub_snapshot, merge_hub_snapshots,
     build_quick_chips, build_windshield, bump_skill_run, bump_usage,
@@ -44,10 +43,8 @@ use grokhub_core::{
     ImagineToolboxDock, ImagineWall,
     WallGif, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
     imagine_stage_h, imagine_stage_visible, imagine_toolbox_dock, imagine_toolbox_shows_title,
-    imagine_toolbox_top, imagine_wall_bounds, IMAGINE_WALL_GAP,
-    doctor_hands_line, due_automations, due_loops, ensure_automation_schedule, estimate_messages,
-    estimate_messages_from,
-    extract_connector_cmds, mark_automation_skipped, retain_held_plan, yolo_plan_split, chat_bearer,
+    imagine_toolbox_top, imagine_wall_bounds, IMAGINE_WALL_GAP, due_automations, due_loops, ensure_automation_schedule, estimate_messages,
+    estimate_messages_from, mark_automation_skipped, retain_held_plan, chat_bearer,
     oauth_access_live,
     drop_trailing_assistant, job_error_goes_to_chat, job_is_scratch,
     persist_user_turn, refund_host_reserved, daily_units_blocked,
@@ -56,7 +53,7 @@ use grokhub_core::{
     imagine_aspect_label, imagine_aspect_name, imagine_image_resolution, imagine_style_label,
     imagine_video_dur_label, imagine_video_duration_secs, imagine_video_res_label,
     imagine_video_resolution, last_imagine_receipt,
-    extract_insights, extract_work_updates, fact_candidates, fact_candidates_from, failover_model, filter_slash_commands, filter_slash_hits, grok_command_hits,
+    extract_insights, extract_work_updates, fact_candidates, fact_candidates_from, filter_slash_hits, grok_command_hits,
     frame_bytes, PresenceFrame,
     forget_topic, greet_from_last_job, has_auth, has_verify_ok, hey_grok_on_press,
     thread_host_receipts, thread_host_receipts_from,
@@ -70,10 +67,7 @@ use grokhub_core::{
     ProjectNode,
     is_plain_text, is_voice_error, keep_last_rewinds, last_user_scan, load_hub_state, mark_automation_ran,
     night_check_may_fire, night_counts_run, night_unauth_should_skip,
-    match_skill, mode_from_chip_value, model_for_mode, nav_from_chip_value,
-    cabin_eyes_request_text, cabin_frame_only, chat_attach_status, imagine_ref_status,
-    kick_consumes_attach, next_chat_image, next_goal_prompt, paint_connect_banner,
-    this_turn_cabin_frame,
+    match_skill, mode_from_chip_value, model_for_mode, nav_from_chip_value, chat_attach_status, imagine_ref_status, next_chat_image, next_goal_prompt,
     is_workload_user, merge_thinking_capped, prefer_complete_reply, quote_for_reply, strip_thinking,
     refresh_last_stretch, thought_shows_acts, thought_shows_label, visible_chat_refs, visible_turn_count, visible_turn_count_from,
     cluster_gap, scrolled_off_tail, ChatKind, ChatView, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK,
@@ -84,9 +78,9 @@ use grokhub_core::{
     BUBBLE_PAD_Y,
     BUBBLE_RADIUS,
     append_say, append_thought, append_tool, views_up_to_last_user, LiveBlock, LiveKind,
-    plus_empty_status, plus_menu_rows, computer_cmd_line, hands_protocol, lock_blocks_hands,
-    parse_computer_op, see_drive_attach, user_asks_cabin_eyes,
-    resolve_chat_model, resolve_dark, effective_chat_mode, settings_pin_blocks_auto, parse_fast_topics,
+    plus_empty_status, plus_menu_rows, computer_cmd_line, lock_blocks_hands,
+    parse_computer_op,
+    resolve_chat_model, resolve_dark, settings_pin_blocks_auto, parse_fast_topics,
     goal_continue_pin, goal_pin_for_job, goal_step_after_outcome, hub_dispatch_ok, should_auto_continue_goal,
     visible_goal_step_on_continue,
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
@@ -94,13 +88,13 @@ use grokhub_core::{
     recipe_from_cmds, replay_automation_target,
     mark_loop_ran, new_loop, parse_recipe, parse_slash, route_schedule, ScheduleRoute,
     automation_schedule_label, automation_summary_line,
-    parse_theme, pick_theme, plan_from_text, plan_room, LOOP_MAX,
+    parse_theme, pick_theme, plan_room, LOOP_MAX,
     chat_may_save_automation, user_asked_to_schedule,
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
     remember_chip_outcome, remember_typed_prompt, roll_usage_day,
     greeting_fingerprint, greeting_name, greeting_prompt, local_greeting, pick_greeting,
-    should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_MODE,
+    should_paint_greeting, should_refresh_greeting, GreetingInput,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
@@ -110,7 +104,6 @@ use grokhub_core::{
     clear_pending_after_complete, inbox_claim_ready,
     should_anticipate, should_auto_compact_now, should_keep_frame, should_refresh_llm,
     should_trim_result_bodies, shortcut_help,
-    windshield_prompt,
     composer_enter, composer_go, composer_go_tip, perm_key, ComposerEnter, ComposerGo, PermKey,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
@@ -121,9 +114,7 @@ use grokhub_core::{
     partition_suggestions, prune_live_suggestions, review_due,
     review_status_line, review_system_prompt, digest_line_from, DigestLine, ReviewDigest, SuggestionStore,
     CABIN_GITHUB_TOOLS, REVIEW_NIGHT_HOUR,
-    should_capture_before_chat, should_failover_status, should_idle_reflect, should_send_screenshot,
-    apply_auto_title, apply_auto_title_in, apply_manual_rename, delete_thread, display_tab_title, history_order,
-    history_row_visible, leftover_empty_thread, mark_slash_result, reuse_empty_thread_idx,
+    should_capture_before_chat, should_idle_reflect, should_send_screenshot, apply_auto_title_in, apply_manual_rename, delete_thread, display_tab_title, leftover_empty_thread, mark_slash_result, reuse_empty_thread_idx,
     unknown_cabin_slash, ThreadReuseView,
     should_name_thread,
     skill_follow_block, skill_use_in_chat_prompt, slash_help, SlashHit, summarize_write, surgical_memory_edit, MemoryEdit,
@@ -134,15 +125,14 @@ use grokhub_core::{
     realtime_bearer, realtime_can_connect, voice_log_role, voice_stream_token, voice_transcript_sends_chat,
     fold_stream_fields, StreamTokenKind,
     update_wipes_config, voice_session_url, Automation, BoardCard, GrokLoop,
-    BoardStatus, ChipInput, ChipKind, ChipMemory, ChipThread, ComputerOp, DeviceCodeStart, HeyGrokAction,
+    BoardStatus, ChipInput, ChipKind, ChipMemory, ChipThread, DeviceCodeStart, HeyGrokAction,
     HeyGrokRoute, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, MintRealtimeFn, Policy, Recipe, ReplayOp, RewindRecord,
     HostPlanStep, HostRisk, forbidden_reason, mint_host_halt,
-    AttachKind, PlusAct, PlusTarget, SkillMd, Slash, ThemeChoice, TranscribeRoute, UsageDay, VoiceEvent,
-    VoiceState, CONTEXT_BUDGET_TOKENS, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, CHIP_LLM_MODE, CHIP_VISIBLE_MAX, FRAME_CAP, IMAGE_FILE_CAP,
+    AttachKind, PlusAct, PlusTarget, SkillMd, Slash, TranscribeRoute, UsageDay, VoiceEvent,
+    VoiceState, CONTEXT_BUDGET_TOKENS, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, CHIP_VISIBLE_MAX, FRAME_CAP, IMAGE_FILE_CAP,
     TEXT_FILE_CAP, bound_scan,
-    user_pref_facts,
-    DEFAULT_MODEL, FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND,
+    user_pref_facts, FOLLOWUP_MAX_STEPS, FOLLOWUP_PROMPT, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HUB_KIND,
     IDLE_REFLECT_MS, IMAGINE_ASPECTS,
     IMAGINE_STYLES,
     PRESENCE_RING_MS, TRANSCRIBERS,
@@ -375,10 +365,6 @@ fn take_focused_composer(
 }
 
 const HIDDEN_HEARTBEAT_MS: u64 = 400;
-
-fn night_host_check_blocks_ui() -> bool {
-    false
-}
 
 fn cabin_fast_llm(key: String, prompt: String) -> String {
     let key = if key.trim().is_empty() {
@@ -956,6 +942,9 @@ fn hide_pending_grok_sessions(
         .collect()
 }
 
+/// `(directory listed, [(entry name, is_dir)])` from the Plus file picker.
+type PickList = (String, Vec<(String, bool)>);
+
 pub struct Cabin {
     nav: Nav,
     cfg: AppConfig,
@@ -997,7 +986,6 @@ pub struct Cabin {
     last_activity: Instant,
     reflected_idle: bool,
     last_recipe: Option<Recipe>,
-    pending_update: bool,
     update_pct: Option<u8>,
     update_can_restart: bool,
     secrets: Secrets,
@@ -1092,7 +1080,6 @@ pub struct Cabin {
     hotkeys: Option<GlobalHotKeyManager>,
     hotkey_hey: u32,
     hotkey_halt: u32,
-    tools_collapsed: bool,
     sidebar_q: String,
     rename_idx: Option<usize>,
     rename_buf: String,
@@ -1125,7 +1112,6 @@ pub struct Cabin {
     skill_q: String,
     mcp_nl: String,
     mcp_compose: bool,
-    github_args: String,
     pending_connectors: Vec<(String, String, String)>,
     auto_compose: bool,
     board_compose: bool,
@@ -1168,9 +1154,9 @@ pub struct Cabin {
     plus_ignore_close: bool,
     file_pick: Option<PlusTarget>,
     pick_rx: Option<mpsc::Receiver<(PlusTarget, PlusPick)>>,
-    pick_list_rx: Option<mpsc::Receiver<(String, Vec<(String, bool)>)>>,
+    pick_list_rx: Option<mpsc::Receiver<PickList>>,
     pick_dir: String,
-    pick_cache: Option<(String, Vec<(String, bool)>)>,
+    pick_cache: Option<PickList>,
     projects: Vec<ProjectNode>,
     project_sel: Option<String>,
     proj_menu_pos: egui::Pos2,
@@ -1322,7 +1308,6 @@ impl Cabin {
             .unwrap_or_else(|| Arc::new(Vec::new()));
         let imagine_last =
             last_imagine_receipt(messages.iter().map(|(_, c)| c.as_str())).unwrap_or_default();
-        let mut cfg = cfg;
         if cfg.source_dir.trim().is_empty() {
             if let Some(src) = resolve_source("") {
                 remember_source(&src);
@@ -1394,7 +1379,6 @@ impl Cabin {
             last_activity: Instant::now(),
             reflected_idle: false,
             last_recipe: None,
-            pending_update: false,
             update_pct: None,
             update_can_restart: false,
             secrets,
@@ -1489,7 +1473,6 @@ impl Cabin {
             hotkeys: None,
             hotkey_hey: 0,
             hotkey_halt: 0,
-            tools_collapsed: false,
             sidebar_q: String::new(),
             rename_idx: None,
             rename_buf: String::new(),
@@ -1522,7 +1505,6 @@ impl Cabin {
             skill_q: String::new(),
             mcp_nl: String::new(),
             mcp_compose: false,
-            github_args: String::new(),
             pending_connectors: vec![],
             auto_compose: false,
             board_compose: false,
@@ -1975,7 +1957,7 @@ impl Cabin {
         let target = self
             .chat_job_thread
             .clone()
-            .unwrap_or_else(|| vis);
+            .unwrap_or(vis);
         if let Some(t) = self.threads.iter_mut().find(|t| t.id == target) {
             t.accessed_ms = now_ms();
         }
@@ -2621,7 +2603,7 @@ impl Cabin {
             .threads
             .get(idx)
             .and_then(|t| t.grok_cwd.as_ref())
-            .map(|p| std::path::PathBuf::from(p) != bound)
+            .map(|p| *p != bound)
             .unwrap_or(false);
         let unknown_cwd = self
             .threads
@@ -2664,12 +2646,14 @@ impl Cabin {
             let out = match spawn(resume.clone()) {
                 Ok(h) => Ok(h),
                 Err(e) => {
-                    if resume.is_none() {
-                        Err(grokhub_acp::explain_handshake_error(&e, &cwd))
-                    } else if foreign || unknown_cwd || grokhub_acp::is_session_cwd_error(&e) {
-                        Err(grokhub_acp::explain_handshake_error(&e, &cwd))
-                    } else {
+                    let retry_fresh = resume.is_some()
+                        && !foreign
+                        && !unknown_cwd
+                        && !grokhub_acp::is_session_cwd_error(&e);
+                    if retry_fresh {
                         spawn(None).map_err(|e2| grokhub_acp::explain_handshake_error(&e2, &cwd))
+                    } else {
+                        Err(grokhub_acp::explain_handshake_error(&e, &cwd))
                     }
                 }
             };
@@ -8016,7 +8000,7 @@ impl Cabin {
                     let _ = apply_work_update(&mut self.board, &key, st);
                 }
                 self.persist();
-                let mut host_needs_kick = false;
+                let host_needs_kick = false;
                 // Grok Build owns bash, files, and computer-use. Do not parse HOST_CMD / COMPUTER_CMD.
                 if let Some(p) = extract_imagine_prompt(&scan) {
                     self.chat_job_thread = origin.clone();
@@ -8096,7 +8080,7 @@ impl Cabin {
                         self.kick_model(false);
                     }
                 } else {
-                    let next_step = goal_step_after_outcome(job_step, &outcome, true);
+                    let next_step = goal_step_after_outcome(job_step, outcome, true);
                     if let Some(id) = job.as_deref() {
                         if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
                             t.goal.step = next_step;
@@ -9301,7 +9285,7 @@ impl Cabin {
 
     fn speak_reply(&mut self, text: &str) {
         let key = self.bearer();
-        let cap = TEXT_FILE_CAP as usize;
+        let cap = TEXT_FILE_CAP;
         let mut end = cap.min(text.len());
         while end > 0 && !text.is_char_boundary(end) {
             end -= 1;
@@ -9397,9 +9381,7 @@ impl Cabin {
     }
 
     fn poll_eyes_cap(&mut self) -> Option<Result<String, String>> {
-        let Some(rx) = self.eyes_cap_rx.take() else {
-            return None;
-        };
+        let rx = self.eyes_cap_rx.take()?;
         match rx.try_recv() {
             Ok(cap) => {
                 if let Ok(url) = &cap {
@@ -10087,7 +10069,7 @@ impl Cabin {
                 ui.set_min_width(220.0);
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (id, label) in crate::theme::CABIN_MENU {
-                    if crate::cards::felt_menu_row(ui, *label) {
+                    if crate::cards::felt_menu_row(ui, label) {
                         pick = Some(*id);
                     }
                 }
@@ -10435,17 +10417,6 @@ impl Cabin {
         };
     }
 
-    #[allow(dead_code)]
-    fn conn_kind(&self) -> &'static str {
-        if self.has_key() {
-            "live"
-        } else if self.oauth_pending.is_some() {
-            "setup"
-        } else {
-            "setup"
-        }
-    }
-
     fn ui_titlebar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("titlebar")
             .exact_height(crate::theme::TITLEBAR_H)
@@ -10551,7 +10522,7 @@ impl Cabin {
         email: &str,
         photo: Option<&TextureHandle>,
     ) -> egui::Response {
-        let (rect, resp) =
+        let (_rect, resp) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), RAIL_FOOTER_H), egui::Sense::click());
         let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
         if wash.a() > 0 {
@@ -10692,9 +10663,9 @@ impl Cabin {
                             }
                             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                                 self.cancel_proj_rename();
-                            } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                self.finish_proj_rename();
-                            } else if edit.lost_focus() && !self.proj_rename_focus {
+                            } else if ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                || (edit.lost_focus() && !self.proj_rename_focus)
+                            {
                                 self.finish_proj_rename();
                             }
                         });
@@ -11355,7 +11326,7 @@ impl Cabin {
                 egui::pos2(avail.left() + side, avail.top() + greet_top),
                 egui::vec2(pane_w, greet_h.max(1.0)),
             );
-            ui.allocate_ui_at_rect(greet_rect, |ui| {
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(greet_rect), |ui| {
                 ui.set_min_size(greet_rect.size());
                 ui.with_layout(
                     egui::Layout::top_down_justified(egui::Align::Center),
@@ -11375,7 +11346,7 @@ impl Cabin {
             egui::pos2(avail.left() + side, avail.top() + composer_top),
             egui::vec2(pane_w, composer_h),
         );
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_min_size(egui::vec2(pane_w, crate::theme::QUERY_MIN_H + 96.0));
             ui.with_layout(
                 egui::Layout::top_down_justified(egui::Align::Center),
@@ -12144,7 +12115,7 @@ impl Cabin {
                     screen.center(),
                     egui::vec2(920.0, 620.0).min(screen.size() - egui::vec2(48.0, 48.0)),
                 );
-                ui.allocate_ui_at_rect(modal, |ui| {
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(modal), |ui| {
                     egui::Frame::none()
                         .fill(crate::theme::bg())
                         .rounding(16.0)
@@ -12970,7 +12941,7 @@ impl Cabin {
                     } else {
                         0.0
                     };
-                    ui.allocate_ui_at_rect(viewport, |ui| {
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(viewport), |ui| {
                         ui.set_clip_rect(viewport);
                         egui::ScrollArea::vertical()
                             .id_salt("imagine-scroll")
@@ -12987,7 +12958,7 @@ impl Cabin {
                                         egui::pos2(x + stage_w * 0.5, st.center().y),
                                         egui::vec2(stage_w, stage_h),
                                     );
-                                    ui.allocate_ui_at_rect(stage, |ui| {
+                                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(stage), |ui| {
                                         ui.set_clip_rect(stage);
                                         stage_hit = crate::cards::imagine_stage(
                                             ui, &last, working, video,
@@ -13020,7 +12991,7 @@ impl Cabin {
                             egui::pos2(content.left(), wall_top),
                             egui::vec2(content.width(), wall_h),
                         );
-                        ui.allocate_ui_at_rect(wall, |ui| {
+                        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(wall), |ui| {
                             ui.set_clip_rect(wall);
                             egui::ScrollArea::vertical()
                                 .auto_shrink([false, false])
@@ -13041,9 +13012,7 @@ impl Cabin {
                 }
             });
         let content = panel.response.rect;
-        let bar_w = (content.width() - 48.0)
-            .min(crate::theme::IMAGINE_BAR_W)
-            .max(280.0);
+        let bar_w = (content.width() - 48.0).clamp(280.0, crate::theme::IMAGINE_BAR_W);
         let y = imagine_toolbox_top(content.top(), content.height(), box_h, dock);
         let x = content.center().x - bar_w * 0.5;
         egui::Area::new(egui::Id::new("imagine-new"))
@@ -13106,14 +13075,15 @@ impl Cabin {
                         egui::Color32::from_black_alpha(220),
                     );
                     let inner = full.shrink(28.0);
-                    ui.allocate_ui_at_rect(inner, |ui| {
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
                         crate::cards::imagine_result_hero(ui, &last);
                     });
-                    ui.allocate_ui_at_rect(
-                        egui::Rect::from_min_size(
-                            egui::pos2(full.right() - 220.0, full.top() + 16.0),
-                            egui::vec2(200.0, 40.0),
-                        ),
+                    let save_rect = egui::Rect::from_min_size(
+                        egui::pos2(full.right() - 220.0, full.top() + 16.0),
+                        egui::vec2(200.0, 40.0),
+                    );
+                    ui.allocate_new_ui(
+                        egui::UiBuilder::new().max_rect(save_rect),
                         |ui| {
                             ui.horizontal(|ui| {
                                 if crate::cards::white_pill(ui, "Save") {
@@ -14395,7 +14365,7 @@ mod tests {
         assert!(
             src.contains("selectable(true)"),
             "chat bubble text must be selectable for copy: {}",
-            &src[src.find("fn paint_speech_bubble").unwrap_or(0)..]
+            src[src.find("fn paint_speech_bubble").unwrap_or(0)..]
                 .get(..400)
                 .unwrap_or("")
         );
@@ -14629,6 +14599,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn about_section_opens_update() {
         assert_eq!(
             super::settings_group_home(super::SettingsGroup::About),
@@ -14890,13 +14861,13 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // pins design constants
     fn idle_visible_cabin_does_not_spin() {
         assert!(!super::wants_live_repaint(false, false, false, true, false, false));
         assert!(!super::wants_live_repaint(false, false, false, false, false, false));
         assert!(super::wants_live_repaint(true, false, false, true, false, false));
         assert!(super::wants_live_repaint(false, false, false, false, false, true));
         assert!(super::HIDDEN_HEARTBEAT_MS > 80);
-        assert!(!super::night_host_check_blocks_ui());
         assert_eq!(
             grokhub_core::heartbeat_repaint_ms(false, false, grokhub_core::HEARTBEAT_MS, super::HIDDEN_HEARTBEAT_MS),
             grokhub_core::HEARTBEAT_MS
@@ -17004,9 +16975,7 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("Ok(JobOut::Connector").next())
             .expect("HostDone facts");
-        let diff = host_done_facts
-            .find("HOST_DIFF:")
-            .expect("HOST_DIFF push");
+        assert!(host_done_facts.contains("HOST_DIFF:"), "HOST_DIFF push");
         assert!(
             host_done_facts.contains("resolve_host_cite_path"),
             "HOST_DIFF must read the write from the bound tree, not the cabin cwd: {host_done_facts}"
@@ -18211,7 +18180,7 @@ mod tests {
             "empty home must not paint a GrokHub wordmark: {slice}"
         );
         assert!(
-            !slice.contains("device_name") && !slice.contains("WORDMARK"),
+            !slice.contains("device_name"),
             "empty home must not paint the hostname: {slice}"
         );
         assert!(
@@ -18258,6 +18227,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // pins design constants
     fn rail_footer_is_reserved() {
         assert_eq!(super::RAIL_FOOTER_H, 52.0);
         assert!(super::PALETTE_LIST_H < 400.0);
@@ -18504,7 +18474,7 @@ mod tests {
             "greeting paints inside the capped column"
         );
         assert!(
-            home.contains("allocate_ui_at_rect")
+            home.contains("allocate_new_ui")
                 && home.contains("empty_home_side_gap")
                 && home.contains("top_down_justified"),
             "empty-home cluster is a tight centered column, not a full-height justified fill: {home}"
@@ -19027,7 +18997,7 @@ mod tests {
         let set_nav = src
             .split("fn set_nav_id(")
             .nth(1)
-            .and_then(|s| s.split("fn conn_kind(").next())
+            .and_then(|s| s.split("fn ui_titlebar(").next())
             .expect("set_nav_id");
         assert!(
             set_nav.contains("\"chat\" =>") && set_nav.contains("self.open_recent_chat()"),

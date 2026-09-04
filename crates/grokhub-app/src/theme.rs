@@ -6,7 +6,7 @@ use eframe::egui::{
     TextureHandle, TextureOptions,
 };
 use grokhub_core::{
-    feel_scale, felt_rect, hover_alpha, hover_mix, lerp_f32, lift_rgb, mix_channel, os_prefers_dark,
+    feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb, mix_channel, os_prefers_dark,
     HOVER_EXPANSION, HOVER_SECS, PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -31,9 +31,6 @@ pub const FG: Color32 = Color32::from_rgb(0xfc, 0xfc, 0xfc);
 pub const MUTED: Color32 = Color32::from_rgb(0x9e, 0x9e, 0x9e);
 /// `--fg-tertiary` `0 0% 52%`
 pub const SUBTLE: Color32 = Color32::from_rgb(0x85, 0x85, 0x85);
-/// Empty-chat greeting — grok.com hero, muted not faint-as-chrome
-pub const GREETING: Color32 = Color32::from_rgb(0x9e, 0x9e, 0x9e);
-pub const GREETING_SIZE: f32 = 13.0;
 /// Empty-home hero greeting (grok.com, not a 56px product wordmark)
 pub const GREET_HERO: f32 = 32.0;
 /// `--border-l1` ~8% white on base
@@ -43,7 +40,6 @@ pub const BORDER_STRONG: Color32 = Color32::from_rgb(0x38, 0x38, 0x38);
 /// `--sidebar-accent` `240 5% 26%`
 pub const NAV_ACTIVE: Color32 = Color32::from_rgb(0x3f, 0x3f, 0x46);
 pub const BUBBLE_USER: Color32 = Color32::from_rgb(0x2a, 0x2a, 0x2a);
-pub const BUBBLE_ASSISTANT: Color32 = PANEL;
 pub const LIVE: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
 pub const SETUP: Color32 = Color32::from_rgb(0xea, 0xb3, 0x08);
 pub const OFFLINE: Color32 = Color32::from_rgb(0xef, 0x44, 0x44);
@@ -55,7 +51,6 @@ pub const LIGHT_ELEVATED: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);
 pub const LIGHT_FG: Color32 = Color32::from_rgb(0x0a, 0x0a, 0x0a);
 pub const LIGHT_MUTED: Color32 = Color32::from_rgb(0x73, 0x73, 0x73);
 pub const LIGHT_SUBTLE: Color32 = Color32::from_rgb(0x8a, 0x8a, 0x8a);
-pub const LIGHT_GREETING: Color32 = Color32::from_rgb(0x73, 0x73, 0x73);
 pub const LIGHT_BORDER: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
 pub const LIGHT_BORDER_STRONG: Color32 = Color32::from_rgb(0xd4, 0xd4, 0xd8);
 pub const LIGHT_NAV_ACTIVE: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
@@ -101,9 +96,6 @@ pub fn muted() -> Color32 {
 }
 pub fn subtle() -> Color32 {
     tok(SUBTLE, LIGHT_SUBTLE)
-}
-pub fn whisper() -> Color32 {
-    tok(GREETING, LIGHT_GREETING)
 }
 pub fn border() -> Color32 {
     tok(BORDER, LIGHT_BORDER)
@@ -207,8 +199,6 @@ fn cmd_stdout(bin: &str, args: &[&str]) -> String {
 
 pub const SIDEBAR_W: f32 = 260.0;
 pub const TITLEBAR_H: f32 = 36.0;
-/// `.query-bar` measured max-width
-pub const QUERY_MAX_W: f32 = 800.0;
 /// `[data-testid=chat-input]` `min-h-[60px]`
 pub const QUERY_MIN_H: f32 = 60.0;
 /// `.query-bar` computed `border-radius: 160px`
@@ -222,15 +212,12 @@ pub const FONT_CHROME: f32 = 14.0;
 pub const FONT_META: f32 = 13.0;
 /// Settings / pane titles — larger than Body.
 pub const FONT_HEADING: f32 = 22.0;
-pub const WORDMARK: f32 = 56.0;
 /// grok.com/imagine `h1.text-[22px].leading-7`
 pub const IMAGINE_TITLE: f32 = 22.0;
 /// gap from h1 to `.query-bar` on /imagine
 pub const IMAGINE_GAP: f32 = 32.0;
 /// measured Imagine query-bar width
 pub const IMAGINE_BAR_W: f32 = 768.0;
-/// grok.com/imagine `.query-bar` measured height
-pub const IMAGINE_BAR_H: f32 = 94.0;
 /// Imagine `.query-bar` `border-radius: 20px` — not the chat pill
 pub const IMAGINE_BAR_RADIUS: f32 = 20.0;
 /// Imagine Upload / Submit `size-9`
@@ -259,9 +246,6 @@ pub const CABIN_MENU: &[(&str, &str)] = &[
     ("devices", "Devices"),
     ("queue", "Queue"),
 ];
-
-pub const WORKSPACE: &[(&str, &str)] = GROK_NAV;
-pub const TOOLS: &[(&str, &str)] = CABIN_MENU;
 
 #[allow(dead_code)]
 pub fn stage_subtitle(id: &str) -> &'static str {
@@ -561,18 +545,15 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // pins design constants
     fn grok_com_chrome_tokens() {
         assert_eq!(BG, Color32::from_rgb(5, 5, 5));
         assert_eq!(SURFACE, Color32::from_rgb(20, 20, 20));
         assert_eq!(PANEL, Color32::from_rgb(33, 33, 33));
         assert_eq!(FG, Color32::from_rgb(252, 252, 252));
         assert_eq!(MUTED, Color32::from_rgb(158, 158, 158));
-        assert_eq!(GREETING, MUTED, "hero greeting uses secondary, not a washed-out whisper");
-        assert_ne!(GREETING, FG);
-        assert_eq!(GREETING_SIZE, 13.0);
         assert_eq!(GREET_HERO, 32.0);
         assert!(GREET_HERO > FONT_HEADING);
-        assert_eq!(QUERY_MAX_W, 800.0);
         assert_eq!(QUERY_MIN_H, 60.0);
         assert_eq!(QUERY_RADIUS, 160.0);
         assert_eq!(HIT, 40.0);
@@ -580,7 +561,6 @@ mod tests {
         assert_eq!(FONT_UI, 15.0);
         assert_eq!(FONT_CHROME, 14.0);
         assert_eq!(FONT_HEADING, 22.0);
-        assert_eq!(WORDMARK, 56.0);
         assert_eq!(TITLEBAR_H, 36.0);
         assert!(TITLEBAR_H >= HIT - 4.0, "titlebar must fit chrome hits");
         assert!(include_bytes!("../assets/fonts/Inter-Regular.ttf").len() > 1000);
@@ -592,7 +572,6 @@ mod tests {
         assert_eq!(IMAGINE_TITLE, 22.0);
         assert_eq!(IMAGINE_GAP, 32.0);
         assert_eq!(IMAGINE_BAR_W, 768.0);
-        assert_eq!(IMAGINE_BAR_H, 94.0);
         assert_eq!(IMAGINE_BAR_RADIUS, 20.0);
         assert_eq!(IMAGINE_HIT, 36.0);
         assert_eq!(IMAGINE_TILE_SHORT, 230.0);
@@ -605,7 +584,7 @@ mod tests {
         assert_eq!(CABIN_MENU[0], ("history", "History"));
         assert_eq!(CABIN_MENU[1], ("settings", "Settings"));
         assert!(CABIN_MENU.iter().all(|(id, _)| *id != "command"));
-        assert!(TOOLS.iter().all(|(id, _)| *id != "connectors"));
+        assert!(CABIN_MENU.iter().all(|(id, _)| *id != "connectors"));
         assert_eq!(stage_subtitle("history"), "Past chats");
         assert_eq!(stage_subtitle("chat"), "Recent chat");
         assert_eq!(stage_subtitle("imagine"), "Images");

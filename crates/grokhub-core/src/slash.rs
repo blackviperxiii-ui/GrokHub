@@ -89,8 +89,8 @@ fn strip_bind_word(rest: &str) -> Option<&str> {
 
 pub fn parse_slash(line: &str) -> Option<Slash> {
     let t = line.trim();
-    if t.starts_with("$ ") {
-        let cmd = t[2..].trim();
+    if let Some(rest) = t.strip_prefix("$ ") {
+        let cmd = rest.trim();
         if cmd.is_empty() {
             return None;
         }

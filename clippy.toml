@@ -1,0 +1,2 @@
+# ACP session spawners and chip builders take a dozen plain args by design.
+too-many-arguments-threshold = 12

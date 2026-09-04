@@ -13,7 +13,7 @@ pub enum CaptureKind {
 }
 
 pub fn has_bin(bins: &[&str], name: &str) -> bool {
-    bins.iter().any(|b| *b == name)
+    bins.contains(&name)
 }
 
 /// Wayland-native tools first. X11 grabbers last — they see a black root on GNOME/KDE.

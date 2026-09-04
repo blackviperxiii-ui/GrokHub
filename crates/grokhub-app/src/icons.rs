@@ -23,9 +23,9 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     let painter = ui.painter();
     let fill = crate::theme::surface();
-    let stroke = Stroke::new(1.5, crate::theme::fg());
+    let stroke = Stroke::new(1.5_f32, crate::theme::fg());
     painter.rect_filled(rect, 10.0, fill);
-    painter.rect_stroke(rect, 10.0, Stroke::new(1.0, crate::theme::border_strong()));
+    painter.rect_stroke(rect, 10.0, Stroke::new(1.0_f32, crate::theme::border_strong()));
     let r = rect.shrink(size * 0.22);
     let c = r.center();
     let w = r.width();
@@ -211,7 +211,6 @@ pub enum BarIcon {
     Stop,
     ArrowUp,
     Search,
-    Gear,
 }
 
 /// grok.com rail — 20px stroke-2 square-cap icons.
@@ -224,7 +223,6 @@ pub enum RailIcon {
     Grid,
     Folder,
     Chat,
-    Pin,
     File,
 }
 
@@ -362,13 +360,6 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
                 stroke,
             );
         }
-        RailIcon::Pin => {
-            painter.circle_filled(Pos2::new(c.x, c.y - w * 0.10), w * 0.14, color);
-            painter.line_segment(
-                [Pos2::new(c.x, c.y - w * 0.02), Pos2::new(c.x, c.y + w * 0.28)],
-                stroke,
-            );
-        }
         RailIcon::File => {
             let r = rect.shrink(w * 0.22);
             painter.rect_stroke(r, 2.0, stroke);
@@ -417,7 +408,7 @@ pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::
     }
     let c = rect.center();
     let w = rect.width();
-    let stroke = Stroke::new(1.6, color);
+    let stroke = Stroke::new(1.6_f32, color);
     match icon {
         BarIcon::Plus => {
             painter.line_segment(
@@ -470,7 +461,7 @@ pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::
         }
         BarIcon::Send => {
             painter.circle_filled(c, w * 0.46, crate::theme::fg());
-            let arrow = Stroke::new(1.8, crate::theme::bg());
+            let arrow = Stroke::new(1.8_f32, crate::theme::bg());
             painter.line_segment(
                 [Pos2::new(c.x, c.y + w * 0.16), Pos2::new(c.x, c.y - w * 0.16)],
                 arrow,
@@ -529,19 +520,6 @@ pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::
                 ],
                 stroke,
             );
-        }
-        BarIcon::Gear => {
-            painter.circle_stroke(c, w * 0.16, stroke);
-            for i in 0..6 {
-                let a = i as f32 * std::f32::consts::TAU / 6.0;
-                painter.line_segment(
-                    [
-                        c + Vec2::new(a.cos() * w * 0.18, a.sin() * w * 0.18),
-                        c + Vec2::new(a.cos() * w * 0.32, a.sin() * w * 0.32),
-                    ],
-                    stroke,
-                );
-            }
         }
     }
     resp
@@ -722,7 +700,6 @@ mod tests {
         assert_ne!(icon_for_label("Host snapshot"), icon_for_label("Morning brief"));
         assert_ne!(BarIcon::Mic, BarIcon::Send);
         assert_ne!(BarIcon::Plus, BarIcon::Search);
-        assert_ne!(BarIcon::Gear, BarIcon::Search);
         assert_ne!(BarIcon::ArrowUp, BarIcon::Send);
         assert_ne!(BarIcon::Stop, BarIcon::Send);
         assert_eq!(rail_icon_for("chat"), RailIcon::Chat);

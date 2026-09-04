@@ -339,7 +339,7 @@ pub fn detect_chip_context(chat: &[(String, String)]) -> ChipContext {
         decide: regexish(&blob, &["should i", "which", "options", "tradeoff", "recommend", "compare"]),
         implement: regexish(&users.to_ascii_lowercase(), &["implement", "add ", "build ", "create ", "wire ", "ship ", "patch"]),
         incomplete: regexish(&asst.to_ascii_lowercase(), &["i'll", "i will", "let me", "next i", "continuing", "still need", "want me to", "shall i"])
-            || (asst.len() > 0
+            || (!asst.is_empty()
                 && asst.len() < 600
                 && regexish(&asst.to_ascii_lowercase(), &["check", "probe", "investigate"])
                 && !asst.to_ascii_lowercase().contains("host_cmd")),
@@ -783,6 +783,9 @@ fn chips_from_other_threads(threads: &[ChipThread]) -> Vec<QuickChip> {
     out
 }
 
+/// `(trigger word, label, prompt builder, score)` for a draft-predicted chip.
+type DraftTemplate<'a> = (&'a str, &'a str, fn(&str) -> (String, ChipKind), f32);
+
 fn draft_prediction_chips(draft_raw: &str) -> Vec<QuickChip> {
     let draft = draft_raw.trim();
     if draft.len() < 2 {
@@ -790,20 +793,17 @@ fn draft_prediction_chips(draft_raw: &str) -> Vec<QuickChip> {
     }
     let lower = draft.to_ascii_lowercase();
     if draft.starts_with('$') || lower.starts_with("/sh ") {
+        // Keep the `$` / `/sh ` prefix: Shell chips strip it when they run.
         return vec![chip(
             "pred-shell-run",
             "Run this on host",
-            if draft.starts_with('$') {
-                draft
-            } else {
-                draft
-            },
+            draft,
             ChipKind::Shell,
             130.0,
             "Predicted from your draft",
         )];
     }
-    let templates: &[(&str, &str, fn(&str) -> (String, ChipKind), f32)] = &[
+    let templates: &[DraftTemplate] = &[
         ("fix", "Debug with evidence", |d| {
             (format!("{d}. Investigate with Grok Build tools for real evidence. Root cause, fix, verify."), ChipKind::Chat)
         }, 125.0),
@@ -968,7 +968,7 @@ fn record_transition(memory: &mut ChipMemory, from: Option<String>, to: String) 
             *row.entry(to.clone()).or_insert(0) += 1;
             if row.len() > MAX_TRANSITIONS {
                 let mut pairs: Vec<_> = row.iter().map(|(k, v)| (k.clone(), *v)).collect();
-                pairs.sort_by(|a, b| b.1.cmp(&a.1));
+                pairs.sort_by_key(|p| std::cmp::Reverse(p.1));
                 row.clear();
                 for (k, v) in pairs.into_iter().take(MAX_TRANSITIONS) {
                     row.insert(k, v);
@@ -1539,8 +1539,7 @@ fn uniq_by_value(chips: Vec<QuickChip>) -> Vec<QuickChip> {
 }
 
 pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
-    let max = input.max.min(CHIP_HARD_MAX).max(1).min(CHIP_VISIBLE_MAX.max(input.max.min(CHIP_HARD_MAX)));
-    let max = max.min(CHIP_HARD_MAX);
+    let max = input.max.clamp(1, CHIP_HARD_MAX);
     let dismissed: std::collections::HashSet<String> = input
         .dismissed
         .iter()
@@ -2095,7 +2094,7 @@ mod tests {
         let chips = build_quick_chips(input(&[], "", &mem, &[], &[]));
         let labels: Vec<_> = chips.iter().map(|c| c.label.as_str()).collect();
         assert!(
-            labels.iter().any(|l| *l == "Open Imagine"),
+            labels.contains(&"Open Imagine"),
             "empty {:?}",
             labels
         );
@@ -2105,7 +2104,7 @@ mod tests {
             labels
         );
         assert!(
-            !labels.iter().any(|l| *l == "Voice"),
+            !labels.contains(&"Voice"),
             "Voice is the mic, not a duplicate chip: {:?}",
             labels
         );
@@ -2657,7 +2656,7 @@ mod tests {
         let finish = chips.iter().find(|c| {
             c.id == "last-run-host" || c.id == "ctx-incomplete" || c.label.contains("Finish")
         });
-        let finish = finish.expect(&format!("finish chip: {:?}", labels(&chips)));
+        let finish = finish.unwrap_or_else(|| panic!("finish chip: {:?}", labels(&chips)));
         assert!(
             finish.value.contains("computer-use") || finish.value.contains("desktop"),
             "GUI finish chip must ask Grok to drive the desktop: {}",

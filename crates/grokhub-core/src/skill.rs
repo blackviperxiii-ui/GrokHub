@@ -342,7 +342,7 @@ mod tests {
         );
         let proposed = propose_skill_from_turn("flash the pi", "ok", &["dd if=a".into()]);
         assert_eq!(proposed.slash, "/flash");
-        assert_eq!(prefer_patch(&[flash.clone()], &proposed), Some("flash-pi".into()));
+        assert_eq!(prefer_patch(std::slice::from_ref(&flash), &proposed), Some("flash-pi".into()));
         let patched = patch_skill(&flash, &proposed);
         assert_eq!(patched.name, "flash-pi");
         assert_eq!(patched.slash, "/flash");

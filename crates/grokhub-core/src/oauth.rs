@@ -429,7 +429,7 @@ pub fn parse_poll_result(ok: bool, json: &Value, now_ms: u64) -> PollResult {
 
 fn b64url_decode(s: &str) -> Option<Vec<u8>> {
     let mut t = s.replace('-', "+").replace('_', "/");
-    while t.len() % 4 != 0 {
+    while !t.len().is_multiple_of(4) {
         t.push('=');
     }
     let table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

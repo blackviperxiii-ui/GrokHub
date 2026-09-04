@@ -462,9 +462,7 @@ pub fn is_under_project(abs_path: &str, project_root: &str) -> bool {
 
 pub fn project_name_from_path(p: &str) -> String {
     p.replace('\\', "/")
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .next_back()
+        .split('/').rfind(|s| !s.is_empty())
         .unwrap_or(p)
         .to_string()
 }
@@ -567,7 +565,7 @@ fn host_cd_argv<'a>(bits: &'a [&'a str]) -> Option<&'a [&'a str]> {
 }
 
 fn host_cd_dest_leaves(cmd: &str, root: &str, home: Option<&str>) -> bool {
-    for seg in cmd.split(|c: char| matches!(c, '&' | '|' | ';')) {
+    for seg in cmd.split(['&', '|', ';']) {
         let bits: Vec<&str> = seg.split_whitespace().collect();
         let Some(after_cd) = host_cd_argv(&bits) else {
             continue;
