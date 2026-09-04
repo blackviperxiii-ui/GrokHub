@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.9.0 — 2026-09-04
+
+GrokHub cabin for Grok Build **1.0.21** (covers 1.0.18–1.0.21). Cursor **#9** is on `main`.
+
+- Host receipts keep non-UTF-8 lines (Latin-1 / binary dumps) instead of dropping them, and stop pumping on a pipe read error.
+- Headless `grok -p` spend fields (`usage`, `modelUsage`, cost) ride through the existing `/usage` parser.
+- Clippy is gated in CI (`-D warnings`, `dead_code` stays advisory).
+
+TUI-only 1.0.18–1.0.21 (ghost prompt, `/btw`, dock, `--plugin-dir` SDK inject) stay in `grok`.
+
 ## 2.8.2 — 2026-09-01
 
 - New chat and sidebar History clicks put the cursor in the composer.

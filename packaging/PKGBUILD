@@ -1,6 +1,6 @@
 # Local makepkg from a clone (not the AUR source PKGBUILD).
 pkgname=grokhub
-pkgver=2.8.2
+pkgver=2.9.0
 pkgrel=1
 pkgdesc="Grok-native Linux cabin — Rust binary, no Electron"
 arch=('x86_64')
