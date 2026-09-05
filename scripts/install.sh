@@ -32,8 +32,25 @@ cargo build --release --locked -p grokhub-app -p grokhub-hub
 
 install -Dm755 "$ROOT/target/release/grokhub" "$PREFIX/bin/grokhub"
 install -Dm755 "$ROOT/target/release/grokhub-hub" "$PREFIX/bin/grokhub-hub"
-install -Dm644 "$ROOT/packaging/grokhub.desktop" \
-  "$PREFIX/share/applications/grokhub.desktop"
+install_desktop_entry() {
+  local src="$1"
+  local dst="$2"
+  local bin="$3"
+  local tmp
+  tmp="$(mktemp)"
+  sed -e "s|^Exec=grokhub\$|Exec=${bin}|" \
+      -e "s|^TryExec=grokhub\$|TryExec=${bin}|" \
+      "$src" >"$tmp"
+  install -Dm644 "$tmp" "$dst"
+  rm -f "$tmp"
+}
+install_desktop_entry \
+  "$ROOT/packaging/grokhub.desktop" \
+  "$PREFIX/share/applications/grokhub.desktop" \
+  "$PREFIX/bin/grokhub"
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database "$PREFIX/share/applications" >/dev/null 2>&1 || true
+fi
 install -Dm644 "$ROOT/packaging/grokhub.svg" \
   "$PREFIX/share/icons/hicolor/scalable/apps/grokhub.svg"
 if [[ -d "$ROOT/packaging/icons/hicolor" ]]; then

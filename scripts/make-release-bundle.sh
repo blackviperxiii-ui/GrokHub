@@ -31,7 +31,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 PREFIX="${PREFIX:-$HOME/.local}"
 install -Dm755 "$HERE/grokhub" "$PREFIX/bin/grokhub"
 install -Dm755 "$HERE/grokhub-hub" "$PREFIX/bin/grokhub-hub"
-install -Dm644 "$HERE/grokhub.desktop" "$PREFIX/share/applications/grokhub.desktop"
+sed -e "s|^Exec=grokhub\$|Exec=$PREFIX/bin/grokhub|" \
+    -e "s|^TryExec=grokhub\$|TryExec=$PREFIX/bin/grokhub|" \
+    "$HERE/grokhub.desktop" \
+  | install -Dm644 /dev/stdin "$PREFIX/share/applications/grokhub.desktop"
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database "$PREFIX/share/applications" >/dev/null 2>&1 || true
+fi
 install -Dm644 "$HERE/grokhub.svg" "$PREFIX/share/icons/hicolor/scalable/apps/grokhub.svg"
 try_pkgs() {
   local kind="$1"
