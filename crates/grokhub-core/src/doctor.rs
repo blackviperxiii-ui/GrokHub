@@ -67,6 +67,14 @@ pub fn doctor_extras(last_receipt_ok: Option<bool>, skill_count: usize) -> Vec<D
     out
 }
 
+/// CLI/Settings grok-locate outcome. `text` is the same string `doctor_grok_line` returns.
+pub fn doctor_grok_cli_line(ok: bool, text: impl Into<String>) -> DoctorLine {
+    DoctorLine {
+        ok,
+        text: text.into(),
+    }
+}
+
 pub fn doctor_cabin_line(running: bool) -> DoctorLine {
     DoctorLine {
         ok: running,
@@ -127,5 +135,11 @@ mod tests {
         assert!(doctor_cabin_line(true).text.contains("running"));
         assert!(!doctor_cabin_line(false).ok);
         assert!(doctor_cabin_line(false).text.contains("not running"));
+        let missing = doctor_grok_cli_line(false, "Grok Build CLI missing — install from x.ai/cli");
+        assert!(!missing.ok);
+        assert!(missing.text.contains("x.ai/cli"));
+        let present = doctor_grok_cli_line(true, "Grok Build located");
+        assert!(present.ok);
+        assert!(present.text.contains("Grok Build"));
     }
 }
