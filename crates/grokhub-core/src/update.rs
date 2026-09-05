@@ -321,6 +321,19 @@ pub fn restart_acts(hub_unit: bool, _hands_unit: bool, exe: &str, hidden: bool) 
     acts
 }
 
+/// Overlay stop targets: systemd MainPID of grokhub.service, then leftover cabin.pid.
+/// Do not glob the process table by name — that matches this process.
+pub fn overlay_stop_targets(main_pid: Option<u32>, cabin_pid: Option<u32>) -> Vec<u32> {
+    let mut out = Vec::new();
+    if let Some(pid) = main_pid.filter(|p| *p != 0) {
+        out.push(pid);
+    }
+    if let Some(pid) = cabin_pid.filter(|p| *p != 0 && !out.contains(p)) {
+        out.push(pid);
+    }
+    out
+}
+
 pub fn systemd_user_restart_args(units: &[String]) -> Vec<String> {
     let mut args = vec!["--user".into(), "restart".into()];
     args.extend(units.iter().cloned());
@@ -335,6 +348,29 @@ pub fn systemd_user_stop_args(unit: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn overlay_stop_uses_mainpid_and_cabin_pid_never_pgrep() {
+        assert_eq!(overlay_stop_targets(None, None), Vec::<u32>::new());
+        assert_eq!(overlay_stop_targets(Some(0), Some(0)), Vec::<u32>::new());
+        assert_eq!(overlay_stop_targets(Some(42), None), vec![42]);
+        assert_eq!(overlay_stop_targets(None, Some(7)), vec![7]);
+        assert_eq!(overlay_stop_targets(Some(42), Some(42)), vec![42]);
+        assert_eq!(overlay_stop_targets(Some(42), Some(7)), vec![42, 7]);
+        let prod = include_str!("update.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("prod");
+        assert!(
+            !prod.contains("pgrep "),
+            "overlay restart must never pgrep: {prod}"
+        );
+        let install = include_str!("../../../scripts/install.sh");
+        assert!(
+            !install.contains("pgrep grokhub"),
+            "install.sh must never pgrep grokhub: {install}"
+        );
+    }
 
     #[test]
     fn source_and_overlay_plan() {

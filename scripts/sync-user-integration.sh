@@ -23,9 +23,13 @@ if [[ ! -x "$PREFIX/bin/grokhub" ]]; then
   exit 1
 fi
 
-install -Dm644 "$ROOT/packaging/grokhub.desktop" \
-  "$PREFIX/share/applications/grokhub.desktop"
-update-desktop-database "$PREFIX/share/applications" 2>/dev/null || true
+sed -e "s|^Exec=grokhub\$|Exec=$PREFIX/bin/grokhub|" \
+    -e "s|^TryExec=grokhub\$|TryExec=$PREFIX/bin/grokhub|" \
+    "$ROOT/packaging/grokhub.desktop" \
+  | install -Dm644 /dev/stdin "$PREFIX/share/applications/grokhub.desktop"
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database "$PREFIX/share/applications" >/dev/null 2>&1 || true
+fi
 
 if [[ "$AGENT" -eq 1 ]]; then
   install -Dm644 "$ROOT/packaging/systemd/grokhub-hub.service" \

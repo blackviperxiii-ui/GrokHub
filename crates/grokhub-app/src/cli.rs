@@ -74,5 +74,9 @@ mod tests {
             doctor.contains("doctor_cabin_line") || doctor.contains("cabin_running"),
             "grokhub --doctor must report whether the cabin process is alive: {doctor}"
         );
+        assert!(
+            doctor.contains("doctor_grok_line_blocking") && doctor.contains("find_grok"),
+            "grokhub --doctor must report grok CLI using the same locate path as the cabin: {doctor}"
+        );
     }
 }

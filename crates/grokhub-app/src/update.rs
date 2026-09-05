@@ -387,5 +387,10 @@ mod tests {
             slice.contains("run_limited("),
             "systemctl --user restart must not freeze the UI: {slice}"
         );
+        let prod = src.split("#[cfg(test)]").next().expect("prod");
+        assert!(
+            !prod.contains("pgrep "),
+            "cabin restart must never pgrep: {prod}"
+        );
     }
 }

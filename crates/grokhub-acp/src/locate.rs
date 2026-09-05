@@ -269,9 +269,23 @@ pub fn doctor_line_busy() -> bool {
         .unwrap_or(false)
 }
 
+/// Blocking locate result for `grokhub --doctor`. Same missing/present text as Settings.
+pub fn doctor_grok_line_blocking(bin: Option<&Path>) -> (bool, String) {
+    match bin {
+        None => (false, "Grok Build CLI missing — install from x.ai/cli".into()),
+        Some(p) => match grok_version(p) {
+            Ok(v) => {
+                let v = v.trim().strip_prefix("grok ").unwrap_or(v.trim());
+                (true, format!("Grok Build {v}"))
+            }
+            Err(e) => (false, format!("Grok Build present but unreadable: {e}")),
+        },
+    }
+}
+
 pub fn doctor_grok_line(bin: Option<&Path>) -> (bool, String) {
     if bin.is_none() {
-        return (false, "Grok Build CLI missing — install from x.ai/cli".into());
+        return doctor_grok_line_blocking(None);
     }
     if let Ok(held) = doctor_line_cache().lock() {
         if let Some((path, at, ok, text, inflight)) = held.as_ref() {
@@ -292,13 +306,7 @@ pub fn doctor_grok_line(bin: Option<&Path>) -> (bool, String) {
         (true, "Grok Build CLI".into())
     };
     thread::spawn(move || {
-        let (ok, text) = match &path {
-            None => (false, "Grok Build CLI missing — install from x.ai/cli".into()),
-            Some(p) => match grok_version(p) {
-                Ok(v) => (true, format!("Grok Build {v}")),
-                Err(e) => (false, format!("Grok Build present but unreadable: {e}")),
-            },
-        };
+        let (ok, text) = doctor_grok_line_blocking(path.as_deref());
         if let Ok(mut held) = doctor_line_cache().lock() {
             *held = Some((path, Instant::now(), ok, text, false));
         }
@@ -532,9 +540,11 @@ mod tests {
 
     #[test]
     fn doctor_missing() {
-        let (ok, text) = doctor_grok_line(None);
+        let (ok, text) = doctor_grok_line_blocking(None);
         assert!(!ok);
         assert!(text.contains("x.ai/cli"));
+        let (cached_ok, cached_text) = doctor_grok_line(None);
+        assert_eq!((cached_ok, cached_text), (ok, text.clone()));
         let src = include_str!("locate.rs");
         let ver = src
             .split("pub fn grok_version(")
@@ -557,6 +567,34 @@ mod tests {
         assert!(
             doc.contains("thread::spawn") && doc.contains("inflight"),
             "Settings must not freeze on grok --version: {doc}"
+        );
+        let blocking = src
+            .split("pub fn doctor_grok_line_blocking(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn doctor_grok_line(").next())
+            .expect("doctor_grok_line_blocking");
+        assert!(
+            blocking.contains("grok_version") && blocking.contains("x.ai/cli"),
+            "CLI doctor must use grok_version, not a placeholder: {blocking}"
+        );
+        let fake = std::env::temp_dir().join(format!(
+            "grokhub-fake-grok-{}",
+            std::process::id()
+        ));
+        std::fs::write(&fake, "#!/bin/sh\necho '9.9.9-test (deadbeef)'\n").expect("fake grok");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut p = std::fs::metadata(&fake).expect("meta").permissions();
+            p.set_mode(0o755);
+            std::fs::set_permissions(&fake, p).expect("chmod");
+        }
+        let (ok, text) = doctor_grok_line_blocking(Some(fake.as_path()));
+        let _ = std::fs::remove_file(&fake);
+        assert!(ok, "{text}");
+        assert!(
+            text.contains("9.9.9-test"),
+            "blocking doctor must print grok --version from the located binary: {text}"
         );
         let find = src
             .split("pub fn find_grok(")

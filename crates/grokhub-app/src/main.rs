@@ -32,7 +32,8 @@ use app::Cabin;
 use cli::{parse_args, Launch};
 use eframe::egui;
 use grokhub_core::{
-    doctor_cabin_line, doctor_lines, doctor_ok, hub_kind_from_health, DEFAULT_PORT,
+    doctor_cabin_line, doctor_grok_cli_line, doctor_lines, doctor_ok, hub_kind_from_health,
+    DEFAULT_PORT,
 };
 use std::env;
 
@@ -130,6 +131,9 @@ fn run_doctor() {
     let kind = hub_kind_from_health(probe_hub_health_body().as_deref());
     let mut lines = doctor_lines(authed, mem_ok, &kind);
     lines.extend(grokhub_core::doctor_extras(None, crate::skills::list_skills().len()));
+    let (grok_ok, grok_text) =
+        grokhub_acp::doctor_grok_line_blocking(grokhub_acp::find_grok().as_deref());
+    lines.push(doctor_grok_cli_line(grok_ok, grok_text));
     lines.push(doctor_cabin_line(cabin_running()));
     for l in &lines {
         println!("{} {}", if l.ok { "ok " } else { "ERR" }, l.text);

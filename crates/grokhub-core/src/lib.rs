@@ -15,6 +15,7 @@ pub mod chips;
 pub mod connector;
 pub mod consult;
 pub mod context;
+pub mod desktop_entry;
 pub mod diagnostics;
 pub mod doctor;
 pub mod frame;
@@ -118,9 +119,12 @@ pub use chips::{
     top_habit_labels, ChipInput, ChipKind, ChipMemory, ChipStage, ChipThread, PredictedIntent,
     QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
 };
+pub use desktop_entry::{
+    desktop_bin_path, desktop_entry_uses_prefix_bin, rewrite_desktop_entry,
+};
 pub use doctor::{
-    doctor_cabin_line, doctor_extras, doctor_hands_line, doctor_lines, doctor_ok,
-    hub_kind_from_health, DoctorLine,
+    doctor_cabin_line, doctor_extras, doctor_grok_cli_line, doctor_hands_line, doctor_lines,
+    doctor_ok, hub_kind_from_health, DoctorLine,
 };
 pub use capture::{
     capture_kinds, clamp_to_desktop, cursor_on_output, ffmpeg_webcam_args, ffmpeg_x11_args,
@@ -355,9 +359,10 @@ pub use thread_tab::{
     ThreadReuseView, ThreadTab, AUTO_TITLE_MAX,
 };
 pub use update::{
-    discover_source, is_grokhub_source, overlay_update_begin, overlay_update_can_restart,
-    overlay_update_finish, overlay_update_progress, restart_acts, restart_argv, restart_bin,
-    origin_needs_retarget, stale_github_origin, systemd_user_restart_args, systemd_user_stop_args,
+    discover_source, is_grokhub_source, overlay_stop_targets, overlay_update_begin,
+    overlay_update_can_restart, overlay_update_finish, overlay_update_progress, restart_acts,
+    restart_argv, restart_bin, origin_needs_retarget, stale_github_origin, systemd_user_restart_args,
+    systemd_user_stop_args,
     update_cmds,
     update_plan_steps, update_progress_pct, update_step_label, update_wipes_config, walk_up_source,
     OverlayUpdateView, RestartAct, GITHUB_REMOTE_URL, ORIGIN_REMOTE_URL,
