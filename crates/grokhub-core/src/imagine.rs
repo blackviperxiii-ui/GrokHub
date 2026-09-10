@@ -112,6 +112,19 @@ pub fn imagine_video_fallback_model(model: &str) -> Option<&'static str> {
     }
 }
 
+/// Windows WSAETIMEDOUT (10060) and other connect/read stalls from ureq.
+pub fn imagine_is_network_stall(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("timeout")
+        || e.contains("timed out")
+        || e.contains("timedout")
+        || e.contains("10060")
+        || e.contains("wsaetimedout")
+        || e.contains("connection attempt failed")
+        || e.contains("failed to respond")
+        || (e.contains("network error") && !e.contains("http "))
+}
+
 /// Retry the cheaper Imagine alias when 2.0 / 1.5 is missing, slow, or times out.
 pub fn imagine_should_retry_model(err: &str) -> bool {
     let e = err.to_ascii_lowercase();
@@ -121,9 +134,7 @@ pub fn imagine_should_retry_model(err: &str) -> bool {
     {
         return false;
     }
-    e.contains("timeout")
-        || e.contains("timed out")
-        || e.contains("timedout")
+    imagine_is_network_stall(err)
         || e.contains("model")
         || e.contains("not found")
         || e.contains("does not exist")
@@ -136,6 +147,27 @@ pub fn imagine_should_retry_model(err: &str) -> bool {
         || e.contains("http 403")
         || e.contains("http 429")
         || e.contains("http 5")
+}
+
+/// Rewrite raw ureq / WinSock text so Imagine shows a next step, not `os error 10060`.
+pub fn imagine_network_hint(err: &str) -> String {
+    let e = err.to_ascii_lowercase();
+    if e.contains("http 401")
+        || e.contains("bad credentials")
+        || e.contains("unauthenticated")
+    {
+        return "Imagine auth failed (HTTP 401). Add an xAI console API key in Settings, or run grok login.".into();
+    }
+    if e.contains("http 403") {
+        return format!(
+            "Imagine was denied (HTTP 403). Check the console key's image access. {}",
+            err.chars().take(160).collect::<String>()
+        );
+    }
+    if imagine_is_network_stall(err) {
+        return "Imagine could not reach api.x.ai (network timeout). Check VPN, firewall, or HTTPS_PROXY, then retry. Chat login / console key is reused — no extra token.".into();
+    }
+    err.to_string()
 }
 
 pub fn imagine_image_resolution(quality: bool) -> &'static str {
@@ -258,6 +290,11 @@ pub fn imagine_slug(prompt: &str) -> String {
 
 fn imagine_item_url(data: &Value) -> Option<String> {
     nonempty_json_str(data.get("url"))
+        .or_else(|| nonempty_json_str(data.get("image_url")))
+        .or_else(|| {
+            data.get("image")
+                .and_then(|img| nonempty_json_str(img.get("url")).or_else(|| imagine_item_url(img)))
+        })
         .or_else(|| {
             nonempty_json_str(data.get("b64_json")).map(|s| {
                 if s.starts_with("data:") {
@@ -273,17 +310,61 @@ fn imagine_item_url(data: &Value) -> Option<String> {
         })
 }
 
+fn first_array_item<'a>(body: &'a Value, key: &str) -> Option<&'a Value> {
+    body.get(key).and_then(|d| d.as_array()).and_then(|a| a.first())
+}
+
 pub fn parse_imagine_url(body: &Value) -> Option<String> {
-    if let Some(data) = body
-        .get("data")
-        .and_then(|d| d.as_array())
-        .and_then(|a| a.first())
-    {
-        if let Some(u) = imagine_item_url(data) {
+    for key in ["data", "images"] {
+        if let Some(data) = first_array_item(body, key) {
+            if let Some(u) = imagine_item_url(data) {
+                return Some(u);
+            }
+        }
+    }
+    if let Some(img) = body.get("image") {
+        if let Some(u) = imagine_item_url(img) {
             return Some(u);
         }
     }
-    nonempty_json_str(body.get("url"))
+    nonempty_json_str(body.get("url")).or_else(|| nonempty_json_str(body.get("image_url")))
+}
+
+/// Empty URL after moderation must not look like a parse bug.
+pub fn imagine_moderation_blocked(body: &Value) -> bool {
+    let blocked = |v: &Value| v.get("respect_moderation").and_then(|b| b.as_bool()) == Some(false);
+    if blocked(body) {
+        return true;
+    }
+    if let Some(img) = body.get("image") {
+        if blocked(img) {
+            return true;
+        }
+    }
+    for key in ["data", "images"] {
+        if let Some(item) = first_array_item(body, key) {
+            if blocked(item) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Short body hint when Imagine returns JSON without a usable URL.
+pub fn imagine_empty_reply_hint(body: &Value) -> String {
+    if imagine_moderation_blocked(body) {
+        return "image blocked by moderation".into();
+    }
+    let keys: Vec<&str> = body
+        .as_object()
+        .map(|o| o.keys().take(8).map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+    if keys.is_empty() {
+        "empty Imagine reply".into()
+    } else {
+        format!("empty Imagine reply (keys: {})", keys.join(","))
+    }
 }
 
 /// File extension from magic bytes so a jpeg/webp still is not saved as `.png`.
@@ -901,6 +982,20 @@ mod tests {
         );
         let top = json!({ "url": "https://img/top.png" });
         assert_eq!(parse_imagine_url(&top).as_deref(), Some("https://img/top.png"));
+        let images = json!({ "images": [{ "image_url": "https://img/new.png" }] });
+        assert_eq!(
+            parse_imagine_url(&images).as_deref(),
+            Some("https://img/new.png")
+        );
+        let nested = json!({ "image": { "url": "https://img/nested.png" } });
+        assert_eq!(
+            parse_imagine_url(&nested).as_deref(),
+            Some("https://img/nested.png")
+        );
+        assert!(imagine_moderation_blocked(&json!({
+            "data": [{ "url": "", "respect_moderation": false }]
+        })));
+        assert!(imagine_empty_reply_hint(&json!({ "id": "x", "created": 1 })).contains("id"));
         assert_eq!(
             parse_video_request_id(&json!({ "id": "vid-1" })).as_deref(),
             Some("vid-1")
@@ -920,6 +1015,27 @@ mod tests {
             "HTTP 404: model grok-imagine-image-2.0 not found"
         ));
         assert!(imagine_should_retry_model("timed out waiting for 2.0"));
+        assert!(
+            imagine_is_network_stall("https://api.x.ai/v1/images/generations: Network Error: os error 10060"),
+            "Windows WSAETIMEDOUT must count as a stall so Imagine retries"
+        );
+        assert!(imagine_should_retry_model(
+            "A connection attempt failed because the connected party did not properly respond after a period of time (os error 10060)"
+        ));
+        assert!(
+            imagine_network_hint("os error 10060")
+                .to_ascii_lowercase()
+                .contains("api.x.ai"),
+            "{}",
+            imagine_network_hint("os error 10060")
+        );
+        assert!(
+            imagine_network_hint("HTTP 401: Bad credentials.")
+                .to_ascii_lowercase()
+                .contains("console"),
+            "{}",
+            imagine_network_hint("HTTP 401: Bad credentials.")
+        );
         assert!(imagine_should_retry_model("empty Imagine reply"));
         assert!(imagine_should_retry_model("empty video request_id"));
         assert_eq!(

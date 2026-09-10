@@ -191,9 +191,12 @@ pub fn composer_mid_w(inner: f32) -> f32 {
 }
 
 /// Visible pill width from the window, not egui available (chips/wordmark
-/// inflate that past the pane so Stop paints off-screen).
+/// inflate that past the pane so Stop paints off-screen). Caps at the
+/// official Grok conversation column so ultrawide stays a centered chat.
 pub fn composer_pill_w(screen_w: f32) -> f32 {
-    (screen_w - crate::theme::SIDEBAR_W - 40.0).max(360.0)
+    (screen_w - crate::theme::SIDEBAR_W - 40.0)
+        .min(crate::theme::CHAT_COL_W)
+        .max(360.0)
 }
 
 /// Prompt field is a fixed strip. A stretching `TextEdit` covers the chips
@@ -329,7 +332,7 @@ pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(title)
-                .font(crate::theme::title_font(36.0))
+                .font(crate::theme::title_font(28.0))
                 .color(crate::theme::fg()),
         );
         if !action.is_empty() {
@@ -980,7 +983,7 @@ pub fn grok_tile(
     let mut add_rect = None;
     let resp = egui::Frame::none()
         .fill(crate::theme::elevated())
-        .rounding(18.0)
+        .rounding(14.0)
         .stroke(Stroke::new(
             1.0_f32,
             if selected {
@@ -989,9 +992,9 @@ pub fn grok_tile(
                 crate::theme::border()
             },
         ))
-        .inner_margin(egui::Margin::same(14.0))
+        .inner_margin(egui::Margin::same(12.0))
         .show(ui, |ui| {
-            ui.set_min_height(108.0);
+            ui.set_min_height(96.0);
             ui.horizontal(|ui| {
                 icons::paint_icon(ui, icon, 40.0);
                 ui.add_space(10.0);
@@ -1023,7 +1026,7 @@ pub fn grok_tile(
         .interact(Sense::click());
     let (resp, felt, wash) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
     if wash.a() > 0 {
-        ui.painter().rect_filled(felt, 18.0, wash);
+        ui.painter().rect_filled(felt, 14.0, wash);
     }
     let click_on_add = add_rect
         .zip(ui.input(|i| i.pointer.interact_pos()))
@@ -1036,7 +1039,7 @@ pub fn grok_tile(
     if selected || resp.hovered() {
         ui.painter().rect_stroke(
             felt,
-            18.0,
+            14.0,
             Stroke::new(1.0_f32, crate::theme::border_strong()),
         );
     }
@@ -1208,7 +1211,13 @@ pub struct ImagineStageHit {
 }
 
 /// Generating or finished still/video above the docked Imagine chat box.
-pub fn imagine_stage(ui: &mut egui::Ui, path: &str, working: bool, video: bool) -> ImagineStageHit {
+pub fn imagine_stage(
+    ui: &mut egui::Ui,
+    path: &str,
+    working: bool,
+    video: bool,
+    error: &str,
+) -> ImagineStageHit {
     let mut hit = ImagineStageHit::default();
     let wall = ui.max_rect();
     if wall.width() < 8.0 || wall.height() < 8.0 {
@@ -1217,9 +1226,9 @@ pub fn imagine_stage(ui: &mut egui::Ui, path: &str, working: bool, video: bool) 
     ui.allocate_rect(wall, Sense::hover());
     let r = wall.shrink(1.0);
     ui.painter()
-        .rect_filled(r, 18.0, crate::theme::elevated());
+        .rect_filled(r, 14.0, crate::theme::elevated());
     ui.painter()
-        .rect_stroke(r, 18.0, Stroke::new(1.0_f32, crate::theme::border()));
+        .rect_stroke(r, 14.0, Stroke::new(1.0_f32, crate::theme::border()));
     if working {
         let label = if video {
             "Imagining video…"
@@ -1232,6 +1241,17 @@ pub fn imagine_stage(ui: &mut egui::Ui, path: &str, working: bool, video: bool) 
             label,
             FontId::proportional(crate::theme::FONT_CHROME),
             crate::theme::muted(),
+        );
+        return hit;
+    }
+    let fail = error.trim();
+    if !fail.is_empty() && path.is_empty() {
+        ui.painter().text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            format!("Imagine failed — {fail}"),
+            FontId::proportional(crate::theme::FONT_CHROME),
+            crate::theme::fg(),
         );
         return hit;
     }
@@ -1647,11 +1667,11 @@ pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &
     let mut hit = false;
     let resp = egui::Frame::none()
         .fill(crate::theme::elevated())
-        .rounding(18.0)
+        .rounding(14.0)
         .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::same(16.0))
+        .inner_margin(egui::Margin::same(14.0))
         .show(ui, |ui| {
-            ui.set_min_height(112.0);
+            ui.set_min_height(100.0);
             ui.vertical_centered(|ui| {
                 icons::paint_icon(ui, icon, 36.0);
                 ui.add_space(8.0);
@@ -1664,14 +1684,14 @@ pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &
         .interact(Sense::click());
     let (resp, felt, wash) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
     if wash.a() > 0 {
-        ui.painter().rect_filled(felt, 18.0, wash);
+        ui.painter().rect_filled(felt, 14.0, wash);
     }
     if resp.clicked() {
         hit = true;
     }
     if resp.hovered() {
         ui.painter()
-            .rect_stroke(felt, 18.0, Stroke::new(1.0_f32, crate::theme::border_strong()));
+            .rect_stroke(felt, 14.0, Stroke::new(1.0_f32, crate::theme::border_strong()));
     }
     hit
 }
@@ -1861,17 +1881,19 @@ mod tests {
         );
         assert_eq!(
             composer_pill_w(1400.0),
-            1100.0,
-            "1400-wide cabin must grow past the grok.com 800px query bar"
+            crate::theme::CHAT_COL_W,
+            "wide cabins lock to the Grok conversation column"
         );
-        assert!(
-            composer_pill_w(3440.0) > 2500.0,
-            "ultrawide composer must fill the pane, got {}",
+        assert_eq!(
+            composer_pill_w(3440.0),
+            crate::theme::CHAT_COL_W,
+            "ultrawide composer stays a centered Grok column, got {}",
             composer_pill_w(3440.0)
         );
-        assert!(
-            composer_pill_w(3440.0) > composer_pill_w(1920.0),
-            "composer width must track the monitor"
+        assert_eq!(
+            composer_pill_w(3440.0),
+            composer_pill_w(1920.0),
+            "past the column cap the pill does not keep growing"
         );
         assert!(
             composer_pill_w(900.0) > composer_go_cluster_w() + 80.0,
@@ -1909,6 +1931,7 @@ mod tests {
         assert!(
             stage.contains("Imagining…")
                 && stage.contains("Imagining video…")
+                && stage.contains("Imagine failed")
                 && stage.contains("Expand")
                 && stage.contains("Save")
                 && stage.contains("Open"),
@@ -1962,14 +1985,15 @@ mod tests {
     #[test]
     fn composer_pill_tracks_the_monitor() {
         assert_eq!(composer_pill_w(900.0), 600.0);
-        assert_eq!(composer_pill_w(1400.0), 1100.0);
-        assert!(
-            composer_pill_w(3440.0) > 2500.0,
-            "ultrawide composer must fill the pane, got {}",
+        assert_eq!(composer_pill_w(1400.0), crate::theme::CHAT_COL_W);
+        assert_eq!(
+            composer_pill_w(3440.0),
+            crate::theme::CHAT_COL_W,
+            "ultrawide composer stays a centered Grok column, got {}",
             composer_pill_w(3440.0)
         );
-        assert!(composer_pill_w(3440.0) > composer_pill_w(1920.0));
-        assert!(composer_pill_w(1920.0) > composer_pill_w(1400.0));
+        assert_eq!(composer_pill_w(3440.0), composer_pill_w(1920.0));
+        assert!(composer_pill_w(1400.0) > composer_pill_w(900.0));
     }
 
     #[test]
