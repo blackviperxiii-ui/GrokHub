@@ -194,9 +194,7 @@ pub fn composer_mid_w(inner: f32) -> f32 {
 /// inflate that past the pane so Stop paints off-screen). Caps at the
 /// official Grok conversation column so ultrawide stays a centered chat.
 pub fn composer_pill_w(screen_w: f32) -> f32 {
-    (screen_w - crate::theme::SIDEBAR_W - 40.0)
-        .min(crate::theme::CHAT_COL_W)
-        .max(360.0)
+    (screen_w - crate::theme::SIDEBAR_W - 40.0).clamp(360.0, crate::theme::CHAT_COL_W)
 }
 
 /// Prompt field is a fixed strip. A stretching `TextEdit` covers the chips
@@ -1245,7 +1243,7 @@ pub fn imagine_stage(
         return hit;
     }
     let fail = error.trim();
-    if !fail.is_empty() && path.is_empty() {
+    if !fail.is_empty() {
         ui.painter().text(
             r.center(),
             Align2::CENTER_CENTER,
@@ -1936,6 +1934,11 @@ mod tests {
                 && stage.contains("Save")
                 && stage.contains("Open"),
             "generating box must be interactive: {stage}"
+        );
+        assert!(
+            stage.contains("!fail.is_empty()")
+                && !stage.contains("!fail.is_empty() && path.is_empty()"),
+            "on-stage error must win over leftover imagine_last: {stage}"
         );
         assert_eq!(imagine_kind_label(ImagineKind::Image), "Image");
         assert_eq!(imagine_kind_label(ImagineKind::Video), "Video");

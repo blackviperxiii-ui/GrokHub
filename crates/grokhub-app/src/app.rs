@@ -969,6 +969,8 @@ fn hide_pending_grok_sessions(
 
 /// `(directory listed, [(entry name, is_dir)])` from the Plus file picker.
 type PickList = (String, Vec<(String, bool)>);
+/// `(query, [(path, snippet)])` from History search.
+type HistorySearch = (String, Vec<(String, String)>);
 
 pub struct Cabin {
     nav: Nav,
@@ -1231,7 +1233,7 @@ pub struct Cabin {
     grok_sessions_inflight: u32,
     pending_grok_deletes: HashSet<String>,
     inspect_rx: Option<mpsc::Receiver<String>>,
-    history_rx: Option<mpsc::Receiver<(String, Vec<(String, String)>)>>,
+    history_rx: Option<mpsc::Receiver<HistorySearch>>,
     mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
     mem_file_rx: Option<(String, mpsc::Receiver<(u64, String)>)>,
     recall_rx: Option<mpsc::Receiver<String>>,
@@ -1916,6 +1918,7 @@ impl Cabin {
         }
         self.rx = None;
         self.running = false;
+        self.imagine_pending = false;
         if self.host_reserved > 0 {
             self.host_hour_count = refund_host_reserved(self.host_hour_count, self.host_reserved);
             self.host_reserved = 0;
@@ -7049,6 +7052,7 @@ impl Cabin {
 
     fn sign_out_oauth(&mut self) {
         self.secrets.oauth = None;
+        self.imagine_pending = false;
         self.oauth_pending = None;
         self.oauth_start_rx = None;
         self.oauth_poll_rx = None;
@@ -8403,6 +8407,7 @@ impl Cabin {
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.running = false;
+                self.imagine_pending = false;
                 self.status = self.apply_job_fail(worker_gone_status());
                 self.finish_hub_dispatch(worker_gone_status(), false);
                 self.chat_job_thread = None;
@@ -17071,6 +17076,10 @@ mod tests {
             !halt_flight.contains("t.messages.clone()") && !halt_flight.contains("content.clone()"),
             "Stop must not clone an 8MB transcript to drop one trailing assistant: {halt_flight}"
         );
+        assert!(
+            halt_flight.contains("imagine_pending = false"),
+            "Stop must clear Imagine pending or a later job error paints on the stage: {halt_flight}"
+        );
         let host_done_facts = src
             .split("Ok(JobOut::HostDone(block))")
             .nth(1)
@@ -17295,6 +17304,10 @@ mod tests {
         assert!(
             sign_out.contains("persist_io") && sign_out.contains("secrets::save"),
             "Sign out must not freeze the cabin writing secrets.json: {sign_out}"
+        );
+        assert!(
+            sign_out.contains("imagine_pending = false"),
+            "Sign out must clear Imagine pending or a later job error paints on the stage: {sign_out}"
         );
         let start_o = src
             .split("fn start_oauth(")
