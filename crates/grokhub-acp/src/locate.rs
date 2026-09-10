@@ -199,13 +199,16 @@ pub fn prepare_cabin_grok_home() -> Option<PathBuf> {
     std::fs::create_dir_all(&dir).ok()?;
     if let Some(src) = grok_auth_path() {
         let dst = dir.join("auth.json");
-        if !dst.exists() {
-            #[cfg(unix)]
-            {
+        #[cfg(unix)]
+        {
+            if !dst.exists() {
                 let _ = std::os::unix::fs::symlink(&src, &dst);
             }
-            #[cfg(not(unix))]
-            {
+        }
+        #[cfg(not(unix))]
+        {
+            // Copy is not a live link — refresh after a later `grok login`.
+            if src.is_file() {
                 let _ = std::fs::copy(&src, &dst);
             }
         }
@@ -714,6 +717,19 @@ mod tests {
         assert!(
             key.contains("thread::spawn") && key.contains("inflight"),
             "stale grok login must refresh auth.json off the UI thread: {key}"
+        );
+        let prep = include_str!("locate.rs")
+            .split("pub fn prepare_cabin_grok_home(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn grok_auth_path(").next())
+            .expect("prepare_cabin_grok_home");
+        let win = prep
+            .split("#[cfg(not(unix))]")
+            .nth(1)
+            .expect("windows auth copy");
+        assert!(
+            win.contains("std::fs::copy") && !win.contains("dst.exists()"),
+            "Windows auth.json copy must refresh after grok login: {win}"
         );
     }
 

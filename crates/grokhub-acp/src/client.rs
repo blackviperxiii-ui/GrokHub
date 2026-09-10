@@ -567,6 +567,7 @@ fn rpc_reply_id(id: Option<Value>) -> Option<Value> {
     }
 }
 
+#[cfg(unix)]
 fn isolate_spawned_grok() {
     ignore_sigpipe();
     // The cabin GUI holds DRI/Wayland fds. Grok Build inherits them and its
