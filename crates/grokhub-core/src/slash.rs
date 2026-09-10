@@ -602,7 +602,8 @@ pub fn slash_help() -> String {
         "/palette — command palette",
         "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs.",
         "Mode pill: Chat / Plan / Ask. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: Low / Medium / High / Extra High. Grok Build runs the agent.",
-        "Settings → Behavior: close to tray, living wall, quiet hours, automations a day, host commands an hour.",
+        "Settings → Behavior: close to tray, living wall, quiet hours, automations a day, host commands an hour. Clocks type until Save; an hour alone is not a clock; a typo keeps the last-good window.",
+        "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
         "Appearance: Dark, Light, System. Interactive chat is grok agent stdio (ACP). Night and phone use grok -p. Halt is session/cancel.",
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
         "install.sh installs the Grok Build CLI (grok) from https://x.ai/cli. Settings shows grok --version. Cabin overlay updates the GUI, installs grok if missing, then runs grok update on the current channel.",
@@ -752,6 +753,9 @@ mod tests {
         assert_eq!(parse_slash("/inspect"), Some(Slash::Inspect));
         assert!(slash_help().contains("/loop"));
         assert!(slash_help().contains("/create-skill"));
+        assert!(slash_help().contains("last-good window"));
+        assert!(slash_help().contains("History search drops stale hits"));
+        assert!(slash_help().contains("keeps unsaved typing"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
         assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());
