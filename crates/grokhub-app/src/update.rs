@@ -7,7 +7,7 @@ use grokhub_core::{
 };
 use std::env;
 use std::process::{Command, Stdio};
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
