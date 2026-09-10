@@ -311,8 +311,19 @@ mod tests {
         git(&["push", "-u", "origin", "main"]);
         remember_source(&root);
         let mut cmds = grokhub_core::update_cmds(&root).expect("cmds");
+        #[cfg(windows)]
+        {
+            assert_eq!(cmds.last().map(String::as_str), Some("grok update --alpha"));
+            fs::write(
+                root.join("scripts/install-windows.ps1"),
+                "Set-Content -Path (Join-Path $PSScriptRoot '..\\overlay.ok') -Value overlay-ok\n",
+            )
+            .unwrap();
+        }
+        #[cfg(unix)]
         assert_eq!(cmds.last().map(String::as_str), Some("grok update"));
         cmds.pop();
+        cmds.retain(|c| !c.contains("remote set-url") && !c.contains("remote add"));
         let out = run_update_cmds(&cmds).expect("update");
         assert!(out.contains("exit 0"), "{out}");
         assert!(root.join("overlay.ok").is_file(), "{out}");
@@ -327,7 +338,11 @@ mod tests {
 
     #[test]
     fn overlay_reports_percent_without_chat_text() {
-        let cmds = vec!["true".into(), "true".into()];
+        let cmds = if cfg!(windows) {
+            vec!["$true".into(), "$true".into()]
+        } else {
+            vec!["true".into(), "true".into()]
+        };
         let mut ticks = Vec::new();
         let out = run_update_cmds_with_progress(&cmds, |pct, msg| {
             ticks.push((pct, msg.to_string()));
