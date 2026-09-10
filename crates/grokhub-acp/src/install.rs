@@ -196,7 +196,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("grokhub-install-skip-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let bin = dir.join(if cfg!(windows) { "grok.exe" } else { "grok" });
-        std::fs::write(&bin, b"x").unwrap();
+        // Windows locate rejects ELF/unix leftovers; a skip hit must look native.
+        std::fs::write(&bin, if cfg!(windows) { &b"MZ\0\0"[..] } else { &b"x"[..] }).unwrap();
         let prev = std::env::var_os("GROKHUB_GROK");
         std::env::set_var("GROKHUB_GROK", &bin);
         invalidate_grok_bin_cache();
