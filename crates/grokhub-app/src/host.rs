@@ -2,6 +2,10 @@ use grokhub_core::TEXT_FILE_CAP;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+
+pub(crate) fn hide_windows_console(cmd: &mut Command) {
+    grokhub_acp::hide_windows_console(cmd);
+}
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -25,7 +29,9 @@ fn push_host_line(buf: &mut String, line: &str, cap: usize) -> bool {
 pub fn host_working_dir(project_dir: &str) -> Option<String> {
     let root = grokhub_core::expand_project_root(
         project_dir,
-        std::env::var("HOME").ok().as_deref(),
+        grokhub_core::user_home()
+            .as_ref()
+            .and_then(|p| p.to_str()),
     );
     if root.is_empty() {
         return None;
@@ -45,9 +51,11 @@ pub fn resolve_host_cite_path(project_dir: &str, cited: &str) -> String {
     }
     let expanded = grokhub_core::expand_project_root(
         cited,
-        std::env::var("HOME").ok().as_deref(),
+        grokhub_core::user_home()
+            .as_ref()
+            .and_then(|p| p.to_str()),
     );
-    if expanded.starts_with('/') {
+    if Path::new(&expanded).is_absolute() {
         return expanded;
     }
     match host_working_dir(project_dir) {
@@ -64,6 +72,30 @@ pub fn run_host(cmd: &str, timeout: Duration) -> String {
     run_host_stream(cmd, timeout, None, None, |_| {})
 }
 
+/// PowerShell `bash …` must not hit the WindowsApps/WSL stub.
+fn windows_host_bash(cmd: &str) -> String {
+    if !cfg!(windows) {
+        return cmd.to_string();
+    }
+    let rest = if cmd == "bash" {
+        Some("")
+    } else {
+        cmd.strip_prefix("bash ")
+    };
+    let Some(rest) = rest else {
+        return cmd.to_string();
+    };
+    let Some(bash) = crate::desktop::find_real_bash() else {
+        return cmd.to_string();
+    };
+    let bash = bash.display().to_string().replace('\'', "''");
+    if rest.is_empty() {
+        format!("& '{bash}'")
+    } else {
+        format!("& '{bash}' {rest}")
+    }
+}
+
 pub fn run_host_stream(
     cmd: &str,
     timeout: Duration,
@@ -72,10 +104,25 @@ pub fn run_host_stream(
     mut on_line: impl FnMut(&str),
 ) -> String {
     let start = Instant::now();
-    let mut spawn = Command::new("bash");
+    let cmd = windows_host_bash(cmd);
+    let mut spawn = if cfg!(windows) {
+        let mut c = Command::new("powershell.exe");
+        c.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-NoLogo",
+            "-Command",
+            &cmd,
+        ]);
+        hide_windows_console(&mut c);
+        c
+    } else {
+        let mut c = Command::new("bash");
+        c.arg("-lc").arg(&cmd);
+        c
+    };
     spawn
-        .arg("-lc")
-        .arg(cmd)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(dir) = cwd.filter(|d| !d.is_empty()) {

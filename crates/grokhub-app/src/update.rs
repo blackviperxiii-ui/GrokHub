@@ -15,7 +15,9 @@ use std::time::Duration;
 fn expand_source_hint(raw: &str) -> PathBuf {
     PathBuf::from(grokhub_core::expand_project_root(
         raw,
-        env::var("HOME").ok().as_deref(),
+        grokhub_core::user_home()
+            .as_ref()
+            .and_then(|p| p.to_str()),
     ))
 }
 
@@ -38,9 +40,9 @@ pub fn resolve_source(cfg_source: &str) -> Option<PathBuf> {
     if let Ok(cwd) = env::current_dir() {
         hints.push(cwd);
     }
-    if let Ok(home) = env::var("HOME") {
-        hints.push(PathBuf::from(&home).join("Grok-Hub"));
-        hints.push(PathBuf::from(&home).join("GrokHub"));
+    if let Some(home) = grokhub_core::user_home() {
+        hints.push(home.join("Grok-Hub"));
+        hints.push(home.join("GrokHub"));
     }
     discover_source(&hints)
 }
@@ -119,6 +121,7 @@ fn spawn_detached(argv: &[String]) -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    crate::host::hide_windows_console(&mut cmd);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -141,7 +144,7 @@ fn replace_process(argv: &[String]) -> Result<(), String> {
 
 /// Relaunch hub/hands, then a new cabin process. Caller must persist first.
 pub fn restart_system(hidden: bool) -> Result<(), String> {
-    let home = env::var("HOME").ok();
+    let home = grokhub_core::user_home().and_then(|p| p.into_os_string().into_string().ok());
     let current = env::current_exe()
         .ok()
         .map(|p| p.to_string_lossy().into_owned());

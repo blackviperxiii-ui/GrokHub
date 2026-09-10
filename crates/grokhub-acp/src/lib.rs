@@ -2,6 +2,7 @@
 
 mod catalog;
 mod client;
+mod install;
 mod locate;
 mod stream;
 pub mod protocol;
@@ -21,12 +22,16 @@ pub use client::{
     session_title_from_chat_history,
     show_session, split_session_row, wait_event, AcpHandle, GrokSession, SingleTurn, SpawnOpts,
 };
+pub use install::{
+    begin_grok_install, grok_cli_install_cmd, install_grok_blocking, prepend_dir_to_path,
+    prepend_grok_bin_to_process_path,
+};
 pub use locate::{
     agent_args, agent_args_resume, doctor_grok_line, doctor_grok_line_blocking, doctor_line_busy,
-    find_grok, grok_auth_path,
+    doctor_missing_hint, find_grok, grok_auth_path,
     cabin_grok_home, cabin_leader_socket, grok_cli_key, grok_home, grok_stdout, grok_stdout_timeout,
-    grok_user_stdout_timeout, grok_version, parse_grok_auth_key, prepare_cabin_grok_home,
-    single_turn_args, single_turn_args_full, which,
+    grok_user_stdout_timeout, grok_version, hide_windows_console, invalidate_grok_bin_cache,
+    parse_grok_auth_key, prepare_cabin_grok_home, single_turn_args, single_turn_args_full, which,
 };
 pub use protocol::{
     merge_tool_card, AcpEvent, ElicitAsk, PermissionAsk, PermissionMode, SessionMode, ToolCard,
