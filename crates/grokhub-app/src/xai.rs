@@ -1,13 +1,15 @@
 use grokhub_core::{
     chat_request_body_vision, chat_timeout_secs, client_secrets_body, client_secrets_url,
-    dedicated_imagine_model, dedicated_video_model, frame_bytes, imagine_image_fallback_model,
-    imagine_image_shaped, imagine_should_retry_model, imagine_slug, imagine_video_fallback_model,
-    media_ext_from_bytes, merge_thinking, parse_client_secret, parse_imagine_url,
-    parse_model_reasoning, parse_model_text, parse_stt_text, parse_video_job_status,
-    parse_video_request_id, parse_video_url, realtime_can_connect, responses_request_body,
-    responses_url, stt_multipart, stt_url, tts_request_body, tts_url, video_moderation_blocked,
-    video_request_body, voice_client_secret_denied, PresenceFrame, VideoJobStatus, MEDIA_FILE_CAP,
-    TEXT_FILE_CAP, XAI_BASE,
+    dedicated_imagine_model, dedicated_video_model, frame_bytes, imagine_empty_reply_hint,
+    imagine_image_fallback_model, imagine_image_shaped, imagine_is_network_stall,
+    imagine_moderation_blocked, imagine_network_hint, imagine_should_retry_model, imagine_slug,
+    imagine_video_fallback_model, media_ext_from_bytes,
+    merge_thinking, parse_client_secret, parse_imagine_url, parse_model_reasoning,
+    parse_model_text, parse_stt_text, parse_video_job_status, parse_video_request_id,
+    parse_video_url, realtime_can_connect, responses_request_body, responses_url, stt_multipart,
+    stt_url, tts_request_body, tts_url, video_moderation_blocked, video_request_body,
+    voice_client_secret_denied, PresenceFrame, VideoJobStatus, MEDIA_FILE_CAP, TEXT_FILE_CAP,
+    XAI_BASE,
 };
 use std::io::Read;
 
@@ -17,16 +19,24 @@ fn json_error(v: &serde_json::Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+fn xai_agent(timeout_secs: u64) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .try_proxy_from_env(true)
+        .timeout_connect(std::time::Duration::from_secs(25))
+        .timeout(std::time::Duration::from_secs(timeout_secs.max(1)))
+        .build()
+}
+
 fn grok_json(
     url: &str,
     key: &str,
     body: serde_json::Value,
     timeout_secs: u64,
 ) -> Result<serde_json::Value, String> {
-    let resp = ureq::post(url)
+    let resp = xai_agent(timeout_secs)
+        .post(url)
         .set("authorization", &format!("Bearer {key}"))
         .set("content-type", "application/json")
-        .timeout(std::time::Duration::from_secs(timeout_secs))
         .send_json(body)
         .map_err(http_err)?;
     let v = read_json_capped(resp)?;
@@ -107,18 +117,26 @@ pub fn grok_imagine_opts(
             body,
             timeout_secs,
         )?;
-        let url = parse_imagine_url(&v).ok_or_else(|| "empty Imagine reply".to_string())?;
+        if imagine_moderation_blocked(&v) {
+            return Err("image blocked by moderation".into());
+        }
+        let url = parse_imagine_url(&v).ok_or_else(|| imagine_empty_reply_hint(&v))?;
         save_media(&url, prompt, "png", key)
     };
-    match try_model(&primary, 45) {
+    match try_model(&primary, 120) {
         Ok(path) => Ok(path),
         Err(e) => {
-            if let Some(fb) = imagine_image_fallback_model(&primary) {
-                if imagine_should_retry_model(&e) {
-                    return try_model(fb, 120);
+            if imagine_is_network_stall(&e) {
+                if let Ok(path) = try_model(&primary, 180) {
+                    return Ok(path);
                 }
             }
-            Err(e)
+            if let Some(fb) = imagine_image_fallback_model(&primary) {
+                if imagine_should_retry_model(&e) {
+                    return try_model(fb, 180).map_err(|fb_e| imagine_network_hint(&fb_e));
+                }
+            }
+            Err(imagine_network_hint(&e))
         }
     }
 }
@@ -142,37 +160,44 @@ pub fn grok_imagine_video(
             &format!("{XAI_BASE}/videos/generations"),
             key,
             body,
-            60,
+            120,
         )?;
         parse_video_request_id(&started).ok_or_else(|| "empty video request_id".to_string())
     };
     let request_id = match try_start(&primary) {
         Ok(id) => id,
         Err(e) => {
-            if let Some(fb) = imagine_video_fallback_model(&primary) {
+            let retry = if imagine_is_network_stall(&e) {
+                try_start(&primary).ok()
+            } else {
+                None
+            };
+            if let Some(id) = retry {
+                id
+            } else if let Some(fb) = imagine_video_fallback_model(&primary) {
                 if imagine_should_retry_model(&e) {
-                    try_start(fb)?
+                    try_start(fb).map_err(|fb_e| imagine_network_hint(&fb_e))?
                 } else {
-                    return Err(e);
+                    return Err(imagine_network_hint(&e));
                 }
             } else {
-                return Err(e);
+                return Err(imagine_network_hint(&e));
             }
         }
     };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(480);
     loop {
         if std::time::Instant::now() >= deadline {
-            return Err("video timed out".into());
+            return Err(imagine_network_hint("video timed out"));
         }
-        let poll = ureq::get(&format!("{XAI_BASE}/videos/{request_id}"))
+        let poll = xai_agent(45)
+            .get(&format!("{XAI_BASE}/videos/{request_id}"))
             .set("authorization", &format!("Bearer {key}"))
-            .timeout(std::time::Duration::from_secs(30))
             .call()
-            .map_err(http_err)?;
+            .map_err(|e| imagine_network_hint(&http_err(e)))?;
         let v = read_json_capped(poll)?;
         if let Some(err) = json_error(&v) {
-            return Err(err);
+            return Err(imagine_network_hint(&err));
         }
         let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
         match parse_video_job_status(status) {
@@ -186,7 +211,9 @@ pub fn grok_imagine_video(
                 let url = parse_video_url(&v).ok_or_else(|| "empty video url".to_string())?;
                 return save_media(&url, prompt, "mp4", key);
             }
-            VideoJobStatus::Failed => return Err("video failed".into()),
+            VideoJobStatus::Failed => {
+                return Err(json_error(&v).unwrap_or_else(|| "video failed".into()));
+            }
             VideoJobStatus::Expired => return Err("video expired".into()),
         }
     }
@@ -203,7 +230,7 @@ fn save_media(url: &str, prompt: &str, ext: &str, key: &str) -> Result<String, S
             .1
     } else {
         let fetch = |auth: bool| -> Result<Vec<u8>, String> {
-            let mut req = ureq::get(url).timeout(std::time::Duration::from_secs(120));
+            let mut req = xai_agent(120).get(url);
             if auth && !key.trim().is_empty() {
                 req = req.set("authorization", &format!("Bearer {key}"));
             }
@@ -245,13 +272,13 @@ pub fn grok_stt(api_key: &str, wav: &[u8]) -> Result<String, String> {
     }
     let boundary = "----grokhubstt";
     let body = stt_multipart(wav, "grokhub-voice.wav", boundary);
-    let resp = ureq::post(&stt_url())
+    let resp = xai_agent(60)
+        .post(&stt_url())
         .set("authorization", &format!("Bearer {key}"))
         .set(
             "content-type",
             &format!("multipart/form-data; boundary={boundary}"),
         )
-        .timeout(std::time::Duration::from_secs(60))
         .send_bytes(&body)
         .map_err(|e| e.to_string())?;
     let v = read_json_capped(resp)?;
@@ -275,7 +302,17 @@ pub fn http_err(e: ureq::Error) -> String {
             let body = String::from_utf8_lossy(&buf);
             format!("HTTP {code}: {}", body.chars().take(200).collect::<String>())
         }
-        other => other.to_string(),
+        other => {
+            let raw = other.to_string();
+            if imagine_is_network_stall(&raw) {
+                format!(
+                    "Network timeout reaching api.x.ai. Check VPN, firewall, or HTTPS_PROXY. ({})",
+                    raw.chars().take(160).collect::<String>()
+                )
+            } else {
+                raw
+            }
+        }
     }
 }
 
@@ -288,10 +325,10 @@ pub fn grok_tts(api_key: &str, text: &str) -> Result<Vec<u8>, String> {
     if text.is_empty() {
         return Err("nothing to speak".into());
     }
-    let resp = ureq::post(&tts_url())
+    let resp = xai_agent(60)
+        .post(&tts_url())
         .set("authorization", &format!("Bearer {key}"))
         .set("content-type", "application/json")
-        .timeout(std::time::Duration::from_secs(60))
         .send_json(tts_request_body(text))
         .map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
@@ -314,10 +351,10 @@ pub fn grok_realtime_secret(api_key: &str) -> Result<serde_json::Value, String> 
             .unwrap_or("Duplex Voice needs a console API key.")
             .into());
     }
-    let resp = ureq::post(&client_secrets_url())
+    let resp = xai_agent(20)
+        .post(&client_secrets_url())
         .set("authorization", &format!("Bearer {}", api_key.trim()))
         .set("content-type", "application/json")
-        .timeout(std::time::Duration::from_secs(20))
         .send_json(client_secrets_body())
         .map_err(http_err)?;
     let v = read_json_capped(resp)?;
@@ -387,6 +424,23 @@ mod tests {
         assert!(
             src.contains("imagine_should_retry_model"),
             "OAuth often lacks grok-imagine-image-2.0 — retry grok-imagine-image"
+        );
+        assert!(
+            src.contains("try_proxy_from_env(true)") && src.contains("timeout_connect"),
+            "Imagine must honor HTTPS_PROXY and not hang forever on connect: {src}"
+        );
+        let imagine = src
+            .split("pub fn grok_imagine_opts(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn grok_imagine_video(").next())
+            .expect("grok_imagine_opts");
+        assert!(
+            imagine.contains("try_model(&primary, 120)") && !imagine.contains("try_model(&primary, 45)"),
+            "2k stills routinely exceed a 45s ureq budget and surface as Windows 10060: {imagine}"
+        );
+        assert!(
+            src.contains("imagine_is_network_stall") && src.contains("imagine_network_hint"),
+            "os error 10060 must retry and then name VPN/proxy, not dump a raw WinSock string"
         );
         assert!(
             src.contains("imagine_video_fallback_model"),

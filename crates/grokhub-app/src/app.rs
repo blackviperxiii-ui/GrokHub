@@ -5,6 +5,7 @@ use crate::helpers::{
 };
 use crate::titlebar::{
     apply_tray_window, titlebar_chrome_btn, titlebar_chrome_hit, titlebar_should_start_drag,
+    ChromeBtn,
 };
 use crate::config::{self, AppConfig};
 use crate::desktop::{
@@ -76,7 +77,6 @@ use grokhub_core::{
     worker_gone_status, ChatSendKind,
     bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X,
     BUBBLE_PAD_Y,
-    BUBBLE_RADIUS,
     append_say, append_thought, append_tool, views_up_to_last_user, LiveBlock, LiveKind,
     plus_empty_status, plus_menu_rows, computer_cmd_line, lock_blocks_hands,
     parse_computer_op,
@@ -647,33 +647,64 @@ fn push_stream_capped(buf: &mut String, d: &str, cap: u64) -> bool {
 fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool) -> egui::Response {
     let body = crate::markdown::display_text(body);
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
-    let wrap = bubble_wrap_width(avail, BUBBLE_PAD_X);
-    let content = crate::markdown::measure_text(ui, body, wrap);
-    let inner_w = content.x.max(1.0).min(wrap);
-    let outer_w = bubble_outer_width(avail, inner_w, BUBBLE_PAD_X);
-    let fill = if user {
-        crate::theme::bubble_user()
-    } else {
-        crate::theme::bubble_assistant()
-    };
+    if user {
+        let wrap = bubble_wrap_width(avail, BUBBLE_PAD_X);
+        let content = crate::markdown::measure_text(ui, body, wrap);
+        let inner_w = content.x.max(1.0).min(wrap);
+        let outer_w = bubble_outer_width(avail, inner_w, BUBBLE_PAD_X);
+        let frame = egui::Frame::none()
+            .fill(crate::theme::bubble_user())
+            .rounding(crate::theme::USER_BUBBLE_RADIUS)
+            .inner_margin(egui::Margin::symmetric(BUBBLE_PAD_X, BUBBLE_PAD_Y));
+        let mut resp = None;
+        ui.scope(|ui| {
+            ui.set_max_width(avail);
+            ui.horizontal(|ui| {
+                ui.set_max_width(avail);
+                ui.add_space((avail - outer_w).max(0.0));
+                ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                    ui.set_max_width(outer_w);
+                    resp = Some(
+                        frame
+                            .show(ui, |ui| {
+                                ui.set_max_width(inner_w);
+                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                                ui.add(
+                                    egui::Label::new(RichText::new(body).color(crate::theme::fg()))
+                                        .wrap()
+                                        .selectable(true),
+                                );
+                            })
+                            .response,
+                    );
+                });
+            });
+        });
+        return resp.expect("speech bubble");
+    }
+    // Assistant: flush on the canvas, like grok.com — no bubble.
+    let wrap = bubble_wrap_width(avail, 8.0);
+    let outer = grokhub_core::bubble_max_width(avail);
     let frame = egui::Frame::none()
-        .fill(fill)
-        .rounding(BUBBLE_RADIUS)
-        .inner_margin(egui::Margin::symmetric(BUBBLE_PAD_X, BUBBLE_PAD_Y));
+        .fill(crate::theme::bubble_assistant())
+        .inner_margin(egui::Margin::symmetric(0.0, 2.0));
     let mut resp = None;
     ui.scope(|ui| {
         ui.set_max_width(avail);
-        ui.horizontal(|ui| {
+        ui.horizontal_top(|ui| {
             ui.set_max_width(avail);
-            if user {
-                ui.add_space((avail - outer_w).max(0.0));
-            }
+            let mark = crate::theme::mark(ui.ctx());
+            ui.add(
+                egui::Image::from_texture(&mark)
+                    .fit_to_exact_size(egui::vec2(16.0, 16.0))
+                    .tint(crate::theme::muted()),
+            );
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                ui.set_max_width(outer_w);
+                ui.set_max_width(outer);
                 resp = Some(
                     frame
                         .show(ui, |ui| {
-                            ui.set_max_width(inner_w);
+                            ui.set_max_width(wrap);
                             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                             if markdown {
                                 crate::markdown::show(ui, body);
@@ -736,38 +767,32 @@ fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Response {
     let body = crate::markdown::display_text(body);
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
     let wrap = bubble_wrap_width(avail, BUBBLE_PAD_X);
-    let content = crate::markdown::measure_text(ui, body, wrap);
-    let inner_w = content.x.max(1.0).min(wrap);
-    let outer_w = bubble_outer_width(avail, inner_w, BUBBLE_PAD_X);
     let frame = egui::Frame::none()
-        .fill(crate::theme::surface())
-        .rounding(BUBBLE_RADIUS)
-        .inner_margin(egui::Margin::symmetric(BUBBLE_PAD_X, BUBBLE_PAD_Y));
+        .fill(egui::Color32::TRANSPARENT)
+        .inner_margin(egui::Margin::symmetric(0.0, 2.0));
     let mut resp = None;
     ui.scope(|ui| {
         ui.set_max_width(avail);
-        ui.horizontal(|ui| {
-            ui.set_max_width(avail);
-            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                ui.set_max_width(outer_w);
-                resp = Some(
-                    frame
-                        .show(ui, |ui| {
-                            ui.set_max_width(inner_w);
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(body)
-                                        .size(crate::theme::FONT_META)
-                                        .color(crate::theme::subtle()),
-                                )
-                                .wrap()
-                                .selectable(true),
-                            );
-                        })
-                        .response,
-                );
-            });
+        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+            ui.set_max_width(grokhub_core::bubble_max_width(avail));
+            resp = Some(
+                frame
+                    .show(ui, |ui| {
+                        ui.set_max_width(wrap);
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(body)
+                                    .size(crate::theme::FONT_META)
+                                    .italics()
+                                    .color(crate::theme::subtle()),
+                            )
+                            .wrap()
+                            .selectable(true),
+                        );
+                    })
+                    .response,
+            );
         });
     });
     resp.expect("thought bubble")
@@ -808,8 +833,8 @@ fn paint_chat_block(
         }
         ChatKind::Tool => {
             egui::Frame::none()
-                .fill(crate::theme::elevated())
-                .rounding(8.0)
+                .fill(egui::Color32::TRANSPARENT)
+                .rounding(crate::theme::CHROME_RADIUS)
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                 .inner_margin(egui::Margin::symmetric(10.0, 4.0))
                 .show(ui, |ui| {
@@ -1142,6 +1167,8 @@ pub struct Cabin {
     imagine_aspect_anchor: egui::Rect,
     imagine_expand: bool,
     imagine_job_prompt: String,
+    imagine_error: String,
+    imagine_pending: bool,
     imagine_save_rx: Option<mpsc::Receiver<Result<String, String>>>,
     goal_rx: Option<mpsc::Receiver<(String, String)>>,
     goal_busy: bool,
@@ -1539,6 +1566,8 @@ impl Cabin {
             imagine_aspect_anchor: egui::Rect::NOTHING,
             imagine_expand: false,
             imagine_job_prompt: String::new(),
+            imagine_error: String::new(),
+            imagine_pending: false,
             imagine_save_rx: None,
             goal_rx: None,
             goal_busy: false,
@@ -8318,6 +8347,8 @@ impl Cabin {
             }
             Ok(JobOut::Imagine(url)) => {
                 self.running = false;
+                self.imagine_pending = false;
+                self.imagine_error.clear();
                 self.imagine_last = url.clone();
                 self.status = "Imagine ready".into();
                 let job_prompt = self.imagine_job_prompt.clone();
@@ -8355,6 +8386,10 @@ impl Cabin {
             Ok(JobOut::Err(e)) => {
                 self.running = false;
                 self.voice_orb = "idle".into();
+                if self.imagine_pending {
+                    self.imagine_pending = false;
+                    self.imagine_error = e.clone();
+                }
                 remember_chip_outcome(&mut self.chip_memory, false, now_ms());
                 self.status = self.apply_job_fail(&e);
                 self.finish_hub_dispatch(&e, false);
@@ -8558,9 +8593,16 @@ impl Cabin {
             return;
         }
         let kind = self.imagine_kind;
-        let key = self.bearer();
+        let console = self.console_key().trim().to_string();
+        let key = if !console.is_empty() {
+            console
+        } else {
+            self.bearer()
+        };
         if key.trim().is_empty() {
-            self.status = "Run grok login — Imagine uses that token.".into();
+            self.imagine_error =
+                "Add an xAI console API key in Settings, or run grok login.".into();
+            self.status = self.imagine_error.clone();
             return;
         }
         let aspect = imagine_aspect_label(self.imagine_aspect).to_string();
@@ -8578,6 +8620,8 @@ impl Cabin {
             video_audio: self.imagine_video_audio,
         });
         self.running = true;
+        self.imagine_pending = true;
+        self.imagine_error.clear();
         self.imagine_job_prompt = prompt.clone();
         self.imagine_expand = false;
         self.roll_today();
@@ -10436,10 +10480,12 @@ impl Cabin {
                     ui.label(
                         RichText::new("GrokHub")
                             .size(crate::theme::FONT_CHROME)
-                            .color(crate::theme::muted()),
+                            .strong()
+                            .color(crate::theme::fg()),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if titlebar_chrome_hit(&titlebar_chrome_btn(ui, "×")) {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        if titlebar_chrome_hit(&titlebar_chrome_btn(ui, ChromeBtn::Close)) {
                             let hide = crate::tray::should_hide_on_close(
                                 self.cfg.close_to_tray,
                                 self.tray.is_some(),
@@ -10451,7 +10497,14 @@ impl Cabin {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
                         }
-                        if titlebar_chrome_hit(&titlebar_chrome_btn(ui, "□")) {
+                        if titlebar_chrome_hit(&titlebar_chrome_btn(
+                            ui,
+                            if self.win_max {
+                                ChromeBtn::Restore
+                            } else {
+                                ChromeBtn::Maximize
+                            },
+                        )) {
                             let currently = ctx
                                 .input(|i| i.viewport().maximized)
                                 .unwrap_or(self.win_max);
@@ -10460,7 +10513,7 @@ impl Cabin {
                             self.cfg.window.maximized = self.win_max;
                             self.geom_dirty = true;
                         }
-                        if titlebar_chrome_hit(&titlebar_chrome_btn(ui, "–")) {
+                        if titlebar_chrome_hit(&titlebar_chrome_btn(ui, ChromeBtn::Minimize)) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
                         let (_rect, drag) = ui.allocate_exact_size(
@@ -10501,11 +10554,11 @@ impl Cabin {
         let w = ui.available_width();
         let (_rect, resp) = ui.allocate_exact_size(egui::vec2(w, crate::theme::NAV_ROW_H), egui::Sense::click());
         let (resp, rect, fill) = crate::theme::feel_response(ui, resp, fill);
-        ui.painter().rect_filled(rect, 10.0, fill);
+        ui.painter().rect_filled(rect, crate::theme::CHROME_RADIUS, fill);
         if outline {
             ui.painter().rect_stroke(
                 rect,
-                10.0,
+                crate::theme::CHROME_RADIUS,
                 egui::Stroke::new(1.0_f32, crate::theme::border_strong()),
             );
         }
@@ -10890,12 +10943,17 @@ impl Cabin {
                     self.ui_empty_home(ui);
                     return;
                 }
-                let pane = clamp_row_width(ui.available_width());
+                let avail = clamp_row_width(ui.available_width());
+                let pane = crate::theme::chat_col_w(avail);
+                let side = empty_home_side_gap(avail, pane);
                 let pin_tail = self.chat_tail_frames > 0;
                 let out = egui::ScrollArea::vertical()
                     .stick_to_bottom(true)
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add_space(side);
+                            ui.vertical(|ui| {
                         ui.set_width(pane);
                         ui.set_max_width(pane);
                         let thinking = self.thinking_here();
@@ -10964,6 +11022,8 @@ impl Cabin {
                             // The transcript is laid out now, so the bottom is a real place.
                             ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
                         }
+                            });
+                        });
                     });
                 self.chat_tail_frames = self.chat_tail_frames.saturating_sub(1);
                 if scrolled_off_tail(
@@ -11084,33 +11144,21 @@ impl Cabin {
 
 fn paint_running(ui: &mut egui::Ui) {
     let t = ui.ctx().input(|i| i.time) as f32;
-    let pulse = 0.35 + 0.65 * (t * 4.0).sin().abs();
-    let fill = crate::theme::live();
-    let color = egui::Color32::from_rgba_unmultiplied(
-        fill.r(),
-        fill.g(),
-        fill.b(),
-        (pulse * 255.0) as u8,
-    );
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-        ui.painter().circle_filled(rect.center(), 4.0, color);
-        ui.label(
-            RichText::new("Running")
-                .size(crate::theme::FONT_META)
-                .color(crate::theme::muted()),
-        );
-    });
+    let on = ((t * 1.8).fract() - 0.5).abs() < 0.28;
+    ui.add_space(4.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(2.0, 16.0), egui::Sense::hover());
+    if on {
+        ui.painter().rect_filled(rect, 0.0, crate::theme::fg());
+    }
     ui.ctx().request_repaint();
 }
 
 fn paint_one_tool_card(ui: &mut egui::Ui, card: &ToolCard) {
             egui::Frame::none()
-                .fill(crate::theme::elevated())
-                .rounding(12.0)
+                .fill(egui::Color32::TRANSPARENT)
+                .rounding(crate::theme::CHROME_RADIUS)
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                .inner_margin(egui::Margin::same(10.0))
+                .inner_margin(egui::Margin::same(8.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -11165,8 +11213,8 @@ impl Cabin {
         };
         ui.add_space(8.0);
         egui::Frame::none()
-            .fill(crate::theme::elevated())
-            .rounding(12.0)
+            .fill(egui::Color32::TRANSPARENT)
+            .rounding(crate::theme::CHROME_RADIUS)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
@@ -11221,8 +11269,8 @@ impl Cabin {
         };
         ui.add_space(8.0);
         egui::Frame::none()
-            .fill(crate::theme::elevated())
-            .rounding(12.0)
+            .fill(egui::Color32::TRANSPARENT)
+            .rounding(crate::theme::CHROME_RADIUS)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
@@ -11324,8 +11372,9 @@ impl Cabin {
             .min(avail.width());
         let side = empty_home_side_gap(avail.width(), pane_w);
         let composer_top = empty_home_composer_top(avail.height(), crate::theme::QUERY_MIN_H);
+        let mark_h = if greet_on { 40.0 + 12.0 } else { 0.0 };
         let greet_h = if greet_on {
-            greeting_galley_h(ui, &self.greeting, pane_w)
+            greeting_galley_h(ui, &self.greeting, pane_w) + mark_h
         } else {
             0.0
         };
@@ -11341,6 +11390,12 @@ impl Cabin {
                     egui::Layout::top_down_justified(egui::Align::Center),
                     |ui| {
                         ui.set_width(pane_w);
+                        let mark = crate::theme::mark(ui.ctx());
+                        ui.add(
+                            egui::Image::from_texture(&mark)
+                                .fit_to_exact_size(egui::vec2(40.0, 40.0)),
+                        );
+                        ui.add_space(12.0);
                         ui.label(
                             RichText::new(&self.greeting)
                                 .font(crate::theme::title_font(crate::theme::GREET_HERO))
@@ -11437,8 +11492,8 @@ impl Cabin {
                             );
                             ui.add_space(4.0);
                             egui::Frame::none()
-                                .fill(crate::theme::elevated())
-                                .rounding(12.0)
+                                .fill(crate::theme::surface())
+                                .rounding(crate::theme::CHROME_RADIUS)
                                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                                 .inner_margin(egui::Margin::same(8.0))
                                 .show(ui, |ui| {
@@ -11506,6 +11561,7 @@ impl Cabin {
                         }
                     }
                     ComposerStackSlot::Chips => {
+            if self.messages.is_empty() {
             ui.add_space(6.0);
             if let Some(act) = crate::cards::quick_chip_row(ui, &self.visible_chips) {
                 match act {
@@ -11521,6 +11577,7 @@ impl Cabin {
                         }
                     }
                 }
+            }
             }
                     }
                     ComposerStackSlot::Attach => {
@@ -12914,13 +12971,14 @@ impl Cabin {
         let word = crate::cards::imagine_word(now_ms());
         let selected = self.imagine_prompt.clone();
         let last = self.imagine_last.clone();
+        let imagine_err = self.imagine_error.clone();
         let working = self.running && self.page_nav() == Nav::Imagine;
         let dock = imagine_toolbox_dock(
             !self.imagine_prompt.trim().is_empty(),
-            !last.is_empty(),
+            !last.is_empty() || !imagine_err.is_empty(),
             working,
         );
-        let stage_on = imagine_stage_visible(working, !last.is_empty());
+        let stage_on = imagine_stage_visible(working, !last.is_empty()) || !imagine_err.is_empty();
         let video = self.imagine_kind == ImagineKind::Video;
         let aspect = imagine_aspect_label(self.imagine_aspect).to_string();
         let composer_id = egui::Id::new("imagine-composer");
@@ -12977,7 +13035,7 @@ impl Cabin {
                                     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(stage), |ui| {
                                         ui.set_clip_rect(stage);
                                         stage_hit = crate::cards::imagine_stage(
-                                            ui, &last, working, video,
+                                            ui, &last, working, video, &imagine_err,
                                         );
                                     });
                                     ui.add_space(IMAGINE_WALL_GAP);
@@ -13129,6 +13187,7 @@ impl Cabin {
         if new_project {
             self.imagine_prompt.clear();
             self.imagine_last.clear();
+            self.imagine_error.clear();
             self.imagine_expand = false;
             self.imagine_want_focus = true;
         }
@@ -14403,6 +14462,19 @@ mod tests {
             !bubble_fn.contains("row_h"),
             "a measured-height lock clips markdown: {bubble_fn}"
         );
+        let assistant = src
+            .split("// Assistant: flush on the canvas")
+            .nth(1)
+            .and_then(|s| s.split("fn paint_msg_acts").next())
+            .expect("assistant bubble");
+        assert!(
+            assistant.contains("horizontal_top"),
+            "assistant mark must sit at the top of multi-line replies: {assistant}"
+        );
+        assert!(
+            !assistant.contains("ui.horizontal("),
+            "ui.horizontal centers the mark mid-block: {assistant}"
+        );
         let chat = src
             .split("fn ui_chat(")
             .nth(1)
@@ -14411,6 +14483,10 @@ mod tests {
         assert!(
             chat.contains("available_width") && chat.contains("set_max_width(pane)"),
             "thread uses the CentralPanel pane: {chat}"
+        );
+        assert!(
+            chat.contains("chat_col_w") && chat.contains("empty_home_side_gap"),
+            "conversation sits in a centered Grok column: {chat}"
         );
         assert!(
             !chat.contains("composer_pill_w"),
@@ -15666,8 +15742,10 @@ mod tests {
             .and_then(|s| s.split("fn listen_voice(").next())
             .expect("kick_imagine");
         assert!(
-            kick.contains("bearer()") && !kick.contains("has_key()"),
-            "Imagine must use grok login, not cabin OAuth only: {kick}"
+            kick.contains("bearer()")
+                && kick.contains("console_key()")
+                && !kick.contains("has_key()"),
+            "Imagine prefers a console API key, then grok login: {kick}"
         );
         assert!(
             kick.contains("bump_usage(&mut self.usage, \"imagine\")"),
@@ -18181,6 +18259,10 @@ mod tests {
             "greeting is the empty-home hero, not a 56px wordmark: {slice}"
         );
         assert!(
+            slice.contains("theme::mark"),
+            "empty home paints a quiet Grok mark above the greeting: {slice}"
+        );
+        assert!(
             !slice.contains("italics"),
             "greeting is regular/medium weight: {slice}"
         );
@@ -18227,10 +18309,14 @@ mod tests {
             "greeting-to-composer gap stays tight: {slice}"
         );
         let chips = src.find("ComposerStackSlot::Chips =>").expect("chips arm");
-        let chips = &src[chips..chips + 500];
+        let chips = &src[chips..chips + 700];
         assert!(
             chips.contains("add_space(6.0)"),
             "chips sit a tight gap under the pill: {chips}"
+        );
+        assert!(
+            chips.contains("messages.is_empty()"),
+            "suggestion chips only on empty state: {chips}"
         );
         assert_eq!(super::empty_home_side_gap(1800.0, 800.0), 500.0);
         assert_eq!(super::empty_home_side_gap(700.0, 800.0), 0.0);
@@ -18394,8 +18480,12 @@ mod tests {
             "thought words must not use chat fg: {bubble}"
         );
         assert!(
-            bubble.contains("theme::surface()"),
-            "thought bubbles must recede from assistant chat: {bubble}"
+            bubble.contains("TRANSPARENT"),
+            "thoughts stay flush on the canvas, no elevated card: {bubble}"
+        );
+        assert!(
+            !bubble.contains("theme::surface()"),
+            "thoughts must not sit on a surface card: {bubble}"
         );
     }
 
