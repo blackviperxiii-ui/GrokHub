@@ -1,4 +1,9 @@
 //! GrokHub native cabin. No Electron. No Tauri.
+//!
+//! Windows Explorer/Start must not allocate a console. Closing that console
+//! kills the cabin. CLI flags attach the parent console when there is one.
+
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod app;
 mod build_agent;
@@ -27,6 +32,10 @@ mod tray;
 mod window;
 mod update;
 mod xai;
+#[cfg(windows)]
+mod win_audio;
+#[cfg(windows)]
+mod win_native;
 
 use app::Cabin;
 use cli::{parse_args, Launch};
@@ -38,11 +47,27 @@ use grokhub_core::{
 use std::env;
 
 fn main() {
-    match parse_args(&env::args().collect::<Vec<_>>()) {
+    #[cfg(windows)]
+    ensure_windows_home();
+    let launch = parse_args(&env::args().collect::<Vec<_>>());
+    match launch {
+        Launch::Cabin | Launch::Agent => {}
+        Launch::Hub => attach_cli_console(true),
+        Launch::Version | Launch::Help | Launch::Doctor | Launch::Update | Launch::Oauth => {
+            attach_cli_console(false)
+        }
+    }
+    match launch {
         Launch::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
         }
         Launch::Help => {
+            #[cfg(windows)]
+            eprint!(
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  git pull + overlay install + grok update --alpha\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                env!("CARGO_PKG_VERSION")
+            );
+            #[cfg(not(windows))]
             eprint!(
                 "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  git pull + install.sh --user + grok update\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
                 env!("CARGO_PKG_VERSION")
@@ -170,10 +195,86 @@ fn run_hub() {
     }
 }
 
+fn attach_cli_console(alloc_if_orphan: bool) {
+    #[cfg(windows)]
+    {
+        win_console::attach(alloc_if_orphan);
+    }
+    let _ = alloc_if_orphan;
+}
+
+/// Stock Windows sessions have USERPROFILE but not HOME.
+#[cfg(windows)]
+fn ensure_windows_home() {
+    if env::var_os("HOME").is_some() {
+        return;
+    }
+    if let Ok(up) = env::var("USERPROFILE") {
+        if !up.is_empty() {
+            env::set_var("HOME", up);
+        }
+    }
+}
+
+fn cabin_window_icon() -> Option<egui::IconData> {
+    let bytes = include_bytes!("../../../packaging/windows/grokhub.ico");
+    let img = image::load_from_memory(bytes).ok()?.into_rgba8();
+    let (width, height) = img.dimensions();
+    Some(egui::IconData {
+        rgba: img.into_raw(),
+        width,
+        height,
+    })
+}
+
+#[cfg(windows)]
+mod win_console {
+    use windows_sys::Win32::System::Console::{
+        AllocConsole, AttachConsole, GetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
+        STD_OUTPUT_HANDLE,
+    };
+
+    #[link(name = "ucrt")]
+    extern "C" {
+        fn _open_osfhandle(osfhandle: isize, flags: i32) -> i32;
+        fn _dup2(fd1: i32, fd2: i32) -> i32;
+    }
+
+    const O_TEXT: i32 = 0x4000;
+
+    pub fn attach(alloc_if_orphan: bool) {
+        unsafe {
+            if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+                if !alloc_if_orphan {
+                    return;
+                }
+                if AllocConsole() == 0 {
+                    return;
+                }
+            }
+            bind_stdio(STD_OUTPUT_HANDLE, 1);
+            bind_stdio(STD_ERROR_HANDLE, 2);
+        }
+    }
+
+    unsafe fn bind_stdio(std_id: u32, fd: i32) {
+        let h = GetStdHandle(std_id);
+        if h.is_null() || h == (-1isize as _) {
+            return;
+        }
+        let osfh = _open_osfhandle(h as isize, O_TEXT);
+        if osfh != -1 {
+            let _ = _dup2(osfh, fd);
+        }
+    }
+}
+
 fn run_cabin(hidden: bool) -> eframe::Result<()> {
     if !tray::try_claim_cabin() {
         return Ok(());
     }
+    #[cfg(windows)]
+    crate::win_native::set_app_user_model_id();
     tray::pin_session_bus();
     tray::force_x11_for_close_to_tray(
         env::var_os("DISPLAY").is_some(),
@@ -191,6 +292,9 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
     if let Some(pos) = window::launch_pos(&geom) {
         viewport = viewport.with_position(pos);
     }
+    if let Some(icon) = cabin_window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let opts = eframe::NativeOptions {
         viewport,
         // eframe window persistence also restores visibility; close-to-tray would come back withdrawn.
@@ -205,4 +309,41 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
             Ok(Box::new(Cabin::new(hidden)))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn windows_cabin_is_a_gui_subsystem() {
+        let src = include_str!("main.rs");
+        assert!(
+            src.contains("windows_subsystem = \"windows\""),
+            "Explorer must not attach a console that kills the cabin when closed: {src}"
+        );
+        assert!(
+            src.contains("AttachConsole"),
+            "grokhub --version from PowerShell must still print: {src}"
+        );
+        assert!(
+            src.contains("not(test)"),
+            "cargo test must keep a console: {src}"
+        );
+        assert!(
+            src.contains("cabin_window_icon") && src.contains("with_icon"),
+            "undecorated cabin still needs a taskbar / alt-tab icon: {src}"
+        );
+    }
+
+    #[test]
+    fn windows_exe_embeds_the_cabin_icon() {
+        let build = include_str!("../build.rs");
+        assert!(
+            build.contains("set_icon") && build.contains("grokhub.ico"),
+            "grokhub.exe must carry an ICON resource, not a sidecar .ico: {build}"
+        );
+        assert!(
+            include_bytes!("../../../packaging/windows/grokhub.ico").len() > 64,
+            "packaging/windows/grokhub.ico must exist for winresource and Inno SetupIconFile"
+        );
+    }
 }
