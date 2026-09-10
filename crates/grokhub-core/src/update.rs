@@ -44,14 +44,19 @@ fn sh_quote(s: &str) -> String {
 }
 
 fn git_stdout(source: &Path, args: &[&str]) -> Result<(bool, String), String> {
-    let mut child = Command::new("git")
-        .arg("-C")
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(source)
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("git: {e}"))?;
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("git: {e}"))?;
     let start = Instant::now();
     loop {
         match child.try_wait() {
@@ -116,15 +121,10 @@ pub fn canonical_github_origin(url: &str) -> bool {
     u.ends_with("github.com/blackviperxiii-ui/grokhub")
 }
 
-/// Origin, old hyphenated GitHub, or any other GitHub GrokHub that is not canonical.
+/// Any origin that is not this repo — pin before pull so overlay never
+/// fetches an unvalidated remote and then runs its install script.
 pub fn origin_needs_retarget(url: &str) -> bool {
-    if canonical_github_origin(url) {
-        return false;
-    }
-    let u = url.trim().to_ascii_lowercase();
-    u.contains("origin.cursor.com")
-        || ((u.contains("github.com/") || u.contains("github.com:"))
-            && (u.contains("grok-hub") || u.contains("grokhub")))
+    !canonical_github_origin(url)
 }
 
 /// Alias used by older call sites — same as `origin_needs_retarget`.
@@ -389,6 +389,30 @@ mod tests {
     use super::*;
     use std::fs;
 
+    fn assert_overlay_install(cmd: &str) {
+        #[cfg(windows)]
+        {
+            assert!(
+                cmd.contains("install-windows.ps1") && cmd.contains("powershell"),
+                "{cmd}"
+            );
+        }
+        #[cfg(unix)]
+        {
+            assert!(
+                cmd.contains("install.sh") && cmd.contains("--user"),
+                "{cmd}"
+            );
+        }
+    }
+
+    fn assert_overlay_grok(cmd: &str) {
+        #[cfg(windows)]
+        assert_eq!(cmd, "grok update --alpha");
+        #[cfg(unix)]
+        assert_eq!(cmd, "grok update");
+    }
+
     #[test]
     fn overlay_stop_uses_mainpid_and_cabin_pid_never_pgrep() {
         assert_eq!(overlay_stop_targets(None, None), Vec::<u32>::new());
@@ -444,6 +468,10 @@ mod tests {
         assert!(
             git.contains("try_wait") && !git.contains(".output()"),
             "Settings Update git must not hang the cabin: {git}"
+        );
+        assert!(
+            git.contains("CREATE_NO_WINDOW") && git.contains("creation_flags"),
+            "Windows git probes must not flash a console: {git}"
         );
         let head = src
             .split("fn git_head_branch(")
@@ -504,21 +532,28 @@ mod tests {
             "{no_origin:?}"
         );
         assert!(no_origin[1].contains("pull --ff-only origin main"), "{no_origin:?}");
+        assert_overlay_install(&no_origin[2]);
+        assert_overlay_grok(no_origin.last().unwrap());
         std::process::Command::new("git")
             .args(["remote", "add", "origin", "https://example.invalid/grokhub.git"])
             .current_dir(&root)
             .status()
             .unwrap();
         let cmds = update_cmds(&root).unwrap();
-        assert!(cmds[0].contains("pull --ff-only origin main"), "{cmds:?}");
-        assert!(cmds[1].ends_with("--user"));
-        assert_eq!(cmds.last().map(String::as_str), Some("grok update"));
-        assert!(!cmds.iter().any(|c| c.contains("set-url")), "{cmds:?}");
+        assert!(
+            cmds[0].contains("remote set-url origin https://github.com/blackviperxiii-ui/GrokHub.git"),
+            "{cmds:?}"
+        );
+        assert!(cmds[1].contains("pull --ff-only origin main"), "{cmds:?}");
+        assert_overlay_install(&cmds[2]);
+        assert_overlay_grok(cmds.last().unwrap());
+        #[cfg(unix)]
         assert!(!cmds.iter().any(|c| c.contains("--alpha") || c.contains("--stable")), "{cmds:?}");
         assert!(!update_wipes_config(&cmds));
         let plan = update_plan_steps(cmds);
-        assert!(plan[0].explain.contains("origin/main"), "{plan:?}");
-        assert!(plan[1].explain.contains("overlay"), "{plan:?}");
+        assert!(plan[0].explain.contains("GitHub"), "{plan:?}");
+        assert!(plan[1].explain.contains("origin/main"), "{plan:?}");
+        assert!(plan[2].explain.contains("overlay"), "{plan:?}");
         assert!(plan.last().unwrap().explain.contains("Grok Build CLI"), "{plan:?}");
         assert_ne!(plan[0].explain, "read-only");
         let _ = fs::remove_dir_all(&root);
@@ -681,7 +716,7 @@ mod tests {
         assert!(!canonical_github_origin(
             "https://github.com/blackviperxiii-ui/GrokHub-Windows.git"
         ));
-        assert!(!origin_needs_retarget("https://example.invalid/grokhub.git"));
+        assert!(origin_needs_retarget("https://example.invalid/grokhub.git"));
         assert!(canonical_github_origin(GITHUB_REMOTE_URL));
         assert!(canonical_github_origin(
             "git@github.com:blackviperxiii-ui/GrokHub.git"
@@ -701,8 +736,8 @@ mod tests {
             "{cmds:?}"
         );
         assert!(cmds[1].contains("pull --ff-only origin main"), "{cmds:?}");
-        assert!(cmds[2].ends_with("--user"), "{cmds:?}");
-        assert_eq!(cmds.last().map(String::as_str), Some("grok update"));
+        assert_overlay_install(&cmds[2]);
+        assert_overlay_grok(cmds.last().unwrap());
         let plan = update_plan_steps(cmds);
         assert!(plan[0].explain.contains("GitHub"), "{plan:?}");
 
