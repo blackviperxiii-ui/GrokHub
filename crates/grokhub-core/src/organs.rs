@@ -274,9 +274,14 @@ pub fn daily_units_blocked(used: u32, cap: u32) -> bool {
 }
 
 /// A clock typed into Settings. Nonsense keeps what the cabin already had rather than
-/// silently turning quiet hours off.
+/// silently turning quiet hours off. An hour alone is not a clock — `7` must not become
+/// 07:00 and move the window.
 pub fn normalize_hm(text: &str, fallback: &str) -> String {
-    match hm_min(text) {
+    let t = text.trim();
+    if !t.contains(':') {
+        return fallback.trim().to_string();
+    }
+    match hm_min(t) {
         Some(min) => format!("{:02}:{:02}", min / 60, min % 60),
         None => fallback.trim().to_string(),
     }
@@ -307,7 +312,7 @@ mod tests {
     #[test]
     fn settings_fields_keep_the_old_value_when_the_typing_is_nonsense() {
         assert_eq!(normalize_hm("22:00", "07:00"), "22:00");
-        assert_eq!(normalize_hm("7", "07:00"), "07:00", "an hour alone is midnight-safe");
+        assert_eq!(normalize_hm("7", "22:00"), "22:00", "an hour alone is midnight-safe");
         assert_eq!(normalize_hm(" 9:5 ", "07:00"), "09:05");
         assert_eq!(normalize_hm("", "22:00"), "22:00");
         assert_eq!(normalize_hm("bedtime", "22:00"), "22:00");
