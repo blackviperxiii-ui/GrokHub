@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+On `main` after v2.9.0. No VERSION bump.
+
+- Quiet-hour clocks type into buffers; Save keeps the last-good window. An hour alone (`7`) is not a clock.
+- History search drops the previous needle's hits and ignores a walk that no longer matches the box.
+- Re-opening the memory file already in the editor keeps unsaved typing.
+
 ## 2.9.0 — 2026-09-04
 
 GrokHub cabin for Grok Build **1.0.21** (covers 1.0.18–1.0.21). Cursor **#9** is on `main`.

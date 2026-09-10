@@ -24,7 +24,13 @@ Grok Build owns computer-use. There is no Desk / Take over menu. The cabin rende
 
 ## History and extensions
 
-History is `grok sessions list` only (no disk walk of subagents). Delete is `grok sessions delete` against `~/.grok`, then a refresh from that list. Session transcripts load via `grok export`. The Connectors tab runs `grok inspect` / `grok mcp` / skills / plugins JSON.
+History search types across SOUL/USER/MEMORY and every chat. A new query drops the previous needle's hits; a finished walk only installs when it still matches the box. A hit opens that memory file or thread. Re-opening the file already in the Memory editor keeps unsaved typing.
+
+Below the search, History is `grok sessions list` (no disk walk of subagents). Delete is `grok sessions delete` against `~/.grok`, then a refresh from that list. Session transcripts load via `grok export`. The Connectors tab runs `grok inspect` / `grok mcp` / skills / plugins JSON.
+
+## Settings
+
+Quiet-hour clocks and the daily/host caps type into buffers. Save parses them. A half-typed clock or an hour with no `:` (`7`) keeps the last-good value instead of the factory window or turning the guard off.
 
 ## Auth
 
