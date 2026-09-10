@@ -31,5 +31,28 @@ jobs:
           fail_on_unmatched_files: true
           body: |
             ## Install
-            Extract `grokhub-linux-${{ github.ref_name }}.tar.gz` and run `./install.sh`,
+            **Linux:** extract `grokhub-linux-${{ github.ref_name }}.tar.gz` and run `./install.sh`,
             or `cargo install --path crates/grokhub-app` from a clone.
+
+            **Windows:** run `GrokHub-Setup-${{ github.ref_name }}.exe` (no admin).
+            Installs to `%LOCALAPPDATA%\Programs\GrokHub`.
+
+  windows-installer:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Inno Setup
+        run: choco install innosetup --no-progress
+      - name: Package
+        shell: pwsh
+        run: ./scripts/make-windows-release.ps1
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-release/GrokHub-Setup-*.exe
+            dist-release/grokhub-windows-v*.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true

@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  check:
+  linux:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -46,15 +46,24 @@ jobs:
           fi
           echo "rust-only tree ok"
 
-  windows-package:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+  windows:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release -p grokhub-app
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-grokhub
-          path: target/release/grokhub.exe
+      - run: cargo test --workspace --locked
+      - run: cargo build --release --locked -p grokhub-app -p grokhub-hub
+      - name: Cabin binaries exist
+        shell: pwsh
+        run: |
+          if (-not (Test-Path target/release/grokhub.exe)) { throw 'missing grokhub.exe' }
+          if (-not (Test-Path target/release/grokhub-hub.exe)) { throw 'missing grokhub-hub.exe' }
+      - name: Pack script locks
+        shell: pwsh
+        run: ./scripts/make-windows-release.tests.ps1
+      - name: No Electron leftover
+        shell: pwsh
+        run: |
+          if (Test-Path package.json) { throw 'electron leftover' }
+          if (Test-Path desktop) { throw 'electron leftover' }

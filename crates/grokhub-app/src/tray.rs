@@ -1,6 +1,8 @@
 //! StatusNotifierItem tray. Close hides the cabin; the process keeps working.
 
+#[cfg(unix)]
 use ksni::blocking::TrayMethods;
+#[cfg(unix)]
 use ksni::menu::*;
 use std::env;
 use std::fs;
@@ -209,9 +211,31 @@ pub fn cabin_pid_alive(pid: u32) -> bool {
     {
         Path::new(&format!("/proc/{pid}")).exists()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        windows_pid_alive(pid)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         true
+    }
+}
+
+#[cfg(windows)]
+fn windows_pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code) != 0;
+        CloseHandle(h);
+        ok && code == STILL_ACTIVE as u32
     }
 }
 
@@ -341,7 +365,10 @@ pub fn force_x11_for_close_to_tray(has_display: bool, wayland_set: bool) {
 
 pub struct TrayHost {
     rx: mpsc::Receiver<TrayCmd>,
+    #[cfg(unix)]
     _keep: ksni::blocking::Handle<GrokTray>,
+    #[cfg(windows)]
+    tray_tid: u32,
 }
 
 impl TrayHost {
@@ -350,10 +377,12 @@ impl TrayHost {
     }
 }
 
+#[cfg(unix)]
 struct GrokTray {
     tx: mpsc::Sender<TrayCmd>,
 }
 
+#[cfg(unix)]
 impl ksni::Tray for GrokTray {
     fn id(&self) -> String {
         "grokhub".into()
@@ -420,6 +449,7 @@ impl ksni::Tray for GrokTray {
     }
 }
 
+#[cfg(unix)]
 fn cabin_icon() -> ksni::Icon {
     let w = 22i32;
     let h = 22i32;
@@ -442,6 +472,7 @@ fn cabin_icon() -> ksni::Icon {
     }
 }
 
+#[cfg(unix)]
 pub fn spawn() -> Option<TrayHost> {
     if !tray_wanted() {
         return None;
@@ -452,6 +483,78 @@ pub fn spawn() -> Option<TrayHost> {
         Ok(handle) => Some(TrayHost { rx, _keep: handle }),
         Err(_) => None,
     }
+}
+
+#[cfg(windows)]
+fn windows_tray_thread(ready: mpsc::Sender<Option<TrayHost>>) {
+    if !tray_wanted() {
+        let _ = ready.send(None);
+        return;
+    }
+    use tray_icon::menu::{Menu, MenuEvent, MenuItem};
+    use tray_icon::{Icon, TrayIconBuilder};
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, GetMessageW, TranslateMessage, MSG,
+    };
+    let (tx, rx) = mpsc::channel();
+    let show = MenuItem::new("Show cabin", true, None);
+    let halt = MenuItem::new("Halt", true, None);
+    let quit = MenuItem::new("Quit", true, None);
+    let menu = Menu::new();
+    let _ = menu.append(&show);
+    let _ = menu.append(&halt);
+    let _ = menu.append(&quit);
+    let icon = match Icon::from_rgba(vec![232, 168, 96, 255].repeat(22 * 22), 22, 22) {
+        Ok(i) => i,
+        Err(_) => {
+            let _ = ready.send(None);
+            return;
+        }
+    };
+    let tray = match TrayIconBuilder::new()
+        .with_menu(Box::new(menu))
+        .with_tooltip("GrokHub")
+        .with_icon(icon)
+        .build()
+    {
+        Ok(t) => t,
+        Err(_) => {
+            let _ = ready.send(None);
+            return;
+        }
+    };
+    let show_id = show.id().clone();
+    let halt_id = halt.id().clone();
+    let quit_id = quit.id().clone();
+    std::thread::spawn(move || {
+        while let Ok(ev) = MenuEvent::receiver().recv() {
+            let cmd = if ev.id == show_id {
+                TrayCmd::Show
+            } else if ev.id == halt_id {
+                TrayCmd::Halt
+            } else if ev.id == quit_id {
+                TrayCmd::Quit
+            } else {
+                continue;
+            };
+            if tx.send(cmd).is_err() {
+                break;
+            }
+        }
+    });
+    let tray_tid = unsafe { GetCurrentThreadId() };
+    if ready.send(Some(TrayHost { rx, tray_tid })).is_err() {
+        return;
+    }
+    unsafe {
+        let mut msg = std::mem::zeroed::<MSG>();
+        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+    drop(tray);
 }
 
 /// ksni `spawn()` `block_on`s session-bus setup on the caller. Never do that
@@ -471,7 +574,22 @@ where
 }
 
 pub fn begin_tray_spawn() -> mpsc::Receiver<Option<TrayHost>> {
-    spawn_worker(spawn)
+    #[cfg(unix)]
+    {
+        spawn_worker(spawn)
+    }
+    #[cfg(windows)]
+    {
+        let (tx, rx) = mpsc::channel();
+        let _ = thread::Builder::new()
+            .name("grokhub-tray".into())
+            .spawn(move || windows_tray_thread(tx));
+        rx
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        spawn_worker(|| None)
+    }
 }
 
 pub fn take_spawn_result<T>(rx: &mpsc::Receiver<T>) -> Option<T> {
@@ -495,7 +613,17 @@ pub fn drop_off_thread<T: Send + 'static>(value: T) {
 
 impl Drop for TrayHost {
     fn drop(&mut self) {
-        let _ = self._keep.shutdown();
+        #[cfg(unix)]
+        {
+            let _ = self._keep.shutdown();
+        }
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
+            unsafe {
+                let _ = PostThreadMessageW(self.tray_tid, WM_QUIT, 0, 0);
+            }
+        }
     }
 }
 

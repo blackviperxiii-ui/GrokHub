@@ -124,10 +124,12 @@ where
         }
         StoreRead::Text(raw) => raw,
     };
+    // PowerShell Set-Content -Encoding utf8 writes a BOM; serde_json rejects it.
+    let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw.as_str());
     if raw.trim().is_empty() {
         return fallback();
     }
-    match serde_json::from_str(&raw) {
+    match serde_json::from_str(raw) {
         Ok(v) => v,
         Err(_) => {
             quarantine(path);
@@ -288,8 +290,15 @@ pub fn config_dir() -> PathBuf {
 }
 
 fn dirs_fallback() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".config/GrokHub");
+    if cfg!(windows) {
+        if let Ok(app) = std::env::var("APPDATA") {
+            if !app.trim().is_empty() {
+                return PathBuf::from(app).join("GrokHub");
+            }
+        }
+    }
+    if let Some(home) = grokhub_core::user_home() {
+        return home.join(".config/GrokHub");
     }
     PathBuf::from(".grokhub")
 }
@@ -309,11 +318,11 @@ pub fn default_device_name() -> String {
 }
 
 fn hostname_cmd() -> Option<String> {
-    let mut child = std::process::Command::new("hostname")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut cmd = std::process::Command::new("hostname");
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    grokhub_acp::hide_windows_console(&mut cmd);
+    let mut child = cmd.spawn().ok()?;
     let start = Instant::now();
     loop {
         match child.try_wait() {
