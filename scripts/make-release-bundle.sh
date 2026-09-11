@@ -73,7 +73,7 @@ echo "installed $PREFIX/bin/grokhub"
 if [[ -x "$PREFIX/bin/grok" || -x "$HOME/.grok/bin/grok" ]] || command -v grok >/dev/null 2>&1; then
   echo "installed Grok Build CLI (grok)"
 else
-  echo "grok: Grok Build CLI not on PATH — curl -fsSL https://x.ai/cli/install.sh | bash"
+  echo "grok: Grok Build CLI not on PATH — curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash"
 fi
 EOF
 chmod 755 "$STAGE/install.sh" "$STAGE/grokhub" "$STAGE/grokhub-hub" \
