@@ -1,8 +1,8 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.9.0
+**Version:** 2.9.1
 
-GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands).
+GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands). One repo, one version — Linux tarball/AUR and Windows `GrokHub-Setup-<version>.exe` ship from the same tag.
 
 ## Split
 
@@ -38,4 +38,4 @@ Agent: `grok login` cached token, `grok.com` ACP auth, or `XAI_API_KEY`. Imagine
 
 ## Overlay vs agent updates
 
-Cabin overlay (`/update`) updates the GUI, then runs `grok update` on the current channel. It does not pass `--alpha` or `--stable`.
+Cabin overlay (`/update`) updates the GUI, then runs `grok update` on the current channel. Linux does not pass `--alpha` or `--stable` and does not set `GROK_CHANNEL=alpha`. Windows overlay may still vendor alpha for first-run `grok.exe`. `/learn` (alias `/learn reflect`) is a cabin slash: palette click and typed send both run reflect.
