@@ -844,7 +844,7 @@ fn paint_chat_block(
                     .size(crate::theme::FONT_META)
                     .color(crate::theme::muted()),
             )
-            .id_source(("chat-tool", title, block.body.as_str()))
+            .id_salt(("chat-tool", title, block.body.as_str()))
             .default_open(false)
             .show(ui, |ui| {
                 ui.set_max_width(bubble_w);
@@ -11292,7 +11292,7 @@ impl Cabin {
                 .size(crate::theme::FONT_META)
                 .color(crate::theme::muted()),
         )
-        .id_source("chat-work-tree")
+        .id_salt("chat-work-tree")
         .default_open(false)
         .show(ui, |ui| {
             for card in &self.tool_cards {
@@ -11325,7 +11325,7 @@ fn paint_one_tool_card(ui: &mut egui::Ui, card: &ToolCard) {
             .size(crate::theme::FONT_META)
             .color(crate::theme::muted()),
     )
-    .id_source(("tool-card", card.id.as_str(), label))
+    .id_salt(("tool-card", card.id.as_str(), label))
     .default_open(false)
     .show(ui, |ui| {
         paint_tool_card_body(ui, card);
