@@ -120,9 +120,10 @@ use grokhub_core::{
     skill_follow_block, skill_use_in_chat_prompt, slash_help, SlashHit, summarize_write, surgical_memory_edit, MemoryEdit,
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
-    unified_diff_cite, usage_line, add_tokens, token_delta, cap_from_text, cap_label, normalize_hm,
+    unified_diff_cite, usage_line, add_tokens, token_delta, cap_from_text, normalize_hm,
+    quiet_hours_choice_label, quiet_hours_menu,
     transcribe_route, uid, update_cmds_for, overlay_update_begin, overlay_update_finish,
-    settings_update_action_hint, settings_update_note,
+    settings_update_action_hint,
     realtime_bearer, realtime_can_connect, voice_log_role, voice_stream_token, voice_transcript_sends_chat,
     fold_stream_fields, StreamTokenKind,
     update_wipes_config, voice_session_url, Automation, BoardCard, GrokLoop,
@@ -170,7 +171,6 @@ enum SettingsSec {
     Account,
     Appearance,
     Behavior,
-    Github,
     Update,
     About,
 }
@@ -178,7 +178,6 @@ enum SettingsSec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsGroup {
     General,
-    Data,
     About,
 }
 
@@ -236,7 +235,6 @@ fn plus_from_path(target: PlusTarget, path: PathBuf) -> PlusPick {
 fn settings_group_home(group: SettingsGroup) -> SettingsSec {
     match group {
         SettingsGroup::General => SettingsSec::Account,
-        SettingsGroup::Data => SettingsSec::Github,
         SettingsGroup::About => SettingsSec::Update,
     }
 }
@@ -468,7 +466,6 @@ fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::Account => "Account",
         SettingsSec::Appearance => "Appearance",
         SettingsSec::Behavior => "Behavior",
-        SettingsSec::Github => "GitHub",
         SettingsSec::Update => "Update",
         SettingsSec::About => "About",
     }
@@ -12459,19 +12456,8 @@ impl Cabin {
         let mut connect = false;
         let mut disconnect = false;
         let mut update = false;
-        let mut install_cli = false;
         let mut restart = false;
         let mut copy_diag = false;
-        let cli_ready = grokhub_acp::grok_cli_known_good() || grokhub_acp::find_grok().is_some();
-        let show_cli_install = grokhub_core::should_show_manual_cli_install(cli_ready);
-        let cli_installing = self.grok_install_rx.is_some();
-        let cli_install_hint = if cli_installing {
-            "Installing Grok Build CLI alpha (GROK_CHANNEL=alpha)…"
-        } else if !self.grok_install_err.is_empty() {
-            "Grok is missing or broken. Installs Grok Build CLI alpha from x.ai/cli."
-        } else {
-            "Installs Grok Build CLI alpha (GROK_CHANNEL=alpha / https://x.ai/cli/alpha) when grok is missing or broken."
-        };
         let oauth_line = self.secrets.oauth.as_ref().map(|t| {
             t.email
                 .clone()
@@ -12481,11 +12467,7 @@ impl Cabin {
         let pending = self.oauth_pending.as_ref().map(|p| {
             format!("Approve {} at {}", p.user_code, p.verification_uri)
         });
-        let imagine_live = dedicated_imagine_model(&self.cfg.imagine_model);
-        let voice_live = dedicated_voice_model(&self.cfg.voice_model);
         let doctor = self.doctor_text();
-        let usage = usage_line(&self.usage);
-        let catalog = catalog_line();
         let mut close = false;
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             close = true;
@@ -12535,13 +12517,6 @@ impl Cabin {
                                                     if crate::cards::settings_nav(ui, label, sec == s) {
                                                         next_sec = Some(s);
                                                     }
-                                                }
-                                                ui.add_space(10.0);
-                                                if crate::cards::section_label(ui, "Data") {
-                                                    next_sec = Some(settings_group_home(SettingsGroup::Data));
-                                                }
-                                                if crate::cards::settings_nav(ui, "GitHub", sec == SettingsSec::Github) {
-                                                    next_sec = Some(SettingsSec::Github);
                                                 }
                                                 ui.add_space(10.0);
                                                 if crate::cards::section_label(ui, "About") {
@@ -12626,25 +12601,6 @@ impl Cabin {
                                                             if let Some(p) = &pending {
                                                                 crate::cards::settings_note(ui, p);
                                                             }
-                                                            if show_cli_install
-                                                                && crate::cards::settings_action(
-                                                                    ui,
-                                                                    "Install Grok Build CLI",
-                                                                    cli_install_hint,
-                                                                    if cli_installing { "Installing…" } else { "Install" },
-                                                                )
-                                                                && !cli_installing
-                                                            {
-                                                                install_cli = true;
-                                                            }
-                                                            crate::cards::settings_field(ui, "Console key", "Voice and Imagine only. Agent auth is grok login (cached token). Lives in secrets.json, never markdown.", &mut self.secrets.api_key, true);
-                                                            crate::cards::settings_field(ui, "Device name", "How this box shows up on the hub.", &mut self.cfg.device_name, false);
-                                                            crate::cards::settings_field(ui, "Chat model", "Unused by Grok Build. Session model is /model in grok. Keep empty.", &mut self.cfg.model, false);
-                                                            crate::cards::settings_note(ui, "Session mode is Chat / Plan / Ask on the composer. Effort sets grok agent --reasoning-effort. The leftover ladder pin below is legacy.");
-                                                            crate::cards::settings_note(ui, &format!("Live still model: {imagine_live}. Chat models never run here."));
-                                                            crate::cards::settings_field(ui, "Imagine override", "Must contain “image” or the cabin keeps grok-imagine-image-2.0. Retired grok-2-image names are rewritten.", &mut self.cfg.imagine_model, false);
-                                                            crate::cards::settings_note(ui, &format!("Live voice model: {voice_live}. OAuth runs Hey Grok STT and TTS; duplex needs a console key."));
-                                                            crate::cards::settings_field(ui, "Voice override", "Must contain “voice” or “realtime”. Empty keeps grok-voice-think-fast-2.0.", &mut self.cfg.voice_model, false);
                                                         }
                                                         SettingsSec::Appearance => {
                                                             crate::cards::settings_note(
@@ -12694,62 +12650,34 @@ impl Cabin {
                                                                 self.persist_cfg();
                                                                 self.status = "Saved".into();
                                                             }
-                                                            crate::cards::settings_field(
-                                                                ui,
-                                                                "Quiet hours start",
-                                                                "24h clock. Inside quiet hours the cabin holds a destructive automation and stops anticipating.",
-                                                                &mut self.quiet_start_buf,
-                                                                false,
+                                                            let quiet_menu = quiet_hours_menu(
+                                                                &self.cfg.quiet_start,
+                                                                &self.cfg.quiet_end,
                                                             );
-                                                            crate::cards::settings_field(
-                                                                ui,
-                                                                "Quiet hours end",
-                                                                "Same clock. Start and end equal means no quiet hours.",
-                                                                &mut self.quiet_end_buf,
-                                                                false,
+                                                            let quiet_labels: Vec<String> =
+                                                                quiet_menu.iter().map(|(l, _, _)| l.clone()).collect();
+                                                            let quiet_selected = quiet_hours_choice_label(
+                                                                &self.cfg.quiet_start,
+                                                                &self.cfg.quiet_end,
                                                             );
-                                                            crate::cards::settings_field(
+                                                            if let Some(i) = crate::cards::settings_dropdown(
                                                                 ui,
-                                                                "Automations a day",
-                                                                "Loops, clock jobs, and anticipate share this budget. 0 is no cap.",
-                                                                &mut self.cap_auto_buf,
-                                                                false,
-                                                            );
-                                                            crate::cards::settings_field(
-                                                                ui,
-                                                                "Host commands an hour",
-                                                                "Rolling hour for shell work. 0 is no cap.",
-                                                                &mut self.cap_host_buf,
-                                                                false,
-                                                            );
-                                                            crate::cards::settings_note(ui, &format!(
-                                                                "Now: quiet {}–{} · {} · {}. Today: {} automations, {} host runs.",
-                                                                self.cfg.quiet_start,
-                                                                self.cfg.quiet_end,
-                                                                cap_label(self.cfg.daily_auto_cap, "automations a day"),
-                                                                cap_label(self.cfg.host_hour_cap, "host runs an hour"),
-                                                                self.usage.automation,
-                                                                self.usage.host,
-                                                            ));
-                                                        }
-                                                        SettingsSec::Github => {
-                                                            crate::cards::settings_field(ui, "Personal access token", "CONNECTOR_CMD only. GitHub is the only live connector.", &mut self.secrets.github_token, true);
-                                                            crate::cards::settings_field(ui, "Bound project", "The world. Host, Imagine, and memory stay here.", &mut self.cfg.project_dir, false);
+                                                                "Quiet hours",
+                                                                "Inside quiet hours the cabin holds a destructive automation and stops anticipating. Off is start and end equal.",
+                                                                &quiet_selected,
+                                                                &quiet_labels,
+                                                            ) {
+                                                                if let Some((_, start, end)) = quiet_menu.get(i) {
+                                                                    self.cfg.quiet_start = start.clone();
+                                                                    self.cfg.quiet_end = end.clone();
+                                                                    self.quiet_start_buf = start.clone();
+                                                                    self.quiet_end_buf = end.clone();
+                                                                    self.persist_cfg();
+                                                                    self.status = "Saved".into();
+                                                                }
+                                                            }
                                                         }
                                                         SettingsSec::Update => {
-                                                            crate::cards::settings_note(ui, settings_update_note());
-                                                            crate::cards::settings_field(ui, "Source clone", "Empty uses GROKHUB_SRC or the install receipt. Windows Setup can leave this blank.", &mut self.cfg.source_dir, false);
-                                                            if show_cli_install
-                                                                && crate::cards::settings_action(
-                                                                    ui,
-                                                                    "Install Grok Build CLI",
-                                                                    cli_install_hint,
-                                                                    if cli_installing { "Installing…" } else { "Install" },
-                                                                )
-                                                                && !cli_installing
-                                                            {
-                                                                install_cli = true;
-                                                            }
                                                             if crate::cards::settings_action(ui, "Install overlay", settings_update_action_hint(), "Update") {
                                                                 update = true;
                                                             }
@@ -12787,8 +12715,6 @@ impl Cabin {
                                                             ui.add_space(6.0);
                                                             crate::cards::settings_note(ui, "Native Grok Build cabin.");
                                                             crate::cards::settings_note(ui, &build_agent::grok_banner());
-                                                            crate::cards::settings_note(ui, &usage);
-                                                            crate::cards::settings_note(ui, &catalog);
                                                             crate::cards::settings_note(ui, &doctor);
                                                             if crate::cards::settings_action(ui, "Diagnostics", "Copy a redacted bundle. No secrets.", "Copy") {
                                                                 copy_diag = true;
@@ -12817,9 +12743,6 @@ impl Cabin {
         }
         if update {
             self.queue_update();
-        }
-        if install_cli {
-            self.queue_grok_cli_install();
         }
         if restart {
             self.restart_after_update(ctx);
@@ -15009,6 +14932,10 @@ mod tests {
             about.contains("FONT_HEADING"),
             "version is a heading, not a muted note: {about}"
         );
+        assert!(
+            !about.contains("usage_line") && !about.contains("catalog_line"),
+            "About must not paint today-stats or the model catalog: {about}"
+        );
     }
 
     #[test]
@@ -15055,6 +14982,35 @@ mod tests {
         assert!(
             settings.contains("(SettingsSec::Behavior, \"Behavior\")"),
             "the tabs that remain are the ones with a home: {settings}"
+        );
+        assert!(
+            !settings.contains("section_label(ui, \"Data\")")
+                && !settings.contains("settings_nav(ui, \"GitHub\""),
+            "GitHub is connector-managed — Settings must not keep a Data/GitHub tab: {settings}"
+        );
+        assert!(
+            !settings.contains("Install Grok Build CLI")
+                && !settings.contains("Console key")
+                && !settings.contains("Device name")
+                && !settings.contains("Imagine override"),
+            "Account is OAuth connect/sign-out only: {settings}"
+        );
+        assert!(
+            !settings.contains("Automations a day")
+                && !settings.contains("Host commands")
+                && !settings.contains("Quiet hours start"),
+            "Behavior dropped a-day/host caps and split quiet clocks: {settings}"
+        );
+        assert!(
+            settings.contains("settings_dropdown") && settings.contains("Quiet hours"),
+            "Quiet hours is one dropdown: {settings}"
+        );
+        assert!(
+            !settings.contains("settings_update_note()")
+                && !settings.contains("Source clone")
+                && settings.contains("Install overlay")
+                && settings.contains("settings_update_action_hint()"),
+            "Update is overlay + Update + Restart only: {settings}"
         );
     }
 
@@ -15234,21 +15190,23 @@ mod tests {
         let behavior = src
             .split("SettingsSec::Behavior => {")
             .nth(1)
-            .and_then(|s| s.split("SettingsSec::Github => {").next())
+            .and_then(|s| s.split("SettingsSec::Update => {").next())
             .expect("Behavior");
         assert!(
             behavior.contains("self.persist_cfg()")
                 && !behavior.contains("save = true")
                 && !behavior.contains("self.persist()")
                 && !behavior.contains("persist_snap"),
-            "Close to tray and Living wall must not clone every thread to write app.json: {behavior}"
+            "Close to tray, Living wall, and quiet hours must not clone every thread to write app.json: {behavior}"
         );
         assert!(
-            behavior.contains("quiet_start_buf")
+            behavior.contains("settings_dropdown")
+                && behavior.contains("quiet_hours_menu")
+                && behavior.contains("quiet_start_buf")
                 && behavior.contains("quiet_end_buf")
-                && behavior.contains("cap_auto_buf")
-                && behavior.contains("cap_host_buf"),
-            "quiet hours and the caps hold real work — they need a way in: {behavior}"
+                && !behavior.contains("cap_auto_buf")
+                && !behavior.contains("cap_host_buf"),
+            "quiet hours is one dropdown; a-day/host caps are gone: {behavior}"
         );
         let saved = src
             .split("fn save_settings(")
@@ -15266,10 +15224,11 @@ mod tests {
             "Save must keep the last good clock, not the factory window: {saved}"
         );
         // Split so these assertions are not their own counter-examples.
-        let gone = ["Host", "Voice", "Night", "Imagine"]
+        let gone = ["Host", "Voice", "Night", "Imagine", "Github"]
             .iter()
             .map(|s| format!("SettingsSec{}{s}", "::"))
             .chain(std::iter::once(format!("SettingsGroup{}Cabin", "::")))
+            .chain(std::iter::once(format!("SettingsGroup{}Data", "::")))
             .find(|needle| src.contains(needle));
         assert_eq!(
             gone, None,
@@ -17023,16 +16982,15 @@ mod tests {
             "Windows Update must run without a clone: {queued}"
         );
         assert!(
-            src.contains("settings_update_note()")
-                && src.contains("settings_update_action_hint()"),
-            "Settings → Update copy must be OS-aware: {src}"
+            src.contains("settings_update_action_hint()"),
+            "Settings → Update overlay hint must be OS-aware: {src}"
         );
         assert!(
             src.contains("Install Grok Build CLI")
                 && src.contains("queue_grok_cli_install")
                 && src.contains("begin_grok_install_force")
                 && src.contains("should_show_manual_cli_install"),
-            "Settings must offer a manual alpha CLI install when grok is missing or broken: {src}"
+            "Get Started still offers a manual alpha CLI install when grok is missing or broken: {src}"
         );
         let flush_p = src
             .split("fn flush_projects(")

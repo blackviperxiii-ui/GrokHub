@@ -618,14 +618,14 @@ pub fn slash_help() -> String {
         "/palette — command palette",
         "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs.",
         "Mode pill: Chat / Plan / Ask. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: Low / Medium / High / Extra High. Hover a composer pill for what it does. Grok Build runs the agent.",
-        "Settings → Behavior: close to tray, living wall, quiet hours, automations a day, host commands an hour. Clocks type until Save; an hour alone is not a clock; a typo keeps the last-good window.",
+        "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
         "Appearance: Dark, Light, System. Interactive chat is grok agent stdio (ACP). Night and phone use grok -p. Halt is session/cancel.",
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
         if cfg!(windows) {
-            "First-time install (Windows Setup) installs Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Settings → Install Grok Build CLI installs alpha when grok is missing or broken. Settings → Connect does the same when grok is not already connected. Settings → Update downloads the latest grokhub-windows zip from GitHub (or overlays a source clone), then runs grok update --alpha. Settings shows grok --version."
+            "First-time install (Windows Setup) installs Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Get Started installs alpha when grok is missing or broken. Settings → Connect does the same when grok is not already connected. Settings → Update overlays the cabin (GitHub zip when there is no clone), then runs grok update --alpha. Settings About shows grok --version."
         } else {
-            "First-time install (install.sh, AUR) installs Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Settings → Install Grok Build CLI installs alpha when grok is missing or broken. Settings → Connect does the same when grok is not already connected. Cabin overlay updates the GUI, installs grok alpha only if missing, then runs grok update on the current channel (Linux does not pass --alpha)."
+            "First-time install (install.sh, AUR) installs Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Get Started installs alpha when grok is missing or broken. Settings → Connect does the same when grok is not already connected. Cabin overlay updates the GUI, installs grok alpha only if missing, then runs grok update on the current channel (Linux does not pass --alpha)."
         },
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
         "Pulse every 15s. Hidden idle waits for the pulse.",
@@ -816,7 +816,7 @@ mod tests {
         assert_eq!(parse_slash("/inspect"), Some(Slash::Inspect));
         assert!(slash_help().contains("/loop"));
         assert!(slash_help().contains("/create-skill"));
-        assert!(slash_help().contains("last-good window"));
+        assert!(slash_help().contains("quiet hours dropdown"));
         assert!(slash_help().contains("History search drops stale hits"));
         assert!(slash_help().contains("keeps unsaved typing"));
         assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));

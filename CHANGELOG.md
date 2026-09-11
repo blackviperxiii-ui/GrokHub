@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Settings trim: Account is OAuth connect/sign-out only. Behavior quiet hours is one dropdown (no a-day/host-command caps). GitHub Settings page is gone (connector-managed). Update is overlay + Update + Restart. About drops the today-stats line and the model catalog.
+
 ## 2.9.4 — 2026-09-11
 
 One cabin, two ship artifacts on the same tag. Cursor **#18** (full-pane chat bubbles, faded thought process, collapsed Work tree) is on `main`.
