@@ -1207,6 +1207,8 @@ pub struct Cabin {
     oauth_photo_rx: Option<mpsc::Receiver<OauthPhotoOut>>,
     oauth_photo_busy: bool,
     oauth_profile_tried: bool,
+    grok_install_rx: Option<mpsc::Receiver<Result<std::path::PathBuf, String>>>,
+    grok_install_err: String,
     acp: Option<grokhub_acp::AcpHandle>,
     acp_spawn_rx: Option<mpsc::Receiver<Result<grokhub_acp::AcpHandle, String>>>,
     grok_p_rx: Option<mpsc::Receiver<GrokPEvent>>,
@@ -1606,6 +1608,8 @@ impl Cabin {
             oauth_photo_rx: None,
             oauth_photo_busy: false,
             oauth_profile_tried: false,
+            grok_install_rx: None,
+            grok_install_err: String::new(),
             acp: None,
             acp_spawn_rx: None,
             grok_p_rx: None,
@@ -1660,6 +1664,10 @@ impl Cabin {
         if dropped_leftover {
             c.persist_bg();
         }
+        if grokhub_core::should_kick_alpha_install(grokhub_acp::find_grok().is_some()) {
+            c.grok_install_rx = Some(grokhub_acp::begin_grok_install());
+        }
+        c.sync_cli_auth_from_oauth();
         c
     }
 
@@ -6974,6 +6982,44 @@ impl Cabin {
         });
     }
 
+    fn sync_cli_auth_from_oauth(&self) {
+        let Some(tokens) = self.secrets.oauth.clone() else {
+            return;
+        };
+        std::thread::spawn(move || {
+            match grokhub_acp::write_cli_auth_if_needed(&tokens) {
+                Ok(_) => {}
+                Err(e) => eprintln!("grok auth.json: {e}"),
+            }
+        });
+    }
+
+    fn mark_get_started_done(&mut self) {
+        if self.cfg.get_started_done {
+            return;
+        }
+        self.cfg.get_started_done = true;
+        self.persist_cfg();
+    }
+
+    fn poll_grok_install(&mut self) {
+        let Some(rx) = self.grok_install_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(_)) => {
+                grokhub_acp::invalidate_grok_bin_cache();
+            }
+            Ok(Err(e)) => {
+                self.grok_install_err = e;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.grok_install_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
     fn start_oauth(&mut self) {
         if self.oauth_start_rx.is_some() {
             return;
@@ -7030,6 +7076,8 @@ impl Cabin {
                             self.oauth_photo = None;
                             self.oauth_photo_key.clear();
                             self.status = "Grok OAuth connected".into();
+                            self.sync_cli_auth_from_oauth();
+                            self.mark_get_started_done();
                         }
                     }
                     grokhub_core::PollStatus::Expired | grokhub_core::PollStatus::Denied => {
@@ -9931,6 +9979,10 @@ impl eframe::App for Cabin {
                 self.geom_dirty = false;
             }
         }
+        self.poll_grok_install();
+        if self.grok_install_rx.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
         if self.oauth_pending.is_some() || self.oauth_start_rx.is_some() || self.oauth_poll_rx.is_some()
         {
             self.poll_oauth();
@@ -10097,6 +10149,7 @@ impl eframe::App for Cabin {
         if self.nav == Nav::Settings {
             self.ui_settings(ctx);
         }
+        self.ui_get_started(ctx);
         if self.palette_open {
             self.ui_palette(ctx);
         }
@@ -11522,7 +11575,17 @@ impl Cabin {
                     ComposerStackSlot::AuthBanner => {
                         let grok_missing = grokhub_acp::find_grok().is_none();
                         let need_login = grokhub_acp::grok_cli_key().is_none() && !self.has_key();
-                        if grok_missing || need_login
+                        let cabin_oauth = self
+                            .secrets
+                            .oauth
+                            .as_ref()
+                            .is_some_and(|t| !t.access_token.trim().is_empty());
+                        let get_started = grokhub_core::should_show_get_started(
+                            !grok_missing,
+                            cabin_oauth,
+                            self.cfg.get_started_done,
+                        );
+                        if !get_started && (grok_missing || need_login)
                         {
                             ui.horizontal(|ui| {
                                 crate::cards::settings_note(
@@ -12235,6 +12298,96 @@ impl Cabin {
         }
     }
 
+    fn ui_get_started(&mut self, ctx: &egui::Context) {
+        let grok_present = grokhub_acp::find_grok().is_some();
+        let cabin_oauth = self
+            .secrets
+            .oauth
+            .as_ref()
+            .is_some_and(|t| !t.access_token.trim().is_empty());
+        let installing = self.grok_install_rx.is_some();
+        if grokhub_core::should_show_get_started(
+            grok_present,
+            cabin_oauth,
+            self.cfg.get_started_done,
+        ) {
+            let pending = self.oauth_pending.as_ref().map(|p| {
+                format!("Approve {} at {}", p.user_code, p.verification_uri)
+            });
+            let screen = ctx.screen_rect();
+            egui::Area::new(egui::Id::new("get-started-overlay"))
+                .fixed_pos(screen.min)
+                .order(egui::Order::Foreground)
+                .interactable(true)
+                .show(ctx, |ui| {
+                    ui.set_min_size(screen.size());
+                    ui.painter().rect_filled(screen, 0.0, crate::theme::bg());
+                    let modal = egui::Rect::from_center_size(
+                        screen.center(),
+                        egui::vec2(520.0, 360.0).min(screen.size() - egui::vec2(48.0, 48.0)),
+                    );
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(modal), |ui| {
+                        egui::Frame::none()
+                            .fill(crate::theme::panel())
+                            .rounding(16.0)
+                            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                            .inner_margin(egui::Margin::same(24.0))
+                            .show(ui, |ui| {
+                                if crate::cards::get_started_panel(ui, pending.as_deref()) {
+                                    self.start_oauth();
+                                }
+                            });
+                    });
+                });
+            return;
+        }
+        if !grok_present && !self.cfg.get_started_done && !cabin_oauth {
+            let screen = ctx.screen_rect();
+            let body = if installing {
+                "Installing Grok Build CLI (alpha)…".to_string()
+            } else if !self.grok_install_err.is_empty() {
+                format!(
+                    "{}\n{}",
+                    self.grok_install_err,
+                    grokhub_acp::grok_cli_install_cmd()
+                )
+            } else {
+                "Installing Grok Build CLI (alpha)…".to_string()
+            };
+            egui::Area::new(egui::Id::new("get-started-install"))
+                .fixed_pos(screen.min)
+                .order(egui::Order::Foreground)
+                .interactable(true)
+                .show(ctx, |ui| {
+                    ui.set_min_size(screen.size());
+                    ui.painter().rect_filled(screen, 0.0, crate::theme::bg());
+                    let modal = egui::Rect::from_center_size(
+                        screen.center(),
+                        egui::vec2(520.0, 280.0).min(screen.size() - egui::vec2(48.0, 48.0)),
+                    );
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(modal), |ui| {
+                        egui::Frame::none()
+                            .fill(crate::theme::panel())
+                            .rounding(16.0)
+                            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                            .inner_margin(egui::Margin::same(24.0))
+                            .show(ui, |ui| {
+                                ui.vertical_centered(|ui| {
+                                    ui.add_space(24.0);
+                                    ui.label(
+                                        egui::RichText::new("Get Started")
+                                            .font(crate::theme::title_font(crate::theme::GREET_HERO))
+                                            .color(crate::theme::fg()),
+                                    );
+                                    ui.add_space(12.0);
+                                    crate::cards::settings_note(ui, &body);
+                                });
+                            });
+                    });
+                });
+        }
+    }
+
     fn ui_settings(&mut self, ctx: &egui::Context) {
         let mut save = false;
         let mut connect = false;
@@ -12379,7 +12532,7 @@ impl Cabin {
                                                                 "Connect Grok"
                                                             };
                                                             let auth_hint = oauth_line.as_deref().unwrap_or(
-                                                                "Device-code OAuth. Same public client as Grok CLI.",
+                                                                "Device-code OAuth. Also signs in the Grok Build CLI if it is not already connected.",
                                                             );
                                                             if crate::cards::settings_action(
                                                                 ui,
@@ -17395,6 +17548,10 @@ mod tests {
             sign_out.contains("imagine_pending = false"),
             "Sign out must clear Imagine pending or a later job error paints on the stage: {sign_out}"
         );
+        assert!(
+            !sign_out.contains("auth.json"),
+            "Sign out must not wipe ~/.grok/auth.json: {sign_out}"
+        );
         let start_o = src
             .split("fn start_oauth(")
             .nth(1)
@@ -17420,6 +17577,43 @@ mod tests {
         assert!(
             poll_o.contains("persist_io") && poll_o.contains("secrets::save"),
             "OAuth Ready must not freeze the cabin writing secrets.json: {poll_o}"
+        );
+        let ready = src
+            .split("PollStatus::Ready")
+            .nth(1)
+            .and_then(|s| s.split("PollStatus::Expired").next())
+            .expect("oauth ready");
+        assert!(
+            (ready.contains("write_cli_auth_if_needed") || ready.contains("sync_cli_auth_from_oauth"))
+                && (ready.contains("get_started_done = true") || ready.contains("mark_get_started_done")),
+            "Connect Grok must sign in grok alpha when CLI is empty: {ready}"
+        );
+        let boot = src
+            .split("pub fn new(hidden: bool)")
+            .nth(1)
+            .and_then(|s| s.split("fn persist(&mut self)").next())
+            .expect("Cabin::new");
+        assert!(
+            boot.contains("write_cli_auth_if_needed") || boot.contains("sync_cli_auth_from_oauth"),
+            "upgrade: existing cabin OAuth must fill empty grok auth.json: {boot}"
+        );
+        assert!(
+            boot.contains("begin_grok_install")
+                && (boot.contains("should_kick_alpha_install") || boot.contains("find_grok")),
+            "missing grok on first launch must fetch CLI alpha: {boot}"
+        );
+        let started = src
+            .split("fn ui_get_started(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_settings(").next())
+            .expect("ui_get_started");
+        assert!(
+            started.contains("Installing Grok Build CLI (alpha)"),
+            "install wait copy must say alpha: {started}"
+        );
+        assert!(
+            started.contains("should_show_get_started") && started.contains("start_oauth"),
+            "Get Started must use cabin device-code OAuth: {started}"
         );
         let photo = src
             .split("fn kick_oauth_photo(")
