@@ -2,7 +2,7 @@ post_install() {
   gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
   update-desktop-database /usr/share/applications 2>/dev/null || true
   GROK_CHANNEL=alpha PREFIX=/usr bash /usr/lib/grokhub/install-grok-cli.sh \
-    || echo "grok: install Grok Build CLI alpha with GROK_CHANNEL=alpha curl -fsSL https://x.ai/cli/install.sh | bash"
+    || echo "grok: install Grok Build CLI alpha with curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash"
 
   cat <<'EOF'
 

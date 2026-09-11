@@ -431,8 +431,9 @@ pub fn should_show_get_started(
     grok_present: bool,
     cabin_oauth: bool,
     get_started_done: bool,
+    cli_connected: bool,
 ) -> bool {
-    grok_present && !cabin_oauth && !get_started_done
+    grok_present && !cabin_oauth && !get_started_done && !cli_connected
 }
 
 pub fn should_sync_cli_auth(cli_connected: bool) -> bool {
@@ -827,13 +828,17 @@ mod tests {
 
     #[test]
     fn get_started_and_cli_sync_predicates() {
-        assert!(should_show_get_started(true, false, false));
+        assert!(should_show_get_started(true, false, false, false));
         assert!(
-            !should_show_get_started(false, false, false),
+            !should_show_get_started(false, false, false, false),
             "wait for grok alpha before Get Started"
         );
-        assert!(!should_show_get_started(true, true, false));
-        assert!(!should_show_get_started(true, false, true));
+        assert!(!should_show_get_started(true, true, false, false));
+        assert!(!should_show_get_started(true, false, true, false));
+        assert!(
+            !should_show_get_started(true, false, false, true),
+            "existing grok login must not block upgrades"
+        );
         assert!(should_sync_cli_auth(false));
         assert!(
             !should_sync_cli_auth(true),
