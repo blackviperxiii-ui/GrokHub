@@ -121,7 +121,8 @@ use grokhub_core::{
     thread_goal_prompt, theme_id, theme_label, toggle_pin, DeleteOutcome, ThreadTab,
     top_habit_labels,
     unified_diff_cite, usage_line, add_tokens, token_delta, cap_from_text, cap_label, normalize_hm,
-    transcribe_route, uid, update_cmds, overlay_update_begin, overlay_update_finish,
+    transcribe_route, uid, update_cmds_for, overlay_update_begin, overlay_update_finish,
+    settings_update_action_hint, settings_update_note,
     realtime_bearer, realtime_can_connect, voice_log_role, voice_stream_token, voice_transcript_sends_chat,
     fold_stream_fields, StreamTokenKind,
     update_wipes_config, voice_session_url, Automation, BoardCard, GrokLoop,
@@ -9044,14 +9045,13 @@ impl Cabin {
     fn queue_update(&mut self) {
         self.nav = Nav::Settings;
         self.settings_sec = SettingsSec::Update;
-        let Some(src) = resolve_source(&self.cfg.source_dir) else {
-            self.status = "Set Settings → source (clone path) or GROKHUB_SRC".into();
-            return;
-        };
-        self.cfg.source_dir = src.display().to_string();
-        remember_source(&src);
-        self.persist_cfg();
-        match update_cmds(&src) {
+        let src = resolve_source(&self.cfg.source_dir);
+        if let Some(src) = src.as_ref() {
+            self.cfg.source_dir = src.display().to_string();
+            remember_source(src);
+            self.persist_cfg();
+        }
+        match update_cmds_for(src.as_deref()) {
             Ok(cmds) if !update_wipes_config(&cmds) => {
                 self.start_overlay_update(cmds);
             }
@@ -12676,9 +12676,9 @@ impl Cabin {
                                                             crate::cards::settings_field(ui, "Bound project", "The world. Host, Imagine, and memory stay here.", &mut self.cfg.project_dir, false);
                                                         }
                                                         SettingsSec::Update => {
-                                                            crate::cards::settings_note(ui, "Pulls origin/main, overlays the GUI, then runs grok update on the current channel (does not switch alpha/stable). The clone must be on main. Does not wipe ~/.config/GrokHub.");
-                                                            crate::cards::settings_field(ui, "Source clone", "Empty uses GROKHUB_SRC or the install receipt.", &mut self.cfg.source_dir, false);
-                                                            if crate::cards::settings_action(ui, "Install overlay", "Pulls this clone, overlays the GUI, and updates grok.", "Update") {
+                                                            crate::cards::settings_note(ui, settings_update_note());
+                                                            crate::cards::settings_field(ui, "Source clone", "Empty uses GROKHUB_SRC or the install receipt. Windows Setup can leave this blank.", &mut self.cfg.source_dir, false);
+                                                            if crate::cards::settings_action(ui, "Install overlay", settings_update_action_hint(), "Update") {
                                                                 update = true;
                                                             }
                                                             if let Some(pct) = self.update_pct {
@@ -16916,6 +16916,16 @@ mod tests {
                 && !queued.contains("config::save")
                 && !queued.contains("persist_snap"),
             "Update must not clone every thread just to stamp the source path: {queued}"
+        );
+        assert!(
+            queued.contains("update_cmds_for")
+                && !queued.contains("Set Settings → source"),
+            "Windows Update must run without a clone: {queued}"
+        );
+        assert!(
+            src.contains("settings_update_note()")
+                && src.contains("settings_update_action_hint()"),
+            "Settings → Update copy must be OS-aware: {src}"
         );
         let flush_p = src
             .split("fn flush_projects(")

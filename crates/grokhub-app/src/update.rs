@@ -310,7 +310,10 @@ mod tests {
         let mut cmds = grokhub_core::update_cmds(&root).expect("cmds");
         #[cfg(windows)]
         {
-            assert_eq!(cmds.last().map(String::as_str), Some("grok update --alpha"));
+            assert!(
+                cmds.last().is_some_and(|c| c.contains("grok update --alpha")),
+                "{cmds:?}"
+            );
             fs::write(
                 root.join("scripts/install-windows.ps1"),
                 "Set-Content -Path (Join-Path $PSScriptRoot '..\\overlay.ok') -Value overlay-ok\n",
