@@ -1668,6 +1668,9 @@ impl Cabin {
             c.grok_install_rx = Some(grokhub_acp::begin_grok_install());
         }
         c.sync_cli_auth_from_oauth();
+        if grokhub_acp::grok_cli_key().is_some() {
+            c.mark_get_started_done();
+        }
         c
     }
 
@@ -7021,7 +7024,10 @@ impl Cabin {
     }
 
     fn start_oauth(&mut self) {
-        if self.oauth_start_rx.is_some() {
+        if self.oauth_start_rx.is_some()
+            || self.oauth_pending.is_some()
+            || self.oauth_poll_rx.is_some()
+        {
             return;
         }
         let (tx, rx) = mpsc::channel();
@@ -11584,6 +11590,7 @@ impl Cabin {
                             !grok_missing,
                             cabin_oauth,
                             self.cfg.get_started_done,
+                            grokhub_acp::grok_cli_key().is_some(),
                         );
                         if !get_started && (grok_missing || need_login)
                         {
@@ -12305,15 +12312,30 @@ impl Cabin {
             .oauth
             .as_ref()
             .is_some_and(|t| !t.access_token.trim().is_empty());
+        let cli_connected = grokhub_acp::grok_cli_key().is_some();
         let installing = self.grok_install_rx.is_some();
         if grokhub_core::should_show_get_started(
             grok_present,
             cabin_oauth,
             self.cfg.get_started_done,
+            cli_connected,
         ) {
             let pending = self.oauth_pending.as_ref().map(|p| {
                 format!("Approve {} at {}", p.user_code, p.verification_uri)
             });
+            let oauth_busy = self.oauth_pending.is_some()
+                || self.oauth_start_rx.is_some()
+                || self.oauth_poll_rx.is_some();
+            let oauth_err = if pending.is_some() {
+                None
+            } else {
+                let s = self.status.trim();
+                if s.is_empty() || s == "Grok OAuth connected" {
+                    None
+                } else {
+                    Some(s)
+                }
+            };
             let screen = ctx.screen_rect();
             egui::Area::new(egui::Id::new("get-started-overlay"))
                 .fixed_pos(screen.min)
@@ -12333,7 +12355,12 @@ impl Cabin {
                             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                             .inner_margin(egui::Margin::same(24.0))
                             .show(ui, |ui| {
-                                if crate::cards::get_started_panel(ui, pending.as_deref()) {
+                                if crate::cards::get_started_panel(
+                                    ui,
+                                    pending.as_deref(),
+                                    oauth_err,
+                                    !oauth_busy,
+                                ) {
                                     self.start_oauth();
                                 }
                             });
@@ -17557,6 +17584,10 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn poll_oauth(").next())
             .expect("start_oauth");
+        assert!(
+            start_o.contains("oauth_pending") && start_o.contains("oauth_poll_rx"),
+            "Connect must not restart an in-flight device-code wait: {start_o}"
+        );
         let start_spawn = start_o.find("thread::spawn").expect("start_oauth spawn");
         let start_dev = start_o.find("start_device").expect("start_device");
         assert!(
@@ -17602,6 +17633,10 @@ mod tests {
                 && (boot.contains("should_kick_alpha_install") || boot.contains("find_grok")),
             "missing grok on first launch must fetch CLI alpha: {boot}"
         );
+        assert!(
+            boot.contains("grok_cli_key") && boot.contains("mark_get_started_done"),
+            "existing grok login must skip Get Started on upgrade: {boot}"
+        );
         let started = src
             .split("fn ui_get_started(")
             .nth(1)
@@ -17614,6 +17649,10 @@ mod tests {
         assert!(
             started.contains("should_show_get_started") && started.contains("start_oauth"),
             "Get Started must use cabin device-code OAuth: {started}"
+        );
+        assert!(
+            started.contains("oauth_err") && started.contains("oauth_busy"),
+            "Get Started must show OAuth errors and not restart an in-flight wait: {started}"
         );
         let photo = src
             .split("fn kick_oauth_photo(")

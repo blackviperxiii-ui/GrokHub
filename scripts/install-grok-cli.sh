@@ -72,5 +72,5 @@ link_into_prefix
 if grok_present; then
   echo "grok: installed Grok Build CLI"
 else
-  echo "grok: missing — run: GROK_CHANNEL=alpha curl -fsSL https://x.ai/cli/install.sh | bash"
+  echo "grok: missing — run: curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash"
 fi
