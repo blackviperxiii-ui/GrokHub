@@ -2,6 +2,10 @@ use grokhub_core::TEXT_FILE_CAP;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+
+pub(crate) fn hide_windows_console(cmd: &mut Command) {
+    grokhub_acp::hide_windows_console(cmd);
+}
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -25,7 +29,9 @@ fn push_host_line(buf: &mut String, line: &str, cap: usize) -> bool {
 pub fn host_working_dir(project_dir: &str) -> Option<String> {
     let root = grokhub_core::expand_project_root(
         project_dir,
-        std::env::var("HOME").ok().as_deref(),
+        grokhub_core::user_home()
+            .as_ref()
+            .and_then(|p| p.to_str()),
     );
     if root.is_empty() {
         return None;
@@ -45,9 +51,11 @@ pub fn resolve_host_cite_path(project_dir: &str, cited: &str) -> String {
     }
     let expanded = grokhub_core::expand_project_root(
         cited,
-        std::env::var("HOME").ok().as_deref(),
+        grokhub_core::user_home()
+            .as_ref()
+            .and_then(|p| p.to_str()),
     );
-    if expanded.starts_with('/') {
+    if Path::new(&expanded).is_absolute() {
         return expanded;
     }
     match host_working_dir(project_dir) {
@@ -64,6 +72,30 @@ pub fn run_host(cmd: &str, timeout: Duration) -> String {
     run_host_stream(cmd, timeout, None, None, |_| {})
 }
 
+/// PowerShell `bash …` must not hit the WindowsApps/WSL stub.
+fn windows_host_bash(cmd: &str) -> String {
+    if !cfg!(windows) {
+        return cmd.to_string();
+    }
+    let rest = if cmd == "bash" {
+        Some("")
+    } else {
+        cmd.strip_prefix("bash ")
+    };
+    let Some(rest) = rest else {
+        return cmd.to_string();
+    };
+    let Some(bash) = crate::desktop::find_real_bash() else {
+        return cmd.to_string();
+    };
+    let bash = bash.display().to_string().replace('\'', "''");
+    if rest.is_empty() {
+        format!("& '{bash}'")
+    } else {
+        format!("& '{bash}' {rest}")
+    }
+}
+
 pub fn run_host_stream(
     cmd: &str,
     timeout: Duration,
@@ -72,10 +104,25 @@ pub fn run_host_stream(
     mut on_line: impl FnMut(&str),
 ) -> String {
     let start = Instant::now();
-    let mut spawn = Command::new("bash");
+    let cmd = windows_host_bash(cmd);
+    let mut spawn = if cfg!(windows) {
+        let mut c = Command::new("powershell.exe");
+        c.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-NoLogo",
+            "-Command",
+            &cmd,
+        ]);
+        hide_windows_console(&mut c);
+        c
+    } else {
+        let mut c = Command::new("bash");
+        c.arg("-lc").arg(&cmd);
+        c
+    };
     spawn
-        .arg("-lc")
-        .arg(cmd)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(dir) = cwd.filter(|d| !d.is_empty()) {
@@ -194,6 +241,15 @@ fn kill_host(child: &mut Child) {
             .args(["-KILL", "--", &format!("-{pid}")])
             .status();
     }
+    #[cfg(windows)]
+    {
+        let pid = child.id().to_string();
+        let mut kill = Command::new("taskkill");
+        kill.args(["/F", "/T", "/PID", &pid]);
+        kill.stdout(Stdio::null()).stderr(Stdio::null());
+        hide_windows_console(&mut kill);
+        let _ = kill.status();
+    }
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -204,20 +260,50 @@ mod tests {
 
     #[test]
     fn echo_ok() {
-        let out = run_host("echo grokhub-smoke", Duration::from_secs(5));
+        let cmd = if cfg!(windows) {
+            "Write-Output grokhub-smoke"
+        } else {
+            "echo grokhub-smoke"
+        };
+        let out = run_host(cmd, Duration::from_secs(15));
         assert!(out.contains("grokhub-smoke"), "{out}");
         assert!(out.contains("exit 0"), "{out}");
-        let mut lines = Vec::new();
-        let streamed = run_host_stream("printf 'a\\nb\\n'", Duration::from_secs(5), None, None, |l| {
-            lines.push(l.to_string());
-        });
-        assert!(streamed.contains("exit 0"), "{streamed}");
-        assert!(lines.contains(&"a".to_string()) || streamed.contains("a"), "{streamed:?} {lines:?}");
+        #[cfg(unix)]
+        {
+            let mut lines = Vec::new();
+            let streamed =
+                run_host_stream("printf 'a\\nb\\n'", Duration::from_secs(5), None, None, |l| {
+                    lines.push(l.to_string());
+                });
+            assert!(streamed.contains("exit 0"), "{streamed}");
+            assert!(
+                lines.contains(&"a".to_string()) || streamed.contains("a"),
+                "{streamed:?} {lines:?}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_host_is_powershell() {
+        let src = include_str!("host.rs");
+        assert!(src.contains("powershell.exe"), "{src}");
+        assert!(src.contains("-NoProfile"), "{src}");
+        assert!(
+            src.contains("hide_windows_console"),
+            "host PowerShell must not pop a console that kills the cabin: {src}"
+        );
+        assert!(
+            src.contains("taskkill") && src.contains("/T") && src.contains("/F"),
+            "Windows host halt must taskkill the process tree: {src}"
+        );
     }
 
     #[test]
     fn host_working_dir_uses_an_existing_bound_tree() {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let home = grokhub_core::user_home()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "/tmp".into());
         let dir = std::path::PathBuf::from(&home).join(format!(
             "grokhub-host-cwd-{}",
             std::time::SystemTime::now()
@@ -237,7 +323,10 @@ mod tests {
             "a missing bound tree must be created, not inherit the cabin process cwd"
         );
         assert!(Path::new(&missing).is_dir());
-        let rest = path.trim_start_matches(&format!("{home}/"));
+        let rest = path
+            .strip_prefix(&home)
+            .map(|p| p.trim_start_matches(['/', '\\']))
+            .unwrap_or(path.as_str());
         assert_eq!(
             host_working_dir(&format!("~/{rest}")),
             Some(path.clone()),
@@ -253,7 +342,9 @@ mod tests {
 
     #[test]
     fn resolve_host_cite_path_joins_relative_writes_to_the_bound_tree() {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let home = grokhub_core::user_home()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "/tmp".into());
         let dir = std::path::PathBuf::from(&home).join(format!(
             "grokhub-host-cite-{}",
             std::time::SystemTime::now()
@@ -268,11 +359,20 @@ mod tests {
             resolve_host_cite_path(&path, "notes.md"),
             format!("{path}/notes.md")
         );
+        #[cfg(unix)]
         assert_eq!(
             resolve_host_cite_path(&path, "/tmp/abs.txt"),
             "/tmp/abs.txt"
         );
-        let rest = path.trim_start_matches(&format!("{home}/"));
+        #[cfg(windows)]
+        {
+            let abs = r"C:\Windows\Temp\abs.txt";
+            assert_eq!(resolve_host_cite_path(r"C:\proj", abs), abs);
+        }
+        let rest = path
+            .strip_prefix(&home)
+            .map(|p| p.trim_start_matches(['/', '\\']))
+            .unwrap_or(path.as_str());
         assert_eq!(
             resolve_host_cite_path(&format!("~/{rest}"), "notes.md"),
             format!("{path}/notes.md"),
@@ -292,10 +392,20 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("temp project");
         let path = dir.to_string_lossy().into_owned();
-        let out = run_host_stream("pwd", Duration::from_secs(5), None, Some(path.as_str()), |_| {});
-        let canon = std::fs::canonicalize(&dir).unwrap_or(dir.clone());
+        let pwd = if cfg!(windows) {
+            "(Get-Location).Path"
+        } else {
+            "pwd"
+        };
+        let out = run_host_stream(pwd, Duration::from_secs(15), None, Some(path.as_str()), |_| {});
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let flattened = out.replace('\\', "/").to_lowercase();
+        let needle = name.replace('\\', "/").to_lowercase();
         assert!(
-            out.contains(&canon.to_string_lossy().into_owned()) || out.contains(&path),
+            !needle.is_empty() && flattened.contains(&needle),
             "host shell must start in the bound project: {out}"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -307,8 +417,13 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = stop.clone();
         let started = Instant::now();
+        let sleep = if cfg!(windows) {
+            "Start-Sleep -Seconds 8"
+        } else {
+            "sleep 8"
+        };
         let handle = std::thread::spawn(move || {
-            run_host_stream("sleep 8", Duration::from_secs(20), Some(&stop_t), None, |_| {})
+            run_host_stream(sleep, Duration::from_secs(20), Some(&stop_t), None, |_| {})
         });
         std::thread::sleep(Duration::from_millis(250));
         stop.store(true, Ordering::SeqCst);
@@ -321,6 +436,7 @@ mod tests {
         assert!(out.contains("halted"), "{out}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn non_utf8_output_lines_still_land_in_the_receipt() {
         let out = run_host(
@@ -368,10 +484,12 @@ mod tests {
             pump.contains("from_utf8_lossy") && !pump.contains(".flatten()"),
             "a non-UTF-8 line must be shown lossily and a read error must end the pump: {pump}"
         );
-        let out = run_host(
-            "python3 -c \"print('x'*200000)\"",
-            Duration::from_secs(5),
-        );
+        let dump = if cfg!(windows) {
+            "$s = 'x'*200000; Write-Output $s"
+        } else {
+            "python3 -c \"print('x'*200000)\""
+        };
+        let out = run_host(dump, Duration::from_secs(15));
         assert!(
             out.len() <= grokhub_core::TEXT_FILE_CAP + 256,
             "capped host receipt stayed huge: {}",

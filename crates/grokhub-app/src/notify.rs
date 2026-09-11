@@ -1,3 +1,4 @@
+#[cfg(not(windows))]
 use std::process::Command;
 use std::time::Duration;
 
@@ -27,7 +28,15 @@ pub fn ping_args<'a>(title: &'a str, body: &'a str) -> Vec<&'a str> {
 }
 
 pub fn ping(title: &str, body: &str) {
-    let _ = Command::new("notify-send").args(ping_args(title, body)).spawn();
+    #[cfg(windows)]
+    {
+        crate::win_native::toast(title, body);
+        return;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("notify-send").args(ping_args(title, body)).spawn();
+    }
 }
 
 pub fn ping_if_long_quiet(elapsed: Duration, quiet_hours: bool, title: &str, body: &str) {
@@ -37,22 +46,34 @@ pub fn ping_if_long_quiet(elapsed: Duration, quiet_hours: bool, title: &str, bod
 }
 
 pub fn inhibit_sleep() -> Option<std::process::Child> {
-    Command::new("systemd-inhibit")
-        .args([
-            "--what=idle:sleep",
-            "--who=GrokHub",
-            "--why=host-job",
-            "--mode=block",
-            "sleep",
-            "inf",
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()
+    #[cfg(windows)]
+    {
+        crate::win_native::keep_awake(true);
+        return None;
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("systemd-inhibit")
+            .args([
+                "--what=idle:sleep",
+                "--who=GrokHub",
+                "--why=host-job",
+                "--mode=block",
+                "sleep",
+                "inf",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()
+    }
 }
 
 pub fn release_inhibit(child: &mut Option<std::process::Child>) {
+    #[cfg(windows)]
+    {
+        crate::win_native::keep_awake(false);
+    }
     if let Some(mut c) = child.take() {
         let _ = c.kill();
         let _ = c.wait();
