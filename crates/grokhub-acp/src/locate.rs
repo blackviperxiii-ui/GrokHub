@@ -207,7 +207,7 @@ pub fn doctor_missing_hint() -> &'static str {
     if cfg!(windows) {
         "Grok Build CLI missing — $env:GROK_CHANNEL='alpha'; irm https://x.ai/cli/install.ps1 | iex"
     } else {
-        "Grok Build CLI missing — GROK_CHANNEL=alpha curl -fsSL https://x.ai/cli/install.sh | bash"
+        "Grok Build CLI missing — curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash"
     }
 }
 

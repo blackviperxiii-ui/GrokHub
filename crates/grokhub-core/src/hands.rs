@@ -313,9 +313,19 @@ mod tests {
             sh.contains("GROK_CHANNEL=alpha") && bundle.contains("GROK_CHANNEL=alpha"),
             "clone and tarball fallbacks must name alpha, not bare install.sh"
         );
+        assert!(
+            sh.contains("| GROK_CHANNEL=alpha bash")
+                && bundle.contains("| GROK_CHANNEL=alpha bash")
+                && grok_cli.contains("| GROK_CHANNEL=alpha bash")
+                && !sh.contains("GROK_CHANNEL=alpha curl")
+                && !bundle.contains("GROK_CHANNEL=alpha curl")
+                && !grok_cli.contains("GROK_CHANNEL=alpha curl"),
+            "fallback one-liners must put GROK_CHANNEL on bash, not only curl"
+        );
         let aur_install = include_str!("../../../packaging/aur/grokhub.install");
         assert!(
-            aur_install.contains("GROK_CHANNEL=alpha"),
+            aur_install.contains("GROK_CHANNEL=alpha")
+                && aur_install.contains("| GROK_CHANNEL=alpha bash"),
             "AUR post_install must install grok alpha: {aur_install}"
         );
         let overlay = include_str!("../../../crates/grokhub-core/src/update.rs");

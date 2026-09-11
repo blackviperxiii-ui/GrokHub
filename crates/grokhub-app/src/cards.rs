@@ -854,7 +854,12 @@ pub fn settings_field(
     ui.add_space(10.0);
 }
 
-pub fn get_started_panel(ui: &mut egui::Ui, pending: Option<&str>) -> bool {
+pub fn get_started_panel(
+    ui: &mut egui::Ui,
+    pending: Option<&str>,
+    error: Option<&str>,
+    connect_enabled: bool,
+) -> bool {
     let mut connect = false;
     ui.vertical_centered(|ui| {
         ui.add_space(24.0);
@@ -873,7 +878,12 @@ pub fn get_started_panel(ui: &mut egui::Ui, pending: Option<&str>) -> bool {
         if let Some(p) = pending {
             settings_note(ui, p);
         }
-        connect = white_pill(ui, "Connect Super Grok");
+        if let Some(e) = error.filter(|s| !s.trim().is_empty()) {
+            settings_note(ui, e);
+        }
+        if connect_enabled {
+            connect = white_pill(ui, "Connect Super Grok");
+        }
     });
     connect
 }
@@ -2073,8 +2083,9 @@ mod tests {
         assert!(
             app.contains("ui_get_started")
                 && app.contains("should_show_get_started")
-                && app.contains("start_oauth"),
-            "Get Started must use cabin device-code OAuth: {app}"
+                && app.contains("start_oauth")
+                && app.contains("oauth_err"),
+            "Get Started must use cabin device-code OAuth and surface errors: {app}"
         );
         assert!(
             app.contains("Also signs in the Grok Build CLI if it is not already connected"),
