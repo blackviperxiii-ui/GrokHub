@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.9.2
+**Version:** 2.9.3
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands). One repo, one version — Linux tarball/AUR and Windows `GrokHub-Setup-<version>.exe` ship from the same tag.
 
@@ -38,4 +38,4 @@ First-time installers ship Grok Build CLI **alpha** (`GROK_CHANNEL=alpha` / Wind
 
 ## Overlay vs agent updates
 
-Cabin overlay (`/update`) updates the GUI, then runs `grok update` on the current channel. Linux does not pass `--alpha` or `--stable` and does not set `GROK_CHANNEL=alpha`. Windows Setup Update downloads the latest `grokhub-windows` zip from GitHub (no clone required), then `grok update --alpha`. A Windows source clone still overlays with `install-windows.ps1`. `/learn` (alias `/learn reflect`) is a cabin slash: palette click and typed send both run reflect.
+Cabin overlay (`/update`) updates the GUI, then runs `grok update` on the current channel. Linux does not pass `--alpha` or `--stable` and does not set `GROK_CHANNEL=alpha`. Windows Setup Update downloads the latest `grokhub-windows` zip from GitHub (no clone required), then `grok update --alpha`. A Windows source clone still overlays with `install-windows.ps1`. Settings → **Install Grok Build CLI** (Account or Update) and first-run install Grok Build CLI alpha when `grok` is missing or broken. `/learn` (alias `/learn reflect`) is a cabin slash: palette click and typed send both run reflect.

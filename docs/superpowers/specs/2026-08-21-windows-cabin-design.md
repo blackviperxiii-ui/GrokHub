@@ -1,6 +1,6 @@
 # Windows cabin installer
 
-**Version:** 2.9.2  
+**Version:** 2.9.3  
 **Repo:** `blackviperxiii-ui/GrokHub` (one cabin, two artifacts — not the deleted Electron app)
 
 GrokHub on Windows is the same native egui cabin as Linux. Grok Build (`grok.exe` over ACP) is the agent, host shell, and computer-use. The Windows artifact is `GrokHub-Setup-<version>.exe` (Inno) plus `grokhub-windows-v<version>.zip`. Same tag and cabin version as Linux `grokhub-linux-v*.tar.gz`. No Windows AT-SPI / screenshot / click backends.
@@ -45,9 +45,9 @@ Locate order: `GROKHUB_GROK`, PATH (`grok.exe`), `%USERPROFILE%\.grok\bin\grok.e
 
 **Bundle if possible.** Release packaging downloads the official Windows x86_64 artifact (`https://x.ai/cli/grok-<ver>-windows-x86_64.exe`, version from `https://x.ai/cli/stable`) as `grok.exe` and `agent.exe`. The installer copies them to `%USERPROFILE%\.grok\bin` and adds that directory to the user PATH.
 
-**If the download fails, it is not a ship blocker.** The installer still installs the cabin. First launch or a post-install step may run `irm https://x.ai/cli/install.ps1 | iex`. Settings / doctor say when `grok.exe` is missing and how to install it.
+**If the download fails, it is not a ship blocker.** The installer still installs the cabin. First launch installs Grok Build CLI **alpha** (`GROK_CHANNEL=alpha` / `https://x.ai/cli/alpha`) when `grok` is missing or broken (stub MZ or `STATUS_DLL_NOT_FOUND`). Settings → Account and Settings → Update show **Install Grok Build CLI** in that case. A leftover `grok.exe` that cannot start shows one cabin error (Windows loader dialogs silenced), not a looping MessageBox.
 
-Cabin overlay on Windows does not run Linux `install.sh`. Settings → Update downloads the latest `grokhub-windows` zip from GitHub when there is no source clone, then runs `grok update --alpha`. A source clone still overlays with `install-windows.ps1`.
+Cabin overlay on Windows does not run Linux `install.sh`. Settings → Update downloads the latest `grokhub-windows` zip from GitHub when there is no source clone, then runs `grok update --alpha`. A source clone still overlays with `install-windows.ps1`. After a CLI install, `%USERPROFILE%\.grok\bin` is preferred over a leftover PATH `grok`.
 
 ## Installer
 
