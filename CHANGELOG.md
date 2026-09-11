@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 2.9.3 — 2026-09-11
+
+One cabin, two ship artifacts on the same tag. Cursor **#17** (Windows Grok Build CLI install when missing or broken; no looping loader dialog) is on `main`.
+
+- Linux: `grokhub-linux-v2.9.3.tar.gz` and AUR `pkgver=2.9.3`. `/update` overlays the GUI then `grok update` on the current channel — it does not pass `--alpha`.
+- Windows: `GrokHub-Setup-2.9.3.exe` and `grokhub-windows-v2.9.3.zip` from `packaging/windows/` + Inno. Settings → Update downloads the GitHub zip when there is no source clone, then `grok update --alpha`.
+- Settings → **Install Grok Build CLI** (Account or Update) and first-run install Grok Build CLI **alpha** when `grok` is missing or broken (stub MZ / `STATUS_DLL_NOT_FOUND`). A hard-failed `grok.exe` shows one cabin error, not a looping Windows loader dialog.
+- Install control hides when a working CLI is present. After install, `~/.grok/bin` is preferred over a leftover PATH `grok`.
+
 ## 2.9.2 — 2026-09-11
 
 One cabin, two ship artifacts on the same tag. Cursor **#14** (composer hover tips), **#15** (first-run Get Started OAuth + CLI alpha), and **#16** (Windows Update without a clone) are on `main`.
