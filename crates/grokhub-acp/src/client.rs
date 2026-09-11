@@ -596,6 +596,9 @@ fn isolate_spawned_grok() {
 
 /// Spawn and handshake. Puts `XAI_API_KEY` on the child when provided.
 pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
+    if crate::locate::grok_marked_unusable(&opts.program) {
+        return Err(crate::locate::doctor_broken_hint().into());
+    }
     let timeout = opts.handshake_timeout.unwrap_or(HANDSHAKE_TIMEOUT);
     let cwd_path = ensure_session_cwd(&opts.cwd)
         .map_err(|e| explain_handshake_error(&e, &opts.cwd))?;
@@ -1324,6 +1327,9 @@ fn grok_p_child(
     let program = find_grok().ok_or_else(|| {
         "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
     })?;
+    if crate::locate::grok_marked_unusable(&program) {
+        return Err(crate::locate::doctor_broken_hint().into());
+    }
     let cwd_path = ensure_session_cwd(cwd)?;
     let mut args = crate::locate::single_turn_args_full(
         prompt,
