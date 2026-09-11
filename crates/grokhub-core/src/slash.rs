@@ -146,7 +146,7 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/status" | "/info" | "/session-info" | "/doctor" => Some(Slash::Inspect),
         "/compact" => Some(Slash::Compact),
         "/skill" if !rest.is_empty() => Some(Slash::Skill(rest.to_string())),
-        "/learn" if rest.eq_ignore_ascii_case("reflect") => Some(Slash::LearnReflect),
+        "/learn" => Some(Slash::LearnReflect),
         "/update" => Some(Slash::Update),
         "/help" => Some(Slash::Help),
         "/new" => Some(Slash::New),
@@ -375,6 +375,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/health", hint: "Run install/session health pass", insert: "/health", run_on_pick: true },
     SlashDef { cmd: "/fix", hint: "Self-heal stuck UI + health pass", insert: "/fix", run_on_pick: true },
     SlashDef { cmd: "/memory", hint: "Show memory files", insert: "/memory ", run_on_pick: false },
+    SlashDef { cmd: "/learn", hint: "Run self-improve reflect", insert: "/learn", run_on_pick: true },
     SlashDef { cmd: "/learn reflect", hint: "Run self-improve reflect", insert: "/learn reflect", run_on_pick: true },
     SlashDef { cmd: "/mode", hint: "Set mode…", insert: "/mode ", run_on_pick: false },
     SlashDef { cmd: "/imagine", hint: "Open Imagine", insert: "/imagine ", run_on_pick: false },
@@ -480,6 +481,16 @@ impl From<&SlashDef> for SlashHit {
     }
 }
 
+/// Cabin `/learn reflect` owns `/learn`. A Grok extra with the same verb must
+/// not appear as an insert-only chip that swallows the click.
+fn cabin_owns_slash(cmd: &str) -> bool {
+    let cmd = cmd.to_ascii_lowercase();
+    SLASH_COMMANDS.iter().any(|s| {
+        let c = s.cmd.to_ascii_lowercase();
+        c == cmd || c.starts_with(&format!("{cmd} "))
+    })
+}
+
 pub fn grok_command_hits(names: &[String]) -> Vec<SlashHit> {
     let mut out = Vec::new();
     for name in names {
@@ -488,7 +499,7 @@ pub fn grok_command_hits(names: &[String]) -> Vec<SlashHit> {
             continue;
         }
         let cmd = format!("/{n}");
-        if SLASH_COMMANDS.iter().any(|s| s.cmd.eq_ignore_ascii_case(&cmd)) {
+        if cabin_owns_slash(&cmd) {
             continue;
         }
         out.push(SlashHit {
@@ -571,6 +582,7 @@ pub fn slash_help() -> String {
         "/board — open the Workboard",
         "/skill <name> — run a skill",
         "/memory note <fact> — write MEMORY.md",
+        "/learn — reflect this chat into MEMORY.md (alias /learn reflect)",
         "/recall <q> — search memory, learned insights, and chats",
         "/forget <topic> — drop memory lines that mention the topic (whole words)",
         "/imagine <prompt>",
@@ -651,7 +663,18 @@ mod tests {
         assert!(!extra.iter().any(|h| h.cmd == "/help"));
         let hits = filter_slash_hits("/cre", &extra);
         assert!(hits.iter().any(|h| h.cmd == "/create-skill"), "{hits:?}");
+        assert_eq!(parse_slash("/learn"), Some(Slash::LearnReflect));
         assert_eq!(parse_slash("/learn reflect"), Some(Slash::LearnReflect));
+        assert_eq!(parse_slash("/LEARN"), Some(Slash::LearnReflect));
+        assert_eq!(parse_slash("/learn now"), Some(Slash::LearnReflect));
+        let learn = grok_command_hits(&["learn".into(), "create-skill".into()]);
+        assert!(!learn.iter().any(|h| h.cmd == "/learn"), "{learn:?}");
+        assert!(learn.iter().any(|h| h.cmd == "/create-skill"), "{learn:?}");
+        let learn_hits = filter_slash_hits("/learn", &[]);
+        assert!(
+            learn_hits.iter().any(|h| h.cmd == "/learn" && h.run_on_pick),
+            "{learn_hits:?}"
+        );
         assert_eq!(parse_slash("/update"), Some(Slash::Update));
     }
 
@@ -742,6 +765,7 @@ mod tests {
         assert!(slash_help().contains("User bubbles sit on the right"));
         assert!(slash_help().contains("compact Grok context"));
         assert!(slash_help().contains("/forget and Memory Save stay off"));
+        assert!(slash_help().contains("/learn — reflect this chat into MEMORY.md"));
         assert!(slash_help().contains("/skill <name> — run a skill"));
         assert!(slash_help().contains("/sync — merge chats and memory"));
         assert!(slash_help().contains("Expired pair codes hide and rotate"));

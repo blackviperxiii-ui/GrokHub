@@ -3999,12 +3999,8 @@ impl Cabin {
                 self.run_slash(Slash::Sh(cmd.to_string()));
             }
             ChipKind::Chat => {
-                if chip.value.starts_with('/') {
-                    if let Some(slash) = parse_slash(&chip.value) {
-                        self.run_slash(slash);
-                        return;
-                    }
-                }
+                // Slash chips use the typed send path so `/learn` click and Enter
+                // both parse locally instead of inserting a no-op or hitting Grok.
                 self.composer.clear();
                 self.send_chat(chip.value);
             }
@@ -15358,6 +15354,10 @@ mod tests {
         assert!(
             chip_spawn < chip_save && chip.contains("persist_io"),
             "chip click must not freeze the cabin writing chips.json: {chip}"
+        );
+        assert!(
+            chip.contains("send_chat(chip.value)"),
+            "/learn chip click must use the typed send path, not a silent parse miss: {chip}"
         );
     }
 
