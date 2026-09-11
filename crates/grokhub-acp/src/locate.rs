@@ -205,9 +205,9 @@ fn cabin_config_root() -> Option<PathBuf> {
 
 pub fn doctor_missing_hint() -> &'static str {
     if cfg!(windows) {
-        "Grok Build CLI missing — irm https://x.ai/cli/install.ps1 | iex"
+        "Grok Build CLI missing — $env:GROK_CHANNEL='alpha'; irm https://x.ai/cli/install.ps1 | iex"
     } else {
-        "Grok Build CLI missing — install from x.ai/cli"
+        "Grok Build CLI missing — curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash"
     }
 }
 
@@ -236,6 +236,70 @@ pub fn prepare_cabin_grok_home() -> Option<PathBuf> {
 
 pub fn grok_auth_path() -> Option<PathBuf> {
     Some(grok_home()?.join("auth.json"))
+}
+
+pub fn invalidate_grok_key_cache() {
+    if let Ok(mut held) = grok_key_cache().lock() {
+        *held = None;
+    }
+}
+
+fn create_private_file(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let _ = std::fs::remove_file(path);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::File::create(path)
+    }
+}
+
+/// Write cabin OAuth into `~/.grok/auth.json` when the CLI has no session.
+/// Returns `Ok(true)` if a file was written.
+pub fn write_cli_auth_if_needed(tokens: &grokhub_core::XaiOAuthTokens) -> Result<bool, String> {
+    if !grokhub_core::should_sync_cli_auth(grok_cli_key().is_some()) {
+        return Ok(false);
+    }
+    let path = grok_auth_path().ok_or_else(|| "no grok home".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let existing = if path.is_file() {
+        read_file_capped(&path, 64 * 1024)
+    } else {
+        String::new()
+    };
+    if !grokhub_core::should_sync_cli_auth(parse_grok_auth_key(&existing).is_some()) {
+        return Ok(false);
+    }
+    let body = grokhub_core::merge_cli_auth_json(&existing, tokens)?;
+    let tmp = path.with_extension("json.tmp");
+    {
+        use std::io::Write;
+        let mut f = create_private_file(&tmp).map_err(|e| e.to_string())?;
+        f.write_all(body.as_bytes()).map_err(|e| e.to_string())?;
+        f.sync_all().map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    invalidate_grok_key_cache();
+    let _ = prepare_cabin_grok_home();
+    Ok(true)
 }
 
 /// Cached `grok login` bearer from `~/.grok/auth.json`. Never logs the secret.
@@ -955,5 +1019,62 @@ mod tests {
             parse_grok_auth_key(r#"{"access_token":"top-level"}"#).as_deref(),
             Some("top-level")
         );
+    }
+
+    fn should_write_cli_auth_raw(raw: &str) -> bool {
+        grokhub_core::should_sync_cli_auth(parse_grok_auth_key(raw).is_some())
+    }
+
+    struct MergeOut {
+        wrote: bool,
+        body: String,
+    }
+
+    fn merge_and_decide(
+        raw: &str,
+        tokens: &grokhub_core::XaiOAuthTokens,
+    ) -> Result<MergeOut, String> {
+        if !should_write_cli_auth_raw(raw) {
+            return Ok(MergeOut {
+                wrote: false,
+                body: raw.to_string(),
+            });
+        }
+        Ok(MergeOut {
+            wrote: true,
+            body: grokhub_core::merge_cli_auth_json(raw, tokens)?,
+        })
+    }
+
+    #[test]
+    fn write_cli_auth_skips_when_login_exists() {
+        let dir = std::env::temp_dir().join(format!("grokhub-auth-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("auth.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "https://auth.x.ai::existing": {
+                    "auth_mode": "oidc",
+                    "key": "already-in"
+                }
+            }"#,
+        )
+        .unwrap();
+        let tokens = grokhub_core::XaiOAuthTokens {
+            access_token: "new-cabin".into(),
+            refresh_token: Some("new-ref".into()),
+            ..Default::default()
+        };
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(parse_grok_auth_key(&raw).is_some());
+        assert!(
+            !should_write_cli_auth_raw(&raw),
+            "existing grok login must win"
+        );
+        let empty = merge_and_decide("", &tokens).unwrap();
+        assert!(empty.wrote);
+        assert!(empty.body.contains("new-cabin"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

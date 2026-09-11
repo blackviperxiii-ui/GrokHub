@@ -618,7 +618,7 @@ pub fn slash_help() -> String {
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
         "Appearance: Dark, Light, System. Interactive chat is grok agent stdio (ACP). Night and phone use grok -p. Halt is session/cancel.",
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
-        "install.sh installs the Grok Build CLI (grok) from https://x.ai/cli. Settings shows grok --version. Cabin overlay updates the GUI, installs grok if missing, then runs grok update on the current channel.",
+        "First-time install (install.sh, AUR, Windows Setup) installs Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Settings → Connect does the same when grok is not already connected. Cabin overlay updates the GUI, installs grok alpha only if missing, then runs grok update on the current channel (Linux does not pass --alpha).",
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
         "Pulse every 15s. Hidden idle waits for the pulse.",
         "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
@@ -771,6 +771,13 @@ mod tests {
         assert!(slash_help().contains("/sync — merge chats and memory"));
         assert!(slash_help().contains("Expired pair codes hide and rotate"));
         assert!(slash_help().contains("x.ai/cli"));
+        assert!(
+            slash_help().contains("GROK_CHANNEL=alpha")
+                && slash_help().contains("Get Started")
+                && slash_help().contains("current channel"),
+            "{}",
+            slash_help()
+        );
         assert!(slash_help().contains("pinned taskbar click"));
         assert_eq!(parse_slash("/plan"), Some(Slash::Plan));
         assert_eq!(parse_slash("/always-approve"), Some(Slash::AlwaysApprove));

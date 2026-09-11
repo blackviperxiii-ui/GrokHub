@@ -44,6 +44,15 @@ mod tests {
         assert_eq!(parse_args(&args(&["grokhub", "--doctor"])), Launch::Doctor);
         assert_eq!(parse_args(&args(&["grokhub", "--update"])), Launch::Update);
         assert_eq!(parse_args(&args(&["grokhub", "--oauth"])), Launch::Oauth);
+        let oauth = include_str!("main.rs")
+            .split("fn run_oauth_cli(")
+            .nth(1)
+            .and_then(|s| s.split("fn probe_hub_health_body(").next())
+            .expect("run_oauth_cli");
+        assert!(
+            oauth.contains("write_cli_auth_if_needed"),
+            "grokhub --oauth must sign in the CLI: {oauth}"
+        );
         assert_eq!(parse_args(&args(&["grokhub", "-V"])), Launch::Version);
         assert_eq!(parse_args(&args(&["grokhub", "--version"])), Launch::Version);
     }

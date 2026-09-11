@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Install xAI Grok Build CLI (https://x.ai/cli) alongside grokhub.
+# Install xAI Grok Build CLI alpha (https://x.ai/cli) alongside grokhub.
 # Official installer writes ~/.grok/bin/grok. This also links PREFIX/bin/grok.
-# Overlay-safe: never fails the cabin install.
+# Overlay-safe: never fails the cabin install. First-time fetch is GROK_CHANNEL=alpha.
 set -u
 
 PREFIX="${PREFIX:-$HOME/.local}"
 GROK_INSTALL_URL="${GROK_INSTALL_URL:-https://x.ai/cli/install.sh}"
+export GROK_CHANNEL="${GROK_CHANNEL:-alpha}"
 
 if [[ -z "${GROK_BIN_DIR:-}" ]]; then
   case "$PREFIX" in
@@ -58,7 +59,7 @@ if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
   exit 0
 fi
 
-echo "grok: installing Grok Build CLI from https://x.ai/cli"
+echo "grok: installing Grok Build CLI alpha (GROK_CHANNEL=alpha) from https://x.ai/cli"
 if command -v curl >/dev/null 2>&1; then
   curl -fsSL "$GROK_INSTALL_URL" | bash \
     || echo "grok: official installer failed — cabin install continues"
@@ -71,5 +72,5 @@ link_into_prefix
 if grok_present; then
   echo "grok: installed Grok Build CLI"
 else
-  echo "grok: missing — run: curl -fsSL https://x.ai/cli/install.sh | bash"
+  echo "grok: missing — run: curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash"
 fi

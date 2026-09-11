@@ -295,11 +295,14 @@ pub use rewind::{
     rewind_copy_cmd, rewind_dest, rewind_restore_matches, rewind_snapshot_ready, RewindRecord,
 };
 pub use oauth::{
-    apply_profile, auth_bearer, chat_bearer, has_auth, merge_refreshed, next_oauth_poll_secs, parse_device_start, parse_poll_result,
-    parse_token_json, parse_userinfo_profile, oauth_access_live, realtime_bearer, token_needs_refresh, trusted_profile_photo_url,
-    trusted_xai_url, jwt_exp_ms, DeviceCodeStart, OAuthProfile, PollResult, PollStatus, XaiOAuthTokens,
-    TOKEN_REFRESH_SKEW_MS, XAI_DEVICE_CODE_GRANT, XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY,
-    XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE, XAI_OAUTH_USERINFO,
+    apply_profile, auth_bearer, chat_bearer, cli_auth_record, cli_auth_slot_key, has_auth,
+    merge_cli_auth_json, merge_refreshed, next_oauth_poll_secs, parse_device_start, parse_poll_result,
+    parse_token_json, parse_userinfo_profile, oauth_access_live, realtime_bearer,
+    should_kick_alpha_install, should_show_get_started, should_sync_cli_auth, token_needs_refresh,
+    trusted_profile_photo_url, trusted_xai_url, jwt_exp_ms, unix_ms_to_rfc3339, DeviceCodeStart,
+    OAuthProfile, PollResult, PollStatus, XaiOAuthTokens, TOKEN_REFRESH_SKEW_MS,
+    XAI_DEVICE_CODE_GRANT, XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY, XAI_OAUTH_ISSUER,
+    XAI_OAUTH_SCOPE, XAI_OAUTH_USERINFO,
 };
 pub use project::{
     add_to_folder, clean_project_name, create_folder, create_project, drop_node, drop_selected,

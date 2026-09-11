@@ -34,7 +34,7 @@ Quiet-hour clocks and the daily/host caps type into buffers. Save parses them. A
 
 ## Auth
 
-Agent: `grok login` cached token, `grok.com` ACP auth, or `XAI_API_KEY`. Imagine uses the same token (console key optional). Voice still prefers cabin `secrets.json` / console key.
+First-time installers ship Grok Build CLI **alpha** (`GROK_CHANNEL=alpha` / Windows `x.ai/cli/alpha`). First run is Get Started: cabin device-code Super Grok OAuth writes `secrets.json` and, when `~/.grok/auth.json` is empty, the same tokens so `grok` is signed in. Settings → Connect does that CLI write only if the CLI is not already connected. Agent auth is that session, an existing `grok login`, or `XAI_API_KEY`. Imagine uses the same token (console key optional). Voice still prefers cabin `secrets.json` / console key.
 
 ## Overlay vs agent updates
 
