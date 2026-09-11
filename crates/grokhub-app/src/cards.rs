@@ -1813,7 +1813,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn composer_hover_copy_covers_the_real_pills() {
         let modes: Vec<_> = composer_modes().iter().map(|(id, _)| *id).collect();
         assert_eq!(modes, ["chat", "plan", "ask"]);
