@@ -1799,6 +1799,74 @@ pub fn open_path(path: &str) -> Result<(), String> {
     }
 }
 
+pub const VIDEO_PLAYERS: &[&str] = &["mpv", "ffplay"];
+
+/// Play a saved Imagine clip (or open a still) without blocking the UI.
+pub fn play_media(path: &str) -> Result<(), String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err("empty path".into());
+    }
+    if grokhub_core::imagine_is_video_path(path) {
+        if let Some(player) = first_bin(VIDEO_PLAYERS) {
+            let mut cmd = spawn_bin(&player);
+            match player.as_str() {
+                "mpv" => {
+                    cmd.args(["--really-quiet", path]);
+                }
+                "ffplay" => {
+                    cmd.args(["-autoexit", "-loglevel", "error", path]);
+                }
+                _ => return open_path(path),
+            }
+            if cmd.spawn().is_ok() {
+                return Ok(());
+            }
+        }
+    }
+    open_path(path)
+}
+
+pub fn video_poster_ready(video: &str) -> Option<String> {
+    let dest = grokhub_core::imagine_video_poster_path(video);
+    let len = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+    if len > 32 {
+        Some(dest)
+    } else {
+        None
+    }
+}
+
+/// First-frame JPEG beside the `.mp4`. `ffmpeg` — call off the UI thread.
+pub fn ensure_video_poster(video: &str) -> Option<String> {
+    if let Some(dest) = video_poster_ready(video) {
+        return Some(dest);
+    }
+    if !grokhub_core::imagine_is_video_path(video) || !which("ffmpeg") {
+        return None;
+    }
+    let dest = grokhub_core::imagine_video_poster_path(video);
+    let tmp = format!("{dest}.part");
+    let args = grokhub_core::imagine_video_poster_args(video, &tmp);
+    let mut cmd = spawn_bin("ffmpeg");
+    cmd.args(&args);
+    let ok = run_limited(cmd, DESK_CAPTURE_TIMEOUT).is_some_and(|o| o.status.success());
+    if !ok {
+        let _ = std::fs::remove_file(&tmp);
+        return None;
+    }
+    let len = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+    if len <= 32 || len > IMAGE_FILE_CAP {
+        let _ = std::fs::remove_file(&tmp);
+        return None;
+    }
+    if std::fs::rename(&tmp, &dest).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return None;
+    }
+    video_poster_ready(video)
+}
+
 /// Short PCM chunks for the realtime socket. Empty iterator if no recorder.
 pub fn record_pcm_chunks() -> Vec<Vec<u8>> {
     #[cfg(windows)]
@@ -2031,6 +2099,21 @@ mod tests {
         assert!(RECORDERS.contains(&"arecord"));
         assert!(TRANSCRIBERS.contains(&"whisper"));
         assert!(PLAYERS.contains(&"ffplay"));
+        assert!(VIDEO_PLAYERS.contains(&"mpv") && VIDEO_PLAYERS.contains(&"ffplay"));
+        let play = include_str!("desktop.rs");
+        let play = play
+            .split("pub fn play_media(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn video_poster_ready(").next())
+            .expect("play_media");
+        assert!(
+            play.contains("imagine_is_video_path")
+                && play.contains("VIDEO_PLAYERS")
+                && play.contains("open_path")
+                && !play.contains("-nodisp")
+                && !play.contains("--no-video"),
+            "Imagine video must open a real player, not the speech path: {play}"
+        );
         assert!(first_bin(&["definitely-not-a-bin-grokhub"]).is_none());
         assert!(hands_down_receipt(HandsDown::Missing).contains("lib/grokhub/bin"));
         assert!(hands_down_receipt(HandsDown::Uinput).contains("uinput"));
@@ -2041,6 +2124,9 @@ mod tests {
         );
         let a = grokhub_core::live_pcm_argv("arecord").unwrap();
         assert!(a.contains(&"raw"));
+        assert!(play_media("").is_err());
+        assert!(video_poster_ready("/tmp/still.png").is_none());
+        assert!(ensure_video_poster("/tmp/still.png").is_none());
     }
 
     #[test]

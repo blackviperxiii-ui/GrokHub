@@ -3,8 +3,8 @@
 use crate::icons::{self, TileIcon};
 use eframe::egui::{self, Align2, Color32, ColorImage, FontId, RichText, Sense, Stroke, TextureHandle, TextureOptions};
 use grokhub_core::{
-    curate_wall, imagine_result_fit, parse_loop_line, wall_curate_seed, LearnedSuggestion,
-    SuggestionKind, WallGif, WallSlot, IMAGE_FILE_CAP,
+    curate_wall, imagine_media_click, imagine_result_fit, parse_loop_line, wall_curate_seed,
+    ImagineMediaClick, LearnedSuggestion, SuggestionKind, WallGif, WallSlot, IMAGE_FILE_CAP,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
@@ -1317,6 +1317,7 @@ pub struct ImagineStageHit {
     pub expand: bool,
     pub save: bool,
     pub open: bool,
+    pub play: bool,
 }
 
 /// Generating or finished still/video above the docked Imagine chat box.
@@ -1376,16 +1377,32 @@ pub fn imagine_stage(
         ui.set_clip_rect(media);
         imagine_result_hero(ui, path);
         let resp = ui.interact(media, egui::Id::new("imagine-stage-media"), Sense::click());
+        let click = imagine_media_click(path);
         if resp.clicked() {
-            hit.expand = true;
+            match click {
+                ImagineMediaClick::Play => hit.play = true,
+                ImagineMediaClick::Expand => hit.expand = true,
+            }
         }
-        resp.on_hover_text("Expand");
+        resp.on_hover_text(match click {
+            ImagineMediaClick::Play => "Play",
+            ImagineMediaClick::Expand => "Expand",
+        });
     });
     let bar = egui::Rect::from_min_max(egui::pos2(r.left() + 10.0, media.bottom()), r.max);
     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(bar), |ui| {
         ui.horizontal(|ui| {
-            if ghost_pill(ui, "Expand") {
-                hit.expand = true;
+            match imagine_media_click(path) {
+                ImagineMediaClick::Play => {
+                    if ghost_pill(ui, "Play") {
+                        hit.play = true;
+                    }
+                }
+                ImagineMediaClick::Expand => {
+                    if ghost_pill(ui, "Expand") {
+                        hit.expand = true;
+                    }
+                }
             }
             if ghost_pill(ui, "Save") {
                 hit.save = true;
@@ -1432,6 +1449,28 @@ pub fn imagine_result_hero(ui: &mut egui::Ui, path: &str) {
 }
 
 fn imagine_video_hero(ui: &mut egui::Ui, wall: egui::Rect, path: &str) {
+    if let Some(poster) = crate::desktop::video_poster_ready(path) {
+        let (tex, size) = imagine_disk_tex(ui.ctx(), &poster);
+        let (x, y, w, h) = imagine_result_fit(
+            wall.left(),
+            wall.top(),
+            wall.width(),
+            wall.height(),
+            size[0] as f32,
+            size[1] as f32,
+        );
+        if w > 1.0 && h > 1.0 {
+            let dest = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+            ui.painter().image(
+                tex.id(),
+                dest,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+    } else {
+        kick_video_poster(ui.ctx().clone(), path.to_string());
+    }
     let name = std::path::Path::new(path)
         .file_name()
         .and_then(|s| s.to_str())
@@ -1453,6 +1492,29 @@ fn imagine_video_hero(ui: &mut egui::Ui, wall: egui::Rect, path: &str) {
         FontId::proportional(crate::theme::FONT_CHROME),
         crate::theme::fg(),
     );
+}
+
+fn kick_video_poster(ctx: egui::Context, path: String) {
+    {
+        let Ok(mut g) = video_poster_gate().lock() else {
+            return;
+        };
+        if !g.insert(path.clone()) {
+            return;
+        }
+    }
+    std::thread::spawn(move || {
+        let _ = crate::desktop::ensure_video_poster(&path);
+        if let Ok(mut g) = video_poster_gate().lock() {
+            g.remove(&path);
+        }
+        ctx.request_repaint();
+    });
+}
+
+fn video_poster_gate() -> &'static Mutex<HashSet<String>> {
+    static G: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    G.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 /// grok.com/imagine masonry: full-bleed stills, 1px gutters, caption over the photo.
@@ -2108,9 +2170,29 @@ mod tests {
                 && stage.contains("Imagining video…")
                 && stage.contains("Imagine failed")
                 && stage.contains("Expand")
+                && stage.contains("Play")
                 && stage.contains("Save")
-                && stage.contains("Open"),
+                && stage.contains("Open")
+                && stage.contains("imagine_media_click")
+                && stage.contains("ImagineMediaClick::Play"),
             "generating box must be interactive: {stage}"
+        );
+        assert!(
+            stage.contains("ImagineMediaClick::Play => hit.play = true")
+                && stage.contains("ghost_pill(ui, \"Play\")"),
+            "a video click must play, not only expand: {stage}"
+        );
+        let hero = include_str!("cards.rs");
+        let hero = hero
+            .split("fn imagine_video_hero(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn imagine_masonry(").next())
+            .expect("imagine_video_hero");
+        assert!(
+            hero.contains("video_poster_ready")
+                && hero.contains("kick_video_poster")
+                && hero.contains("thread::spawn"),
+            "video poster extract must leave the UI thread: {hero}"
         );
         assert!(
             stage.contains("!fail.is_empty()")
