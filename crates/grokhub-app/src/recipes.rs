@@ -42,13 +42,12 @@ pub fn load_last() -> Option<Recipe> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::TEST_CONFIG_LOCK;
     use grokhub_core::{ComputerOp, ScreenSize};
 
     #[test]
     fn recipe_disk_roundtrip() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-recipes-{}", std::process::id()));
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("recipes");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let recipe = Recipe {

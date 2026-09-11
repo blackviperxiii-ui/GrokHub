@@ -118,12 +118,11 @@ pub fn append_trajectory(line: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::fs;
-    use crate::config::TEST_CONFIG_LOCK;
 
     #[test]
     fn learning_roundtrip() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-learn-{}", std::process::id()));
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("learn");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let mut s = LearningState::default();
@@ -139,8 +138,8 @@ mod tests {
 
     #[test]
     fn chips_roundtrip() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-chips-{}", std::process::id()));
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("chips");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let mut s = empty_chip_memory();
@@ -153,8 +152,8 @@ mod tests {
 
     #[test]
     fn wall_roundtrip() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-wall-{}", std::process::id()));
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("wall");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let mut w = ImagineWall {
@@ -180,8 +179,8 @@ mod tests {
 
     #[test]
     fn projects_roundtrip() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-proj-{}", std::process::id()));
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("proj");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let nodes = grokhub_core::seed_from_bound("/tmp/GrokHub-Work");
@@ -202,8 +201,8 @@ mod tests {
 
     #[test]
     fn suggestions_roundtrip() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-suggest-{}", std::process::id()));
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("suggest");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let mut s = SuggestionStore {
@@ -247,8 +246,8 @@ mod tests {
 
     #[test]
     fn trajectory_appends() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-traj-{}", std::process::id()));
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("traj");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         append_trajectory(r#"{"ts":1,"cmds":["HOST_CMD: ls"],"ok":true,"excerpt":"ok"}"#)
