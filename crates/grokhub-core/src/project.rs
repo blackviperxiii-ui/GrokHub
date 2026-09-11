@@ -97,7 +97,7 @@ pub fn create_project(
         return Err("id taken");
     }
     let mut path = project_work_path(work_root, &name);
-    let home = std::env::var("HOME").ok();
+    let home = crate::user_home().and_then(|p| p.into_os_string().into_string().ok());
     if nodes
         .iter()
         .any(|n| bound_paths_match(&n.path, &path, home.as_deref()))
@@ -151,7 +151,7 @@ pub fn settle_project_path(
     }
     let name = node.name.clone();
     let mut path = project_work_path(work_root, &name);
-    let home = std::env::var("HOME").ok();
+    let home = crate::user_home().and_then(|p| p.into_os_string().into_string().ok());
     if nodes
         .iter()
         .any(|n| n.id != id && bound_paths_match(&n.path, &path, home.as_deref()))
@@ -220,19 +220,27 @@ pub struct DropOutcome {
     pub name: String,
 }
 
+fn user_home_str() -> Option<String> {
+    crate::user_home().and_then(|p| p.into_os_string().into_string().ok())
+}
+
+fn path_match_key(p: &str) -> String {
+    let mut s = p.replace('\\', "/");
+    while s.contains("//") {
+        s = s.replace("//", "/");
+    }
+    s.trim_end_matches('/').to_string()
+}
+
 pub fn bound_paths_match(a: &str, b: &str, home: Option<&str>) -> bool {
-    let a = expand_project_root(a, home);
-    let b = expand_project_root(b, home);
+    let a = path_match_key(&expand_project_root(a, home));
+    let b = path_match_key(&expand_project_root(b, home));
     !a.is_empty() && a == b
 }
 
 pub fn drop_selected(nodes: &mut Vec<ProjectNode>, id: &str, bound_path: &str) -> DropOutcome {
-    drop_selected_in(
-        nodes,
-        id,
-        bound_path,
-        std::env::var("HOME").ok().as_deref(),
-    )
+    let home = user_home_str();
+    drop_selected_in(nodes, id, bound_path, home.as_deref())
 }
 
 pub fn drop_selected_in(
@@ -417,11 +425,8 @@ pub fn folder_choices(nodes: &[ProjectNode]) -> Vec<(String, String)> {
 }
 
 pub fn upsert_bound(nodes: &mut Vec<ProjectNode>, bound_path: &str) -> Option<String> {
-    upsert_bound_in(
-        nodes,
-        bound_path,
-        std::env::var("HOME").ok().as_deref(),
-    )
+    let home = user_home_str();
+    upsert_bound_in(nodes, bound_path, home.as_deref())
 }
 
 pub fn upsert_bound_in(
@@ -468,7 +473,12 @@ pub fn project_name_from_path(p: &str) -> String {
 }
 
 pub fn expand_host_path_token(tok: &str) -> Option<String> {
-    expand_host_path_token_in(tok, std::env::var("HOME").ok().as_deref())
+    expand_host_path_token_in(
+        tok,
+        crate::user_home()
+            .as_ref()
+            .and_then(|p| p.to_str()),
+    )
 }
 
 fn peel_host_path_token(tok: &str) -> String {
@@ -489,25 +499,42 @@ pub fn expand_project_root(root: &str, home: Option<&str>) -> String {
 
 pub fn expand_host_path_token_in(tok: &str, home: Option<&str>) -> Option<String> {
     let tok = peel_host_path_token(tok);
-    if tok.starts_with('/') {
+    if std::path::Path::new(&tok).is_absolute()
+        || tok.starts_with('/')
+        || (cfg!(windows) && tok.len() >= 3 && tok.as_bytes()[1] == b':')
+    {
         return Some(tok);
     }
     if tok == "$OLDPWD" || tok.starts_with("$OLDPWD/") {
         return Some("/var/empty".into());
     }
     let home = home.filter(|h| !h.is_empty())?;
-    let home = home.trim_end_matches('/');
-    if let Some(rest) = tok.strip_prefix("~/") {
-        return Some(format!("{home}/{rest}"));
+    let home = home.trim_end_matches(['/', '\\']);
+    let join_home = |rest: &str| -> String {
+        let rest = rest.trim_start_matches(['/', '\\']);
+        if home.starts_with('/') {
+            format!("{home}/{rest}")
+        } else {
+            std::path::Path::new(home)
+                .join(rest)
+                .to_string_lossy()
+                .into_owned()
+        }
+    };
+    if let Some(rest) = tok.strip_prefix("~/").or_else(|| tok.strip_prefix("~\\")) {
+        return Some(join_home(rest));
     }
-    if let Some(rest) = tok.strip_prefix("$HOME/") {
-        return Some(format!("{home}/{rest}"));
+    if let Some(rest) = tok
+        .strip_prefix("$HOME/")
+        .or_else(|| tok.strip_prefix("$HOME\\"))
+    {
+        return Some(join_home(rest));
     }
     if tok == "~" || tok == "$HOME" {
         return Some(home.to_string());
     }
     if let Some(rest) = tok.strip_prefix('~') {
-        if !rest.is_empty() && !rest.starts_with('/') {
+        if !rest.is_empty() && !rest.starts_with('/') && !rest.starts_with('\\') {
             return Some(format!("/home/{rest}"));
         }
     }
@@ -540,7 +567,8 @@ fn looks_like_host_path(tok: &str) -> bool {
 }
 
 pub fn host_cmd_leaves_project(cmd: &str, project_root: &str) -> bool {
-    host_cmd_leaves_project_in(cmd, project_root, std::env::var("HOME").ok().as_deref())
+    let home = user_home_str();
+    host_cmd_leaves_project_in(cmd, project_root, home.as_deref())
 }
 
 fn host_cmd_name(tok: &str) -> &str {
@@ -919,8 +947,13 @@ mod tests {
 
     #[test]
     fn create_project_does_not_reuse_tilde_tree() {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/j".into());
-        let work = format!("{home}/GrokHub-Work");
+        let home = crate::user_home()
+            .and_then(|p| p.into_os_string().into_string().ok())
+            .unwrap_or_else(|| "/home/j".into());
+        let work = std::path::Path::new(&home)
+            .join("GrokHub-Work")
+            .to_string_lossy()
+            .into_owned();
         let mut nodes = vec![ProjectNode {
             id: "old".into(),
             name: "Night watch".into(),
@@ -937,6 +970,20 @@ mod tests {
             nodes[0].path,
             nodes[1].path
         );
+    }
+
+    #[test]
+    fn bound_paths_match_ignores_separator_style() {
+        assert!(bound_paths_match(
+            "~/GrokHub-Work/night-watch",
+            "/home/j/GrokHub-Work/night-watch",
+            Some("/home/j"),
+        ));
+        assert!(bound_paths_match(
+            "~/GrokHub-Work/night-watch",
+            r"/home/j\GrokHub-Work\night-watch",
+            Some("/home/j"),
+        ));
     }
 
     #[test]

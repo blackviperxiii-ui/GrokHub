@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 fn contains_path_leaf(cmd: &str, leaf: &str) -> bool {
+    let cmd = cmd.replace('\\', "/");
     cmd.split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | '=' | ',' | ';'))
         .any(|tok| {
             let t = tok.trim_matches(|ch: char| matches!(ch, '"' | '\''));
@@ -27,12 +28,15 @@ const FORBIDDEN_LEAVES: &[(&str, &str)] = &[
 ];
 
 pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
-    let c = cmd.to_ascii_lowercase();
+    let c = cmd.to_ascii_lowercase().replace('\\', "/");
     if c.contains("/etc/shadow") {
         return Some("forbidden path: /etc/shadow");
     }
     if c.contains("/etc/sudoers") {
         return Some("forbidden path: /etc/sudoers");
+    }
+    if c.contains(".grok/auth.json") {
+        return Some("forbidden path: grok login");
     }
     for (leaf, why) in FORBIDDEN_LEAVES {
         if contains_path_leaf(&c, leaf) {
@@ -88,6 +92,10 @@ mod tests {
         assert!(forbidden_reason("cat ~/.config/GrokHub/app.json").is_some());
         assert!(forbidden_reason("cat ~/.config/GrokHub/secrets.json").is_some());
         assert!(forbidden_reason("cat $HOME/.config/GrokHub/secrets.json").is_some());
+        assert!(forbidden_reason(r"type %APPDATA%\GrokHub\secrets.json").is_some());
+        assert!(forbidden_reason(r"Get-Content $env:APPDATA\GrokHub\secrets.json").is_some());
+        assert!(forbidden_reason(r"type ~\.grok\auth.json").is_some());
+        assert!(forbidden_reason("cat ~/.grok/auth.json").is_some());
         assert!(forbidden_reason("cat ~/.config/GrokHub/hub-state.json").is_some());
         assert!(forbidden_reason("cat ~/.aws/credentials").is_some());
         assert!(forbidden_reason("cat ~/.kube/config").is_some());

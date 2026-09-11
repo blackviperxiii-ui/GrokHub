@@ -355,7 +355,16 @@ pub fn ensure_access(tokens: &XaiOAuthTokens) -> Result<(String, XaiOAuthTokens,
 
 pub fn open_browser(url: &str) -> Result<(), String> {
     trusted_xai_url(url)?;
-    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    }
     Ok(())
 }
 

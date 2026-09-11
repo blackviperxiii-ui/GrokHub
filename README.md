@@ -1,14 +1,16 @@
 # GrokHub
 
-Native Rust cabin for **Arch Linux / CachyOS**. No Electron. No Tauri.
+Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.9.0** — Grok Build **1.0.21**. History is `grok sessions` 1:1. Chat is this Linux desktop. `/update` overlays the GUI and updates `grok`. MCP tools can ask for a form or URL.
+**v2.9.0** — Grok Build **1.0.21**. History is `grok sessions` 1:1. `/update` overlays the GUI and updates `grok`. MCP tools can ask for a form or URL.
 
-| Platform | Repository | Latest |
-|----------|------------|--------|
-| **Linux** (this) | [GrokHub](https://github.com/blackviperxiii-ui/GrokHub) | **v2.9.0** |
-| **Windows** | [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) | native cabin — same crates |
+| Platform | Artifact | Latest |
+|----------|----------|--------|
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v*.tar.gz`, AUR | **v2.9.0** |
+| **Windows** (x86_64) | `GrokHub-Setup-<version>.exe` | same tag |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
+
+Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
 
 ## Run
 
@@ -51,7 +53,7 @@ Imagine stills use dedicated **`grok-imagine-image-2.0`** (falls back to `grok-i
 
 Settings → **Connect Grok OAuth** (or `grokhub --oauth`) is cabin sign-in for Voice. Agent auth and Imagine use `grok login` (or `XAI_API_KEY`). Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600), never in markdown. Settings → Appearance is **Dark**, **Light**, or **System**. Settings → Behavior holds close-to-tray, the living wall, **quiet hours**, **automations a day**, and **host commands an hour**. Quiet-hour clocks type into buffers until Save — a half-typed clock does not go live. An hour alone (`7`) is not a clock. A clock or cap the cabin cannot read keeps the last-good value, not the factory window, and does not switch the guard off.
 
-Settings → **Update** (or `grokhub --update` / `/update`) retargets a leftover Origin clone to GitHub (`https://github.com/blackviperxiii-ui/GrokHub.git`), then `git pull --ff-only origin main`, `./scripts/install.sh --user`, and `grok update` on the current channel. Overlay updates the GUI, installs Grok Build CLI (`grok`) if it is missing, then updates the agent. Progress stays on Settings. After a clean overlay, **Restart** reloads hub, drops the cabin pid lock, starts a new overlay `grokhub`, and exits this process.
+Settings → **Update** (or `grokhub --update` / `/update`) retargets a leftover Origin or `GrokHub-Windows` clone to GitHub (`https://github.com/blackviperxiii-ui/GrokHub.git`), then `git pull --ff-only origin main`. Linux overlays with `./scripts/install.sh --user` and `grok update` on the current channel (no `--alpha`). Windows overlays with `scripts/install-windows.ps1` into `%LOCALAPPDATA%\Programs\GrokHub`. Progress stays on Settings. After a clean overlay, **Restart** reloads hub, drops the cabin pid lock, starts a new overlay `grokhub`, and exits this process.
 
 Chat is headless `grok -p` on this desktop (full filesystem and shell; Grok is told not to claim it lacks computer access). Night and phone `/v1/task` enqueue the same on the bound project. Halt / Stop / Ctrl+Shift+Esc kill the child. Chat only saves a night job when you asked to schedule one — a reply that mentions “every day at” or “heartbeat every” as advice does not. A clock ask (“every weekday at 9pm, summarize the board”) is saved as a cabin automation in `automations.json` with its hour intact; an interval ask (`/loop 30m`, “every 2 hours”) is saved as a Grok Build loop. The pulse fires both. Anticipate only fires a `Follow skill` on a real `need to` / `remind me` insight that matches a skill, not polite “if you need” chit-chat. A 15s heartbeat runs housekeep, inbox, night, review, wall, mid-thought, reflect, and anticipate. Hidden idle cabins wait for that pulse. Phone dispatch completes on halt / error. `/rewind` restores only the bound project root.
 
@@ -112,9 +114,12 @@ Contract: [`docs/superpowers/plans/2026-08-14-dispatch-android-notes.md`](docs/s
 | `~/.local/bin/grok` | Grok Build CLI (official xAI installer; also `~/.grok/bin/grok`) |
 | `/usr/bin/grokhub` | System / makepkg |
 | `/usr/bin/grok` | System Grok Build CLI (AUR `post_install`) |
-| `~/.config/GrokHub` | User data (`app.json`, `projects.json`, `secrets.json`, memory) |
+| `~/.config/GrokHub` | Linux user data (`app.json`, `projects.json`, `secrets.json`, memory) |
+| `%LOCALAPPDATA%\Programs\GrokHub` | Windows cabin (`grokhub.exe`) |
+| `%APPDATA%\GrokHub` | Windows user data |
 
-Release tarball: `grokhub-linux-v*.tar.gz` from `./scripts/make-release-bundle.sh`.
+Linux tarball: `grokhub-linux-v*.tar.gz` from `./scripts/make-release-bundle.sh`.  
+Windows installer: `GrokHub-Setup-<version>.exe` from `./scripts/make-windows-release.ps1` (Inno Setup). A tag publishes both.
 
 Arch notes: [`packaging/README-ARCH.md`](packaging/README-ARCH.md).
 

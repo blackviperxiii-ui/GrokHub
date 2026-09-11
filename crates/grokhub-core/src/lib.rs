@@ -38,6 +38,7 @@ pub mod oauth;
 pub mod openclaw;
 pub mod organs;
 pub mod pair;
+pub mod paths;
 pub mod project;
 pub mod recipe;
 pub mod redact;
@@ -207,6 +208,7 @@ pub use pair::{
     pair_code_is_live, parse_hostname_i, pick_lan_ipv4, start_hub_rotates_pair, CODE_ALPH,
     PAIR_TTL_MS,
 };
+pub use paths::user_home;
 pub use automation::{
     automation_blocked_by_policy, automation_schedule_label, automation_summary_line,
     compute_next_run, due_automations, ensure_automation_schedule,

@@ -177,13 +177,22 @@ fn kick_os_dark() {
 }
 
 fn probe_os_dark() -> bool {
-    let scheme = cmd_stdout(
-        "gsettings",
-        &["get", "org.gnome.desktop.interface", "color-scheme"],
-    );
-    let gtk = std::env::var("GTK_THEME").unwrap_or_default();
-    let xfce = cmd_stdout("xfconf-query", &["-c", "xsettings", "-p", "/Net/ThemeName"]);
-    os_prefers_dark(&scheme, &gtk, &xfce)
+    #[cfg(windows)]
+    {
+        return crate::win_native::apps_use_light_theme()
+            .map(|light| !light)
+            .unwrap_or(true);
+    }
+    #[cfg(not(windows))]
+    {
+        let scheme = cmd_stdout(
+            "gsettings",
+            &["get", "org.gnome.desktop.interface", "color-scheme"],
+        );
+        let gtk = std::env::var("GTK_THEME").unwrap_or_default();
+        let xfce = cmd_stdout("xfconf-query", &["-c", "xsettings", "-p", "/Net/ThemeName"]);
+        os_prefers_dark(&scheme, &gtk, &xfce)
+    }
 }
 
 fn cmd_stdout(bin: &str, args: &[&str]) -> String {

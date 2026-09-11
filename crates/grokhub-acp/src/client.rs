@@ -7,7 +7,7 @@ use crate::protocol::{
 use crate::protocol::SessionMode;
 use crate::{
     agent_args, cabin_grok_home, cabin_leader_socket, find_grok, grok_home, grok_stdout_timeout,
-    prepare_cabin_grok_home,
+    hide_windows_console, prepare_cabin_grok_home,
 };
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -567,6 +567,7 @@ fn rpc_reply_id(id: Option<Value>) -> Option<Value> {
     }
 }
 
+#[cfg(unix)]
 fn isolate_spawned_grok() {
     ignore_sigpipe();
     // The cabin GUI holds DRI/Wayland fds. Grok Build inherits them and its
@@ -605,6 +606,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("GROK_NO_AUTO_UPDATE", "1");
+    hide_windows_console(&mut cmd);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -1344,6 +1346,7 @@ fn grok_p_child(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("GROK_NO_AUTO_UPDATE", "1");
+    hide_windows_console(&mut cmd);
     if always_approve {
         cmd.env("GROK_DEFAULT_SELECTED_PERMISSION", "always_allow_all_sessions");
     } else if auto {

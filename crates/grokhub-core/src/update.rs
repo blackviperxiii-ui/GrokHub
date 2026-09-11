@@ -44,14 +44,19 @@ fn sh_quote(s: &str) -> String {
 }
 
 fn git_stdout(source: &Path, args: &[&str]) -> Result<(bool, String), String> {
-    let mut child = Command::new("git")
-        .arg("-C")
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(source)
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("git: {e}"))?;
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("git: {e}"))?;
     let start = Instant::now();
     loop {
         match child.try_wait() {
@@ -110,21 +115,16 @@ fn origin_norm(url: &str) -> String {
     }
 }
 
-/// Same repo as `GITHUB_REMOTE_URL` (https or ssh).
+/// Same repo as `GITHUB_REMOTE_URL` (https or ssh). Not GrokHub-Windows.
 pub fn canonical_github_origin(url: &str) -> bool {
     let u = origin_norm(url);
-    u.contains("github.com/blackviperxiii-ui/grokhub") && !u.contains("grok-hub")
+    u.ends_with("github.com/blackviperxiii-ui/grokhub")
 }
 
-/// Origin, old hyphenated GitHub, or any other GitHub GrokHub that is not canonical.
+/// Any origin that is not this repo — pin before pull so overlay never
+/// fetches an unvalidated remote and then runs its install script.
 pub fn origin_needs_retarget(url: &str) -> bool {
-    if canonical_github_origin(url) {
-        return false;
-    }
-    let u = url.trim().to_ascii_lowercase();
-    u.contains("origin.cursor.com")
-        || ((u.contains("github.com/") || u.contains("github.com:"))
-            && (u.contains("grok-hub") || u.contains("grokhub")))
+    !canonical_github_origin(url)
 }
 
 /// Alias used by older call sites — same as `origin_needs_retarget`.
@@ -158,9 +158,34 @@ pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
         }
     }
     cmds.push(format!("git -C {src} pull --ff-only origin main"));
-    cmds.push(format!("{src}/scripts/install.sh --user"));
-    cmds.push("grok update".into());
+    cmds.push(overlay_install_cmd(source, &src));
+    cmds.push(overlay_grok_update_cmd().into());
     Ok(cmds)
+}
+
+fn overlay_install_cmd(source: &Path, src_quoted: &str) -> String {
+    if cfg!(windows) {
+        let install = sh_quote(
+            &source
+                .join("scripts")
+                .join("install-windows.ps1")
+                .display()
+                .to_string(),
+        );
+        format!("powershell.exe -NoProfile -ExecutionPolicy Bypass -File {install}")
+    } else {
+        format!("{src_quoted}/scripts/install.sh --user")
+    }
+}
+
+fn overlay_grok_update_cmd() -> &'static str {
+    // Linux overlay stays on the current channel. Windows first-run / installer
+    // may still vendor alpha; do not force --alpha here on Unix.
+    if cfg!(windows) {
+        "grok update --alpha"
+    } else {
+        "grok update"
+    }
 }
 
 pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
@@ -170,10 +195,18 @@ pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
                 "fast-forward origin/main — config stays".into()
             } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
                 "point origin at GitHub — Cursor Origin is not live yet".into()
-            } else if cmd.contains("install.sh") {
-                "overlay ~/.local/bin — does not wipe config".into()
+            } else if cmd.contains("install.sh") || cmd.contains("install-windows.ps1") {
+                if cfg!(windows) {
+                    "overlay %LOCALAPPDATA%\\Programs\\GrokHub — does not wipe config".into()
+                } else {
+                    "overlay ~/.local/bin — does not wipe config".into()
+                }
             } else if grok_cli_update_cmd(&cmd) {
-                "update Grok Build CLI on the current channel".into()
+                if cmd.contains("--alpha") {
+                    "update Grok Build CLI on the alpha channel".into()
+                } else {
+                    "update Grok Build CLI on the current channel".into()
+                }
             } else {
                 explain_host_risk(&cmd, host_risk(&cmd))
             };
@@ -212,7 +245,7 @@ pub fn update_step_label(cmd: &str) -> &'static str {
         "Pulling origin/main…"
     } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
         "Retargeting origin…"
-    } else if cmd.contains("install.sh") {
+    } else if cmd.contains("install.sh") || cmd.contains("install-windows.ps1") {
         "Installing overlay…"
     } else if grok_cli_update_cmd(cmd) {
         "Updating Grok Build CLI…"
@@ -277,8 +310,21 @@ pub fn overlay_update_can_restart(finished_ok: bool, running: bool) -> bool {
 
 /// Prefer the user overlay binary so a running (deleted) inode is not relaunched.
 pub fn restart_bin(home: Option<&str>, current_exe: Option<&str>) -> String {
-    if let Some(home) = home.map(str::trim).filter(|s| !s.is_empty()) {
-        let overlay = std::path::Path::new(home).join(".local/bin/grokhub");
+    if cfg!(windows) {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            let overlay = std::path::Path::new(&local)
+                .join("Programs")
+                .join("GrokHub")
+                .join("grokhub.exe");
+            if overlay.is_file() {
+                return overlay.to_string_lossy().into_owned();
+            }
+        }
+    } else if let Some(home) = home.map(str::trim).filter(|s| !s.is_empty()) {
+        let overlay = std::path::Path::new(home)
+            .join(".local")
+            .join("bin")
+            .join("grokhub");
         if overlay.is_file() {
             return overlay.to_string_lossy().into_owned();
         }
@@ -286,7 +332,7 @@ pub fn restart_bin(home: Option<&str>, current_exe: Option<&str>) -> String {
     current_exe
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or("grokhub")
+        .unwrap_or(if cfg!(windows) { "grokhub.exe" } else { "grokhub" })
         .to_string()
 }
 
@@ -349,6 +395,30 @@ mod tests {
     use super::*;
     use std::fs;
 
+    fn assert_overlay_install(cmd: &str) {
+        #[cfg(windows)]
+        {
+            assert!(
+                cmd.contains("install-windows.ps1") && cmd.contains("powershell"),
+                "{cmd}"
+            );
+        }
+        #[cfg(unix)]
+        {
+            assert!(
+                cmd.contains("install.sh") && cmd.contains("--user"),
+                "{cmd}"
+            );
+        }
+    }
+
+    fn assert_overlay_grok(cmd: &str) {
+        #[cfg(windows)]
+        assert_eq!(cmd, "grok update --alpha");
+        #[cfg(unix)]
+        assert_eq!(cmd, "grok update");
+    }
+
     #[test]
     fn overlay_stop_uses_mainpid_and_cabin_pid_never_pgrep() {
         assert_eq!(overlay_stop_targets(None, None), Vec::<u32>::new());
@@ -404,6 +474,10 @@ mod tests {
         assert!(
             git.contains("try_wait") && !git.contains(".output()"),
             "Settings Update git must not hang the cabin: {git}"
+        );
+        assert!(
+            git.contains("CREATE_NO_WINDOW") && git.contains("creation_flags"),
+            "Windows git probes must not flash a console: {git}"
         );
         let head = src
             .split("fn git_head_branch(")
@@ -464,21 +538,28 @@ mod tests {
             "{no_origin:?}"
         );
         assert!(no_origin[1].contains("pull --ff-only origin main"), "{no_origin:?}");
+        assert_overlay_install(&no_origin[2]);
+        assert_overlay_grok(no_origin.last().unwrap());
         std::process::Command::new("git")
             .args(["remote", "add", "origin", "https://example.invalid/grokhub.git"])
             .current_dir(&root)
             .status()
             .unwrap();
         let cmds = update_cmds(&root).unwrap();
-        assert!(cmds[0].contains("pull --ff-only origin main"), "{cmds:?}");
-        assert!(cmds[1].ends_with("--user"));
-        assert_eq!(cmds.last().map(String::as_str), Some("grok update"));
-        assert!(!cmds.iter().any(|c| c.contains("set-url")), "{cmds:?}");
+        assert!(
+            cmds[0].contains("remote set-url origin https://github.com/blackviperxiii-ui/GrokHub.git"),
+            "{cmds:?}"
+        );
+        assert!(cmds[1].contains("pull --ff-only origin main"), "{cmds:?}");
+        assert_overlay_install(&cmds[2]);
+        assert_overlay_grok(cmds.last().unwrap());
+        #[cfg(unix)]
         assert!(!cmds.iter().any(|c| c.contains("--alpha") || c.contains("--stable")), "{cmds:?}");
         assert!(!update_wipes_config(&cmds));
         let plan = update_plan_steps(cmds);
-        assert!(plan[0].explain.contains("origin/main"), "{plan:?}");
-        assert!(plan[1].explain.contains("overlay"), "{plan:?}");
+        assert!(plan[0].explain.contains("GitHub"), "{plan:?}");
+        assert!(plan[1].explain.contains("origin/main"), "{plan:?}");
+        assert!(plan[2].explain.contains("overlay"), "{plan:?}");
         assert!(plan.last().unwrap().explain.contains("Grok Build CLI"), "{plan:?}");
         assert_ne!(plan[0].explain, "read-only");
         let _ = fs::remove_dir_all(&root);
@@ -540,13 +621,47 @@ mod tests {
 
     #[test]
     fn restart_prefers_overlay_bin_and_restarts_hub_then_cabin() {
-        let root = std::env::temp_dir().join(format!("grokhub-restart-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "grokhub-restart-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
         let _ = fs::remove_dir_all(&root);
-        let bin = root.join(".local/bin/grokhub");
-        fs::create_dir_all(bin.parent().unwrap()).unwrap();
-        fs::write(&bin, "#!/bin/sh\n").unwrap();
-        assert_eq!(restart_bin(Some(root.to_str().unwrap()), Some("/old/grokhub")), bin.to_string_lossy().to_string());
-        assert_eq!(restart_bin(None, Some("/opt/grokhub")), "/opt/grokhub");
+        #[cfg(unix)]
+        {
+            let bin = root.join(".local").join("bin").join("grokhub");
+            fs::create_dir_all(bin.parent().unwrap()).unwrap();
+            fs::write(&bin, "#!/bin/sh\n").unwrap();
+            assert_eq!(
+                restart_bin(Some(root.to_str().unwrap()), Some("/old/grokhub")),
+                bin.to_string_lossy().to_string()
+            );
+            assert_eq!(restart_bin(None, Some("/opt/grokhub")), "/opt/grokhub");
+        }
+        #[cfg(windows)]
+        {
+            let prev = std::env::var_os("LOCALAPPDATA");
+            std::env::set_var("LOCALAPPDATA", &root);
+            let bin = root.join("Programs").join("GrokHub").join("grokhub.exe");
+            fs::create_dir_all(bin.parent().unwrap()).unwrap();
+            fs::write(&bin, b"MZ").unwrap();
+            assert_eq!(
+                restart_bin(None, Some(r"C:\old\grokhub.exe")),
+                bin.to_string_lossy().to_string()
+            );
+            assert_eq!(
+                restart_bin(None, Some(r"C:\opt\grokhub.exe")),
+                bin.to_string_lossy().to_string(),
+                "Windows overlay must win over current_exe"
+            );
+            match prev {
+                Some(v) => std::env::set_var("LOCALAPPDATA", v),
+                None => std::env::remove_var("LOCALAPPDATA"),
+            }
+        }
         assert_eq!(restart_argv("/opt/grokhub", false), vec!["/opt/grokhub".to_string()]);
         assert_eq!(
             restart_argv("/opt/grokhub", true),
@@ -635,7 +750,13 @@ mod tests {
         assert!(!origin_needs_retarget(
             "git@github.com:blackviperxiii-ui/GrokHub.git"
         ));
-        assert!(!origin_needs_retarget("https://example.invalid/grokhub.git"));
+        assert!(origin_needs_retarget(
+            "https://github.com/blackviperxiii-ui/GrokHub-Windows.git"
+        ));
+        assert!(!canonical_github_origin(
+            "https://github.com/blackviperxiii-ui/GrokHub-Windows.git"
+        ));
+        assert!(origin_needs_retarget("https://example.invalid/grokhub.git"));
         assert!(canonical_github_origin(GITHUB_REMOTE_URL));
         assert!(canonical_github_origin(
             "git@github.com:blackviperxiii-ui/GrokHub.git"
@@ -655,10 +776,31 @@ mod tests {
             "{cmds:?}"
         );
         assert!(cmds[1].contains("pull --ff-only origin main"), "{cmds:?}");
-        assert!(cmds[2].ends_with("--user"), "{cmds:?}");
-        assert_eq!(cmds.last().map(String::as_str), Some("grok update"));
+        assert_overlay_install(&cmds[2]);
+        assert_overlay_grok(cmds.last().unwrap());
         let plan = update_plan_steps(cmds);
         assert!(plan[0].explain.contains("GitHub"), "{plan:?}");
+
+        std::process::Command::new("git")
+            .args([
+                "remote",
+                "set-url",
+                "origin",
+                "https://github.com/blackviperxiii-ui/GrokHub-Windows.git",
+            ])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        let from_windows = update_cmds(&root).unwrap();
+        assert!(
+            from_windows[0].contains(
+                "remote set-url origin https://github.com/blackviperxiii-ui/GrokHub.git"
+            ),
+            "{from_windows:?}"
+        );
+        assert!(!from_windows
+            .iter()
+            .any(|c| c.contains("GrokHub-Windows.git")));
         let _ = fs::remove_dir_all(&root);
     }
 }

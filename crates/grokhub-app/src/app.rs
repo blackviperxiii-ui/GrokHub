@@ -944,6 +944,8 @@ fn hide_pending_grok_sessions(
 
 /// `(directory listed, [(entry name, is_dir)])` from the Plus file picker.
 type PickList = (String, Vec<(String, bool)>);
+/// History search: needle + `[(path_or_id, snippet)]`.
+type HistoryHitsRx = mpsc::Receiver<(String, Vec<(String, String)>)>;
 
 pub struct Cabin {
     nav: Nav,
@@ -1204,7 +1206,7 @@ pub struct Cabin {
     grok_sessions_inflight: u32,
     pending_grok_deletes: HashSet<String>,
     inspect_rx: Option<mpsc::Receiver<String>>,
-    history_rx: Option<mpsc::Receiver<(String, Vec<(String, String)>)>>,
+    history_rx: Option<HistoryHitsRx>,
     mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
     mem_file_rx: Option<(String, mpsc::Receiver<(u64, String)>)>,
     recall_rx: Option<mpsc::Receiver<String>>,
@@ -1634,6 +1636,34 @@ impl Cabin {
 
     fn apply_saved_geom(&mut self, ctx: &egui::Context) {
         let g = crate::window::clamp_geom(self.cfg.window);
+        #[cfg(windows)]
+        if g.maximized && self.window_visible {
+            if let Some((x, y, w, h)) = crate::win_native::work_area() {
+                let ppp = ctx.pixels_per_point().max(0.5);
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                    w as f32 / ppp,
+                    h as f32 / ppp,
+                )));
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                    x as f32 / ppp,
+                    y as f32 / ppp,
+                )));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                let _ = crate::win_native::show_cabin(x, y, w, h, true);
+                let dark = grokhub_core::resolve_dark(
+                    grokhub_core::parse_theme(&self.cfg.theme),
+                    crate::theme::desktop_prefers_dark(),
+                );
+                crate::win_native::polish_hwnd(dark);
+                self.win_max = true;
+                self.cfg.window.maximized = true;
+                self.geom_applied = true;
+                self.geom_apply_frames = 0;
+                return;
+            }
+            self.win_max = true;
+            return;
+        }
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(g.w, g.h)));
         if let Some([x, y]) = crate::window::launch_pos(&g) {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
@@ -1659,7 +1689,7 @@ impl Cabin {
         if !crate::window::geom_can_remember(self.geom_applied, self.geom_apply_frames) {
             return;
         }
-        let (outer, inner, maximized) = ctx.input(|i| {
+        let (outer, inner, egui_max) = ctx.input(|i| {
             (
                 i.viewport().outer_rect,
                 i.viewport().inner_rect,
@@ -1670,7 +1700,10 @@ impl Cabin {
             return;
         };
         let size = inner.map(|r| r.size()).unwrap_or(outer.size());
-        let maximized = maximized.unwrap_or(self.win_max);
+        #[cfg(windows)]
+        let maximized = self.win_max;
+        #[cfg(not(windows))]
+        let maximized = egui_max.unwrap_or(self.win_max);
         if let Some(g) = crate::window::remember_geom(
             self.window_visible,
             maximized,
@@ -9521,6 +9554,8 @@ impl Cabin {
         self.tray_saw_unfocused = false;
         self.tray_hid_at = Instant::now();
         apply_tray_window(ctx, crate::tray::hide_to_tray_window());
+        #[cfg(windows)]
+        crate::win_native::hide_cabin();
         self.ensure_tray_spawn();
     }
 
@@ -9536,6 +9571,22 @@ impl Cabin {
         self.tray_saw_unfocused = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         apply_tray_window(ctx, crate::tray::show_from_tray_window());
+        #[cfg(windows)]
+        {
+            let g = crate::window::clamp_geom(self.cfg.window);
+            if let Some((x, y, w, h)) = crate::win_native::work_area() {
+                if self.win_max {
+                    let _ = crate::win_native::show_cabin(x, y, w, h, true);
+                } else {
+                    let ppp = ctx.pixels_per_point().max(0.5);
+                    let x = (g.x.unwrap_or(100.0) * ppp).round() as i32;
+                    let y = (g.y.unwrap_or(100.0) * ppp).round() as i32;
+                    let w = (g.w * ppp).round() as i32;
+                    let h = (g.h * ppp).round() as i32;
+                    let _ = crate::win_native::show_cabin(x, y, w, h, false);
+                }
+            }
+        }
         self.apply_saved_geom(ctx);
         self.ensure_tray_spawn();
         ctx.request_repaint();
@@ -9943,6 +9994,8 @@ impl eframe::App for Cabin {
         {
             self.show_from_tray(ctx);
         } else if !self.window_visible {
+            #[cfg(windows)]
+            crate::win_native::hide_cabin_stubs_only();
             let focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
             self.tray_saw_unfocused =
                 crate::tray::remember_hidden_unfocus(focused, self.tray_saw_unfocused);
@@ -10456,9 +10509,44 @@ impl Cabin {
                                 .input(|i| i.viewport().maximized)
                                 .unwrap_or(self.win_max);
                             self.win_max = next_maximized(currently);
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(self.win_max));
                             self.cfg.window.maximized = self.win_max;
                             self.geom_dirty = true;
+                            #[cfg(windows)]
+                            {
+                                let ppp = ctx.pixels_per_point().max(0.5);
+                                if self.win_max {
+                                    if let Some((x, y, w, h)) = crate::win_native::work_area() {
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                                            egui::vec2(w as f32 / ppp, h as f32 / ppp),
+                                        ));
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
+                                            egui::pos2(x as f32 / ppp, y as f32 / ppp),
+                                        ));
+                                        let _ = crate::win_native::show_cabin(x, y, w, h, true);
+                                    }
+                                } else {
+                                    let g = crate::window::clamp_geom(self.cfg.window);
+                                    let x = (g.x.unwrap_or(100.0) * ppp).round() as i32;
+                                    let y = (g.y.unwrap_or(100.0) * ppp).round() as i32;
+                                    let w = (g.w * ppp).round() as i32;
+                                    let h = (g.h * ppp).round() as i32;
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                                        egui::vec2(g.w, g.h),
+                                    ));
+                                    if let Some([lx, ly]) = crate::window::launch_pos(&g) {
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
+                                            egui::pos2(lx, ly),
+                                        ));
+                                    }
+                                    let _ = crate::win_native::show_cabin(x, y, w, h, false);
+                                }
+                            }
+                            #[cfg(not(windows))]
+                            {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
+                                    self.win_max,
+                                ));
+                            }
                         }
                         if titlebar_chrome_hit(&titlebar_chrome_btn(ui, "–")) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));

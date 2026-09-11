@@ -96,6 +96,15 @@ fn kill_limited(child: &mut Child) {
             .args(["-KILL", "--", &format!("-{pid}")])
             .status();
     }
+    #[cfg(windows)]
+    {
+        let pid = child.id().to_string();
+        let mut kill = Command::new("taskkill");
+        kill.args(["/F", "/T", "/PID", &pid]);
+        kill.stdout(Stdio::null()).stderr(Stdio::null());
+        crate::host::hide_windows_console(&mut kill);
+        let _ = kill.status();
+    }
     let _ = child.kill();
 }
 
@@ -128,8 +137,10 @@ fn read_pipe_capped(mut r: impl Read, cap: usize, overflow: &AtomicBool) -> Vec<
 /// Spawn `cmd` and kill the process group if it exceeds `timeout`.
 /// Used by presence / windshield paths that run on the UI thread.
 pub(crate) fn run_limited(mut cmd: Command, timeout: Duration) -> Option<Output> {
+    cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    crate::host::hide_windows_console(&mut cmd);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -599,11 +610,62 @@ fn map_pointer_op(op: &ComputerOp) -> ComputerOp {
     }
 }
 
+fn push_bash_cand(p: PathBuf, out: &mut Vec<PathBuf>) {
+    if p.is_file() && !is_wsl_bash_stub(&p) && !out.iter().any(|e| e == &p) {
+        out.push(p);
+    }
+}
+
+fn is_wsl_bash_stub(p: &Path) -> bool {
+    let s = p.to_string_lossy().to_ascii_lowercase();
+    s.contains("windowsapps") || s.contains("system32\\bash") || s.contains("system32/bash")
+}
+
+fn bash_probe_ok(p: &Path) -> bool {
+    let mut cmd = Command::new(p);
+    cmd.args(["-lc", "echo grokhub-bash"]);
+    crate::host::hide_windows_console(&mut cmd);
+    run_limited(cmd, Duration::from_secs(2))
+        .is_some_and(|o| String::from_utf8_lossy(&o.stdout).contains("grokhub-bash"))
+}
+
+/// Git bash on Windows, a real bash on PATH — never the WSL stub.
+pub fn find_real_bash() -> Option<PathBuf> {
+    let mut cands = Vec::new();
+    #[cfg(windows)]
+    {
+        for key in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+            if let Ok(root) = std::env::var(key) {
+                let root = PathBuf::from(root);
+                push_bash_cand(root.join(r"Git\bin\bash.exe"), &mut cands);
+                push_bash_cand(root.join(r"Git\usr\bin\bash.exe"), &mut cands);
+            }
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            push_bash_cand(
+                PathBuf::from(local).join(r"Programs\Git\bin\bash.exe"),
+                &mut cands,
+            );
+        }
+    }
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            push_bash_cand(dir.join("bash"), &mut cands);
+            if cfg!(windows) {
+                push_bash_cand(dir.join("bash.exe"), &mut cands);
+            }
+        }
+    }
+    cands.into_iter().find(|p| bash_probe_ok(p))
+}
+
 pub fn resolve_bin(name: &str) -> Option<PathBuf> {
     resolve_bin_in(
         name,
         std::env::var("PATH").ok().as_deref(),
-        std::env::var("HOME").ok().as_deref(),
+        grokhub_core::user_home()
+            .as_ref()
+            .and_then(|p| p.to_str()),
     )
 }
 
@@ -1401,12 +1463,27 @@ pub fn transcribe_local(wav: &Path) -> Result<String, String> {
 }
 
 pub fn play_audio(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        if crate::win_audio::play_file(path).is_ok() {
+            return Ok(());
+        }
+    }
     let dest = path.to_str().ok_or("audio path")?;
     match first_bin(PLAYERS).as_deref() {
         Some("ffplay") => run_ok("ffplay", &["-nodisp", "-autoexit", "-loglevel", "error", dest]),
         Some("mpv") => run_ok("mpv", &["--no-video", "--really-quiet", dest]),
         Some("paplay") => run_ok("paplay", &[dest]),
-        _ => Err("no ffplay/mpv/paplay to speak".into()),
+        _ => {
+            #[cfg(windows)]
+            {
+                crate::win_audio::play_file(path)
+            }
+            #[cfg(not(windows))]
+            {
+                Err("no ffplay/mpv/paplay to speak".into())
+            }
+        }
     }
 }
 
@@ -1414,6 +1491,8 @@ pub fn play_audio(path: &Path) -> Result<(), String> {
 #[derive(Default)]
 pub struct PcmSink {
     child: Option<Child>,
+    #[cfg(windows)]
+    win: Option<crate::win_audio::WaveOut>,
 }
 
 
@@ -1425,6 +1504,20 @@ impl PcmSink {
     pub fn push(&mut self, pcm: &[u8]) {
         if pcm.is_empty() {
             return;
+        }
+        #[cfg(windows)]
+        {
+            if let Some(out) = self.win.as_mut() {
+                out.push(pcm);
+                return;
+            }
+            if let Some(out) = crate::win_audio::WaveOut::start() {
+                self.win = Some(out);
+                if let Some(out) = self.win.as_mut() {
+                    out.push(pcm);
+                    return;
+                }
+            }
         }
         if self.ensure().is_err() {
             return;
@@ -1493,10 +1586,21 @@ impl Drop for PcmSink {
 /// Long-running raw PCM capture for duplex Voice. Kill on drop.
 pub struct LivePcm {
     child: Option<Child>,
+    #[cfg(windows)]
+    win: Option<crate::win_audio::WaveIn>,
 }
 
 impl LivePcm {
     pub fn start() -> Option<Self> {
+        #[cfg(windows)]
+        {
+            if let Some(win) = crate::win_audio::WaveIn::start() {
+                return Some(Self {
+                    child: None,
+                    win: Some(win),
+                });
+            }
+        }
         let bin = first_bin(RECORDERS)?;
         let args = live_pcm_argv(bin.as_str())?;
         let child = Command::new(&bin)
@@ -1505,10 +1609,20 @@ impl LivePcm {
             .stderr(Stdio::null())
             .spawn()
             .ok()?;
-        Some(Self { child: Some(child) })
+        Some(Self {
+            child: Some(child),
+            #[cfg(windows)]
+            win: None,
+        })
     }
 
     pub fn read_frame(&mut self) -> Option<Vec<u8>> {
+        #[cfg(windows)]
+        {
+            if let Some(win) = self.win.as_mut() {
+                return win.read_frame();
+            }
+        }
         let stdout = self.child.as_mut()?.stdout.as_mut()?;
         let mut buf = vec![0u8; live_pcm_frame_bytes()];
         stdout.read_exact(&mut buf).ok()?;
@@ -1528,6 +1642,17 @@ impl Drop for LivePcm {
 }
 
 fn record_wav(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        match crate::win_audio::record_wav(path, 4) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                if first_bin(RECORDERS).is_none() {
+                    return Err(e);
+                }
+            }
+        }
+    }
     let dest = path.to_str().ok_or("wav path")?;
     match first_bin(RECORDERS).as_deref() {
         Some("arecord") => run_ok(
@@ -1655,8 +1780,35 @@ pub fn capture_webcam() -> Result<String, String> {
     Ok(jpeg_data_url(&bytes))
 }
 
+pub fn open_path(path: &str) -> Result<(), String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err("empty path".into());
+    }
+    #[cfg(windows)]
+    {
+        return crate::win_native::open_path(path);
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// Short PCM chunks for the realtime socket. Empty iterator if no recorder.
 pub fn record_pcm_chunks() -> Vec<Vec<u8>> {
+    #[cfg(windows)]
+    {
+        if let Ok(pcm) = crate::win_audio::record_pcm_secs(1) {
+            if pcm.len() >= 64 {
+                return vec![pcm];
+            }
+        }
+    }
     let dest = std::env::temp_dir().join("grokhub-voice-live.wav");
     let path = dest.to_string_lossy().to_string();
     let ok = match first_bin(RECORDERS).as_deref() {
@@ -1702,6 +1854,12 @@ pub fn save_file_dialog(suggested: &str) -> Option<PathBuf> {
         .and_then(|s| s.to_str())
         .filter(|s| !s.is_empty())
         .unwrap_or("imagine.png");
+    #[cfg(windows)]
+    {
+        if let Some(p) = crate::win_native::save_file_dialog(name) {
+            return Some(p);
+        }
+    }
     for bin in ["zenity", "kdialog", "yad", "qarma"] {
         let Some(args) = grokhub_core::picker_save_args(bin, name) else {
             continue;
@@ -1724,6 +1882,12 @@ pub fn save_file_dialog(suggested: &str) -> Option<PathBuf> {
 }
 
 pub fn pick_file() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        if let Some(p) = crate::win_native::open_file_dialog() {
+            return Some(p);
+        }
+    }
     for bin in ["zenity", "kdialog", "yad", "qarma"] {
         let Some(args) = picker_args(bin) else {
             continue;

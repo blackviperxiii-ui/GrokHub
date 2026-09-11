@@ -124,10 +124,12 @@ where
         }
         StoreRead::Text(raw) => raw,
     };
+    // PowerShell Set-Content -Encoding utf8 writes a BOM; serde_json rejects it.
+    let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw.as_str());
     if raw.trim().is_empty() {
         return fallback();
     }
-    match serde_json::from_str(&raw) {
+    match serde_json::from_str(raw) {
         Ok(v) => v,
         Err(_) => {
             quarantine(path);
@@ -288,8 +290,15 @@ pub fn config_dir() -> PathBuf {
 }
 
 fn dirs_fallback() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".config/GrokHub");
+    if cfg!(windows) {
+        if let Ok(app) = std::env::var("APPDATA") {
+            if !app.trim().is_empty() {
+                return PathBuf::from(app).join("GrokHub");
+            }
+        }
+    }
+    if let Some(home) = grokhub_core::user_home() {
+        return home.join(".config/GrokHub");
     }
     PathBuf::from(".grokhub")
 }
@@ -309,11 +318,11 @@ pub fn default_device_name() -> String {
 }
 
 fn hostname_cmd() -> Option<String> {
-    let mut child = std::process::Command::new("hostname")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut cmd = std::process::Command::new("hostname");
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    grokhub_acp::hide_windows_console(&mut cmd);
+    let mut child = cmd.spawn().ok()?;
     let start = Instant::now();
     loop {
         match child.try_wait() {
@@ -517,14 +526,28 @@ pub fn save_chat(msgs: &[(String, String)]) -> Result<(), String> {
 #[cfg(test)]
 pub static TEST_CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Tests that panic while holding `TEST_CONFIG_LOCK` must not take down the rest of the suite.
+#[cfg(test)]
+pub fn hold_test_config() -> std::sync::MutexGuard<'static, ()> {
+    TEST_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Isolated `GROKHUB_CONFIG` root so parallel tests do not share one temp tree.
+#[cfg(test)]
+pub fn test_config_root(label: &str) -> std::path::PathBuf {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("grokhub-{label}-{}-{n}", std::process::id()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn roundtrip_under_grokhub_config() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-cfg-{}", std::process::id()));
+        let _g = hold_test_config();
+        let root = test_config_root("cfg");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let cfg = AppConfig {
@@ -599,8 +622,8 @@ mod tests {
 
     #[test]
     fn empty_device_name_fills_from_the_box() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-devname-{}", std::process::id()));
+        let _g = hold_test_config();
+        let root = test_config_root("devname");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         fs::create_dir_all(&root).expect("dir");
@@ -614,8 +637,8 @@ mod tests {
 
     #[test]
     fn composer_pills_survive_a_restart_but_always_approve_does_not() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-pills-{}", std::process::id()));
+        let _g = hold_test_config();
+        let root = test_config_root("pills");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let mut cfg = AppConfig::default();
@@ -646,8 +669,8 @@ mod tests {
 
     #[test]
     fn reasoning_effort_migrates_from_legacy_mode() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-effort-{}", std::process::id()));
+        let _g = hold_test_config();
+        let root = test_config_root("effort");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         fs::create_dir_all(&root).expect("dir");
@@ -684,8 +707,8 @@ mod tests {
             read.contains("MEMORY_FILE_CAP") && !read.contains("read_to_string"),
             "Memory editor and kick_model must not slurp a huge MEMORY.md: {read}"
         );
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-mem-cap-{}", std::process::id()));
+        let _g = hold_test_config();
+        let root = test_config_root("mem-cap");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         fs::create_dir_all(memory_dir()).unwrap();
@@ -714,8 +737,8 @@ mod tests {
             "first persist must write closeToTray true so X hides to the tray"
         );
         assert!(default_close_to_tray());
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-cfg-empty-{}", std::process::id()));
+        let _g = hold_test_config();
+        let root = test_config_root("cfg-empty");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let loaded = load();
@@ -789,7 +812,7 @@ mod tests {
 
     #[test]
     fn oversized_json_store_is_quarantined_not_wiped() {
-        let root = std::env::temp_dir().join(format!("grokhub-oversize-{}", std::process::id()));
+        let root = test_config_root("oversize");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("root");
         let path = root.join("threads.json");
@@ -829,7 +852,7 @@ mod tests {
 
     #[test]
     fn corrupt_json_store_is_quarantined_and_missing_one_is_not() {
-        let root = std::env::temp_dir().join(format!("grokhub-corrupt-{}", std::process::id()));
+        let root = test_config_root("corrupt");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("root");
 
@@ -863,7 +886,7 @@ mod tests {
     #[test]
     fn atomic_write_temp_is_private_before_the_rename() {
         use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!("grokhub-priv-{}", std::process::id()));
+        let root = test_config_root("priv");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("root");
         let path = root.join("secrets.json");
@@ -887,7 +910,7 @@ mod tests {
 
     #[test]
     fn read_file_capped_loops_to_the_cap() {
-        let root = std::env::temp_dir().join(format!("grokhub-shortread-{}", std::process::id()));
+        let root = test_config_root("shortread");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("root");
         let path = root.join("big.md");
