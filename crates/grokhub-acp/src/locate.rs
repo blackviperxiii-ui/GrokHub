@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{mpsc, Mutex, OnceLock};
@@ -44,11 +45,72 @@ fn grok_bin_cache() -> &'static Mutex<GrokBinCache> {
     C.get_or_init(|| Mutex::new(None))
 }
 
+/// Hide a Windows console for spawned CLI tools (`grok.exe`, powershell).
+///
+/// `grokhub.exe` is `windows_subsystem = "windows"`. Spawning a console-subsystem
+/// binary without `CREATE_NO_WINDOW` allocates a visible terminal. Closing that
+/// window kills the child with `STATUS_CONTROL_C_EXIT`.
+pub fn hide_windows_console(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let _ = cmd;
+}
+
+/// Drop the grok PATH cache after a first-run install.
+pub fn invalidate_grok_bin_cache() {
+    if let Ok(mut held) = grok_bin_cache().lock() {
+        *held = None;
+    }
+}
+
+/// Serialize tests that mutate `GROKHUB_GROK` / `PATH`.
+#[cfg(test)]
+pub(crate) fn grok_env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static L: OnceLock<Mutex<()>> = OnceLock::new();
+    L.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+fn grok_bin_name() -> &'static str {
+    if cfg!(windows) {
+        "grok.exe"
+    } else {
+        "grok"
+    }
+}
+
+/// Windows runners often have a Unix/ELF `grok` on PATH (Git bash, leftover Linux).
+/// That is not a Grok Build we can spawn — error 193 is "not a valid Win32 application".
+fn grok_bin_is_native(path: &Path) -> bool {
+    if !cfg!(windows) {
+        return path.is_file();
+    }
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut magic = [0u8; 4];
+    if f.read(&mut magic).unwrap_or(0) < 2 {
+        return false;
+    }
+    magic[0] == b'M' && magic[1] == b'Z'
+}
+
+fn take_grok_bin(path: PathBuf) -> Option<PathBuf> {
+    path.is_file()
+        .then_some(path)
+        .filter(|p| grok_bin_is_native(p))
+}
+
 fn find_grok_scan() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("GROKHUB_GROK") {
         let p = PathBuf::from(p);
         if p.is_file() {
-            return Some(p);
+            return take_grok_bin(p);
         }
         // Explicit override: do not fall through to PATH / ~/.local/bin/grok.
         return None;
@@ -56,11 +118,24 @@ fn find_grok_scan() -> Option<PathBuf> {
     if let Some(p) = which("grok") {
         return Some(p);
     }
-    let home = std::env::var("HOME").ok()?;
-    for rel in ["/.local/bin/grok", "/.grok/bin/grok"] {
-        let p = PathBuf::from(format!("{home}{rel}"));
-        if p.is_file() {
-            return Some(p);
+    if let Some(home) = grokhub_core::user_home() {
+        if cfg!(windows) {
+            if let Some(p) = take_grok_bin(home.join(".grok").join("bin").join(grok_bin_name())) {
+                return Some(p);
+            }
+        } else {
+            for rel in [".local/bin", ".grok/bin"] {
+                if let Some(p) = take_grok_bin(home.join(rel).join(grok_bin_name())) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if let Some(p) = take_grok_bin(dir.join(grok_bin_name())) {
+                return Some(p);
+            }
         }
     }
     None
@@ -88,8 +163,12 @@ fn kick_find_grok(key: String) {
 pub fn which(name: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&paths) {
-        let p = dir.join(name);
-        if p.is_file() {
+        if cfg!(windows) && !name.ends_with(".exe") {
+            if let Some(p) = take_grok_bin(dir.join(format!("{name}.exe"))) {
+                return Some(p);
+            }
+        }
+        if let Some(p) = take_grok_bin(dir.join(name)) {
             return Some(p);
         }
     }
@@ -97,8 +176,7 @@ pub fn which(name: &str) -> Option<PathBuf> {
 }
 
 pub fn grok_home() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".grok"))
+    Some(grokhub_core::user_home()?.join(".grok"))
 }
 
 /// Socket for cabin `grok agent stdio`. Must not be `~/.grok/leader.sock` or the
@@ -111,8 +189,26 @@ pub fn cabin_leader_socket() -> Option<PathBuf> {
 /// chrome-devtools MCP plugin and the running CLI can SIGTERM this process
 /// (exit 143) while it pushes the model catalog.
 pub fn cabin_grok_home() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".config/GrokHub/grok-home"))
+    Some(cabin_config_root()?.join("grok-home"))
+}
+
+fn cabin_config_root() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("GROKHUB_CONFIG") {
+        return Some(PathBuf::from(p));
+    }
+    if cfg!(windows) {
+        let app = std::env::var_os("APPDATA")?;
+        return Some(PathBuf::from(app).join("GrokHub"));
+    }
+    Some(grokhub_core::user_home()?.join(".config/GrokHub"))
+}
+
+pub fn doctor_missing_hint() -> &'static str {
+    if cfg!(windows) {
+        "Grok Build CLI missing — irm https://x.ai/cli/install.ps1 | iex"
+    } else {
+        "Grok Build CLI missing — install from x.ai/cli"
+    }
 }
 
 /// Make `GROK_HOME` usable: directory plus a symlink to the real `grok login`.
@@ -121,13 +217,16 @@ pub fn prepare_cabin_grok_home() -> Option<PathBuf> {
     std::fs::create_dir_all(&dir).ok()?;
     if let Some(src) = grok_auth_path() {
         let dst = dir.join("auth.json");
-        if !dst.exists() {
-            #[cfg(unix)]
-            {
+        #[cfg(unix)]
+        {
+            if !dst.exists() {
                 let _ = std::os::unix::fs::symlink(&src, &dst);
             }
-            #[cfg(not(unix))]
-            {
+        }
+        #[cfg(not(unix))]
+        {
+            // Copy is not a live link — refresh after a later `grok login`.
+            if src.is_file() {
                 let _ = std::fs::copy(&src, &dst);
             }
         }
@@ -272,7 +371,8 @@ pub fn doctor_line_busy() -> bool {
 /// Blocking locate result for `grokhub --doctor`. Same missing/present text as Settings.
 pub fn doctor_grok_line_blocking(bin: Option<&Path>) -> (bool, String) {
     match bin {
-        None => (false, "Grok Build CLI missing — install from x.ai/cli".into()),
+        None => (false, doctor_missing_hint().into()),
+        Some(p) if !grok_bin_is_native(p) => (false, doctor_missing_hint().into()),
         Some(p) => match grok_version(p) {
             Ok(v) => {
                 let v = v.trim().strip_prefix("grok ").unwrap_or(v.trim());
@@ -346,8 +446,10 @@ fn grok_stdout_inner(
     let mut cmd = Command::new(&bin);
     cmd.args(&owned)
         .current_dir(&cwd)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    hide_windows_console(&mut cmd);
     if isolate_cabin {
         if let Some(dir) = prepare_cabin_grok_home() {
             cmd.env("GROK_HOME", dir);
@@ -367,13 +469,26 @@ fn grok_stdout_inner(
         Ok(Ok(o)) => o,
         Ok(Err(e)) => return Err(e.to_string()),
         Err(_) => {
-            let _ = Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .status();
-            thread::sleep(Duration::from_millis(80));
-            let _ = Command::new("kill")
-                .args(["-KILL", &pid.to_string()])
-                .status();
+            #[cfg(windows)]
+            {
+                let mut kill = Command::new("taskkill");
+                kill.args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null());
+                hide_windows_console(&mut kill);
+                let _ = kill.status();
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = Command::new("kill")
+                    .args(["-TERM", &pid.to_string()])
+                    .status();
+                thread::sleep(Duration::from_millis(80));
+                let _ = Command::new("kill")
+                    .args(["-KILL", &pid.to_string()])
+                    .status();
+            }
             return Err(format!("grok {} timed out", args.join(" ")));
         }
     };
@@ -574,8 +689,12 @@ mod tests {
             .and_then(|s| s.split("pub fn doctor_grok_line(").next())
             .expect("doctor_grok_line_blocking");
         assert!(
-            blocking.contains("grok_version") && blocking.contains("x.ai/cli"),
+            blocking.contains("grok_version") && blocking.contains("doctor_missing_hint"),
             "CLI doctor must use grok_version, not a placeholder: {blocking}"
+        );
+        assert!(
+            src.contains("grok_bin_is_native") && src.contains("b'M'"),
+            "Windows must skip Unix/ELF grok on PATH: {src}"
         );
         let fake = std::env::temp_dir().join(format!(
             "grokhub-fake-grok-{}",
@@ -591,11 +710,26 @@ mod tests {
         }
         let (ok, text) = doctor_grok_line_blocking(Some(fake.as_path()));
         let _ = std::fs::remove_file(&fake);
-        assert!(ok, "{text}");
-        assert!(
-            text.contains("9.9.9-test"),
-            "blocking doctor must print grok --version from the located binary: {text}"
-        );
+        #[cfg(unix)]
+        {
+            assert!(ok, "{text}");
+            assert!(
+                text.contains("9.9.9-test"),
+                "blocking doctor must print grok --version from the located binary: {text}"
+            );
+        }
+        #[cfg(windows)]
+        {
+            assert!(!ok, "{text}");
+            assert!(
+                text.contains("x.ai/cli"),
+                "a Unix/ELF grok on Windows is missing, not present-but-unreadable: {text}"
+            );
+            assert!(
+                !text.contains("unreadable"),
+                "foreign grok must not look installed: {text}"
+            );
+        }
         let find = src
             .split("pub fn find_grok(")
             .nth(1)
@@ -622,6 +756,19 @@ mod tests {
             key.contains("thread::spawn") && key.contains("inflight"),
             "stale grok login must refresh auth.json off the UI thread: {key}"
         );
+        let prep = include_str!("locate.rs")
+            .split("pub fn prepare_cabin_grok_home(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn grok_auth_path(").next())
+            .expect("prepare_cabin_grok_home");
+        let win = prep
+            .split("#[cfg(not(unix))]")
+            .nth(1)
+            .expect("windows auth copy");
+        assert!(
+            win.contains("std::fs::copy") && !win.contains("dst.exists()"),
+            "Windows auth.json copy must refresh after grok login: {win}"
+        );
     }
 
     #[test]
@@ -638,9 +785,28 @@ mod tests {
     }
 
     #[test]
+    fn foreign_elf_grok_is_not_native_on_windows() {
+        let path = std::env::temp_dir().join(format!(
+            "grokhub-elf-grok-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"\x7fELFnot-a-windows-grok").expect("elf");
+        assert_eq!(grok_bin_is_native(&path), !cfg!(windows));
+        let (ok, text) = doctor_grok_line_blocking(Some(path.as_path()));
+        let _ = std::fs::remove_file(&path);
+        #[cfg(windows)]
+        {
+            assert!(!ok, "{text}");
+            assert!(text.contains("x.ai/cli"), "{text}");
+            assert!(!text.contains("unreadable"), "{text}");
+        }
+        let _ = (ok, text);
+    }
+
+    #[test]
     fn cabin_leader_socket_is_not_the_cli_leader() {
         let p = cabin_leader_socket().expect("HOME");
-        let s = p.to_string_lossy();
+        let s = p.to_string_lossy().replace('\\', "/");
         assert!(
             s.contains("GrokHub/grok-home") && s.ends_with("leader.sock"),
             "{s}"

@@ -37,7 +37,8 @@ pub fn wants_live_repaint(
 }
 
 pub fn expand_home(p: &str) -> String {
-    grokhub_core::expand_project_root(p, std::env::var("HOME").ok().as_deref())
+    let home = grokhub_core::user_home().and_then(|p| p.into_os_string().into_string().ok());
+    grokhub_core::expand_project_root(p, home.as_deref())
 }
 
 #[cfg(test)]
@@ -65,8 +66,14 @@ mod tests {
 
     #[test]
     fn expand_home_understands_dollar_home() {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/j".into());
-        assert_eq!(expand_home("$HOME/proj"), format!("{home}/proj"));
-        assert_eq!(expand_home("~/proj"), format!("{home}/proj"));
+        let home = grokhub_core::user_home()
+            .and_then(|p| p.into_os_string().into_string().ok())
+            .unwrap_or_else(|| "/home/j".into());
+        let want = std::path::Path::new(&home)
+            .join("proj")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(expand_home("$HOME/proj"), want);
+        assert_eq!(expand_home("~/proj"), want);
     }
 }
