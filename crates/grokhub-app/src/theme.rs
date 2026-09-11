@@ -7,7 +7,7 @@ use eframe::egui::{
 };
 use grokhub_core::{
     feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb, mix_channel, os_prefers_dark,
-    HOVER_EXPANSION, HOVER_SECS, PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
+    HOVER_EXPANSION, HOVER_SECS, HOVER_WASH, PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
@@ -25,6 +25,8 @@ pub const SURFACE: Color32 = Color32::from_rgb(0x14, 0x14, 0x14);
 pub const PANEL: Color32 = Color32::from_rgb(0x21, 0x21, 0x21);
 /// query-bar `oklab(0.193 / 0.75)` over base
 pub const ELEVATED: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x1a);
+/// Official Grok dark hover / selection `#1C1F23` — not a white or cream wash.
+pub const HOVER: Color32 = Color32::from_rgb(0x1c, 0x1f, 0x23);
 /// `--fg-primary` `rgb(252,252,252)`
 pub const FG: Color32 = Color32::from_rgb(0xfc, 0xfc, 0xfc);
 /// `--fg-secondary` `0 0% 62%`
@@ -87,6 +89,9 @@ pub fn panel() -> Color32 {
 }
 pub fn elevated() -> Color32 {
     tok(ELEVATED, LIGHT_ELEVATED)
+}
+pub fn hover() -> Color32 {
+    tok(HOVER, LIGHT_HOVER)
 }
 pub fn fg() -> Color32 {
     tok(FG, LIGHT_FG)
@@ -326,11 +331,7 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     } else {
         egui::Visuals::light()
     };
-    let hover = if dark {
-        Color32::from_rgb(0x29, 0x29, 0x29)
-    } else {
-        LIGHT_HOVER
-    };
+    let hover = hover();
     visuals.dark_mode = dark;
     visuals.override_text_color = Some(fg());
     visuals.panel_fill = surface();
@@ -341,7 +342,7 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     visuals.hyperlink_color = fg();
     visuals.warn_fg_color = setup();
     visuals.error_fg_color = offline();
-    visuals.selection.bg_fill = elevated();
+    visuals.selection.bg_fill = hover;
     visuals.selection.stroke = Stroke::new(1.0_f32, border_strong());
     visuals.widgets.noninteractive.bg_fill = panel();
     visuals.widgets.noninteractive.weak_bg_fill = surface();
@@ -479,17 +480,32 @@ pub fn felt_icon_hit(
 }
 
 pub fn lift_fill(fill: Color32, mix: f32) -> Color32 {
-    let toward_white = !USE_LIGHT.load(Ordering::Relaxed);
+    let light = USE_LIGHT.load(Ordering::Relaxed);
     if fill.a() == 0 {
-        let a = hover_alpha(0, mix);
-        return if toward_white {
-            Color32::from_white_alpha(a)
-        } else {
-            Color32::from_black_alpha(a)
-        };
+        if mix <= 0.0 {
+            return Color32::TRANSPARENT;
+        }
+        if light {
+            return Color32::from_black_alpha(hover_alpha(0, mix));
+        }
+        let t = (mix / HOVER_WASH).clamp(0.0, 1.0);
+        return Color32::from_rgba_unmultiplied(
+            HOVER.r(),
+            HOVER.g(),
+            HOVER.b(),
+            mix_channel(0, 255, t),
+        );
     }
-    let (r, g, b) = lift_rgb(fill.r(), fill.g(), fill.b(), mix, toward_white);
-    Color32::from_rgba_unmultiplied(r, g, b, fill.a())
+    if light {
+        let (r, g, b) = lift_rgb(fill.r(), fill.g(), fill.b(), mix, false);
+        return Color32::from_rgba_unmultiplied(r, g, b, fill.a());
+    }
+    Color32::from_rgba_unmultiplied(
+        mix_channel(fill.r(), HOVER.r(), mix),
+        mix_channel(fill.g(), HOVER.g(), mix),
+        mix_channel(fill.b(), HOVER.b(), mix),
+        fill.a(),
+    )
 }
 
 pub fn feel_response(
@@ -550,6 +566,7 @@ mod tests {
         assert_eq!(BG, Color32::from_rgb(5, 5, 5));
         assert_eq!(SURFACE, Color32::from_rgb(20, 20, 20));
         assert_eq!(PANEL, Color32::from_rgb(33, 33, 33));
+        assert_eq!(HOVER, Color32::from_rgb(0x1c, 0x1f, 0x23));
         assert_eq!(FG, Color32::from_rgb(252, 252, 252));
         assert_eq!(MUTED, Color32::from_rgb(158, 158, 158));
         assert_eq!(GREET_HERO, 32.0);
@@ -592,25 +609,36 @@ mod tests {
         assert_eq!(title_font(40.0).size, 40.0);
         set_paint_dark(true);
         assert_eq!(bg(), BG);
+        assert_eq!(hover(), HOVER);
         set_paint_dark(false);
         assert_eq!(bg(), LIGHT_BG);
         assert_eq!(fg(), LIGHT_FG);
+        assert_eq!(hover(), LIGHT_HOVER);
         set_paint_dark(true);
         assert_eq!(bg(), BG);
+        assert_eq!(hover(), HOVER);
     }
 
     #[test]
     fn lift_fill_washes_transparent() {
         set_paint_dark(true);
         assert_eq!(lift_fill(Color32::TRANSPARENT, 0.0).a(), 0);
-        let hover = lift_fill(Color32::TRANSPARENT, 0.10);
-        assert!(hover.a() > 8);
+        let wash = lift_fill(Color32::TRANSPARENT, HOVER_WASH);
+        assert_eq!(wash, HOVER);
+        assert!(wash.r() < 40 && wash.g() < 40 && wash.b() < 40);
+        let cream = Color32::from_white_alpha(wash.a());
+        assert_ne!(wash, cream, "dark hover must not be a white/cream wash");
         let solid = lift_fill(Color32::from_rgb(20, 20, 20), 0.10);
-        assert!(solid.r() > 20);
+        assert!(
+            solid.r() < 40,
+            "solid dark hover must stay on {HOVER:?}, not lift toward white"
+        );
         set_paint_dark(false);
+        assert_eq!(hover(), LIGHT_HOVER);
         let light = lift_fill(Color32::from_rgb(244, 244, 245), 0.10);
         assert!(light.r() < 244);
         set_paint_dark(true);
+        assert_eq!(hover(), HOVER);
     }
 
     #[test]
