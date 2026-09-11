@@ -200,6 +200,9 @@ pub struct AppConfig {
     pub theme: String,
     #[serde(default)]
     pub window: crate::window::WindowGeom,
+    /// First-run Get Started completed (Super Grok OAuth succeeded once).
+    #[serde(default)]
+    pub get_started_done: bool,
 }
 
 fn default_yolo() -> bool {
@@ -278,6 +281,7 @@ impl Default for AppConfig {
             imagine_wall: default_imagine_wall(),
             theme: default_theme(),
             window: crate::window::WindowGeom::default(),
+            get_started_done: false,
         }
     }
 }
@@ -780,6 +784,11 @@ mod tests {
         };
         save(&themed).expect("theme save");
         assert_eq!(load().theme, "system");
+        let parsed: AppConfig = serde_json::from_str(r#"{"deviceName":"box"}"#).unwrap();
+        assert!(
+            !parsed.get_started_done,
+            "missing getStartedDone is first run"
+        );
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
