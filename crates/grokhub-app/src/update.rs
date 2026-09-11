@@ -205,7 +205,7 @@ mod tests {
         let rest = root
             .strip_prefix(&home)
             .map(|p| p.to_string_lossy().trim_start_matches(['/', '\\']).to_string())
-            .unwrap_or_else(|| root.to_string_lossy().into_owned());
+            .unwrap_or_else(|_| root.to_string_lossy().into_owned());
         let found = resolve_source(&format!("~/{rest}"));
         match prev_src {
             Some(v) => env::set_var("GROKHUB_SRC", v),
