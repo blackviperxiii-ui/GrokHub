@@ -93,7 +93,7 @@ use grokhub_core::{
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
     remember_chip_outcome, remember_home_slash, remember_home_surface, remember_typed_prompt,
-    home_slash_cmd, roll_usage_day,
+    home_slash_cmd, home_surface_from_nav, roll_usage_day,
     greeting_fingerprint, greeting_name, greeting_prompt, is_cabin_first_run, local_greeting,
     pick_greeting, project_title_from_hint, should_paint_greeting, should_refresh_greeting,
     GreetingInput,
@@ -3901,7 +3901,7 @@ impl Cabin {
         let skill_count = self.skill_list.len();
         let session_mode = self.session_mode.as_str().to_string();
         let key = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.thread_idx,
             n,
             last,
@@ -3915,6 +3915,7 @@ impl Cabin {
             self.llm_chips.len(),
             self.has_key(),
             self.llm_ready(),
+            self.cabin_signed_in(),
             self.usage.messages,
             last_slash,
             last_surface,
@@ -3931,7 +3932,7 @@ impl Cabin {
         let input = ChipInput {
             chat: &chat,
             draft: &self.composer,
-            grok_connected: self.llm_ready(),
+            grok_connected: self.cabin_signed_in(),
             host_on: false,
             mode: if self.cfg.mode.trim().is_empty() {
                 "auto"
@@ -6986,6 +6987,16 @@ impl Cabin {
         self.continue_hint = threads::continue_thread_hint(&self.threads);
     }
 
+    fn tick_home_surface(&mut self) {
+        let Some(surface) = home_surface_from_nav(self.nav_id()) else {
+            return;
+        };
+        if self.chip_memory.last_surface.as_deref() == Some(surface) {
+            return;
+        }
+        remember_home_surface(&mut self.chip_memory, surface, now_ms());
+    }
+
     fn cabin_signed_in(&self) -> bool {
         self.secrets
             .oauth
@@ -10025,6 +10036,7 @@ impl eframe::App for Cabin {
         self.poll_review();
         self.poll_greeting();
         self.poll_goals();
+        self.tick_home_surface();
         self.refresh_chips();
         self.refresh_greeting();
         self.drain_inbox();
@@ -16501,8 +16513,41 @@ mod tests {
             "empty chips must not inject HOST_CMD host_chips: {chips}"
         );
         assert!(
-            chips.contains("llm_ready"),
-            "chips must treat grok CLI as connected, not only cabin OAuth: {chips}"
+            chips.contains("grok_connected: self.cabin_signed_in()"),
+            "Connect chip must follow signed-in, not a PATH grok: {chips}"
+        );
+        assert!(
+            !chips.contains("grok_connected: self.llm_ready()"),
+            "PATH grok must not hide Connect Grok: {chips}"
+        );
+    }
+
+    #[test]
+    fn imagine_visit_ranks_home_chips() {
+        let src = include_str!("app.rs");
+        let update = src
+            .split("fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame)")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_sidebar(").next())
+            .expect("update");
+        let tick = update.find("tick_home_surface").expect("tick_home_surface in update");
+        let chips = update.find("refresh_chips").expect("refresh_chips in update");
+        assert!(
+            tick < chips,
+            "Imagine/Skills visits must record last_surface before chips rank: {update}"
+        );
+        let tick_fn = src
+            .split("fn tick_home_surface(")
+            .nth(1)
+            .and_then(|s| s.split("fn cabin_signed_in(").next())
+            .expect("tick_home_surface");
+        assert!(
+            tick_fn.contains("home_surface_from_nav") && tick_fn.contains("remember_home_surface"),
+            "sidebar / palette / slash page visits must rank Imagine and Skills: {tick_fn}"
+        );
+        assert!(
+            tick_fn.contains("nav_id()"),
+            "surface must follow the live page, not only a chip click: {tick_fn}"
         );
     }
 
