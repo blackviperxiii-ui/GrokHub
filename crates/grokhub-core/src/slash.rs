@@ -613,7 +613,7 @@ pub fn slash_help() -> String {
         "/models — Grok catalog",
         "/palette — command palette",
         "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs.",
-        "Mode pill: Chat / Plan / Ask. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: Low / Medium / High / Extra High. Grok Build runs the agent.",
+        "Mode pill: Chat / Plan / Ask. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: Low / Medium / High / Extra High. Hover a composer pill for what it does. Grok Build runs the agent.",
         "Settings → Behavior: close to tray, living wall, quiet hours, automations a day, host commands an hour. Clocks type until Save; an hour alone is not a clock; a typo keeps the last-good window.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
         "Appearance: Dark, Light, System. Interactive chat is grok agent stdio (ACP). Night and phone use grok -p. Halt is session/cancel.",
@@ -758,6 +758,7 @@ mod tests {
         assert!(slash_help().contains("Grok Build computer-use"));
         assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
         assert!(slash_help().contains("Mode pill: Chat / Plan / Ask"));
+        assert!(slash_help().contains("Hover a composer pill for what it does"));
         assert!(slash_help().contains("centered over the composer"));
         assert!(slash_help().contains("Hidden idle waits for the pulse"));
         assert!(slash_help().contains("Chat rail opens the last-accessed thread"));

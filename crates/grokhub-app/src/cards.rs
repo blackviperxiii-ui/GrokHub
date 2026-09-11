@@ -390,7 +390,7 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
 }
 
 /// Segmented control segment — animated active wash, Plasma-style click feel.
-pub fn felt_segment(ui: &mut egui::Ui, label: &str, selected: bool) -> bool {
+pub fn felt_segment(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
     let min = egui::vec2(52.0, 28.0);
     let (_rect, resp) = ui.allocate_exact_size(min, Sense::click());
     let on_t = crate::theme::animate_selection(ui, resp.id.with("seg"), selected);
@@ -406,7 +406,7 @@ pub fn felt_segment(ui: &mut egui::Ui, label: &str, selected: bool) -> bool {
         FontId::proportional(crate::theme::FONT_CHROME),
         text_color,
     );
-    resp.clicked()
+    resp
 }
 
 /// Catalog / settings tab with animated active fill.
@@ -513,16 +513,81 @@ pub fn effort_label(id: &str) -> &'static str {
     grokhub_core::effort_label(id)
 }
 
+/// Hover copy for the Chat / Plan / Ask session pills. Unknown ids stay silent.
+pub fn composer_session_tip(id: &str) -> Option<(&'static str, &'static str)> {
+    match id {
+        "chat" => Some((
+            "Chat",
+            "Normal chat. Grok can edit files and use tools in the bound project. Everyday work.",
+        )),
+        "plan" => Some((
+            "Plan",
+            "Grok writes a plan before changing things. Use this for bigger or riskier work. /plan is the same.",
+        )),
+        "ask" => Some((
+            "Ask",
+            "Question session. Grok looks and explains without editing. Switch to Chat to do the work.",
+        )),
+        _ => None,
+    }
+}
+
+/// Hover copy for the Ask / Auto / Always permission pills. Unknown ids stay silent.
+pub fn composer_perm_tip(id: &str) -> Option<(&'static str, &'static str)> {
+    match id {
+        "ask" => Some((
+            "Ask",
+            "You approve each tool. Allow / Deny shows in chat. Safest default.",
+        )),
+        "auto" => Some((
+            "Auto",
+            "Safe tools run on their own. Use this when you trust the turn. /auto is the same.",
+        )),
+        "always-approve" => Some((
+            "Always",
+            "Skip every tool prompt this launch. Resets to Ask next time. /always-approve.",
+        )),
+        _ => None,
+    }
+}
+
+/// Hover copy for the effort dropdown above the composer.
+pub fn composer_effort_tip() -> (&'static str, &'static str) {
+    (
+        "Effort",
+        "How hard Grok thinks. Higher is slower and deeper. None through Max; /effort sets the same.",
+    )
+}
+
+fn show_composer_tip(ui: &mut egui::Ui, title: &str, body: &str) {
+    ui.set_max_width(240.0);
+    ui.spacing_mut().item_spacing.y = 4.0;
+    ui.visuals_mut().window_fill = crate::theme::hover();
+    ui.visuals_mut().widgets.noninteractive.bg_fill = crate::theme::hover();
+    ui.label(
+        RichText::new(title)
+            .size(13.0)
+            .strong()
+            .color(crate::theme::fg()),
+    );
+    ui.label(RichText::new(body).size(12.0).color(crate::theme::muted()));
+}
+
+fn with_composer_tip(resp: egui::Response, title: &str, body: &str) -> egui::Response {
+    resp.on_hover_ui(|ui| show_composer_tip(ui, title, body))
+}
+
 fn catalog_pill(
     ui: &mut egui::Ui,
     popup_id: &'static str,
     current: &str,
     items: &[(&'static str, &'static str)],
     label: &str,
+    tip: Option<(&'static str, &'static str)>,
 ) -> Option<String> {
     let mut next = None;
     let id = ui.make_persistent_id(popup_id);
-    let resp = crate::theme::felt_label_button(
+    let mut resp = crate::theme::felt_label_button(
         ui,
         label,
         Color32::TRANSPARENT,
@@ -532,6 +597,9 @@ fn catalog_pill(
         Some(Stroke::new(1.0_f32, crate::theme::border())),
         false,
     );
+    if let Some((title, body)) = tip {
+        resp = with_composer_tip(resp, title, body);
+    }
     if resp.clicked() {
         ui.memory_mut(|m| m.toggle_popup(id));
     }
@@ -566,6 +634,7 @@ pub fn effort_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
         id,
         effort_modes(),
         effort_label(id),
+        Some(composer_effort_tip()),
     )
 }
 
@@ -586,7 +655,11 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
         ui.spacing_mut().item_spacing.x = 4.0;
         for (id, label) in composer_modes() {
             let on = *id == mode;
-            if felt_segment(ui, label, on) && !on {
+            let mut resp = felt_segment(ui, label, on);
+            if let Some((title, body)) = composer_session_tip(id) {
+                resp = with_composer_tip(resp, title, body);
+            }
+            if resp.clicked() && !on {
                 out.mode = Some((*id).to_string());
             }
         }
@@ -599,7 +672,11 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
         ui.add_space(6.0);
         for (id, label) in permission_modes() {
             let on = *id == perm;
-            if felt_segment(ui, label, on) && !on {
+            let mut resp = felt_segment(ui, label, on);
+            if let Some((title, body)) = composer_perm_tip(id) {
+                resp = with_composer_tip(resp, title, body);
+            }
+            if resp.clicked() && !on {
                 out.perm = Some((*id).to_string());
             }
         }
@@ -1736,6 +1813,67 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn composer_hover_copy_covers_the_real_pills() {
+        let modes: Vec<_> = composer_modes().iter().map(|(id, _)| *id).collect();
+        assert_eq!(modes, ["chat", "plan", "ask"]);
+        for id in modes {
+            let (title, body) = composer_session_tip(id).expect(id);
+            assert!(!title.is_empty(), "{id}");
+            assert!(body.len() < 160, "{id} tip too long: {body}");
+        }
+        let (chat_title, chat) = composer_session_tip("chat").unwrap();
+        assert_eq!(chat_title, "Chat");
+        assert!(chat.contains("Normal chat"), "{chat}");
+        let (plan_title, plan) = composer_session_tip("plan").unwrap();
+        assert_eq!(plan_title, "Plan");
+        assert!(plan.contains("plan") && plan.contains("/plan"), "{plan}");
+        let (ask_title, ask) = composer_session_tip("ask").unwrap();
+        assert_eq!(ask_title, "Ask");
+        assert!(ask.contains("without editing"), "{ask}");
+        assert!(composer_session_tip("always-approve").is_none());
+        assert!(composer_session_tip("auto").is_none());
+
+        let perms: Vec<_> = permission_modes().iter().map(|(id, _)| *id).collect();
+        assert_eq!(perms, ["ask", "auto", "always-approve"]);
+        for id in perms {
+            let (title, body) = composer_perm_tip(id).expect(id);
+            assert!(!title.is_empty(), "{id}");
+            assert!(body.len() < 160, "{id} tip too long: {body}");
+        }
+        let (ask_p, ask_body) = composer_perm_tip("ask").unwrap();
+        assert_eq!(ask_p, "Ask");
+        assert!(ask_body.contains("Allow / Deny"), "{ask_body}");
+        let (auto_t, auto) = composer_perm_tip("auto").unwrap();
+        assert_eq!(auto_t, "Auto");
+        assert!(auto.contains("Safe tools") && auto.contains("/auto"), "{auto}");
+        let (always_t, always) = composer_perm_tip("always-approve").unwrap();
+        assert_eq!(always_t, "Always");
+        assert!(
+            always.contains("Skip every tool") && always.contains("/always-approve"),
+            "{always}"
+        );
+        assert!(composer_perm_tip("chat").is_none());
+        assert!(composer_perm_tip("plan").is_none());
+
+        let (effort_t, effort) = composer_effort_tip();
+        assert_eq!(effort_t, "Effort");
+        assert!(
+            effort.contains("None through Max") && effort.contains("/effort"),
+            "{effort}"
+        );
+        let effort_src = include_str!("cards.rs")
+            .split("pub fn effort_pill(")
+            .nth(1)
+            .and_then(|s| s.split("pub struct SessionRowOut").next())
+            .expect("effort_pill");
+        assert!(
+            effort_src.contains("composer_effort_tip"),
+            "effort dropdown must show hover help: {effort_src}"
+        );
+    }
+
+    #[test]
     fn mode_pill_fits_the_composer_cluster() {
         assert_eq!(MODE_PILL_W, 84.0);
         assert_eq!(
@@ -1754,6 +1892,12 @@ mod tests {
         assert!(
             session.contains("felt_segment") && session.contains("out.effort = Some(next)"),
             "composer session row must include effort dropdown: {session}"
+        );
+        assert!(
+            session.contains("composer_session_tip")
+                && session.contains("composer_perm_tip")
+                && session.contains("with_composer_tip"),
+            "composer pills must show hover help: {session}"
         );
         let switch = include_str!("cards.rs")
             .split("pub fn settings_switch(")

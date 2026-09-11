@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Hover Chat / Plan / Ask, Ask / Auto / Always, and Effort above the composer for what each control does.
+
 ## 2.9.1 — 2026-09-11
 
 One cabin, two ship artifacts on the same tag. Cursor **#11** (Windows fold), **#10** (official restyle + Imagine), **#12** (Grok dark hover), and **#13** (`/learn`) are on `main`.
