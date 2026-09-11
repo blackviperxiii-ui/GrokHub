@@ -312,13 +312,19 @@ pub fn overlay_update_can_restart(finished_ok: bool, running: bool) -> bool {
 pub fn restart_bin(home: Option<&str>, current_exe: Option<&str>) -> String {
     if cfg!(windows) {
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
-            let overlay = std::path::Path::new(&local).join("Programs/GrokHub/grokhub.exe");
+            let overlay = std::path::Path::new(&local)
+                .join("Programs")
+                .join("GrokHub")
+                .join("grokhub.exe");
             if overlay.is_file() {
                 return overlay.to_string_lossy().into_owned();
             }
         }
     } else if let Some(home) = home.map(str::trim).filter(|s| !s.is_empty()) {
-        let overlay = std::path::Path::new(home).join(".local/bin/grokhub");
+        let overlay = std::path::Path::new(home)
+            .join(".local")
+            .join("bin")
+            .join("grokhub");
         if overlay.is_file() {
             return overlay.to_string_lossy().into_owned();
         }
@@ -615,13 +621,47 @@ mod tests {
 
     #[test]
     fn restart_prefers_overlay_bin_and_restarts_hub_then_cabin() {
-        let root = std::env::temp_dir().join(format!("grokhub-restart-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "grokhub-restart-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
         let _ = fs::remove_dir_all(&root);
-        let bin = root.join(".local/bin/grokhub");
-        fs::create_dir_all(bin.parent().unwrap()).unwrap();
-        fs::write(&bin, "#!/bin/sh\n").unwrap();
-        assert_eq!(restart_bin(Some(root.to_str().unwrap()), Some("/old/grokhub")), bin.to_string_lossy().to_string());
-        assert_eq!(restart_bin(None, Some("/opt/grokhub")), "/opt/grokhub");
+        #[cfg(unix)]
+        {
+            let bin = root.join(".local").join("bin").join("grokhub");
+            fs::create_dir_all(bin.parent().unwrap()).unwrap();
+            fs::write(&bin, "#!/bin/sh\n").unwrap();
+            assert_eq!(
+                restart_bin(Some(root.to_str().unwrap()), Some("/old/grokhub")),
+                bin.to_string_lossy().to_string()
+            );
+            assert_eq!(restart_bin(None, Some("/opt/grokhub")), "/opt/grokhub");
+        }
+        #[cfg(windows)]
+        {
+            let prev = std::env::var_os("LOCALAPPDATA");
+            std::env::set_var("LOCALAPPDATA", &root);
+            let bin = root.join("Programs").join("GrokHub").join("grokhub.exe");
+            fs::create_dir_all(bin.parent().unwrap()).unwrap();
+            fs::write(&bin, b"MZ").unwrap();
+            assert_eq!(
+                restart_bin(None, Some(r"C:\old\grokhub.exe")),
+                bin.to_string_lossy().to_string()
+            );
+            assert_eq!(
+                restart_bin(None, Some(r"C:\opt\grokhub.exe")),
+                bin.to_string_lossy().to_string(),
+                "Windows overlay must win over current_exe"
+            );
+            match prev {
+                Some(v) => std::env::set_var("LOCALAPPDATA", v),
+                None => std::env::remove_var("LOCALAPPDATA"),
+            }
+        }
         assert_eq!(restart_argv("/opt/grokhub", false), vec!["/opt/grokhub".to_string()]);
         assert_eq!(
             restart_argv("/opt/grokhub", true),
