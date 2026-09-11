@@ -427,6 +427,92 @@ pub fn parse_poll_result(ok: bool, json: &Value, now_ms: u64) -> PollResult {
     }
 }
 
+pub fn should_show_get_started(
+    grok_present: bool,
+    cabin_oauth: bool,
+    get_started_done: bool,
+) -> bool {
+    grok_present && !cabin_oauth && !get_started_done
+}
+
+pub fn should_sync_cli_auth(cli_connected: bool) -> bool {
+    !cli_connected
+}
+
+pub fn should_kick_alpha_install(grok_present: bool) -> bool {
+    !grok_present
+}
+
+pub fn cli_auth_slot_key(client_id: &str) -> String {
+    format!("{XAI_OAUTH_ISSUER}::{client_id}")
+}
+
+pub fn unix_ms_to_rfc3339(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400) as u64;
+    let hour = rem / 3600;
+    let min = (rem % 3600) / 60;
+    let sec = rem % 60;
+    let (y, m, d) = civil_from_unix_days(days);
+    format!("{y:04}-{m:02}-{d:02}T{hour:02}:{min:02}:{sec:02}Z")
+}
+
+fn civil_from_unix_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i32 + era as i32 * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+pub fn cli_auth_record(tokens: &XaiOAuthTokens) -> Value {
+    let mut rec = serde_json::Map::new();
+    rec.insert("auth_mode".into(), Value::String("oidc".into()));
+    rec.insert("key".into(), Value::String(tokens.access_token.clone()));
+    rec.insert(
+        "oidc_client_id".into(),
+        Value::String(XAI_OAUTH_CLIENT_ID.into()),
+    );
+    if let Some(rt) = tokens
+        .refresh_token
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        rec.insert("refresh_token".into(), Value::String(rt.to_string()));
+    }
+    if let Some(ms) = tokens.expires_at.filter(|n| *n > 0) {
+        rec.insert("expires_at".into(), Value::String(unix_ms_to_rfc3339(ms)));
+    }
+    Value::Object(rec)
+}
+
+pub fn merge_cli_auth_json(existing: &str, tokens: &XaiOAuthTokens) -> Result<String, String> {
+    if tokens.access_token.trim().is_empty() {
+        return Err("OAuth access token empty".into());
+    }
+    let mut root = if existing.trim().is_empty() {
+        Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str(existing).map_err(|e| e.to_string())?
+    };
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| "auth.json must be a JSON object".to_string())?;
+    obj.insert(
+        cli_auth_slot_key(XAI_OAUTH_CLIENT_ID),
+        cli_auth_record(tokens),
+    );
+    serde_json::to_string_pretty(&root).map_err(|e| e.to_string())
+}
+
 fn b64url_decode(s: &str) -> Option<Vec<u8>> {
     let mut t = s.replace('-', "+").replace('_', "/");
     while !t.len().is_multiple_of(4) {
@@ -737,5 +823,59 @@ mod tests {
         );
         assert_eq!(t.name.as_deref(), Some("Viper"));
         assert_eq!(t.picture.as_deref(), Some("https://assets.grok.com/users/viper.png"));
+    }
+
+    #[test]
+    fn get_started_and_cli_sync_predicates() {
+        assert!(should_show_get_started(true, false, false));
+        assert!(
+            !should_show_get_started(false, false, false),
+            "wait for grok alpha before Get Started"
+        );
+        assert!(!should_show_get_started(true, true, false));
+        assert!(!should_show_get_started(true, false, true));
+        assert!(should_sync_cli_auth(false));
+        assert!(
+            !should_sync_cli_auth(true),
+            "Settings reconnect must not overwrite grok login"
+        );
+        assert!(should_kick_alpha_install(false));
+        assert!(!should_kick_alpha_install(true));
+    }
+
+    #[test]
+    fn cli_auth_json_uses_cabin_client_slot() {
+        let tokens = XaiOAuthTokens {
+            access_token: "cabin-access".into(),
+            refresh_token: Some("cabin-refresh".into()),
+            expires_at: Some(1_767_225_600_000),
+            ..Default::default()
+        };
+        let slot = cli_auth_slot_key(XAI_OAUTH_CLIENT_ID);
+        assert_eq!(slot, format!("https://auth.x.ai::{XAI_OAUTH_CLIENT_ID}"));
+        let merged = merge_cli_auth_json("{}", &tokens).unwrap();
+        let v: Value = serde_json::from_str(&merged).unwrap();
+        let rec = v.get(&slot).unwrap();
+        assert_eq!(rec.get("auth_mode").and_then(|x| x.as_str()), Some("oidc"));
+        assert_eq!(rec.get("key").and_then(|x| x.as_str()), Some("cabin-access"));
+        assert_eq!(
+            rec.get("refresh_token").and_then(|x| x.as_str()),
+            Some("cabin-refresh")
+        );
+        assert_eq!(
+            rec.get("oidc_client_id").and_then(|x| x.as_str()),
+            Some(XAI_OAUTH_CLIENT_ID)
+        );
+        assert_eq!(
+            rec.get("expires_at").and_then(|x| x.as_str()),
+            Some("2026-01-01T00:00:00Z")
+        );
+        let keep = merge_cli_auth_json(
+            r#"{"https://auth.x.ai::other":{"auth_mode":"oidc","key":"keep-me"}}"#,
+            &tokens,
+        )
+        .unwrap();
+        assert!(keep.contains("keep-me") && keep.contains("cabin-access"));
+        assert_eq!(unix_ms_to_rfc3339(0), "1970-01-01T00:00:00Z");
     }
 }
