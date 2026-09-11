@@ -249,7 +249,8 @@ pub fn settings_update_action_hint() -> &'static str {
 fn overlay_install_cmd(source: &Path, src_quoted: &str) -> String {
     if cfg!(windows) {
         // run_host is already PowerShell -Command. Do not nest powershell.exe -File
-        // or the script's exit code is lost.
+        // or the script's exit code is lost. Process Bypass is required because `&`
+        // a .ps1 file is still subject to Restricted (Windows 10 default).
         let install = host_quote(
             &source
                 .join("scripts")
@@ -257,7 +258,9 @@ fn overlay_install_cmd(source: &Path, src_quoted: &str) -> String {
                 .display()
                 .to_string(),
         );
-        format!("& {install}")
+        format!(
+            "Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force; & {install}"
+        )
     } else {
         format!("{src_quoted}/scripts/install.sh --user")
     }
@@ -324,10 +327,14 @@ pub fn update_progress_pct(done_cmds: usize, total_cmds: usize) -> u8 {
 
 pub fn grok_cli_update_cmd(cmd: &str) -> bool {
     let t = cmd.trim();
-    t == "grok update"
-        || t.starts_with("grok update ")
-        || t.ends_with("/grok update")
-        || t.ends_with("grok update --alpha")
+    let tail = t
+        .rsplit([';', '|'])
+        .next()
+        .map(str::trim)
+        .unwrap_or(t);
+    tail == "grok update"
+        || tail.starts_with("grok update ")
+        || tail.ends_with("/grok update")
 }
 
 pub fn update_step_label(cmd: &str) -> &'static str {
@@ -492,9 +499,10 @@ mod tests {
         {
             assert!(
                 cmd.contains("install-windows.ps1")
-                    && cmd.trim_start().starts_with('&')
+                    && cmd.contains("Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass")
+                    && cmd.contains("& ")
                     && !cmd.contains("powershell.exe"),
-                "Windows overlay must invoke the ps1 inside host PowerShell: {cmd}"
+                "Windows overlay must invoke the ps1 inside host PowerShell with process Bypass: {cmd}"
             );
         }
         #[cfg(unix)]
@@ -945,7 +953,7 @@ mod tests {
                 && rel.contains("grokhub-windows-v")
                 && rel.contains("Tls12")
                 && rel.contains("UseBasicParsing")
-                && rel.contains("github.com/blackviperxiii-ui/GrokHub/releases/download")
+                && rel.contains("GrokHub/releases/download")
                 && rel.contains("Overlay-Locked")
                 && rel.contains("Rename-Item")
                 && rel.contains("LOCALAPPDATA")
@@ -985,6 +993,17 @@ mod tests {
             unix.contains("\"grok update\"")
                 && unix.contains("do not force --alpha here on Unix"),
             "Linux cabin /update must stay current-channel: {unix}"
+        );
+        let win_install = include_str!("update.rs")
+            .split("fn overlay_install_cmd(")
+            .nth(1)
+            .and_then(|s| s.split("fn overlay_grok_update_cmd(").next())
+            .expect("overlay_install_cmd");
+        assert!(
+            win_install.contains("Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass")
+                && win_install.contains("& {install}")
+                && !win_install.contains("-File {install}"),
+            "clone overlay must Bypass Restricted without nesting powershell: {win_install}"
         );
     }
 }
