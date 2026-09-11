@@ -252,6 +252,12 @@ mod tests {
                 && grok_cli.contains("cabin install continues"),
             "install-grok-cli.sh must run the official Grok Build installer without failing the cabin"
         );
+        assert!(
+            grok_cli.contains("GROK_CHANNEL=alpha")
+                && grok_cli.contains("https://x.ai/cli/install.sh")
+                && !grok_cli.contains("GROK_CHANNEL=stable"),
+            "first-time grok install must request alpha: {grok_cli}"
+        );
         let sh = include_str!("../../../scripts/install.sh");
         assert!(
             !sh.contains("build-hands.sh")
@@ -302,6 +308,26 @@ mod tests {
         assert!(
             !bundle.contains("sudo pacman -S --needed ydotool"),
             "release tarball must not hard-require pacman ydotool"
+        );
+        assert!(
+            sh.contains("GROK_CHANNEL=alpha") && bundle.contains("GROK_CHANNEL=alpha"),
+            "clone and tarball fallbacks must name alpha, not bare install.sh"
+        );
+        let aur_install = include_str!("../../../packaging/aur/grokhub.install");
+        assert!(
+            aur_install.contains("GROK_CHANNEL=alpha"),
+            "AUR post_install must install grok alpha: {aur_install}"
+        );
+        let overlay = include_str!("../../../crates/grokhub-core/src/update.rs");
+        let unix_update = overlay
+            .split("fn overlay_grok_update_cmd(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn update_plan_steps(").next())
+            .expect("overlay_grok_update_cmd");
+        assert!(
+            unix_update.contains("\"grok update\"")
+                && unix_update.contains("do not force --alpha here on Unix"),
+            "Linux cabin /update must stay current-channel: {unix_update}"
         );
         assert_eq!(
             ydotool_socket_path(None, Some("/run/user/1000")),
