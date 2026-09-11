@@ -116,7 +116,8 @@ pub use chips::{
     build_quick_chips, chip_memory_key, chip_scan, chip_suggest_prompt, chip_thread_from_messages,
     context_fingerprint, detect_chip_context, detect_chip_stage, empty_chip_memory,
     mode_from_chip_value, nav_from_chip_value, parse_llm_chips, predict_intents, prune_retired_chip_memory, remember_chip_click,
-    remember_chip_dismiss, remember_chip_outcome, remember_typed_prompt, should_refresh_llm,
+    remember_chip_dismiss, remember_chip_outcome, remember_home_slash, remember_home_surface,
+    remember_typed_prompt, should_refresh_llm, home_slash_cmd,
     top_habit_labels, ChipInput, ChipKind, ChipMemory, ChipStage, ChipThread, PredictedIntent,
     QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
 };
@@ -250,9 +251,10 @@ pub use grok_loop::{
     GrokLoop, LOOP_MAX, LOOP_MIN_MS,
 };
 pub use greeting::{
-    greeting_fingerprint, greeting_name, greeting_prompt, local_greeting, parse_llm_greeting,
-    pick_greeting, should_paint_greeting, should_refresh_greeting, GreetingInput, GREETING_LLM_DEBOUNCE_MS, GREETING_LLM_MODE,
-    GREETING_MAX_CHARS,
+    classify_greeting, clean_project_title, greeting_fingerprint, greeting_name, greeting_prompt,
+    is_cabin_first_run, local_greeting, parse_llm_greeting, pick_greeting, project_title_from_hint,
+    should_paint_greeting, should_refresh_greeting, GreetingInput, GreetingKind, GREETING_LLM_DEBOUNCE_MS,
+    GREETING_LLM_MODE, GREETING_MAX_CHARS,
 };
 pub use history::{
     dedupe_hits, search_corpus, search_corpus_tagged, search_text, search_thread_body,
