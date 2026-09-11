@@ -144,6 +144,16 @@ pub fn ignore_close_while_hidden(window_visible: bool, close_requested: bool) ->
     !window_visible && close_requested
 }
 
+/// Tray Quit / restart set `want_quit` then Close. A hidden cabin must not
+/// CancelClose that — otherwise Quit leaves a process with no window.
+pub fn ignore_close_request(
+    window_visible: bool,
+    close_requested: bool,
+    want_quit: bool,
+) -> bool {
+    !want_quit && ignore_close_while_hidden(window_visible, close_requested)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HiddenTick {
     Raise,
@@ -485,14 +495,35 @@ pub fn spawn() -> Option<TrayHost> {
     }
 }
 
+/// Linux installs `hicolor` + `icon_name = grokhub`. Windows has no icon
+/// theme — the tray must carry the same cabin PNG as RGBA.
+pub fn cabin_tray_png() -> &'static [u8] {
+    include_bytes!("../../../packaging/icons/hicolor/32x32/apps/grokhub.png")
+}
+
+pub fn cabin_tray_rgba() -> Option<(Vec<u8>, u32, u32)> {
+    let img = image::load_from_memory(cabin_tray_png()).ok()?.into_rgba8();
+    let (width, height) = img.dimensions();
+    if width == 0 || height == 0 || width != height {
+        return None;
+    }
+    Some((img.into_raw(), width, height))
+}
+
+#[cfg(windows)]
+fn windows_tray_icon() -> Option<tray_icon::Icon> {
+    let (rgba, width, height) = cabin_tray_rgba()?;
+    tray_icon::Icon::from_rgba(rgba, width, height).ok()
+}
+
 #[cfg(windows)]
 fn windows_tray_thread(ready: mpsc::Sender<Option<TrayHost>>) {
     if !tray_wanted() {
         let _ = ready.send(None);
         return;
     }
-    use tray_icon::menu::{Menu, MenuEvent, MenuItem};
-    use tray_icon::{Icon, TrayIconBuilder};
+    use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+    use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, GetMessageW, TranslateMessage, MSG,
@@ -504,10 +535,11 @@ fn windows_tray_thread(ready: mpsc::Sender<Option<TrayHost>>) {
     let menu = Menu::new();
     let _ = menu.append(&show);
     let _ = menu.append(&halt);
+    let _ = menu.append(&PredefinedMenuItem::separator());
     let _ = menu.append(&quit);
-    let icon = match Icon::from_rgba(vec![232, 168, 96, 255].repeat(22 * 22), 22, 22) {
-        Ok(i) => i,
-        Err(_) => {
+    let icon = match windows_tray_icon() {
+        Some(i) => i,
+        None => {
             let _ = ready.send(None);
             return;
         }
@@ -527,6 +559,7 @@ fn windows_tray_thread(ready: mpsc::Sender<Option<TrayHost>>) {
     let show_id = show.id().clone();
     let halt_id = halt.id().clone();
     let quit_id = quit.id().clone();
+    let menu_tx = tx.clone();
     std::thread::spawn(move || {
         while let Ok(ev) = MenuEvent::receiver().recv() {
             let cmd = if ev.id == show_id {
@@ -538,7 +571,26 @@ fn windows_tray_thread(ready: mpsc::Sender<Option<TrayHost>>) {
             } else {
                 continue;
             };
-            if tx.send(cmd).is_err() {
+            if menu_tx.send(cmd).is_err() {
+                break;
+            }
+        }
+    });
+    std::thread::spawn(move || {
+        while let Ok(ev) = TrayIconEvent::receiver().recv() {
+            let show = match ev {
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+                | TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                } => true,
+                _ => false,
+            };
+            if show && tx.send(TrayCmd::Show).is_err() {
                 break;
             }
         }
@@ -688,6 +740,16 @@ mod tests {
         assert!(ignore_close_while_hidden(false, true));
         assert!(!ignore_close_while_hidden(false, false));
         assert!(!ignore_close_while_hidden(true, true));
+        assert!(
+            ignore_close_request(false, true, false),
+            "a leftover close after × must not hide again"
+        );
+        assert!(
+            !ignore_close_request(false, true, true),
+            "tray Quit on a hidden cabin must not CancelClose"
+        );
+        assert!(!ignore_close_request(true, true, true));
+        assert!(!ignore_close_request(true, true, false));
     }
 
     #[test]
@@ -782,6 +844,58 @@ mod tests {
             "restart/quit must not raise the old cabin after a sibling spawn"
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn windows_tray_uses_the_linux_cabin_mark() {
+        let src = include_str!("tray.rs");
+        assert!(
+            !src.contains("232, 168, 96, 255"),
+            "Windows tray must not be a solid orange square: {src}"
+        );
+        assert!(
+            src.contains("hicolor/32x32/apps/grokhub.png"),
+            "Windows tray must embed the Linux 32px cabin PNG: {src}"
+        );
+        let (rgba, w, h) = cabin_tray_rgba().expect("cabin tray png");
+        assert_eq!((w, h), (32, 32));
+        assert_eq!(rgba.len(), 32 * 32 * 4);
+        let linux = image::load_from_memory(include_bytes!(
+            "../../../packaging/icons/hicolor/32x32/apps/grokhub.png"
+        ))
+        .unwrap()
+        .into_rgba8();
+        assert_eq!(rgba, linux.into_raw());
+        let cx = ((16 * 32 + 16) * 4) as usize;
+        assert_ne!(
+            &rgba[cx..cx + 3],
+            &[232, 168, 96],
+            "cabin well must not be the old orange fill"
+        );
+    }
+
+    #[test]
+    fn windows_ico_matches_linux_hicolor() {
+        let ico = image::load_from_memory(include_bytes!(
+            "../../../packaging/windows/grokhub.ico"
+        ))
+        .expect("grokhub.ico")
+        .into_rgba8();
+        let linux = image::load_from_memory(include_bytes!(
+            "../../../packaging/icons/hicolor/256x256/apps/grokhub.png"
+        ))
+        .unwrap()
+        .into_rgba8();
+        assert_eq!(
+            ico.dimensions(),
+            linux.dimensions(),
+            "winresource / Inno ICO must carry the Linux 256px cabin"
+        );
+        assert_eq!(
+            ico.as_raw(),
+            linux.as_raw(),
+            "Windows ICO pixels must match packaging/icons/hicolor/256x256"
+        );
     }
 
     #[test]
