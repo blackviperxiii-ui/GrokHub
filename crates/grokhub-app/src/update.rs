@@ -176,13 +176,14 @@ pub fn restart_system(hidden: bool) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::TEST_CONFIG_LOCK;
     use std::fs;
 
     #[test]
     fn resolve_source_expands_tilde() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let home = env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let _g = crate::config::hold_test_config();
+        let home = grokhub_core::user_home()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "/tmp".into());
         let root = PathBuf::from(&home).join(format!(
             "grokhub-src-tilde-{}",
             std::time::SystemTime::now()
@@ -198,16 +199,13 @@ mod tests {
         let prev_src = env::var("GROKHUB_SRC").ok();
         env::remove_var("GROKHUB_SRC");
         let prev_cfg = env::var("GROKHUB_CONFIG").ok();
-        let cfg = std::env::temp_dir().join(format!(
-            "grokhub-src-tilde-cfg-{}",
-            std::process::id()
-        ));
+        let cfg = crate::config::test_config_root("src-tilde-cfg");
         let _ = fs::remove_dir_all(&cfg);
         env::set_var("GROKHUB_CONFIG", &cfg);
         let rest = root
-            .to_string_lossy()
-            .trim_start_matches(&format!("{home}/"))
-            .to_string();
+            .strip_prefix(&home)
+            .map(|p| p.to_string_lossy().trim_start_matches(['/', '\\']).to_string())
+            .unwrap_or_else(|| root.to_string_lossy().into_owned());
         let found = resolve_source(&format!("~/{rest}"));
         match prev_src {
             Some(v) => env::set_var("GROKHUB_SRC", v),
@@ -228,8 +226,8 @@ mod tests {
 
     #[test]
     fn resolve_prefers_grokhub_src() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-src-hint-{}", std::process::id()));
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("src-hint");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::create_dir_all(root.join("crates/grokhub-app")).unwrap();
@@ -260,12 +258,11 @@ mod tests {
 
     #[test]
     fn run_update_pulls_main_then_overlay() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let pid = std::process::id();
-        let root = std::env::temp_dir().join(format!("grokhub-upd-src-{pid}"));
-        let bare = std::env::temp_dir().join(format!("grokhub-upd-bare-{pid}.git"));
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("upd-src");
+        let bare = crate::config::test_config_root("upd-bare").with_extension("git");
         let prev_cfg = env::var("GROKHUB_CONFIG").ok();
-        let cfg = std::env::temp_dir().join(format!("grokhub-upd-cfg-{pid}"));
+        let cfg = crate::config::test_config_root("upd-cfg");
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&bare);
         let _ = fs::remove_dir_all(&cfg);
@@ -360,15 +357,34 @@ mod tests {
 
     #[test]
     fn restart_system_plan_uses_overlay_when_present() {
-        let home = std::env::temp_dir().join(format!("grokhub-restart-home-{}", std::process::id()));
+        let home = crate::config::test_config_root("restart-home");
         let _ = std::fs::remove_dir_all(&home);
-        let bin = home.join(".local/bin/grokhub");
-        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
-        std::fs::write(&bin, "#!/bin/sh\n").unwrap();
-        assert_eq!(
-            grokhub_core::restart_bin(Some(home.to_str().unwrap()), Some("/old/grokhub")),
-            bin.to_string_lossy()
-        );
+        #[cfg(unix)]
+        {
+            let bin = home.join(".local/bin/grokhub");
+            std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+            std::fs::write(&bin, "#!/bin/sh\n").unwrap();
+            assert_eq!(
+                grokhub_core::restart_bin(Some(home.to_str().unwrap()), Some("/old/grokhub")),
+                bin.to_string_lossy()
+            );
+        }
+        #[cfg(windows)]
+        {
+            let prev = env::var_os("LOCALAPPDATA");
+            env::set_var("LOCALAPPDATA", &home);
+            let bin = home.join("Programs").join("GrokHub").join("grokhub.exe");
+            std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+            std::fs::write(&bin, b"MZ").unwrap();
+            assert_eq!(
+                grokhub_core::restart_bin(None, Some(r"C:\old\grokhub.exe")),
+                bin.to_string_lossy()
+            );
+            match prev {
+                Some(v) => env::set_var("LOCALAPPDATA", v),
+                None => env::remove_var("LOCALAPPDATA"),
+            }
+        }
         let acts = grokhub_core::restart_acts(false, false, "/opt/grokhub", true);
         assert_eq!(
             acts,

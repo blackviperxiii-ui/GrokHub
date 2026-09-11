@@ -25,12 +25,11 @@ pub fn save(list: &[GrokLoop]) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::fs;
-    use crate::config::TEST_CONFIG_LOCK;
 
     #[test]
     fn loop_roundtrip() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-loops-{}", std::process::id()));
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("loops");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let rows = vec![GrokLoop {
