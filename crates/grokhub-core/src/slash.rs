@@ -631,7 +631,7 @@ pub fn slash_help() -> String {
         "Pulse every 15s. Hidden idle waits for the pulse.",
         "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
         "Chat rail opens the last-accessed thread.",
-        "Tool calls, diffs, and desk frames render in the pane. Permission prompts Allow / Deny — Enter allows and Esc denies when the composer is empty. User bubbles sit on the right.",
+        "Tool calls, diffs, and desk frames sit in a collapsed Work tree — expand to view. User and assistant chats are bubbles; thinking is faded thought process, not a bubble. Permission prompts Allow / Deny — Enter allows and Esc denies when the composer is empty. User bubbles sit on the right.",
         "Five chips sit centered over the composer.",
     ]
     .join("\n")
@@ -771,6 +771,8 @@ mod tests {
         assert!(slash_help().contains("Hidden idle waits for the pulse"));
         assert!(slash_help().contains("Chat rail opens the last-accessed thread"));
         assert!(slash_help().contains("Tool calls, diffs, and desk frames"));
+        assert!(slash_help().contains("collapsed Work tree"));
+        assert!(slash_help().contains("thought process"));
         assert!(slash_help().contains("User bubbles sit on the right"));
         assert!(slash_help().contains("compact Grok context"));
         assert!(slash_help().contains("/forget and Memory Save stay off"));
