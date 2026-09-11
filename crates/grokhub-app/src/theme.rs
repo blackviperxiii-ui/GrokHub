@@ -1,5 +1,6 @@
-//! Cabin chrome measured from live grok.com dark (`scheme-dark`, 2026-08-15).
+//! Official Grok dark tokens (grok.com / iOS / Android, 2026-09).
 //! Recreated in egui — no grok.com JS, no webview.
+//! Dark-first: OLED canvas, quiet chrome, one conversation column.
 
 use eframe::egui::{
     self, Color32, ColorImage, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
@@ -10,36 +11,43 @@ use grokhub_core::{
     HOVER_EXPANSION, HOVER_SECS, PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub fn title_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("inter-bold".into()))
 }
 
-/// `--surface-base` / body `rgb(5,5,5)`
-pub const BG: Color32 = Color32::from_rgb(0x05, 0x05, 0x05);
-/// `--surface-l1` `0 0% 8%`
-pub const SURFACE: Color32 = Color32::from_rgb(0x14, 0x14, 0x14);
-/// `--surface-l2` `0 0% 13%`
-pub const PANEL: Color32 = Color32::from_rgb(0x21, 0x21, 0x21);
-/// query-bar `oklab(0.193 / 0.75)` over base
-pub const ELEVATED: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x1a);
-/// `--fg-primary` `rgb(252,252,252)`
-pub const FG: Color32 = Color32::from_rgb(0xfc, 0xfc, 0xfc);
-/// `--fg-secondary` `0 0% 62%`
-pub const MUTED: Color32 = Color32::from_rgb(0x9e, 0x9e, 0x9e);
-/// `--fg-tertiary` `0 0% 52%`
-pub const SUBTLE: Color32 = Color32::from_rgb(0x85, 0x85, 0x85);
-/// Empty-home hero greeting (grok.com, not a 56px product wordmark)
-pub const GREET_HERO: f32 = 32.0;
-/// `--border-l1` ~8% white on base
-pub const BORDER: Color32 = Color32::from_rgb(0x26, 0x26, 0x26);
-/// `--border-l2` ~14% white
-pub const BORDER_STRONG: Color32 = Color32::from_rgb(0x38, 0x38, 0x38);
-/// `--sidebar-accent` `240 5% 26%`
-pub const NAV_ACTIVE: Color32 = Color32::from_rgb(0x3f, 0x3f, 0x46);
-pub const BUBBLE_USER: Color32 = Color32::from_rgb(0x2a, 0x2a, 0x2a);
+/// Official Grok canvas — true black, not elevated IDE gray.
+pub const BG: Color32 = Color32::from_rgb(0x00, 0x00, 0x00);
+/// Surface / user bubble / composer fill `#16181C`.
+pub const SURFACE: Color32 = Color32::from_rgb(0x16, 0x18, 0x1c);
+/// Quiet lifted chrome (menus, sheets) `#1A1A1A`.
+pub const PANEL: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x1a);
+/// Same family as surface — input and bubble share one plane.
+pub const ELEVATED: Color32 = Color32::from_rgb(0x16, 0x18, 0x1c);
+/// Surface hover `#1C1F23`.
+pub const SURFACE_HOVER: Color32 = Color32::from_rgb(0x1c, 0x1f, 0x23);
+/// Text primary `#E7E9EA`.
+pub const FG: Color32 = Color32::from_rgb(0xe7, 0xe9, 0xea);
+/// Text secondary `#71767B`.
+pub const MUTED: Color32 = Color32::from_rgb(0x71, 0x76, 0x7b);
+/// Meta / thought — one step quieter than secondary.
+pub const SUBTLE: Color32 = Color32::from_rgb(0x5c, 0x61, 0x66);
+/// Empty-home greeting — title 20–28, not a product wordmark.
+pub const GREET_HERO: f32 = 28.0;
+/// Hairline `#2F3336`.
+pub const BORDER: Color32 = Color32::from_rgb(0x2f, 0x33, 0x36);
+/// Slightly stronger hairline for an active ring.
+pub const BORDER_STRONG: Color32 = Color32::from_rgb(0x3d, 0x43, 0x48);
+/// Selected rail row — surface hover, not a colored accent.
+pub const NAV_ACTIVE: Color32 = Color32::from_rgb(0x1c, 0x1f, 0x23);
+pub const BUBBLE_USER: Color32 = Color32::from_rgb(0x16, 0x18, 0x1c);
+/// Citation / link only. Never chrome.
+pub const LINK: Color32 = Color32::from_rgb(0x1d, 0x9b, 0xf0);
+/// Send/on inverse fill.
+pub const SEND_ON: Color32 = Color32::WHITE;
+pub const SEND_ON_INK: Color32 = Color32::BLACK;
 pub const LIVE: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
 pub const SETUP: Color32 = Color32::from_rgb(0xea, 0xb3, 0x08);
 pub const OFFLINE: Color32 = Color32::from_rgb(0xef, 0x44, 0x44);
@@ -109,8 +117,21 @@ pub fn nav_active() -> Color32 {
 pub fn bubble_user() -> Color32 {
     tok(BUBBLE_USER, LIGHT_BUBBLE_USER)
 }
+/// Assistant is flush on the canvas — no bubble fill.
 pub fn bubble_assistant() -> Color32 {
-    panel()
+    Color32::TRANSPARENT
+}
+pub fn surface_hover() -> Color32 {
+    tok(SURFACE_HOVER, LIGHT_HOVER)
+}
+pub fn link() -> Color32 {
+    tok(LINK, LINK)
+}
+pub fn send_on() -> Color32 {
+    tok(SEND_ON, LIGHT_FG)
+}
+pub fn send_on_ink() -> Color32 {
+    tok(SEND_ON_INK, LIGHT_ELEVATED)
 }
 pub fn live() -> Color32 {
     LIVE
@@ -207,11 +228,26 @@ fn cmd_stdout(bin: &str, args: &[&str]) -> String {
 }
 
 pub const SIDEBAR_W: f32 = 260.0;
-pub const TITLEBAR_H: f32 = 36.0;
+/// Centered conversation column (official Grok ~720–800).
+pub const CHAT_COL_W: f32 = 768.0;
+/// Soft user-bubble radius. Assistant has none.
+pub const USER_BUBBLE_RADIUS: f32 = 20.0;
+/// Quiet chrome (rail rows, sheets, menus). Composer + user bubble stay large.
+pub const CHROME_RADIUS: f32 = 6.0;
+pub const TITLEBAR_H: f32 = 40.0;
 /// `[data-testid=chat-input]` `min-h-[60px]`
 pub const QUERY_MIN_H: f32 = 60.0;
 /// `.query-bar` computed `border-radius: 160px`
 pub const QUERY_RADIUS: f32 = 160.0;
+
+/// Cap a pane to the Grok conversation column.
+pub fn chat_col_w(avail: f32) -> f32 {
+    if !avail.is_finite() || avail <= 0.0 {
+        CHAT_COL_W
+    } else {
+        avail.min(CHAT_COL_W)
+    }
+}
 /// Attach / Submit `h-10 w-10 rounded-full`
 pub const HIT: f32 = 40.0;
 /// Rail / chrome row (`h-10`, `--font-size-chrome`)
@@ -335,33 +371,29 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     } else {
         egui::Visuals::light()
     };
-    let hover = if dark {
-        Color32::from_rgb(0x29, 0x29, 0x29)
-    } else {
-        LIGHT_HOVER
-    };
+    let hover = surface_hover();
     visuals.dark_mode = dark;
     visuals.override_text_color = Some(fg());
-    visuals.panel_fill = surface();
+    visuals.panel_fill = bg();
     visuals.window_fill = panel();
     visuals.extreme_bg_color = bg();
-    visuals.faint_bg_color = elevated();
-    visuals.code_bg_color = elevated();
-    visuals.hyperlink_color = fg();
+    visuals.faint_bg_color = surface();
+    visuals.code_bg_color = surface();
+    visuals.hyperlink_color = link();
     visuals.warn_fg_color = setup();
     visuals.error_fg_color = offline();
-    visuals.selection.bg_fill = elevated();
+    visuals.selection.bg_fill = surface_hover();
     visuals.selection.stroke = Stroke::new(1.0_f32, border_strong());
-    visuals.widgets.noninteractive.bg_fill = panel();
-    visuals.widgets.noninteractive.weak_bg_fill = surface();
+    visuals.widgets.noninteractive.bg_fill = surface();
+    visuals.widgets.noninteractive.weak_bg_fill = bg();
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, muted());
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, border());
-    visuals.widgets.inactive.bg_fill = elevated();
-    visuals.widgets.inactive.weak_bg_fill = elevated();
+    visuals.widgets.inactive.bg_fill = surface();
+    visuals.widgets.inactive.weak_bg_fill = surface();
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, fg());
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, border());
     let press = if dark {
-        Color32::from_rgb(0x1f, 0x1f, 0x1f)
+        SURFACE_HOVER
     } else {
         Color32::from_rgb(0xc8, 0xc8, 0xcc)
     };
@@ -369,29 +401,24 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     visuals.widgets.hovered.bg_fill = hover;
     visuals.widgets.hovered.weak_bg_fill = hover;
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, fg());
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, border_strong());
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, border());
     visuals.widgets.hovered.expansion = HOVER_EXPANSION;
     visuals.widgets.active.bg_fill = press;
     visuals.widgets.active.weak_bg_fill = press;
     visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, fg());
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, border_strong());
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, border());
     visuals.widgets.active.expansion = PRESS_EXPANSION;
-    visuals.widgets.open.bg_fill = elevated();
+    visuals.widgets.open.bg_fill = panel();
     visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, fg());
     visuals.window_stroke = Stroke::new(1.0_f32, border());
-    visuals.window_rounding = 12.0.into();
-    visuals.menu_rounding = 12.0.into();
+    visuals.window_rounding = CHROME_RADIUS.into();
+    visuals.menu_rounding = CHROME_RADIUS.into();
     visuals.window_shadow = egui::Shadow::NONE;
-    visuals.popup_shadow = egui::Shadow {
-        offset: egui::vec2(0.0, 8.0),
-        blur: 16.0,
-        spread: 0.0,
-        color: Color32::from_black_alpha(80),
-    };
-    visuals.widgets.noninteractive.rounding = 10.0.into();
-    visuals.widgets.inactive.rounding = 10.0.into();
-    visuals.widgets.hovered.rounding = 10.0.into();
-    visuals.widgets.active.rounding = 10.0.into();
+    visuals.popup_shadow = egui::Shadow::NONE;
+    visuals.widgets.noninteractive.rounding = CHROME_RADIUS.into();
+    visuals.widgets.inactive.rounding = CHROME_RADIUS.into();
+    visuals.widgets.hovered.rounding = CHROME_RADIUS.into();
+    visuals.widgets.active.rounding = CHROME_RADIUS.into();
     ctx.set_visuals(visuals);
 
     let mut style = (*ctx.style()).clone();
@@ -524,17 +551,25 @@ pub fn feel_response(
     (resp, rect, lift_fill(fill, mix))
 }
 
-#[allow(dead_code)]
+fn mark_image() -> &'static ColorImage {
+    static IMG: OnceLock<ColorImage> = OnceLock::new();
+    IMG.get_or_init(|| {
+        let bytes = include_bytes!("../assets/grokhub-32.png");
+        let img = image::load_from_memory(bytes).expect("grokhub mark");
+        let rgba = img.to_rgba8();
+        let size = [rgba.width() as usize, rgba.height() as usize];
+        ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
+    })
+}
+
 pub fn mark(ctx: &egui::Context) -> TextureHandle {
-    let bytes = include_bytes!("../assets/grokhub-32.png");
-    let img = image::load_from_memory(bytes).expect("grokhub mark");
-    let rgba = img.to_rgba8();
-    let size = [rgba.width() as usize, rgba.height() as usize];
-    ctx.load_texture(
-        "grokhub-mark",
-        ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
-        TextureOptions::LINEAR,
-    )
+    let id = egui::Id::new("grokhub-mark");
+    if let Some(tex) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
+        return tex;
+    }
+    let tex = ctx.load_texture("grokhub-mark", mark_image().clone(), TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    tex
 }
 
 #[cfg(test)]
@@ -556,13 +591,26 @@ mod tests {
     #[test]
     #[allow(clippy::assertions_on_constants)] // pins design constants
     fn grok_com_chrome_tokens() {
-        assert_eq!(BG, Color32::from_rgb(5, 5, 5));
-        assert_eq!(SURFACE, Color32::from_rgb(20, 20, 20));
-        assert_eq!(PANEL, Color32::from_rgb(33, 33, 33));
-        assert_eq!(FG, Color32::from_rgb(252, 252, 252));
-        assert_eq!(MUTED, Color32::from_rgb(158, 158, 158));
-        assert_eq!(GREET_HERO, 32.0);
+        assert_eq!(BG, Color32::from_rgb(0, 0, 0));
+        assert_eq!(SURFACE, Color32::from_rgb(0x16, 0x18, 0x1c));
+        assert_eq!(PANEL, Color32::from_rgb(0x1a, 0x1a, 0x1a));
+        assert_eq!(SURFACE_HOVER, Color32::from_rgb(0x1c, 0x1f, 0x23));
+        assert_eq!(FG, Color32::from_rgb(0xe7, 0xe9, 0xea));
+        assert_eq!(MUTED, Color32::from_rgb(0x71, 0x76, 0x7b));
+        assert_eq!(BORDER, Color32::from_rgb(0x2f, 0x33, 0x36));
+        assert_eq!(LINK, Color32::from_rgb(0x1d, 0x9b, 0xf0));
+        assert_eq!(SEND_ON, Color32::WHITE);
+        assert_eq!(GREET_HERO, 28.0);
         assert!(GREET_HERO > FONT_HEADING);
+        assert!(GREET_HERO <= 28.0);
+        assert_eq!(CHAT_COL_W, 768.0);
+        assert!(CHAT_COL_W >= 720.0 && CHAT_COL_W <= 800.0);
+        assert_eq!(chat_col_w(1800.0), CHAT_COL_W);
+        assert_eq!(chat_col_w(600.0), 600.0);
+        assert_eq!(USER_BUBBLE_RADIUS, 20.0);
+        assert!(USER_BUBBLE_RADIUS < QUERY_RADIUS);
+        assert_eq!(CHROME_RADIUS, 6.0);
+        assert!(CHROME_RADIUS < USER_BUBBLE_RADIUS);
         assert_eq!(QUERY_MIN_H, 60.0);
         assert_eq!(QUERY_RADIUS, 160.0);
         assert_eq!(HIT, 40.0);
@@ -570,7 +618,7 @@ mod tests {
         assert_eq!(FONT_UI, 15.0);
         assert_eq!(FONT_CHROME, 14.0);
         assert_eq!(FONT_HEADING, 22.0);
-        assert_eq!(TITLEBAR_H, 36.0);
+        assert_eq!(TITLEBAR_H, 40.0);
         assert!(TITLEBAR_H >= HIT - 4.0, "titlebar must fit chrome hits");
         assert!(include_bytes!("../assets/fonts/Inter-Regular.ttf").len() > 1000);
         assert_eq!(
@@ -601,9 +649,15 @@ mod tests {
         assert_eq!(title_font(40.0).size, 40.0);
         set_paint_dark(true);
         assert_eq!(bg(), BG);
+        assert_eq!(surface(), SURFACE);
+        assert_eq!(bubble_user(), BUBBLE_USER);
+        assert_eq!(bubble_assistant(), Color32::TRANSPARENT);
+        assert_eq!(link(), LINK);
+        assert_eq!(send_on(), SEND_ON);
         set_paint_dark(false);
         assert_eq!(bg(), LIGHT_BG);
         assert_eq!(fg(), LIGHT_FG);
+        assert_eq!(bubble_assistant(), Color32::TRANSPARENT);
         set_paint_dark(true);
         assert_eq!(bg(), BG);
     }
@@ -614,8 +668,8 @@ mod tests {
         assert_eq!(lift_fill(Color32::TRANSPARENT, 0.0).a(), 0);
         let hover = lift_fill(Color32::TRANSPARENT, 0.10);
         assert!(hover.a() > 8);
-        let solid = lift_fill(Color32::from_rgb(20, 20, 20), 0.10);
-        assert!(solid.r() > 20);
+        let solid = lift_fill(Color32::from_rgb(0x16, 0x18, 0x1c), 0.10);
+        assert!(solid.r() > 0x16);
         set_paint_dark(false);
         let light = lift_fill(Color32::from_rgb(244, 244, 245), 0.10);
         assert!(light.r() < 244);
@@ -650,6 +704,32 @@ mod tests {
         assert!(
             dark.contains("thread::spawn") && dark.contains("inflight"),
             "stale gsettings must refresh off the UI thread: {dark}"
+        );
+    }
+
+    #[test]
+    fn mark_caches_decoded_pixels_and_gpu_texture() {
+        let src = include_str!("theme.rs");
+        let mark = src
+            .split("fn mark_image(")
+            .nth(1)
+            .and_then(|s| s.split("#[cfg(test)]").next())
+            .expect("mark");
+        assert!(
+            mark.contains("get_or_init") && mark.contains("OnceLock"),
+            "decode grokhub-32.png once: {mark}"
+        );
+        assert!(
+            mark.contains("get_temp") && mark.contains("insert_temp"),
+            "reuse the GPU texture across paints: {mark}"
+        );
+        let paint = mark
+            .split("pub fn mark(")
+            .nth(1)
+            .expect("mark paint");
+        assert!(
+            !paint.contains("load_from_memory"),
+            "paint must not decode the PNG: {paint}"
         );
     }
 }
