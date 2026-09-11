@@ -2,7 +2,7 @@
 
 use crate::locate::{
     clear_grok_unusable, cli_install_should_skip, doctor_broken_hint, find_grok,
-    grok_cli_is_runnable, invalidate_grok_bin_cache,
+    grok_cli_is_runnable, grok_marked_unusable, invalidate_grok_bin_cache,
 };
 #[cfg(windows)]
 use crate::locate::hide_windows_console;
@@ -60,14 +60,13 @@ fn install_grok_blocking_opts(force: bool) -> Result<PathBuf, String> {
             if cli_install_should_skip(Some(&p)) {
                 return Ok(p);
             }
+            // Soft --version miss (timeout / AV stall): keep a present CLI.
+            if !grok_marked_unusable(&p) {
+                return Ok(p);
+            }
         }
     }
-    if let Some(home) = grokhub_core::user_home() {
-        let staged = home.join(".grok").join("bin").join(if cfg!(windows) {
-            "grok.exe"
-        } else {
-            "grok"
-        });
+    if let Some(staged) = grok_staged_bin() {
         if staged.is_file() {
             let _ = std::fs::remove_file(&staged);
         }
@@ -98,6 +97,11 @@ fn finish_cli_install(missing: &str) -> Result<PathBuf, String> {
     prepend_grok_bin_to_process_path();
     clear_grok_unusable();
     invalidate_grok_bin_cache();
+    if let Some(p) = grok_staged_bin().filter(|p| p.is_file()) {
+        if grok_cli_is_runnable(&p) {
+            return Ok(p);
+        }
+    }
     let p = find_grok().ok_or_else(|| missing.to_string())?;
     if grok_cli_is_runnable(&p) {
         Ok(p)
@@ -164,6 +168,10 @@ fn grok_bin_dir() -> Option<PathBuf> {
     Some(grokhub_core::user_home()?.join(".grok").join("bin"))
 }
 
+fn grok_staged_bin() -> Option<PathBuf> {
+    Some(grok_bin_dir()?.join(if cfg!(windows) { "grok.exe" } else { "grok" }))
+}
+
 pub fn prepend_grok_bin_to_process_path() {
     let Some(dir) = grok_bin_dir() else {
         return;
@@ -174,22 +182,21 @@ pub fn prepend_grok_bin_to_process_path() {
 pub fn prepend_dir_to_path(dir: &Path) {
     let dir_s = dir.to_string_lossy();
     let cur = std::env::var_os("PATH").unwrap_or_default();
-    let already = std::env::split_paths(&cur).any(|p| {
-        if cfg!(windows) {
-            p.to_string_lossy().eq_ignore_ascii_case(&dir_s)
-        } else {
-            p == dir
-        }
-    });
-    if already {
-        return;
-    }
     let sep = if cfg!(windows) { ';' } else { ':' };
-    let cur_s = cur.to_string_lossy();
-    let new = if cur_s.is_empty() {
+    let rest: Vec<String> = std::env::split_paths(&cur)
+        .filter(|p| {
+            if cfg!(windows) {
+                !p.to_string_lossy().eq_ignore_ascii_case(&dir_s)
+            } else {
+                p != dir
+            }
+        })
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let new = if rest.is_empty() {
         dir_s.into_owned()
     } else {
-        format!("{dir_s}{sep}{cur_s}")
+        format!("{dir_s}{sep}{}", rest.join(&sep.to_string()))
     };
     std::env::set_var("PATH", new);
 }
@@ -320,6 +327,10 @@ mod tests {
             src.contains("cli_install_should_skip") && src.contains("grok_cli_is_runnable"),
             "a leftover grok.exe that cannot start must not count as installed: {src}"
         );
+        assert!(
+            src.contains("grok_marked_unusable") && src.contains("grok_staged_bin"),
+            "boot install must keep a present CLI on a soft --version miss and validate ~/.grok/bin first: {src}"
+        );
     }
 
     #[test]
@@ -330,6 +341,13 @@ mod tests {
         prepend_dir_to_path(&dir);
         prepend_dir_to_path(&dir);
         let path = std::env::var("PATH").unwrap_or_default();
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        std::env::set_var(
+            "PATH",
+            format!("/no/such/first{sep}{}{sep}/no/such/last", dir.display()),
+        );
+        prepend_dir_to_path(&dir);
+        let moved = std::env::var("PATH").unwrap_or_default();
         match old {
             Some(v) => std::env::set_var("PATH", v),
             None => std::env::remove_var("PATH"),
@@ -343,6 +361,16 @@ mod tests {
         assert!(
             path.starts_with(&*dir.to_string_lossy()) || path.to_lowercase().starts_with(&dir.to_string_lossy().to_lowercase()),
             "grok bin must be first on PATH: {path}"
+        );
+        assert!(
+            moved.starts_with(&*dir.to_string_lossy())
+                || moved.to_lowercase().starts_with(&dir.to_string_lossy().to_lowercase()),
+            "an existing ~/.grok/bin later on PATH must move to the front: {moved}"
+        );
+        assert_eq!(
+            moved.matches(name.as_ref()).count(),
+            1,
+            "moving ~/.grok/bin to the front must not duplicate it: {moved}"
         );
     }
 

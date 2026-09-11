@@ -12446,7 +12446,7 @@ impl Cabin {
         let mut install_cli = false;
         let mut restart = false;
         let mut copy_diag = false;
-        let cli_ready = grokhub_acp::grok_cli_known_good();
+        let cli_ready = grokhub_acp::grok_cli_known_good() || grokhub_acp::find_grok().is_some();
         let show_cli_install = grokhub_core::should_show_manual_cli_install(cli_ready);
         let cli_installing = self.grok_install_rx.is_some();
         let cli_install_hint = if cli_installing {
