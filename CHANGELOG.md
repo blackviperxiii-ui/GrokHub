@@ -2,7 +2,14 @@
 
 ## Unreleased
 
-- Hover Chat / Plan / Ask, Ask / Auto / Always, and Effort above the composer for what each control does.
+## 2.9.2 — 2026-09-11
+
+One cabin, two ship artifacts on the same tag. Cursor **#14** (composer hover tips), **#15** (first-run Get Started OAuth + CLI alpha), and **#16** (Windows Update without a clone) are on `main`.
+
+- Linux: `grokhub-linux-v2.9.2.tar.gz` and AUR `pkgver=2.9.2`. `/update` overlays the GUI then `grok update` on the current channel — it does not pass `--alpha`.
+- Windows: `GrokHub-Setup-2.9.2.exe` and `grokhub-windows-v2.9.2.zip` from `packaging/windows/` + Inno. Settings → Update downloads the GitHub zip when there is no source clone, then `grok update --alpha`.
+- First-time installers ship Grok Build CLI alpha (`GROK_CHANNEL=alpha`). First run is Get Started — Super Grok OAuth signs in `grok` too.
+- Hover Chat / Plan / Ask, Ask / Auto / Always, and Effort for a short Grok-dark tip.
 
 ## 2.9.1 — 2026-09-11
 

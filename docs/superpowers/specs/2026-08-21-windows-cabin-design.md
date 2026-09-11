@@ -1,6 +1,6 @@
 # Windows cabin installer
 
-**Version:** 2.9.1  
+**Version:** 2.9.2  
 **Repo:** `blackviperxiii-ui/GrokHub` (one cabin, two artifacts — not the deleted Electron app)
 
 GrokHub on Windows is the same native egui cabin as Linux. Grok Build (`grok.exe` over ACP) is the agent, host shell, and computer-use. The Windows artifact is `GrokHub-Setup-<version>.exe` (Inno) plus `grokhub-windows-v<version>.zip`. Same tag and cabin version as Linux `grokhub-linux-v*.tar.gz`. No Windows AT-SPI / screenshot / click backends.
@@ -47,7 +47,7 @@ Locate order: `GROKHUB_GROK`, PATH (`grok.exe`), `%USERPROFILE%\.grok\bin\grok.e
 
 **If the download fails, it is not a ship blocker.** The installer still installs the cabin. First launch or a post-install step may run `irm https://x.ai/cli/install.ps1 | iex`. Settings / doctor say when `grok.exe` is missing and how to install it.
 
-Cabin overlay on Windows does not run Linux `install.sh`. Agent updates stay `grok update`.
+Cabin overlay on Windows does not run Linux `install.sh`. Settings → Update downloads the latest `grokhub-windows` zip from GitHub when there is no source clone, then runs `grok update --alpha`. A source clone still overlays with `install-windows.ps1`.
 
 ## Installer
 
