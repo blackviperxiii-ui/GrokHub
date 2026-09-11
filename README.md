@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.9.1** — Grok Build **1.0.21**. History is `grok sessions` 1:1. `/update` overlays the GUI and updates `grok` on the current channel (Linux does not force `--alpha`). MCP tools can ask for a form or URL. Dark chrome hover is `#1C1F23`. `/learn` runs cabin reflect.
+**v2.9.2** — Grok Build **1.0.21**. First run is Get Started (Super Grok OAuth signs in `grok`). Hover composer pills for what they do. Windows Update downloads the GitHub zip (no clone). Linux `/update` is `grok update` (no `--alpha`). History is `grok sessions` 1:1.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.9.1.tar.gz`, AUR | **v2.9.1** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.9.1.exe`, `grokhub-windows-v2.9.1.zip` | **v2.9.1** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.9.2.tar.gz`, AUR | **v2.9.2** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.9.2.exe`, `grokhub-windows-v2.9.2.zip` | **v2.9.2** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
