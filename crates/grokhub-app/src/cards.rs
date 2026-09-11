@@ -574,7 +574,7 @@ fn show_composer_tip(ui: &mut egui::Ui, title: &str, body: &str) {
 }
 
 fn with_composer_tip(resp: egui::Response, title: &str, body: &str) -> egui::Response {
-    resp.on_hover_ui(|ui| show_composer_tip(ui, title, body))
+    resp.on_hover_ui_at_pointer(|ui| show_composer_tip(ui, title, body))
 }
 
 fn catalog_pill(
