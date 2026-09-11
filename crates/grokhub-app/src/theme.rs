@@ -1,6 +1,6 @@
 //! Official Grok dark tokens (grok.com / iOS / Android, 2026-09).
 //! Recreated in egui — no grok.com JS, no webview.
-//! Dark-first: OLED canvas, quiet chrome, one conversation column.
+//! Dark-first: OLED canvas, quiet chrome. Composer stays a Grok column; chat text is fluid.
 
 use eframe::egui::{
     self, Color32, ColorImage, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
@@ -122,9 +122,9 @@ pub fn nav_active() -> Color32 {
 pub fn bubble_user() -> Color32 {
     tok(BUBBLE_USER, LIGHT_BUBBLE_USER)
 }
-/// Assistant is flush on the canvas — no bubble fill.
+/// Assistant bubble — same plane as the user bubble, left-aligned on the canvas.
 pub fn bubble_assistant() -> Color32 {
-    Color32::TRANSPARENT
+    tok(BUBBLE_USER, LIGHT_BUBBLE_USER)
 }
 pub fn surface_hover() -> Color32 {
     tok(SURFACE_HOVER, LIGHT_HOVER)
@@ -233,9 +233,9 @@ fn cmd_stdout(bin: &str, args: &[&str]) -> String {
 }
 
 pub const SIDEBAR_W: f32 = 260.0;
-/// Centered conversation column (official Grok ~720–800).
+/// Centered composer / empty-home column (official Grok ~720–800). Chat text uses the pane.
 pub const CHAT_COL_W: f32 = 768.0;
-/// Soft user-bubble radius. Assistant has none.
+/// Soft chat-bubble radius. User and assistant share it. Thought has none.
 pub const USER_BUBBLE_RADIUS: f32 = 20.0;
 /// Quiet chrome (rail rows, sheets, menus). Composer + user bubble stay large.
 pub const CHROME_RADIUS: f32 = 6.0;
@@ -245,7 +245,7 @@ pub const QUERY_MIN_H: f32 = 60.0;
 /// `.query-bar` computed `border-radius: 160px`
 pub const QUERY_RADIUS: f32 = 160.0;
 
-/// Cap a pane to the Grok conversation column.
+/// Cap the composer / empty-home column. Transcript layout uses the full pane.
 pub fn chat_col_w(avail: f32) -> f32 {
     if !avail.is_finite() || avail <= 0.0 {
         CHAT_COL_W
@@ -672,14 +672,14 @@ mod tests {
         assert_eq!(bg(), BG);
         assert_eq!(surface(), SURFACE);
         assert_eq!(bubble_user(), BUBBLE_USER);
-        assert_eq!(bubble_assistant(), Color32::TRANSPARENT);
+        assert_eq!(bubble_assistant(), BUBBLE_USER);
         assert_eq!(link(), LINK);
         assert_eq!(send_on(), SEND_ON);
         assert_eq!(hover(), HOVER);
         set_paint_dark(false);
         assert_eq!(bg(), LIGHT_BG);
         assert_eq!(fg(), LIGHT_FG);
-        assert_eq!(bubble_assistant(), Color32::TRANSPARENT);
+        assert_eq!(bubble_assistant(), LIGHT_BUBBLE_USER);
         assert_eq!(hover(), LIGHT_HOVER);
         set_paint_dark(true);
         assert_eq!(bg(), BG);
