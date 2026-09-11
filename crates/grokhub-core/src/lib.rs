@@ -117,7 +117,7 @@ pub use chips::{
     context_fingerprint, detect_chip_context, detect_chip_stage, empty_chip_memory,
     mode_from_chip_value, nav_from_chip_value, parse_llm_chips, predict_intents, prune_retired_chip_memory, remember_chip_click,
     remember_chip_dismiss, remember_chip_outcome, remember_home_slash, remember_home_surface,
-    remember_typed_prompt, should_refresh_llm, home_slash_cmd,
+    remember_typed_prompt, should_refresh_llm, home_slash_cmd, home_surface_from_nav,
     top_habit_labels, ChipInput, ChipKind, ChipMemory, ChipStage, ChipThread, PredictedIntent,
     QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
 };
