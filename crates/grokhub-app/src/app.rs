@@ -17352,6 +17352,32 @@ mod tests {
             !crate::theme::CABIN_MENU.iter().any(|(id, _)| *id == "command"),
             "Command is not a cabin menu row"
         );
+        for gone in ["history", "workboard", "memory", "devices", "queue"] {
+            assert!(
+                !crate::theme::CABIN_MENU.iter().any(|(id, _)| *id == gone),
+                "{gone} must not sit in the avatar menu"
+            );
+        }
+        let menu = src
+            .split("fn ui_settings_menu(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ui_palette").next())
+            .expect("ui_settings_menu");
+        assert!(
+            menu.contains("CABIN_MENU")
+                && menu.contains("\"Help\"")
+                && menu.contains("\"Sign out\"")
+                && menu.contains("\"Connect Grok\""),
+            "avatar menu must keep Settings, Help, and Sign in / Sign out: {menu}"
+        );
+        assert!(
+            !menu.contains("\"History\"")
+                && !menu.contains("\"Workboard\"")
+                && !menu.contains("\"Memory\"")
+                && !menu.contains("\"Devices\"")
+                && !menu.contains("\"Queue\""),
+            "avatar menu must not hardcode leftover panes: {menu}"
+        );
         let replay = src
             .split("fn replay_recipe(")
             .nth(1)
