@@ -944,6 +944,8 @@ fn hide_pending_grok_sessions(
 
 /// `(directory listed, [(entry name, is_dir)])` from the Plus file picker.
 type PickList = (String, Vec<(String, bool)>);
+/// `(query, [(hit title, snippet)])` from History search.
+type HistorySearch = (String, Vec<(String, String)>);
 
 pub struct Cabin {
     nav: Nav,
@@ -1204,7 +1206,7 @@ pub struct Cabin {
     grok_sessions_inflight: u32,
     pending_grok_deletes: HashSet<String>,
     inspect_rx: Option<mpsc::Receiver<String>>,
-    history_rx: Option<mpsc::Receiver<(String, Vec<(String, String)>)>>,
+    history_rx: Option<mpsc::Receiver<HistorySearch>>,
     mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
     mem_file_rx: Option<(String, mpsc::Receiver<(u64, String)>)>,
     recall_rx: Option<mpsc::Receiver<String>>,
