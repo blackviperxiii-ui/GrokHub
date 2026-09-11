@@ -849,9 +849,14 @@ mod tests {
     #[test]
     fn windows_tray_uses_the_linux_cabin_mark() {
         let src = include_str!("tray.rs");
+        let win = src
+            .split("fn windows_tray_thread")
+            .nth(1)
+            .and_then(|s| s.split("/// ksni").next())
+            .expect("windows_tray_thread");
         assert!(
-            !src.contains("232, 168, 96, 255"),
-            "Windows tray must not be a solid orange square: {src}"
+            win.contains("windows_tray_icon") && !win.contains("from_rgba(vec!"),
+            "Windows tray must load the cabin PNG, not a fill square: {win}"
         );
         assert!(
             src.contains("hicolor/32x32/apps/grokhub.png"),
