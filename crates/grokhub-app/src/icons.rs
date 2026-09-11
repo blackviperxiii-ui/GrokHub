@@ -460,8 +460,8 @@ pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::
             );
         }
         BarIcon::Send => {
-            painter.circle_filled(c, w * 0.46, crate::theme::fg());
-            let arrow = Stroke::new(1.8_f32, crate::theme::bg());
+            painter.circle_filled(c, w * 0.46, crate::theme::send_on());
+            let arrow = Stroke::new(1.8_f32, crate::theme::send_on_ink());
             painter.line_segment(
                 [Pos2::new(c.x, c.y + w * 0.16), Pos2::new(c.x, c.y - w * 0.16)],
                 arrow,
@@ -482,12 +482,12 @@ pub fn paint_bar_icon(ui: &mut egui::Ui, icon: BarIcon, size: f32, color: egui::
             );
         }
         BarIcon::Stop => {
-            painter.circle_filled(c, w * 0.46, crate::theme::fg());
+            painter.circle_filled(c, w * 0.46, crate::theme::send_on());
             let pad = w * 0.18;
             painter.rect_filled(
                 egui::Rect::from_center_size(c, Vec2::splat(w - pad * 2.0)),
                 2.0,
-                crate::theme::bg(),
+                crate::theme::send_on_ink(),
             );
         }
         BarIcon::ArrowUp => {
