@@ -38,4 +38,4 @@ Agent: `grok login` cached token, `grok.com` ACP auth, or `XAI_API_KEY`. Imagine
 
 ## Overlay vs agent updates
 
-Cabin overlay (`/update`) updates the GUI, then runs `grok update` on the current channel. Linux does not pass `--alpha` or `--stable` and does not set `GROK_CHANNEL=alpha`. Windows overlay may still vendor alpha for first-run `grok.exe`. `/learn` (alias `/learn reflect`) is a cabin slash: palette click and typed send both run reflect.
+Cabin overlay (`/update`) updates the GUI, then runs `grok update` on the current channel. Linux does not pass `--alpha` or `--stable` and does not set `GROK_CHANNEL=alpha`. Windows Setup Update downloads the latest `grokhub-windows` zip from GitHub (no clone required), then `grok update --alpha`. A Windows source clone still overlays with `install-windows.ps1`. `/learn` (alias `/learn reflect`) is a cabin slash: palette click and typed send both run reflect.

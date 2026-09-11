@@ -586,7 +586,11 @@ pub fn slash_help() -> String {
         "/recall <q> — search memory, learned insights, and chats",
         "/forget <topic> — drop memory lines that mention the topic (whole words)",
         "/imagine <prompt>",
-        "/update — overlay install, then `grok update` on the current channel. Restart on Settings.",
+        if cfg!(windows) {
+            "/update — latest GitHub Windows zip into %LOCALAPPDATA%\\Programs\\GrokHub, then `grok update --alpha`. A source clone overlays with install-windows.ps1. Restart on Settings."
+        } else {
+            "/update — overlay install, then `grok update` on the current channel. Restart on Settings."
+        },
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers",
         "/hub — devices / pair",
@@ -618,7 +622,11 @@ pub fn slash_help() -> String {
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
         "Appearance: Dark, Light, System. Interactive chat is grok agent stdio (ACP). Night and phone use grok -p. Halt is session/cancel.",
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
-        "install.sh installs the Grok Build CLI (grok) from https://x.ai/cli. Settings shows grok --version. Cabin overlay updates the GUI, installs grok if missing, then runs grok update on the current channel.",
+        if cfg!(windows) {
+            "Windows Setup installs Grok Build CLI alpha from https://x.ai/cli. Settings → Update downloads the latest grokhub-windows zip from GitHub (or overlays a source clone), then runs grok update --alpha. Settings shows grok --version."
+        } else {
+            "install.sh installs the Grok Build CLI (grok) from https://x.ai/cli. Settings shows grok --version. Cabin overlay updates the GUI, installs grok if missing, then runs grok update on the current channel."
+        },
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
         "Pulse every 15s. Hidden idle waits for the pulse.",
         "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
@@ -770,6 +778,29 @@ mod tests {
         assert!(slash_help().contains("/sync — merge chats and memory"));
         assert!(slash_help().contains("Expired pair codes hide and rotate"));
         assert!(slash_help().contains("x.ai/cli"));
+        #[cfg(windows)]
+        {
+            assert!(
+                slash_help().contains("grok update --alpha")
+                    && slash_help().contains("LOCALAPPDATA"),
+                "{}",
+                slash_help()
+            );
+            assert!(
+                !slash_help().contains("current channel"),
+                "Windows /update is alpha, not current-channel: {}",
+                slash_help()
+            );
+        }
+        #[cfg(unix)]
+        {
+            assert!(
+                slash_help().contains("current channel")
+                    && !slash_help().contains("grok update --alpha"),
+                "Linux /update must not tell users to pass --alpha: {}",
+                slash_help()
+            );
+        }
         assert!(slash_help().contains("pinned taskbar click"));
         assert_eq!(parse_slash("/plan"), Some(Slash::Plan));
         assert_eq!(parse_slash("/always-approve"), Some(Slash::AlwaysApprove));
