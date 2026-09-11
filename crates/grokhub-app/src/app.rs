@@ -689,7 +689,6 @@ fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool
         });
         return resp.expect("speech bubble");
     }
-    // Assistant: left bubble, mark at the top of multi-line replies.
     ui.scope(|ui| {
         ui.set_max_width(avail);
         ui.horizontal_top(|ui| {
@@ -11106,7 +11105,6 @@ impl Cabin {
                     .stick_to_bottom(true)
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
-                        ui.vertical(|ui| {
                         ui.set_width(pane);
                         ui.set_max_width(pane);
                         let thinking = self.thinking_here();
@@ -11175,7 +11173,6 @@ impl Cabin {
                             // The transcript is laid out now, so the bottom is a real place.
                             ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
                         }
-                        });
                     });
                 self.chat_tail_frames = self.chat_tail_frames.saturating_sub(1);
                 if scrolled_off_tail(
@@ -14824,7 +14821,7 @@ mod tests {
             "a measured-height lock clips markdown: {bubble_fn}"
         );
         let assistant = src
-            .split("// Assistant: left bubble, mark at the top")
+            .split("return resp.expect(\"speech bubble\");")
             .nth(1)
             .and_then(|s| s.split("fn paint_msg_acts").next())
             .expect("assistant bubble");
