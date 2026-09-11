@@ -1,9 +1,9 @@
 # Windows cabin installer
 
-**Version:** 2.6.42  
-**Repo:** new public `blackviperxiii-ui/GrokHub-Windows` (not the deleted Electron app)
+**Version:** 2.9.1  
+**Repo:** `blackviperxiii-ui/GrokHub` (one cabin, two artifacts — not the deleted Electron app)
 
-GrokHub on Windows is the same native egui cabin. Grok Build (`grok.exe` over ACP) is the agent, host shell, and computer-use. The first Windows ship is cabin-first: UI, hub, tray, Settings, and Grok Build. No Windows AT-SPI / screenshot / click backends.
+GrokHub on Windows is the same native egui cabin as Linux. Grok Build (`grok.exe` over ACP) is the agent, host shell, and computer-use. The Windows artifact is `GrokHub-Setup-<version>.exe` (Inno) plus `grokhub-windows-v<version>.zip`. Same tag and cabin version as Linux `grokhub-linux-v*.tar.gz`. No Windows AT-SPI / screenshot / click backends.
 
 ## Split
 
@@ -15,9 +15,9 @@ Transport: spawn `grok.exe --no-auto-update agent stdio`. Do not vendor grok-bui
 
 ## Repository
 
-- Source: copy of Linux `GrokHub` committed `main` at v2.6.42 (`790d8e40`). Do not include uncommitted local cabin WIP.
-- Linux `GrokHub` stays the Arch/CachyOS repo. Windows packaging, CI, and `cfg(windows)` live in `GrokHub-Windows`.
-- Public. Default branch `main`.
+- Source: this repo. Windows vs Linux is `cfg(windows)` / `cfg(unix)` on the same `main`.
+- Packaging: `packaging/windows/` (Inno `grokhub.iss`), `scripts/make-windows-release.ps1`, and `.github/workflows/release.yml` `windows-installer`.
+- The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive. New cabin work lands here.
 - Do not recreate or push the old Electron `Grok-Hub-Windows` history.
 
 ## Architecture
@@ -92,7 +92,7 @@ Cross-compile from CachyOS is not the release path.
 - Windows computer-use (screenshots, clicks, window enumeration) in the cabin
 - MSIX / Store listing
 - ARM64 Windows in v1 (x86_64 only)
-- Merging Windows CI back into the Linux repo in this ship
+- A second Windows-only source repo
 - Android
 
 ## Success

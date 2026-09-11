@@ -2,8 +2,15 @@
 
 ## Unreleased
 
-On `main` after v2.9.0. No VERSION bump.
+## 2.9.1 — 2026-09-11
 
+One cabin, two ship artifacts on the same tag. Cursor **#11** (Windows fold), **#10** (official restyle + Imagine), **#12** (Grok dark hover), and **#13** (`/learn`) are on `main`.
+
+- Linux: `grokhub-linux-v2.9.1.tar.gz` and AUR `pkgver=2.9.1`. `/update` overlays the GUI then `grok update` on the current channel — it does not pass `--alpha`.
+- Windows: `GrokHub-Setup-2.9.1.exe` and `grokhub-windows-v2.9.1.zip` from `packaging/windows/` + Inno. Same cabin version as Linux.
+- Official Grok dark tokens, 768px column, Imagine parser/timeouts/proxy/on-stage errors, square titlebar glyphs.
+- Dark chrome hover is `#1C1F23`, not a cream wash.
+- `/learn` (and `/learn reflect`) click and typed send run cabin reflect.
 - Quiet-hour clocks type into buffers; Save keeps the last-good window. An hour alone (`7`) is not a clock.
 - History search drops the previous needle's hits and ignores a walk that no longer matches the box.
 - Re-opening the memory file already in the editor keeps unsaved typing.
