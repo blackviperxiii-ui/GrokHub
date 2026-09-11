@@ -188,7 +188,8 @@ pub fn yolo_plan_split(
     risky_only: bool,
     project_root: &str,
 ) -> (Vec<String>, Vec<HostPlanStep>) {
-    yolo_plan_split_in(plan, risky_only, project_root, std::env::var("HOME").ok().as_deref())
+    let home = crate::user_home().and_then(|p| p.into_os_string().into_string().ok());
+    yolo_plan_split_in(plan, risky_only, project_root, home.as_deref())
 }
 
 pub fn yolo_plan_split_in(
