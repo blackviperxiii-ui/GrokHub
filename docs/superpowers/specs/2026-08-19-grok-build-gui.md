@@ -14,13 +14,13 @@ Transport: chat is headless `grok -p --output-format streaming-json` with `--san
 
 ## Chat
 
-`send_chat` runs `grok -p` whose cwd is the bound project, or `~/GrokHub-Work` when unbound — never the cabin process cwd. Stream thought and text into existing bubbles. Stop / Halt / tray Halt SIGTERMs the `grok -p` child (`session/cancel` on ACP). A dead stored session id retries without `--resume`. Disk-full / permission-denied handshake errors land in the chat with the cwd named. Grok.com-style “I don’t have access to your computer” thoughts are stripped from the pane.
+`send_chat` runs `grok -p` whose cwd is the bound project, or `~/GrokHub-Work` when unbound — never the cabin process cwd. Stream user and assistant text into bubbles that use the full chat pane. Thinking is faded thought process, not a bubble. Stop / Halt / tray Halt SIGTERMs the `grok -p` child (`session/cancel` on ACP). A dead stored session id retries without `--resume`. Disk-full / permission-denied handshake errors land in the chat with the cwd named. Grok.com-style “I don’t have access to your computer” thoughts are stripped from the pane.
 
-Composer pills: Chat / Plan / Ask, Ask / Auto / Always-approve, and Effort (low / medium / high / xhigh → `grok agent --reasoning-effort`). Hover a pill for what it does. Segment pills, catalog triggers, settings switches, and sidebar chrome use Plasma-style click feel (hover wash, press shrink, ~120ms selection blend). Tool cards, diffs, and computer-use frames render in the chat pane. Permission prompts Allow / Deny / Always.
+Composer pills: Chat / Plan / Ask, Ask / Auto / Always-approve, and Effort (low / medium / high / xhigh → `grok agent --reasoning-effort`). Hover a pill for what it does. Segment pills, catalog triggers, settings switches, and sidebar chrome use Plasma-style click feel (hover wash, press shrink, ~120ms selection blend). Tool cards, diffs, and computer-use frames sit in a collapsed Work tree. Permission prompts Allow / Deny / Always.
 
 ## Desktop
 
-Grok Build owns computer-use. There is no Desk / Take over menu. The cabin renders tool cards and the last ACP frame in chat. Halt cancels the ACP turn.
+Grok Build owns computer-use. There is no Desk / Take over menu. The cabin keeps tool cards and the last ACP frame in a collapsed Work tree. Halt cancels the ACP turn.
 
 ## History and extensions
 
