@@ -196,21 +196,32 @@ pub fn windows_release_update_cmds() -> Vec<String> {
 pub fn windows_release_overlay_cmd() -> &'static str {
     concat!(
         "$ErrorActionPreference='Stop'; ",
+        "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; ",
         "$dest = Join-Path $env:LOCALAPPDATA 'Programs\\GrokHub'; ",
         "New-Item -ItemType Directory -Path $dest -Force | Out-Null; ",
-        "$rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest' -Headers @{ 'User-Agent'='GrokHub' }; ",
-        "$asset = @($rel.assets | Where-Object { $_.name -like 'grokhub-windows-v*.zip' })[0]; ",
+        "$rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest' -Headers @{ 'User-Agent'='GrokHub' } -UseBasicParsing; ",
+        "$asset = @($rel.assets | Where-Object { $_.name -match '^grokhub-windows-v[0-9]+\\.[0-9]+\\.[0-9]+\\.zip$' })[0]; ",
         "if (-not $asset) { throw 'no grokhub-windows zip on latest GitHub Release' }; ",
+        "$url = [string]$asset.browser_download_url; ",
+        "if ($url -notmatch '^https://(github\\.com/blackviperxiii-ui/GrokHub/releases/download/|objects\\.githubusercontent\\.com/|release-assets\\.githubusercontent\\.com/)') { throw 'unexpected download URL' }; ",
+        "if ($url -notlike ('*/' + $asset.name)) { throw 'download URL name mismatch' }; ",
         "$zip = Join-Path $env:TEMP $asset.name; ",
-        "Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip; ",
+        "Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing; ",
         "$stage = Join-Path $env:TEMP 'grokhub-windows-overlay'; ",
         "if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }; ",
         "Expand-Archive -Path $zip -DestinationPath $stage -Force; ",
-        "$exe = Get-ChildItem -Path $stage -Recurse -Filter grokhub.exe | Select-Object -First 1; ",
-        "$hub = Get-ChildItem -Path $stage -Recurse -Filter grokhub-hub.exe | Select-Object -First 1; ",
+        "$stageFull = (Resolve-Path $stage).Path; ",
+        "$under = { param($p) ([IO.Path]::GetFullPath($p)).StartsWith(($stageFull.TrimEnd('\\') + '\\'), [StringComparison]::OrdinalIgnoreCase) }; ",
+        "$exe = Get-ChildItem -Path $stage -Recurse -File -Filter grokhub.exe | Where-Object { & $under $_.FullName } | Select-Object -First 1; ",
+        "$hub = Get-ChildItem -Path $stage -Recurse -File -Filter grokhub-hub.exe | Where-Object { & $under $_.FullName } | Select-Object -First 1; ",
         "if (-not $exe -or -not $hub) { throw 'zip missing grokhub.exe' }; ",
-        "Copy-Item $exe.FullName (Join-Path $dest 'grokhub.exe') -Force; ",
-        "Copy-Item $hub.FullName (Join-Path $dest 'grokhub-hub.exe') -Force; ",
+        "function Overlay-Locked($from, $to) { ",
+        "$old = \"$to.old\"; ",
+        "if (Test-Path $old) { Remove-Item $old -Force -ErrorAction SilentlyContinue }; ",
+        "if (Test-Path $to) { try { Copy-Item $from $to -Force; return } catch { Rename-Item $to $old -Force } }; ",
+        "Copy-Item $from $to -Force }; ",
+        "Overlay-Locked $exe.FullName (Join-Path $dest 'grokhub.exe'); ",
+        "Overlay-Locked $hub.FullName (Join-Path $dest 'grokhub-hub.exe'); ",
         "Write-Output \"overlay $dest\""
     )
 }
@@ -316,7 +327,7 @@ pub fn grok_cli_update_cmd(cmd: &str) -> bool {
     t == "grok update"
         || t.starts_with("grok update ")
         || t.ends_with("/grok update")
-        || t.contains("grok update --alpha")
+        || t.ends_with("grok update --alpha")
 }
 
 pub fn update_step_label(cmd: &str) -> &'static str {
@@ -824,6 +835,7 @@ mod tests {
         assert!(grok_cli_update_cmd("grok update"));
         assert!(grok_cli_update_cmd(windows_grok_update_cmd()));
         assert!(!grok_cli_update_cmd("echo grok update"));
+        assert!(!grok_cli_update_cmd("echo grok update --alpha"));
         assert_eq!(update_step_label("echo hi"), "Updating…");
         assert_eq!(
             update_step_label("git -C '/x' remote set-url origin https://github.com/blackviperxiii-ui/GrokHub.git"),
@@ -924,8 +936,18 @@ mod tests {
         }
         let rel = windows_release_overlay_cmd();
         assert!(
+            crate::forbidden_reason(rel).is_none(),
+            "Windows zip overlay must be allowed as a host command: {:?}",
+            crate::forbidden_reason(rel)
+        );
+        assert!(
             rel.contains("api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest")
-                && rel.contains("grokhub-windows-v*.zip")
+                && rel.contains("grokhub-windows-v")
+                && rel.contains("Tls12")
+                && rel.contains("UseBasicParsing")
+                && rel.contains("github.com/blackviperxiii-ui/GrokHub/releases/download")
+                && rel.contains("Overlay-Locked")
+                && rel.contains("Rename-Item")
                 && rel.contains("LOCALAPPDATA")
                 && rel.contains("Programs\\GrokHub")
                 && rel.contains("Expand-Archive")
@@ -933,6 +955,11 @@ mod tests {
                 && !rel.contains("cargo build")
                 && !rel.contains("GROK_CHANNEL=alpha"),
             "{rel}"
+        );
+        let install_win = include_str!("../../../scripts/install-windows.ps1");
+        assert!(
+            install_win.contains("Overlay-Locked") && install_win.contains("Rename-Item"),
+            "clone overlay must replace a running grokhub.exe: {install_win}"
         );
         assert_eq!(
             windows_grok_update_cmd(),
