@@ -50,7 +50,11 @@ fn grok_bin_cache() -> &'static Mutex<GrokBinCache> {
 /// `grokhub.exe` is `windows_subsystem = "windows"`. Spawning a console-subsystem
 /// binary without `CREATE_NO_WINDOW` allocates a visible terminal. Closing that
 /// window kills the child with `STATUS_CONTROL_C_EXIT`.
+///
+/// Also silences the loader MessageBox (missing DLL / bad image) so a broken
+/// `grok.exe` becomes one cabin error instead of a looping system dialog.
 pub fn hide_windows_console(cmd: &mut Command) {
+    silence_windows_hard_errors();
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -58,6 +62,155 @@ pub fn hide_windows_console(cmd: &mut Command) {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     let _ = cmd;
+}
+
+/// Process-wide: do not show Windows critical-error / missing-DLL dialogs.
+/// Children inherit this. Safe to call from any thread, including Linux (no-op).
+pub fn silence_windows_hard_errors() {
+    #[cfg(windows)]
+    {
+        const SEM_FAILCRITICALERRORS: u32 = 0x0001;
+        const SEM_NOGPFAULTERRORBOX: u32 = 0x0002;
+        const SEM_NOOPENFILEERRORBOX: u32 = 0x8000;
+        const MODE: u32 = SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn SetErrorMode(u_mode: u32) -> u32;
+            fn SetThreadErrorMode(dw_new_mode: u32, lp_old_mode: *mut u32) -> i32;
+        }
+        unsafe {
+            SetErrorMode(MODE);
+            let mut old = 0u32;
+            let _ = SetThreadErrorMode(MODE, &mut old);
+        }
+    }
+}
+
+/// NTSTATUS / Win32 codes and spawn text that mean "do not spawn this grok again".
+pub fn is_cli_hard_failure(code: Option<i32>, text: &str) -> bool {
+    const HARD: &[u32] = &[
+        0xC0000135, // STATUS_DLL_NOT_FOUND
+        0xC0000138, // STATUS_ORDINAL_NOT_FOUND
+        0xC0000139, // STATUS_ENTRYPOINT_NOT_FOUND
+        0xC000007B, // STATUS_INVALID_IMAGE_FORMAT
+        0xC0000142, // STATUS_DLL_INIT_FAILED
+        0xC0000020, // STATUS_INVALID_FILE_FOR_SECTION
+    ];
+    if let Some(c) = code {
+        let u = c as u32;
+        if HARD.contains(&u) || c == 193 || c == 126 {
+            return true;
+        }
+    }
+    let t = text.to_ascii_lowercase();
+    t.contains("dll was not found")
+        || t.contains("dll not found")
+        || t.contains("the specified module could not be found")
+        || t.contains("not a valid win32")
+        || t.contains("%1 is not a valid")
+        || t.contains("code execution cannot proceed")
+        || t.contains("status_dll_not_found")
+}
+
+fn grok_unusable_cache() -> &'static Mutex<Option<(PathBuf, String)>> {
+    static C: OnceLock<Mutex<Option<(PathBuf, String)>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(None))
+}
+
+fn same_grok_path(a: &Path, b: &Path) -> bool {
+    if cfg!(windows) {
+        a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
+    } else {
+        a == b
+    }
+}
+
+pub fn mark_grok_unusable(path: &Path, reason: &str) {
+    if let Ok(mut held) = grok_unusable_cache().lock() {
+        *held = Some((path.to_path_buf(), reason.to_string()));
+    }
+    invalidate_grok_bin_cache();
+}
+
+pub fn grok_unusable_reason(path: &Path) -> Option<String> {
+    grok_unusable_cache()
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().and_then(|(p, r)| same_grok_path(p, path).then(|| r.clone())))
+}
+
+pub fn grok_marked_unusable(path: &Path) -> bool {
+    grok_unusable_reason(path).is_some()
+}
+
+pub fn clear_grok_unusable() {
+    if let Ok(mut held) = grok_unusable_cache().lock() {
+        *held = None;
+    }
+}
+
+pub fn doctor_broken_hint() -> &'static str {
+    "Grok Build CLI is broken (missing DLL or bad image). Use Settings → Install Grok Build CLI."
+}
+
+/// True after a successful `grok --version` in this process. Missing or
+/// marked-broken binaries are not ready — first launch and Settings treat
+/// them as "install alpha".
+pub fn grok_cli_known_good() -> bool {
+    let Some(p) = find_grok() else {
+        return false;
+    };
+    if grok_marked_unusable(&p) {
+        return false;
+    }
+    doctor_line_cache()
+        .lock()
+        .ok()
+        .and_then(|g| {
+            g.as_ref().and_then(|(path, _, ok, _, inflight)| {
+                (*ok && !*inflight && path.as_deref().is_some_and(|c| same_grok_path(c, &p)))
+                    .then_some(true)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Skip the official installer only when this binary actually runs.
+pub fn cli_install_should_skip(found: Option<&Path>) -> bool {
+    let Some(p) = found else {
+        return false;
+    };
+    if !grok_bin_is_native(p) || !grok_bin_looks_complete(p) || grok_marked_unusable(p) {
+        return false;
+    }
+    grok_cli_is_runnable(p)
+}
+
+pub fn grok_cli_is_runnable(path: &Path) -> bool {
+    if grok_marked_unusable(path) || !grok_bin_looks_complete(path) {
+        return false;
+    }
+    match grok_version(path) {
+        Ok(_) => true,
+        Err(e) => {
+            if is_cli_hard_failure(None, &e) {
+                mark_grok_unusable(path, &e);
+            }
+            false
+        }
+    }
+}
+
+/// Incomplete downloads / 4-byte MZ stubs are not an installed CLI.
+pub fn grok_bin_looks_complete(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if cfg!(windows) {
+        meta.len() >= 4096
+    } else {
+        meta.len() > 0
+    }
 }
 
 /// Drop the grok PATH cache after a first-run install.
@@ -104,6 +257,8 @@ fn take_grok_bin(path: PathBuf) -> Option<PathBuf> {
     path.is_file()
         .then_some(path)
         .filter(|p| grok_bin_is_native(p))
+        .filter(|p| grok_bin_looks_complete(p))
+        .filter(|p| !grok_marked_unusable(p))
 }
 
 fn find_grok_scan() -> Option<PathBuf> {
@@ -205,9 +360,9 @@ fn cabin_config_root() -> Option<PathBuf> {
 
 pub fn doctor_missing_hint() -> &'static str {
     if cfg!(windows) {
-        "Grok Build CLI missing — $env:GROK_CHANNEL='alpha'; irm https://x.ai/cli/install.ps1 | iex"
+        "Grok Build CLI missing — Settings → Install Grok Build CLI, or $env:GROK_CHANNEL='alpha'; irm https://x.ai/cli/install.ps1 | iex"
     } else {
-        "Grok Build CLI missing — curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash"
+        "Grok Build CLI missing — Settings → Install Grok Build CLI, or curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash"
     }
 }
 
@@ -436,13 +591,23 @@ pub fn doctor_line_busy() -> bool {
 pub fn doctor_grok_line_blocking(bin: Option<&Path>) -> (bool, String) {
     match bin {
         None => (false, doctor_missing_hint().into()),
-        Some(p) if !grok_bin_is_native(p) => (false, doctor_missing_hint().into()),
+        Some(p) if !grok_bin_is_native(p) || !grok_bin_looks_complete(p) => {
+            (false, doctor_missing_hint().into())
+        }
+        Some(p) if grok_marked_unusable(p) => (false, doctor_broken_hint().into()),
         Some(p) => match grok_version(p) {
             Ok(v) => {
                 let v = v.trim().strip_prefix("grok ").unwrap_or(v.trim());
                 (true, format!("Grok Build {v}"))
             }
-            Err(e) => (false, format!("Grok Build present but unreadable: {e}")),
+            Err(e) => {
+                if is_cli_hard_failure(None, &e) {
+                    mark_grok_unusable(p, &e);
+                    (false, doctor_broken_hint().into())
+                } else {
+                    (false, format!("Grok Build present but unreadable: {e}"))
+                }
+            }
         },
     }
 }
@@ -451,9 +616,17 @@ pub fn doctor_grok_line(bin: Option<&Path>) -> (bool, String) {
     if bin.is_none() {
         return doctor_grok_line_blocking(None);
     }
+    if let Some(p) = bin {
+        if grok_marked_unusable(p) {
+            return (false, doctor_broken_hint().into());
+        }
+    }
     if let Ok(held) = doctor_line_cache().lock() {
         if let Some((path, at, ok, text, inflight)) = held.as_ref() {
-            if path.as_deref() == bin && (*inflight || at.elapsed() < Duration::from_secs(8)) {
+            let sticky_fail = !*ok && path.as_deref().is_some_and(|p| bin.is_some_and(|b| same_grok_path(p, b)));
+            if path.as_deref() == bin
+                && (*inflight || sticky_fail || at.elapsed() < Duration::from_secs(8))
+            {
                 return (*ok, text.clone());
             }
         }
@@ -462,12 +635,12 @@ pub fn doctor_grok_line(bin: Option<&Path>) -> (bool, String) {
     let last = if let Ok(mut held) = doctor_line_cache().lock() {
         let last = match held.as_ref() {
             Some((p, _, ok, text, _)) if p == &path => (*ok, text.clone()),
-            _ => (true, "Grok Build CLI".into()),
+            _ => (false, "Checking Grok Build CLI…".into()),
         };
         *held = Some((path.clone(), Instant::now(), last.0, last.1.clone(), true));
         last
     } else {
-        (true, "Grok Build CLI".into())
+        (false, "Checking Grok Build CLI…".into())
     };
     thread::spawn(move || {
         let (ok, text) = doctor_grok_line_blocking(path.as_deref());
@@ -504,6 +677,9 @@ fn grok_stdout_inner(
     secs: u64,
     isolate_cabin: bool,
 ) -> Result<String, String> {
+    if grok_marked_unusable(bin) {
+        return Err(doctor_broken_hint().into());
+    }
     let bin = bin.to_path_buf();
     let cwd = cwd.to_path_buf();
     let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -522,7 +698,17 @@ fn grok_stdout_inner(
             cmd.env("GROK_LEADER_SOCKET", sock);
         }
     }
-    let child = cmd.spawn().map_err(|e| e.to_string())?;
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = e.to_string();
+            if is_cli_hard_failure(e.raw_os_error(), &msg) {
+                mark_grok_unusable(&bin, &msg);
+                return Err(doctor_broken_hint().into());
+            }
+            return Err(msg);
+        }
+    };
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -559,13 +745,18 @@ fn grok_stdout_inner(
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if !out.status.success() {
-        return Err(if !stderr.is_empty() {
+        let detail = if !stderr.is_empty() {
             stderr
         } else if !stdout.is_empty() {
             stdout
         } else {
             format!("grok {} failed", args.join(" "))
-        });
+        };
+        if is_cli_hard_failure(out.status.code(), &detail) {
+            mark_grok_unusable(&bin, &detail);
+            return Err(doctor_broken_hint().into());
+        }
+        return Err(detail);
     }
     if stdout.is_empty() {
         Ok(stderr)
@@ -1075,6 +1266,66 @@ mod tests {
         let empty = merge_and_decide("", &tokens).unwrap();
         assert!(empty.wrote);
         assert!(empty.body.contains("new-cabin"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hard_failure_codes_are_sticky() {
+        assert!(is_cli_hard_failure(Some(-1073741515), ""));
+        assert!(is_cli_hard_failure(Some(0xC0000135u32 as i32), ""));
+        assert!(is_cli_hard_failure(Some(193), ""));
+        assert!(is_cli_hard_failure(
+            None,
+            "The code execution cannot proceed because vcruntime140.dll was not found"
+        ));
+        assert!(!is_cli_hard_failure(Some(1), "usage: grok --help"));
+        let src = include_str!("locate.rs");
+        assert!(
+            src.contains("SetErrorMode") && src.contains("SEM_FAILCRITICALERRORS")
+                || src.contains("0x0001"),
+            "Windows must silence the loader MessageBox: {src}"
+        );
+        assert!(
+            src.contains("grok_marked_unusable") && src.contains("doctor_broken_hint"),
+            "a broken grok.exe must not be spawned again: {src}"
+        );
+    }
+
+    #[test]
+    fn stub_mz_is_not_an_installed_cli() {
+        let _lock = grok_env_test_lock();
+        let dir = std::env::temp_dir().join(format!("grokhub-stub-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let stub = dir.join(if cfg!(windows) { "grok.exe" } else { "grok" });
+        std::fs::write(&stub, if cfg!(windows) { &b"MZ\0\0"[..] } else { &b""[..] }).unwrap();
+        assert!(
+            !grok_bin_looks_complete(&stub),
+            "a 4-byte MZ / empty file is not Grok Build"
+        );
+        assert!(!cli_install_should_skip(Some(&stub)));
+        mark_grok_unusable(&stub, "dll was not found");
+        assert!(grok_marked_unusable(&stub));
+        assert!(!cli_install_should_skip(Some(&stub)));
+        let prev = std::env::var_os("GROKHUB_GROK");
+        std::env::set_var("GROKHUB_GROK", &stub);
+        invalidate_grok_bin_cache();
+        assert!(
+            !grok_cli_known_good(),
+            "a stub GROKHUB_GROK must not look ready"
+        );
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_GROK", v),
+            None => std::env::remove_var("GROKHUB_GROK"),
+        }
+        invalidate_grok_bin_cache();
+        let (ok, text) = doctor_grok_line_blocking(Some(&stub));
+        assert!(!ok, "{text}");
+        assert!(
+            text.contains("broken") || text.contains("x.ai/cli") || text.contains("Install"),
+            "{text}"
+        );
+        clear_grok_unusable();
+        invalidate_grok_bin_cache();
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

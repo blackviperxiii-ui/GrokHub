@@ -1,7 +1,9 @@
 //! First-run Grok Build CLI **alpha** install (Linux + Windows).
 
-use crate::locate::find_grok;
-use crate::locate::invalidate_grok_bin_cache;
+use crate::locate::{
+    clear_grok_unusable, cli_install_should_skip, doctor_broken_hint, find_grok,
+    grok_cli_is_runnable, invalidate_grok_bin_cache,
+};
 #[cfg(windows)]
 use crate::locate::hide_windows_console;
 use std::io::Read;
@@ -25,19 +27,53 @@ pub fn grok_cli_install_cmd() -> &'static str {
     }
 }
 
-/// Background install. Completes immediately if `grok` is already on disk.
+/// Background install. Completes immediately if `grok` is already runnable.
 pub fn begin_grok_install() -> Receiver<Result<PathBuf, String>> {
+    begin_grok_install_opts(false)
+}
+
+/// Settings → Install Grok Build CLI. Re-runs the alpha installer even if a
+/// leftover or broken `grok.exe` is on disk.
+pub fn begin_grok_install_force() -> Receiver<Result<PathBuf, String>> {
+    begin_grok_install_opts(true)
+}
+
+fn begin_grok_install_opts(force: bool) -> Receiver<Result<PathBuf, String>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let _ = tx.send(install_grok_blocking());
+        let _ = tx.send(install_grok_blocking_opts(force));
     });
     rx
 }
 
 pub fn install_grok_blocking() -> Result<PathBuf, String> {
-    if let Some(p) = find_grok() {
-        return Ok(p);
+    install_grok_blocking_opts(false)
+}
+
+pub fn install_grok_blocking_force() -> Result<PathBuf, String> {
+    install_grok_blocking_opts(true)
+}
+
+fn install_grok_blocking_opts(force: bool) -> Result<PathBuf, String> {
+    if !force {
+        if let Some(p) = find_grok() {
+            if cli_install_should_skip(Some(&p)) {
+                return Ok(p);
+            }
+        }
     }
+    if let Some(home) = grokhub_core::user_home() {
+        let staged = home.join(".grok").join("bin").join(if cfg!(windows) {
+            "grok.exe"
+        } else {
+            "grok"
+        });
+        if staged.is_file() {
+            let _ = std::fs::remove_file(&staged);
+        }
+    }
+    clear_grok_unusable();
+    invalidate_grok_bin_cache();
     #[cfg(windows)]
     {
         run_official_powershell().or_else(|ps_err| {
@@ -45,20 +81,28 @@ pub fn install_grok_blocking() -> Result<PathBuf, String> {
                 format!("{ps_err}; fallback download failed: {dl_err}")
             })
         })?;
-        prepend_grok_bin_to_process_path();
-        invalidate_grok_bin_cache();
-        find_grok().ok_or_else(|| {
-            "Grok Build CLI install finished but grok.exe was not found — run: $env:GROK_CHANNEL='alpha'; irm https://x.ai/cli/install.ps1 | iex".into()
-        })
+        finish_cli_install(
+            "Grok Build CLI install finished but grok.exe was not found — run: $env:GROK_CHANNEL='alpha'; irm https://x.ai/cli/install.ps1 | iex",
+        )
     }
     #[cfg(not(windows))]
     {
         run_official_sh()?;
-        prepend_grok_bin_to_process_path();
-        invalidate_grok_bin_cache();
-        find_grok().ok_or_else(|| {
-            "Grok Build CLI alpha install finished but grok was not found — run: curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash".into()
-        })
+        finish_cli_install(
+            "Grok Build CLI alpha install finished but grok was not found — run: curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash",
+        )
+    }
+}
+
+fn finish_cli_install(missing: &str) -> Result<PathBuf, String> {
+    prepend_grok_bin_to_process_path();
+    clear_grok_unusable();
+    invalidate_grok_bin_cache();
+    let p = find_grok().ok_or_else(|| missing.to_string())?;
+    if grok_cli_is_runnable(&p) {
+        Ok(p)
+    } else {
+        Err(doctor_broken_hint().into())
     }
 }
 
@@ -234,8 +278,24 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("grokhub-install-skip-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let bin = dir.join(if cfg!(windows) { "grok.exe" } else { "grok" });
-        // Windows locate rejects ELF/unix leftovers; a skip hit must look native.
-        std::fs::write(&bin, if cfg!(windows) { &b"MZ\0\0"[..] } else { &b"x"[..] }).unwrap();
+        #[cfg(windows)]
+        {
+            std::fs::write(&bin, &b"MZ\0\0"[..]).unwrap();
+            assert!(
+                !cli_install_should_skip(Some(&bin)),
+                "a stub grok.exe must not skip the alpha installer"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        #[cfg(not(windows))]
+        {
+            std::fs::write(&bin, "#!/bin/sh\necho '9.9.9-test (deadbeef)'\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            let mut p = std::fs::metadata(&bin).unwrap().permissions();
+            p.set_mode(0o755);
+            std::fs::set_permissions(&bin, p).unwrap();
+        }
         let prev = std::env::var_os("GROKHUB_GROK");
         std::env::set_var("GROKHUB_GROK", &bin);
         invalidate_grok_bin_cache();
@@ -247,6 +307,19 @@ mod tests {
         invalidate_grok_bin_cache();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(hit.ok(), Some(bin));
+    }
+
+    #[test]
+    fn force_install_is_exported() {
+        let src = include_str!("install.rs");
+        assert!(
+            src.contains("begin_grok_install_force") && src.contains("GROK_CHANNEL"),
+            "Settings must be able to re-run the alpha installer: {src}"
+        );
+        assert!(
+            src.contains("cli_install_should_skip") && src.contains("grok_cli_is_runnable"),
+            "a leftover grok.exe that cannot start must not count as installed: {src}"
+        );
     }
 
     #[test]
