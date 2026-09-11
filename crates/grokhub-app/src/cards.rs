@@ -1503,11 +1503,9 @@ fn kick_video_poster(ctx: egui::Context, path: String) {
             return;
         }
     }
+    // Keep the gate after a miss so we do not spawn ffmpeg every frame.
     std::thread::spawn(move || {
         let _ = crate::desktop::ensure_video_poster(&path);
-        if let Ok(mut g) = video_poster_gate().lock() {
-            g.remove(&path);
-        }
         ctx.request_repaint();
     });
 }
@@ -2191,8 +2189,9 @@ mod tests {
         assert!(
             hero.contains("video_poster_ready")
                 && hero.contains("kick_video_poster")
-                && hero.contains("thread::spawn"),
-            "video poster extract must leave the UI thread: {hero}"
+                && hero.contains("thread::spawn")
+                && !hero.contains("g.remove(&path)"),
+            "video poster extract must leave the UI thread and attempt a clip once: {hero}"
         );
         assert!(
             stage.contains("!fail.is_empty()")
