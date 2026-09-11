@@ -1106,6 +1106,15 @@ pub fn remember_home_surface(memory: &mut ChipMemory, surface: &str, now_ms: u64
     memory.updated_at = now_ms;
 }
 
+/// Sidebar / palette / slash page ids that should rank home chips after a visit.
+pub fn home_surface_from_nav(id: &str) -> Option<&'static str> {
+    match id.trim().to_ascii_lowercase().as_str() {
+        "imagine" => Some("imagine"),
+        "skills" => Some("skills"),
+        _ => None,
+    }
+}
+
 fn home_project_title(raw: &str) -> String {
     let t = raw.trim();
     let t = t
@@ -2997,5 +3006,16 @@ mod tests {
         assert_eq!(home_slash_cmd("/update"), None);
         assert_eq!(home_slash_cmd("new"), None);
         assert_eq!(home_slash_cmd("clear"), None);
+    }
+
+    #[test]
+    fn home_surface_from_nav_covers_sidebar_pages() {
+        assert_eq!(home_surface_from_nav("imagine"), Some("imagine"));
+        assert_eq!(home_surface_from_nav("skills"), Some("skills"));
+        assert_eq!(home_surface_from_nav("chat"), None);
+        assert_eq!(home_surface_from_nav("settings"), None);
+        let mut mem = ChipMemory::default();
+        remember_home_surface(&mut mem, home_surface_from_nav("imagine").unwrap(), 9);
+        assert_eq!(mem.last_surface.as_deref(), Some("imagine"));
     }
 }
