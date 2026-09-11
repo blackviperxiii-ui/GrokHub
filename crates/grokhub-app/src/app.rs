@@ -12333,7 +12333,7 @@ impl Cabin {
                 if s.is_empty() || s == "Grok OAuth connected" {
                     None
                 } else {
-                    Some(s)
+                    Some(s.to_string())
                 }
             };
             let screen = ctx.screen_rect();
@@ -12358,7 +12358,7 @@ impl Cabin {
                                 if crate::cards::get_started_panel(
                                     ui,
                                     pending.as_deref(),
-                                    oauth_err,
+                                    oauth_err.as_deref(),
                                     !oauth_busy,
                                 ) {
                                     self.start_oauth();
