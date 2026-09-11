@@ -32,7 +32,7 @@ pub fn begin_grok_install() -> Receiver<Result<PathBuf, String>> {
     begin_grok_install_opts(false)
 }
 
-/// Settings → Install Grok Build CLI. Re-runs the alpha installer even if a
+/// Get Started → Install Grok Build CLI. Re-runs the alpha installer even if a
 /// leftover or broken `grok.exe` is on disk.
 pub fn begin_grok_install_force() -> Receiver<Result<PathBuf, String>> {
     begin_grok_install_opts(true)

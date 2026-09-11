@@ -901,6 +901,48 @@ pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
     resp.clicked()
 }
 
+pub fn settings_dropdown(
+    ui: &mut egui::Ui,
+    title: &str,
+    hint: &str,
+    selected: &str,
+    choices: &[String],
+) -> Option<usize> {
+    let mut picked = None;
+    ui.add_space(4.0);
+    ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
+    if !hint.is_empty() {
+        ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
+    }
+    ui.add_space(6.0);
+    egui::Frame::none()
+        .fill(crate::theme::elevated())
+        .rounding(10.0)
+        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
+        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+        .show(ui, |ui| {
+            egui::ComboBox::from_id_salt(title)
+                .selected_text(
+                    RichText::new(selected)
+                        .size(15.0)
+                        .color(crate::theme::fg()),
+                )
+                .width(ui.available_width().max(160.0))
+                .show_ui(ui, |ui| {
+                    for (i, label) in choices.iter().enumerate() {
+                        if ui
+                            .selectable_label(label == selected, label.as_str())
+                            .clicked()
+                        {
+                            picked = Some(i);
+                        }
+                    }
+                });
+        });
+    ui.add_space(10.0);
+    picked
+}
+
 pub fn settings_field(
     ui: &mut egui::Ui,
     title: &str,
@@ -1935,11 +1977,20 @@ mod tests {
         let switch = include_str!("cards.rs")
             .split("pub fn settings_switch(")
             .nth(1)
-            .and_then(|s| s.split("pub fn settings_field(").next())
+            .and_then(|s| s.split("pub fn settings_dropdown(").next())
             .expect("settings_switch");
         assert!(
             switch.contains("animate_selection") && switch.contains("lerp_f32"),
             "settings switch must slide the knob: {switch}"
+        );
+        let dropdown = include_str!("cards.rs")
+            .split("pub fn settings_dropdown(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn settings_field(").next())
+            .expect("settings_dropdown");
+        assert!(
+            dropdown.contains("ComboBox") && dropdown.contains("selectable_label"),
+            "settings dropdown must be one ComboBox: {dropdown}"
         );
         let pills = include_str!("cards.rs");
         assert!(
