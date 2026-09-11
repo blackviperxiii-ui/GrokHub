@@ -623,9 +623,9 @@ pub fn slash_help() -> String {
         "Appearance: Dark, Light, System. Interactive chat is grok agent stdio (ACP). Night and phone use grok -p. Halt is session/cancel.",
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
         if cfg!(windows) {
-            "First-time install (Windows Setup) installs Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Settings → Connect does the same when grok is not already connected. Settings → Update downloads the latest grokhub-windows zip from GitHub (or overlays a source clone), then runs grok update --alpha. Settings shows grok --version."
+            "First-time install (Windows Setup) installs Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Settings → Install Grok Build CLI installs alpha when grok is missing or broken. Settings → Connect does the same when grok is not already connected. Settings → Update downloads the latest grokhub-windows zip from GitHub (or overlays a source clone), then runs grok update --alpha. Settings shows grok --version."
         } else {
-            "First-time install (install.sh, AUR) installs Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Settings → Connect does the same when grok is not already connected. Cabin overlay updates the GUI, installs grok alpha only if missing, then runs grok update on the current channel (Linux does not pass --alpha)."
+            "First-time install (install.sh, AUR) installs Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Settings → Install Grok Build CLI installs alpha when grok is missing or broken. Settings → Connect does the same when grok is not already connected. Cabin overlay updates the GUI, installs grok alpha only if missing, then runs grok update on the current channel (Linux does not pass --alpha)."
         },
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
         "Pulse every 15s. Hidden idle waits for the pulse.",

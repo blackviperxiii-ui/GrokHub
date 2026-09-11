@@ -47,6 +47,7 @@ use grokhub_core::{
 use std::env;
 
 fn main() {
+    grokhub_acp::silence_windows_hard_errors();
     #[cfg(windows)]
     ensure_windows_home();
     let launch = parse_args(&env::args().collect::<Vec<_>>());
