@@ -1,24 +1,20 @@
-//! First-run Grok Build CLI install. Windows only — Linux uses install-grok-cli.sh.
+//! First-run Grok Build CLI **alpha** install (Linux + Windows).
 
 use crate::locate::find_grok;
-#[cfg(any(windows, test))]
 use crate::locate::invalidate_grok_bin_cache;
 #[cfg(windows)]
 use crate::locate::hide_windows_console;
 #[cfg(windows)]
 use std::io::Read;
 use std::path::{Path, PathBuf};
-#[cfg(windows)]
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::Duration;
-#[cfg(windows)]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
 const OFFICIAL_PS: &str = "$env:GROK_CHANNEL='alpha'; irm https://x.ai/cli/install.ps1 | iex";
-const OFFICIAL_SH: &str = "curl -fsSL https://x.ai/cli/install.sh | bash";
+const OFFICIAL_SH: &str = "GROK_CHANNEL=alpha curl -fsSL https://x.ai/cli/install.sh | bash";
 
 /// Platform one-liner shown in Settings.
 pub fn grok_cli_install_cmd() -> &'static str {
@@ -57,7 +53,41 @@ pub fn install_grok_blocking() -> Result<PathBuf, String> {
     }
     #[cfg(not(windows))]
     {
-        Err(crate::doctor_missing_hint().into())
+        run_official_sh()?;
+        prepend_grok_bin_to_process_path();
+        invalidate_grok_bin_cache();
+        find_grok().ok_or_else(|| {
+            "Grok Build CLI alpha install finished but grok was not found — run: GROK_CHANNEL=alpha curl -fsSL https://x.ai/cli/install.sh | bash".into()
+        })
+    }
+}
+
+#[cfg(not(windows))]
+fn run_official_sh() -> Result<(), String> {
+    let mut cmd = Command::new("bash");
+    cmd.args(["-lc", OFFICIAL_SH])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("spawn bash: {e}"))?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                return Err(format!(
+                    "Grok Build CLI alpha installer failed (exit {})",
+                    status.code().unwrap_or(-1)
+                ));
+            }
+            Ok(None) if started.elapsed() > INSTALL_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Grok Build CLI alpha install timed out".into());
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(200)),
+            Err(e) => return Err(format!("wait bash: {e}")),
+        }
     }
 }
 
@@ -179,15 +209,18 @@ mod tests {
     #[test]
     fn hint_is_platform_correct() {
         let cmd = grok_cli_install_cmd();
-        #[cfg(windows)]
-        assert!(cmd.contains("install.ps1"), "{cmd}");
-        #[cfg(not(windows))]
-        assert!(cmd.contains("install.sh"), "{cmd}");
         assert!(cmd.contains("x.ai/cli"), "{cmd}");
+        assert!(
+            cmd.contains("alpha"),
+            "first-run / doctor install must be CLI alpha: {cmd}"
+        );
         #[cfg(windows)]
-        assert!(cmd.contains("alpha"), "{cmd}");
+        assert!(cmd.contains("install.ps1") && cmd.contains("GROK_CHANNEL"), "{cmd}");
         #[cfg(not(windows))]
-        assert!(!cmd.contains("alpha"), "{cmd}");
+        assert!(
+            cmd.contains("install.sh") && cmd.contains("GROK_CHANNEL=alpha"),
+            "{cmd}"
+        );
     }
 
     #[test]
@@ -248,6 +281,14 @@ mod tests {
             !src.contains(&pointer),
             "Windows first-run must download alpha, not {pointer}"
         );
+        #[cfg(not(windows))]
+        {
+            assert!(src.contains("GROK_CHANNEL=alpha"), "{src}");
+            assert!(
+                src.contains("run_official_sh") || src.contains("install.sh"),
+                "Linux first-run must actually run the alpha installer: {src}"
+            );
+        }
     }
 
 }
