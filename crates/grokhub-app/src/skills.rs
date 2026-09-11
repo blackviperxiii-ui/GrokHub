@@ -50,6 +50,9 @@ pub fn save_skill(s: &SkillMd) -> Result<PathBuf, String> {
         {
             let _ = fs::set_permissions(&sh, fs::Permissions::from_mode(0o755));
         }
+        if let Some(cmd) = verify_as_cmd(&s.verify) {
+            fs::write(scripts.join("verify.cmd"), cmd).map_err(|e| e.to_string())?;
+        }
     }
     Ok(path)
 }
@@ -76,6 +79,22 @@ fn verify_as_script(verify: &str) -> Option<String> {
     }
 }
 
+/// Windows verify must not spawn WSL/`bash`. `test -f FILE` becomes `if exist`.
+fn verify_as_cmd(verify: &str) -> Option<String> {
+    let first = verify.trim().lines().next()?.trim();
+    let file = first
+        .strip_prefix("test -f ")
+        .or_else(|| first.strip_prefix("test -e "))?
+        .trim()
+        .trim_matches('"');
+    if file.is_empty() || file.bytes().any(|b| matches!(b, b'&' | b'|' | b'>' | b'<' | b'%')) {
+        return None;
+    }
+    Some(format!(
+        "@echo off\r\nif exist \"{file}\" (exit /b 0) else (exit /b 1)\r\n"
+    ))
+}
+
 pub fn skill_folder(name: &str) -> PathBuf {
     skills_dir().join(skill_dir_name(name))
 }
@@ -91,12 +110,31 @@ pub fn skill_updated_at(name: &str) -> u64 {
 }
 
 pub fn run_verify(name: &str, cwd: Option<&str>) -> Option<VerifyResult> {
-    let path = verify_script_path(skill_folder(name));
-    if !path.exists() {
+    let folder = skill_folder(name);
+    let sh = verify_script_path(&folder);
+    if !sh.exists() {
         return None;
     }
-    let mut cmd = Command::new("bash");
-    cmd.arg(&path);
+    #[cfg(windows)]
+    let mut cmd = {
+        let bat = folder.join("scripts").join("verify.cmd");
+        if !bat.is_file() {
+            return Some(interpret_verify(
+                Some(127),
+                "skill verify on Windows uses cmd, not bash/WSL",
+            ));
+        }
+        let mut c = Command::new("cmd.exe");
+        c.arg("/C").arg(&bat);
+        crate::host::hide_windows_console(&mut c);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = Command::new("bash");
+        c.arg(&sh);
+        c
+    };
     if let Some(dir) = cwd.filter(|d| !d.is_empty()) {
         cmd.current_dir(dir);
     }
@@ -116,8 +154,8 @@ mod tests {
 
     #[test]
     fn write_and_list() {
-        let _g = crate::config::TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-sk-{}", std::process::id()));
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("sk");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let s = SkillMd {
@@ -165,14 +203,8 @@ mod tests {
 
     #[test]
     fn verify_runs_in_the_bound_tree() {
-        let _g = crate::config::TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!(
-            "grokhub-sk-cwd-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
-        ));
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("sk-cwd");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let s = SkillMd {
@@ -201,6 +233,20 @@ mod tests {
     }
 
     #[test]
+    fn verify_as_cmd_translates_test_f() {
+        assert_eq!(
+            verify_as_cmd("test -f grokhub-verify-marker"),
+            Some("@echo off\r\nif exist \"grokhub-verify-marker\" (exit /b 0) else (exit /b 1)\r\n".into())
+        );
+        assert_eq!(
+            verify_as_cmd("test -e notes.md"),
+            Some("@echo off\r\nif exist \"notes.md\" (exit /b 0) else (exit /b 1)\r\n".into())
+        );
+        assert!(verify_as_cmd("lsblk").is_none());
+        assert!(verify_as_cmd("test -f file & calc").is_none());
+    }
+
+    #[test]
     fn run_verify_must_time_out() {
         let src = include_str!("skills.rs");
         let verify = src
@@ -215,6 +261,10 @@ mod tests {
         assert!(
             !verify.contains(".output()"),
             "run_verify must not block the UI on Command::output: {verify}"
+        );
+        assert!(
+            verify.contains("cmd.exe") && verify.contains("cfg(not(windows))"),
+            "Windows verify must use cmd, not WSL bash: {verify}"
         );
     }
 

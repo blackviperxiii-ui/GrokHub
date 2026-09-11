@@ -71,12 +71,11 @@ pub fn migrate_console_key(cfg: &mut crate::config::AppConfig, secrets: &mut Sec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::TEST_CONFIG_LOCK;
 
     #[test]
     fn secrets_roundtrip_mode() {
-        let _g = TEST_CONFIG_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("grokhub-sec-{}", std::process::id()));
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("sec");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let s = Secrets {
