@@ -287,7 +287,8 @@ pub use organs::{
     last_user_scan, last_user_text, normalize_hm,
     thread_host_receipts, thread_host_receipts_from,
     on_wheel_grab, parse_local_clock, passenger_label, plan_room, presence_orb_state,
-    presence_should_stream, quiet_hours_active, redirect_prompt, replay_frame_delay,
+    presence_should_stream, quiet_hours_active, quiet_hours_choice_label, quiet_hours_menu,
+    redirect_prompt, replay_frame_delay,
     should_keep_frame, LocalClock, MidThoughtGreet, RoomPlan, PRESENCE_RING_MS, PRESENCE_WIPE_MS,
 };
 pub use rewind::{
