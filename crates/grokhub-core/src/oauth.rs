@@ -444,7 +444,7 @@ pub fn should_kick_alpha_install(grok_present: bool) -> bool {
     !grok_present
 }
 
-/// Get Started shows **Install Grok Build CLI** when the binary is missing or broken.
+/// Settings → Update and Get Started show **Install Grok Build CLI** when grok is missing or broken.
 pub fn should_show_manual_cli_install(grok_ready: bool) -> bool {
     !grok_ready
 }

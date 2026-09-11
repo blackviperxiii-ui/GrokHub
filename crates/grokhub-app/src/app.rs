@@ -12456,8 +12456,19 @@ impl Cabin {
         let mut connect = false;
         let mut disconnect = false;
         let mut update = false;
+        let mut install_cli = false;
         let mut restart = false;
         let mut copy_diag = false;
+        let cli_ready = grokhub_acp::grok_cli_known_good();
+        let show_cli_install = grokhub_core::should_show_manual_cli_install(cli_ready);
+        let cli_installing = self.grok_install_rx.is_some();
+        let cli_install_hint = if cli_installing {
+            "Installing Grok Build CLI alpha (GROK_CHANNEL=alpha)…"
+        } else if !self.grok_install_err.is_empty() {
+            "Grok is missing or broken. Installs Grok Build CLI alpha from x.ai/cli."
+        } else {
+            "Installs Grok Build CLI alpha (GROK_CHANNEL=alpha / https://x.ai/cli/alpha) when grok is missing or broken."
+        };
         let oauth_line = self.secrets.oauth.as_ref().map(|t| {
             t.email
                 .clone()
@@ -12678,6 +12689,17 @@ impl Cabin {
                                                             }
                                                         }
                                                         SettingsSec::Update => {
+                                                            if show_cli_install
+                                                                && crate::cards::settings_action(
+                                                                    ui,
+                                                                    "Install Grok Build CLI",
+                                                                    cli_install_hint,
+                                                                    if cli_installing { "Installing…" } else { "Install" },
+                                                                )
+                                                                && !cli_installing
+                                                            {
+                                                                install_cli = true;
+                                                            }
                                                             if crate::cards::settings_action(ui, "Install overlay", settings_update_action_hint(), "Update") {
                                                                 update = true;
                                                             }
@@ -12743,6 +12765,9 @@ impl Cabin {
         }
         if update {
             self.queue_update();
+        }
+        if install_cli {
+            self.queue_grok_cli_install();
         }
         if restart {
             self.restart_after_update(ctx);
@@ -14988,12 +15013,17 @@ mod tests {
                 && !settings.contains("settings_nav(ui, \"GitHub\""),
             "GitHub is connector-managed — Settings must not keep a Data/GitHub tab: {settings}"
         );
+        let account = settings
+            .split("SettingsSec::Account => {")
+            .nth(1)
+            .and_then(|s| s.split("SettingsSec::Appearance => {").next())
+            .expect("Account");
         assert!(
-            !settings.contains("Install Grok Build CLI")
-                && !settings.contains("Console key")
-                && !settings.contains("Device name")
-                && !settings.contains("Imagine override"),
-            "Account is OAuth connect/sign-out only: {settings}"
+            !account.contains("Install Grok Build CLI")
+                && !account.contains("Console key")
+                && !account.contains("Device name")
+                && !account.contains("Imagine override"),
+            "Account is OAuth connect/sign-out only: {account}"
         );
         assert!(
             !settings.contains("Automations a day")
@@ -15005,12 +15035,19 @@ mod tests {
             settings.contains("settings_dropdown") && settings.contains("Quiet hours"),
             "Quiet hours is one dropdown: {settings}"
         );
+        let update = settings
+            .split("SettingsSec::Update => {")
+            .nth(1)
+            .and_then(|s| s.split("SettingsSec::About => {").next())
+            .expect("Update");
         assert!(
-            !settings.contains("settings_update_note()")
-                && !settings.contains("Source clone")
-                && settings.contains("Install overlay")
-                && settings.contains("settings_update_action_hint()"),
-            "Update is overlay + Update + Restart only: {settings}"
+            !update.contains("settings_update_note()")
+                && !update.contains("Source clone")
+                && update.contains("Install overlay")
+                && update.contains("settings_update_action_hint()")
+                && update.contains("Install Grok Build CLI")
+                && update.contains("show_cli_install"),
+            "Update is overlay + Update + Restart, plus CLI install when grok is missing or broken: {update}"
         );
     }
 
@@ -16989,8 +17026,9 @@ mod tests {
             src.contains("Install Grok Build CLI")
                 && src.contains("queue_grok_cli_install")
                 && src.contains("begin_grok_install_force")
-                && src.contains("should_show_manual_cli_install"),
-            "Get Started still offers a manual alpha CLI install when grok is missing or broken: {src}"
+                && src.contains("should_show_manual_cli_install")
+                && src.contains("grok_cli_known_good()"),
+            "Settings → Update and Get Started offer a manual alpha CLI install when grok is missing or broken: {src}"
         );
         let flush_p = src
             .split("fn flush_projects(")

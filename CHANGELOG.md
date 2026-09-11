@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Settings trim: Account is OAuth connect/sign-out only. Behavior quiet hours is one dropdown (no a-day/host-command caps). GitHub Settings page is gone (connector-managed). Update is overlay + Update + Restart. About drops the today-stats line and the model catalog.
+- Settings trim: Account is OAuth connect/sign-out only. Behavior quiet hours is one dropdown (no a-day/host-command caps). GitHub Settings page is gone (connector-managed). Update is overlay + Update + Restart, plus **Install Grok Build CLI** when grok is missing or broken. About drops the today-stats line and the model catalog.
 
 ## 2.9.4 — 2026-09-11
 
