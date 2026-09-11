@@ -8804,6 +8804,16 @@ impl Cabin {
         });
     }
 
+    fn play_imagine_media(&self, path: &str) {
+        let path = path.trim().to_string();
+        if path.is_empty() {
+            return;
+        }
+        std::thread::spawn(move || {
+            let _ = crate::desktop::play_media(&path);
+        });
+    }
+
     fn start_imagine_save(&mut self) {
         let src = self.imagine_last.trim().to_string();
         if src.is_empty() || self.imagine_save_rx.is_some() {
@@ -13469,16 +13479,20 @@ impl Cabin {
                 });
             });
         let mut save_now = stage_hit.save;
+        if stage_hit.play && !last.is_empty() {
+            self.play_imagine_media(&last);
+        }
         if stage_hit.expand {
-            self.imagine_expand = true;
+            if grokhub_core::imagine_is_video_path(&last) {
+                self.play_imagine_media(&last);
+            } else {
+                self.imagine_expand = true;
+            }
         }
         if stage_hit.open && !last.is_empty() {
-            let p = last.clone();
-            std::thread::spawn(move || {
-                let _ = std::process::Command::new("xdg-open").arg(p).spawn();
-            });
+            self.play_imagine_media(&last);
         }
-        if self.imagine_expand && !last.is_empty() {
+        if self.imagine_expand && !last.is_empty() && !grokhub_core::imagine_is_video_path(&last) {
             let mut close = ctx.input(|i| i.key_pressed(egui::Key::Escape));
             egui::Area::new(egui::Id::new("imagine-lightbox"))
                 .fixed_pos(content.min)
@@ -16158,8 +16172,15 @@ mod tests {
         assert!(
             imag.contains("ImagineToolboxDock::Bottom")
                 && imag.contains("imagine-lightbox")
-                && imag.contains("start_imagine_save"),
+                && imag.contains("start_imagine_save")
+                && imag.contains("play_imagine_media")
+                && imag.contains("stage_hit.play")
+                && imag.contains("imagine_is_video_path"),
             "send docks the chat box; generated stills expand and save: {imag}"
+        );
+        assert!(
+            imag.contains("!grokhub_core::imagine_is_video_path(&last)"),
+            "a ready video must play, not open the still lightbox: {imag}"
         );
         assert!(
             src.contains("pin_generation_to_wall") && src.contains("wall_gif_from_generation"),
