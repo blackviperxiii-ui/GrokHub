@@ -1,4 +1,5 @@
 //! Empty-chat greeting blurb. Fast mode. Secrets never in the line.
+//! Local line is a situation pick — time, name, signed-in, first-run, last project.
 
 use crate::is_plain_text;
 use crate::strip_thinking;
@@ -15,6 +16,23 @@ pub struct GreetingInput<'a> {
     pub display_name: &'a str,
     pub hour: u8,
     pub last_night: &'a str,
+    pub signed_in: bool,
+    pub first_run: bool,
+    pub last_project: &'a str,
+}
+
+/// Why this empty-home line was chosen. Tests lock the ranker, not the adjectives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GreetingKind {
+    FirstRunUnsigned,
+    FirstRunSigned,
+    ReturningUnsigned,
+    ReturningProject,
+    ReturningQuiet,
+}
+
+pub fn is_cabin_first_run(get_started_done: bool, has_history: bool) -> bool {
+    !get_started_done && !has_history
 }
 
 pub fn should_paint_greeting(empty_chat: bool, scratch: bool) -> bool {
@@ -153,82 +171,88 @@ fn time_word(hour: u8) -> &'static str {
     }
 }
 
-fn memory_hooks(
-    user_md: &str,
-    memory_md: &str,
-    insights: &[String],
-    max: usize,
-) -> Vec<String> {
-    let mut out = vec![];
-    for src in [memory_md, user_md] {
-        for line in src.lines() {
-            if out.len() >= max {
-                return out;
-            }
-            let t = line.trim().trim_start_matches('#').trim();
-            if t.is_empty() {
-                continue;
-            }
-            let low = t.to_ascii_lowercase();
-            if low.starts_with("name") || low == "user" || low == "profile" {
-                continue;
-            }
-            if !is_plain_text(t) {
-                continue;
-            }
-            let bit: String = t.trim_end_matches('.').chars().take(48).collect();
-            if bit.chars().count() < 4 {
-                continue;
-            }
-            out.push(bit);
-        }
+/// Short titled project. Strips "Continue ", rejects machine / product / fail dumps.
+pub fn clean_project_title(raw: &str) -> String {
+    let t = raw.trim();
+    let t = t
+        .strip_prefix("Continue ")
+        .or_else(|| t.strip_prefix("continue "))
+        .unwrap_or(t)
+        .trim();
+    if t.is_empty() || !is_plain_text(t) || is_product_name(t) || is_machine_name(t) {
+        return String::new();
     }
-    for i in insights {
-        if out.len() >= max {
-            break;
-        }
-        if !is_plain_text(i) {
-            continue;
-        }
-        let bit: String = i.trim().trim_end_matches('.').chars().take(48).collect();
-        if bit.chars().count() >= 4 {
-            out.push(bit);
-        }
+    let low = t.to_ascii_lowercase();
+    if low.starts_with("failed:")
+        || low.contains("failed:")
+        || low == "chat"
+        || low == "scratch"
+        || low == "user"
+        || low == "profile"
+    {
+        return String::new();
     }
-    out
+    let words: Vec<&str> = t.split_whitespace().take(4).collect();
+    let bit = words.join(" ");
+    let bit: String = bit.chars().take(28).collect();
+    let bit = bit.trim().trim_end_matches(['.', ',', ';', ':']).to_string();
+    if bit.chars().count() < 2 || is_product_name(&bit) {
+        String::new()
+    } else {
+        bit
+    }
+}
+
+pub fn project_title_from_hint(hint: &str) -> String {
+    clean_project_title(hint)
+}
+
+pub fn classify_greeting(input: &GreetingInput) -> GreetingKind {
+    let project = clean_project_title(input.last_project);
+    if input.first_run {
+        if input.signed_in {
+            GreetingKind::FirstRunSigned
+        } else {
+            GreetingKind::FirstRunUnsigned
+        }
+    } else if !input.signed_in {
+        GreetingKind::ReturningUnsigned
+    } else if !project.is_empty() {
+        GreetingKind::ReturningProject
+    } else {
+        GreetingKind::ReturningQuiet
+    }
 }
 
 pub fn local_greeting(input: &GreetingInput) -> String {
     let name = greeting_name(input.user_md, input.display_name);
-    let hooks = memory_hooks(input.user_md, input.memory_md, input.insights, 1);
     let tod = time_word(input.hour);
-    let mut line = if name.is_empty() {
-        format!("{tod}.")
-    } else {
-        format!("{tod}, {name}.")
-    };
-    if let Some(h) = hooks.first() {
-        let next = format!("{line} {h}.");
-        if next.chars().count() <= GREETING_MAX_CHARS {
-            line = next;
-        }
-    } else if name.is_empty() {
-        line = format!("{tod}. The cabin is ready.");
-    }
-    if !input.last_night.trim().is_empty() && is_plain_text(input.last_night) {
-        let bit: String = input.last_night.trim().chars().take(40).collect();
-        if !line.to_ascii_lowercase().contains(&bit.to_ascii_lowercase()) {
-            let next = format!("{line} {bit}");
-            let next = if next.ends_with('.') {
-                next
+    let project = clean_project_title(input.last_project);
+    let line = match classify_greeting(input) {
+        GreetingKind::FirstRunUnsigned => format!("{tod}. Connect Grok to start."),
+        GreetingKind::FirstRunSigned => {
+            if name.is_empty() {
+                format!("{tod}. The cabin is ready.")
             } else {
-                format!("{next}.")
-            };
-            if next.chars().count() <= GREETING_MAX_CHARS {
-                line = next;
+                format!("{tod}, {name}. The cabin is ready.")
             }
         }
-    }
+        GreetingKind::ReturningUnsigned => format!("{tod}. Sign in to pick up."),
+        GreetingKind::ReturningProject => {
+            if name.is_empty() {
+                format!("{tod}. {project} is still open.")
+            } else {
+                format!("{tod}, {name}. {project} is still open.")
+            }
+        }
+        GreetingKind::ReturningQuiet => {
+            if name.is_empty() {
+                format!("{tod}. The cabin is ready.")
+            } else {
+                format!("{tod}, {name}.")
+            }
+        }
+    };
     clip_greeting(&line)
 }
 
@@ -239,10 +263,14 @@ pub fn greeting_prompt(input: &GreetingInput) -> String {
         format!(
             "One sentence, at most {GREETING_MAX_CHARS} characters. No markdown, no emoji, no quotes, no secrets."
         ),
-        "Address the user by name if known. Ground in USER.md / MEMORY.md. Invite without shouting.".into(),
+        "Address the user by name if known. Invite without shouting.".into(),
+        "Do not quote USER.md or MEMORY.md. Do not mention the machine, hostname, or GrokHub.".into(),
+        "If a last project is set, you may name it once. First-run stays a start line; returning stays a sit-down line.".into(),
         "Reply with only the line.".into(),
         String::new(),
         format!("Hour: {}", input.hour),
+        format!("First run: {}", if input.first_run { "yes" } else { "no" }),
+        format!("Signed in: {}", if input.signed_in { "yes" } else { "no" }),
         format!(
             "Name: {}",
             if name.is_empty() {
@@ -252,6 +280,10 @@ pub fn greeting_prompt(input: &GreetingInput) -> String {
             }
         ),
     ];
+    let project = clean_project_title(input.last_project);
+    if !project.is_empty() {
+        lines.push(format!("Last project: {project}"));
+    }
     if !input.last_night.trim().is_empty() && is_plain_text(input.last_night) {
         lines.push(format!(
             "Last night: {}",
@@ -340,16 +372,20 @@ pub fn pick_greeting(local: &str, llm: Option<&str>) -> String {
 
 pub fn greeting_fingerprint(input: &GreetingInput) -> String {
     let name = greeting_name(input.user_md, input.display_name);
+    let project = clean_project_title(input.last_project);
     let user: String = input.user_md.trim().chars().take(80).collect();
     let mem: String = input.memory_md.trim().chars().take(80).collect();
     let ins = input.insights.first().cloned().unwrap_or_default();
     format!(
-        "{}|{}|{}|{}|n{}|h{}",
+        "{}|{}|{}|{}|n{}|p{}|s{}|f{}|h{}",
         name,
         user,
         mem,
         ins.chars().take(40).collect::<String>(),
         input.last_night.chars().take(40).collect::<String>(),
+        project,
+        if input.signed_in { 1 } else { 0 },
+        if input.first_run { 1 } else { 0 },
         input.hour / 6
     )
 }
@@ -399,6 +435,9 @@ mod tests {
             display_name,
             hour,
             last_night: "",
+            signed_in: true,
+            first_run: false,
+            last_project: "",
         }
     }
 
@@ -442,21 +481,24 @@ mod tests {
     }
 
     #[test]
-    fn local_greeting_uses_profile_and_memory() {
+    fn local_greeting_uses_name_not_memory_dump() {
         let insights = ["prefers nvim".into()];
-        let g = local_greeting(&input(
+        let mut g_in = input(
             "Name: Viper\neditor: nvim\n",
             "Last night we painted the cabin wall.\n",
             &insights,
             "Jeremy",
             21,
-        ));
+        );
+        g_in.last_project = "Night cabin";
+        let g = local_greeting(&g_in);
+        assert_eq!(classify_greeting(&g_in), GreetingKind::ReturningProject);
         assert!(g.to_ascii_lowercase().contains("viper"), "{g}");
+        assert!(g.to_ascii_lowercase().contains("night cabin"), "{g}");
         assert!(
-            g.to_ascii_lowercase().contains("nvim")
-                || g.to_ascii_lowercase().contains("wall")
-                || g.to_ascii_lowercase().contains("paint"),
-            "should ground in memory, got {g}"
+            !g.to_ascii_lowercase().contains("painted")
+                && !g.to_ascii_lowercase().contains("nvim"),
+            "local line must not dump MEMORY.md: {g}"
         );
         assert!(g.chars().count() <= GREETING_MAX_CHARS, "{g}");
         assert!(!g.contains('?'), "local blurb stays quiet: {g}");
@@ -519,17 +561,28 @@ mod tests {
             22,
         );
         with_night.last_night = "host snapshot failed";
+        with_night.last_project = "Night cabin";
         let night_prompt = greeting_prompt(&with_night);
         assert!(
             night_prompt.contains("Last night: host snapshot failed"),
             "{night_prompt}"
         );
+        assert!(
+            night_prompt.contains("Last project: Night cabin"),
+            "{night_prompt}"
+        );
+        assert!(night_prompt.contains("First run: no"), "{night_prompt}");
+        assert!(night_prompt.contains("Signed in: yes"), "{night_prompt}");
         let mut continue_in = input("", "", &[], "", 8);
-        continue_in.last_night = "Continue Night cabin";
+        continue_in.last_project = "Night cabin";
         let local = local_greeting(&continue_in);
         assert!(
-            local.to_ascii_lowercase().contains("continue night cabin"),
-            "empty-chat greeting should surface the last-access hint: {local}"
+            local.to_ascii_lowercase().contains("night cabin"),
+            "empty-chat greeting should surface the last project: {local}"
+        );
+        assert!(
+            !local.to_ascii_lowercase().contains("continue night cabin"),
+            "do not dump the raw continue hint: {local}"
         );
     }
 
@@ -593,5 +646,55 @@ mod tests {
         let c = greeting_fingerprint(&input("Name: Viper\n", "wall\n", &[], "Viper", 8));
         assert_ne!(a, b);
         assert_ne!(a, c);
+        let mut d = input("Name: Viper\n", "wall\n", &[], "Viper", 21);
+        d.last_project = "Night cabin";
+        assert_ne!(a, greeting_fingerprint(&d));
+        let mut e = input("Name: Viper\n", "wall\n", &[], "Viper", 21);
+        e.first_run = true;
+        assert_ne!(a, greeting_fingerprint(&e));
+    }
+
+    #[test]
+    fn greeting_kind_ranks_situation() {
+        assert!(is_cabin_first_run(false, false));
+        assert!(!is_cabin_first_run(true, false));
+        assert!(!is_cabin_first_run(false, true));
+
+        let mut first = input("", "", &[], "", 8);
+        first.first_run = true;
+        first.signed_in = false;
+        assert_eq!(classify_greeting(&first), GreetingKind::FirstRunUnsigned);
+        let g = local_greeting(&first);
+        assert_eq!(g, "Morning. Connect Grok to start.");
+
+        first.signed_in = true;
+        first.display_name = "Jeremy";
+        assert_eq!(classify_greeting(&first), GreetingKind::FirstRunSigned);
+        let g = local_greeting(&first);
+        assert!(g.contains("Jeremy"), "{g}");
+        assert!(g.contains("ready"), "{g}");
+        assert!(!g.contains('?'), "{g}");
+
+        let mut back = input("Name: Viper\n", "", &[], "Viper", 21);
+        back.signed_in = false;
+        assert_eq!(classify_greeting(&back), GreetingKind::ReturningUnsigned);
+        assert_eq!(local_greeting(&back), "Evening. Sign in to pick up.");
+
+        back.signed_in = true;
+        back.last_project = "Continue Night cabin";
+        assert_eq!(clean_project_title(back.last_project), "Night cabin");
+        assert_eq!(classify_greeting(&back), GreetingKind::ReturningProject);
+        let g = local_greeting(&back);
+        assert!(g.starts_with("Evening, Viper."), "{g}");
+        assert!(g.contains("Night cabin is still open"), "{g}");
+
+        back.last_project = "failed: host snapshot";
+        assert_eq!(classify_greeting(&back), GreetingKind::ReturningQuiet);
+        assert_eq!(local_greeting(&back), "Evening, Viper.");
+
+        assert_eq!(project_title_from_hint("Continue Night cabin"), "Night cabin");
+        assert!(clean_project_title("CachyOS").is_empty());
+        assert!(clean_project_title("GrokHub").is_empty());
+        assert!(clean_project_title("Chat").is_empty());
     }
 }
