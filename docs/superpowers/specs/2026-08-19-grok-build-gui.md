@@ -14,6 +14,8 @@ Transport: chat is headless `grok -p --output-format streaming-json` with `--san
 
 ## Chat
 
+Left-rail **Chat** is the new-chat control. There is no separate New chat button. Click Chat on an empty draft (no dialogue, no Grok session) to pull that same draft up. After dialogue has started, Chat opens a new draft. Keep one empty draft at a time. Old convos are sidebar History (`grok sessions`).
+
 `send_chat` runs `grok -p` whose cwd is the bound project, or `~/GrokHub-Work` when unbound — never the cabin process cwd. Stream user and assistant text into bubbles that use the full chat pane. Thinking is faded thought process, not a bubble. Stop / Halt / tray Halt SIGTERMs the `grok -p` child (`session/cancel` on ACP). A dead stored session id retries without `--resume`. Disk-full / permission-denied handshake errors land in the chat with the cwd named. Grok.com-style “I don’t have access to your computer” thoughts are stripped from the pane.
 
 Composer pills: Chat / Plan / Ask, Ask / Auto / Always-approve, and Effort (low / medium / high / xhigh → `grok agent --reasoning-effort`). Hover a pill for what it does. Segment pills, catalog triggers, settings switches, and sidebar chrome use Plasma-style click feel (hover wash, press shrink, ~120ms selection blend). Tool cards, diffs, and computer-use frames sit in a collapsed Work tree. Permission prompts Allow / Deny / Always.
