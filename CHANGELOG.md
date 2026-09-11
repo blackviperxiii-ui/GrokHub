@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.9.4 — 2026-09-11
+
+One cabin, two ship artifacts on the same tag. Cursor **#18** (full-pane chat bubbles, faded thought process, collapsed Work tree) is on `main`.
+
+- Linux: `grokhub-linux-v2.9.4.tar.gz` and AUR `pkgver=2.9.4`. `/update` overlays the GUI then `grok update` on the current channel — it does not pass `--alpha`.
+- Windows: `GrokHub-Setup-2.9.4.exe` and `grokhub-windows-v2.9.4.zip` from `packaging/windows/` + Inno. Settings → Update downloads the GitHub zip when there is no source clone, then `grok update --alpha`.
+- User and assistant chats are Grok-dark bubbles that wrap with the pane. Thinking stays flush, faded, and labeled Thought process. Tool calls, diffs, and computer-use frames sit in a collapsed Work tree.
+
 ## 2.9.3 — 2026-09-11
 
 One cabin, two ship artifacts on the same tag. Cursor **#17** (Windows Grok Build CLI install when missing or broken; no looping loader dialog) is on `main`.
