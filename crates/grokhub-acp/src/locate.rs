@@ -153,9 +153,9 @@ pub fn doctor_broken_hint() -> &'static str {
     "Grok Build CLI is broken (missing DLL or bad image). Use Settings → Install Grok Build CLI."
 }
 
-/// True after a successful `grok --version` in this process. Missing or
-/// marked-broken binaries are not ready — first launch and Settings treat
-/// them as "install alpha".
+/// True after a successful `grok --version` in this process (doctor, install
+/// skip, or finish). Missing or marked-broken binaries are not ready — first
+/// launch and Settings treat them as "install alpha".
 pub fn grok_cli_known_good() -> bool {
     let Some(p) = find_grok() else {
         return false;
@@ -191,7 +191,10 @@ pub fn grok_cli_is_runnable(path: &Path) -> bool {
         return false;
     }
     match grok_version(path) {
-        Ok(_) => true,
+        Ok(v) => {
+            remember_doctor_result(Some(path.to_path_buf()), true, doctor_ok_line(&v));
+            true
+        }
         Err(e) => {
             if is_cli_hard_failure(None, &e) {
                 mark_grok_unusable(path, &e);
@@ -596,10 +599,7 @@ pub fn doctor_grok_line_blocking(bin: Option<&Path>) -> (bool, String) {
         }
         Some(p) if grok_marked_unusable(p) => (false, doctor_broken_hint().into()),
         Some(p) => match grok_version(p) {
-            Ok(v) => {
-                let v = v.trim().strip_prefix("grok ").unwrap_or(v.trim());
-                (true, format!("Grok Build {v}"))
-            }
+            Ok(v) => (true, doctor_ok_line(&v)),
             Err(e) => {
                 if is_cli_hard_failure(None, &e) {
                     mark_grok_unusable(p, &e);
@@ -623,10 +623,7 @@ pub fn doctor_grok_line(bin: Option<&Path>) -> (bool, String) {
     }
     if let Ok(held) = doctor_line_cache().lock() {
         if let Some((path, at, ok, text, inflight)) = held.as_ref() {
-            let sticky_fail = !*ok && path.as_deref().is_some_and(|p| bin.is_some_and(|b| same_grok_path(p, b)));
-            if path.as_deref() == bin
-                && (*inflight || sticky_fail || at.elapsed() < Duration::from_secs(8))
-            {
+            if path.as_deref() == bin && (*inflight || at.elapsed() < Duration::from_secs(8)) {
                 return (*ok, text.clone());
             }
         }
@@ -644,11 +641,20 @@ pub fn doctor_grok_line(bin: Option<&Path>) -> (bool, String) {
     };
     thread::spawn(move || {
         let (ok, text) = doctor_grok_line_blocking(path.as_deref());
-        if let Ok(mut held) = doctor_line_cache().lock() {
-            *held = Some((path, Instant::now(), ok, text, false));
-        }
+        remember_doctor_result(path, ok, text);
     });
     last
+}
+
+fn doctor_ok_line(version: &str) -> String {
+    let v = version.trim().strip_prefix("grok ").unwrap_or(version.trim());
+    format!("Grok Build {v}")
+}
+
+fn remember_doctor_result(path: Option<PathBuf>, ok: bool, text: String) {
+    if let Ok(mut held) = doctor_line_cache().lock() {
+        *held = Some((path, Instant::now(), ok, text, false));
+    }
 }
 
 pub fn grok_stdout(bin: &Path, cwd: &Path, args: &[&str]) -> Result<String, String> {
@@ -690,6 +696,7 @@ fn grok_stdout_inner(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     hide_windows_console(&mut cmd);
+    cmd.env("GROK_NO_AUTO_UPDATE", "1");
     if isolate_cabin {
         if let Some(dir) = prepare_cabin_grok_home() {
             cmd.env("GROK_HOME", dir);
@@ -933,6 +940,10 @@ mod tests {
         assert!(
             doc.contains("elapsed"),
             "Settings must not spawn grok --version every frame: {doc}"
+        );
+        assert!(
+            !doc.contains("sticky_fail"),
+            "soft grok --version failures must expire so Settings can recover: {doc}"
         );
         assert!(
             doc.contains("thread::spawn") && doc.contains("inflight"),
@@ -1327,5 +1338,49 @@ mod tests {
         clear_grok_unusable();
         invalidate_grok_bin_cache();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn runnable_cli_warms_known_good() {
+        let _lock = grok_env_test_lock();
+        let src = include_str!("locate.rs");
+        assert!(
+            src.contains("remember_doctor_result") && src.contains("doctor_ok_line"),
+            "a live grok --version must warm doctor_line_cache: {src}"
+        );
+        let runnable = src
+            .split("pub fn grok_cli_is_runnable(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn grok_bin_looks_complete(").next())
+            .expect("grok_cli_is_runnable");
+        assert!(
+            runnable.contains("remember_doctor_result"),
+            "install skip / finish must mark grok_cli_known_good: {runnable}"
+        );
+        #[cfg(unix)]
+        {
+            let dir = std::env::temp_dir().join(format!("grokhub-warm-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            let bin = dir.join("grok");
+            std::fs::write(&bin, "#!/bin/sh\necho '9.9.9-warm (deadbeef)'\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            let mut p = std::fs::metadata(&bin).unwrap().permissions();
+            p.set_mode(0o755);
+            std::fs::set_permissions(&bin, p).unwrap();
+            let prev = std::env::var_os("GROKHUB_GROK");
+            std::env::set_var("GROKHUB_GROK", &bin);
+            invalidate_grok_bin_cache();
+            assert!(grok_cli_is_runnable(&bin), "fake grok must run");
+            assert!(
+                grok_cli_known_good(),
+                "successful grok --version must hide Install Grok Build CLI"
+            );
+            match prev {
+                Some(v) => std::env::set_var("GROKHUB_GROK", v),
+                None => std::env::remove_var("GROKHUB_GROK"),
+            }
+            invalidate_grok_bin_cache();
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
