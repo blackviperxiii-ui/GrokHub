@@ -367,7 +367,8 @@ pub use update::{
     overlay_update_can_restart, overlay_update_finish, overlay_update_progress, restart_acts,
     restart_argv, restart_bin, origin_needs_retarget, stale_github_origin, systemd_user_restart_args,
     systemd_user_stop_args,
-    update_cmds,
+    settings_update_action_hint, settings_update_note, update_cmds, update_cmds_for,
+    windows_grok_update_cmd, windows_release_overlay_cmd, windows_release_update_cmds,
     update_plan_steps, update_progress_pct, update_step_label, update_wipes_config, walk_up_source,
     OverlayUpdateView, RestartAct, GITHUB_REMOTE_URL, ORIGIN_REMOTE_URL,
 };

@@ -39,8 +39,21 @@ pub fn discover_source(hints: &[PathBuf]) -> Option<PathBuf> {
     None
 }
 
-fn sh_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
+fn host_quote(s: &str) -> String {
+    if cfg!(windows) {
+        format!("'{}'", s.replace('\'', "''"))
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+fn git_probe_timeout() -> Duration {
+    // Windows Defender / cold git.exe often exceeds 2s on the first probe.
+    if cfg!(windows) {
+        Duration::from_secs(8)
+    } else {
+        Duration::from_secs(2)
+    }
 }
 
 fn git_stdout(source: &Path, args: &[&str]) -> Result<(bool, String), String> {
@@ -67,7 +80,7 @@ fn git_stdout(source: &Path, args: &[&str]) -> Result<(bool, String), String> {
                 }
                 return Ok((st.success(), out));
             }
-            Ok(None) if start.elapsed() > Duration::from_secs(2) => {
+            Ok(None) if start.elapsed() > git_probe_timeout() => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err("git timed out — is the source clone reachable?".into());
@@ -142,7 +155,7 @@ pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
             "source clone is on {branch} — checkout main, then Update"
         ));
     }
-    let src = sh_quote(&source.display().to_string());
+    let src = host_quote(&source.display().to_string());
     let mut cmds = Vec::new();
     match git_origin_url(source) {
         Ok(origin) if origin_needs_retarget(&origin) => {
@@ -163,16 +176,77 @@ pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
     Ok(cmds)
 }
 
+/// Windows Setup users have no clone and no cargo. Download the latest zip.
+pub fn update_cmds_for(source: Option<&Path>) -> Result<Vec<String>, String> {
+    match source {
+        Some(src) => update_cmds(src),
+        None if cfg!(windows) => Ok(windows_release_update_cmds()),
+        None => Err("not a GrokHub source tree — set Settings → source or GROKHUB_SRC".into()),
+    }
+}
+
+pub fn windows_release_update_cmds() -> Vec<String> {
+    vec![
+        windows_release_overlay_cmd().into(),
+        windows_grok_update_cmd().into(),
+    ]
+}
+
+/// Embedded so a Setup.exe install can update without a source tree.
+pub fn windows_release_overlay_cmd() -> &'static str {
+    concat!(
+        "$ErrorActionPreference='Stop'; ",
+        "$dest = Join-Path $env:LOCALAPPDATA 'Programs\\GrokHub'; ",
+        "New-Item -ItemType Directory -Path $dest -Force | Out-Null; ",
+        "$rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest' -Headers @{ 'User-Agent'='GrokHub' }; ",
+        "$asset = @($rel.assets | Where-Object { $_.name -like 'grokhub-windows-v*.zip' })[0]; ",
+        "if (-not $asset) { throw 'no grokhub-windows zip on latest GitHub Release' }; ",
+        "$zip = Join-Path $env:TEMP $asset.name; ",
+        "Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip; ",
+        "$stage = Join-Path $env:TEMP 'grokhub-windows-overlay'; ",
+        "if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }; ",
+        "Expand-Archive -Path $zip -DestinationPath $stage -Force; ",
+        "$exe = Get-ChildItem -Path $stage -Recurse -Filter grokhub.exe | Select-Object -First 1; ",
+        "$hub = Get-ChildItem -Path $stage -Recurse -Filter grokhub-hub.exe | Select-Object -First 1; ",
+        "if (-not $exe -or -not $hub) { throw 'zip missing grokhub.exe' }; ",
+        "Copy-Item $exe.FullName (Join-Path $dest 'grokhub.exe') -Force; ",
+        "Copy-Item $hub.FullName (Join-Path $dest 'grokhub-hub.exe') -Force; ",
+        "Write-Output \"overlay $dest\""
+    )
+}
+
+pub fn windows_grok_update_cmd() -> &'static str {
+    r#"$env:PATH = "$env:USERPROFILE\.grok\bin;$env:PATH"; grok update --alpha"#
+}
+
+pub fn settings_update_note() -> &'static str {
+    if cfg!(windows) {
+        "Downloads the latest Windows zip from GitHub into %LOCALAPPDATA%\\Programs\\GrokHub, then runs grok update --alpha. A source clone on main overlays with install-windows.ps1 instead. Does not wipe %APPDATA%\\GrokHub."
+    } else {
+        "Pulls origin/main, overlays the GUI, then runs grok update on the current channel (does not switch alpha/stable). The clone must be on main. Does not wipe ~/.config/GrokHub."
+    }
+}
+
+pub fn settings_update_action_hint() -> &'static str {
+    if cfg!(windows) {
+        "Latest GitHub zip, or overlay a source clone, then grok update --alpha."
+    } else {
+        "Pulls this clone, overlays the GUI, and updates grok."
+    }
+}
+
 fn overlay_install_cmd(source: &Path, src_quoted: &str) -> String {
     if cfg!(windows) {
-        let install = sh_quote(
+        // run_host is already PowerShell -Command. Do not nest powershell.exe -File
+        // or the script's exit code is lost.
+        let install = host_quote(
             &source
                 .join("scripts")
                 .join("install-windows.ps1")
                 .display()
                 .to_string(),
         );
-        format!("powershell.exe -NoProfile -ExecutionPolicy Bypass -File {install}")
+        format!("& {install}")
     } else {
         format!("{src_quoted}/scripts/install.sh --user")
     }
@@ -182,7 +256,7 @@ fn overlay_grok_update_cmd() -> &'static str {
     // Linux overlay stays on the current channel. Windows first-run / installer
     // may still vendor alpha; do not force --alpha here on Unix.
     if cfg!(windows) {
-        "grok update --alpha"
+        windows_grok_update_cmd()
     } else {
         "grok update"
     }
@@ -195,6 +269,8 @@ pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
                 "fast-forward origin/main — config stays".into()
             } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
                 "point origin at GitHub — Cursor Origin is not live yet".into()
+            } else if cmd.contains("releases/latest") || cmd.contains("grokhub-windows-v") {
+                "download latest Windows cabin from GitHub — does not wipe config".into()
             } else if cmd.contains("install.sh") || cmd.contains("install-windows.ps1") {
                 if cfg!(windows) {
                     "overlay %LOCALAPPDATA%\\Programs\\GrokHub — does not wipe config".into()
@@ -237,7 +313,10 @@ pub fn update_progress_pct(done_cmds: usize, total_cmds: usize) -> u8 {
 
 pub fn grok_cli_update_cmd(cmd: &str) -> bool {
     let t = cmd.trim();
-    t == "grok update" || t.starts_with("grok update ") || t.ends_with("/grok update")
+    t == "grok update"
+        || t.starts_with("grok update ")
+        || t.ends_with("/grok update")
+        || t.contains("grok update --alpha")
 }
 
 pub fn update_step_label(cmd: &str) -> &'static str {
@@ -245,6 +324,8 @@ pub fn update_step_label(cmd: &str) -> &'static str {
         "Pulling origin/main…"
     } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
         "Retargeting origin…"
+    } else if cmd.contains("releases/latest") || cmd.contains("grokhub-windows-v") {
+        "Downloading latest Windows cabin…"
     } else if cmd.contains("install.sh") || cmd.contains("install-windows.ps1") {
         "Installing overlay…"
     } else if grok_cli_update_cmd(cmd) {
@@ -399,8 +480,10 @@ mod tests {
         #[cfg(windows)]
         {
             assert!(
-                cmd.contains("install-windows.ps1") && cmd.contains("powershell"),
-                "{cmd}"
+                cmd.contains("install-windows.ps1")
+                    && cmd.trim_start().starts_with('&')
+                    && !cmd.contains("powershell.exe"),
+                "Windows overlay must invoke the ps1 inside host PowerShell: {cmd}"
             );
         }
         #[cfg(unix)]
@@ -414,7 +497,10 @@ mod tests {
 
     fn assert_overlay_grok(cmd: &str) {
         #[cfg(windows)]
-        assert_eq!(cmd, "grok update --alpha");
+        {
+            assert_eq!(cmd, windows_grok_update_cmd());
+            assert!(cmd.contains("grok update --alpha"), "{cmd}");
+        }
         #[cfg(unix)]
         assert_eq!(cmd, "grok update");
     }
@@ -731,7 +817,12 @@ mod tests {
             "Installing overlay…"
         );
         assert_eq!(update_step_label("grok update"), "Updating Grok Build CLI…");
+        assert_eq!(
+            update_step_label(windows_release_overlay_cmd()),
+            "Downloading latest Windows cabin…"
+        );
         assert!(grok_cli_update_cmd("grok update"));
+        assert!(grok_cli_update_cmd(windows_grok_update_cmd()));
         assert!(!grok_cli_update_cmd("echo grok update"));
         assert_eq!(update_step_label("echo hi"), "Updating…");
         assert_eq!(
@@ -802,5 +893,71 @@ mod tests {
             .iter()
             .any(|c| c.contains("GrokHub-Windows.git")));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn windows_can_update_without_a_clone() {
+        let none = update_cmds_for(None);
+        #[cfg(windows)]
+        {
+            let cmds = none.expect("windows release plan");
+            assert!(
+                cmds[0].contains("releases/latest") && cmds[0].contains("grokhub-windows-v"),
+                "{cmds:?}"
+            );
+            assert_overlay_grok(cmds.last().unwrap());
+            assert!(!update_wipes_config(&cmds));
+            let plan = update_plan_steps(cmds);
+            assert!(
+                plan[0].explain.contains("GitHub") && plan[0].explain.contains("Windows"),
+                "{plan:?}"
+            );
+            assert!(plan.last().unwrap().explain.contains("alpha"), "{plan:?}");
+        }
+        #[cfg(unix)]
+        {
+            let err = none.unwrap_err();
+            assert!(
+                err.contains("source") || err.contains("GROKHUB_SRC"),
+                "{err}"
+            );
+        }
+        let rel = windows_release_overlay_cmd();
+        assert!(
+            rel.contains("api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest")
+                && rel.contains("grokhub-windows-v*.zip")
+                && rel.contains("LOCALAPPDATA")
+                && rel.contains("Programs\\GrokHub")
+                && rel.contains("Expand-Archive")
+                && rel.contains("grokhub.exe")
+                && !rel.contains("cargo build")
+                && !rel.contains("GROK_CHANNEL=alpha"),
+            "{rel}"
+        );
+        assert_eq!(
+            windows_grok_update_cmd(),
+            r#"$env:PATH = "$env:USERPROFILE\.grok\bin;$env:PATH"; grok update --alpha"#
+        );
+        assert!(settings_update_note().contains(if cfg!(windows) {
+            "grok update --alpha"
+        } else {
+            "current channel"
+        }));
+        #[cfg(unix)]
+        assert!(
+            !settings_update_note().contains("--alpha"),
+            "{}",
+            settings_update_note()
+        );
+        let unix = include_str!("update.rs")
+            .split("fn overlay_grok_update_cmd(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn update_plan_steps(").next())
+            .expect("overlay_grok_update_cmd");
+        assert!(
+            unix.contains("\"grok update\"")
+                && unix.contains("do not force --alpha here on Unix"),
+            "Linux cabin /update must stay current-channel: {unix}"
+        );
     }
 }

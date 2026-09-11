@@ -64,7 +64,7 @@ fn main() {
         Launch::Help => {
             #[cfg(windows)]
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  git pull + overlay install + grok update --alpha\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  latest GitHub zip (or source overlay) + grok update --alpha\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
                 env!("CARGO_PKG_VERSION")
             );
             #[cfg(not(windows))]
@@ -170,11 +170,13 @@ fn run_doctor() {
 
 fn run_update_cli() {
     let cfg = config::load();
-    let Some(src) = update::resolve_source(&cfg.source_dir) else {
-        eprintln!("no GrokHub source tree — set GROKHUB_SRC or Settings → source");
-        std::process::exit(1);
-    };
-    match update::run_update(&src) {
+    let src = update::resolve_source(&cfg.source_dir);
+    if let Some(src) = src.as_ref() {
+        update::remember_source(src);
+    }
+    match grokhub_core::update_cmds_for(src.as_deref())
+        .and_then(|cmds| update::run_update_cmds(&cmds))
+    {
         Ok(out) => print!("{out}"),
         Err(e) => {
             eprintln!("{e}");
@@ -331,6 +333,21 @@ mod tests {
         assert!(
             src.contains("cabin_window_icon") && src.contains("with_icon"),
             "undecorated cabin still needs a taskbar / alt-tab icon: {src}"
+        );
+    }
+
+    #[test]
+    fn update_cli_runs_without_a_windows_clone() {
+        let src = include_str!("main.rs");
+        let upd = src
+            .split("fn run_update_cli()")
+            .nth(1)
+            .and_then(|s| s.split("fn run_hub(").next())
+            .expect("run_update_cli");
+        assert!(
+            upd.contains("update_cmds_for")
+                && !upd.contains("no GrokHub source tree"),
+            "grokhub --update on Windows must not require a clone: {upd}"
         );
     }
 
