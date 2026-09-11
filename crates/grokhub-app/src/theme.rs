@@ -122,9 +122,8 @@ pub fn nav_active() -> Color32 {
 pub fn bubble_user() -> Color32 {
     tok(BUBBLE_USER, LIGHT_BUBBLE_USER)
 }
-/// Assistant bubble — same plane as the user bubble, left-aligned on the canvas.
 pub fn bubble_assistant() -> Color32 {
-    tok(BUBBLE_USER, LIGHT_BUBBLE_USER)
+    bubble_user()
 }
 pub fn surface_hover() -> Color32 {
     tok(SURFACE_HOVER, LIGHT_HOVER)
