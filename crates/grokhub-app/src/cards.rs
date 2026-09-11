@@ -931,6 +931,40 @@ pub fn settings_field(
     ui.add_space(10.0);
 }
 
+pub fn get_started_panel(
+    ui: &mut egui::Ui,
+    pending: Option<&str>,
+    error: Option<&str>,
+    connect_enabled: bool,
+) -> bool {
+    let mut connect = false;
+    ui.vertical_centered(|ui| {
+        ui.add_space(24.0);
+        ui.label(
+            RichText::new("Get Started")
+                .font(crate::theme::title_font(crate::theme::GREET_HERO))
+                .color(crate::theme::fg()),
+        );
+        ui.add_space(12.0);
+        ui.label(
+            RichText::new("Connect your Super Grok account. This signs in GrokHub and the Grok Build CLI together.")
+                .size(15.0)
+                .color(crate::theme::muted()),
+        );
+        ui.add_space(20.0);
+        if let Some(p) = pending {
+            settings_note(ui, p);
+        }
+        if let Some(e) = error.filter(|s| !s.trim().is_empty()) {
+            settings_note(ui, e);
+        }
+        if connect_enabled {
+            connect = white_pill(ui, "Connect Super Grok");
+        }
+    });
+    connect
+}
+
 pub fn settings_action(ui: &mut egui::Ui, title: &str, hint: &str, action: &str) -> bool {
     let mut hit = false;
     ui.horizontal(|ui| {
@@ -2176,6 +2210,29 @@ mod tests {
         assert!(
             tex.contains("image_pixels_ok") || tex.contains("IMAGE_PIXEL_CAP"),
             "a tiny wall still with huge pixels must not decode on the UI thread: {tex}"
+        );
+    }
+
+    #[test]
+    fn get_started_copy_and_connect() {
+        let src = include_str!("cards.rs");
+        assert!(
+            src.contains("Get Started")
+                && src.contains("Connect your Super Grok account")
+                && src.contains("Connect Super Grok"),
+            "{src}"
+        );
+        let app = include_str!("app.rs");
+        assert!(
+            app.contains("ui_get_started")
+                && app.contains("should_show_get_started")
+                && app.contains("start_oauth")
+                && app.contains("oauth_err"),
+            "Get Started must use cabin device-code OAuth and surface errors: {app}"
+        );
+        assert!(
+            app.contains("Also signs in the Grok Build CLI if it is not already connected"),
+            "settings Connect must say it also signs the CLI in: {app}"
         );
     }
 }
