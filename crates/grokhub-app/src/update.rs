@@ -361,7 +361,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
         #[cfg(unix)]
         {
-            let bin = home.join(".local/bin/grokhub");
+            let bin = home.join(".local").join("bin").join("grokhub");
             std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
             std::fs::write(&bin, "#!/bin/sh\n").unwrap();
             assert_eq!(
