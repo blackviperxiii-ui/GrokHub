@@ -433,7 +433,28 @@ pub fn should_show_get_started(
     get_started_done: bool,
     cli_connected: bool,
 ) -> bool {
-    grok_present && !cabin_oauth && !get_started_done && !cli_connected
+    should_show_get_started_now(
+        grok_present,
+        cabin_oauth,
+        get_started_done,
+        cli_connected,
+        false,
+    )
+}
+
+/// After this session's official alpha install, show Get Started once grok
+/// lands even if leftover `auth.json` or a prior `get_started_done` would
+/// have skipped it. Cabin OAuth already connected still wins.
+pub fn should_show_get_started_now(
+    grok_present: bool,
+    cabin_oauth: bool,
+    get_started_done: bool,
+    cli_connected: bool,
+    official_install_session: bool,
+) -> bool {
+    grok_present
+        && !cabin_oauth
+        && (official_install_session || (!get_started_done && !cli_connected))
 }
 
 pub fn should_sync_cli_auth(cli_connected: bool) -> bool {
@@ -444,9 +465,22 @@ pub fn should_kick_alpha_install(grok_present: bool) -> bool {
     !grok_present
 }
 
-/// Settings → Update and Get Started show **Install Grok Build CLI** when grok is missing or broken.
-pub fn should_show_manual_cli_install(grok_ready: bool) -> bool {
-    !grok_ready
+/// First-run / Settings **Install Grok Build CLI**.
+/// Hide the control when grok is already present or an alpha install is
+/// already in progress / scheduled — do not offer a duplicate Install.
+pub fn should_show_manual_cli_install(grok_ready: bool, install_in_progress: bool) -> bool {
+    !grok_ready && !install_in_progress
+}
+
+/// Full-screen install wait. Stays up for an official install this session
+/// even if a `grok.exe` appears mid-download (Windows first-run).
+pub fn should_show_cli_install_wait(
+    _grok_present: bool,
+    _install_in_progress: bool,
+    official_wait: bool,
+    has_err: bool,
+) -> bool {
+    has_err || official_wait
 }
 
 /// Cabin stays on Grok Build CLI alpha. Only the `alpha` channel counts.
@@ -890,6 +924,44 @@ mod tests {
     }
 
     #[test]
+    fn missing_starts_alpha_install_present_and_in_progress_hide_control() {
+        assert!(
+            should_kick_alpha_install(false),
+            "missing → starts alpha install"
+        );
+        assert!(
+            !should_kick_alpha_install(true),
+            "present → do not start a second install"
+        );
+        assert!(
+            !should_show_manual_cli_install(true, false),
+            "present → no Install control"
+        );
+        assert!(
+            !should_show_manual_cli_install(false, true),
+            "install-in-progress → no duplicate control"
+        );
+        assert!(
+            should_show_manual_cli_install(false, false),
+            "missing and idle → Install (retry) is allowed"
+        );
+        assert!(
+            should_show_cli_install_wait(false, true, true, false),
+            "missing + official install in progress → wait sheet"
+        );
+        assert!(
+            should_show_cli_install_wait(true, true, true, false),
+            "mid-download grok.exe must keep the wait sheet"
+        );
+        assert!(
+            !should_show_cli_install_wait(true, true, false, false),
+            "present grok keep-alpha must not cover the cabin with the wait sheet"
+        );
+        assert!(should_show_cli_install_wait(false, false, true, false));
+        assert!(should_show_cli_install_wait(true, false, false, true));
+    }
+
+    #[test]
     fn get_started_and_cli_sync_predicates() {
         assert!(should_show_get_started(true, false, false, false));
         assert!(
@@ -902,6 +974,14 @@ mod tests {
             !should_show_get_started(true, false, false, true),
             "existing grok login must not block upgrades"
         );
+        assert!(
+            should_show_get_started_now(true, false, true, true, true),
+            "official install this session must still open Get Started after grok lands"
+        );
+        assert!(
+            !should_show_get_started_now(true, true, false, false, true),
+            "cabin OAuth already connected must not reopen Get Started"
+        );
         assert!(should_sync_cli_auth(false));
         assert!(
             !should_sync_cli_auth(true),
@@ -909,11 +989,10 @@ mod tests {
         );
         assert!(should_kick_alpha_install(false));
         assert!(!should_kick_alpha_install(true));
-        assert!(should_show_manual_cli_install(false));
-        assert!(
-            !should_show_manual_cli_install(true),
-            "hide the install control once grok --version works"
-        );
+        assert!(should_show_manual_cli_install(false, false));
+        assert!(!should_show_manual_cli_install(true, false));
+        assert!(!should_show_manual_cli_install(false, true));
+        assert!(!should_show_manual_cli_install(true, true));
         assert!(cli_channel_is_alpha("alpha"));
         assert!(cli_channel_is_alpha("Alpha"));
         assert!(!cli_channel_is_alpha("stable"));
