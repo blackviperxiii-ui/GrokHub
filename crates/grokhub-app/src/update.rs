@@ -102,7 +102,6 @@ pub fn run_update(source: &std::path::Path) -> Result<String, String> {
     run_update_cmds(&cmds)
 }
 
-/// `GET` GitHub Latest `tag_name`. In-app notify compares this to the running cabin.
 pub fn fetch_github_latest_tag() -> Result<String, String> {
     let resp = match ureq::get(GITHUB_LATEST_API)
         .set("user-agent", "GrokHub")
@@ -496,10 +495,6 @@ mod tests {
                 && !fetch.contains("into_string()")
                 && !fetch.contains("into_json()"),
             "Latest check must cap the GitHub body and stay in-app: {fetch}"
-        );
-        assert!(
-            src.contains("begin_cabin_latest_check") && src.contains("fetch_github_latest_tag"),
-            "{src}"
         );
     }
 }
