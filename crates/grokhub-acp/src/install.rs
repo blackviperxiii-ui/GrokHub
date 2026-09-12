@@ -33,6 +33,12 @@ pub fn begin_grok_install() -> Receiver<Result<PathBuf, String>> {
     begin_grok_install_opts(false)
 }
 
+/// First run and reinstall: official alpha if `grok` is missing or unusable.
+/// A working CLI is pinned to alpha and left alone.
+pub fn begin_ensure_grok_alpha() -> Receiver<Result<PathBuf, String>> {
+    begin_grok_install()
+}
+
 /// Settings → Update → Install Grok Build CLI. Re-runs the alpha installer even if a
 /// leftover or broken `grok.exe` is on disk.
 pub fn begin_grok_install_force() -> Receiver<Result<PathBuf, String>> {
@@ -90,10 +96,8 @@ fn install_grok_blocking_opts(force: bool) -> Result<PathBuf, String> {
                 // fail install skip or kick the official installer.
                 return keep_cli_alpha_blocking().or(Ok(p));
             }
-            // Soft --version miss (timeout / AV stall): keep a present CLI.
-            if !grok_marked_unusable(&p) {
-                return Ok(p);
-            }
+            // Missing --version, stub, or leftover that cannot start: run the
+            // official alpha installer. Do not treat a present file as success.
         }
     }
     if let Some(staged) = grok_staged_bin() {
@@ -105,11 +109,15 @@ fn install_grok_blocking_opts(force: bool) -> Result<PathBuf, String> {
     invalidate_grok_bin_cache();
     #[cfg(windows)]
     {
-        run_official_powershell().or_else(|ps_err| {
-            run_direct_download().map_err(|dl_err| {
-                format!("{ps_err}; fallback download failed: {dl_err}")
+        run_official_powershell()
+            .or_else(|ps_err| {
+                run_elevated_powershell().map_err(|elev_err| format!("{ps_err}; {elev_err}"))
             })
-        })?;
+            .or_else(|ps_err| {
+                run_direct_download().map_err(|dl_err| {
+                    format!("{ps_err}; fallback download failed: {dl_err}")
+                })
+            })?;
         finish_cli_install(
             "Grok Build CLI install finished but grok.exe was not found — run: $env:GROK_CHANNEL='alpha'; irm https://x.ai/cli/install.ps1 | iex",
         )
@@ -236,6 +244,14 @@ fn run_official_powershell() -> Result<(), String> {
     run_hidden_powershell(OFFICIAL_PS)
 }
 
+/// UAC on first run is expected. Official install writes `%USERPROFILE%\.grok\bin`;
+/// elevation covers policy / a hidden `irm | iex` that Windows blocked.
+#[cfg(windows)]
+fn run_elevated_powershell() -> Result<(), String> {
+    const WRAP: &str = "Start-Process -FilePath powershell.exe -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','$env:GROK_CHANNEL=''alpha''; irm https://x.ai/cli/install.ps1 | iex'";
+    run_hidden_powershell(WRAP)
+}
+
 #[cfg(windows)]
 fn run_direct_download() -> Result<(), String> {
     let script = r#"
@@ -275,6 +291,7 @@ fn run_hidden_powershell(command: &str) -> Result<(), String> {
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
+    cmd.env("GROK_CHANNEL", "alpha");
     hide_windows_console(&mut cmd);
     let child = cmd
         .spawn()
@@ -368,8 +385,19 @@ mod tests {
             "a leftover grok.exe that cannot start must not count as installed: {src}"
         );
         assert!(
-            src.contains("grok_marked_unusable") && src.contains("grok_staged_bin"),
-            "boot install must keep a present CLI on a soft --version miss and validate ~/.grok/bin first: {src}"
+            src.contains("begin_ensure_grok_alpha") && src.contains("grok_staged_bin"),
+            "first run / reinstall must ensure alpha and validate ~/.grok/bin first: {src}"
+        );
+        let skip = src
+            .split("fn install_grok_blocking_opts(")
+            .nth(1)
+            .and_then(|s| s.split("if let Some(staged)").next())
+            .expect("install skip");
+        assert!(
+            skip.contains("cli_install_should_skip")
+                && skip.contains("cannot start")
+                && !skip.contains("Soft --version miss"),
+            "a leftover grok that cannot start must run the official alpha installer: {skip}"
         );
     }
 
@@ -443,6 +471,10 @@ mod tests {
                 "Linux first-run must actually run the alpha installer: {src}"
             );
         }
+        assert!(
+            src.contains("run_elevated_powershell") && src.contains("Verb RunAs"),
+            "Windows first-run must request UAC when the hidden official installer fails: {src}"
+        );
         assert!(
             src.contains("begin_keep_cli_alpha")
                 && src.contains("keep_cli_alpha_blocking")

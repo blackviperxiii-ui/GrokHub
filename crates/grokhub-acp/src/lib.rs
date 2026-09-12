@@ -23,7 +23,8 @@ pub use client::{
     show_session, split_session_row, wait_event, AcpHandle, GrokSession, SingleTurn, SpawnOpts,
 };
 pub use install::{
-    begin_grok_install, begin_grok_install_force, begin_keep_cli_alpha, grok_cli_install_cmd,
+    begin_ensure_grok_alpha, begin_grok_install, begin_grok_install_force, begin_keep_cli_alpha,
+    grok_cli_install_cmd,
     install_grok_blocking, install_grok_blocking_force, keep_cli_alpha_blocking,
     prepend_dir_to_path, prepend_grok_bin_to_process_path,
 };

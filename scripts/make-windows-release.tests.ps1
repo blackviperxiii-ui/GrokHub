@@ -13,5 +13,12 @@ if ($dl -notmatch 'x.ai/cli/alpha') { throw 'must resolve version from x.ai/cli/
 if ($dl -notmatch 'storage.googleapis.com/grok-build-public-artifacts') { throw 'must fall back to GCS artifacts' }
 $iss = Get-Content -Raw "$PSScriptRoot/../packaging/windows/grokhub.iss"
 if ($iss -notmatch 'stage\\grok\.exe"; DestDir: "\{%USERPROFILE\}\\.grok\\bin"') { throw 'Inno must vendor grok.exe into ~/.grok/bin' }
+if ($iss -notmatch 'install-grok-alpha\.ps1') { throw 'Inno must ship the official alpha CLI installer script' }
+if ($iss -notmatch 'Installing Grok Build CLI \(alpha\)') { throw 'Setup must actually run the alpha CLI install, not assume PATH' }
+if ($iss -notmatch 'waituntilterminated') { throw 'Setup must wait for the alpha CLI install before launching the cabin' }
 if ($iss -notmatch 'SetupIconFile=grokhub.ico') { throw 'Inno must use the cabin icon for Setup.exe' }
+$cli = Get-Content -Raw "$PSScriptRoot/../packaging/windows/install-grok-alpha.ps1"
+if ($cli -notmatch "GROK_CHANNEL = 'alpha'" -or $cli -notmatch 'x.ai/cli/install.ps1' -or $cli -notmatch 'x.ai/cli/alpha') {
+  throw 'Setup CLI helper must install official alpha'
+}
 Write-Output 'pack script locks ok'
