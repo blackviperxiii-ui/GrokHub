@@ -12584,11 +12584,16 @@ impl Cabin {
         let oauth_busy = self.oauth_pending.is_some()
             || self.oauth_start_rx.is_some()
             || self.oauth_poll_rx.is_some();
-        let status = self.status.trim();
-        let oauth_err = (pending.is_none()
-            && !status.is_empty()
-            && status != "Grok OAuth connected")
-            .then(|| status.to_string());
+        let oauth_err = if pending.is_some() {
+            None
+        } else {
+            let s = self.status.trim();
+            if s.is_empty() || s == "Grok OAuth connected" {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        };
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(crate::theme::bg()))
             .show(ctx, |ui| {
