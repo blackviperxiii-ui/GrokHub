@@ -1663,6 +1663,8 @@ impl Cabin {
         grokhub_acp::silence_windows_hard_errors();
         if grokhub_core::should_kick_alpha_install(grokhub_acp::grok_cli_known_good()) {
             c.grok_install_rx = Some(grokhub_acp::begin_grok_install());
+        } else if grokhub_acp::find_grok().is_some() {
+            c.grok_install_rx = Some(grokhub_acp::begin_keep_cli_alpha());
         }
         c.sync_cli_auth_from_oauth();
         if grokhub_acp::grok_cli_key().is_some() {
@@ -17749,8 +17751,9 @@ mod tests {
             boot.contains("begin_grok_install")
                 && boot.contains("should_kick_alpha_install")
                 && boot.contains("grok_cli_known_good")
+                && boot.contains("begin_keep_cli_alpha")
                 && boot.contains("silence_windows_hard_errors"),
-            "missing or broken grok on first launch must fetch CLI alpha without a MessageBox loop: {boot}"
+            "missing grok installs alpha; a present stable grok switches to alpha: {boot}"
         );
         assert!(
             boot.contains("grok_cli_key") && boot.contains("mark_get_started_done"),
