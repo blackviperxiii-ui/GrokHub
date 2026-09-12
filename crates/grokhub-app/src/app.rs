@@ -10083,7 +10083,11 @@ impl eframe::App for Cabin {
         self.tick_heartbeat();
         let close_requested = ctx.input(|i| i.viewport().close_requested());
         let mut just_hid = false;
-        if crate::tray::ignore_close_while_hidden(self.window_visible, close_requested) {
+        if crate::tray::ignore_close_request(
+            self.window_visible,
+            close_requested,
+            self.want_quit,
+        ) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         } else if close_requested {
             let hide = crate::tray::should_hide_on_close(
@@ -15450,7 +15454,8 @@ mod tests {
         );
         assert_eq!(
             grokhub_core::heartbeat_repaint_ms(false, true, grokhub_core::HEARTBEAT_MS, super::HIDDEN_HEARTBEAT_MS),
-            grokhub_core::HEARTBEAT_MS
+            super::HIDDEN_HEARTBEAT_MS,
+            "hidden idle must wake for tray Quit, not the 15s pulse"
         );
         assert_eq!(
             grokhub_core::heartbeat_repaint_ms(true, true, grokhub_core::HEARTBEAT_MS, super::HIDDEN_HEARTBEAT_MS),
@@ -15575,8 +15580,9 @@ mod tests {
             "a saved job must not clone every thread 2s later — the persist helpers bump the idle key: {saver}"
         );
         assert!(
-            src.contains("ignore_close_while_hidden"),
-            "sticky close_requested must not hide the cabin after a taskbar raise"
+            src.contains("ignore_close_request")
+                && src.contains("self.want_quit"),
+            "sticky close_requested must not hide after a taskbar raise, and tray Quit must still exit"
         );
         assert!(
             include_str!("main.rs").contains("try_claim_cabin"),
