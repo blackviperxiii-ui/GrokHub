@@ -330,6 +330,17 @@ mod tests {
                 && aur_install.contains("| GROK_CHANNEL=alpha bash"),
             "AUR post_install must install grok alpha: {aur_install}"
         );
+        let iss = include_str!("../../../packaging/windows/grokhub.iss");
+        let win_cli = include_str!("../../../packaging/windows/install-grok-alpha.ps1");
+        assert!(
+            iss.contains("install-grok-alpha.ps1")
+                && iss.contains("waituntilterminated")
+                && iss.contains("Installing Grok Build CLI (alpha)")
+                && win_cli.contains("GROK_CHANNEL")
+                && win_cli.contains("alpha")
+                && win_cli.contains("https://x.ai/cli/install.ps1"),
+            "Windows Setup must run the official alpha installer, not assume grok is on PATH: {iss}"
+        );
         let overlay = include_str!("../../../crates/grokhub-core/src/update.rs");
         let unix_update = overlay
             .split("fn overlay_grok_update_cmd(")
