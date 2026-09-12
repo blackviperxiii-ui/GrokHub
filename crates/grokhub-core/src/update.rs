@@ -263,7 +263,6 @@ pub fn parse_cabin_semver(raw: &str) -> Option<(u64, u64, u64)> {
     Some((major, minor, patch.parse().ok()?))
 }
 
-/// Latest GitHub tag is a newer cabin than the running version.
 pub fn cabin_version_newer(latest: &str, running: &str) -> bool {
     match (parse_cabin_semver(latest), parse_cabin_semver(running)) {
         (Some(l), Some(r)) => l > r,
@@ -271,7 +270,6 @@ pub fn cabin_version_newer(latest: &str, running: &str) -> bool {
     }
 }
 
-/// In-app notify when GitHub Latest is newer. Missing/unparseable Latest is not a notify.
 pub fn should_notify_cabin_update(running: &str, latest: Option<&str>) -> bool {
     latest.is_some_and(|tag| cabin_version_newer(tag, running))
 }
@@ -293,13 +291,10 @@ pub fn cabin_update_notice(running: &str, latest: &str) -> String {
     )
 }
 
-/// Settings → Update shows **Update Grok Build CLI** when grok is already usable.
-/// Missing/broken grok is first-run Install, not this action.
 pub fn should_show_cli_alpha_update(grok_ready: bool) -> bool {
     grok_ready
 }
 
-/// Same command the overlay last step uses. Do not pass `--stable`.
 pub fn grok_cli_alpha_update_cmd() -> &'static str {
     overlay_grok_update_cmd()
 }

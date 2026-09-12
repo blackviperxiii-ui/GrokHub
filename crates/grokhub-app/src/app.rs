@@ -1671,9 +1671,7 @@ impl Cabin {
             c.persist_bg();
         }
         grokhub_acp::silence_windows_hard_errors();
-        // First run and reinstall always ensure Grok Build CLI alpha in the
-        // background (official installer when missing/unusable; pin a working
-        // CLI to alpha). Do not wait for Settings. UAC is expected on Windows.
+        // Official alpha when missing/unusable; pin a working CLI. UAC is expected on Windows.
         c.grok_install_wait =
             grokhub_core::should_kick_alpha_install(grokhub_acp::find_grok().is_some());
         c.official_cli_session = c.grok_install_wait;
@@ -10311,9 +10309,7 @@ impl eframe::App for Cabin {
             ),
         );
         self.ui_titlebar(ctx);
-        // Windows first-run: a Foreground Area over empty chat does not paint.
-        // Take the CentralPanel (same path as chat) and skip the rail so the
-        // wait sheet / Get Started is the only pane.
+        // First-run wait / Get Started takes CentralPanel — a Foreground Area over chat does not paint on Windows.
         if !self.ui_get_started(ctx) {
             self.ui_sidebar(ctx);
             self.ui_settings_menu(ctx);
@@ -12530,8 +12526,6 @@ impl Cabin {
             self.official_cli_session,
         );
         let show_install = grokhub_core::should_show_cli_install_wait(
-            grok_present,
-            installing,
             self.grok_install_wait,
             !self.grok_install_err.is_empty(),
         );
@@ -12539,9 +12533,7 @@ impl Cabin {
             return false;
         }
         if show_install {
-            let body = if installing {
-                "Installing Grok Build CLI (alpha)…".to_string()
-            } else if !self.grok_install_err.is_empty() {
+            let body = if !installing && !self.grok_install_err.is_empty() {
                 format!(
                     "{}\n{}",
                     self.grok_install_err,
@@ -12643,9 +12635,11 @@ impl Cabin {
             grokhub_core::should_show_manual_cli_install(cli_ready, cli_installing);
         let show_cli_update = should_show_cli_alpha_update(cli_ready);
         let cabin_notify = self.cabin_update_available();
-        let cabin_notice = self.cabin_latest.as_deref().and_then(|tag| {
-            cabin_notify.then(|| cabin_update_notice(env!("CARGO_PKG_VERSION"), tag))
-        });
+        let cabin_notice = self
+            .cabin_latest
+            .as_deref()
+            .filter(|_| cabin_notify)
+            .map(|tag| cabin_update_notice(env!("CARGO_PKG_VERSION"), tag));
         let cli_install_hint = if cli_installing {
             "Installing Grok Build CLI alpha (GROK_CHANNEL=alpha)…"
         } else if !self.grok_install_err.is_empty() {
@@ -17297,11 +17291,6 @@ mod tests {
             .split("fn queue_cli_alpha_update(")
             .nth(1)
             .and_then(|s| s.split("fn poll_grok_install(").next())
-            .or_else(|| {
-                src.split("fn queue_cli_alpha_update(")
-                    .nth(1)
-                    .and_then(|s| s.split("\n    fn ").next())
-            })
             .expect("queue_cli_alpha_update");
         assert!(
             queued_cli.contains("grok_cli_alpha_update_cmds")
