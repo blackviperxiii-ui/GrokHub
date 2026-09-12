@@ -469,13 +469,43 @@ pub fn get_started_oauth_error(status: &str) -> Option<&str> {
         return None;
     }
     let lower = s.to_ascii_lowercase();
-    if !lower.contains("oauth") {
-        return None;
-    }
     if lower.contains("oauth connected") {
         return None;
     }
-    Some(s)
+    if is_device_code_failure(&lower) {
+        Some(s)
+    } else {
+        None
+    }
+}
+
+fn is_device_code_failure(lower: &str) -> bool {
+    // Live start/poll paths write these; most omit the word "oauth".
+    const MARKERS: &[&str] = &[
+        "oauth",
+        "access_denied",
+        "expired_token",
+        "device code",
+        "invalid device",
+        "xai discovery",
+        "untrusted xai",
+        "token response missing",
+        "auth.x.ai",
+    ];
+    MARKERS.iter().any(|m| lower.contains(m))
+}
+
+/// Tag a device-code failure so Get Started can show network / API strings
+/// that have no OAuth marker of their own.
+pub fn oauth_error_status(msg: impl AsRef<str>) -> String {
+    let s = msg.as_ref().trim();
+    if get_started_oauth_error(s).is_some() {
+        s.to_string()
+    } else if s.is_empty() {
+        "OAuth failed".into()
+    } else {
+        format!("oauth error ({s})")
+    }
 }
 
 pub fn should_kick_alpha_install(grok_present: bool) -> bool {
@@ -1006,6 +1036,17 @@ mod tests {
         );
         assert!(get_started_oauth_error("Grok OAuth failed to start").is_some());
         assert!(get_started_oauth_error("oauth error (access_denied)").is_some());
+        assert!(get_started_oauth_error("access_denied").is_some());
+        assert!(get_started_oauth_error("expired_token").is_some());
+        assert!(get_started_oauth_error("device code failed").is_some());
+        assert!(get_started_oauth_error("Invalid device code response from xAI").is_some());
+        assert!(get_started_oauth_error("xAI discovery missing device endpoint").is_some());
+        assert!(get_started_oauth_error("https://auth.x.ai: Connection failed").is_some());
+        assert_eq!(
+            oauth_error_status("Connection reset by peer"),
+            "oauth error (Connection reset by peer)"
+        );
+        assert_eq!(oauth_error_status("access_denied"), "access_denied");
         assert!(
             get_started_oauth_error("Grok OAuth connected").is_none(),
             "success is not an error on Get Started"
