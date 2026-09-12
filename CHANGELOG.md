@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.9.7 — 2026-09-12
+
+One cabin, two ship artifacts on the same tag. Cursor **#28** (deslop first-run / Latest-notify), **#29** (Windows leftover clone uses zip), and **#30** (Get Started OAuth errors, Linux CLI PATH) are on `main`.
+
+- Linux: `grokhub-linux-v2.9.7.tar.gz` and AUR `pkgver=2.9.7`. `/update` overlays the GUI then `grok update --alpha` with `$HOME/.grok/bin:$HOME/.local/bin` prepended.
+- Windows: `GrokHub-Setup-2.9.7.exe` and `grokhub-windows-v2.9.7.zip` from `packaging/windows/` + Inno. Settings → Update downloads the GitHub zip when there is no source clone **or** the leftover clone is not a usable `main` checkout, then `grok update --alpha`.
+- Get Started shows live device-code / OAuth failures (`access_denied`, expired token, start/poll errors). Leftover wall or install status is not painted as an OAuth error. Latest → Settings still overlays Get Started.
+
 ## 2.9.6 — 2026-09-12
 
 One cabin, two ship artifacts on the same tag. Cursor **#26** (first-run CLI alpha) and **#27** (cabin Latest notify + CLI alpha update) are on `main`.
