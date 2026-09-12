@@ -2,9 +2,16 @@
 
 ## Unreleased
 
-- Settings trim: Account is OAuth connect/sign-out only. Behavior quiet hours is one dropdown (no a-day/host-command caps). GitHub Settings page is gone (connector-managed). Update is overlay + Update + Restart, plus **Install Grok Build CLI** when grok is missing or broken. About drops the today-stats line and the model catalog.
-- Left-rail **Chat** reuses one empty draft (no dialogue). After a reply starts, Chat opens a new chat. The separate New chat button is gone. Old convos stay in sidebar History (`grok sessions`).
-- Cabin stays on Grok Build CLI **alpha**. Linux `/update` now runs `grok update --alpha` (same as Windows). A leftover stable `grok` is detected (`~/.grok/config.toml` `[cli] channel` or `grok update --check --json`) and switched with `grok update --alpha`. A working alpha install is not yanked.
+## 2.9.5 — 2026-09-12
+
+One cabin, two ship artifacts on the same tag. Cursor **#19** (Imagine video playback), **#20** (profile menu), **#21** (smart chips), **#22** (Windows icon/tray), **#23** (Settings trim), **#24** (chat reuse), and **#25** (CLI stays on alpha) are on `main`.
+
+- Linux: `grokhub-linux-v2.9.5.tar.gz` and AUR `pkgver=2.9.5`. `/update` overlays the GUI then `grok update --alpha`.
+- Windows: `GrokHub-Setup-2.9.5.exe` and `grokhub-windows-v2.9.5.zip` from `packaging/windows/` + Inno. Settings → Update downloads the GitHub zip when there is no source clone, then `grok update --alpha`.
+- Imagine videos play in-pane instead of the image zoom. Avatar menu is Settings / Help / Connect. Empty-home greeting and chips rank from the situation. Windows uses the PNG cabin icon and tray Quit.
+- Settings Account is OAuth connect/sign-out. Behavior quiet hours is one dropdown. GitHub Settings is gone. Update is overlay + Update + Restart, plus **Install Grok Build CLI** when grok is missing or broken. About drops the today-stats line and the model catalog.
+- Left-rail **Chat** reuses one empty draft (no New chat button). After a reply starts, Chat opens a new chat. Old convos stay in sidebar History (`grok sessions`).
+- Cabin stays on Grok Build CLI **alpha**. A leftover stable `grok` is detected (`~/.grok/config.toml` `[cli] channel` or `grok update --check --json`) and switched with `grok update --alpha`. A working alpha install is not yanked.
 
 ## 2.9.4 — 2026-09-11
 
