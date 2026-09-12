@@ -1660,19 +1660,10 @@ impl Cabin {
             c.persist_bg();
         }
         grokhub_acp::silence_windows_hard_errors();
-        // `grok_cli_known_good` needs a prior `--version` in this process; the
-        // doctor cache is empty at first launch. A leftover stable `grok` is
-        // still on disk — switch it with `grok update --alpha`. Missing or
-        // marked-broken still installs official alpha.
-        if let Some(bin) = grokhub_acp::find_grok() {
-            if grokhub_acp::grok_marked_unusable(&bin) {
-                c.grok_install_rx = Some(grokhub_acp::begin_grok_install());
-            } else {
-                c.grok_install_rx = Some(grokhub_acp::begin_keep_cli_alpha());
-            }
-        } else if grokhub_core::should_kick_alpha_install(false) {
-            c.grok_install_rx = Some(grokhub_acp::begin_grok_install());
-        }
+        // First run and reinstall always ensure Grok Build CLI alpha in the
+        // background (official installer when missing/unusable; pin a working
+        // CLI to alpha). Do not wait for Settings. UAC is expected on Windows.
+        c.grok_install_rx = Some(grokhub_acp::begin_ensure_grok_alpha());
         c.sync_cli_auth_from_oauth();
         if grokhub_acp::grok_cli_key().is_some() {
             c.mark_get_started_done();
@@ -12515,7 +12506,9 @@ impl Cabin {
                 });
             return;
         }
-        if !grok_present && !self.cfg.get_started_done && !cabin_oauth {
+        if grokhub_core::should_kick_alpha_install(grok_present)
+            || !self.grok_install_err.is_empty()
+        {
             let screen = ctx.screen_rect();
             let body = if installing {
                 "Installing Grok Build CLI (alpha)…".to_string()
@@ -12528,7 +12521,8 @@ impl Cabin {
             } else {
                 "Installing Grok Build CLI (alpha)…".to_string()
             };
-            let show_retry = !installing && !self.grok_install_err.is_empty();
+            let show_retry = grokhub_core::should_show_manual_cli_install(grok_present, installing)
+                && !self.grok_install_err.is_empty();
             let mut retry = false;
             egui::Area::new(egui::Id::new("get-started-install"))
                 .fixed_pos(screen.min)
@@ -12579,9 +12573,11 @@ impl Cabin {
         let mut install_cli = false;
         let mut restart = false;
         let mut copy_diag = false;
-        let cli_ready = grokhub_acp::grok_cli_known_good();
-        let show_cli_install = grokhub_core::should_show_manual_cli_install(cli_ready);
+        let cli_ready =
+            grokhub_acp::find_grok().is_some() || grokhub_acp::grok_cli_known_good();
         let cli_installing = self.grok_install_rx.is_some();
+        let show_cli_install =
+            grokhub_core::should_show_manual_cli_install(cli_ready, cli_installing);
         let cli_install_hint = if cli_installing {
             "Installing Grok Build CLI alpha (GROK_CHANNEL=alpha)…"
         } else if !self.grok_install_err.is_empty() {
@@ -17193,8 +17189,8 @@ mod tests {
                 && src.contains("queue_grok_cli_install")
                 && src.contains("begin_grok_install_force")
                 && src.contains("should_show_manual_cli_install")
-                && src.contains("grok_cli_known_good()"),
-            "Settings → Update and Get Started offer a manual alpha CLI install when grok is missing or broken: {src}"
+                && src.contains("cli_installing"),
+            "Settings → Update and Get Started hide Install when grok is present or an alpha install is in progress: {src}"
         );
         let flush_p = src
             .split("fn flush_projects(")
@@ -17934,14 +17930,10 @@ mod tests {
             "upgrade: existing cabin OAuth must fill empty grok auth.json: {boot}"
         );
         assert!(
-            boot.contains("begin_grok_install")
-                && boot.contains("should_kick_alpha_install")
-                && boot.contains("find_grok")
-                && boot.contains("grok_marked_unusable")
-                && boot.contains("begin_keep_cli_alpha")
+            boot.contains("begin_ensure_grok_alpha")
                 && !boot.contains("grok_cli_known_good()")
                 && boot.contains("silence_windows_hard_errors"),
-            "a leftover grok must switch via keep_cli_alpha before doctor cache exists: {boot}"
+            "first launch and reinstall must ensure CLI alpha in the background: {boot}"
         );
         assert!(
             boot.contains("grok_cli_key") && boot.contains("mark_get_started_done"),
@@ -17965,8 +17957,11 @@ mod tests {
             "Get Started must show OAuth errors and not restart an in-flight wait: {started}"
         );
         assert!(
-            started.contains("Install Grok Build CLI") && started.contains("queue_grok_cli_install"),
-            "a failed first-run install must offer Install Grok Build CLI: {started}"
+            started.contains("Install Grok Build CLI")
+                && started.contains("queue_grok_cli_install")
+                && started.contains("should_show_manual_cli_install")
+                && started.contains("should_kick_alpha_install"),
+            "first-run Install hides when grok is present or an alpha install is already scheduled: {started}"
         );
         let photo = src
             .split("fn kick_oauth_photo(")

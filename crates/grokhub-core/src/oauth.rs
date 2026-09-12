@@ -444,9 +444,11 @@ pub fn should_kick_alpha_install(grok_present: bool) -> bool {
     !grok_present
 }
 
-/// Settings → Update and Get Started show **Install Grok Build CLI** when grok is missing or broken.
-pub fn should_show_manual_cli_install(grok_ready: bool) -> bool {
-    !grok_ready
+/// First-run / Settings **Install Grok Build CLI**.
+/// Hide the control when grok is already present or an alpha install is
+/// already in progress / scheduled — do not offer a duplicate Install.
+pub fn should_show_manual_cli_install(grok_ready: bool, install_in_progress: bool) -> bool {
+    !grok_ready && !install_in_progress
 }
 
 /// Cabin stays on Grok Build CLI alpha. Only the `alpha` channel counts.
@@ -890,6 +892,30 @@ mod tests {
     }
 
     #[test]
+    fn missing_starts_alpha_install_present_and_in_progress_hide_control() {
+        assert!(
+            should_kick_alpha_install(false),
+            "missing → starts alpha install"
+        );
+        assert!(
+            !should_kick_alpha_install(true),
+            "present → do not start a second install"
+        );
+        assert!(
+            !should_show_manual_cli_install(true, false),
+            "present → no Install control"
+        );
+        assert!(
+            !should_show_manual_cli_install(false, true),
+            "install-in-progress → no duplicate control"
+        );
+        assert!(
+            should_show_manual_cli_install(false, false),
+            "missing and idle → Install (retry) is allowed"
+        );
+    }
+
+    #[test]
     fn get_started_and_cli_sync_predicates() {
         assert!(should_show_get_started(true, false, false, false));
         assert!(
@@ -909,11 +935,10 @@ mod tests {
         );
         assert!(should_kick_alpha_install(false));
         assert!(!should_kick_alpha_install(true));
-        assert!(should_show_manual_cli_install(false));
-        assert!(
-            !should_show_manual_cli_install(true),
-            "hide the install control once grok --version works"
-        );
+        assert!(should_show_manual_cli_install(false, false));
+        assert!(!should_show_manual_cli_install(true, false));
+        assert!(!should_show_manual_cli_install(false, true));
+        assert!(!should_show_manual_cli_install(true, true));
         assert!(cli_channel_is_alpha("alpha"));
         assert!(cli_channel_is_alpha("Alpha"));
         assert!(!cli_channel_is_alpha("stable"));
