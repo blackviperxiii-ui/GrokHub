@@ -6666,7 +6666,7 @@ impl Cabin {
         let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
         if !wall_can_paint(
-            self.llm_ready(),
+            self.has_key(),
             self.cfg.imagine_wall,
             self.wall_busy,
             self.running,
@@ -10332,9 +10332,12 @@ impl eframe::App for Cabin {
                 Nav::Agents => self.ui_agents(ctx),
                 Nav::Settings => self.ui_chat(ctx),
             }
-            if self.nav == Nav::Settings {
-                self.ui_settings(ctx);
-            }
+        }
+        // Latest chip → Settings → Update must paint on top of Get Started.
+        // A first-frame Area over empty chat does not draw; this overlay opens
+        // after GitHub Latest returns, when the window is already sized.
+        if self.nav == Nav::Settings {
+            self.ui_settings(ctx);
         }
         if self.palette_open {
             self.ui_palette(ctx);
@@ -12595,12 +12598,7 @@ impl Cabin {
         let oauth_err = if pending.is_some() {
             None
         } else {
-            let s = self.status.trim();
-            if s.is_empty() || s == "Grok OAuth connected" {
-                None
-            } else {
-                Some(s.to_string())
-            }
+            grokhub_core::get_started_oauth_error(&self.status).map(str::to_string)
         };
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(crate::theme::bg()))
@@ -18081,6 +18079,27 @@ mod tests {
             src.contains("if !self.ui_get_started(ctx)"),
             "first-run sheet must replace empty-cabin chat so it paints on Windows"
         );
+        let paint = src
+            .split("self.ui_titlebar(ctx);")
+            .nth(1)
+            .and_then(|s| s.split("if self.palette_open").next())
+            .expect("titlebar then panes");
+        let settings_nav = paint
+            .find("if self.nav == Nav::Settings")
+            .expect("Settings after Get Started skip");
+        let skip = paint
+            .find("if !self.ui_get_started(ctx)")
+            .expect("get started skip");
+        assert!(
+            settings_nav > skip
+                && paint[skip..settings_nav].contains("ui_sidebar")
+                && !paint[settings_nav..].contains("ui_sidebar"),
+            "Latest chip must open Settings on top of Get Started: {paint}"
+        );
+        assert!(
+            started.contains("get_started_oauth_error"),
+            "Get Started must not paint leftover wall/install status as an OAuth error: {started}"
+        );
         assert!(
             started.contains("egui::CentralPanel::default()"),
             "Get Started must paint in CentralPanel, not a first-frame Area: {started}"
@@ -19593,6 +19612,15 @@ mod tests {
         assert!(
             wall_spawn < wall_save && held_wall.contains("persist_io"),
             "a held wall cover must not freeze the cabin writing imagine-wall.json: {wall}"
+        );
+        let tick_wall = src
+            .split("fn tick_wall(")
+            .nth(1)
+            .and_then(|s| s.split("fn kick_wall(").next())
+            .expect("tick_wall");
+        assert!(
+            tick_wall.contains("self.has_key()") && !tick_wall.contains("self.llm_ready()"),
+            "first-run Get Started must not kick a wall cover just because grok is on disk: {tick_wall}"
         );
         assert!(
             apply.contains("apply_review_skill_patches"),
