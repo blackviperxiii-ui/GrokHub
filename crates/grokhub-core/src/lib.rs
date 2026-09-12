@@ -303,7 +303,7 @@ pub use oauth::{
     merge_cli_auth_json, merge_refreshed, next_oauth_poll_secs, parse_device_start, parse_poll_result,
     parse_token_json, parse_userinfo_profile, oauth_access_live, realtime_bearer,
     cli_channel_is_alpha, parse_cli_config_channel, parse_cli_update_check_channel,
-    get_started_oauth_error, should_kick_alpha_install, should_show_cli_install_wait,
+    get_started_oauth_error, oauth_error_status, should_kick_alpha_install, should_show_cli_install_wait,
     should_show_get_started, should_show_get_started_now,
     should_show_manual_cli_install,
     should_switch_cli_to_alpha, should_sync_cli_auth, token_needs_refresh,
