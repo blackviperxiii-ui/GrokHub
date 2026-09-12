@@ -37,9 +37,10 @@ pub fn next_heartbeat_wait_ms(elapsed_ms: u64, period_ms: u64) -> u64 {
 }
 
 pub fn heartbeat_repaint_ms(live: bool, hidden: bool, wait_ms: u64, hidden_ms: u64) -> u64 {
-    let _ = (hidden, hidden_ms);
     if live {
         80
+    } else if hidden {
+        hidden_ms.min(wait_ms)
     } else {
         wait_ms
     }
@@ -83,7 +84,11 @@ mod tests {
     fn idle_cabin_wakes_for_the_pulse() {
         assert_eq!(heartbeat_repaint_ms(true, false, 15_000, 400), 80);
         assert_eq!(heartbeat_repaint_ms(true, true, 15_000, 400), 80);
-        assert_eq!(heartbeat_repaint_ms(false, true, 15_000, 400), 15_000);
+        assert_eq!(
+            heartbeat_repaint_ms(false, true, 15_000, 400),
+            400,
+            "a hidden cabin must poll tray Quit / Show, not sleep the 15s pulse"
+        );
         assert_eq!(heartbeat_repaint_ms(false, true, 200, 400), 200);
         assert_eq!(heartbeat_repaint_ms(false, false, 15_000, 400), 15_000);
     }

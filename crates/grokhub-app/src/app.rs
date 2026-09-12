@@ -15344,7 +15344,8 @@ mod tests {
         );
         assert_eq!(
             grokhub_core::heartbeat_repaint_ms(false, true, grokhub_core::HEARTBEAT_MS, super::HIDDEN_HEARTBEAT_MS),
-            grokhub_core::HEARTBEAT_MS
+            super::HIDDEN_HEARTBEAT_MS,
+            "hidden idle must wake for tray Quit, not the 15s pulse"
         );
         assert_eq!(
             grokhub_core::heartbeat_repaint_ms(true, true, grokhub_core::HEARTBEAT_MS, super::HIDDEN_HEARTBEAT_MS),

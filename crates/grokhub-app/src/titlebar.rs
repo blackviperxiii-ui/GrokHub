@@ -1,7 +1,14 @@
 use eframe::egui;
 
 pub fn apply_tray_window(ctx: &egui::Context, w: crate::tray::TrayWindow) {
+    // winit Visible(false) is SW_HIDE on Windows — that freezes egui timers
+    // so tray Quit / Show never run. Linux still unmaps; Windows cloaks.
+    #[cfg(not(windows))]
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(w.visible));
+    #[cfg(windows)]
+    if w.visible {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+    }
     if w.visible {
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(w.minimized));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -124,6 +131,19 @@ mod tests {
         assert!(
             src.contains("from_center_size") && src.contains("ChromeBtn::Restore"),
             "40px titlebar must keep square ×/□/restore, not shrink() a tall hit: {src}"
+        );
+    }
+
+    #[test]
+    fn windows_hide_to_tray_does_not_sw_hide() {
+        let src = include_str!("titlebar.rs");
+        assert!(
+            src.contains("cfg(not(windows))") && src.contains("Visible(w.visible)"),
+            "Windows must cloak, not winit Visible(false)/SW_HIDE, or tray Quit never runs: {src}"
+        );
+        assert!(
+            src.contains("cfg(windows)") && src.contains("Visible(true)"),
+            "Show from tray must still map the cloaked cabin: {src}"
         );
     }
 }
