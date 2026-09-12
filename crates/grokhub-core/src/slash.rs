@@ -589,7 +589,7 @@ pub fn slash_help() -> String {
         if cfg!(windows) {
             "/update — latest GitHub Windows zip into %LOCALAPPDATA%\\Programs\\GrokHub, then `grok update --alpha`. A source clone overlays with install-windows.ps1. Restart on Settings."
         } else {
-            "/update — overlay install, then `grok update` on the current channel. Restart on Settings."
+            "/update — overlay install, then `grok update --alpha`. Restart on Settings."
         },
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers",
@@ -623,9 +623,9 @@ pub fn slash_help() -> String {
         "Appearance: Dark, Light, System. Interactive chat is grok agent stdio (ACP). Night and phone use grok -p. Halt is session/cancel.",
         "Voice: OAuth for STT/TTS; duplex streams PCM with a console key. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
         if cfg!(windows) {
-            "First-time install (Windows Setup) installs Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Settings → Update → Install Grok Build CLI installs alpha when grok is missing or broken (Get Started does the same on first run). Settings → Connect does the same when grok is not already connected. Settings → Update overlays the cabin (GitHub zip when there is no clone), then runs grok update --alpha. Settings About shows grok --version."
+            "First-time install (Windows Setup) installs Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Settings → Update → Install Grok Build CLI installs alpha when grok is missing or broken (Get Started does the same on first run). Settings → Connect does the same when grok is not already connected. Settings → Update overlays the cabin (GitHub zip when there is no clone), then runs grok update --alpha. If grok is on stable after an upgrade, the cabin switches it back to alpha. Settings About shows grok --version."
         } else {
-            "First-time install (install.sh, AUR) installs Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Settings → Update → Install Grok Build CLI installs alpha when grok is missing or broken (Get Started does the same on first run). Settings → Connect does the same when grok is not already connected. Cabin overlay updates the GUI, installs grok alpha only if missing, then runs grok update on the current channel (Linux does not pass --alpha)."
+            "First-time install (install.sh, AUR) installs Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Settings → Update → Install Grok Build CLI installs alpha when grok is missing or broken (Get Started does the same on first run). Settings → Connect does the same when grok is not already connected. Cabin overlay updates the GUI, then runs grok update --alpha. If grok is on stable after an upgrade, the cabin switches it back to alpha. It does not yank a working alpha install."
         },
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
         "Pulse every 15s. Hidden idle waits for the pulse.",
@@ -803,9 +803,10 @@ mod tests {
         #[cfg(unix)]
         {
             assert!(
-                slash_help().contains("current channel")
-                    && !slash_help().contains("grok update --alpha"),
-                "Linux /update must not tell users to pass --alpha: {}",
+                slash_help().contains("grok update --alpha")
+                    && !slash_help().contains("current channel")
+                    && !slash_help().contains("Linux does not pass --alpha"),
+                "Linux /update must pin grok to alpha: {}",
                 slash_help()
             );
         }

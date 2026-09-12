@@ -1660,7 +1660,17 @@ impl Cabin {
             c.persist_bg();
         }
         grokhub_acp::silence_windows_hard_errors();
-        if grokhub_core::should_kick_alpha_install(grokhub_acp::grok_cli_known_good()) {
+        // `grok_cli_known_good` needs a prior `--version` in this process; the
+        // doctor cache is empty at first launch. A leftover stable `grok` is
+        // still on disk — switch it with `grok update --alpha`. Missing or
+        // marked-broken still installs official alpha.
+        if let Some(bin) = grokhub_acp::find_grok() {
+            if grokhub_acp::grok_marked_unusable(&bin) {
+                c.grok_install_rx = Some(grokhub_acp::begin_grok_install());
+            } else {
+                c.grok_install_rx = Some(grokhub_acp::begin_keep_cli_alpha());
+            }
+        } else if grokhub_core::should_kick_alpha_install(false) {
             c.grok_install_rx = Some(grokhub_acp::begin_grok_install());
         }
         c.sync_cli_auth_from_oauth();
@@ -17926,9 +17936,12 @@ mod tests {
         assert!(
             boot.contains("begin_grok_install")
                 && boot.contains("should_kick_alpha_install")
-                && boot.contains("grok_cli_known_good")
+                && boot.contains("find_grok")
+                && boot.contains("grok_marked_unusable")
+                && boot.contains("begin_keep_cli_alpha")
+                && !boot.contains("grok_cli_known_good()")
                 && boot.contains("silence_windows_hard_errors"),
-            "missing or broken grok on first launch must fetch CLI alpha without a MessageBox loop: {boot}"
+            "a leftover grok must switch via keep_cli_alpha before doctor cache exists: {boot}"
         );
         assert!(
             boot.contains("grok_cli_key") && boot.contains("mark_get_started_done"),
