@@ -9214,10 +9214,17 @@ impl Cabin {
         self.nav = Nav::Settings;
         self.settings_sec = SettingsSec::Update;
         let src = resolve_source(&self.cfg.source_dir);
-        if let Some(src) = src.as_ref() {
-            self.cfg.source_dir = src.display().to_string();
-            remember_source(src);
-            self.persist_cfg();
+        // Leftover cursor/* (or any non-main tree) is not a product checkout.
+        // Do not persist it — Windows Setup still runs the GitHub zip path.
+        if src
+            .as_ref()
+            .is_some_and(|p| grokhub_core::overlay_clone_usable(p))
+        {
+            if let Some(src) = src.as_ref() {
+                self.cfg.source_dir = src.display().to_string();
+                remember_source(src);
+                self.persist_cfg();
+            }
         }
         match update_cmds_for(src.as_deref()) {
             Ok(cmds) if !update_wipes_config(&cmds) => {
@@ -17272,8 +17279,9 @@ mod tests {
         );
         assert!(
             queued.contains("update_cmds_for")
+                && queued.contains("overlay_clone_usable")
                 && !queued.contains("Set Settings → source"),
-            "Windows Update must run without a clone: {queued}"
+            "Windows Update must run without a clone; leftover cursor/* must not be remembered: {queued}"
         );
         assert!(
             src.contains("settings_update_action_hint()"),

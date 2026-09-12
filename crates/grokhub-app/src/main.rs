@@ -175,8 +175,13 @@ fn run_doctor() {
 fn run_update_cli() {
     let cfg = config::load();
     let src = update::resolve_source(&cfg.source_dir);
-    if let Some(src) = src.as_ref() {
-        update::remember_source(src);
+    if src
+        .as_ref()
+        .is_some_and(|p| grokhub_core::overlay_clone_usable(p))
+    {
+        if let Some(src) = src.as_ref() {
+            update::remember_source(src);
+        }
     }
     match grokhub_core::update_cmds_for(src.as_deref())
         .and_then(|cmds| update::run_update_cmds(&cmds))
@@ -350,8 +355,9 @@ mod tests {
             .expect("run_update_cli");
         assert!(
             upd.contains("update_cmds_for")
+                && upd.contains("overlay_clone_usable")
                 && !upd.contains("no GrokHub source tree"),
-            "grokhub --update on Windows must not require a clone: {upd}"
+            "grokhub --update on Windows must not require a clone or remember leftover cursor/*: {upd}"
         );
     }
 

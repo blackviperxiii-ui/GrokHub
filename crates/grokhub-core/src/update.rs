@@ -179,11 +179,26 @@ pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
     Ok(cmds)
 }
 
+/// A real product checkout: GrokHub tree on `main`. Leftover `cursor/*`
+/// (or any other branch) is not this — Windows Setup must still Update.
+pub fn overlay_clone_usable(source: &Path) -> bool {
+    is_grokhub_source(source) && git_head_branch(source).ok().as_deref() == Some("main")
+}
+
 /// Windows Setup users have no clone and no cargo. Download the latest zip.
+/// A leftover agent checkout (wrong branch, detached HEAD) must not block that.
 pub fn update_cmds_for(source: Option<&Path>) -> Result<Vec<String>, String> {
+    update_cmds_for_host(source, cfg!(windows))
+}
+
+pub fn update_cmds_for_host(source: Option<&Path>, windows: bool) -> Result<Vec<String>, String> {
     match source {
-        Some(src) => update_cmds(src),
-        None if cfg!(windows) => Ok(windows_release_update_cmds()),
+        Some(src) => match update_cmds(src) {
+            Ok(cmds) => Ok(cmds),
+            Err(_) if windows => Ok(windows_release_update_cmds()),
+            Err(e) => Err(e),
+        },
+        None if windows => Ok(windows_release_update_cmds()),
         None => Err("not a GrokHub source tree — set Settings → source or GROKHUB_SRC".into()),
     }
 }
@@ -982,7 +997,60 @@ mod tests {
     }
 
     #[test]
+    fn leftover_windows_clone_uses_github_zip() {
+        let root = std::env::temp_dir().join(format!(
+            "grokhub-src-leftover-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        seed_git_source(&root, "cursor/windows-icon-tray-7fe9");
+        let err = update_cmds(&root).unwrap_err();
+        assert!(
+            err.contains("cursor/windows-icon-tray-7fe9") && err.contains("checkout main"),
+            "{err}"
+        );
+        assert!(
+            !overlay_clone_usable(&root),
+            "a leftover cursor/* branch is not a product checkout"
+        );
+        let win = update_cmds_for_host(Some(&root), true).expect("Setup cabin must still Update");
+        assert_eq!(win, windows_release_update_cmds());
+        assert!(
+            win[0].contains("releases/latest") && win[0].contains("grokhub-windows-v"),
+            "{win:?}"
+        );
+        assert_eq!(win.last().map(String::as_str), Some(windows_grok_update_cmd()));
+        assert!(!update_wipes_config(&win));
+        assert!(
+            !win.iter()
+                .any(|c| c.contains("pull --ff-only") || c.contains("checkout main")),
+            "leftover clone must not become the overlay plan: {win:?}"
+        );
+        let unix = update_cmds_for_host(Some(&root), false).unwrap_err();
+        assert!(
+            unix.contains("cursor/windows-icon-tray-7fe9"),
+            "Linux still requires a main checkout: {unix}"
+        );
+        std::process::Command::new("git")
+            .args(["checkout", "-B", "main"])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(overlay_clone_usable(&root));
+        let on_main = update_cmds_for_host(Some(&root), true).expect("main clone overlays");
+        assert!(
+            on_main.iter().any(|c| c.contains("pull --ff-only origin main")),
+            "a real main checkout still overlays: {on_main:?}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn windows_can_update_without_a_clone() {
+        assert_eq!(
+            update_cmds_for_host(None, true).expect("windows host, no clone"),
+            windows_release_update_cmds()
+        );
         let none = update_cmds_for(None);
         #[cfg(windows)]
         {
