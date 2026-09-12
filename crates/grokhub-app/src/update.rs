@@ -1,10 +1,11 @@
 use crate::config;
 use crate::host::run_host;
 use grokhub_core::{
-    discover_source, forbidden_reason, restart_acts, restart_bin, systemd_user_restart_args,
-    systemd_user_stop_args, update_cmds, update_progress_pct, update_step_label,
-    update_wipes_config, RestartAct,
+    discover_source, forbidden_reason, parse_github_latest_tag, restart_acts, restart_bin,
+    systemd_user_restart_args, systemd_user_stop_args, update_cmds, update_progress_pct,
+    update_step_label, update_wipes_config, RestartAct, GITHUB_LATEST_API, TEXT_FILE_CAP,
 };
+use std::io::Read;
 use std::env;
 use std::process::{Command, Stdio};
 #[cfg(all(test, unix))]
@@ -99,6 +100,52 @@ pub fn run_update(source: &std::path::Path) -> Result<String, String> {
     let cmds = update_cmds(source)?;
     remember_source(source);
     run_update_cmds(&cmds)
+}
+
+/// `GET` GitHub Latest `tag_name`. In-app notify compares this to the running cabin.
+pub fn fetch_github_latest_tag() -> Result<String, String> {
+    let resp = match ureq::get(GITHUB_LATEST_API)
+        .set("user-agent", "GrokHub")
+        .set("accept", "application/vnd.github+json")
+        .timeout(Duration::from_secs(8))
+        .call()
+    {
+        Ok(r) => r,
+        Err(ureq::Error::Status(code, r)) => {
+            let mut buf = Vec::new();
+            let _ = r
+                .into_reader()
+                .take(TEXT_FILE_CAP as u64)
+                .read_to_end(&mut buf);
+            return Err(format!(
+                "GitHub Latest {code}: {}",
+                String::from_utf8_lossy(&buf).chars().take(120).collect::<String>()
+            ));
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut buf = Vec::new();
+    if resp
+        .into_reader()
+        .take(TEXT_FILE_CAP as u64 + 1)
+        .read_to_end(&mut buf)
+        .is_err()
+    {
+        return Err("GitHub Latest response read failed".into());
+    }
+    if buf.len() > TEXT_FILE_CAP {
+        return Err("GitHub Latest response too large".into());
+    }
+    let body = String::from_utf8_lossy(&buf);
+    parse_github_latest_tag(&body).ok_or_else(|| "GitHub Latest has no tag_name".into())
+}
+
+pub fn begin_cabin_latest_check() -> std::sync::mpsc::Receiver<Result<String, String>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(fetch_github_latest_tag());
+    });
+    rx
 }
 
 fn unit_is_active(unit: &str) -> bool {
@@ -428,6 +475,31 @@ mod tests {
         assert!(
             !prod.contains("pgrep "),
             "cabin restart must never pgrep: {prod}"
+        );
+    }
+
+    #[test]
+    fn latest_fetch_is_capped_github_api() {
+        let src = include_str!("update.rs");
+        let fetch = src
+            .split("pub fn fetch_github_latest_tag(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn begin_cabin_latest_check(").next())
+            .expect("fetch_github_latest_tag");
+        assert!(
+            fetch.contains("GITHUB_LATEST_API")
+                && fetch.contains("user-agent")
+                && fetch.contains("GrokHub")
+                && fetch.contains(".take(")
+                && fetch.contains("TEXT_FILE_CAP")
+                && fetch.contains("parse_github_latest_tag")
+                && !fetch.contains("into_string()")
+                && !fetch.contains("into_json()"),
+            "Latest check must cap the GitHub body and stay in-app: {fetch}"
+        );
+        assert!(
+            src.contains("begin_cabin_latest_check") && src.contains("fetch_github_latest_tag"),
+            "{src}"
         );
     }
 }
