@@ -223,7 +223,7 @@ fn ensure_windows_home() {
 }
 
 fn cabin_window_icon() -> Option<egui::IconData> {
-    let bytes = include_bytes!("../../../packaging/windows/grokhub.ico");
+    let bytes = include_bytes!("../../../packaging/icons/hicolor/256x256/apps/grokhub.png");
     let img = image::load_from_memory(bytes).ok()?.into_rgba8();
     let (width, height) = img.dimensions();
     Some(egui::IconData {
@@ -366,5 +366,16 @@ mod tests {
             include_bytes!("../../../packaging/windows/grokhub.ico").len() > 64,
             "packaging/windows/grokhub.ico must exist for winresource and Inno SetupIconFile"
         );
+        let src = include_str!("main.rs");
+        assert!(
+            src.contains("hicolor/256x256/apps/grokhub.png"),
+            "taskbar / alt-tab icon must be the Linux cabin PNG: {src}"
+        );
+        let window = image::load_from_memory(include_bytes!(
+            "../../../packaging/icons/hicolor/256x256/apps/grokhub.png"
+        ))
+        .unwrap()
+        .into_rgba8();
+        assert_eq!(window.dimensions(), (256, 256));
     }
 }
