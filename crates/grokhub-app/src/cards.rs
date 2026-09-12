@@ -475,6 +475,23 @@ pub fn status_chip(ui: &mut egui::Ui, label: &str, tone: ChipTone) {
         });
 }
 
+/// In-app cabin update notify. Click opens Settings → Update. Not a web page.
+pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
+    egui::Frame::none()
+        .fill(crate::theme::elevated())
+        .rounding(10.0)
+        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
+        .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(RichText::new(label).size(12.0).color(crate::theme::LIVE))
+                    .sense(Sense::click()),
+            )
+            .clicked()
+        })
+        .inner
+}
+
 pub fn framed_preview(ui: &mut egui::Ui, tex: &TextureHandle, size: [usize; 2], max_w: f32) {
     let scale = max_w / size[0].max(1) as f32;
     let h = size[1] as f32 * scale;

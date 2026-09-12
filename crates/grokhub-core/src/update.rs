@@ -115,6 +115,9 @@ fn git_origin_url(source: &Path) -> Result<String, String> {
 pub const GITHUB_REMOTE_URL: &str = "https://github.com/blackviperxiii-ui/GrokHub.git";
 /// Leftover Cursor Origin clone — retarget to GitHub.
 pub const ORIGIN_REMOTE_URL: &str = "https://origin.cursor.com/viperxiii/GrokHub.git";
+/// Public Latest release. Cabin notify compares `tag_name` to the running version.
+pub const GITHUB_LATEST_API: &str =
+    "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest";
 
 fn origin_norm(url: &str) -> String {
     let mut u = url.trim().trim_end_matches('/').to_ascii_lowercase();
@@ -244,6 +247,65 @@ pub fn settings_update_action_hint() -> &'static str {
     } else {
         "Pulls this clone, overlays the GUI, and updates grok on alpha."
     }
+}
+
+/// `2.9.5` or `v2.9.5`. Extra suffix after patch (`2.9.5-alpha`) is ignored.
+pub fn parse_cabin_semver(raw: &str) -> Option<(u64, u64, u64)> {
+    let t = raw.trim().trim_start_matches(['v', 'V']);
+    let mut parts = t.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch_tok = parts.next()?;
+    let patch: String = patch_tok.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if patch.is_empty() {
+        return None;
+    }
+    Some((major, minor, patch.parse().ok()?))
+}
+
+/// Latest GitHub tag is a newer cabin than the running version.
+pub fn cabin_version_newer(latest: &str, running: &str) -> bool {
+    match (parse_cabin_semver(latest), parse_cabin_semver(running)) {
+        (Some(l), Some(r)) => l > r,
+        _ => false,
+    }
+}
+
+/// In-app notify when GitHub Latest is newer. Missing/unparseable Latest is not a notify.
+pub fn should_notify_cabin_update(running: &str, latest: Option<&str>) -> bool {
+    latest.is_some_and(|tag| cabin_version_newer(tag, running))
+}
+
+/// `tag_name` from `GET …/releases/latest`.
+pub fn parse_github_latest_tag(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let tag = v.get("tag_name").and_then(|x| x.as_str())?.trim();
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag.to_string())
+    }
+}
+
+pub fn cabin_update_notice(running: &str, latest: &str) -> String {
+    format!(
+        "GrokHub {latest} is on GitHub Latest (running {running}). Update overlays the cabin, then Restart."
+    )
+}
+
+/// Settings → Update shows **Update Grok Build CLI** when grok is already usable.
+/// Missing/broken grok is first-run Install, not this action.
+pub fn should_show_cli_alpha_update(grok_ready: bool) -> bool {
+    grok_ready
+}
+
+/// Same command the overlay last step uses. Do not pass `--stable`.
+pub fn grok_cli_alpha_update_cmd() -> &'static str {
+    overlay_grok_update_cmd()
+}
+
+pub fn grok_cli_alpha_update_cmds() -> Vec<String> {
+    vec![overlay_grok_update_cmd().into()]
 }
 
 fn overlay_install_cmd(source: &Path, src_quoted: &str) -> String {
@@ -1004,6 +1066,57 @@ mod tests {
                 && win_install.contains("& {install}")
                 && !win_install.contains("-File {install}"),
             "clone overlay must Bypass Restricted without nesting powershell: {win_install}"
+        );
+    }
+
+    #[test]
+    fn notify_when_newer() {
+        assert_eq!(parse_cabin_semver("2.9.5"), Some((2, 9, 5)));
+        assert_eq!(parse_cabin_semver("v2.9.6"), Some((2, 9, 6)));
+        assert_eq!(parse_cabin_semver("V2.10.0"), Some((2, 10, 0)));
+        assert!(cabin_version_newer("v2.9.6", "2.9.5"));
+        assert!(cabin_version_newer("2.10.0", "v2.9.5"));
+        assert!(!cabin_version_newer("v2.9.5", "2.9.5"));
+        assert!(!cabin_version_newer("v2.9.4", "2.9.5"));
+        assert!(!should_notify_cabin_update("2.9.5", None));
+        assert!(!should_notify_cabin_update("2.9.5", Some("v2.9.5")));
+        assert!(!should_notify_cabin_update("2.9.5", Some("v2.9.4")));
+        assert!(should_notify_cabin_update("2.9.5", Some("v2.9.6")));
+        assert!(should_notify_cabin_update("2.9.5", Some("2.10.0")));
+        assert!(!should_notify_cabin_update("2.9.5", Some("not-a-version")));
+        assert_eq!(
+            parse_github_latest_tag(r#"{"tag_name":"v2.9.6","name":"GrokHub 2.9.6"}"#).as_deref(),
+            Some("v2.9.6")
+        );
+        assert!(parse_github_latest_tag("{}").is_none());
+        assert!(parse_github_latest_tag("not-json").is_none());
+        let notice = cabin_update_notice("2.9.5", "v2.9.6");
+        assert!(notice.contains("v2.9.6") && notice.contains("2.9.5"), "{notice}");
+        assert!(
+            !notice.contains("http") && !notice.contains("github.com"),
+            "notify is in-app, not a web page: {notice}"
+        );
+        assert_eq!(GITHUB_LATEST_API, "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest");
+    }
+
+    #[test]
+    fn cli_alpha_update_command() {
+        let cmd = grok_cli_alpha_update_cmd();
+        assert!(cmd.contains("grok update --alpha"), "{cmd}");
+        assert!(!cmd.contains("--stable"), "{cmd}");
+        let cmds = grok_cli_alpha_update_cmds();
+        assert_eq!(cmds.len(), 1);
+        assert!(grok_cli_update_cmd(&cmds[0]));
+        assert_eq!(cmds[0], overlay_grok_update_cmd());
+        assert!(should_show_cli_alpha_update(true));
+        assert!(
+            !should_show_cli_alpha_update(false),
+            "missing grok is first-run Install, not CLI update"
+        );
+        let plan = update_plan_steps(cmds);
+        assert!(
+            plan[0].explain.contains("alpha") && plan[0].explain.contains("Grok Build CLI"),
+            "{plan:?}"
         );
     }
 }
