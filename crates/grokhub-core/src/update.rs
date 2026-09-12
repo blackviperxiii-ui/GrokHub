@@ -338,13 +338,19 @@ fn overlay_install_cmd(source: &Path, src_quoted: &str) -> String {
     }
 }
 
+/// Linux overlay / Settings → Update CLI. Put `~/.grok/bin` on PATH inside the
+/// host command (same as Windows). `bash -lc` can reset PATH from profile.
+pub fn unix_grok_update_cmd() -> &'static str {
+    r#"export PATH="$HOME/.grok/bin:$HOME/.local/bin:$PATH"; grok update --alpha"#
+}
+
 fn overlay_grok_update_cmd() -> &'static str {
     // Cabin stays on Grok Build CLI alpha. Linux matches Windows: grok update --alpha.
     // Do not pass --stable. A working alpha install is not yanked.
     if cfg!(windows) {
         windows_grok_update_cmd()
     } else {
-        "grok update --alpha"
+        unix_grok_update_cmd()
     }
 }
 
@@ -593,7 +599,11 @@ mod tests {
             assert!(cmd.contains("grok update --alpha"), "{cmd}");
         }
         #[cfg(unix)]
-        assert_eq!(cmd, "grok update --alpha");
+        {
+            assert_eq!(cmd, unix_grok_update_cmd());
+            assert!(cmd.contains("$HOME/.grok/bin"), "{cmd}");
+            assert!(grok_cli_update_cmd(cmd), "{cmd}");
+        }
     }
 
     #[test]
@@ -733,7 +743,7 @@ mod tests {
         #[cfg(unix)]
         {
             assert!(
-                cmds.last().is_some_and(|c| c == "grok update --alpha"),
+                cmds.last().is_some_and(|c| c == unix_grok_update_cmd()),
                 "{cmds:?}"
             );
             assert!(
@@ -1109,15 +1119,17 @@ mod tests {
         );
         assert!(settings_update_note().contains("grok update --alpha"));
         let unix = include_str!("update.rs")
-            .split("fn overlay_grok_update_cmd(")
+            .split("pub fn unix_grok_update_cmd(")
             .nth(1)
             .and_then(|s| s.split("pub fn update_plan_steps(").next())
-            .expect("overlay_grok_update_cmd");
+            .expect("unix_grok_update_cmd");
         assert!(
-            unix.contains("\"grok update --alpha\"")
+            unix.contains("$HOME/.grok/bin")
+                && unix.contains("grok update --alpha")
                 && unix.contains("Do not pass --stable")
+                && unix.contains("unix_grok_update_cmd()")
                 && !unix.contains("do not force --alpha here on Unix"),
-            "Linux cabin /update must pin grok to alpha: {unix}"
+            "Linux cabin /update must pin grok to alpha and put ~/.grok/bin on PATH: {unix}"
         );
         let win_install = include_str!("update.rs")
             .split("fn overlay_install_cmd(")

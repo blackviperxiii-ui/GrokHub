@@ -367,7 +367,10 @@ mod tests {
             .unwrap();
         }
         #[cfg(unix)]
-        assert_eq!(cmds.last().map(String::as_str), Some("grok update --alpha"));
+        assert_eq!(
+            cmds.last().map(String::as_str),
+            Some(grokhub_core::unix_grok_update_cmd())
+        );
         cmds.pop();
         cmds.retain(|c| !c.contains("remote set-url") && !c.contains("remote add"));
         let out = run_update_cmds(&cmds).expect("update");
