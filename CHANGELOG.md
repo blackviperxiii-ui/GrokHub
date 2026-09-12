@@ -4,6 +4,7 @@
 
 - Settings trim: Account is OAuth connect/sign-out only. Behavior quiet hours is one dropdown (no a-day/host-command caps). GitHub Settings page is gone (connector-managed). Update is overlay + Update + Restart, plus **Install Grok Build CLI** when grok is missing or broken. About drops the today-stats line and the model catalog.
 - Left-rail **Chat** reuses one empty draft (no dialogue). After a reply starts, Chat opens a new chat. The separate New chat button is gone. Old convos stay in sidebar History (`grok sessions`).
+- Cabin stays on Grok Build CLI **alpha**. Linux `/update` now runs `grok update --alpha` (same as Windows). A leftover stable `grok` is detected (`~/.grok/config.toml` `[cli] channel` or `grok update --check --json`) and switched with `grok update --alpha`. A working alpha install is not yanked.
 
 ## 2.9.4 — 2026-09-11
 

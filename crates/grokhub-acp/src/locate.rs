@@ -337,6 +337,23 @@ pub fn grok_home() -> Option<PathBuf> {
     Some(grokhub_core::user_home()?.join(".grok"))
 }
 
+/// Channel `grok update` will follow. Prefers `~/.grok/config.toml` `[cli] channel`
+/// so a cabin launch does not hit the network. Falls back to
+/// `grok update --check --json`.
+pub fn grok_cli_channel(bin: &Path) -> Option<String> {
+    if let Some(home) = grok_home() {
+        let cfg = home.join("config.toml");
+        if let Ok(text) = std::fs::read_to_string(&cfg) {
+            if let Some(ch) = grokhub_core::parse_cli_config_channel(&text) {
+                return Some(ch);
+            }
+        }
+    }
+    let cwd = grok_home().unwrap_or_else(std::env::temp_dir);
+    let text = grok_user_stdout_timeout(bin, &cwd, &["update", "--check", "--json"], 20).ok()?;
+    grokhub_core::parse_cli_update_check_channel(&text)
+}
+
 /// Socket for cabin `grok agent stdio`. Must not be `~/.grok/leader.sock` or the
 /// interactive CLI leader SIGTERMs the cabin child (wait status 143).
 pub fn cabin_leader_socket() -> Option<PathBuf> {
@@ -1391,5 +1408,32 @@ mod tests {
             invalidate_grok_bin_cache();
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    #[test]
+    fn grok_cli_channel_reads_config_toml() {
+        let _lock = grok_env_test_lock();
+        let dir = std::env::temp_dir().join(format!("grokhub-ch-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(dir.join(".grok"));
+        std::fs::write(dir.join(".grok").join("config.toml"), "[cli]\nchannel = \"stable\"\n")
+            .unwrap();
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", &dir);
+        let bin = dir.join("missing-grok");
+        let ch = grok_cli_channel(&bin);
+        match prev {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(ch.as_deref(), Some("stable"));
+        assert!(grokhub_core::should_switch_cli_to_alpha(ch.as_deref()));
+        let src = include_str!("locate.rs");
+        assert!(
+            src.contains("parse_cli_config_channel")
+                && src.contains("update")
+                && src.contains("--check"),
+            "channel probe must prefer config.toml then grok update --check --json: {src}"
+        );
     }
 }
