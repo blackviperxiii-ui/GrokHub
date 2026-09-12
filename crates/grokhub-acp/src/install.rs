@@ -388,9 +388,16 @@ mod tests {
             src.contains("begin_ensure_grok_alpha") && src.contains("grok_staged_bin"),
             "first run / reinstall must ensure alpha and validate ~/.grok/bin first: {src}"
         );
+        let skip = src
+            .split("fn install_grok_blocking_opts(")
+            .nth(1)
+            .and_then(|s| s.split("if let Some(staged)").next())
+            .expect("install skip");
         assert!(
-            !src.contains("keep a present CLI") && !src.contains("Soft --version miss"),
-            "a leftover grok that cannot start must run the official alpha installer: {src}"
+            skip.contains("cli_install_should_skip")
+                && skip.contains("cannot start")
+                && !skip.contains("Soft --version miss"),
+            "a leftover grok that cannot start must run the official alpha installer: {skip}"
         );
     }
 
