@@ -373,14 +373,16 @@ pub use thread_tab::{
     ThreadReuseView, ThreadTab, AUTO_TITLE_MAX,
 };
 pub use update::{
-    discover_source, is_grokhub_source, overlay_stop_targets, overlay_update_begin,
-    overlay_update_can_restart, overlay_update_finish, overlay_update_progress, restart_acts,
-    restart_argv, restart_bin, origin_needs_retarget, stale_github_origin, systemd_user_restart_args,
-    systemd_user_stop_args,
-    settings_update_action_hint, settings_update_note, update_cmds, update_cmds_for,
-    windows_grok_update_cmd, windows_release_overlay_cmd, windows_release_update_cmds,
-    update_plan_steps, update_progress_pct, update_step_label, update_wipes_config, walk_up_source,
-    OverlayUpdateView, RestartAct, GITHUB_REMOTE_URL, ORIGIN_REMOTE_URL,
+    cabin_update_notice, cabin_version_newer, discover_source, grok_cli_alpha_update_cmd,
+    grok_cli_alpha_update_cmds, is_grokhub_source, overlay_stop_targets, overlay_update_begin,
+    overlay_update_can_restart, overlay_update_finish, overlay_update_progress, parse_cabin_semver,
+    parse_github_latest_tag, restart_acts, restart_argv, restart_bin, origin_needs_retarget,
+    stale_github_origin, should_notify_cabin_update, should_show_cli_alpha_update,
+    systemd_user_restart_args, systemd_user_stop_args, settings_update_action_hint,
+    settings_update_note, update_cmds, update_cmds_for, windows_grok_update_cmd,
+    windows_release_overlay_cmd, windows_release_update_cmds, update_plan_steps,
+    update_progress_pct, update_step_label, update_wipes_config, walk_up_source, OverlayUpdateView,
+    RestartAct, GITHUB_LATEST_API, GITHUB_REMOTE_URL, ORIGIN_REMOTE_URL,
 };
 
 pub const PRESENCE_PUSH_MIN_MS: u64 = 400;
