@@ -18102,6 +18102,17 @@ mod tests {
             started.contains("get_started_oauth_error"),
             "Get Started must not paint leftover wall/install status as an OAuth error: {started}"
         );
+        let poll = src
+            .split("fn poll_oauth(")
+            .nth(1)
+            .and_then(|s| s.split("fn clear_oauth_photo(").next())
+            .expect("poll_oauth");
+        assert!(
+            poll.matches("oauth_error_status").count() >= 3
+                && poll.contains("PollStatus::Expired")
+                && poll.contains("PollStatus::Denied"),
+            "Get Started must show live device-code start/poll/deny failures: {poll}"
+        );
         assert!(
             started.contains("egui::CentralPanel::default()"),
             "Get Started must paint in CentralPanel, not a first-frame Area: {started}"
