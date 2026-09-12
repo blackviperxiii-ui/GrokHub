@@ -461,6 +461,23 @@ pub fn should_sync_cli_auth(cli_connected: bool) -> bool {
     !cli_connected
 }
 
+/// First-run Get Started may only show device-code failures.
+/// Leftover cabin status (wall cover, install, Saved) must not paint on the sheet.
+pub fn get_started_oauth_error(status: &str) -> Option<&str> {
+    let s = status.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let lower = s.to_ascii_lowercase();
+    if !lower.contains("oauth") {
+        return None;
+    }
+    if lower.contains("oauth connected") {
+        return None;
+    }
+    Some(s)
+}
+
 pub fn should_kick_alpha_install(grok_present: bool) -> bool {
     !grok_present
 }
@@ -987,6 +1004,19 @@ mod tests {
             !should_sync_cli_auth(true),
             "Settings reconnect must not overwrite grok login"
         );
+        assert!(get_started_oauth_error("Grok OAuth failed to start").is_some());
+        assert!(get_started_oauth_error("oauth error (access_denied)").is_some());
+        assert!(
+            get_started_oauth_error("Grok OAuth connected").is_none(),
+            "success is not an error on Get Started"
+        );
+        assert!(
+            get_started_oauth_error("Wall cover held — Connect Grok in Settings").is_none(),
+            "leftover wall status must not paint on Get Started"
+        );
+        assert!(get_started_oauth_error("Grok Build CLI (alpha) installed").is_none());
+        assert!(get_started_oauth_error("Saved").is_none());
+        assert!(get_started_oauth_error("").is_none());
         assert!(should_kick_alpha_install(false));
         assert!(!should_kick_alpha_install(true));
         assert!(should_show_manual_cli_install(false, false));
