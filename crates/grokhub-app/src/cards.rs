@@ -475,7 +475,6 @@ pub fn status_chip(ui: &mut egui::Ui, label: &str, tone: ChipTone) {
         });
 }
 
-/// In-app cabin update notify. Click opens Settings → Update. Not a web page.
 pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
     egui::Frame::none()
         .fill(crate::theme::elevated())

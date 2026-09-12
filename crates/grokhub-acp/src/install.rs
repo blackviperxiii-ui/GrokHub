@@ -33,8 +33,7 @@ pub fn begin_grok_install() -> Receiver<Result<PathBuf, String>> {
     begin_grok_install_opts(false)
 }
 
-/// First run and reinstall: official alpha if `grok` is missing or unusable.
-/// A working CLI is pinned to alpha and left alone.
+/// Boot path: official alpha if `grok` is missing or unusable; pin a working CLI.
 pub fn begin_ensure_grok_alpha() -> Receiver<Result<PathBuf, String>> {
     begin_grok_install()
 }
@@ -96,8 +95,7 @@ fn install_grok_blocking_opts(force: bool) -> Result<PathBuf, String> {
                 // fail install skip or kick the official installer.
                 return keep_cli_alpha_blocking().or(Ok(p));
             }
-            // Missing --version, stub, or leftover that cannot start: run the
-            // official alpha installer. Do not treat a present file as success.
+            // Unusable leftover: fall through to the official installer.
         }
     }
     if let Some(staged) = grok_staged_bin() {
@@ -244,8 +242,7 @@ fn run_official_powershell() -> Result<(), String> {
     run_hidden_powershell(OFFICIAL_PS)
 }
 
-/// UAC on first run is expected. Official install writes `%USERPROFILE%\.grok\bin`;
-/// elevation covers policy / a hidden `irm | iex` that Windows blocked.
+/// Hidden `irm | iex` can be blocked; UAC `RunAs` is the next try.
 #[cfg(windows)]
 fn run_elevated_powershell() -> Result<(), String> {
     const WRAP: &str = "Start-Process -FilePath powershell.exe -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','$env:GROK_CHANNEL=''alpha''; irm https://x.ai/cli/install.ps1 | iex'";
@@ -395,9 +392,9 @@ mod tests {
             .expect("install skip");
         assert!(
             skip.contains("cli_install_should_skip")
-                && skip.contains("cannot start")
-                && !skip.contains("Soft --version miss"),
-            "a leftover grok that cannot start must run the official alpha installer: {skip}"
+                && skip.contains("keep_cli_alpha_blocking")
+                && !skip.contains("return Ok(p)"),
+            "unusable leftover grok must fall through to the official installer: {skip}"
         );
     }
 

@@ -442,9 +442,8 @@ pub fn should_show_get_started(
     )
 }
 
-/// After this session's official alpha install, show Get Started once grok
-/// lands even if leftover `auth.json` or a prior `get_started_done` would
-/// have skipped it. Cabin OAuth already connected still wins.
+/// Official-install session still opens Get Started after grok lands; leftover
+/// `auth.json` / `get_started_done` cannot skip it. Cabin OAuth already connected wins.
 pub fn should_show_get_started_now(
     grok_present: bool,
     cabin_oauth: bool,
@@ -465,21 +464,13 @@ pub fn should_kick_alpha_install(grok_present: bool) -> bool {
     !grok_present
 }
 
-/// First-run / Settings **Install Grok Build CLI**.
-/// Hide the control when grok is already present or an alpha install is
-/// already in progress / scheduled — do not offer a duplicate Install.
+/// Settings / Get Started **Install Grok Build CLI** — hide when grok is ready or an install is already running.
 pub fn should_show_manual_cli_install(grok_ready: bool, install_in_progress: bool) -> bool {
     !grok_ready && !install_in_progress
 }
 
-/// Full-screen install wait. Stays up for an official install this session
-/// even if a `grok.exe` appears mid-download (Windows first-run).
-pub fn should_show_cli_install_wait(
-    _grok_present: bool,
-    _install_in_progress: bool,
-    official_wait: bool,
-    has_err: bool,
-) -> bool {
+/// Full-screen wait for this session's official install (or a failed install).
+pub fn should_show_cli_install_wait(official_wait: bool, has_err: bool) -> bool {
     has_err || official_wait
 }
 
@@ -946,19 +937,15 @@ mod tests {
             "missing and idle → Install (retry) is allowed"
         );
         assert!(
-            should_show_cli_install_wait(false, true, true, false),
-            "missing + official install in progress → wait sheet"
+            should_show_cli_install_wait(true, false),
+            "official install this session → wait sheet"
         );
         assert!(
-            should_show_cli_install_wait(true, true, true, false),
-            "mid-download grok.exe must keep the wait sheet"
-        );
-        assert!(
-            !should_show_cli_install_wait(true, true, false, false),
+            !should_show_cli_install_wait(false, false),
             "present grok keep-alpha must not cover the cabin with the wait sheet"
         );
-        assert!(should_show_cli_install_wait(false, false, true, false));
-        assert!(should_show_cli_install_wait(true, false, false, true));
+        assert!(should_show_cli_install_wait(false, true));
+        assert!(should_show_cli_install_wait(true, true));
     }
 
     #[test]
