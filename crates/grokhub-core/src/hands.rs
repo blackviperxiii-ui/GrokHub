@@ -343,15 +343,17 @@ mod tests {
         );
         let overlay = include_str!("../../../crates/grokhub-core/src/update.rs");
         let unix_update = overlay
-            .split("fn overlay_grok_update_cmd(")
+            .split("pub fn unix_grok_update_cmd(")
             .nth(1)
             .and_then(|s| s.split("pub fn update_plan_steps(").next())
-            .expect("overlay_grok_update_cmd");
+            .expect("unix_grok_update_cmd");
         assert!(
-            unix_update.contains("\"grok update --alpha\"")
+            unix_update.contains("$HOME/.grok/bin")
+                && unix_update.contains("grok update --alpha")
                 && unix_update.contains("Do not pass --stable")
+                && unix_update.contains("unix_grok_update_cmd()")
                 && !unix_update.contains("do not force --alpha here on Unix"),
-            "Linux cabin /update must pin grok to alpha: {unix_update}"
+            "Linux cabin /update must pin grok to alpha and put ~/.grok/bin on PATH: {unix_update}"
         );
         assert_eq!(
             ydotool_socket_path(None, Some("/run/user/1000")),
