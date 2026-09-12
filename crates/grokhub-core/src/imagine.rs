@@ -268,6 +268,48 @@ pub fn imagine_is_video_path(path: &str) -> bool {
     matches!(ext.as_str(), "mp4" | "webm" | "mov")
 }
 
+/// Clicking a finished Imagine result. Videos play; stills expand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImagineMediaClick {
+    Expand,
+    Play,
+}
+
+pub fn imagine_media_click(path: &str) -> ImagineMediaClick {
+    if imagine_is_video_path(path) {
+        ImagineMediaClick::Play
+    } else {
+        ImagineMediaClick::Expand
+    }
+}
+
+/// Sidecar JPEG for the first video frame. Not the `.mp4` itself.
+pub fn imagine_video_poster_path(video: &str) -> String {
+    std::path::Path::new(video)
+        .with_extension("poster.jpg")
+        .display()
+        .to_string()
+}
+
+/// `ffmpeg` argv to pull one still off a saved Imagine clip. Not for the UI thread.
+pub fn imagine_video_poster_args(src: &str, dest: &str) -> Vec<String> {
+    vec![
+        "-y".into(),
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-ss".into(),
+        "0.2".into(),
+        "-i".into(),
+        src.into(),
+        "-frames:v".into(),
+        "1".into(),
+        "-q:v".into(),
+        "3".into(),
+        dest.into(),
+    ]
+}
+
 pub fn imagine_slug(prompt: &str) -> String {
     let s: String = prompt
         .chars()
@@ -377,6 +419,8 @@ pub fn media_ext_from_bytes<'a>(buf: &'a [u8], fallback: &'a str) -> &'a str {
         "webp"
     } else if buf.len() >= 8 && &buf[4..8] == b"ftyp" {
         "mp4"
+    } else if buf.len() >= 4 && buf[0] == 0x1A && buf[1] == 0x45 && buf[2] == 0xDF && buf[3] == 0xA3 {
+        "webm"
     } else {
         fallback
     }
@@ -1048,6 +1092,13 @@ mod tests {
         );
         assert_eq!(media_ext_from_bytes(&[0xFF, 0xD8, 0xFF, 0xE0], "png"), "jpg");
         assert_eq!(media_ext_from_bytes(b"nope", "png"), "png");
+        let mut ftyp = vec![0u8; 12];
+        ftyp[4..8].copy_from_slice(b"ftyp");
+        assert_eq!(media_ext_from_bytes(&ftyp, "png"), "mp4");
+        assert_eq!(
+            media_ext_from_bytes(&[0x1A, 0x45, 0xDF, 0xA3, 0, 0, 0, 0], "mp4"),
+            "webm"
+        );
         assert_eq!(imagine_dest(None), "GrokHub-Work/imagine");
         assert_eq!(
             extract_imagine_prompt("ok\nIMAGINE_PROMPT: a cabin at night\n").as_deref(),
@@ -1134,7 +1185,26 @@ mod tests {
             Some("https://vid/x.mp4")
         );
         assert!(imagine_is_video_path("/tmp/clip.mp4"));
+        assert!(imagine_is_video_path("/tmp/clip.webm"));
         assert!(!imagine_is_video_path("/tmp/still.png"));
+        assert_eq!(
+            imagine_media_click("/tmp/clip.mp4"),
+            ImagineMediaClick::Play
+        );
+        assert_eq!(
+            imagine_media_click("/tmp/still.png"),
+            ImagineMediaClick::Expand
+        );
+        assert_eq!(
+            imagine_video_poster_path("/tmp/clip.mp4"),
+            std::path::Path::new("/tmp/clip.poster.jpg")
+                .display()
+                .to_string()
+        );
+        let poster = imagine_video_poster_args("/tmp/clip.mp4", "/tmp/clip.poster.jpg");
+        assert!(poster.contains(&"-i".into()) && poster.contains(&"/tmp/clip.mp4".into()));
+        assert!(poster.contains(&"-frames:v".into()) && poster.contains(&"1".into()));
+        assert!(!poster.iter().any(|a| a.contains("nodisp")));
         let agent = compose_imagine_prompt(&ImagineSpec {
             prompt: "a mascot on the desk",
             kind: ImagineKind::Agent,
