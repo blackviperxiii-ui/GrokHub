@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Settings trim: Account is OAuth connect/sign-out only. Behavior quiet hours is one dropdown (no a-day/host-command caps). GitHub Settings page is gone (connector-managed). Update is overlay + Update + Restart, plus **Install Grok Build CLI** when grok is missing or broken. About drops the today-stats line and the model catalog.
+- Left-rail **Chat** reuses one empty draft (no dialogue). After a reply starts, Chat opens a new chat. The separate New chat button is gone. Old convos stay in sidebar History (`grok sessions`).
 
 ## 2.9.4 — 2026-09-11
 

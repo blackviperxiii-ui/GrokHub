@@ -141,9 +141,17 @@ pub fn default_thread_title(scratch: bool) -> &'static str {
     }
 }
 
-/// Empty default-titled leftover from New chat / restart. Keep the current tab.
+/// Empty default-titled leftover from Chat / restart. Keep the current tab.
 pub fn leftover_empty_thread(title: &str, scratch: bool, empty: bool) -> bool {
-    empty && title.trim().eq_ignore_ascii_case(default_thread_title(scratch))
+    empty
+        && title
+            .trim()
+            .eq_ignore_ascii_case(default_thread_title(scratch))
+}
+
+/// One Chat-button draft: no dialogue and no Grok session yet.
+pub fn empty_chat_draft(empty: bool, has_session: bool) -> bool {
+    empty && !has_session
 }
 
 pub fn history_row_visible(
@@ -161,22 +169,23 @@ pub struct ThreadReuseView<'a> {
     pub title: &'a str,
     pub scratch: bool,
     pub empty: bool,
+    pub has_session: bool,
 }
 
-/// Reuse this empty tab, or another leftover empty of the same kind, instead of stacking Chats.
+/// Reuse this empty draft, or another empty draft of the same kind, instead of stacking Chats.
 pub fn reuse_empty_thread_idx(
     threads: &[ThreadReuseView<'_>],
     current: usize,
     want_scratch: bool,
 ) -> Option<usize> {
     if let Some(t) = threads.get(current) {
-        if t.scratch == want_scratch && t.empty {
+        if t.scratch == want_scratch && empty_chat_draft(t.empty, t.has_session) {
             return Some(current);
         }
     }
-    threads.iter().position(|t| {
-        t.scratch == want_scratch && leftover_empty_thread(t.title, t.scratch, t.empty)
-    })
+    threads
+        .iter()
+        .position(|t| t.scratch == want_scratch && empty_chat_draft(t.empty, t.has_session))
 }
 
 #[cfg(test)]
@@ -271,30 +280,43 @@ mod tests {
         assert!(leftover_empty_thread("scratch", true, true));
         assert!(!leftover_empty_thread("night watch", false, true));
         assert!(!leftover_empty_thread("Chat", false, false));
+        assert!(empty_chat_draft(true, false));
+        assert!(!empty_chat_draft(true, true));
+        assert!(!empty_chat_draft(false, false));
         assert!(history_row_visible("Chat", false, true, true, false));
         assert!(!history_row_visible("Chat", false, true, false, false));
         assert!(history_row_visible("Chat", false, true, false, true));
-        assert!(history_row_visible("casual greeting", false, false, false, false));
+        assert!(history_row_visible(
+            "casual greeting",
+            false,
+            false,
+            false,
+            false
+        ));
         let tabs = [
             ThreadReuseView {
                 title: "casual greeting",
                 scratch: false,
                 empty: false,
+                has_session: true,
             },
             ThreadReuseView {
                 title: "Chat",
                 scratch: false,
                 empty: true,
+                has_session: false,
             },
             ThreadReuseView {
                 title: "Chat",
                 scratch: false,
                 empty: true,
+                has_session: false,
             },
             ThreadReuseView {
                 title: "Scratch",
                 scratch: true,
                 empty: true,
+                has_session: false,
             },
         ];
         assert_eq!(reuse_empty_thread_idx(&tabs, 0, false), Some(1));
@@ -304,8 +326,61 @@ mod tests {
             title: "Chat",
             scratch: false,
             empty: true,
+            has_session: false,
         }];
         assert_eq!(reuse_empty_thread_idx(&already, 0, false), Some(0));
         assert_eq!(reuse_empty_thread_idx(&already, 0, true), None);
+        let talking = [ThreadReuseView {
+            title: "casual greeting",
+            scratch: false,
+            empty: false,
+            has_session: true,
+        }];
+        assert_eq!(
+            reuse_empty_thread_idx(&talking, 0, false),
+            None,
+            "dialogue already started — Chat creates a new draft"
+        );
+        let history_loading = [
+            ThreadReuseView {
+                title: "night watch",
+                scratch: false,
+                empty: true,
+                has_session: true,
+            },
+            ThreadReuseView {
+                title: "Chat",
+                scratch: false,
+                empty: true,
+                has_session: false,
+            },
+        ];
+        assert_eq!(
+            reuse_empty_thread_idx(&history_loading, 0, false),
+            Some(1),
+            "opening History must not steal the empty Chat draft"
+        );
+        let history_only = [ThreadReuseView {
+            title: "night watch",
+            scratch: false,
+            empty: true,
+            has_session: true,
+        }];
+        assert_eq!(
+            reuse_empty_thread_idx(&history_only, 0, false),
+            None,
+            "History with no leftover draft still creates a new chat"
+        );
+        let renamed_draft = [ThreadReuseView {
+            title: "notes",
+            scratch: false,
+            empty: true,
+            has_session: false,
+        }];
+        assert_eq!(
+            reuse_empty_thread_idx(&renamed_draft, 0, false),
+            Some(0),
+            "an empty draft with no dialogue is still the one Chat"
+        );
     }
 }
