@@ -86,7 +86,8 @@ fn install_grok_blocking_opts(force: bool) -> Result<PathBuf, String> {
     if !force {
         if let Some(p) = find_grok() {
             if cli_install_should_skip(Some(&p)) {
-                return Ok(p);
+                // Present and runnable — pin alpha. Do not reinstall.
+                return keep_cli_alpha_blocking();
             }
             // Soft --version miss (timeout / AV stall): keep a present CLI.
             if !grok_marked_unusable(&p) {
@@ -433,9 +434,19 @@ mod tests {
         }
         assert!(
             src.contains("begin_keep_cli_alpha")
+                && src.contains("keep_cli_alpha_blocking")
                 && src.contains("grok update --alpha")
                 && src.contains("[\"update\", \"--alpha\"]"),
             "a stable grok must switch to alpha without a reinstall: {src}"
+        );
+        let skip = src
+            .split("fn install_grok_blocking_opts(")
+            .nth(1)
+            .and_then(|s| s.split("if let Some(staged)").next())
+            .expect("install skip");
+        assert!(
+            skip.contains("cli_install_should_skip") && skip.contains("keep_cli_alpha_blocking()"),
+            "first-run install skip must still pin leftover stable to alpha: {skip}"
         );
         let off = format!("update --{}", "stable");
         assert!(
