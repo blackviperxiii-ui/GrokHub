@@ -1204,6 +1204,10 @@ pub struct Cabin {
     oauth_profile_tried: bool,
     grok_install_rx: Option<mpsc::Receiver<Result<std::path::PathBuf, String>>>,
     grok_install_err: String,
+    /// Official alpha install this session (missing/unusable at boot or retry).
+    grok_install_wait: bool,
+    /// Stay on Get Started after this session's official install lands.
+    official_cli_session: bool,
     acp: Option<grokhub_acp::AcpHandle>,
     acp_spawn_rx: Option<mpsc::Receiver<Result<grokhub_acp::AcpHandle, String>>>,
     grok_p_rx: Option<mpsc::Receiver<GrokPEvent>>,
@@ -1605,6 +1609,8 @@ impl Cabin {
             oauth_profile_tried: false,
             grok_install_rx: None,
             grok_install_err: String::new(),
+            grok_install_wait: false,
+            official_cli_session: false,
             acp: None,
             acp_spawn_rx: None,
             grok_p_rx: None,
@@ -1660,21 +1666,15 @@ impl Cabin {
             c.persist_bg();
         }
         grokhub_acp::silence_windows_hard_errors();
-        // `grok_cli_known_good` needs a prior `--version` in this process; the
-        // doctor cache is empty at first launch. A leftover stable `grok` is
-        // still on disk — switch it with `grok update --alpha`. Missing or
-        // marked-broken still installs official alpha.
-        if let Some(bin) = grokhub_acp::find_grok() {
-            if grokhub_acp::grok_marked_unusable(&bin) {
-                c.grok_install_rx = Some(grokhub_acp::begin_grok_install());
-            } else {
-                c.grok_install_rx = Some(grokhub_acp::begin_keep_cli_alpha());
-            }
-        } else if grokhub_core::should_kick_alpha_install(false) {
-            c.grok_install_rx = Some(grokhub_acp::begin_grok_install());
-        }
+        // First run and reinstall always ensure Grok Build CLI alpha in the
+        // background (official installer when missing/unusable; pin a working
+        // CLI to alpha). Do not wait for Settings. UAC is expected on Windows.
+        c.grok_install_wait =
+            grokhub_core::should_kick_alpha_install(grokhub_acp::find_grok().is_some());
+        c.official_cli_session = c.grok_install_wait;
+        c.grok_install_rx = Some(grokhub_acp::begin_ensure_grok_alpha());
         c.sync_cli_auth_from_oauth();
-        if grokhub_acp::grok_cli_key().is_some() {
+        if grokhub_acp::grok_cli_key().is_some() && !c.official_cli_session {
             c.mark_get_started_done();
         }
         c
@@ -7104,6 +7104,7 @@ impl Cabin {
     }
 
     fn mark_get_started_done(&mut self) {
+        self.official_cli_session = false;
         if self.cfg.get_started_done {
             return;
         }
@@ -7116,6 +7117,8 @@ impl Cabin {
             return;
         }
         self.grok_install_err.clear();
+        self.grok_install_wait = true;
+        self.official_cli_session = true;
         self.status = "Installing Grok Build CLI (alpha)…".into();
         self.grok_install_rx = Some(grokhub_acp::begin_grok_install_force());
     }
@@ -7129,10 +7132,12 @@ impl Cabin {
                 grokhub_acp::clear_grok_unusable();
                 grokhub_acp::invalidate_grok_bin_cache();
                 self.grok_install_err.clear();
+                self.grok_install_wait = false;
                 self.status = "Grok Build CLI (alpha) installed".into();
             }
             Ok(Err(e)) => {
                 self.grok_install_err = e.clone();
+                self.grok_install_wait = true;
                 self.status = e;
             }
             Err(mpsc::TryRecvError::Empty) => {
@@ -10268,27 +10273,31 @@ impl eframe::App for Cabin {
             ),
         );
         self.ui_titlebar(ctx);
-        self.ui_sidebar(ctx);
-        self.ui_settings_menu(ctx);
+        // Windows first-run: a Foreground Area over empty chat does not paint.
+        // Take the CentralPanel (same path as chat) and skip the rail so the
+        // wait sheet / Get Started is the only pane.
+        if !self.ui_get_started(ctx) {
+            self.ui_sidebar(ctx);
+            self.ui_settings_menu(ctx);
 
-        match self.page_nav() {
-            Nav::Chat => self.ui_chat(ctx),
-            Nav::Devices => self.ui_devices(ctx),
-            Nav::Memory => self.ui_memory(ctx),
-            Nav::Workboard => self.ui_board(ctx),
-            Nav::Imagine => self.ui_imagine(ctx),
-            Nav::Skills => self.ui_skills(ctx),
-            Nav::Night => self.ui_night(ctx),
-            Nav::History => self.ui_history(ctx),
-            Nav::Command => self.ui_command(ctx),
-            Nav::Connectors => self.ui_connectors(ctx),
-            Nav::Agents => self.ui_agents(ctx),
-            Nav::Settings => self.ui_chat(ctx),
+            match self.page_nav() {
+                Nav::Chat => self.ui_chat(ctx),
+                Nav::Devices => self.ui_devices(ctx),
+                Nav::Memory => self.ui_memory(ctx),
+                Nav::Workboard => self.ui_board(ctx),
+                Nav::Imagine => self.ui_imagine(ctx),
+                Nav::Skills => self.ui_skills(ctx),
+                Nav::Night => self.ui_night(ctx),
+                Nav::History => self.ui_history(ctx),
+                Nav::Command => self.ui_command(ctx),
+                Nav::Connectors => self.ui_connectors(ctx),
+                Nav::Agents => self.ui_agents(ctx),
+                Nav::Settings => self.ui_chat(ctx),
+            }
+            if self.nav == Nav::Settings {
+                self.ui_settings(ctx);
+            }
         }
-        if self.nav == Nav::Settings {
-            self.ui_settings(ctx);
-        }
-        self.ui_get_started(ctx);
         if self.palette_open {
             self.ui_palette(ctx);
         }
@@ -11733,13 +11742,16 @@ impl Cabin {
                             .oauth
                             .as_ref()
                             .is_some_and(|t| !t.access_token.trim().is_empty());
-                        let get_started = grokhub_core::should_show_get_started(
+                        let get_started = grokhub_core::should_show_get_started_now(
                             !grok_missing,
                             cabin_oauth,
                             self.cfg.get_started_done,
                             grokhub_acp::grok_cli_key().is_some(),
+                            self.official_cli_session,
                         );
-                        if !get_started && (grok_missing || need_login)
+                        if !get_started
+                            && !self.grok_install_wait
+                            && (grok_missing || need_login)
                         {
                             ui.horizontal(|ui| {
                                 crate::cards::settings_note(
@@ -12452,7 +12464,7 @@ impl Cabin {
         }
     }
 
-    fn ui_get_started(&mut self, ctx: &egui::Context) {
+    fn ui_get_started(&mut self, ctx: &egui::Context) -> bool {
         let grok_present = grokhub_acp::find_grok().is_some();
         let cabin_oauth = self
             .secrets
@@ -12461,62 +12473,23 @@ impl Cabin {
             .is_some_and(|t| !t.access_token.trim().is_empty());
         let cli_connected = grokhub_acp::grok_cli_key().is_some();
         let installing = self.grok_install_rx.is_some();
-        if grokhub_core::should_show_get_started(
+        let show_oauth = grokhub_core::should_show_get_started_now(
             grok_present,
             cabin_oauth,
             self.cfg.get_started_done,
             cli_connected,
-        ) {
-            let pending = self.oauth_pending.as_ref().map(|p| {
-                format!("Approve {} at {}", p.user_code, p.verification_uri)
-            });
-            let oauth_busy = self.oauth_pending.is_some()
-                || self.oauth_start_rx.is_some()
-                || self.oauth_poll_rx.is_some();
-            let oauth_err = if pending.is_some() {
-                None
-            } else {
-                let s = self.status.trim();
-                if s.is_empty() || s == "Grok OAuth connected" {
-                    None
-                } else {
-                    Some(s.to_string())
-                }
-            };
-            let screen = ctx.screen_rect();
-            egui::Area::new(egui::Id::new("get-started-overlay"))
-                .fixed_pos(screen.min)
-                .order(egui::Order::Foreground)
-                .interactable(true)
-                .show(ctx, |ui| {
-                    ui.set_min_size(screen.size());
-                    ui.painter().rect_filled(screen, 0.0, crate::theme::bg());
-                    let modal = egui::Rect::from_center_size(
-                        screen.center(),
-                        egui::vec2(520.0, 360.0).min(screen.size() - egui::vec2(48.0, 48.0)),
-                    );
-                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(modal), |ui| {
-                        egui::Frame::none()
-                            .fill(crate::theme::panel())
-                            .rounding(16.0)
-                            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                            .inner_margin(egui::Margin::same(24.0))
-                            .show(ui, |ui| {
-                                if crate::cards::get_started_panel(
-                                    ui,
-                                    pending.as_deref(),
-                                    oauth_err.as_deref(),
-                                    !oauth_busy,
-                                ) {
-                                    self.start_oauth();
-                                }
-                            });
-                    });
-                });
-            return;
+            self.official_cli_session,
+        );
+        let show_install = grokhub_core::should_show_cli_install_wait(
+            grok_present,
+            installing,
+            self.grok_install_wait,
+            !self.grok_install_err.is_empty(),
+        );
+        if !show_oauth && !show_install {
+            return false;
         }
-        if !grok_present && !self.cfg.get_started_done && !cabin_oauth {
-            let screen = ctx.screen_rect();
+        if show_install {
             let body = if installing {
                 "Installing Grok Build CLI (alpha)…".to_string()
             } else if !self.grok_install_err.is_empty() {
@@ -12528,26 +12501,20 @@ impl Cabin {
             } else {
                 "Installing Grok Build CLI (alpha)…".to_string()
             };
-            let show_retry = !installing && !self.grok_install_err.is_empty();
+            let show_retry = grokhub_core::should_show_manual_cli_install(grok_present, installing)
+                && !self.grok_install_err.is_empty();
             let mut retry = false;
-            egui::Area::new(egui::Id::new("get-started-install"))
-                .fixed_pos(screen.min)
-                .order(egui::Order::Foreground)
-                .interactable(true)
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none().fill(crate::theme::bg()))
                 .show(ctx, |ui| {
-                    ui.set_min_size(screen.size());
-                    ui.painter().rect_filled(screen, 0.0, crate::theme::bg());
-                    let modal = egui::Rect::from_center_size(
-                        screen.center(),
-                        egui::vec2(520.0, 320.0).min(screen.size() - egui::vec2(48.0, 48.0)),
-                    );
-                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(modal), |ui| {
+                    ui.centered_and_justified(|ui| {
                         egui::Frame::none()
                             .fill(crate::theme::panel())
                             .rounding(16.0)
                             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                             .inner_margin(egui::Margin::same(24.0))
                             .show(ui, |ui| {
+                                ui.set_max_width(520.0);
                                 ui.vertical_centered(|ui| {
                                     ui.add_space(24.0);
                                     ui.label(
@@ -12568,7 +12535,47 @@ impl Cabin {
             if retry {
                 self.queue_grok_cli_install();
             }
+            return true;
         }
+        let pending = self.oauth_pending.as_ref().map(|p| {
+            format!("Approve {} at {}", p.user_code, p.verification_uri)
+        });
+        let oauth_busy = self.oauth_pending.is_some()
+            || self.oauth_start_rx.is_some()
+            || self.oauth_poll_rx.is_some();
+        let oauth_err = if pending.is_some() {
+            None
+        } else {
+            let s = self.status.trim();
+            if s.is_empty() || s == "Grok OAuth connected" {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        };
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(crate::theme::bg()))
+            .show(ctx, |ui| {
+                ui.centered_and_justified(|ui| {
+                    egui::Frame::none()
+                        .fill(crate::theme::panel())
+                        .rounding(16.0)
+                        .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                        .inner_margin(egui::Margin::same(24.0))
+                        .show(ui, |ui| {
+                            ui.set_max_width(520.0);
+                            if crate::cards::get_started_panel(
+                                ui,
+                                pending.as_deref(),
+                                oauth_err.as_deref(),
+                                !oauth_busy,
+                            ) {
+                                self.start_oauth();
+                            }
+                        });
+                });
+            });
+        true
     }
 
     fn ui_settings(&mut self, ctx: &egui::Context) {
@@ -12579,9 +12586,11 @@ impl Cabin {
         let mut install_cli = false;
         let mut restart = false;
         let mut copy_diag = false;
-        let cli_ready = grokhub_acp::grok_cli_known_good();
-        let show_cli_install = grokhub_core::should_show_manual_cli_install(cli_ready);
+        let cli_ready =
+            grokhub_acp::find_grok().is_some() || grokhub_acp::grok_cli_known_good();
         let cli_installing = self.grok_install_rx.is_some();
+        let show_cli_install =
+            grokhub_core::should_show_manual_cli_install(cli_ready, cli_installing);
         let cli_install_hint = if cli_installing {
             "Installing Grok Build CLI alpha (GROK_CHANNEL=alpha)…"
         } else if !self.grok_install_err.is_empty() {
@@ -17193,8 +17202,8 @@ mod tests {
                 && src.contains("queue_grok_cli_install")
                 && src.contains("begin_grok_install_force")
                 && src.contains("should_show_manual_cli_install")
-                && src.contains("grok_cli_known_good()"),
-            "Settings → Update and Get Started offer a manual alpha CLI install when grok is missing or broken: {src}"
+                && src.contains("cli_installing"),
+            "Settings → Update and Get Started hide Install when grok is present or an alpha install is in progress: {src}"
         );
         let flush_p = src
             .split("fn flush_projects(")
@@ -17934,18 +17943,16 @@ mod tests {
             "upgrade: existing cabin OAuth must fill empty grok auth.json: {boot}"
         );
         assert!(
-            boot.contains("begin_grok_install")
-                && boot.contains("should_kick_alpha_install")
-                && boot.contains("find_grok")
-                && boot.contains("grok_marked_unusable")
-                && boot.contains("begin_keep_cli_alpha")
+            boot.contains("begin_ensure_grok_alpha")
                 && !boot.contains("grok_cli_known_good()")
                 && boot.contains("silence_windows_hard_errors"),
-            "a leftover grok must switch via keep_cli_alpha before doctor cache exists: {boot}"
+            "first launch and reinstall must ensure CLI alpha in the background: {boot}"
         );
         assert!(
-            boot.contains("grok_cli_key") && boot.contains("mark_get_started_done"),
-            "existing grok login must skip Get Started on upgrade: {boot}"
+            boot.contains("grok_cli_key")
+                && boot.contains("mark_get_started_done")
+                && boot.contains("official_cli_session"),
+            "existing grok login must skip Get Started on upgrade unless this session is installing alpha: {boot}"
         );
         let started = src
             .split("fn ui_get_started(")
@@ -17953,20 +17960,42 @@ mod tests {
             .and_then(|s| s.split("fn ui_settings(").next())
             .expect("ui_get_started");
         assert!(
+            src.contains("if !self.ui_get_started(ctx)"),
+            "first-run sheet must replace empty-cabin chat so it paints on Windows"
+        );
+        assert!(
+            started.contains("egui::CentralPanel::default()"),
+            "Get Started must paint in CentralPanel, not a first-frame Area: {started}"
+        );
+        assert!(
+            !started.contains("egui::Area::new"),
+            "Windows first-run Area over chat does not paint: {started}"
+        );
+        assert!(
             started.contains("Installing Grok Build CLI (alpha)"),
             "install wait copy must say alpha: {started}"
         );
         assert!(
-            started.contains("should_show_get_started") && started.contains("start_oauth"),
+            started.contains("should_show_get_started_now") && started.contains("start_oauth"),
             "Get Started must use cabin device-code OAuth: {started}"
+        );
+        assert!(
+            started.contains("official_cli_session"),
+            "official alpha install this session must still open Get Started after grok lands: {started}"
+        );
+        assert!(
+            started.contains("should_show_cli_install_wait"),
+            "Get Started wait sheet must use the official alpha wait predicate: {started}"
         );
         assert!(
             started.contains("oauth_err") && started.contains("oauth_busy"),
             "Get Started must show OAuth errors and not restart an in-flight wait: {started}"
         );
         assert!(
-            started.contains("Install Grok Build CLI") && started.contains("queue_grok_cli_install"),
-            "a failed first-run install must offer Install Grok Build CLI: {started}"
+            started.contains("Install Grok Build CLI")
+                && started.contains("queue_grok_cli_install")
+                && started.contains("should_show_manual_cli_install"),
+            "first-run Install hides when grok is present or an alpha install is already scheduled: {started}"
         );
         let photo = src
             .split("fn kick_oauth_photo(")

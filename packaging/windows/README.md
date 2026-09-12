@@ -15,7 +15,7 @@ Per-user install (no admin): `%LOCALAPPDATA%\Programs\GrokHub`
 pwsh -File scripts/make-windows-release.ps1
 ```
 
-Stages `target/release/grokhub.exe` + `grokhub-hub.exe`, downloads Grok Build CLI **alpha** into the stage, then runs ISCC. Missing `grok.exe` fails the pack (first-run install is the fallback for already-shipped builds). Offline:
+Stages `target/release/grokhub.exe` + `grokhub-hub.exe`, downloads Grok Build CLI **alpha** into the stage, then runs ISCC. Missing `grok.exe` fails the pack. Setup still runs `install-grok-alpha.ps1` (`GROK_CHANNEL=alpha` / `https://x.ai/cli/install.ps1`) so grok is not assumed on PATH. First cabin launch does the same if grok is missing or unusable. Offline:
 
 ```powershell
 pwsh -File scripts/make-windows-release.ps1 -SkipGrok

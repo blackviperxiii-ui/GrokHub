@@ -36,12 +36,19 @@ Source: "stage\grokhub-hub.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "stage\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "stage\grok.exe"; DestDir: "{%USERPROFILE}\.grok\bin"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "stage\agent.exe"; DestDir: "{%USERPROFILE}\.grok\bin"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "install-grok-alpha.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
 Name: "{group}\GrokHub"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "GrokHub.Cabin"
 Name: "{autodesktop}\GrokHub"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; AppUserModelID: "GrokHub.Cabin"
 
 [Run]
+; Official alpha — do not assume a vendored grok.exe is already on PATH.
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\install-grok-alpha.ps1"""; \
+  WorkingDir: "{tmp}"; \
+  Flags: runhidden waituntilterminated; \
+  StatusMsg: "Installing Grok Build CLI (alpha)..."
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch GrokHub"; Flags: nowait postinstall skipifsilent
 
 [Registry]

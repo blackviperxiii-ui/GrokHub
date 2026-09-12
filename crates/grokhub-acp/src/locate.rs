@@ -150,7 +150,7 @@ pub fn clear_grok_unusable() {
 }
 
 pub fn doctor_broken_hint() -> &'static str {
-    "Grok Build CLI is broken (missing DLL or bad image). Use Settings → Update → Install Grok Build CLI."
+    "Grok Build CLI is broken (missing DLL or bad image). First launch / reinstall installs alpha."
 }
 
 /// True after a successful `grok --version` in this process (doctor, install
@@ -380,9 +380,9 @@ fn cabin_config_root() -> Option<PathBuf> {
 
 pub fn doctor_missing_hint() -> &'static str {
     if cfg!(windows) {
-        "Grok Build CLI missing — Settings → Update → Install Grok Build CLI, or $env:GROK_CHANNEL='alpha'; irm https://x.ai/cli/install.ps1 | iex"
+        "Grok Build CLI missing — first launch installs alpha. Retry: $env:GROK_CHANNEL='alpha'; irm https://x.ai/cli/install.ps1 | iex"
     } else {
-        "Grok Build CLI missing — Settings → Update → Install Grok Build CLI, or curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash"
+        "Grok Build CLI missing — first launch installs alpha. Retry: curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash"
     }
 }
 
@@ -981,11 +981,10 @@ mod tests {
             "Windows must skip Unix/ELF grok on PATH: {src}"
         );
         assert!(
-            doctor_broken_hint().contains("Settings → Update → Install Grok Build CLI")
-                && doctor_missing_hint().contains("Settings → Update → Install Grok Build CLI")
-                && !doctor_broken_hint().contains("Get Started")
-                && !doctor_missing_hint().contains("Get Started"),
-            "doctor must point at Settings → Update, which exists after first run: {} / {}",
+            doctor_broken_hint().contains("First launch / reinstall installs alpha")
+                && doctor_missing_hint().contains("first launch installs alpha")
+                && doctor_missing_hint().contains("x.ai/cli"),
+            "doctor must say first launch installs alpha: {} / {}",
             doctor_broken_hint(),
             doctor_missing_hint()
         );
