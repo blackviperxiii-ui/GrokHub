@@ -449,6 +449,64 @@ pub fn should_show_manual_cli_install(grok_ready: bool) -> bool {
     !grok_ready
 }
 
+/// Cabin stays on Grok Build CLI alpha. Only the `alpha` channel counts.
+pub fn cli_channel_is_alpha(channel: &str) -> bool {
+    channel.trim().eq_ignore_ascii_case("alpha")
+}
+
+/// Switch when the CLI reported a non-alpha channel. `None` means the probe
+/// failed — do not yank a working install.
+pub fn should_switch_cli_to_alpha(channel: Option<&str>) -> bool {
+    match channel {
+        Some(ch) => !cli_channel_is_alpha(ch),
+        None => false,
+    }
+}
+
+/// `grok update --check --json` → `channel`.
+pub fn parse_cli_update_check_channel(json: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(json.trim()).ok()?;
+    let ch = v.get("channel").and_then(|x| x.as_str())?.trim();
+    if ch.is_empty() {
+        None
+    } else {
+        Some(ch.to_string())
+    }
+}
+
+/// `~/.grok/config.toml` `[cli] channel`.
+pub fn parse_cli_config_channel(toml: &str) -> Option<String> {
+    let mut in_cli = false;
+    for raw in toml.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            in_cli = line == "[cli]";
+            continue;
+        }
+        if !in_cli {
+            continue;
+        }
+        let Some((key, val)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "channel" {
+            continue;
+        }
+        let v = val
+            .trim()
+            .trim_start_matches(['"', '\''])
+            .trim_end_matches(['"', '\''])
+            .trim();
+        if !v.is_empty() {
+            return Some(v.to_string());
+        }
+    }
+    None
+}
+
 pub fn cli_auth_slot_key(client_id: &str) -> String {
     format!("{XAI_OAUTH_ISSUER}::{client_id}")
 }
@@ -856,6 +914,43 @@ mod tests {
             !should_show_manual_cli_install(true),
             "hide the install control once grok --version works"
         );
+        assert!(cli_channel_is_alpha("alpha"));
+        assert!(cli_channel_is_alpha("Alpha"));
+        assert!(!cli_channel_is_alpha("stable"));
+        assert!(!cli_channel_is_alpha("unknown"));
+        assert!(
+            !should_switch_cli_to_alpha(Some("alpha")),
+            "do not yank a working alpha install"
+        );
+        assert!(should_switch_cli_to_alpha(Some("stable")));
+        assert!(should_switch_cli_to_alpha(Some("enterprise")));
+        assert!(
+            !should_switch_cli_to_alpha(None),
+            "a failed channel probe must not reinstall grok"
+        );
+        assert_eq!(
+            parse_cli_update_check_channel(
+                r#"{"currentVersion":"1.0.25","latestVersion":"1.0.25","channel":"stable"}"#
+            )
+            .as_deref(),
+            Some("stable")
+        );
+        assert_eq!(
+            parse_cli_update_check_channel(
+                r#"{"currentVersion":"1.0.30","latestVersion":"1.0.30","channel":"alpha"}"#
+            )
+            .as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(
+            parse_cli_config_channel("[ui]\ntheme = \"dark\"\n[cli]\nchannel = \"alpha\"\n"),
+            Some("alpha".into())
+        );
+        assert_eq!(
+            parse_cli_config_channel("[cli.foo]\nchannel = \"stable\"\n[cli]\nchannel = 'stable'\n"),
+            Some("stable".into())
+        );
+        assert!(parse_cli_config_channel("[ui]\nchannel = \"alpha\"\n").is_none());
     }
 
     #[test]

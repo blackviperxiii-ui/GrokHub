@@ -255,8 +255,10 @@ mod tests {
         assert!(
             grok_cli.contains("GROK_CHANNEL=alpha")
                 && grok_cli.contains("https://x.ai/cli/install.sh")
-                && !grok_cli.contains("GROK_CHANNEL=stable"),
-            "first-time grok install must request alpha: {grok_cli}"
+                && !grok_cli.contains("GROK_CHANNEL=stable")
+                && grok_cli.contains("grok update --alpha")
+                && grok_cli.contains("grok_on_alpha"),
+            "first-time grok install is alpha; overlay switches stable→alpha: {grok_cli}"
         );
         let sh = include_str!("../../../scripts/install.sh");
         assert!(
@@ -335,9 +337,10 @@ mod tests {
             .and_then(|s| s.split("pub fn update_plan_steps(").next())
             .expect("overlay_grok_update_cmd");
         assert!(
-            unix_update.contains("\"grok update\"")
-                && unix_update.contains("do not force --alpha here on Unix"),
-            "Linux cabin /update must stay current-channel: {unix_update}"
+            unix_update.contains("\"grok update --alpha\"")
+                && unix_update.contains("Do not pass --stable")
+                && !unix_update.contains("do not force --alpha here on Unix"),
+            "Linux cabin /update must pin grok to alpha: {unix_update}"
         );
         assert_eq!(
             ydotool_socket_path(None, Some("/run/user/1000")),
