@@ -86,8 +86,9 @@ fn install_grok_blocking_opts(force: bool) -> Result<PathBuf, String> {
     if !force {
         if let Some(p) = find_grok() {
             if cli_install_should_skip(Some(&p)) {
-                // Present and runnable — pin alpha. Do not reinstall.
-                return keep_cli_alpha_blocking();
+                // Present and runnable — pin alpha. A failed pin must not
+                // fail install skip or kick the official installer.
+                return keep_cli_alpha_blocking().or(Ok(p));
             }
             // Soft --version miss (timeout / AV stall): keep a present CLI.
             if !grok_marked_unusable(&p) {
@@ -333,6 +334,12 @@ mod tests {
             std::fs::set_permissions(&bin, p).unwrap();
         }
         let prev = std::env::var_os("GROKHUB_GROK");
+        let prev_home = std::env::var_os("HOME");
+        let home = dir.join("home");
+        let _ = std::fs::create_dir_all(home.join(".grok"));
+        std::fs::write(home.join(".grok").join("config.toml"), "[cli]\nchannel = \"alpha\"\n")
+            .unwrap();
+        std::env::set_var("HOME", &home);
         std::env::set_var("GROKHUB_GROK", &bin);
         invalidate_grok_bin_cache();
         let hit = install_grok_blocking();
@@ -340,9 +347,13 @@ mod tests {
             Some(v) => std::env::set_var("GROKHUB_GROK", v),
             None => std::env::remove_var("GROKHUB_GROK"),
         }
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
         invalidate_grok_bin_cache();
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(hit.ok(), Some(bin));
+        assert_eq!(hit, Ok(bin.clone()), "present runnable grok must skip install: {hit:?}");
     }
 
     #[test]
