@@ -305,6 +305,42 @@ pub fn cap_label(cap: u32, unit: &str) -> String {
     }
 }
 
+/// Preset quiet-hour windows for the Settings dropdown. Start and end equal is off.
+pub const QUIET_HOURS_WINDOWS: &[(&str, &str)] = &[
+    ("00:00", "00:00"),
+    ("21:00", "07:00"),
+    ("22:00", "07:00"),
+    ("23:00", "07:00"),
+    ("00:00", "06:00"),
+];
+
+pub fn quiet_hours_choice_label(start: &str, end: &str) -> String {
+    if start == end {
+        "Off".into()
+    } else {
+        format!("{start}–{end}")
+    }
+}
+
+/// Dropdown rows: presets, plus the live window when it is not already a preset.
+pub fn quiet_hours_menu(start: &str, end: &str) -> Vec<(String, String, String)> {
+    let mut out: Vec<(String, String, String)> = QUIET_HOURS_WINDOWS
+        .iter()
+        .map(|(s, e)| (quiet_hours_choice_label(s, e), (*s).into(), (*e).into()))
+        .collect();
+    if !out.iter().any(|(_, s, e)| s == start && e == end) {
+        out.insert(
+            0,
+            (
+                quiet_hours_choice_label(start, end),
+                start.to_string(),
+                end.to_string(),
+            ),
+        );
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,6 +365,14 @@ mod tests {
         assert_eq!(cap_label(40, "a day"), "40 a day");
         assert!(!quiet_hours_active("21:00", "22:00", "07:00"));
         assert!(quiet_hours_active("23:30", "22:00", "07:00"));
+        assert_eq!(quiet_hours_choice_label("22:00", "07:00"), "22:00–07:00");
+        assert_eq!(quiet_hours_choice_label("00:00", "00:00"), "Off");
+        let menu = quiet_hours_menu("22:00", "07:00");
+        assert_eq!(menu.len(), QUIET_HOURS_WINDOWS.len());
+        assert!(menu.iter().any(|(l, s, e)| l == "22:00–07:00" && s == "22:00" && e == "07:00"));
+        let custom = quiet_hours_menu("01:30", "08:00");
+        assert_eq!(custom[0], ("01:30–08:00".into(), "01:30".into(), "08:00".into()));
+        assert_eq!(custom.len(), QUIET_HOURS_WINDOWS.len() + 1);
     }
 
     #[test]
