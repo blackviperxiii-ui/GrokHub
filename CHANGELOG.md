@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Cabin stays on Grok Build CLI **alpha**. Linux `/update` now runs `grok update --alpha` (same as Windows). A leftover stable `grok` is detected (`~/.grok/config.toml` `[cli] channel` or `grok update --check --json`) and switched with `grok update --alpha`. A working alpha install is not yanked.
+
 ## 2.9.4 — 2026-09-11
 
 One cabin, two ship artifacts on the same tag. Cursor **#18** (full-pane chat bubbles, faded thought process, collapsed Work tree) is on `main`.

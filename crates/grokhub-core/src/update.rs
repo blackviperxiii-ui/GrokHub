@@ -234,7 +234,7 @@ pub fn settings_update_note() -> &'static str {
     if cfg!(windows) {
         "Downloads the latest Windows zip from GitHub into %LOCALAPPDATA%\\Programs\\GrokHub, then runs grok update --alpha. A source clone on main overlays with install-windows.ps1 instead. Does not wipe %APPDATA%\\GrokHub."
     } else {
-        "Pulls origin/main, overlays the GUI, then runs grok update on the current channel (does not switch alpha/stable). The clone must be on main. Does not wipe ~/.config/GrokHub."
+        "Pulls origin/main, overlays the GUI, then runs grok update --alpha so the CLI stays on the fastest track. The clone must be on main. Does not wipe ~/.config/GrokHub."
     }
 }
 
@@ -242,7 +242,7 @@ pub fn settings_update_action_hint() -> &'static str {
     if cfg!(windows) {
         "Latest GitHub zip, or overlay a source clone, then grok update --alpha."
     } else {
-        "Pulls this clone, overlays the GUI, and updates grok."
+        "Pulls this clone, overlays the GUI, and updates grok on alpha."
     }
 }
 
@@ -267,12 +267,12 @@ fn overlay_install_cmd(source: &Path, src_quoted: &str) -> String {
 }
 
 fn overlay_grok_update_cmd() -> &'static str {
-    // Linux overlay stays on the current channel. Windows first-run / installer
-    // may still vendor alpha; do not force --alpha here on Unix.
+    // Cabin stays on Grok Build CLI alpha. Linux matches Windows: grok update --alpha.
+    // Do not pass --stable. A working alpha install is not yanked.
     if cfg!(windows) {
         windows_grok_update_cmd()
     } else {
-        "grok update"
+        "grok update --alpha"
     }
 }
 
@@ -521,7 +521,7 @@ mod tests {
             assert!(cmd.contains("grok update --alpha"), "{cmd}");
         }
         #[cfg(unix)]
-        assert_eq!(cmd, "grok update");
+        assert_eq!(cmd, "grok update --alpha");
     }
 
     #[test]
@@ -659,7 +659,16 @@ mod tests {
         assert_overlay_install(&cmds[2]);
         assert_overlay_grok(cmds.last().unwrap());
         #[cfg(unix)]
-        assert!(!cmds.iter().any(|c| c.contains("--alpha") || c.contains("--stable")), "{cmds:?}");
+        {
+            assert!(
+                cmds.last().is_some_and(|c| c == "grok update --alpha"),
+                "{cmds:?}"
+            );
+            assert!(
+                !cmds.iter().any(|c| c.contains("--stable")),
+                "cabin must not switch grok off alpha: {cmds:?}"
+            );
+        }
         assert!(!update_wipes_config(&cmds));
         let plan = update_plan_steps(cmds);
         assert!(plan[0].explain.contains("GitHub"), "{plan:?}");
@@ -973,26 +982,17 @@ mod tests {
             windows_grok_update_cmd(),
             r#"$env:PATH = "$env:USERPROFILE\.grok\bin;$env:PATH"; grok update --alpha"#
         );
-        assert!(settings_update_note().contains(if cfg!(windows) {
-            "grok update --alpha"
-        } else {
-            "current channel"
-        }));
-        #[cfg(unix)]
-        assert!(
-            !settings_update_note().contains("--alpha"),
-            "{}",
-            settings_update_note()
-        );
+        assert!(settings_update_note().contains("grok update --alpha"));
         let unix = include_str!("update.rs")
             .split("fn overlay_grok_update_cmd(")
             .nth(1)
             .and_then(|s| s.split("pub fn update_plan_steps(").next())
             .expect("overlay_grok_update_cmd");
         assert!(
-            unix.contains("\"grok update\"")
-                && unix.contains("do not force --alpha here on Unix"),
-            "Linux cabin /update must stay current-channel: {unix}"
+            unix.contains("\"grok update --alpha\"")
+                && unix.contains("Do not pass --stable")
+                && !unix.contains("do not force --alpha here on Unix"),
+            "Linux cabin /update must pin grok to alpha: {unix}"
         );
         let win_install = include_str!("update.rs")
             .split("fn overlay_install_cmd(")

@@ -1,8 +1,9 @@
 //! First-run Grok Build CLI **alpha** install (Linux + Windows).
 
 use crate::locate::{
-    clear_grok_unusable, cli_install_should_skip, doctor_broken_hint, find_grok,
-    grok_cli_is_runnable, grok_marked_unusable, invalidate_grok_bin_cache,
+    clear_grok_unusable, cli_install_should_skip, doctor_broken_hint, doctor_missing_hint,
+    find_grok, grok_cli_channel, grok_cli_is_runnable, grok_home, grok_marked_unusable,
+    grok_user_stdout_timeout, invalidate_grok_bin_cache,
 };
 #[cfg(windows)]
 use crate::locate::hide_windows_console;
@@ -36,6 +37,33 @@ pub fn begin_grok_install() -> Receiver<Result<PathBuf, String>> {
 /// leftover or broken `grok.exe` is on disk.
 pub fn begin_grok_install_force() -> Receiver<Result<PathBuf, String>> {
     begin_grok_install_opts(true)
+}
+
+/// If a working `grok` is not on alpha, run `grok update --alpha`.
+/// Leaves a working alpha install alone. A failed channel probe does not reinstall.
+pub fn begin_keep_cli_alpha() -> Receiver<Result<PathBuf, String>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(keep_cli_alpha_blocking());
+    });
+    rx
+}
+
+pub fn keep_cli_alpha_blocking() -> Result<PathBuf, String> {
+    let p = find_grok().ok_or_else(|| doctor_missing_hint().to_string())?;
+    if grok_marked_unusable(&p) || !grok_cli_is_runnable(&p) {
+        return Err(doctor_broken_hint().into());
+    }
+    if !grokhub_core::should_switch_cli_to_alpha(grok_cli_channel(&p).as_deref()) {
+        return Ok(p);
+    }
+    run_grok_update_alpha(&p)
+}
+
+fn run_grok_update_alpha(bin: &Path) -> Result<PathBuf, String> {
+    let cwd = grok_home().unwrap_or_else(std::env::temp_dir);
+    let _ = grok_user_stdout_timeout(bin, &cwd, &["update", "--alpha"], 300)?;
+    Ok(bin.to_path_buf())
 }
 
 fn begin_grok_install_opts(force: bool) -> Receiver<Result<PathBuf, String>> {
@@ -403,6 +431,17 @@ mod tests {
                 "Linux first-run must actually run the alpha installer: {src}"
             );
         }
+        assert!(
+            src.contains("begin_keep_cli_alpha")
+                && src.contains("grok update --alpha")
+                && src.contains("[\"update\", \"--alpha\"]"),
+            "a stable grok must switch to alpha without a reinstall: {src}"
+        );
+        let off = format!("update --{}", "stable");
+        assert!(
+            !src.contains(&off),
+            "cabin must never switch grok off alpha: {src}"
+        );
     }
 
 }
