@@ -918,6 +918,7 @@ mod tests {
 
     #[test]
     fn env_override_missing_is_none() {
+        let _lock = grok_env_test_lock();
         let prev = std::env::var_os("GROKHUB_GROK");
         std::env::set_var("GROKHUB_GROK", "/no/such/grok-binary-xyz");
         let hit = find_grok();

@@ -2115,6 +2115,7 @@ mod tests {
 
     #[test]
     fn spawn_opts_missing_grok() {
+        let _lock = crate::locate::grok_env_test_lock();
         let prev = std::env::var_os("GROKHUB_GROK");
         let path_prev = std::env::var_os("PATH");
         let home_prev = std::env::var_os("HOME");
@@ -2129,6 +2130,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&fake_home).unwrap();
         std::env::set_var("HOME", &fake_home);
+        crate::invalidate_grok_bin_cache();
         let err = SpawnOpts::grok(
             std::env::temp_dir(),
             None,
