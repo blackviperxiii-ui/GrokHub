@@ -1,6 +1,6 @@
 # Windows cabin installer
 
-**Version:** 2.9.5  
+**Version:** 2.9.6  
 **Repo:** `blackviperxiii-ui/GrokHub` (one cabin, two artifacts — not the deleted Electron app)
 
 GrokHub on Windows is the same native egui cabin as Linux. Grok Build (`grok.exe` over ACP) is the agent, host shell, and computer-use. The Windows artifact is `GrokHub-Setup-<version>.exe` (Inno) plus `grokhub-windows-v<version>.zip`. Same tag and cabin version as Linux `grokhub-linux-v*.tar.gz`. No Windows AT-SPI / screenshot / click backends.
@@ -47,7 +47,7 @@ Locate order: `GROKHUB_GROK`, PATH (`grok.exe`), `%USERPROFILE%\.grok\bin\grok.e
 
 **If the download fails, it is not a ship blocker.** The installer still installs the cabin. First launch and reinstall automatically install Grok Build CLI **alpha** (`GROK_CHANNEL=alpha` / `https://x.ai/cli/alpha`) when `grok` is missing or unusable (stub MZ or `STATUS_DLL_NOT_FOUND`). UAC on first run is expected. The Install control is hidden when grok is already present or an alpha install is already running. A leftover `grok.exe` that cannot start shows one cabin error (Windows loader dialogs silenced), not a looping MessageBox.
 
-Cabin overlay on Windows does not run Linux `install.sh`. Settings → Update downloads the latest `grokhub-windows` zip from GitHub when there is no source clone, then runs `grok update --alpha`. A source clone still overlays with `install-windows.ps1`. After a CLI install, `%USERPROFILE%\.grok\bin` is preferred over a leftover PATH `grok`.
+Cabin overlay on Windows does not run Linux `install.sh`. Settings → Update downloads the latest `grokhub-windows` zip from GitHub when there is no source clone, then runs `grok update --alpha`. A source clone still overlays with `install-windows.ps1`. After a CLI install, `%USERPROFILE%\.grok\bin` is preferred over a leftover PATH `grok`. When GitHub Latest is newer than the running cabin, the titlebar shows **Update available** (in-app — Settings → Update). Settings → **Update Grok Build CLI** runs `grok update --alpha` when grok is already installed.
 
 ## Installer
 
