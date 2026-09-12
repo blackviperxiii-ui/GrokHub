@@ -4248,6 +4248,10 @@ impl Cabin {
                     } else {
                         t.messages.is_empty()
                     },
+                    has_session: t
+                        .grok_session
+                        .as_deref()
+                        .is_some_and(|s| !s.trim().is_empty()),
                 })
                 .collect();
             reuse_empty_thread_idx(&views, self.thread_idx, scratch)
@@ -6836,7 +6840,10 @@ impl Cabin {
         self.palette_open = false;
         self.settings_menu_open = false;
         match action {
-            "nav:chat" => self.nav = Nav::Chat,
+            "nav:chat" => {
+                self.new_thread(false);
+                self.nav = Nav::Chat;
+            }
             "nav:night" => self.nav = Nav::Night,
             "nav:history" => self.nav = Nav::History,
             "nav:devices" => self.nav = Nav::Devices,
@@ -10690,7 +10697,7 @@ impl Cabin {
                 Nav::Connectors
             }
             "chat" => {
-                self.open_recent_chat();
+                self.new_thread(false);
                 Nav::Chat
             }
             _ => Nav::Chat,
@@ -10920,13 +10927,6 @@ impl Cabin {
                 if Self::nav_row(ui, false, crate::icons::RailIcon::Search, "Search", false).clicked()
                 {
                     self.open_palette();
-                }
-                if Self::nav_row(ui, false, crate::icons::RailIcon::Compose, "New chat", true)
-                    .clicked()
-                {
-                    self.new_thread(false);
-                    self.nav = Nav::Chat;
-                    self.composer_want_focus = true;
                 }
                 ui.add_space(6.0);
                 let cur = self.nav_id();
@@ -19827,7 +19827,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_rail_opens_most_recent_thread() {
+    fn chat_rail_reuses_empty_draft() {
         let src = include_str!("app.rs");
         let theme = include_str!("theme.rs");
         let chat = theme.find("(\"chat\", \"Chat\")").expect("chat rail");
@@ -19838,22 +19838,31 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn ui_titlebar(").next())
             .expect("set_nav_id");
-        assert!(
-            set_nav.contains("\"chat\" =>") && set_nav.contains("self.open_recent_chat()"),
-            "Chat rail click opens the last accessed thread: {set_nav}"
-        );
-        let open = src
-            .split("fn open_recent_chat(")
+        let chat_arm = set_nav
+            .split("\"chat\" =>")
             .nth(1)
-            .and_then(|s| s.split("fn land_on_real_chat(").next())
-            .expect("open_recent_chat");
+            .and_then(|s| s.split("_ =>").next())
+            .expect("chat arm");
         assert!(
-            open.contains("most_recently_accessed_index") && open.contains("switch_thread"),
-            "Chat rail uses last-access, not leftover thread_idx: {open}"
+            chat_arm.contains("self.new_thread(false)"),
+            "Chat rail click reuses or starts one empty draft: {chat_arm}"
         );
         assert!(
-            open.contains("composer_want_focus = true"),
-            "Chat rail must put the cursor in the composer: {open}"
+            !chat_arm.contains("open_recent_chat"),
+            "Chat rail must not jump to last-access; History is for old convos: {chat_arm}"
+        );
+        let created = src
+            .split("fn new_thread")
+            .nth(1)
+            .and_then(|s| s.split("fn begin_chat_rename").next())
+            .expect("new_thread");
+        assert!(
+            created.contains("reuse_empty_thread_idx") && created.contains("has_session"),
+            "Chat must reuse an empty no-session draft instead of stacking Chats: {created}"
+        );
+        assert!(
+            created.contains("composer_want_focus = true"),
+            "Chat rail must put the cursor in the composer: {created}"
         );
         let side = src
             .split("fn ui_sidebar(")
@@ -19861,10 +19870,21 @@ mod tests {
             .and_then(|s| s.split("fn cached_chat_views(").next())
             .expect("ui_sidebar");
         assert!(
-            side.contains("New chat")
-                && side.contains("composer_want_focus = true")
-                && side.contains("OpenGrok"),
-            "New chat and sidebar History clicks must focus the composer: {side}"
+            !side.contains("\"New chat\"") && !side.contains("RailIcon::Compose"),
+            "sidebar must not keep a separate New chat button: {side}"
+        );
+        assert!(
+            side.contains("composer_want_focus = true") && side.contains("OpenGrok"),
+            "sidebar History clicks must focus the composer: {side}"
+        );
+        let palette = src
+            .split("fn run_palette(")
+            .nth(1)
+            .and_then(|s| s.split("fn run_slash_line(").next())
+            .expect("run_palette");
+        assert!(
+            palette.contains("\"nav:chat\"") && palette.contains("self.new_thread(false)"),
+            "palette Chat uses the same empty-draft reuse as the rail: {palette}"
         );
         let land = src
             .split("fn land_on_real_chat(")

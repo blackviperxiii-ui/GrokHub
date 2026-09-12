@@ -367,7 +367,8 @@ pub use task::{HubTask, Receipt};
 pub use thread_tab::{
     apply_auto_title, apply_auto_title_in, apply_manual_rename, auto_title_blocked, clean_tab_title,
     default_thread_title, delete_thread, display_tab_title, history_order, history_row_visible,
-    leftover_empty_thread, reuse_empty_thread_idx, short_auto_title, toggle_pin, DeleteOutcome,
+    empty_chat_draft, leftover_empty_thread, reuse_empty_thread_idx, short_auto_title, toggle_pin,
+    DeleteOutcome,
     ThreadReuseView, ThreadTab, AUTO_TITLE_MAX,
 };
 pub use update::{

@@ -549,7 +549,7 @@ pub fn resolve_mode_arg(arg: &str) -> Option<String> {
 pub fn slash_help() -> String {
     [
         "/help — this list",
-        "/new — new chat (new Grok Build session)",
+        "/new — new chat (reuse empty draft; new Grok Build session)",
         "/scratch — new scratch chat (no memory; /forget and Memory Save stay off)",
         "/clear — clear this chat",
         "/compact — compact Grok context (also trims the painted pane)",
@@ -630,7 +630,7 @@ pub fn slash_help() -> String {
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
         "Pulse every 15s. Hidden idle waits for the pulse.",
         "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
-        "Chat rail opens the last-accessed thread.",
+        "Chat rail reuses one empty draft; after dialogue starts it opens a new chat. Old convos are sidebar History.",
         "Tool calls, diffs, and desk frames sit in a collapsed Work tree — expand to view. User and assistant chats are bubbles; thinking is faded thought process, not a bubble. Permission prompts Allow / Deny — Enter allows and Esc denies when the composer is empty. User bubbles sit on the right.",
         "Five chips sit centered over the composer.",
     ]
@@ -769,7 +769,7 @@ mod tests {
         assert!(slash_help().contains("Hover a composer pill for what it does"));
         assert!(slash_help().contains("centered over the composer"));
         assert!(slash_help().contains("Hidden idle waits for the pulse"));
-        assert!(slash_help().contains("Chat rail opens the last-accessed thread"));
+        assert!(slash_help().contains("Chat rail reuses one empty draft"));
         assert!(slash_help().contains("Tool calls, diffs, and desk frames"));
         assert!(slash_help().contains("collapsed Work tree"));
         assert!(slash_help().contains("thought process"));
