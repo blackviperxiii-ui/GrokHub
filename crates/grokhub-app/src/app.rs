@@ -86,15 +86,17 @@ use grokhub_core::{
     now_ms, parse_consult, parse_goal_outcome, parse_local_clock, patch_skill, prefer_patch,
     reply_needs_followup,
     recipe_from_cmds, replay_automation_target,
-    mark_loop_ran, new_loop, parse_recipe, parse_slash, route_schedule, ScheduleRoute,
+    mark_loop_ran, new_loop, parse_recipe, parse_slash, slash_kind, route_schedule, ScheduleRoute,
     automation_schedule_label, automation_summary_line,
     parse_theme, pick_theme, plan_room, LOOP_MAX,
     chat_may_save_automation, user_asked_to_schedule,
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
-    remember_chip_outcome, remember_typed_prompt, roll_usage_day,
-    greeting_fingerprint, greeting_name, greeting_prompt, local_greeting, pick_greeting,
-    should_paint_greeting, should_refresh_greeting, GreetingInput,
+    remember_chip_outcome, remember_home_slash, remember_home_surface, remember_typed_prompt,
+    home_slash_cmd, home_surface_from_nav, roll_usage_day,
+    greeting_fingerprint, greeting_name, greeting_prompt, is_cabin_first_run, local_greeting,
+    pick_greeting, project_title_from_hint, should_paint_greeting, should_refresh_greeting,
+    GreetingInput,
     recall_hits, redirect_prompt, redact_secrets, refused_lock, replay_ops, rewind_allowed,
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, rewind_blocked_reason, rewind_copy_cmd, rewind_snapshot_ready,
     rewind_dest, rewind_restore_matches, save_hub_state, screen_from_extents, search_corpus,
@@ -3661,6 +3663,13 @@ impl Cabin {
             } else {
                 self.greeting_memory_md.as_str()
             };
+            let last_project = Self::last_project_title_from(
+                &last_night,
+                &self.continue_hint,
+                &self.cfg.goal_pin,
+            );
+            let first_run = is_cabin_first_run(self.cfg.get_started_done, self.has_real_history());
+            let signed_in = self.cabin_signed_in();
             let input = GreetingInput {
                 user_md,
                 memory_md,
@@ -3668,6 +3677,9 @@ impl Cabin {
                 display_name: &display_name,
                 hour,
                 last_night: &last_night,
+                signed_in,
+                first_run,
+                last_project: &last_project,
             };
             let fp = greeting_fingerprint(&input);
             let local = local_greeting(&input);
@@ -3870,8 +3882,26 @@ impl Cabin {
         let last_failed = self.last_receipt_ok == Some(false);
         let draft_head: String = self.composer.chars().take(16).collect();
         let draft_tail: String = self.composer.chars().rev().take(16).collect();
+        let last_slash = self
+            .chip_memory
+            .last_slash
+            .clone()
+            .unwrap_or_default();
+        let last_surface = self
+            .chip_memory
+            .last_surface
+            .clone()
+            .unwrap_or_default();
+        let first_run = is_cabin_first_run(self.cfg.get_started_done, self.has_real_history());
+        let last_project = Self::last_project_title_from(
+            &self.last_night_hint(),
+            &self.continue_hint,
+            &self.cfg.goal_pin,
+        );
+        let skill_count = self.skill_list.len();
+        let session_mode = self.session_mode.as_str().to_string();
         let key = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.thread_idx,
             n,
             last,
@@ -3885,7 +3915,13 @@ impl Cabin {
             self.llm_chips.len(),
             self.has_key(),
             self.llm_ready(),
-            self.usage.messages
+            self.cabin_signed_in(),
+            self.usage.messages,
+            last_slash,
+            last_surface,
+            first_run,
+            last_project,
+            session_mode
         );
         if self.chip_paint_key == key && !self.visible_chips.is_empty() {
             return;
@@ -3896,7 +3932,7 @@ impl Cabin {
         let input = ChipInput {
             chat: &chat,
             draft: &self.composer,
-            grok_connected: self.llm_ready(),
+            grok_connected: self.cabin_signed_in(),
             host_on: false,
             mode: if self.cfg.mode.trim().is_empty() {
                 "auto"
@@ -3914,6 +3950,12 @@ impl Cabin {
             now_ms: now_ms(),
             max: CHIP_VISIBLE_MAX,
             other_threads: &others,
+            first_run,
+            last_slash: &last_slash,
+            last_surface: &last_surface,
+            last_project: &last_project,
+            skill_count: skill_count as u32,
+            session_mode: &session_mode,
         };
         let mode = input.mode;
         self.visible_chips = build_quick_chips(input);
@@ -3994,6 +4036,11 @@ impl Cabin {
             ChipKind::Nav => {
                 if let Some(id) = nav_from_chip_value(&chip.value) {
                     self.nav = Self::nav_from_id(id);
+                    if id == "imagine" {
+                        remember_home_surface(&mut self.chip_memory, "imagine", now_ms());
+                    } else if id == "skills" {
+                        remember_home_surface(&mut self.chip_memory, "skills", now_ms());
+                    }
                 }
             }
             ChipKind::Mode => {
@@ -4465,6 +4512,7 @@ impl Cabin {
             now_ms(),
             Self::local_clock().hour as u8,
         );
+        remember_home_surface(&mut self.chip_memory, "chat", now_ms());
         if !persist_user_turn(self.can_agent()) {
             self.hands_attach = false;
             self.eyes_attach = false;
@@ -4506,6 +4554,9 @@ impl Cabin {
     }
 
     fn run_slash(&mut self, slash: Slash) {
+        if let Some(cmd) = home_slash_cmd(slash_kind(&slash)) {
+            remember_home_slash(&mut self.chip_memory, cmd, now_ms());
+        }
         match slash {
             Slash::Forget(topic) => {
                 if self.scratch() {
@@ -6934,6 +6985,50 @@ impl Cabin {
 
     fn tick_mid_thought(&mut self) {
         self.continue_hint = threads::continue_thread_hint(&self.threads);
+    }
+
+    fn tick_home_surface(&mut self) {
+        let Some(surface) = home_surface_from_nav(self.nav_id()) else {
+            return;
+        };
+        if self.chip_memory.last_surface.as_deref() == Some(surface) {
+            return;
+        }
+        remember_home_surface(&mut self.chip_memory, surface, now_ms());
+    }
+
+    fn cabin_signed_in(&self) -> bool {
+        self.secrets
+            .oauth
+            .as_ref()
+            .is_some_and(|t| !t.access_token.trim().is_empty())
+            || grokhub_acp::grok_cli_key().is_some()
+    }
+
+    fn has_real_history(&self) -> bool {
+        self.threads.iter().any(|t| {
+            !t.scratch
+                && !t.messages.is_empty()
+                && !t.title.trim().is_empty()
+                && !t.title.eq_ignore_ascii_case("chat")
+                && !t.title.eq_ignore_ascii_case("scratch")
+        })
+    }
+
+    fn last_project_title_from(last_night: &str, continue_hint: &str, goal_pin: &str) -> String {
+        let from_hint = project_title_from_hint(continue_hint);
+        if !from_hint.is_empty() {
+            return from_hint;
+        }
+        let from_night = project_title_from_hint(last_night);
+        if !from_night.is_empty() {
+            return from_night;
+        }
+        let pin = goal_pin.trim();
+        if pin.chars().count() <= 28 && !pin.contains('.') {
+            return project_title_from_hint(pin);
+        }
+        String::new()
     }
 
     fn last_night_hint(&self) -> String {
@@ -9951,6 +10046,7 @@ impl eframe::App for Cabin {
         self.poll_review();
         self.poll_greeting();
         self.poll_goals();
+        self.tick_home_surface();
         self.refresh_chips();
         self.refresh_greeting();
         self.drain_inbox();
@@ -16438,8 +16534,41 @@ mod tests {
             "empty chips must not inject HOST_CMD host_chips: {chips}"
         );
         assert!(
-            chips.contains("llm_ready"),
-            "chips must treat grok CLI as connected, not only cabin OAuth: {chips}"
+            chips.contains("grok_connected: self.cabin_signed_in()"),
+            "Connect chip must follow signed-in, not a PATH grok: {chips}"
+        );
+        assert!(
+            !chips.contains("grok_connected: self.llm_ready()"),
+            "PATH grok must not hide Connect Grok: {chips}"
+        );
+    }
+
+    #[test]
+    fn imagine_visit_ranks_home_chips() {
+        let src = include_str!("app.rs");
+        let update = src
+            .split("fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame)")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_sidebar(").next())
+            .expect("update");
+        let tick = update.find("tick_home_surface").expect("tick_home_surface in update");
+        let chips = update.find("refresh_chips").expect("refresh_chips in update");
+        assert!(
+            tick < chips,
+            "Imagine/Skills visits must record last_surface before chips rank: {update}"
+        );
+        let tick_fn = src
+            .split("fn tick_home_surface(")
+            .nth(1)
+            .and_then(|s| s.split("fn cabin_signed_in(").next())
+            .expect("tick_home_surface");
+        assert!(
+            tick_fn.contains("home_surface_from_nav") && tick_fn.contains("remember_home_surface"),
+            "sidebar / palette / slash page visits must rank Imagine and Skills: {tick_fn}"
+        );
+        assert!(
+            tick_fn.contains("nav_id()"),
+            "surface must follow the live page, not only a chip click: {tick_fn}"
         );
     }
 
