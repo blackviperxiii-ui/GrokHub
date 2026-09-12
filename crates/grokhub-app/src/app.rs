@@ -15242,18 +15242,23 @@ mod tests {
                 && update.contains("settings_update_action_hint()")
                 && update.contains("Install Grok Build CLI")
                 && update.contains("show_cli_install")
-                && update.contains("cabin_update_notice")
-                && update.contains("should_notify_cabin_update")
+                && update.contains("cabin_notice")
                 && update.contains("Update Grok Build CLI")
-                && update.contains("should_show_cli_alpha_update")
-                && update.contains("queue_cli_alpha_update")
+                && update.contains("show_cli_update")
                 && update.contains("grok update --alpha"),
             "Update is overlay + Update + Restart, Latest notify, CLI alpha update when grok is ready, Install when missing: {update}"
         );
         assert!(
+            settings.contains("cabin_update_notice")
+                && settings.contains("should_show_cli_alpha_update")
+                && settings.contains("queue_cli_alpha_update"),
+            "Settings Update must wire Latest notify and CLI alpha update: {settings}"
+        );
+        assert!(
             !account.contains("Update available")
                 && !account.contains("cabin_update_notice")
-                && !account.contains("GitHub Latest"),
+                && !account.contains("GitHub Latest")
+                && !account.contains("Update Grok Build CLI"),
             "cabin notify must not live on Account: {account}"
         );
     }
