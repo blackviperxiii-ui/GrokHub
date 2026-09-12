@@ -154,6 +154,10 @@ pub struct ChipMemory {
     #[serde(default)]
     pub last_chip_key: Option<String>,
     #[serde(default)]
+    pub last_slash: Option<String>,
+    #[serde(default)]
+    pub last_surface: Option<String>,
+    #[serde(default)]
     pub total_events: u32,
     #[serde(default)]
     pub updated_at: u64,
@@ -170,6 +174,8 @@ impl Default for ChipMemory {
             hits: vec![],
             transitions: BTreeMap::new(),
             last_chip_key: None,
+            last_slash: None,
+            last_surface: None,
             total_events: 0,
             updated_at: 0,
         }
@@ -214,6 +220,12 @@ pub struct ChipInput<'a> {
     pub now_ms: u64,
     pub max: usize,
     pub other_threads: &'a [ChipThread],
+    pub first_run: bool,
+    pub last_slash: &'a str,
+    pub last_surface: &'a str,
+    pub last_project: &'a str,
+    pub skill_count: u32,
+    pub session_mode: &'a str,
 }
 
 pub fn empty_chip_memory() -> ChipMemory {
@@ -1063,6 +1075,194 @@ fn boost_matching(memory: &mut ChipMemory, text: &str, now_ms: u64) {
     memory.updated_at = now_ms;
 }
 
+/// Cabin verbs that are worth remembering as a next-chip. Not /update, /clear, /new.
+pub fn home_slash_cmd(kind: &str) -> Option<&'static str> {
+    match kind.trim().to_ascii_lowercase().as_str() {
+        "plan" | "/plan" => Some("/plan"),
+        "reflect" | "/learn" | "learn" => Some("/learn"),
+        "imagine" | "/imagine" => Some("/imagine"),
+        "skill" | "grok_skills" | "/skill" | "/skills" | "skills" => Some("/skills"),
+        "board" | "/board" => Some("/board"),
+        "dream" | "/dream" => Some("/dream"),
+        "project_show" | "project_bind" | "/project" | "project" => Some("/project"),
+        _ => None,
+    }
+}
+
+pub fn remember_home_slash(memory: &mut ChipMemory, cmd: &str, now_ms: u64) {
+    let Some(verb) = home_slash_cmd(cmd) else {
+        return;
+    };
+    memory.last_slash = Some(verb.to_string());
+    memory.updated_at = now_ms;
+}
+
+pub fn remember_home_surface(memory: &mut ChipMemory, surface: &str, now_ms: u64) {
+    let s = surface.trim().to_ascii_lowercase();
+    if !matches!(s.as_str(), "chat" | "imagine" | "skills") {
+        return;
+    }
+    memory.last_surface = Some(s);
+    memory.updated_at = now_ms;
+}
+
+/// Sidebar / palette / slash page ids that should rank home chips after a visit.
+pub fn home_surface_from_nav(id: &str) -> Option<&'static str> {
+    match id.trim().to_ascii_lowercase().as_str() {
+        "imagine" => Some("imagine"),
+        "skills" => Some("skills"),
+        _ => None,
+    }
+}
+
+fn home_project_title(raw: &str) -> String {
+    let t = raw.trim();
+    let t = t
+        .strip_prefix("Continue ")
+        .or_else(|| t.strip_prefix("continue "))
+        .unwrap_or(t)
+        .trim();
+    if skip_other_thread_title(t) || !is_plain_text(t) {
+        return String::new();
+    }
+    let low = t.to_ascii_lowercase();
+    if low.starts_with("failed:") || low.contains("grokhub") {
+        return String::new();
+    }
+    shorten(t, 22)
+}
+
+fn slash_home_chip(cmd: &str, score: f32) -> Option<QuickChip> {
+    match home_slash_cmd(cmd)? {
+        "/plan" => Some(chip(
+            "home-slash-plan",
+            "/plan",
+            "/plan",
+            ChipKind::Chat,
+            score,
+            "Last slash",
+        )),
+        "/learn" => Some(chip(
+            "home-slash-learn",
+            "/learn",
+            "/learn",
+            ChipKind::Chat,
+            score,
+            "Last slash",
+        )),
+        "/dream" => Some(chip(
+            "home-slash-dream",
+            "/dream",
+            "/dream",
+            ChipKind::Chat,
+            score,
+            "Last slash",
+        )),
+        "/project" => Some(chip(
+            "home-slash-project",
+            "/project",
+            "/project",
+            ChipKind::Chat,
+            score,
+            "Last slash",
+        )),
+        _ => None,
+    }
+}
+
+fn home_signal_chips(input: &ChipInput<'_>) -> Vec<QuickChip> {
+    let mut out = vec![];
+    let project = home_project_title(input.last_project);
+    if !project.is_empty() {
+        out.push(chip(
+            "home-continue",
+            &format!("Continue {project}"),
+            &format!("Continue the work on {project}. Pick up where we left off and act now."),
+            ChipKind::Chat,
+            108.0,
+            "Last project",
+        ));
+    }
+    if let Some(c) = slash_home_chip(input.last_slash, 106.0) {
+        out.push(c);
+    } else if input.session_mode.eq_ignore_ascii_case("plan") {
+        if let Some(c) = slash_home_chip("/plan", 100.0) {
+            out.push(c);
+        }
+    }
+    if input.first_run && input.grok_connected {
+        out.push(chip(
+            "home-first-next",
+            "What's next",
+            "What should we do next in this cabin? One concrete step.",
+            ChipKind::Chat,
+            86.0,
+            "First run",
+        ));
+    }
+    out
+}
+
+fn apply_home_signal_boost(chips: &mut [QuickChip], input: &ChipInput<'_>) {
+    let slash = home_slash_cmd(input.last_slash).unwrap_or("");
+    let surface = input.last_surface.trim().to_ascii_lowercase();
+    let session = input.session_mode.trim().to_ascii_lowercase();
+    for c in chips.iter_mut() {
+        let id = c.id.to_ascii_lowercase();
+        let label = c.label.to_ascii_lowercase();
+        let val = c.value.to_ascii_lowercase();
+        if surface == "imagine"
+            && (val.contains("__nav:imagine") || label.contains("imagine") || id.contains("imagine"))
+        {
+            c.score += 22.0;
+            if c.hint.is_empty() || c.hint == "Create images" || c.hint == "Images" {
+                c.hint = "Last surface".into();
+            }
+        }
+        if (slash == "/imagine" || surface == "imagine")
+            && (val.contains("__nav:imagine") || label.contains("imagine"))
+        {
+            c.score += 8.0;
+        }
+        if (slash == "/skills" || input.skill_count > 0 || surface == "skills")
+            && (val.contains("__nav:skills") || label == "skills")
+        {
+            c.score += if input.skill_count > 0 { 56.0 } else { 28.0 };
+            if c.hint == "Default" {
+                c.hint = "Skills you have".into();
+            }
+        }
+        if slash == "/board" && (val.contains("__nav:workboard") || label.contains("workboard")) {
+            c.score += 16.0;
+        }
+        if input.first_run {
+            if id.contains("empty-next") || label == "what's next" {
+                c.score += 24.0;
+            }
+            if val.contains("__nav:imagine") || label.contains("imagine") {
+                c.score += 18.0;
+            }
+            if val.contains("__nav:skills") || label == "skills" {
+                c.score += 20.0;
+            }
+            if id.contains("night") || label.contains("night job") || id.contains("github") {
+                c.score -= 40.0;
+            }
+        }
+        if session == "ask" && (label.contains("what's next") || id.contains("empty-next")) {
+            c.score += 10.0;
+        }
+        if session == "plan" && val == "/plan" {
+            c.score += 8.0;
+        }
+        if !home_project_title(input.last_project).is_empty()
+            && (id.starts_with("prev-") || id == "home-continue" || label.starts_with("continue "))
+        {
+            c.score += 12.0;
+        }
+    }
+}
+
 pub fn remember_chip_outcome(memory: &mut ChipMemory, success: bool, now_ms: u64) {
     let Some(key) = memory.last_chip_key.clone() else {
         return;
@@ -1561,6 +1761,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             "You're not connected — this is the best next step",
         ));
     }
+    chips.extend(home_signal_chips(&input));
     chips.extend(draft_prediction_chips(input.draft));
     chips.extend(learned_chips_from_memory(input.memory, input.now_ms).into_iter().map(|mut c| {
         if let Some(hit) = input.memory.hits.iter().find(|h| h.value == c.value) {
@@ -1702,6 +1903,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
     chips.retain(|c| c.value.trim().to_ascii_lowercase() != draft);
 
     apply_intent_boost(&mut chips, &intents);
+    apply_home_signal_boost(&mut chips, &input);
     if !draft.is_empty() {
         apply_draft_boost(&mut chips, input.draft, &intents);
     }
@@ -2085,6 +2287,12 @@ mod tests {
             now_ms: 1_000_000,
             max: 5,
             other_threads: &[],
+            first_run: false,
+            last_slash: "",
+            last_surface: "",
+            last_project: "",
+            skill_count: 0,
+            session_mode: "chat",
         }
     }
 
@@ -2705,5 +2913,109 @@ mod tests {
             "{:?}",
             labels(&cleaned)
         );
+    }
+
+    #[test]
+    fn home_slash_and_surface_rank_next_chips() {
+        let mut mem = ChipMemory::default();
+        remember_home_slash(&mut mem, "plan", 10);
+        remember_home_surface(&mut mem, "imagine", 11);
+        assert_eq!(mem.last_slash.as_deref(), Some("/plan"));
+        assert_eq!(mem.last_surface.as_deref(), Some("imagine"));
+        remember_home_slash(&mut mem, "/update", 12);
+        assert_eq!(mem.last_slash.as_deref(), Some("/plan"), "junk slashes stay out");
+
+        let mut inp = input(&[], "", &mem, &[], &[]);
+        inp.last_slash = "/plan";
+        inp.last_surface = "imagine";
+        let chips = build_quick_chips(inp);
+        let shown = labels(&chips);
+        assert!(
+            chips.iter().any(|c| c.value == "/plan" && c.label == "/plan"),
+            "last slash /plan must surface: {shown:?}"
+        );
+        assert!(
+            chips.iter().any(|c| c.label == "Open Imagine"),
+            "last Imagine surface must keep Imagine: {shown:?}"
+        );
+        assert!(
+            chips.iter().find(|c| c.value == "/plan").map(|c| c.score)
+                > chips.iter().find(|c| c.label == "Cabin brief").map(|c| c.score),
+            "slash outranks generic empty-home: {shown:?}"
+        );
+        for c in &chips {
+            assert!(
+                c.label.chars().count() <= 28,
+                "ADHD labels stay short: {}",
+                c.label
+            );
+        }
+        assert!(chips.len() <= CHIP_VISIBLE_MAX);
+    }
+
+    #[test]
+    fn last_project_and_first_run_rank() {
+        let mem = ChipMemory::default();
+        let mut returning = input(&[], "", &mem, &[], &[]);
+        returning.last_project = "Night cabin";
+        let chips = build_quick_chips(returning);
+        assert!(
+            chips.iter().any(|c| c.id == "home-continue" && c.label.contains("Night cabin")),
+            "{:?}",
+            labels(&chips)
+        );
+        assert_eq!(chips[0].id, "home-continue", "{:?}", labels(&chips));
+
+        let mut first = input(&[], "", &mem, &[], &[]);
+        first.first_run = true;
+        let chips = build_quick_chips(first);
+        let shown = labels(&chips);
+        assert!(shown.iter().any(|l| *l == "What's next"), "{shown:?}");
+        assert!(shown.iter().any(|l| *l == "Open Imagine"), "{shown:?}");
+        assert!(
+            !shown.iter().any(|l| l.contains("night job")),
+            "first-run must not lead with night jobs: {shown:?}"
+        );
+
+        let mut skills = input(&[], "", &mem, &[], &[]);
+        skills.skill_count = 3;
+        skills.last_surface = "skills";
+        let chips = build_quick_chips(skills);
+        assert!(
+            chips.iter().any(|c| c.label == "Skills"),
+            "skills you have must rank: {:?}",
+            labels(&chips)
+        );
+
+        let mut plan = input(&[], "", &mem, &[], &[]);
+        plan.session_mode = "plan";
+        let chips = build_quick_chips(plan);
+        assert!(
+            chips.iter().any(|c| c.label == "/plan" && c.value == "/plan"),
+            "last session Plan offers /plan: {:?}",
+            labels(&chips)
+        );
+    }
+
+    #[test]
+    fn home_slash_cmd_keeps_cabin_verbs() {
+        assert_eq!(home_slash_cmd("plan"), Some("/plan"));
+        assert_eq!(home_slash_cmd("reflect"), Some("/learn"));
+        assert_eq!(home_slash_cmd("/learn"), Some("/learn"));
+        assert_eq!(home_slash_cmd("imagine"), Some("/imagine"));
+        assert_eq!(home_slash_cmd("/update"), None);
+        assert_eq!(home_slash_cmd("new"), None);
+        assert_eq!(home_slash_cmd("clear"), None);
+    }
+
+    #[test]
+    fn home_surface_from_nav_covers_sidebar_pages() {
+        assert_eq!(home_surface_from_nav("imagine"), Some("imagine"));
+        assert_eq!(home_surface_from_nav("skills"), Some("skills"));
+        assert_eq!(home_surface_from_nav("chat"), None);
+        assert_eq!(home_surface_from_nav("settings"), None);
+        let mut mem = ChipMemory::default();
+        remember_home_surface(&mut mem, home_surface_from_nav("imagine").unwrap(), 9);
+        assert_eq!(mem.last_surface.as_deref(), Some("imagine"));
     }
 }
