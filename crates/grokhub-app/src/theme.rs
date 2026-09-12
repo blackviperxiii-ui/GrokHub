@@ -286,15 +286,9 @@ pub const GROK_NAV: &[(&str, &str)] = &[
     ("skills", "Skills and Connectors"),
 ];
 
-/// Cabin-only panes. Opened from the avatar settings menu.
-pub const CABIN_MENU: &[(&str, &str)] = &[
-    ("history", "History"),
-    ("settings", "Settings"),
-    ("workboard", "Workboard"),
-    ("memory", "Memory"),
-    ("devices", "Devices"),
-    ("queue", "Queue"),
-];
+/// Avatar-menu destinations besides Help / Sign in / Sign out.
+/// Leftover panes stay reachable from slash, palette, and the sidebar.
+pub const CABIN_MENU: &[(&str, &str)] = &[("settings", "Settings")];
 
 #[allow(dead_code)]
 pub fn stage_subtitle(id: &str) -> &'static str {
@@ -658,10 +652,21 @@ mod tests {
         assert_eq!(GROK_NAV[0], ("chat", "Chat"));
         assert_eq!(GROK_NAV[1], ("imagine", "Imagine"));
         assert!(GROK_NAV.iter().all(|(id, _)| *id != "settings"));
-        assert_eq!(CABIN_MENU[0], ("history", "History"));
-        assert_eq!(CABIN_MENU[1], ("settings", "Settings"));
-        assert!(CABIN_MENU.iter().all(|(id, _)| *id != "command"));
-        assert!(CABIN_MENU.iter().all(|(id, _)| *id != "connectors"));
+        assert_eq!(CABIN_MENU, &[("settings", "Settings")]);
+        for gone in [
+            "history",
+            "workboard",
+            "memory",
+            "devices",
+            "queue",
+            "command",
+            "connectors",
+        ] {
+            assert!(
+                CABIN_MENU.iter().all(|(id, _)| *id != gone),
+                "{gone} must not sit in the avatar menu"
+            );
+        }
         assert_eq!(stage_subtitle("history"), "Past chats");
         assert_eq!(stage_subtitle("chat"), "Recent chat");
         assert_eq!(stage_subtitle("imagine"), "Images");
