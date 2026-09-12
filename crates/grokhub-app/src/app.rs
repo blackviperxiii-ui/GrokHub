@@ -7214,7 +7214,7 @@ impl Cabin {
                     self.oauth_pending = Some(start);
                     self.oauth_next_poll = Instant::now() + Duration::from_secs(wait);
                 }
-                Ok(Err(e)) => self.status = e,
+                Ok(Err(e)) => self.status = grokhub_core::oauth_error_status(e),
                 Err(mpsc::TryRecvError::Empty) => {
                     self.oauth_start_rx = Some(rx);
                     return;
@@ -7249,7 +7249,9 @@ impl Cabin {
                     }
                     grokhub_core::PollStatus::Expired | grokhub_core::PollStatus::Denied => {
                         self.oauth_pending = None;
-                        self.status = r.error.unwrap_or_else(|| "OAuth failed".into());
+                        self.status = grokhub_core::oauth_error_status(
+                            r.error.unwrap_or_else(|| "OAuth failed".into()),
+                        );
                     }
                     status @ (grokhub_core::PollStatus::Pending | grokhub_core::PollStatus::SlowDown) => {
                         if let Some(p) = self.oauth_pending.as_mut() {
@@ -7261,7 +7263,7 @@ impl Cabin {
                         }
                     }
                 },
-                Ok(Err(e)) => self.status = e,
+                Ok(Err(e)) => self.status = grokhub_core::oauth_error_status(e),
                 Err(mpsc::TryRecvError::Empty) => {
                     self.oauth_poll_rx = Some(rx);
                     return;
