@@ -2,7 +2,14 @@
 
 ## Unreleased
 
-- First cabin launch and reinstall automatically install Grok Build CLI **alpha** when `grok` is missing or unusable. Windows Setup runs the official installer (`install-grok-alpha.ps1`) and does not assume grok is already on PATH. The Install control is hidden when grok is present or an alpha install is already running.
+## 2.9.6 — 2026-09-12
+
+One cabin, two ship artifacts on the same tag. Cursor **#26** (first-run CLI alpha) and **#27** (cabin Latest notify + CLI alpha update) are on `main`.
+
+- Linux: `grokhub-linux-v2.9.6.tar.gz` and AUR `pkgver=2.9.6`. `/update` overlays the GUI then `grok update --alpha`.
+- Windows: `GrokHub-Setup-2.9.6.exe` and `grokhub-windows-v2.9.6.zip` from `packaging/windows/` + Inno. Settings → Update downloads the GitHub zip when there is no source clone, then `grok update --alpha`.
+- First cabin launch and reinstall automatically install Grok Build CLI **alpha** when `grok` is missing or unusable. Windows Setup runs the official installer (`install-grok-alpha.ps1`) and does not assume grok is already on PATH. Wait / Get Started paint as `CentralPanel`. The Install control is hidden when grok is present or an alpha install is already running.
+- When GitHub Latest is a newer cabin, the titlebar shows **Update available** (in-app — Settings → Update, not a web page). Settings → **Update Grok Build CLI** runs `grok update --alpha` when grok is already installed.
 
 ## 2.9.5 — 2026-09-12
 

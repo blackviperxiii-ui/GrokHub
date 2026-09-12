@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.9.5** — Grok Build **1.0.30** alpha. Imagine videos play in-pane. Avatar menu is Settings / Help / Connect. Empty-home greeting and chips rank from the situation. Windows taskbar/tray icon and tray Quit. Settings is OAuth Account, quiet-hours dropdown, overlay Update. Chat rail reuses one empty draft (no New chat button). `/update` runs `grok update --alpha` on Linux and Windows. History is `grok sessions` 1:1.
+**v2.9.6** — Grok Build **1.0.30** alpha. First launch and reinstall install CLI alpha when grok is missing; wait / Get Started paint as the only pane. Titlebar **Update available** when GitHub Latest is newer. Settings → Update adds **Update Grok Build CLI** (`grok update --alpha`). Imagine videos play in-pane. Avatar menu is Settings / Help / Connect. Empty-home greeting and chips rank from the situation. Windows taskbar/tray icon and tray Quit. Settings is OAuth Account, quiet-hours dropdown, overlay Update. Chat rail reuses one empty draft (no New chat button). `/update` runs `grok update --alpha` on Linux and Windows. History is `grok sessions` 1:1.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.9.5.tar.gz`, AUR | **v2.9.5** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.9.5.exe`, `grokhub-windows-v2.9.5.zip` | **v2.9.5** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.9.6.tar.gz`, AUR | **v2.9.6** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.9.6.exe`, `grokhub-windows-v2.9.6.zip` | **v2.9.6** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
