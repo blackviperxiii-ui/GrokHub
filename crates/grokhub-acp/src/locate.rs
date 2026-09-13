@@ -807,6 +807,7 @@ pub fn agent_args(always_approve: bool, reasoning_effort: Option<&str>) -> Vec<S
 
 /// Headless `grok -p` so a cabin chat maps 1:1 onto a Grok Build session
 /// without a long-lived `agent stdio` child of the GUI (exit 143).
+/// Grok Build 1.0.31 `--help` is byte-identical to 1.0.30 for these flags.
 pub fn single_turn_args(
     prompt: &str,
     cwd: &str,
@@ -1185,6 +1186,20 @@ mod tests {
         assert!(
             ask.windows(2).any(|w| w[0] == "--rules" && w[1] == CABIN_DESKTOP_RULES),
             "cabin grok -p must tell Grok it has this computer: {ask:?}"
+        );
+        // 1.0.31 --help: same headless surface as 1.0.30. Do not switch to
+        // streaming-messages-json / --include-partial-messages (TUI Messages wire).
+        assert!(
+            !ask.iter().any(|a| a == "streaming-messages-json"
+                || a == "--include-partial-messages"
+                || a == "--stable"),
+            "cabin must stay on streaming-json + alpha: {ask:?}"
+        );
+        assert!(
+            single_turn_args("hi", "/tmp/work", None, false, true)
+                .iter()
+                .any(|a| a == "--no-auto-update"),
+            "1.0.31 still accepts hidden --no-auto-update"
         );
     }
 
