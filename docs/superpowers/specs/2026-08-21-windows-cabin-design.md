@@ -43,7 +43,7 @@ Same workspace crates: `grokhub-app` (`grokhub.exe`), `grokhub-hub` (`grokhub-hu
 
 Locate order: `GROKHUB_GROK`, PATH (`grok.exe`), `%USERPROFILE%\.grok\bin\grok.exe`, then `grok.exe` next to `grokhub.exe`.
 
-**Bundle if possible.** Release packaging downloads the official Windows x86_64 artifact (`https://x.ai/cli/grok-<ver>-windows-x86_64.exe`, version from `https://x.ai/cli/alpha`) as `grok.exe` and `agent.exe`. The installer copies them to `%USERPROFILE%\.grok\bin` and adds that directory to the user PATH. Setup also runs the official installer (`GROK_CHANNEL=alpha` / `https://x.ai/cli/install.ps1`) so grok is not assumed on PATH.
+**Bundle if possible.** Release packaging downloads the official Windows x86_64 artifact (`https://x.ai/cli/grok-<ver>-windows-x86_64.exe`, version from `https://x.ai/cli/alpha`, currently **1.0.36**) as `grok.exe` and `agent.exe`. The installer copies them to `%USERPROFILE%\.grok\bin` and adds that directory to the user PATH. Setup also runs the official installer (`GROK_CHANNEL=alpha` / `https://x.ai/cli/install.ps1`) so grok is not assumed on PATH.
 
 **If the download fails, it is not a ship blocker.** The installer still installs the cabin. First launch and reinstall automatically install Grok Build CLI **alpha** (`GROK_CHANNEL=alpha` / `https://x.ai/cli/alpha`) when `grok` is missing or unusable (stub MZ or `STATUS_DLL_NOT_FOUND`). UAC on first run is expected. The Install control is hidden when grok is already present or an alpha install is already running. A leftover `grok.exe` that cannot start shows one cabin error (Windows loader dialogs silenced), not a looping MessageBox.
 
