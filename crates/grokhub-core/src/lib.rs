@@ -351,7 +351,8 @@ pub use voice::{
     realtime_can_connect, reduce_voice_state, should_attach_cabin_frame, should_capture_before_chat,
     should_mute_speaker, speech_can_connect, stt_multipart, stt_url, transcribe_route,
     tts_request_body, tts_url, voice_can_connect, voice_client_secret_denied, voice_log_role,
-    voice_session_url, voice_stream_token, voice_transcript_sends_chat, live_pcm_argv, live_pcm_frame_bytes,
+    voice_session_url, voice_stream_token, voice_transcript_sends_chat, voice_tts_script,
+    live_pcm_argv, live_pcm_frame_bytes,
     CabinEyesState, HeyGrokAction, HeyGrokRoute, TranscribeRoute, VoiceEvent, VoiceRole, VoiceState,
     DEFAULT_VOICE, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS,
 };
