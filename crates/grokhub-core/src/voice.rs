@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 
 use crate::attach::TEXT_FILE_CAP;
 use crate::chat::XAI_BASE;
+use crate::chat_view::assistant_prose;
 use crate::stream::StreamTokenKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,13 +170,16 @@ pub fn realtime_can_connect(api_key: &str) -> bool {
 }
 
 pub fn hey_grok_route(has_api_key: bool, has_speech_auth: bool, has_local: bool) -> HeyGrokRoute {
-    if has_api_key {
-        HeyGrokRoute::Realtime
-    } else if has_speech_auth || has_local {
+    if has_speech_auth || has_local || has_api_key {
         HeyGrokRoute::PushToTalk
     } else {
         HeyGrokRoute::None
     }
+}
+
+/// TTS script for a chat complete. Thinking / `THINKING:` / protocol stay off the speaker.
+pub fn voice_tts_script(complete: &str) -> String {
+    assistant_prose(complete)
 }
 
 pub fn encode_session_update() -> String {
@@ -647,10 +651,21 @@ mod tests {
             dedicated_voice_model(""),
             "grok-voice-think-fast-2.0"
         );
-        assert_eq!(hey_grok_route(true, true, false), HeyGrokRoute::Realtime);
+        assert_eq!(hey_grok_route(true, true, false), HeyGrokRoute::PushToTalk);
+        assert_eq!(hey_grok_route(true, false, false), HeyGrokRoute::PushToTalk);
         assert_eq!(hey_grok_route(false, true, false), HeyGrokRoute::PushToTalk);
         assert_eq!(hey_grok_route(false, false, true), HeyGrokRoute::PushToTalk);
         assert_eq!(hey_grok_route(false, false, false), HeyGrokRoute::None);
+        assert_eq!(
+            voice_tts_script("THINKING:\nplan the night\n\nI'll look."),
+            "I'll look."
+        );
+        assert_eq!(
+            voice_tts_script("<think>plan</think>\nHello."),
+            "Hello."
+        );
+        assert!(voice_tts_script("THINKING:\nonly thought").is_empty());
+        assert!(!voice_tts_script("I'll look.\nHOST_CMD: echo hi\nDone.").contains("HOST_CMD"));
         assert!(realtime_can_connect("xai-k"));
         assert!(!realtime_can_connect(""));
         assert!(speech_can_connect("tok"));
