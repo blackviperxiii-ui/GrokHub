@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.9.9 — 2026-09-19
+
+One cabin, two ship artifacts on the same tag. Cursor **#39** (PTT voice on Linux and Windows; TTS speaks the reply body, not thinking) is on `main`.
+
+- Linux: `grokhub-linux-v2.9.9.tar.gz` and AUR `pkgver=2.9.9`. `/update` overlays the GUI then `grok update --alpha` with `$HOME/.grok/bin:$HOME/.local/bin` prepended.
+- Windows: `GrokHub-Setup-2.9.9.exe` and `grokhub-windows-v2.9.9.zip` from `packaging/windows/` + Inno. Settings → Update downloads the GitHub zip when there is no source clone **or** the leftover clone is not a usable `main` checkout, then `grok update --alpha`.
+- Hey Grok is push-to-talk on both platforms: `listen_turn` → chat → `speak_reply`. A console key no longer opens duplex PCM (`Realtime` / `PcmSink`).
+- TTS runs `voice_tts_script` / `assistant_prose` first, so `THINKING:` / `<think>` / host protocol never hit `grok_tts`. Chat still shows the thought process.
+- Voice is Ara. Live Voice · Listening sits above the composer with Stop. PTT returns to Idle after STT.
+- Grok Build CLI **1.0.38** alpha (unchanged). Headless spawn stays `grok -p --output-format streaming-json` + `--alpha`.
+
 ## 2.9.8 — 2026-09-19
 
 One cabin, two ship artifacts on the same tag. Cursor **#37** (voice Ara, live strip, Stop, PTT Idle reset), **#38** (glanceable Thinking / Running / Waiting), and **#36** (CLI alpha 1.0.38 pin) are on `main`. Superseded alpha ports **#35**–**#31** closed with `ours`.
