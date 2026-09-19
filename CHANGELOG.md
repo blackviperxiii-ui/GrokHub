@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- PTT voice stays live after one listen/speak turn. Indicator + Stop remain, and the next utterance listens again until Stop, the live-green mic, or Ctrl+G / Super+G. Same on Linux and Windows.
+
 ## 2.9.9 — 2026-09-19
 
 One cabin, two ship artifacts on the same tag. Cursor **#39** (PTT voice on Linux and Windows; TTS speaks the reply body, not thinking) is on `main`.

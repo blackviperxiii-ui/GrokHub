@@ -59,6 +59,7 @@ use grokhub_core::{
     forget_topic, greet_from_last_job, has_auth, has_verify_ok, hey_grok_on_press,
     thread_host_receipts, thread_host_receipts_from,
     hey_grok_route, hey_grok_starts_ptt, import_memory_file, merge_imported_memory, insight_pin, is_openclaw_workspace,
+    ptt_after_speak, ptt_after_stt, PttLine,
     add_to_folder, create_folder, create_project, drop_node, drop_selected, folder_choices,
     host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line, is_hard_run,
     verify_ok_after_user_turn, VerifyResult,
@@ -1091,6 +1092,7 @@ pub struct Cabin {
     presence_ring: Vec<(u64, String)>,
     voice_sock: Option<crate::voice_ws::VoiceSock>,
     voice_state: VoiceState,
+    voice_hold_rx: Option<mpsc::Receiver<()>>,
     cmd_line: String,
     cmd_hist: Vec<String>,
     agents: Vec<AgentJob>,
@@ -1499,6 +1501,7 @@ impl Cabin {
             presence_ring: vec![],
             voice_sock: None,
             voice_state: VoiceState::Idle,
+            voice_hold_rx: None,
             cmd_line: String::new(),
             cmd_hist: vec![],
             agents: vec![],
@@ -2008,6 +2011,7 @@ impl Cabin {
             }
         }
         self.rx = None;
+        self.voice_hold_rx = None;
         self.running = false;
         self.imagine_pending = false;
         if self.host_reserved > 0 {
@@ -8099,7 +8103,9 @@ impl Cabin {
             &self.visible_thread_id(),
         );
         self.running = false;
-        self.voice_orb = "idle".into();
+        if !self.voice_is_on() {
+            self.voice_orb = "idle".into();
+        }
         if here {
             self.status.clear();
         }
@@ -8134,6 +8140,7 @@ impl Cabin {
             }
             self.kick_imagine();
         }
+        self.maybe_continue_ptt();
         self.persist();
         if !self.running {
             self.finish_hub_dispatch(&text, hub_dispatch_ok(&text));
@@ -8229,7 +8236,9 @@ impl Cabin {
                     &self.visible_thread_id(),
                 );
                 self.running = false;
-                self.voice_orb = "idle".into();
+                if !self.voice_is_on() {
+                    self.voice_orb = "idle".into();
+                }
                 if here {
                     self.status.clear();
                 }
@@ -8485,6 +8494,7 @@ impl Cabin {
                 if !self.running {
                     self.finish_hub_dispatch(&text, hub_dispatch_ok(&text));
                 }
+                self.maybe_continue_ptt();
                 self.spawn_thread_goal_on(job.as_deref());
             }
             Ok(JobOut::Consult(detail)) => {
@@ -8651,17 +8661,28 @@ impl Cabin {
                 self.finish_hub_dispatch(&format!("IMAGINE: {url}"), true);
                 self.chat_job_thread = None;
                 self.persist();
+                self.maybe_continue_ptt();
             }
             Ok(JobOut::Voice(t)) => {
                 self.running = false;
-                self.voice_state = VoiceState::Idle;
-                self.voice_orb = "idle".into();
-                if is_voice_error(&t) {
-                    self.status = t;
-                } else {
-                    self.status = "Hey Grok".into();
-                    self.speak_next = true;
-                    self.send_chat(t);
+                match ptt_after_stt(self.voice_is_on(), !is_voice_error(&t)) {
+                    PttLine::Leave => {
+                        self.status = if is_voice_error(&t) {
+                            t
+                        } else {
+                            "Voice off".into()
+                        };
+                    }
+                    PttLine::Listen => {
+                        self.status = t;
+                        self.maybe_continue_ptt();
+                    }
+                    PttLine::Chat => {
+                        self.status = "Hey Grok".into();
+                        self.speak_next = true;
+                        self.send_chat(t);
+                        self.maybe_continue_ptt();
+                    }
                 }
             }
             Ok(JobOut::UpdateProgress { pct, msg }) => {
@@ -8680,7 +8701,9 @@ impl Cabin {
             }
             Ok(JobOut::Err(e)) => {
                 self.running = false;
-                self.voice_orb = "idle".into();
+                if !self.voice_is_on() {
+                    self.voice_orb = "idle".into();
+                }
                 if self.imagine_pending {
                     self.imagine_pending = false;
                     self.imagine_error = e.clone();
@@ -8692,6 +8715,7 @@ impl Cabin {
                 self.stream_buf.clear();
                 self.thought_buf.clear();
                 self.persist();
+                self.maybe_continue_ptt();
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.rx = Some(rx);
@@ -9074,9 +9098,14 @@ impl Cabin {
                 return;
             }
         }
+        self.start_ptt_listen();
+    }
+
+    fn start_ptt_listen(&mut self) {
         if !hey_grok_starts_ptt(self.voice_sock.is_some(), self.running) {
             return;
         }
+        let speech = self.bearer();
         self.voice_orb = "listening".into();
         self.voice_state = VoiceState::Listening;
         self.running = true;
@@ -9089,11 +9118,34 @@ impl Cabin {
         });
     }
 
+    fn maybe_continue_ptt(&mut self) {
+        if !ptt_after_speak(self.voice_is_on()) {
+            return;
+        }
+        if self.voice_hold_rx.is_some()
+            || !hey_grok_starts_ptt(self.voice_sock.is_some(), self.running)
+        {
+            return;
+        }
+        self.start_ptt_listen();
+    }
+
+    fn poll_voice_hold(&mut self) {
+        let Some(rx) = self.voice_hold_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => self.maybe_continue_ptt(),
+            Err(mpsc::TryRecvError::Empty) => self.voice_hold_rx = Some(rx),
+        }
+    }
+
     fn voice_is_on(&self) -> bool {
         voice_mode_active(self.voice_state, self.voice_sock.is_some())
     }
 
     fn leave_voice(&mut self) {
+        self.voice_hold_rx = None;
         if let Some(mut s) = self.voice_sock.take() {
             s.halt();
         }
@@ -9674,7 +9726,13 @@ impl Cabin {
     fn speak_reply(&mut self, text: &str) {
         let text = voice_tts_script(text);
         if text.is_empty() {
+            self.maybe_continue_ptt();
             return;
+        }
+        if self.voice_is_on() {
+            self.voice_state = VoiceState::Speaking;
+            self.voice_orb = "speaking".into();
+            self.status = voice_mode_label(VoiceState::Speaking).into();
         }
         let key = self.bearer();
         let cap = TEXT_FILE_CAP;
@@ -9683,13 +9741,23 @@ impl Cabin {
             end -= 1;
         }
         let text = text[..end].to_string();
+        let hold = self.voice_is_on();
+        let tx = if hold {
+            let (tx, rx) = mpsc::channel();
+            self.voice_hold_rx = Some(rx);
+            Some(tx)
+        } else {
+            None
+        };
         std::thread::spawn(move || {
-            let Ok(bytes) = grok_tts(&key, &text) else {
-                return;
-            };
-            let path = std::env::temp_dir().join("grokhub-speak.mp3");
-            if std::fs::write(&path, bytes).is_ok() {
-                let _ = play_audio(&path);
+            if let Ok(bytes) = grok_tts(&key, &text) {
+                let path = std::env::temp_dir().join("grokhub-speak.mp3");
+                if std::fs::write(&path, bytes).is_ok() {
+                    let _ = play_audio(&path);
+                }
+            }
+            if let Some(tx) = tx {
+                let _ = tx.send(());
             }
         });
     }
@@ -10191,6 +10259,7 @@ impl eframe::App for Cabin {
         self.drain_inbox();
         self.poll_tray(ctx);
         self.poll_voice();
+        self.poll_voice_hold();
         self.poll_global_hotkeys();
         self.poll_night_check(now_ms());
         self.poll_grok_loop();
@@ -19581,6 +19650,35 @@ mod tests {
         assert!(
             imagine.contains("paint_voice_mode_row"),
             "Imagine must show the same voice indicator: {imagine}"
+        );
+        let voice_job = src
+            .split("Ok(JobOut::Voice(t))")
+            .nth(1)
+            .and_then(|s| s.split("Ok(JobOut::UpdateProgress").next())
+            .expect("JobOut::Voice");
+        assert!(
+            !voice_job.contains("voice_state = VoiceState::Idle")
+                && voice_job.contains("ptt_after_stt")
+                && voice_job.contains("maybe_continue_ptt"),
+            "PTT must not idle after one listen: {voice_job}"
+        );
+        let speak = src
+            .split("fn speak_reply(")
+            .nth(1)
+            .and_then(|s| s.split("fn refresh_eyes(").next())
+            .expect("speak_reply");
+        assert!(
+            speak.contains("voice_hold_rx") && speak.contains("maybe_continue_ptt"),
+            "TTS done must re-arm listen while the line is open: {speak}"
+        );
+        let start = src
+            .split("fn start_ptt_listen(")
+            .nth(1)
+            .and_then(|s| s.split("fn maybe_continue_ptt(").next())
+            .expect("start_ptt_listen");
+        assert!(
+            start.contains("listen_turn") && !start.contains("leave_voice"),
+            "the next utterance must listen without re-entering voice: {start}"
         );
     }
 
