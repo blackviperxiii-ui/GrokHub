@@ -128,8 +128,8 @@ use grokhub_core::{
     transcribe_route, uid, update_cmds_for, overlay_update_begin, overlay_update_finish,
     cabin_update_notice, grok_cli_alpha_update_cmds, settings_update_action_hint,
     should_notify_cabin_update, should_show_cli_alpha_update,
-    realtime_bearer, realtime_can_connect, voice_log_role, voice_mode_active, voice_mode_label,
-    voice_stream_token, voice_transcript_sends_chat,
+    realtime_can_connect, voice_log_role, voice_mode_active, voice_mode_label,
+    voice_stream_token, voice_transcript_sends_chat, voice_tts_script,
     fold_stream_fields, StreamTokenKind,
     update_wipes_config, Automation, BoardCard, GrokLoop,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ChipThread, DeviceCodeStart, HeyGrokAction,
@@ -9060,7 +9060,6 @@ impl Cabin {
             self.halt_work("Hands on — halted");
             return;
         }
-        let oauth = secrets::access_token(&self.secrets);
         let speech = self.bearer();
         let has_local = first_bin(TRANSCRIBERS).is_some();
         let route = hey_grok_route(
@@ -9068,31 +9067,11 @@ impl Cabin {
             !speech.is_empty(),
             has_local,
         );
-        if self.voice_sock.is_none() {
-            match route {
-                HeyGrokRoute::Realtime => {
-                    if let Some(key) = realtime_bearer(self.console_key(), &oauth) {
-                        match crate::voice_ws::start(&key, &self.cfg.voice_model) {
-                            Ok(sock) => {
-                                self.voice_sock = Some(sock);
-                                self.voice_state = VoiceState::Listening;
-                                self.voice_orb = "listening".into();
-                                self.status = voice_mode_label(VoiceState::Listening).into();
-                                return;
-                            }
-                            Err(e) => {
-                                self.status = format!("{e} — push-to-talk");
-                            }
-                        }
-                    }
-                }
-                HeyGrokRoute::PushToTalk => {}
-                HeyGrokRoute::None => {
-                    self.status =
-                        "Connect Grok OAuth for STT/TTS, or paste a console key for duplex Voice."
-                            .into();
-                    return;
-                }
+        match route {
+            HeyGrokRoute::PushToTalk | HeyGrokRoute::Realtime => {}
+            HeyGrokRoute::None => {
+                self.status = "Connect Grok OAuth for STT/TTS.".into();
+                return;
             }
         }
         if !hey_grok_starts_ptt(self.voice_sock.is_some(), self.running) {
@@ -9693,6 +9672,10 @@ impl Cabin {
     }
 
     fn speak_reply(&mut self, text: &str) {
+        let text = voice_tts_script(text);
+        if text.is_empty() {
+            return;
+        }
         let key = self.bearer();
         let cap = TEXT_FILE_CAP;
         let mut end = cap.min(text.len());
@@ -16798,6 +16781,10 @@ mod tests {
                 || speak[..clone].contains("take_ui"),
             "voice speak must not clone an 8MB complete onto the UI thread: {speak}"
         );
+        assert!(
+            speak.contains("voice_tts_script"),
+            "TTS must strip THINKING: / thoughts before grok_tts: {speak}"
+        );
     }
 
     #[test]
@@ -19545,6 +19532,10 @@ mod tests {
         assert!(
             listen.contains("voice_is_on()") && listen.contains("self.leave_voice()"),
             "mic / Ctrl+G must leave a live voice session: {listen}"
+        );
+        assert!(
+            listen.contains("listen_turn") && !listen.contains("voice_ws::start"),
+            "Hey Grok is PTT on every platform — duplex must not own the mic: {listen}"
         );
         let leave = src
             .split("fn leave_voice(")
