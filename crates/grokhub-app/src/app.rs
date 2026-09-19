@@ -72,7 +72,8 @@ use grokhub_core::{
     is_workload_user, merge_thinking_capped, prefer_complete_reply, quote_for_reply, strip_thinking,
     refresh_last_stretch, thought_shows_acts, thought_shows_label, visible_chat_refs, visible_turn_count, visible_turn_count_from,
     cluster_gap, scrolled_off_tail, ChatKind, ChatView, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK,
-    apply_job_error, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
+    apply_job_error, chat_run_action, chat_run_hint, chat_run_label, chat_run_phase,
+    chat_send_kind, chat_shows_thinking, chat_stream_is_visible, is_thinking_status, ChatRunPhase,
     upsert_assistant_turn,
     worker_gone_status, ChatSendKind,
     bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X,
@@ -1946,6 +1947,41 @@ impl Cabin {
         )
     }
 
+    fn run_phase_here(&self) -> ChatRunPhase {
+        if !self.thinking_here() {
+            return ChatRunPhase::Idle;
+        }
+        let waiting = self.perm_ask.is_some() || self.elicit_ask.is_some();
+        let has_output = !self.stream_buf.trim().is_empty()
+            || self
+                .live_blocks
+                .iter()
+                .any(|b| matches!(b.kind, LiveKind::Say | LiveKind::Tool));
+        chat_run_phase(true, waiting, has_output)
+    }
+
+    fn run_action_here(&self) -> String {
+        let waiting = self
+            .perm_ask
+            .as_ref()
+            .map(|p| p.title.as_str())
+            .or_else(|| self.elicit_ask.as_ref().map(|p| p.server_name.as_str()));
+        let tool = self
+            .live_blocks
+            .iter()
+            .rev()
+            .find(|b| b.kind == LiveKind::Tool && !b.tool_title.is_empty())
+            .map(|b| b.tool_title.as_str())
+            .or_else(|| {
+                self.tool_cards
+                    .iter()
+                    .rev()
+                    .find(|c| !c.title.is_empty())
+                    .map(|c| c.title.as_str())
+            });
+        chat_run_action(waiting, tool).to_string()
+    }
+
     fn halt_in_flight(&mut self) {
         self.host_halt.store(true, Ordering::SeqCst);
         if let Some(h) = &self.acp {
@@ -3220,7 +3256,16 @@ impl Cabin {
                 }
             }
         }
-        if !self.status.is_empty() && self.status != "Thinking…" {
+        if self.thinking_here() {
+            let phase = self.run_phase_here();
+            crate::cards::paint_run_pulse(
+                ui,
+                chat_run_label(phase),
+                &chat_run_hint(phase, &self.run_action_here()),
+                false,
+            );
+        }
+        if !self.status.is_empty() && !is_thinking_status(&self.status) {
             ui.label(
                 RichText::new(crate::cards::clip_status(&self.status, 72))
                     .size(12.0)
@@ -11332,7 +11377,14 @@ impl Cabin {
                             self.paint_tool_cards(ui);
                         }
                         if thinking {
-                            paint_running(ui);
+                            let phase = self.run_phase_here();
+                            if paint_running(
+                                ui,
+                                chat_run_label(phase),
+                                &chat_run_hint(phase, &self.run_action_here()),
+                            ) {
+                                self.run_slash(Slash::Stop);
+                            }
                         }
                         match act {
                             ChatBlockAct::Copy(body) => {
@@ -11483,15 +11535,8 @@ impl Cabin {
     }
 }
 
-fn paint_running(ui: &mut egui::Ui) {
-    let t = ui.ctx().input(|i| i.time) as f32;
-    let on = ((t * 1.8).fract() - 0.5).abs() < 0.28;
-    ui.add_space(4.0);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(2.0, 16.0), egui::Sense::hover());
-    if on {
-        ui.painter().rect_filled(rect, 0.0, crate::theme::fg());
-    }
-    ui.ctx().request_repaint();
+fn paint_running(ui: &mut egui::Ui, label: &str, hint: &str) -> bool {
+    crate::cards::paint_run_pulse(ui, label, hint, true)
 }
 
 fn paint_one_tool_card(ui: &mut egui::Ui, card: &ToolCard) {
@@ -15021,12 +15066,36 @@ mod tests {
             "tools must sit in the live turn, not always under the last bubble: {chat}"
         );
         assert!(
-            chat.contains("paint_running"),
+            chat.contains("paint_running")
+                && chat.contains("chat_run_label")
+                && chat.contains("run_slash(Slash::Stop)"),
             "a running pulse must show while the agent is working: {chat}"
         );
         assert!(
             chat.contains("cluster_gap"),
             "consecutive thoughts must cluster tighter than chat: {chat}"
+        );
+        let running = src
+            .split("fn paint_running(")
+            .nth(1)
+            .and_then(|s| s.split("fn paint_one_tool_card(").next())
+            .expect("paint_running");
+        assert!(
+            running.contains("paint_run_pulse") && running.contains("true"),
+            "transcript running chrome must be the labeled live pulse with Stop: {running}"
+        );
+        assert!(
+            !running.contains("vec2(2.0, 16.0)"),
+            "a blinking caret is not the in-progress indicator: {running}"
+        );
+        let attach = src
+            .split("fn ui_attach_chip(")
+            .nth(1)
+            .and_then(|s| s.split("fn work_root(").next())
+            .expect("ui_attach_chip");
+        assert!(
+            attach.contains("paint_run_pulse") && attach.contains("thinking_here"),
+            "composer must keep a glanceable running pulse when the pane is scrolled: {attach}"
         );
         assert!(
             chat.contains("scroll_to_cursor") && chat.contains("chat_tail_frames"),

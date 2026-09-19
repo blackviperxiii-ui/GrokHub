@@ -47,6 +47,69 @@ pub fn chat_shows_thinking(
     }
 }
 
+/// Glanceable phase for an in-flight turn. Grok Bot keeps idle / thinking /
+/// working / waiting distinct so a pulse is not the only cue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatRunPhase {
+    Idle,
+    Thinking,
+    Running,
+    Waiting,
+}
+
+pub fn chat_run_phase(running: bool, waiting: bool, has_output: bool) -> ChatRunPhase {
+    if !running {
+        ChatRunPhase::Idle
+    } else if waiting {
+        ChatRunPhase::Waiting
+    } else if has_output {
+        ChatRunPhase::Running
+    } else {
+        ChatRunPhase::Thinking
+    }
+}
+
+pub fn chat_run_label(phase: ChatRunPhase) -> &'static str {
+    match phase {
+        ChatRunPhase::Idle => "",
+        ChatRunPhase::Thinking => "Thinking",
+        ChatRunPhase::Running => "Running",
+        ChatRunPhase::Waiting => "Waiting",
+    }
+}
+
+/// Hover copy: current action when we have one, otherwise a short phase hint.
+pub fn chat_run_hint(phase: ChatRunPhase, action: &str) -> String {
+    let action = action.trim();
+    if !action.is_empty() {
+        return action.to_string();
+    }
+    match phase {
+        ChatRunPhase::Idle => String::new(),
+        ChatRunPhase::Thinking => "Working on your reply".into(),
+        ChatRunPhase::Running => "Streaming a reply".into(),
+        ChatRunPhase::Waiting => "Needs your say".into(),
+    }
+}
+
+pub fn chat_run_action<'a>(waiting_title: Option<&'a str>, tool_title: Option<&'a str>) -> &'a str {
+    [waiting_title, tool_title]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .unwrap_or("")
+}
+
+/// Live-dot opacity. Always visible (never a blink-off), brighter as it pulses.
+pub fn chat_run_dot_alpha(t: f32) -> f32 {
+    0.35 + 0.65 * (t * 4.0).sin().abs()
+}
+
+pub fn is_thinking_status(status: &str) -> bool {
+    status == "Thinking…" || status.starts_with("Thinking…")
+}
+
 /// Same-thread interrupt uses redirect. A different thread starts a fresh send.
 pub fn chat_send_kind(
     job_thread_id: Option<&str>,
@@ -408,5 +471,29 @@ mod tests {
         ];
         let msgs = kick_messages_for_job(None, "thr-a", &visible, &[]);
         assert_eq!(msgs, vec![("user".into(), "hi".into())]);
+    }
+
+    #[test]
+    fn run_phase_is_glanceable_not_one_busy_blob() {
+        assert_eq!(chat_run_phase(false, false, false), ChatRunPhase::Idle);
+        assert_eq!(chat_run_phase(true, false, false), ChatRunPhase::Thinking);
+        assert_eq!(chat_run_phase(true, false, true), ChatRunPhase::Running);
+        assert_eq!(chat_run_phase(true, true, true), ChatRunPhase::Waiting);
+        assert_eq!(chat_run_label(ChatRunPhase::Thinking), "Thinking");
+        assert_eq!(chat_run_label(ChatRunPhase::Running), "Running");
+        assert_eq!(chat_run_label(ChatRunPhase::Waiting), "Waiting");
+        assert_eq!(chat_run_hint(ChatRunPhase::Running, "run_terminal_cmd"), "run_terminal_cmd");
+        assert_eq!(chat_run_hint(ChatRunPhase::Thinking, ""), "Working on your reply");
+        assert_eq!(chat_run_action(Some("shell"), Some("edit")), "shell");
+        assert_eq!(chat_run_action(None, Some("edit")), "edit");
+        assert_eq!(chat_run_action(Some("  "), None), "");
+        let a0 = chat_run_dot_alpha(0.0);
+        let a1 = chat_run_dot_alpha(0.4);
+        assert!(a0 >= 0.35 && a0 <= 1.0, "dot stays visible: {a0}");
+        assert!(a1 >= 0.35 && a1 <= 1.0, "dot stays visible: {a1}");
+        assert_ne!(a0, a1, "the live dot pulses instead of blinking off");
+        assert!(is_thinking_status("Thinking…"));
+        assert!(is_thinking_status("Thinking… 12k/128k"));
+        assert!(!is_thinking_status("Retry in 2s"));
     }
 }
